@@ -1,4 +1,3 @@
-// Synthetic transcript and image bytes through the shipped UI and real Gateway.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -623,7 +622,7 @@ suite.define(() => {
           ),
         );
 
-        // Capture baseline evidence before these repair assertions fail on the old bundle.
+        // Save measurements before asserting budgets so failures retain their evidence.
         const selectedStartup = startupMetrics.find(
           (metric) => metric.method === "chat.startup" && metric.resolvedKey === selectedKey,
         );

@@ -91,8 +91,16 @@ See [Release channels](/install/development-channels) for channel semantics.
 
 The OpenClaw owner can say "update" (the agent uses the `gateway` action
 `update.run`) or send `/update`. The bot acknowledges, the Gateway restarts,
-and a completion or failure notice arrives in the same chat. If the update
-cannot start, the bot explains why and provides the manual command when available.
+and an update report arrives in the same chat. It includes the outcome, recorded
+phase durations, failed steps, verification facts, and the next action when
+needed. If the update cannot start, the bot records and explains why and provides
+the manual command when available.
+
+Chat, CLI, Control UI, and automatic updates share a durable run ID. Use
+`openclaw update status` to read the active or latest report, including after a
+restart; `--json` exposes the `activeRun` and `lastRun` records. See
+[Run history and reports](/cli/update#run-history-and-reports) for Gateway history
+queries.
 
 The sender must be in [`commands.ownerAllowFrom`](/tools/slash-commands#configuration).
 `/update` also requires `commands.restart` (enabled by default).

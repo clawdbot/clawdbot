@@ -734,13 +734,12 @@ extensions/memory-core/src/dreaming.ts	1
 extensions/memory-core/src/memory/embeddings.ts	2
 extensions/memory-core/src/memory/hybrid.ts	1
 extensions/memory-core/src/memory/manager-db.ts	5
-extensions/memory-core/src/memory/manager-embedding-cache.ts	1
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
 extensions/memory-core/src/memory/manager-embedding-ops.ts	2
 extensions/memory-core/src/memory/manager-keyword-retrieval.ts	1
-extensions/memory-core/src/memory/manager-search-orchestration.ts	2
+extensions/memory-core/src/memory/manager-search-orchestration.ts	1
 extensions/memory-core/src/memory/manager-search.ts	9
-extensions/memory-core/src/memory/manager-sync-base.ts	5
+extensions/memory-core/src/memory/manager-sync-base.ts	4
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
 extensions/memory-core/src/memory/manager-watch-ops.ts	4
 extensions/memory-core/src/memory/manager.ts	2

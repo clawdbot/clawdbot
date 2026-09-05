@@ -219,12 +219,12 @@ describe("refreshChatAvatar", () => {
       settings: { token: "test-token" },
     });
     const second = makeChatHost({ client: first.client, settings: { token: "test-token" } });
-    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      return url.includes("meta=1")
-        ? new Response(JSON.stringify({ avatarUrl: "/avatar/main?v=1" }))
-        : new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } });
-    });
+    const fetchAvatar = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(
+        async () =>
+          new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
+      );
     vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:shared-avatar");
     const revoke = vi.spyOn(URL, "revokeObjectURL");
 

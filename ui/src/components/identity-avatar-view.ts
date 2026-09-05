@@ -47,10 +47,10 @@ function settleIdentityAvatarImage(event: Event, fallbackSelector: string, faile
   if (!(image instanceof HTMLImageElement)) {
     return;
   }
-  // Each rendered image owns its resource until replacement or disconnect.
   image.closest<HTMLElement>(fallbackSelector)?.classList.toggle("is-fallback", failed);
 }
 
+// Each rendered image owns its resource until replacement or disconnect.
 class IdentityAvatarImageDirective extends UntilDirective<unknown> {
   private part?: Part;
   private sourceUrl?: string;

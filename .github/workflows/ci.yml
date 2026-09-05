@@ -3816,7 +3816,7 @@ jobs:
               ;;
           esac
 
-  # Keep five core Programs; ordinary hybrid runs pair them across three hosted jobs.
+  # Keep five core Programs; ordinary hybrid runs serialize them across two hosted jobs.
   # GitHub, frozen and manual runs retain five jobs. All-Blacksmith keeps one lint job.
   check-lint-hosted-core-shard:
     permissions:
@@ -3830,7 +3830,7 @@ jobs:
       fail-fast: false
       max-parallel: 5
       matrix:
-        stripe: ${{ fromJSON(needs.preflight.outputs.runner_profile == 'hybrid' && needs.preflight.outputs.frozen_target != 'true' && !inputs.release_gate && (github.event_name == 'push' || github.event_name == 'pull_request') && '[1,2,3]' || '[1,2,3,4,5]') }}
+        stripe: ${{ fromJSON(needs.preflight.outputs.runner_profile == 'hybrid' && needs.preflight.outputs.frozen_target != 'true' && !inputs.release_gate && (github.event_name == 'push' || github.event_name == 'pull_request') && '[1,2]' || '[1,2,3,4,5]') }}
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -3890,12 +3890,13 @@ jobs:
           fi
           stripes=("$CORE_STRIPE")
           if ${{ needs.preflight.outputs.runner_profile == 'hybrid' && needs.preflight.outputs.frozen_target != 'true' && !inputs.release_gate && (github.event_name == 'push' || github.event_name == 'pull_request') }}; then
-            stripes=("$((2 * CORE_STRIPE - 1))" "$((2 * CORE_STRIPE))")
+            if [ "$CORE_STRIPE" = "1" ]; then
+              stripes=(1 2)
+            else
+              stripes=(3 4 5)
+            fi
           fi
           for stripe in "${stripes[@]}"; do
-            if [ "$stripe" -gt 5 ]; then
-              continue
-            fi
             node --import tsx scripts/run-oxlint-shards.mts \
               --only=core --split-core --core-stripe="$stripe/5" --threads=1
             if [ "$RUNNER_PROFILE" = "github" ] && [ "$RELEASE_GATE" != "true" ] &&

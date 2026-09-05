@@ -8,6 +8,8 @@ import { resolveGatewayBindHost, resolveGatewayRequiredListenHosts } from "../..
 import { loadExecApprovalsReadOnly } from "../../infra/exec-approvals.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { readRestartSentinelReadOnly } from "../../infra/restart-sentinel.js";
+import { findActiveUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { resolvePluginControlPlaneWorkspace } from "../../plugins/control-plane-workspace.js";
 import { buildPluginCompatibilityNotices } from "../../plugins/status.js";
 import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
@@ -222,12 +224,14 @@ export async function buildStatusAllReportData(params: {
     nodeService: params.nodeService,
     nodeOnlyGateway: params.nodeOnlyGateway,
   });
+  const updateRun = findActiveUpdateRun() ?? listUpdateRuns({ limit: 1 })[0];
   const overviewRows = buildStatusAllOverviewRows({
     surface: overviewSurface,
     osLabel: params.overview.osSummary.label,
     configPath,
     summary,
     secretDiagnosticsCount: params.overview.secretDiagnostics.length,
+    updateValue: updateRun ? renderUpdateRunReport(updateRun).headline : undefined,
     updateRestartValue: formatUpdateRestartStatusValue(diagnosis.sentinel?.payload),
     agentStatus: params.overview.agentStatus,
     tailscaleBackendState: diagnosis.tailscale.backendState,

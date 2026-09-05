@@ -162,11 +162,15 @@ describe("memory embedding cache", () => {
         const prepare = db.prepare.bind(db);
         vi.spyOn(db, "prepare").mockImplementation((sql) => {
           const statement = prepare(sql);
-          const all = statement.all.bind(statement);
-          vi.spyOn(statement, "all").mockImplementation((...bindings) => {
-            const rows = all(...bindings);
-            reads.push({ bindings: bindings.length, rows: rows.length });
-            return rows;
+          const iterate = statement.iterate.bind(statement);
+          vi.spyOn(statement, "iterate").mockImplementation(function* (...bindings) {
+            const read = { bindings: bindings.length, rows: 0 };
+            reads.push(read);
+            for (const row of iterate(...bindings)) {
+              read.rows += 1;
+              yield row;
+            }
+            return undefined;
           });
           return statement;
         });
@@ -189,6 +193,52 @@ describe("memory embedding cache", () => {
       }
     },
   );
+
+  it("propagates a native cache read failure without retaining a partial cursor", () => {
+    const db = createDb();
+    try {
+      const identity = { provider: "local", model: "fixture", providerKey: "fixture" };
+      upsertMemoryEmbeddingCache({
+        db,
+        enabled: true,
+        provider: { id: identity.provider, model: identity.model },
+        providerKey: identity.providerKey,
+        entries: ["first", "second"].map((hash) => ({ hash, embedding: [1, 2] })),
+      });
+      let reads = 0;
+      db.function("read_embedding", (value) => {
+        if (++reads === 2) {
+          throw new Error("cache step failed");
+        }
+        return value;
+      });
+      db.exec(`
+        ALTER TABLE memory_embedding_cache RENAME TO stored_cache;
+        CREATE VIEW memory_embedding_cache AS SELECT
+          provider, model, provider_key, hash, read_embedding(embedding) AS embedding
+          FROM stored_cache;
+      `);
+      const load = () =>
+        loadMemoryEmbeddingCache({
+          db,
+          enabled: true,
+          providerIdentities: [identity],
+          hashes: ["first", "second"],
+        });
+      expect(load).toThrow("cache step failed");
+      db.exec(
+        "DROP VIEW memory_embedding_cache; ALTER TABLE stored_cache RENAME TO memory_embedding_cache",
+      );
+      expect(load()).toEqual(
+        new Map([
+          ["first", [1, 2]],
+          ["second", [1, 2]],
+        ]),
+      );
+    } finally {
+      db.close();
+    }
+  });
 
   it("reuses cached embeddings on forced reindex instead of scheduling new embeds", () => {
     const cached = new Map<string, number[]>([

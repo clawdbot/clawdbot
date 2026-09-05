@@ -470,12 +470,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
   }
 
   private hasIndexedContent(): boolean {
-    const chunkRow = this.db.prepare(`SELECT 1 as found FROM memory_index_chunks LIMIT 1`).get() as
-      | {
-          found?: number;
-        }
-      | undefined;
-    if (chunkRow?.found === 1) {
+    if (this.hasIndexedChunks()) {
       return true;
     }
     if (!this.fts.enabled || !this.fts.available) {

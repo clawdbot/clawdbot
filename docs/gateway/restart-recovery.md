@@ -311,6 +311,17 @@ SQLite before the process exits. After boot the gateway posts the outcome back
 to the originating chat and dispatches a one-shot continuation turn so the
 agent picks up exactly where it left off, on the same channel and thread.
 
+For updates, the sentinel carries `stats.runId`, linking the detached updater to
+its durable `update_runs` record. The new Gateway records its observed running
+version, build, and startup facts there. It preserves a terminal outcome already
+written by the updater and waits while a managed handoff is still pending.
+If the existing restart-verification retry window expires, a still-running row
+finishes as failed with `restart-unhealthy`; an already-finalized CLI outcome
+stays intact.
+The post-restart notice is rendered from that row using the same report as
+`openclaw update status`; consuming the sentinel does not remove run history.
+Sentinels left by older releases retain their existing delivery route.
+
 The sentinel's typed SQLite columns are authoritative for restart handling;
 its `payload_json` value is a replay/debug shadow only. Runtime reads, writes,
 and clears SQLite state without a file fallback. During the storage cutover, a

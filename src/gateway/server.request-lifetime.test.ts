@@ -228,6 +228,145 @@ describe("public Gateway close request lifetime", () => {
     }
   });
 
+  it("joins a returned catalog's held completion before zero-budget dependency retirement", async ({
+    signal,
+  }) => {
+    const release = createDeferredCore();
+    const connectionReleased = createDeferredCore();
+    const order: string[] = [];
+    const finishedAtClose: boolean[] = [];
+    let publication: Promise<void> | undefined;
+    let providerSignal: AbortSignal | undefined;
+    let completionSettled = false;
+    let drainFinished = false;
+    const registry = createEmptyPluginRegistry();
+    registry.sessionCatalogs.push({
+      pluginId: "catalog-lifetime-proof",
+      source: "test",
+      provider: {
+        id: "catalog-lifetime-proof",
+        label: "Catalog lifetime proof",
+        audience: "gateway-operators",
+        supportsProcessHomeIsolation: true,
+        list: async (params) => {
+          providerSignal = params.signal;
+          publication = release.promise
+            .then(() =>
+              params.onHost?.({
+                hostId: "node:held",
+                kind: "node",
+                label: "Held host",
+                connected: true,
+                sessions: [],
+              }),
+            )
+            .finally(() => {
+              completionSettled = true;
+              order.push("catalog completion settled");
+            });
+          params.waitUntil?.(publication);
+          return [];
+        },
+        read: async () => {
+          throw new Error("read is outside this catalog lifetime proof");
+        },
+      },
+    });
+    setTestPluginRegistry(registry);
+    const unblock = () => release.resolve();
+    signal.addEventListener("abort", unblock, { once: true });
+    let gateway: GatewayHarness | undefined;
+    let ws: WebSocket | undefined;
+    let closing: Promise<void> | undefined;
+    try {
+      // Observe the real owner after the fixture's mock registration has loaded.
+      const kernelModule = await import("./server-kernel.js");
+      const createKernel = kernelModule.createGatewayKernel;
+      vi.spyOn(kernelModule, "createGatewayKernel").mockImplementationOnce(async (...args) => {
+        const kernel = await createKernel(...args);
+        const register = kernel.connectionWork.registerConnection.bind(kernel.connectionWork);
+        vi.spyOn(kernel.connectionWork, "registerConnection").mockImplementation((close) => {
+          const releaseConnection = register(close);
+          return () => {
+            releaseConnection();
+            connectionReleased.resolve();
+          };
+        });
+        const drain = kernel.connectionWork.drain.bind(kernel.connectionWork);
+        vi.spyOn(kernel.connectionWork, "drain").mockImplementation(async () => {
+          await drain();
+          drainFinished = true;
+        });
+        kernel.registerGatewayLifetimeSidecars([
+          {
+            stop: () => {
+              order.push("dependencies stopped");
+            },
+          },
+        ]);
+        return kernel;
+      });
+      gateway = await createGatewaySuiteHarness({
+        serverOptions: { bind: "loopback", auth: { mode: "none" } },
+      });
+      await gateway.server.startupSettled;
+      ws = await gateway.openWs();
+      await connectOk(ws, { scopes: ["operator.admin"] });
+      const response = onceMessage<{
+        type: string;
+        id: string;
+        ok: boolean;
+        payload?: { catalogs: Array<{ id: string; hosts: unknown[] }> };
+      }>(ws, (frame) => frame.type === "res" && frame.id === "held-catalog");
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "held-catalog",
+          method: "sessions.catalog.list",
+          params: { catalogId: "catalog-lifetime-proof", progressId: "held-catalog" },
+        }),
+      );
+      expect(await response).toMatchObject({
+        ok: true,
+        payload: { catalogs: [{ id: "catalog-lifetime-proof", hosts: [] }] },
+      });
+      await nextTurn();
+      expect(completionSettled).toBe(false);
+      expect(providerSignal?.aborted).toBe(false);
+      const disconnected = once(ws, "close");
+      const firstClose = gateway.server.close({ drainTimeoutMs: 0 }).then(() => {
+        finishedAtClose.push(completionSettled);
+      });
+      const concurrentClose = gateway.server.close({ drainTimeoutMs: 0 }).then(() => {
+        finishedAtClose.push(completionSettled);
+      });
+      closing = Promise.all([firstClose, concurrentClose]).then(() => undefined);
+      await disconnected;
+      // The server-side release follows actual socket bookkeeping. Once its microtasks
+      // settle, the held catalog completion must be the remaining required work.
+      await connectionReleased.promise;
+      await nextTurn();
+      const whileHeld = { drainFinished, order: [...order], retired: providerSignal?.aborted };
+      unblock();
+      await publication;
+      await closing;
+      expect(whileHeld).toEqual({ drainFinished: false, order: [], retired: true });
+      expect(order).toEqual(["catalog completion settled", "dependencies stopped"]);
+      expect(finishedAtClose).toEqual([true, true]);
+    } finally {
+      unblock();
+      try {
+        await Promise.allSettled([publication]);
+        ws?.terminate();
+        await (closing ?? gateway?.server.close({ drainTimeoutMs: 0 }));
+        resetTestPluginRegistry();
+      } finally {
+        vi.restoreAllMocks();
+        signal.removeEventListener("abort", unblock);
+      }
+    }
+  });
+
   it("fences incoming RPCs while an asynchronous shutdown owner is still stopping", async ({
     signal,
   }) => {

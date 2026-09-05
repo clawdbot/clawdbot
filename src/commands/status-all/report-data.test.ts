@@ -1,7 +1,12 @@
 // Status-all report data tests cover local read-only diagnosis probes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 
 const mocks = vi.hoisted(() => ({
+  listUpdateRuns: vi.fn<() => UpdateRunRecord[]>(() => []),
+  buildStatusAllOverviewRows: vi.fn<
+    typeof import("../status-overview-rows.ts").buildStatusAllOverviewRows
+  >(() => []),
   readConfigFileSnapshot: vi.fn(async () => ({ path: "/tmp/openclaw.json" })),
   inspectPortUsage: vi.fn(async () => null),
   resolveGatewayBindHost: vi.fn(async () => "127.0.0.1"),
@@ -32,6 +37,10 @@ vi.mock("../../infra/ports-inspect.js", () => ({ inspectPortUsage: mocks.inspect
 vi.mock("../../infra/exec-approvals.js", () => ({
   loadExecApprovalsReadOnly: mocks.loadExecApprovalsReadOnly,
 }));
+vi.mock("../../infra/update-run-ledger.js", () => ({
+  findActiveUpdateRun: () => undefined,
+  listUpdateRuns: mocks.listUpdateRuns,
+}));
 vi.mock("../../infra/restart-sentinel.js", () => ({
   readRestartSentinelReadOnly: async () => null,
 }));
@@ -40,7 +49,9 @@ vi.mock("../../skills/discovery/status.js", () => ({
   buildWorkspaceSkillStatus: mocks.buildWorkspaceSkillStatus,
 }));
 vi.mock("../../skills/runtime/remote.js", () => ({ getRemoteSkillEligibility: () => ({}) }));
-vi.mock("../status-overview-rows.ts", () => ({ buildStatusAllOverviewRows: () => [] }));
+vi.mock("../status-overview-rows.ts", () => ({
+  buildStatusAllOverviewRows: mocks.buildStatusAllOverviewRows,
+}));
 vi.mock("../status-overview-surface.ts", () => ({
   buildStatusOverviewSurfaceFromOverview: () => ({}),
 }));
@@ -63,11 +74,33 @@ import { buildStatusAllReportData } from "./report-data.js";
 describe("buildStatusAllReportData", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.listUpdateRuns.mockReturnValue([]);
     mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValue({ ok: true, value: {} });
     mocks.resolveStatusGatewayHealthSafe.mockResolvedValue(undefined);
   });
 
-  it("keeps local config diagnosis non-observing", async () => {
+  it("keeps diagnosis non-observing and retains the update report after sentinel consumption", async () => {
+    mocks.listUpdateRuns.mockReturnValue([
+      {
+        runId: "6631ecee-adbf-41e8-a0e3-1b88b28b0a59",
+        createdAtMs: 1,
+        updatedAtMs: 2,
+        trigger: "cli",
+        phase: "finished",
+        status: "succeeded",
+        reason: null,
+        origin: {},
+        target: {},
+        before: { version: "2026.9.1" },
+        after: { version: "2026.9.2" },
+        steps: [],
+        verification: {},
+        repair: [],
+        confirmedAtMs: null,
+        finishedAtMs: 2,
+        downtimeMs: null,
+      },
+    ]);
     await buildStatusAllReportData({
       overview: {
         cfg: {},
@@ -92,6 +125,12 @@ describe("buildStatusAllReportData", () => {
       progress: { setLabel: vi.fn(), tick: vi.fn() },
     });
 
+    expect(mocks.buildStatusAllOverviewRows).toHaveBeenCalledWith(
+      expect.objectContaining({
+        updateValue: "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).",
+        updateRestartValue: null,
+      }),
+    );
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledOnce();
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
     expect(mocks.resolveGatewayBindHost).toHaveBeenCalledWith("loopback", undefined);

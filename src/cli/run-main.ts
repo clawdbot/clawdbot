@@ -14,11 +14,7 @@ import { resolveGatewayPort, resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isLoopbackAddress, isSecureWebSocketUrl } from "../gateway/net.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
-import {
-  consumeRootOptionToken,
-  FLAG_TERMINATOR,
-  isValueToken,
-} from "../infra/cli-root-options.js";
+import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
@@ -138,7 +134,7 @@ export function isGatewayRunFastPathArgv(argv: string[]): boolean {
       continue;
     }
 
-    const rootConsumed = consumeRootOptionToken(args, index);
+    const rootConsumed = consumeGatewayFastPathRootOptionToken(args, index);
     if (rootConsumed > 0) {
       index += rootConsumed - 1;
       continue;
@@ -256,8 +252,9 @@ async function tryRunGatewayRunFastPath(
     gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
     { beforeRun },
   );
+  const parseArgv = normalizeRootNoColorArgvForProgram(argv, program);
   try {
-    await startupTrace.measure("gateway-run-parse", () => program.parseAsync(argv), {
+    await startupTrace.measure("gateway-run-parse", () => program.parseAsync(parseArgv), {
       timeline: false,
     });
   } catch (error) {

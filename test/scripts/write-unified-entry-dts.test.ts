@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { TSDOWN_NON_SDK_DTS_CONFIG_GROUPS } from "../../scripts/lib/tsdown-config-groups.mts";
 import { resolveTsdownDeclarationGeneratorInputs } from "../../scripts/lib/tsdown-declaration-generator-inputs.mts";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import {
   createFixture,
   declarationCacheRecords,
@@ -109,6 +110,7 @@ describe("write-unified-entry-dts", () => {
     const { root, write, production, declarations } = createFixture(
       TSDOWN_NON_SDK_DTS_CONFIG_GROUPS,
     );
+    materializeNativeCompiler(root);
     expect(Object.values(declarations).every((entries) => entries.length > 0)).toBe(true);
     expect(production).toHaveLength(Object.values(declarations).flat().length);
     write("extensions/fixture-a/runtime-only.js", 'export const runtimeOnly = "runtime";');

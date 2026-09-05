@@ -38,6 +38,19 @@ describe("memory source state", () => {
   });
 
   it.each([
+    { paths: [], expected: [] },
+    { paths: ["memory/one.md", "memory/one.md", "missing' OR 1=1 --"], expected: ["hash-1"] },
+    {
+      paths: [...Array.from({ length: 33_000 }, (_, index) => `missing-${index}`), "memory/one.md"],
+      expected: ["hash-1"],
+    },
+  ])("restricts source snapshots to $paths.length requested paths", ({ paths, expected }) => {
+    expect(
+      loadMemorySourceFileState({ db, source: "memory", paths }).map((row) => row.hash),
+    ).toEqual(expected);
+  });
+
+  it.each([
     {
       existingHashes: new Map([["memory/one.md", "hash-from-snapshot"]]),
       expected: "hash-from-snapshot",

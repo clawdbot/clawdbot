@@ -372,29 +372,6 @@ export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): 
   }
 }
 
-export function formatUpdateOutcomeNotice(payload: RestartSentinelPayload): string {
-  const before = payload.stats?.before?.version;
-  const after = payload.stats?.after?.version;
-  const previous = typeof before === "string" ? before.trim() : "";
-  const current = typeof after === "string" ? after.trim() : "";
-  let outcome = "✅ OpenClaw updated and restarted.";
-  if (payload.status === "ok" && current) {
-    outcome = `✅ OpenClaw updated to ${current}${previous ? ` (from ${previous})` : ""}.`;
-  } else if (payload.status === "skipped") {
-    outcome = `ℹ️ OpenClaw update skipped: ${payload.stats?.reason?.trim() || "unknown reason"}.`;
-  } else if (payload.status === "error") {
-    const reason =
-      payload.stats?.reason?.trim() ||
-      payload.stats?.steps?.find((step) => step.log?.exitCode != null && step.log.exitCode !== 0)
-        ?.name ||
-      "unknown reason";
-    outcome = `⚠️ OpenClaw update failed: ${reason}. The gateway is running ${previous || "the previous version"}.`;
-  }
-  const note = payload.message?.trim() ?? "";
-  const sentence = !note.startsWith("/") && /\s/.test(note) && /[.!?]$/.test(note) ? note : "";
-  return [outcome, sentence, payload.doctorHint?.trim()].filter(Boolean).join("\n");
-}
-
 export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {
   const message = payload.message?.trim();
   if (message && (!payload.stats || payload.kind === "config-auto-recovery")) {

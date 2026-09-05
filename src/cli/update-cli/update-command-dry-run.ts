@@ -8,6 +8,7 @@ import { formatSchemaRefusalLines, hasSchemaRefusal } from "./schema-preflight.j
 import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 
 type UpdateDryRunPreview = {
+  runId: string;
   dryRun: true;
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -67,6 +68,7 @@ function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): vo
 }
 
 export function printUpdateDryRun(params: {
+  runId: string;
   root: string;
   installKind: "git" | "package" | "unknown";
   updateInstallKind: "git" | "package" | "unknown";
@@ -144,6 +146,7 @@ export function printUpdateDryRun(params: {
 
   printDryRunPreview(
     {
+      runId: params.runId,
       dryRun: true,
       root: params.root,
       installKind: params.installKind,

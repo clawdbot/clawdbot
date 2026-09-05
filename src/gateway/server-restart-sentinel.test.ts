@@ -12,12 +12,20 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import { resolveSystemEventOptionsOwnerAgentId } from "../infra/system-event-ownership.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunPhase,
+} from "../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { resolveRuntimeServiceVersion } from "../version.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
 
 type RestartSentinel = NonNullable<
@@ -830,6 +838,136 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.logWarn).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { terminal: false, channel: "webchat" },
+    { terminal: true, channel: "telegram" },
+  ])(
+    "uses the durable update outcome on boot ($channel, already terminal: $terminal)",
+    async ({ terminal, channel }) => {
+      const record = createUpdateRun({
+        trigger: "api",
+        before: { version: "2026.9.1" },
+        target: { version: resolveRuntimeServiceVersion() },
+      });
+      const existing = terminal
+        ? finishUpdateRun(record.runId, { status: "failed", reason: "post-update-plugins" })
+        : record;
+      mocks.deliveryContextFromSession.mockReturnValue({
+        channel,
+        ...(channel === "telegram" ? { to: "chat-123" } : {}),
+      });
+      mocks.appendAssistantMessageToSessionTranscript.mockResolvedValue({
+        ok: true,
+        target: {
+          agentId: "main",
+          sessionId: "main",
+          sessionKey: "agent:main:main",
+          storePath: "/tmp/sessions.json",
+        },
+        messageId: "update-notice",
+      });
+      mocks.readRestartSentinel.mockResolvedValue({
+        version: 1,
+        revision: 123,
+        payload: {
+          kind: "update",
+          status: "ok",
+          ts: 123,
+          sessionKey: "agent:main:main",
+          stats: { runId: record.runId },
+          doctorHint: "Run openclaw --profile work doctor --non-interactive.",
+        },
+      });
+
+      await scheduleRestartSentinelWake({ deps: {} as never });
+
+      const result = getUpdateRun(record.runId)!;
+      expect(result.status).toBe(terminal ? "failed" : "succeeded");
+      expect(result.verification).toMatchObject({
+        booted: true,
+        serviceRunning: true,
+        runningVersion: resolveRuntimeServiceVersion(),
+        noticeDelivered: true,
+        doctorHint: "Run openclaw --profile work doctor --non-interactive.",
+      });
+      if (terminal) {
+        expect(result.finishedAtMs).toBe(existing.finishedAtMs);
+      }
+      const message = renderUpdateRunReport(result).markdown;
+      if (channel === "webchat") {
+        expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+          expect.objectContaining({ text: message }),
+        );
+        expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+          expect.objectContaining({ payloads: [{ text: message }] }),
+        );
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "settles an exhausted pending handoff without overwriting CLI completion (%s)",
+    async (cliFinished) => {
+      vi.useFakeTimers();
+      const record = createUpdateRun({
+        trigger: "api",
+        target: { version: resolveRuntimeServiceVersion() },
+      });
+      recordUpdateRunPhase(record.runId, "restarting");
+      mocks.deliveryContextFromSession.mockReturnValue({ channel: "webchat" });
+      mocks.appendAssistantMessageToSessionTranscript.mockResolvedValue({
+        ok: true,
+        target: {
+          agentId: "main",
+          sessionId: "main",
+          sessionKey: "agent:main:main",
+          storePath: "/tmp/sessions.json",
+        },
+        messageId: "update-notice",
+      });
+      mocks.readRestartSentinel.mockResolvedValue({
+        version: 1,
+        revision: 123,
+        payload: {
+          kind: "update",
+          status: "skipped",
+          ts: 123,
+          sessionKey: "agent:main:main",
+          stats: { runId: record.runId, reason: "restart-health-pending" },
+        },
+      });
+
+      await scheduleRestartSentinelWake({ deps: {} as never });
+      expect(getUpdateRun(record.runId)?.status).toBe("running");
+      expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+      if (cliFinished) {
+        finishUpdateRun(record.runId, {
+          status: "succeeded",
+          after: { version: resolveRuntimeServiceVersion() },
+        });
+      }
+      // The sentinel owns 900 one-millisecond retries under VITEST. WAL
+      // maintenance has its own persistent interval and must remain running.
+      await vi.advanceTimersByTimeAsync(900);
+
+      const result = getUpdateRun(record.runId)!;
+      expect(result.status).toBe(cliFinished ? "succeeded" : "failed");
+      expect(result.reason).toBe(cliFinished ? null : "restart-unhealthy");
+      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+        expect.objectContaining({ text: renderUpdateRunReport(result).markdown }),
+      );
+      expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledOnce();
+      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
+      const sentinelReads = mocks.readRestartSentinel.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(900);
+      expect(mocks.readRestartSentinel).toHaveBeenCalledTimes(sentinelReads);
+      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
+      expect(mocks.clearRestartSentinelIfRevision).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([false, true])(
     "appends and broadcasts an internal update outcome once (continuation: %s)",
     async (withContinuation) => {
@@ -899,7 +1037,7 @@ describe("scheduleRestartSentinelWake", () => {
             expectedSessionId: sessionId,
             expectedLifecycleRevision: entry.lifecycleRevision,
             storePath,
-            text: "✅ OpenClaw updated and restarted.",
+            text: "✅ OpenClaw updated.",
             idempotencyKey: `restart-sentinel-notice:${sessionKey}:123`,
           }),
         );
@@ -919,7 +1057,7 @@ describe("scheduleRestartSentinelWake", () => {
             sessionKey,
             message: expect.objectContaining({
               role: "assistant",
-              content: [{ type: "text", text: "✅ OpenClaw updated and restarted." }],
+              content: [{ type: "text", text: "✅ OpenClaw updated." }],
             }),
           }),
           subscribers,
@@ -980,7 +1118,7 @@ describe("scheduleRestartSentinelWake", () => {
   );
 
   it.each([
-    { kind: "update", status: "ok", notice: "✅ OpenClaw updated and restarted." },
+    { kind: "update", status: "ok", notice: "✅ OpenClaw updated." },
     {
       kind: "update",
       status: "skipped",
@@ -990,7 +1128,7 @@ describe("scheduleRestartSentinelWake", () => {
       kind: "update",
       status: "error",
       notice:
-        "⚠️ OpenClaw update failed: verification failed. The gateway is running the previous version.",
+        "⚠️ OpenClaw update failed: verification failed.\nRun openclaw triage to diagnose and repair the failed update.",
     },
     {
       kind: "restart",
@@ -3246,7 +3384,7 @@ describe("scheduleRestartSentinelWake", () => {
         to: "123",
         accountId: "bot",
         threadId: "7",
-        payloads: [{ text: "✅ OpenClaw updated and restarted." }],
+        payloads: [{ text: "✅ OpenClaw updated." }],
       }),
     );
     const eventOptions = mocks.enqueueSystemEvent.mock.calls[0]?.[1];

@@ -3978,6 +3978,7 @@ describe("scripts/crabbox-wrapper", () => {
         source = origin,
         extraEnv: NodeJS.ProcessEnv = {},
         nativeSeed = true,
+        prepareReceiver?: (receiver: string) => void,
       ) => {
         const receiver = path.join(root, name);
         if (source === origin && nativeSeed) {
@@ -4025,6 +4026,7 @@ describe("scripts/crabbox-wrapper", () => {
         } else {
           mkdirSync(receiver);
         }
+        prepareReceiver?.(receiver);
         const transport =
           provider === "blacksmith-testbox" ? path.join(root, `${name}-transport`) : receiver;
         if (transport !== receiver) {
@@ -4186,9 +4188,80 @@ describe("scripts/crabbox-wrapper", () => {
           : existsSync(path.join(producer, ".git", "shallow")),
       ).toEqual(shallowBefore ?? false);
 
-      const imported = receive("candidate", candidate.remoteCommand, candidate.bundle);
+      const newerFiles = [
+        "newer-source.txt",
+        "newer-source-link",
+        "newer-directory/owned.txt",
+        "newer-directory/.gitignore",
+        "newer-directory/hidden/.gitignore",
+        "newer-directory/hidden/generated.js",
+      ];
+      const newerCaches = [
+        "newer-directory/cache.ignored",
+        "newer-directory/changed-cache.ignored",
+        "newer-directory/.cache.ignored/.gitignore",
+        "newer-directory/.changed-cache.ignored/.gitignore",
+        "newer-directory/.untracked-cache.ignored/.gitignore",
+      ];
+      const prepareNewerReceiver = (receiver: string) => {
+        writeFileSync(path.join(receiver, newerFiles[0]!), "newer workflow source\n");
+        symlinkSync("newer-source.txt", path.join(receiver, newerFiles[1]!));
+        mkdirSync(path.join(receiver, "newer-directory"));
+        writeFileSync(path.join(receiver, newerFiles[2]!), "newer nested source\n");
+        mkdirSync(path.join(receiver, "newer-directory/hidden"));
+        writeFileSync(path.join(receiver, newerFiles[3]!), "hidden/\n!*.ignored\n");
+        writeFileSync(path.join(receiver, newerFiles[4]!), "generated.js\n");
+        writeFileSync(path.join(receiver, newerFiles[5]!), "newer hidden source\n");
+        writeFileSync(path.join(receiver, "newer-private.ignored"), "retained private bytes\n");
+        for (const file of newerCaches) {
+          mkdirSync(path.dirname(path.join(receiver, file)), { recursive: true });
+          writeFileSync(path.join(receiver, file), "retained cache bytes\n");
+        }
+        git(receiver, [
+          "add",
+          "-f",
+          ...newerFiles,
+          ...newerCaches.slice(0, -1),
+          "newer-private.ignored",
+        ]);
+        git(receiver, ["commit", "-qm", "newer workflow source"]);
+        // A stale execution index cannot erase ownership recorded by its commit.
+        git(receiver, ["update-index", "--force-remove", ...newerFiles]);
+        writeFileSync(path.join(receiver, "newer-private.ignored"), "changed private bytes\n");
+        writeFileSync(path.join(receiver, newerCaches[1]!), "changed cache bytes\n");
+        writeFileSync(path.join(receiver, newerCaches[3]!), "changed cache bytes\n");
+      };
+      const imported = receive(
+        "candidate",
+        candidate.remoteCommand,
+        candidate.bundle,
+        origin,
+        {
+          GIT_DIR: path.join(root, "unrelated-git"),
+          GIT_WORK_TREE: root,
+          GIT_INDEX_FILE: path.join(root, "unrelated-index"),
+          GIT_COMMON_DIR: path.join(root, "unrelated-common"),
+          GIT_OBJECT_DIRECTORY: path.join(root, "unrelated-objects"),
+          GIT_ALTERNATE_OBJECT_DIRECTORIES: path.join(root, "unrelated-alternates"),
+        },
+        true,
+        provider === "blacksmith-testbox" ? prepareNewerReceiver : undefined,
+      );
       expect(imported.result.status, failureDetail(imported.result)).toBe(0);
       expect(imported.result.stdout).toBe("transport fixture reached\n");
+      if (provider === "blacksmith-testbox") {
+        for (const file of newerFiles) {
+          expect(() => lstatSync(path.join(imported.receiver, file))).toThrow();
+        }
+        for (const [index, file] of newerCaches.entries()) {
+          expect(readFileSync(path.join(imported.receiver, file), "utf8")).toBe(
+            index === 1 || index === 3 ? "changed cache bytes\n" : "retained cache bytes\n",
+          );
+        }
+        expect(readFileSync(path.join(imported.receiver, "newer-private.ignored"), "utf8")).toBe(
+          "changed private bytes\n",
+        );
+      }
       expect(git(imported.receiver, ["rev-parse", "HEAD^"])).toBe(base);
       expect(git(imported.receiver, ["rev-list", "--count", "HEAD"])).toBe("3");
       if (alias) {
@@ -4307,6 +4380,62 @@ describe("scripts/crabbox-wrapper", () => {
       // Shared receiver failure paths need one full real-Git fixture; provider/history
       // variants above retain independent successful source identity checks.
       if (provider === "blacksmith-testbox" && !shallow) {
+        for (const [fault, file, message] of [
+          ["bytes", "newer-source.txt", "source bytes mismatch"],
+          ["mode", "newer-source.txt", "source mode mismatch"],
+          ["kind", "newer-source.txt", "source mode mismatch"],
+          ["link", "newer-source-link", "source bytes mismatch"],
+          ["parent", "newer-directory", "unexpected source entry"],
+          ["untracked", "unowned.txt", "unexpected source entry"],
+          ["index", "unowned.txt", "unexpected source entry"],
+          ["hidden-untracked", "newer-directory/hidden/unknown.js", "unexpected source entry"],
+          ["hidden-bytes", "newer-directory/hidden/generated.js", "source bytes mismatch"],
+        ] as const) {
+          let retained: ReturnType<typeof sourceManifest> = [];
+          let priorHead = "";
+          const rejected = receive(
+            `newer-${fault}`,
+            candidate.remoteCommand,
+            candidate.bundle,
+            origin,
+            {},
+            true,
+            (receiver) => {
+              prepareNewerReceiver(receiver);
+              priorHead = git(receiver, ["rev-parse", "HEAD"]);
+              const fullPath = path.join(receiver, file);
+              if (fault === "mode") {
+                chmodSync(fullPath, 0o755);
+              } else if (fault === "kind" || fault === "link" || fault === "parent") {
+                rmSync(fullPath, { recursive: true });
+                symlinkSync(
+                  fault === "parent" ? deletionReferent : path.join(deletionReferent, "canary.txt"),
+                  fullPath,
+                );
+              } else {
+                writeFileSync(fullPath, "retained changed bytes\n");
+              }
+              if (fault === "index") {
+                git(receiver, ["add", file]);
+              }
+              retained = sourceManifest(receiver, [file]);
+            },
+          );
+          expect(rejected.result.status, failureDetail(rejected.result)).toBe(2);
+          expect(rejected.result.stderr, fault).toContain(message);
+          expect(rejected.result.stdout, fault).not.toContain("transport fixture reached");
+          expect(
+            sourceManifest(
+              rejected.receiver,
+              retained.map(([retainedFile]) => retainedFile),
+            ),
+            fault,
+          ).toEqual(retained);
+          expect(git(rejected.receiver, ["rev-parse", "HEAD"]), fault).toBe(priorHead);
+          expect(readFileSync(path.join(deletionReferent, "canary.txt"), "utf8")).toBe(
+            "private referent\n",
+          );
+        }
         const corrupt = Buffer.from(candidate.bundle);
         const lastIndex = corrupt.length - 1;
         corrupt.writeUInt8(corrupt.readUInt8(lastIndex) ^ 1, lastIndex);
