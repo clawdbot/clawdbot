@@ -38,6 +38,19 @@ export type QuestionPromptDelivery = {
   messageChannel?: string;
 };
 
+/** Ties a question prompt to both the run signal and the question's terminal state. */
+export function createQuestionPromptAbort(toolSignal?: AbortSignal): {
+  signal: AbortSignal;
+  abort: () => void;
+} {
+  const controller = new AbortController();
+  const signal = toolSignal ? AbortSignal.any([toolSignal, controller.signal]) : controller.signal;
+  return {
+    signal,
+    abort: () => controller.abort(new Error("question ended before prompt delivery")),
+  };
+}
+
 /** Builds a portable prompt sender for Gateway-scoped / loopback tool construction. */
 export function createChannelQuestionPromptDelivery(params: {
   cfg?: OpenClawConfig;
@@ -105,7 +118,7 @@ export async function sendQuestionToolPrompt(params: {
   const { questionId, questions } = params;
   const send: QuestionPromptSend = (payload) =>
     runWithQuestionChannelDeliveries([questionId], () =>
-      params.send(payload, { signal: params.signal }),
+      params.signal ? params.send(payload, { signal: params.signal }) : params.send(payload),
     );
   if (params.toolName === "secrets") {
     const binding = questions[0]?.secretStore;

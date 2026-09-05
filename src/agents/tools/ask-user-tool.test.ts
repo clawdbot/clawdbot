@@ -412,42 +412,29 @@ describe("ask_user execution", () => {
 
   it("aborts a self-published prompt when the answer wins before delivery", async () => {
     const answers = { answers: { deploy_target: ["Production"] } };
-    let capturedSignal: AbortSignal | undefined;
+    const finishWait = createDeferred<typeof answers>();
+    const promptStarted = createDeferred<void>();
     let aborted = false;
-    let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _opts, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
-        });
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-
+    const gateway = gatewayStub(async (method, _opts, params) =>
+      method === "question.request"
+        ? { id: params.id }
+        : method === "question.waitAnswer"
+          ? finishWait.promise
+          : Promise.reject(new Error(`unexpected method ${method}`)),
+    );
     const pending = createAskUserTool({
       sessionKey: "agent:main:direct-dispatch-abort",
       gatewayCall: gateway.call,
       questionPrompt: {
         send: (_payload, options) => {
-          capturedSignal = options?.signal;
+          options?.signal?.addEventListener("abort", () => (aborted = true), { once: true });
+          promptStarted.resolve();
           return new Promise<void>(() => {});
         },
       },
     }).execute("call-direct-dispatch-abort", validArgs);
-
-    await vi.waitFor(() => expect(capturedSignal).toBeDefined());
-    capturedSignal?.addEventListener(
-      "abort",
-      () => {
-        aborted = true;
-      },
-      { once: true },
-    );
-    finishWait?.({ status: "answered", answers });
-
+    await promptStarted.promise;
+    finishWait.resolve({ status: "answered", answers });
     await expect(pending).resolves.toMatchObject({ details: { status: "answered", answers } });
     expect(aborted).toBe(true);
   });

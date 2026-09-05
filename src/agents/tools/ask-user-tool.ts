@@ -30,7 +30,11 @@ import {
   readQuestionErrorReason,
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
-import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
+import {
+  createQuestionPromptAbort,
+  type QuestionPromptDelivery,
+  sendQuestionToolPrompt,
+} from "./question-prompt-send.js";
 
 const ASK_USER_RPC_GRACE_MS = 10_000;
 const ASK_USER_PROMPT_RECHECK_MS = 50;
@@ -575,6 +579,7 @@ export function createAskUserTool(params: {
       // prompt before this call. One that dispatches tools itself reserves nothing,
       // so the tool publishes its own prompt rather than blocking on a silent wait.
       const publishOwnPrompt = reserved ? undefined : params.questionPrompt?.send;
+      const promptAbort = publishOwnPrompt ? createQuestionPromptAbort(signal) : undefined;
       const deliverPrompt = reserved?.phase.kind === "reserved" || publishOwnPrompt !== undefined;
       const state: AskUserQuestionState =
         reserved ??
@@ -591,7 +596,6 @@ export function createAskUserTool(params: {
       transitionAskUserQuestion(state, { kind: "registering" });
       askUserQuestions.set(questionId, state);
       let registered = false;
-      let promptAbort: AbortController | undefined;
       const cancelPendingQuestion = createGatewayQuestionCanceller({ gatewayCall, questionId });
       const cancelOnAbort = () => {
         if (askUserQuestions.get(questionId) === state) {
@@ -695,10 +699,6 @@ export function createAskUserTool(params: {
           // A consumed registration-time claim must not expose a stale prompt.
           markAskUserPromptReady(questionId, normalized.questions);
           if (publishOwnPrompt) {
-            promptAbort = new AbortController();
-            const promptSignal = signal
-              ? AbortSignal.any([signal, promptAbort.signal])
-              : promptAbort.signal;
             settleAfterOwnPromptDelivery(
               questionId,
               sendQuestionToolPrompt({
@@ -706,7 +706,7 @@ export function createAskUserTool(params: {
                 questionId,
                 questions: normalized.questions,
                 send: publishOwnPrompt,
-                signal: promptSignal,
+                signal: promptAbort?.signal,
               }),
             );
           }
@@ -760,7 +760,7 @@ export function createAskUserTool(params: {
         }
         throw error;
       } finally {
-        promptAbort?.abort(new Error("ask_user question ended before prompt delivery"));
+        promptAbort?.abort();
         signal?.removeEventListener("abort", cancelOnAbort);
         if (askUserQuestions.get(questionId) === state) {
           releaseAskUserQuestion(questionId);

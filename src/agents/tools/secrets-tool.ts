@@ -22,7 +22,11 @@ import {
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
 import { callGatewayTool } from "./gateway.js";
-import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
+import {
+  createQuestionPromptAbort,
+  type QuestionPromptDelivery,
+  sendQuestionToolPrompt,
+} from "./question-prompt-send.js";
 import { jsonResult, textResult } from "./tool-results.js";
 
 type SecretStoreKind = "secret";
@@ -271,7 +275,7 @@ export function createSecretsTool(params: {
         throw new ToolInputError(`Unknown secrets action: ${action}`);
       }
       const request = normalizeSecretsRequestParams(input);
-      const promptAbort = publishOwnPrompt ? new AbortController() : undefined;
+      const promptAbort = publishOwnPrompt ? createQuestionPromptAbort(signal) : undefined;
       const delivery = beginAskUserPromptDelivery({
         toolCallId,
         sessionKey: params.sessionKey,
@@ -288,11 +292,7 @@ export function createSecretsTool(params: {
                   questions: request.questions,
                   config: params.config,
                   send: publishOwnPrompt,
-                  signal: signal
-                    ? promptAbort
-                      ? AbortSignal.any([signal, promptAbort.signal])
-                      : signal
-                    : promptAbort?.signal,
+                  signal: promptAbort?.signal,
                 }),
             }
           : {}),
@@ -391,7 +391,7 @@ export function createSecretsTool(params: {
         }
         throw error;
       } finally {
-        promptAbort?.abort(new Error("secrets question ended before prompt delivery"));
+        promptAbort?.abort();
         signal?.removeEventListener("abort", cancelOnAbort);
         delivery.release();
       }
