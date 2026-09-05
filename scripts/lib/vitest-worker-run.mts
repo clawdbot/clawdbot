@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runManagedCommand } from "./managed-child-process.mts";
-import { resolveVitestProcessEnv } from "./vitest-process-env.mts";
 import {
   verifyVitestWorkerArtifacts,
   VITEST_WORKER_PREPARE_REQUEST,
@@ -42,7 +41,7 @@ export function createVitestWorkerRun(env: NodeJS.ProcessEnv = process.env) {
         bin: process.execPath,
         args: [fileURLToPath(new URL("./vitest-worker-compiler.mts", import.meta.url)), directory],
         cwd: root,
-        env: resolveVitestProcessEnv(env),
+        env,
         shell: false,
         // Match the native declaration owner: POSIX group/output join; Windows close/taskkill.
         requireProcessTreeExit: process.platform !== "win32",

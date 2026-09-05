@@ -16,12 +16,8 @@ import {
 import { hasNonRunVitestSubcommand } from "./lib/vitest-cli-mode.mts";
 import { parseVitestExecutionArgs } from "./lib/vitest-cli.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
-import {
-  isCiLikeEnv,
-  resolveLocalFullSuiteProfile,
-  resolveLocalVitestEnv,
-} from "./lib/vitest-local-scheduling.mts";
-import { resolveVitestNodeArgs } from "./lib/vitest-process-env.mts";
+import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mts";
+import { resolveVitestNodeArgs, resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
 import type { exitVitestBySignal } from "./lib/vitest-process.mts";
 import { createVitestReportOwner, type VitestReportOwner } from "./lib/vitest-report-owner.mts";
 import {
@@ -284,7 +280,7 @@ export async function runTestProjects(
     printHelp();
     return;
   }
-  const baseEnv = resolveLocalVitestEnv(env);
+  const baseEnv = resolveVitestProcessEnv(env);
   const { targetArgs, forwardedArgs } = parseTestProjectsArgs(args, process.cwd());
   const unmatchedExplicitTargets = findUnmatchedExplicitTestTargets(args, process.cwd());
   if (unmatchedExplicitTargets.length > 0) {

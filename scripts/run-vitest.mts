@@ -931,7 +931,7 @@ export async function runVitest(
   const delegatedArgs = resolveTestProjectsDelegationArgs(argv);
   if (delegatedArgs) {
     const { runTestProjects } = await import("./test-projects-run.mts");
-    return runTestProjects(exitBySignal, delegatedArgs, resolveVitestProcessEnv(env));
+    return runTestProjects(exitBySignal, delegatedArgs, env);
   }
 
   const vitestArgs = resolveImplicitVitestArgs(argv);
@@ -984,7 +984,9 @@ export async function runVitest(
   }
   const sourceMode =
     !execution || execution.options.watch || resolveExplicitVitestMode(vitestArgs) === "watch";
-  const workers = sourceMode ? undefined : createVitestWorkerRun(invocationEnv);
+  const workers = sourceMode
+    ? undefined
+    : createVitestWorkerRun(resolveVitestProcessEnv(invocationEnv));
   let interrupted: NodeJS.Signals | undefined;
   const onSignal = (signal: NodeJS.Signals) => {
     interrupted ??= signal;
