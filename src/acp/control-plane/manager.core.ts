@@ -168,16 +168,30 @@ export class AcpSessionManager {
     runtime: AcpRuntime;
     handle: AcpRuntimeHandle;
     meta: SessionAcpMeta;
+    sessionEntry: SessionEntry;
+    closeRuntimeOnFailure: () => Promise<void>;
   }> {
     const target = resolveAcpSessionTarget(input);
     return await this.withSessionActor(target, async () => {
-      return await runManagerInitializeSession({
+      const initialized = await runManagerInitializeSession({
         input,
         ...target,
         deps: this.deps,
         runtimeHandles: this.runtimeHandles,
         writeSessionMeta: this.writeSessionMeta.bind(this),
       });
+      return {
+        ...initialized,
+        // Deletion and shutdown may have already released this exact handle.
+        closeRuntimeOnFailure: () =>
+          this.withSessionActor(target, () =>
+            this.runtimeHandles.close({
+              ...target,
+              reason: "spawn-failed",
+              expectedHandle: initialized.handle,
+            }),
+          ),
+      };
     });
   }
 
@@ -468,6 +482,7 @@ export class AcpSessionManager {
   }
 
   private async writeSessionMeta(params: {
+    assertCommitAllowed?: () => void;
     cfg: OpenClawConfig;
     sessionKey: string;
     agentId: string;
@@ -485,6 +500,7 @@ export class AcpSessionManager {
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         mutate: params.mutate,
+        assertCommitAllowed: params.assertCommitAllowed,
         ...(params.skipMaintenance === true ? { skipMaintenance: true } : {}),
         ...(params.takeCacheOwnership === true ? { takeCacheOwnership: true } : {}),
       });

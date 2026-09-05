@@ -109,14 +109,20 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     };
   }
 
-  private resolveCurrentTurnEntryId(): string | null {
+  resolveCurrentTurnEntryId(isInterruptedTail?: (entry: SessionEntry) => boolean): string | null {
     let parentId = this.appendParentId;
     let remainingAncestors = this.byId.size;
     // Compaction rewrites context without consuming the current user turn.
-    // Stop at message and reset boundaries so old keyed turns stay closed.
+    // Walk physical parents: opaque/context-excluded users still close older
+    // turns. Replay may recognize its interrupted tail, never skip missing rows.
     while (parentId && remainingAncestors-- > 0) {
       const parent = this.byId.get(parentId);
-      if (!parent || (!isSessionContextMetadataEntry(parent) && parent.type !== "compaction")) {
+      if (
+        !parent ||
+        (!isSessionContextMetadataEntry(parent) &&
+          parent.type !== "compaction" &&
+          !isInterruptedTail?.(parent))
+      ) {
         break;
       }
       parentId = parent.parentId;
@@ -393,25 +399,6 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       this.labelTimestampsById.delete(targetId);
     }
     return entry.id;
-  }
-
-  getBranch(fromId?: string): SessionEntry[] {
-    const path: SessionEntry[] = [];
-    const seen = new Set<string>();
-    let currentId = fromId ?? this.leafId;
-    while (currentId && !seen.has(currentId)) {
-      seen.add(currentId);
-      const current = this.byId.get(currentId);
-      if (current) {
-        const normalizedCurrent = this.normalizeEntryParent(current);
-        path.push(normalizedCurrent);
-        currentId = normalizedCurrent.parentId;
-      } else {
-        currentId = this.opaqueParentsById.get(currentId) ?? null;
-      }
-    }
-    path.reverse();
-    return path;
   }
 
   buildSessionContext(): SessionContext {

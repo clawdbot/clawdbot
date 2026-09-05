@@ -1,3 +1,4 @@
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import type { TemplateResult } from "lit";
 import type { GatewayControlUiPluginWidgetKind } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
@@ -5,7 +6,7 @@ import type { BoardWidget } from "../types.ts";
 
 export type PluginBoardWidgetRenderer = (props: {
   widget: BoardWidget;
-  sessionKey: string;
+  session: BoardGetParams;
   active: boolean;
   canMutate: boolean;
   requestUpdate: () => void;
@@ -27,21 +28,6 @@ const PLUGIN_WIDGET_KIND_CONTRIBUTIONS: Record<string, PluginWidgetKindContribut
     kind: "session:progress",
     label: t("sessionProgressCard.widgetLabel"),
     loader: async () => (await import("./session-progress.ts")).renderSessionProgressWidget,
-  },
-  "workboard:board": {
-    kind: "workboard:board",
-    label: t("workboard.widget.boardLabel"),
-    loader: async () => (await import("./workboard-board.ts")).renderWorkboardBoardWidget,
-  },
-  "workboard:card": {
-    kind: "workboard:card",
-    label: t("workboard.widget.cardLabel"),
-    loader: async () => (await import("./workboard-card.ts")).renderWorkboardCardWidget,
-  },
-  "workboard:mini": {
-    kind: "workboard:mini",
-    label: t("workboard.widget.summaryLabel"),
-    loader: async () => (await import("./workboard-mini.ts")).renderWorkboardMiniWidget,
   },
 };
 

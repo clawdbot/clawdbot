@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { Browser, BrowserContext, ConsoleMessage, Frame, Locator, Page } from "playwright";
+import type { ConsoleMessage, Frame, Locator, Page } from "playwright";
 import { expect } from "vitest";
 
 const require = createRequire(import.meta.url);
@@ -106,29 +106,6 @@ export function createMcpAppFixtureControl(controlPath: string, eventsPath: stri
       await fs.rename(nextPath, controlPath);
     },
   };
-}
-
-export async function openMcpAppProofContext(
-  owner: Browser,
-  openContexts: Set<BrowserContext>,
-  { captureUiProof, proofDir }: { captureUiProof: boolean; proofDir: string },
-): Promise<BrowserContext> {
-  const context = await owner.newContext({
-    permissions: ["local-network-access"],
-    ...(captureUiProof
-      ? { recordVideo: { dir: proofDir, size: { width: 1280, height: 800 } } }
-      : {}),
-  });
-  openContexts.add(context);
-  return context;
-}
-
-export async function closeMcpAppProofContext(
-  context: BrowserContext,
-  openContexts: Set<BrowserContext>,
-) {
-  await context.close();
-  openContexts.delete(context);
 }
 
 export function createMcpAppTeardownRecorder(proofDir: string, fixtureEventsPath: string) {

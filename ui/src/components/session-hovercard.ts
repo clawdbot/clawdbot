@@ -54,6 +54,7 @@ type SessionHovercardInput = {
   personActivity?: PersonActivityRouting;
   pullRequests?: ControlUiSessionPullRequestSnapshot;
   progressCard?: ProgressCard | null;
+  progressCardError?: string;
 };
 
 let channelAvatarElementLoad: Promise<unknown> | undefined;
@@ -415,33 +416,36 @@ function renderHeader(input: SessionHovercardInput) {
 function renderProgressHeadsUp(
   card: ProgressCard | null | undefined,
   sessionStatus: SidebarSessionHovercardRow["status"],
+  startedAt: SidebarSessionHovercardRow["startedAt"],
 ) {
-  const headsUp = progressCardHeadsUp(card, sessionStatus);
+  const headsUp = progressCardHeadsUp(card, sessionStatus, startedAt);
   if (!headsUp) {
     return nothing;
   }
   const statusLabel = t(
-    headsUp.step.status === "in_progress"
+    headsUp.status === "in_progress"
       ? "sessionProgressCard.status.inProgress"
-      : "sessionProgressCard.status.pending",
+      : headsUp.status === "paused"
+        ? "sessionProgressCard.status.paused"
+        : "sessionProgressCard.status.pending",
   );
   return html`<div
     class="session-hovercard__context-row session-hovercard__plan-row"
     aria-label=${t("sessionProgressCard.stepLabel", {
       status: statusLabel,
-      step: headsUp.step.step,
+      step: headsUp.step,
     })}
-    title=${headsUp.step.step}
+    title=${headsUp.step}
   >
     <span class="session-hovercard__context-icon" aria-hidden="true"
       >${
-        headsUp.step.status === "in_progress"
+        headsUp.status === "in_progress"
           ? html`<span class="session-run-spinner"></span>`
           : icons.clock
       }</span
     >
     <span class="session-hovercard__context-value session-hovercard__plan-step"
-      >${headsUp.step.step}</span
+      >${headsUp.step}</span
     >
     <span class="session-hovercard__plan-count">${headsUp.completed}/${headsUp.total}</span>
   </div>`;
@@ -464,7 +468,7 @@ function renderSessionContext({ row, progressCard }: SessionHovercardInput) {
     !placementIdentity &&
     row?.boardFace !== "dashboard" &&
     row?.hasAutomation !== true &&
-    !progressCardHeadsUp(progressCard, row?.status)
+    !progressCardHeadsUp(progressCard, row?.status, row?.startedAt)
   ) {
     return nothing;
   }
@@ -535,7 +539,7 @@ function renderSessionContext({ row, progressCard }: SessionHovercardInput) {
           </div>`
         : nothing
     }
-    ${renderProgressHeadsUp(progressCard, row?.status)}
+    ${renderProgressHeadsUp(progressCard, row?.status, row?.startedAt)}
   </div>`;
 }
 
@@ -639,12 +643,12 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
     (input.row?.placementProviderId && input.row.placementProfileId) ||
     input.row?.boardFace === "dashboard" ||
     input.row?.hasAutomation === true ||
-    progressCardHeadsUp(input.progressCard, input.row?.status),
+    progressCardHeadsUp(input.progressCard, input.row?.status, input.row?.startedAt),
   );
   const lastMessagePreview = input.progressCard
     ? undefined
     : input.row?.lastMessagePreview?.trim() || undefined;
-  if (!input.row && !hasPullRequestDetails && !input.progressCard) {
+  if (!input.row && !hasPullRequestDetails && !input.progressCard && !input.progressCardError) {
     return nothing;
   }
   return html`<div class="session-hovercard">
@@ -677,5 +681,6 @@ export function renderSessionHovercard(input: SessionHovercardInput) {
         : nothing
     }
     ${renderAgentNotepad(input.progressCard)}
+    ${input.progressCardError ? html`<section class="session-hovercard__section" role="status">${input.progressCardError}</section>` : nothing}
   </div>`;
 }

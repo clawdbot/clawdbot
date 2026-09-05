@@ -357,28 +357,6 @@ export default definePluginEntry({
     api.onConversationBindingResolved?.((event) =>
       codexConversationBindingRuntime.handleBindingResolved(event, { bindingStore }),
     );
-    api.on("after_compaction", async (event, ctx) => {
-      const previousSessionId = event.previousSessionId?.trim();
-      const sessionId = ctx.sessionId?.trim();
-      if (!previousSessionId || !sessionId || previousSessionId === sessionId) {
-        return;
-      }
-      const config = resolveCurrentConfig();
-      const sessionKey = ctx.sessionKey?.trim();
-      const { sessionBindingIdentity } = await import("./src/app-server/session-binding.js");
-      const identity = sessionBindingIdentity({
-        sessionId,
-        ...(sessionKey ? { sessionKey } : {}),
-        ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
-        ...(config ? { config } : {}),
-      });
-      const adopted = await bindingStore.adoptSessionGeneration(identity, previousSessionId);
-      if (adopted === "conflict") {
-        api.logger.warn?.(
-          `codex: could not adopt compacted session generation ${sessionId} (${adopted}); secondary native compaction will skip`,
-        );
-      }
-    });
     api.on("session_end", async (event, ctx) => {
       if (!event.reason || !ENDED_SESSION_REASONS.has(event.reason)) {
         return;

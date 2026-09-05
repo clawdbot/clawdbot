@@ -6,11 +6,11 @@ type LoaderModule = typeof import("./loader.js");
 type ManifestRegistryModule = typeof import("./manifest-registry.js");
 type RuntimeModule = typeof import("./runtime.js");
 type WebFetchProvidersRuntimeModule = typeof import("./web-fetch-providers.runtime.js");
-type WebFetchProvidersSharedModule = typeof import("./web-fetch-providers.shared.js");
+type WebProviderResolutionModule = typeof import("./web-provider-resolution-shared.js");
 
 let loaderModule: LoaderModule;
 let manifestRegistryModule: ManifestRegistryModule;
-let webFetchProvidersSharedModule: WebFetchProvidersSharedModule;
+let webProviderResolutionModule: WebProviderResolutionModule;
 let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resetPluginRuntimeStateForTest: RuntimeModule["resetPluginRuntimeStateForTest"];
@@ -119,7 +119,7 @@ describe("resolvePluginWebFetchProviders", () => {
     });
     loaderModule = await import("./loader.js");
     manifestRegistryModule = await import("./manifest-registry.js");
-    webFetchProvidersSharedModule = await import("./web-fetch-providers.shared.js");
+    webProviderResolutionModule = await import("./web-provider-resolution-shared.js");
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
     ({ resolvePluginWebFetchProviders } = await import("./web-fetch-providers.runtime.js"));
   });
@@ -213,7 +213,8 @@ describe("resolvePluginWebFetchProviders", () => {
     const rawConfig = createFirecrawlAllowConfig();
     const env = createWebFetchEnv();
     const { config, activationSourceConfig, autoEnabledReasons } =
-      webFetchProvidersSharedModule.resolveBundledWebFetchResolutionConfig({
+      webProviderResolutionModule.resolveBundledWebProviderResolutionConfig({
+        contract: "webFetchProviders",
         config: rawConfig,
         workspaceDir: DEFAULT_WORKSPACE,
         env,
@@ -280,6 +281,7 @@ describe("resolvePluginWebFetchProviders", () => {
       candidates: [],
       diagnostics: [],
       installRecords: {},
+      registryPath: "/tmp/openclaw-home/.openclaw/state/openclaw.sqlite",
     });
     const { logger, ...loadOptions } = firstPluginLoadOptions(loadOpenClawPluginsMock);
     expect(Object.keys(logger ?? {}).toSorted()).toEqual(["debug", "error", "info", "warn"]);

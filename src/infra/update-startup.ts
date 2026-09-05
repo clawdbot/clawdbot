@@ -67,6 +67,13 @@ import {
   startManagedServiceUpdateHandoff,
 } from "./update-managed-service-handoff.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  recordUpdateRunPhase,
+  recordUpdateRunStep,
+} from "./update-run-ledger.js";
+import { summarizeUpdateStepFailure } from "./update-run-record.js";
 import { runGatewayUpdatePreflight, type UpdateRunResult } from "./update-runner.js";
 
 type UpdateCheckState = {
@@ -84,18 +91,12 @@ type UpdateCheckState = {
   autoLastAttemptAt?: string;
 };
 
-type AutoUpdatePolicy = {
-  enabled: boolean;
-  stableDelayHours: number;
-  stableJitterHours: number;
-  betaCheckIntervalHours: number;
-};
-
 type AutoUpdateRunResult =
   | { status: "handoff"; command?: string; logPath?: string }
   | { status: "failed"; result: UpdateRunResult; message: string };
 
 type AutoUpdateRunParams = {
+  runId: string;
   channel: "stable" | "beta" | "dev";
   mode: UpdateRunResult["mode"];
   timeoutMs: number;
@@ -221,9 +222,8 @@ const UPDATE_CHECK_STATE_KEY = "update.checkState";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const AUTO_UPDATE_COMMAND_TIMEOUT_MS = 45 * 60 * 1000;
-const AUTO_STABLE_DELAY_HOURS_DEFAULT = 6;
-const AUTO_STABLE_JITTER_HOURS_DEFAULT = 12;
-const AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT = 1;
+const AUTO_STABLE_DELAY_HOURS = 6;
+const AUTO_STABLE_JITTER_HOURS = 12;
 const DEV_COMMIT_LIMIT = 5;
 const DEV_COMMIT_SUBJECT_MAX_LENGTH = 120;
 const DEV_COMMIT_LOG_MAX_OUTPUT_BYTES = 8 * 1024;
@@ -232,35 +232,15 @@ function shouldSkipCheck(allowInTests: boolean): boolean {
   return !allowInTests && Boolean(process.env.VITEST || process.env.NODE_ENV === "test");
 }
 
-function resolveAutoUpdatePolicy(cfg: OpenClawConfig): AutoUpdatePolicy {
-  const auto = cfg.update?.auto;
-  return {
-    enabled: Boolean(auto?.enabled),
-    stableDelayHours: AUTO_STABLE_DELAY_HOURS_DEFAULT,
-    stableJitterHours: AUTO_STABLE_JITTER_HOURS_DEFAULT,
-    betaCheckIntervalHours: AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT,
-  };
-}
-
 function resolveCheckIntervalMs(
   cfg: OpenClawConfig,
   installKind?: "package" | "git" | "unknown",
 ): number {
   const channel = normalizeUpdateChannel(cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
-  const auto = resolveAutoUpdatePolicy(cfg);
-  if (!auto.enabled) {
-    return UPDATE_CHECK_INTERVAL_MS;
-  }
-  if (channel === "beta") {
-    return Math.max(ONE_HOUR_MS / 4, Math.floor(auto.betaCheckIntervalHours * ONE_HOUR_MS));
-  }
-  if (channel === "stable") {
-    return ONE_HOUR_MS;
-  }
-  if (channel === "dev" && installKind === "git") {
-    return ONE_HOUR_MS;
-  }
-  return UPDATE_CHECK_INTERVAL_MS;
+  return cfg.update?.auto?.enabled &&
+    (channel === "stable" || channel === "beta" || (channel === "dev" && installKind === "git"))
+    ? ONE_HOUR_MS
+    : UPDATE_CHECK_INTERVAL_MS;
 }
 
 function readState(): UpdateCheckState {
@@ -402,8 +382,6 @@ function resolveStableAutoApplyAtMs(params: {
   nowMs: number;
   version: string;
   tag: string;
-  stableDelayHours: number;
-  stableJitterHours: number;
 }): number {
   if (!params.nextState.autoInstallId) {
     params.nextState.autoInstallId = params.state.autoInstallId?.trim() || randomUUID();
@@ -427,8 +405,8 @@ function resolveStableAutoApplyAtMs(params: {
     ? Date.parse(params.nextState.autoFirstSeenAt)
     : params.nowMs;
   const firstSeenMs = Number.isFinite(parsedFirstSeenMs) ? parsedFirstSeenMs : params.nowMs;
-  const baseDelayMs = Math.max(0, params.stableDelayHours) * ONE_HOUR_MS;
-  const jitterWindowMs = Math.max(0, params.stableJitterHours) * ONE_HOUR_MS;
+  const baseDelayMs = AUTO_STABLE_DELAY_HOURS * ONE_HOUR_MS;
+  const jitterWindowMs = AUTO_STABLE_JITTER_HOURS * ONE_HOUR_MS;
   const jitterMs = resolveStableJitterMs({
     installId,
     version: params.version,
@@ -519,7 +497,7 @@ async function runAutoUpdateCommand(
       supervisor,
       handoffId,
       ...(params.devTarget ? { devTarget: params.devTarget } : {}),
-      meta: { handoffId, note: "background auto-update" },
+      meta: { runId: params.runId, handoffId, note: "background auto-update" },
     });
     if (started.status === "started") {
       const successorOwner = {
@@ -546,6 +524,12 @@ async function runAutoUpdateCommand(
         successorOwner,
         skipCooldown: true,
         skipDeferral: true,
+      });
+    } else {
+      // A joined helper owns another run; it cannot complete this campaign's admission.
+      finishUpdateRun(params.runId, {
+        status: "skipped",
+        reason: "managed-service-handoff-already-running",
       });
     }
     return {
@@ -785,7 +769,9 @@ async function runCampaignUpdate(params: {
   devTarget?: TrackedDevUpdateTarget;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   runAuto: AutoUpdateRunner;
+  canApply: () => boolean;
   campaign: UpdateCampaignController;
+  onUpdateRunCreated?: () => void;
   signal?: AbortSignal;
 }): Promise<"handoff" | "failed"> {
   const campaignId = params.campaign.getState()?.id;
@@ -793,100 +779,156 @@ async function runCampaignUpdate(params: {
     campaignId !== undefined &&
     !params.signal?.aborted &&
     params.campaign.getState()?.id === campaignId;
-  if (!isCurrent()) {
+  // The countdown may outlive its config. After this admission, the applying
+  // owner retains its target until handoff or stop/drain settles it.
+  if (!isCurrent() || !params.canApply()) {
     return "failed";
   }
-  // Capture recovery code before the updater can replace the running installation.
-  const { runUpdateFailureTriage } = await import("./update-triage.js");
-  const { sentinel, revision } = await readRestartSentinelSnapshot();
-  if (!isCurrent()) {
-    return "failed";
-  }
-  const attemptAt = resolveUpdateCheckNowMs(Date.now());
-  const attemptState = readState();
-  attemptState.autoLastAttemptVersion = params.version;
-  attemptState.autoLastAttemptAt = resolveUpdateCheckTimestamp(attemptAt);
-  writeState(attemptState);
-
-  const outcome = await params.runAuto({
-    channel: params.channel,
-    mode: params.mode,
-    timeoutMs: AUTO_UPDATE_COMMAND_TIMEOUT_MS,
-    restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
-    ...(params.root ? { root: params.root } : {}),
-    ...(params.channel === "dev" ? {} : { packageTargetVersion: params.version }),
-    ...(params.devTarget ? { devTarget: params.devTarget } : {}),
-    ...(params.signal ? { signal: params.signal } : {}),
+  const { runId } = createUpdateRun({
+    trigger: "campaign",
+    origin: { campaignId },
+    target: {
+      channel: params.channel,
+      tag: params.tag,
+      kind: params.mode === "git" ? "git" : "package",
+      ...(params.mode === "git" ? { sha: params.version } : { version: params.version }),
+    },
+    before: { version: VERSION },
   });
-  if (!isCurrent()) {
-    return "failed";
-  }
-  if (outcome.status === "handoff") {
-    params.log.info("auto-update handoff started", {
+  params.onUpdateRunCreated?.();
+  let terminal: Parameters<typeof finishUpdateRun>[1] | undefined = {
+    status: "failed",
+    reason: "unexpected-error",
+  };
+  try {
+    // Capture recovery code before the updater can replace the running installation.
+    const { runUpdateFailureTriage } = await import("./update-triage.js");
+    const { sentinel, revision } = await readRestartSentinelSnapshot();
+    if (!isCurrent()) {
+      return "failed";
+    }
+    const attemptAt = resolveUpdateCheckNowMs(Date.now());
+    const attemptState = readState();
+    attemptState.autoLastAttemptVersion = params.version;
+    attemptState.autoLastAttemptAt = resolveUpdateCheckTimestamp(attemptAt);
+    writeState(attemptState);
+
+    const outcome = await params.runAuto({
+      runId,
+      channel: params.channel,
+      mode: params.mode,
+      timeoutMs: AUTO_UPDATE_COMMAND_TIMEOUT_MS,
+      restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
+      ...(params.root ? { root: params.root } : {}),
+      ...(params.channel === "dev" ? {} : { packageTargetVersion: params.version }),
+      ...(params.devTarget ? { devTarget: params.devTarget } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+    if (outcome.status === "handoff") {
+      terminal = undefined;
+      recordUpdateRunStep(runId, {
+        step: "managed-service update handoff",
+        status: "completed",
+        endedAtMs: Date.now(),
+      });
+    } else {
+      terminal = {
+        status: outcome.result.status === "skipped" ? "skipped" : "failed",
+        reason: outcome.result.reason,
+        after: outcome.result.after,
+      };
+      recordUpdateRunPhase(runId, "requested", {
+        before: outcome.result.before,
+        origin: { nextAction: outcome.message },
+      });
+      for (const step of outcome.result.steps) {
+        recordUpdateRunStep(runId, {
+          step: step.name,
+          status: step.exitCode === 0 || step.advisory ? "completed" : "failed",
+          endedAtMs: Date.now(),
+          detail:
+            step.exitCode === 0
+              ? undefined
+              : (step.advisory?.message ?? summarizeUpdateStepFailure(step)),
+        });
+      }
+    }
+    if (!isCurrent()) {
+      return "failed";
+    }
+    if (outcome.status === "handoff") {
+      params.log.info("auto-update handoff started", {
+        channel: params.channel,
+        version: params.version,
+        tag: params.tag,
+        forced: params.forced,
+        ...(outcome.command ? { command: outcome.command } : {}),
+        ...(outcome.logPath ? { logPath: outcome.logPath } : {}),
+      });
+      return "handoff";
+    }
+    let triageHint: string | undefined;
+    if (classifyUpdateOutcome(outcome.result) === "failed") {
+      const triage = await runUpdateFailureTriage({
+        failure: { result: outcome.result, error: outcome.message },
+        target: { root: params.root, env: process.env },
+        mode: "json",
+        runtime: {
+          log: (message) => params.log.info(message),
+          error: (message) => params.log.info(message),
+        },
+        signal: params.signal,
+        isCurrent,
+      });
+      if (triage.status !== "cancelled") {
+        triageHint = triage.hint;
+        recordUpdateRunPhase(runId, "requested", { origin: { doctorHint: triageHint } });
+      }
+    }
+    if (!isCurrent()) {
+      return "failed";
+    }
+    // Publish before campaign-ended observers refresh status. A concurrent restart
+    // or update keeps its notification; this attempt may replace only its snapshot.
+    if (!sentinel || !isPendingControlPlaneUpdateRestartSentinel(sentinel.payload)) {
+      await writeRestartSentinelIfUnchanged({
+        payload: {
+          ...buildUpdateRestartSentinelPayload({
+            result: outcome.result,
+            meta: { runId, root: params.root, note: outcome.message },
+          }),
+          ...(triageHint ? { doctorHint: triageHint } : {}),
+        },
+        expectedRevision: revision,
+        isCurrent,
+      });
+    }
+    params.log.info("auto-update attempt failed", {
       channel: params.channel,
       version: params.version,
       tag: params.tag,
       forced: params.forced,
-      ...(outcome.command ? { command: outcome.command } : {}),
-      ...(outcome.logPath ? { logPath: outcome.logPath } : {}),
+      reason: outcome.result.reason,
+      message: outcome.message,
+      ...(triageHint ? { triage: triageHint } : {}),
     });
-    return "handoff";
-  }
-  let triageHint: string | undefined;
-  if (classifyUpdateOutcome(outcome.result) === "failed") {
-    const triage = await runUpdateFailureTriage({
-      failure: { result: outcome.result, error: outcome.message },
-      target: { root: params.root, env: process.env },
-      mode: "json",
-      runtime: {
-        log: (message) => params.log.info(message),
-        error: (message) => params.log.info(message),
-      },
-      signal: params.signal,
-      isCurrent,
-    });
-    if (triage.status !== "cancelled") {
-      triageHint = triage.hint;
+    return "failed";
+  } finally {
+    if (terminal) {
+      finishUpdateRun(runId, terminal);
     }
   }
-  if (!isCurrent()) {
-    return "failed";
-  }
-  // Publish before campaign-ended observers refresh status. A concurrent restart
-  // or update keeps its notification; this attempt may replace only its snapshot.
-  if (!sentinel || !isPendingControlPlaneUpdateRestartSentinel(sentinel.payload)) {
-    await writeRestartSentinelIfUnchanged({
-      payload: {
-        ...buildUpdateRestartSentinelPayload({
-          result: outcome.result,
-          meta: { root: params.root, note: outcome.message },
-        }),
-        ...(triageHint ? { doctorHint: triageHint } : {}),
-      },
-      expectedRevision: revision,
-      isCurrent,
-    });
-  }
-  params.log.info("auto-update attempt failed", {
-    channel: params.channel,
-    version: params.version,
-    tag: params.tag,
-    forced: params.forced,
-    reason: outcome.result.reason,
-    message: outcome.message,
-    ...(triageHint ? { triage: triageHint } : {}),
-  });
-  return "failed";
 }
 
 export async function runGatewayUpdateCheck(
   params: {
-    cfg: OpenClawConfig;
+    getConfig: () => OpenClawConfig;
     log: { info: (msg: string, meta?: Record<string, unknown>) => void };
     isNixMode: boolean;
     allowInTests?: boolean;
     onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
     onUpdateScheduleChange?: (schedule: UpdateScheduleState) => void;
+    onUpdateRunCreated?: () => void;
     activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
     updateCampaign?: UpdateCampaignController;
     runAutoUpdate?: AutoUpdateRunner;
@@ -913,13 +955,18 @@ async function runGatewayUpdateCheckOwned(
   if (params.isNixMode) {
     return;
   }
-  const configChannel = normalizeUpdateChannel(params.cfg.update?.channel);
   const updateCampaign = params.updateCampaign ?? gatewayUpdateCampaign;
+  // The admitted target belongs to the applying owner until it settles.
+  if (updateCampaign.getState()?.state === "applying") {
+    return;
+  }
+  const cfg = params.getConfig();
+  const configChannel = normalizeUpdateChannel(cfg.update?.channel);
   const runAuto: AutoUpdateRunner =
     params.runAutoUpdate ?? ((runParams) => runAutoUpdateCommand(runParams, params.log));
-  const auto = resolveAutoUpdatePolicy(params.cfg);
+  const autoEnabled = Boolean(cfg.update?.auto?.enabled);
   const autoDisabledByEnv = isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE);
-  if (params.cfg.update?.checkOnStart === false || autoDisabledByEnv) {
+  if (cfg.update?.checkOnStart === false || autoDisabledByEnv) {
     updateCampaign.clear();
     setUpdateAvailableCache({
       next: null,
@@ -960,13 +1007,26 @@ async function runGatewayUpdateCheckOwned(
     (configuredChannel === "stable" ||
       configuredChannel === "beta" ||
       configuredChannel === "dev") &&
-    auto.enabled &&
+    autoEnabled &&
     !autoDisabledByExternalSupervisor;
 
-  // The admitted target belongs to the applying owner until it settles.
   if (updateCampaign.getState()?.state === "applying") {
     return;
   }
+  const canApply = () => {
+    const current = params.getConfig();
+    return (
+      current.update?.auto?.enabled === true &&
+      current.update?.checkOnStart !== false &&
+      !isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE) &&
+      !isGatewayExternallySupervised() &&
+      resolveEffectiveUpdateChannel({
+        configChannel: normalizeUpdateChannel(current.update?.channel),
+        currentVersion: VERSION,
+        ...installStatus.status,
+      }).channel === configuredChannel
+    );
+  };
   const channelChanged =
     updateScheduleCache !== null && updateScheduleCache.channel !== configuredChannel;
   if (channelChanged) {
@@ -975,8 +1035,8 @@ async function runGatewayUpdateCheckOwned(
   const priorSchedule =
     updateScheduleCache?.channel === configuredChannel ? updateScheduleCache : null;
   const initialSchedule: UpdateScheduleState = priorSchedule
-    ? { ...priorSchedule, autoEnabled: auto.enabled }
-    : { channel: configuredChannel, autoEnabled: auto.enabled };
+    ? { ...priorSchedule, autoEnabled }
+    : { channel: configuredChannel, autoEnabled };
   setUpdateScheduleCache({
     next: autoDesired ? initialSchedule : withoutCampaign(initialSchedule),
     onUpdateScheduleChange: params.onUpdateScheduleChange,
@@ -1054,7 +1114,7 @@ async function runGatewayUpdateCheckOwned(
   if (!shouldRunAutoUpdate) {
     updateCampaign.clear();
   }
-  const telemetryUpdate = await checkTelemetryUpdate(params.cfg, { surface: "gateway" });
+  const telemetryUpdate = await checkTelemetryUpdate(params.getConfig(), { surface: "gateway" });
   params.signal?.throwIfAborted();
   const state = readState();
   const rawNow = Date.now();
@@ -1080,7 +1140,7 @@ async function runGatewayUpdateCheckOwned(
     });
   }
   const checkIntervalMs = shouldRunAutoUpdate
-    ? resolveCheckIntervalMs(params.cfg, installStatus?.status.installKind)
+    ? resolveCheckIntervalMs(cfg, installStatus?.status.installKind)
     : UPDATE_CHECK_INTERVAL_MS;
   if (
     !shouldBypassSharedThrottle &&
@@ -1177,7 +1237,7 @@ async function runGatewayUpdateCheckOwned(
       onUpdateScheduleChange: params.onUpdateScheduleChange,
     });
 
-    if (auto.enabled && autoDisabledByExternalSupervisor) {
+    if (autoEnabled && autoDisabledByExternalSupervisor) {
       params.log.info("auto-update delegated to external supervisor", {
         version: upstreamSha,
         tag: "dev",
@@ -1212,7 +1272,9 @@ async function runGatewayUpdateCheckOwned(
                 devTarget: devUpdateTargetFromGitTarget(target),
                 log: params.log,
                 runAuto,
+                canApply,
                 campaign: updateCampaign,
+                onUpdateRunCreated: params.onUpdateRunCreated,
                 signal: params.signal,
               }),
             ),
@@ -1305,7 +1367,7 @@ async function runGatewayUpdateCheckOwned(
       nextState.lastNotifiedTag = tag;
     }
 
-    if (channel !== "extended-stable" && auto.enabled && autoDisabledByExternalSupervisor) {
+    if (channel !== "extended-stable" && autoEnabled && autoDisabledByExternalSupervisor) {
       params.log.info("auto-update delegated to external supervisor", {
         version: resolved.version,
         tag,
@@ -1314,16 +1376,12 @@ async function runGatewayUpdateCheckOwned(
     }
 
     if (shouldRunAutoUpdate && (channel === "stable" || channel === "beta")) {
-      const attemptIntervalMs =
-        channel === "beta"
-          ? Math.max(ONE_HOUR_MS / 4, Math.floor(auto.betaCheckIntervalHours * ONE_HOUR_MS))
-          : ONE_HOUR_MS;
       const lastAttemptAt = state.autoLastAttemptAt ? Date.parse(state.autoLastAttemptAt) : null;
       const recentAttemptForSameVersion =
         state.autoLastAttemptVersion === resolved.version &&
         lastAttemptAt != null &&
         Number.isFinite(lastAttemptAt) &&
-        now - lastAttemptAt < attemptIntervalMs;
+        now - lastAttemptAt < ONE_HOUR_MS;
 
       let dueNow = channel === "beta";
       let applyAfterMs: number | null = null;
@@ -1334,8 +1392,6 @@ async function runGatewayUpdateCheckOwned(
           nowMs: now,
           version: resolved.version,
           tag,
-          stableDelayHours: auto.stableDelayHours,
-          stableJitterHours: auto.stableJitterHours,
         });
         dueNow = now >= applyAfterMs;
       }
@@ -1367,7 +1423,9 @@ async function runGatewayUpdateCheckOwned(
                 root: root ?? status.root ?? undefined,
                 log: params.log,
                 runAuto,
+                canApply,
                 campaign: updateCampaign,
+                onUpdateRunCreated: params.onUpdateRunCreated,
                 signal: params.signal,
               }),
             ),
@@ -1396,11 +1454,12 @@ async function runGatewayUpdateCheckOwned(
 }
 
 export function createGatewayUpdateCheck(params: {
-  cfg: OpenClawConfig;
+  getConfig: () => OpenClawConfig;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
   onUpdateScheduleChange?: (schedule: UpdateScheduleState) => void;
+  onUpdateRunCreated?: () => void;
   activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
 }): {
   initialize: () => ReturnType<typeof resolveStartupInstallStatus>;
@@ -1424,12 +1483,12 @@ export function createGatewayUpdateCheck(params: {
         } catch {
           // Discovery failures must not crash or retire the Gateway update loop.
         }
-        return resolveCheckIntervalMs(params.cfg, updateScheduleCache?.install?.kind);
+        return resolveCheckIntervalMs(params.getConfig(), updateScheduleCache?.install?.kind);
       });
       lifecycle.schedule(async () => {
         try {
           const result = await refreshRemoteModelCatalog({
-            config: params.cfg,
+            config: params.getConfig(),
             signal: lifecycle.signal,
           });
           if (lifecycle.signal.aborted) {

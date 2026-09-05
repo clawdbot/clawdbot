@@ -1,7 +1,13 @@
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { scheduleGatewayRequestStart } from "./request-start.js";
+import type { WebSocket } from "ws";
+import { MAX_PAYLOAD_BYTES, MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
+import {
+  prepareGatewayReceiverHandoff,
+  raiseGatewayReceiverPayloadLimit,
+  scheduleGatewayRequestStart,
+} from "./request-start.js";
 
 const permissions: Promise<void>[] = [];
 function requestStart(bytes = 1): Promise<void> {
@@ -107,5 +113,66 @@ describe("Gateway request start fairness", () => {
     expect(scheduleGatewayRequestStart(1)).toBeNull();
     await Promise.all([first, second, third]);
     await expect(requestStart(25 * 1024 * 1024)).resolves.toBeUndefined();
+  });
+});
+
+function receiverSocket(params: { deflate?: { _maxPayload: number } | "readonly" }): WebSocket {
+  const deflate =
+    params.deflate === "readonly"
+      ? Object.defineProperty({}, "_maxPayload", { value: MAX_PREAUTH_PAYLOAD_BYTES })
+      : params.deflate;
+  return {
+    _receiver: {
+      _maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
+      _allowSynchronousEvents: false,
+      ...(deflate ? { _extensions: { "permessage-deflate": deflate } } : {}),
+    },
+  } as unknown as WebSocket;
+}
+
+function payloadLimits(socket: WebSocket): { receiver: number; deflate: number | undefined } {
+  const receiver = (
+    socket as unknown as {
+      _receiver: {
+        _maxPayload: number;
+        _extensions?: { "permessage-deflate"?: { _maxPayload: number } };
+      };
+    }
+  )["_receiver"];
+  return {
+    receiver: receiver["_maxPayload"],
+    deflate: receiver["_extensions"]?.["permessage-deflate"]?.["_maxPayload"],
+  };
+}
+
+describe("authenticated receiver payload limits", () => {
+  it("raises the receiver and the negotiated deflate extension together after connect", () => {
+    const socket = receiverSocket({ deflate: { _maxPayload: MAX_PREAUTH_PAYLOAD_BYTES } });
+    const handoff = prepareGatewayReceiverHandoff(socket, "operator");
+    expect(handoff).not.toBeNull();
+    expect(payloadLimits(socket)).toEqual({
+      receiver: MAX_PREAUTH_PAYLOAD_BYTES,
+      deflate: MAX_PREAUTH_PAYLOAD_BYTES,
+    });
+    handoff?.();
+    expect(payloadLimits(socket)).toEqual({
+      receiver: MAX_PAYLOAD_BYTES,
+      deflate: MAX_PAYLOAD_BYTES,
+    });
+  });
+
+  it("keeps working for peers that did not negotiate compression", () => {
+    const socket = receiverSocket({});
+    expect(raiseGatewayReceiverPayloadLimit(socket, 1_024)).toBe(true);
+    expect(payloadLimits(socket)).toEqual({ receiver: 1_024, deflate: undefined });
+  });
+
+  it("refuses the handoff when the deflate limit cannot be raised", () => {
+    // A non-writable extension limit would silently keep the preauth cap on
+    // compressed frames, so the handshake must fail visibly instead.
+    const socket = receiverSocket({ deflate: "readonly" });
+    expect(prepareGatewayReceiverHandoff(socket, "operator")).toBeNull();
+    expect(raiseGatewayReceiverPayloadLimit(socket, 1_024)).toBe(false);
+    expect(payloadLimits(socket).receiver).toBe(MAX_PREAUTH_PAYLOAD_BYTES);
   });
 });

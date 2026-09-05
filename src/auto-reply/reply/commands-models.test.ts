@@ -105,10 +105,10 @@ function setFastModelsCliBackendDeps(): void {
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalog: modelCatalogMocks.loadModelCatalog,
-  loadPreparedModelCatalogOwnerSnapshot: async (...args: unknown[]) => {
-    const entries = await modelCatalogMocks.loadModelCatalog(...args);
-    return { modelCatalog: { entries, routeVariants: entries }, authModes: {} };
+  withPreparedModelCatalogOwner: async (params: unknown, read: (owner: object) => unknown) => {
+    const entries = await modelCatalogMocks.loadModelCatalog(params);
+    const modelCatalog = { entries, routeVariants: entries };
+    return read({ modelCatalog, authModes: {}, isCurrent: () => true });
   },
 }));
 

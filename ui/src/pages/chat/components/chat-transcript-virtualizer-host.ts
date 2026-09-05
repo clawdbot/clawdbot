@@ -14,6 +14,7 @@ import {
 } from "lit";
 import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import { resolveScrollBehavior } from "../../../lib/scroll-behavior.ts";
+import { isTranscriptScrollKey } from "../chat-scroll-input.ts";
 import type { AssistantMessageExpansionState } from "../chat-thread.ts";
 import {
   CHAT_TRANSCRIPT_END_THRESHOLD_PX,
@@ -263,10 +264,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           if (!element || element !== this.scrollElement || instance.scrollElement !== element) {
             return;
           }
-          if (
-            event instanceof KeyboardEvent &&
-            !["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)
-          ) {
+          if (event instanceof KeyboardEvent && !isTranscriptScrollKey(event)) {
             return;
           }
           if (event instanceof PointerEvent && event.target !== element) {

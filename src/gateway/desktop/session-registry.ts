@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import type { ConnectedRfbStream, DesktopRfbAttachment } from "./attachment.js";
 
 const DEFAULT_LINGER_MS = 60_000;
@@ -48,9 +48,7 @@ type DesktopSessionEntry = {
   ownerEpoch: number;
   initialization?: Promise<void>;
   stopPromise?: Promise<void>;
-  ready: Promise<DesktopSessionStartResult>;
-  resolveReady: (result: DesktopSessionStartResult) => void;
-  rejectReady: (error: Error) => void;
+  ready: Deferred<DesktopSessionStartResult>;
   readySettled: boolean;
   observers: Set<ObserverEntry>;
   observerReservations: Set<symbol>;
@@ -120,7 +118,7 @@ export function createDesktopSessionRegistry(
       entry.observerReservations.clear();
       if (!entry.readySettled) {
         entry.readySettled = true;
-        entry.rejectReady(new DesktopSessionStoppedError());
+        entry.ready.reject(new DesktopSessionStoppedError());
       }
       // Teardown brackets initialization so a source can stop the currently published
       // transport, then dispose anything initialization publishes before it settles.
@@ -148,7 +146,7 @@ export function createDesktopSessionRegistry(
   };
 
   const waitForReady = async (entry: DesktopSessionEntry): Promise<DesktopSessionStartResult> => {
-    const result = await entry.ready;
+    const result = await entry.ready.promise;
     // Every observation gets an idle attachment window, including same-epoch reuse.
     scheduleLinger(entry);
     return result;
@@ -170,19 +168,12 @@ export function createDesktopSessionRegistry(
       }
     }
 
-    let resolveReady!: (result: DesktopSessionStartResult) => void;
-    let rejectReady!: (error: Error) => void;
-    const ready = new Promise<DesktopSessionStartResult>((resolve, reject) => {
-      resolveReady = resolve;
-      rejectReady = reject;
-    });
-    void ready.catch(() => undefined);
+    const ready = createDeferredCore<DesktopSessionStartResult>();
+    void ready.promise.catch(() => undefined);
     const entry: DesktopSessionEntry = {
       sourceKey: request.sourceKey,
       ownerEpoch: request.ownerEpoch,
       ready,
-      resolveReady,
-      rejectReady,
       readySettled: false,
       observers: new Set(),
       observerReservations: new Set(),
@@ -204,12 +195,12 @@ export function createDesktopSessionRegistry(
         return;
       }
       entry.readySettled = true;
-      entry.resolveReady(result);
+      entry.ready.resolve(result);
     })();
     void entry.initialization.catch((error: unknown) => {
       if (!entry.readySettled) {
         entry.readySettled = true;
-        entry.rejectReady(error instanceof Error ? error : new Error("Desktop session failed"));
+        entry.ready.reject(error instanceof Error ? error : new Error("Desktop session failed"));
       }
       void stopEntry(entry);
     });
@@ -315,13 +306,11 @@ export function createDesktopSessionRegistry(
       entry.stopped ||
       entry.ownerEpoch !== params.ownerEpoch ||
       params.reservation.sourceKey !== params.sourceKey ||
-      params.reservation.ownerEpoch !== params.ownerEpoch
+      params.reservation.ownerEpoch !== params.ownerEpoch ||
+      params.stream.destroyed ||
+      params.stream.readableEnded ||
+      params.stream.writableEnded
     ) {
-      params.reservation.release();
-      params.stream.destroy();
-      return undefined;
-    }
-    if (params.stream.destroyed || params.stream.readableEnded || params.stream.writableEnded) {
       params.reservation.release();
       params.stream.destroy();
       return undefined;
@@ -338,31 +327,24 @@ export function createDesktopSessionRegistry(
     return { kind: "stream", streamId } as const;
   }
 
-  function claimStream(attachment: { kind: "stream"; streamId: string }) {
-    for (const entry of entries.values()) {
-      const pending = entry.pendingStreams.get(attachment.streamId);
-      if (!pending) {
-        continue;
-      }
-      entry.pendingStreams.delete(attachment.streamId);
-      pending.reservation.release();
-      const stream = pending.stream;
-      if (stream.destroyed || stream.readableEnded || stream.writableEnded) {
-        stream.destroy();
-        return undefined;
-      }
-      return stream;
+  function claimStream(sourceKey: string, attachment: { kind: "stream"; streamId: string }) {
+    const entry = entries.get(sourceKey);
+    const pending = entry?.pendingStreams.get(attachment.streamId);
+    if (!entry || !pending) {
+      return undefined;
     }
-    return undefined;
+    entry.pendingStreams.delete(attachment.streamId);
+    pending.reservation.release();
+    const stream = pending.stream;
+    if (stream.destroyed || stream.readableEnded || stream.writableEnded) {
+      stream.destroy();
+      return undefined;
+    }
+    return stream;
   }
 
-  function hasPendingStream(attachment: { kind: "stream"; streamId: string }): boolean {
-    for (const entry of entries.values()) {
-      if (entry.pendingStreams.has(attachment.streamId)) {
-        return true;
-      }
-    }
-    return false;
+  function hasPendingStream(sourceKey: string, attachment: { kind: "stream"; streamId: string }) {
+    return entries.get(sourceKey)?.pendingStreams.has(attachment.streamId) ?? false;
   }
 
   async function stop(sourceKey: string, ownerEpoch?: number): Promise<void> {

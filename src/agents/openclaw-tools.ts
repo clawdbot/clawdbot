@@ -8,6 +8,7 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { bindAssembledAgentToolActionDescriptor } from "./agent-tool-metadata.js";
 import {
   type HookContext,
@@ -122,9 +123,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
   options?.recordToolPrepStage?.("openclaw-tools:session-workspace");
   const widgetPresentation = resolveWidgetPresentationForRun(options);
   const inlineWidgetClientAvailable = options?.clientCaps?.includes("inline-widgets") === true;
-  const widgetSessionKey = normalizeOptionalString(
-    options?.runSessionKey ?? options?.agentSessionKey,
-  );
+  const sessionKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const runtimeWebTools = getActiveRuntimeWebToolsMetadataFromState();
   const sandbox =
@@ -152,7 +151,6 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     sessionKey: mediaGenerationAgentSessionKey,
     onYield: options?.onYield,
   });
-  const taskKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
   const imageTool =
     options?.agentDir &&
     resolveImageToolFactoryAvailable({
@@ -319,8 +317,8 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     scheduledWidgetExplicitlyAllowed &&
     !inlineWidgetClientAvailable &&
     !widgetPresentation.currentChannelPresenter &&
-    Boolean(widgetSessionKey) &&
-    !isCronRunSessionKey(widgetSessionKey);
+    Boolean(sessionKey) &&
+    !isCronRunSessionKey(sessionKey);
   const includeMessageTool =
     !embedded ||
     options?.sourceReplyDeliveryMode === "message_tool_only" ||
@@ -341,7 +339,8 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     agentId: sessionAgentId,
   })
     ? createProgressCardTool({
-        agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+        agentSessionKey: sessionKey,
+        agentId: sessionAgentId,
       })
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
@@ -414,9 +413,9 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
                 createPortalTool(),
               ]),
         ]),
-    ...(!embedded && taskKey && options?.taskSuggestionDeliveryMode === "gateway"
+    ...(!embedded && sessionKey && options?.taskSuggestionDeliveryMode === "gateway"
       ? createTaskSuggestionTools({
-          sessionKey: taskKey,
+          sessionKey,
           agentId: sessionAgentId,
           cwd: resolveWorkspaceRoot(options?.cwd ?? options?.workspaceDir ?? inferredWorkspaceDir),
         })
@@ -430,7 +429,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
           createShowWidgetTool({
             sessionId: options?.sessionId,
             agentId: sessionAgentId,
-            agentSessionKey: widgetSessionKey,
+            agentSessionKey: sessionKey,
             inlineHostEnabled: isCoreCanvasHostEnabled(resolvedConfig),
             inlineClientAvailable: inlineWidgetClientAvailable,
             pinnedOnly: scheduledPinnedWidgetOnly,
@@ -648,7 +647,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
   }
 
-  allTools = filterToolsByClientCaps(allTools, options?.clientCaps);
+  allTools = finalizeAgentToolAvailability(filterToolsByClientCaps(allTools, options?.clientCaps));
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
   for (const tool of allTools) {
     bindAssembledAgentToolActionDescriptor(tool);

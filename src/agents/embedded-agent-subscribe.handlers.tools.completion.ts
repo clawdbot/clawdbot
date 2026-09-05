@@ -321,6 +321,7 @@ export async function handleToolExecutionEnd(
       toolName,
       args: startArgs,
       result,
+      hookResult: toolSendReceiptResult,
       isError: isToolError,
       allowExplicitSourceRoute: isDeliveredMessagingToolSendToCurrentSource({
         send: confirmedMessageTarget,

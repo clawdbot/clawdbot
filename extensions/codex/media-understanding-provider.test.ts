@@ -187,6 +187,7 @@ function createFakeClient(options?: {
     return {};
   });
 
+  const closeAndWait = vi.fn(async () => true);
   const client = {
     request,
     addNotificationHandler(handler: (notification: CodexServerNotification) => void) {
@@ -198,10 +199,10 @@ function createFakeClient(options?: {
       return () => requestHandlers.delete(handler);
     },
     addCloseHandler: () => () => undefined,
-    close: vi.fn(),
+    closeAndWait,
   } as unknown as CodexAppServerClient;
 
-  return { client, requests, approvalResponses };
+  return { client, requests, approvalResponses, closeAndWait };
 }
 
 describe("codex media understanding provider", () => {
@@ -462,7 +463,7 @@ describe("codex media understanding provider", () => {
   });
 
   it("passes the scoped auth store into isolated app-server startup", async () => {
-    const { client } = createFakeClient();
+    const { client, closeAndWait } = createFakeClient();
     sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue(client);
     const provider = buildCodexMediaUnderstandingProvider();
     const authStore = {
@@ -493,6 +494,7 @@ describe("codex media understanding provider", () => {
     expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledWith(
       expect.objectContaining({ authProfileStore: authStore }),
     );
+    expect(closeAndWait).toHaveBeenCalledOnce();
   });
 
   it("clamps oversized image understanding turn timeouts", async () => {

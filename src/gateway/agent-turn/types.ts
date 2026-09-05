@@ -33,9 +33,13 @@ export type AgentTurnPrincipal = Pick<
 export type AgentTurnContext = Pick<
   GatewayRequestContext,
   | "addChatRun"
+  | "agentRunSeq"
+  | "broadcast"
   | "broadcastToConnIds"
+  | "cancelRunBoundApprovals"
   | "chatAbortControllers"
   | "chatQueuedTurns"
+  | "chatRunState"
   | "dedupe"
   | "deps"
   | "getRuntimeConfig"
@@ -43,6 +47,9 @@ export type AgentTurnContext = Pick<
   | "loadGatewayModelCatalog"
   | "loadGatewayModelCatalogSnapshot"
   | "logGateway"
+  | "nodeSendToSession"
+  | "removeChatRun"
+  | "requestEntryLifetime"
   | "resolveGatewayContext"
   | "validateAgentRuntimeApprovalAuthority"
 >;

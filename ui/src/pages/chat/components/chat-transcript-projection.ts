@@ -18,7 +18,6 @@ import {
   assistantGroupCanOwnActiveRunStatus,
   agentRunFrameGroups,
   buildCachedChatItems,
-  collectToolTitleCandidates,
   coalesceAgentRunFrames,
   coalesceActivityRuns,
   coalesceStreamRuns,
@@ -32,12 +31,12 @@ import {
   syncToolCardExpansionState,
 } from "../chat-thread.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
-import { getToolTitlesVersion, scheduleToolTitlesForTranscript } from "../tool-titles.ts";
 import { renderAgentRunFrame } from "./chat-agent-run-frame.ts";
 import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.ts";
 import { renderChatDivider, renderChatNotice } from "./chat-divider.ts";
 import { resolveMessageGroupSenderLabel } from "./chat-message-group.ts";
 import { resolveMessageReplyText } from "./chat-message-markdown.ts";
+import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import {
   getChatMediaRenderVersion,
   renderActivityGroup,
@@ -85,6 +84,7 @@ export function projectChatTranscript(
   const displayStream = props.stream ?? null;
   const sessionHost = props.sessionHost ?? null;
   const activeSession = props.selectedSession;
+  const mediaPolicyKey = assistantMediaPolicyKey(activeSession, props.mediaPolicyEpoch);
   // Global-alias routing ignores the capped session list, which may omit the
   // canonical row. The scope gate keeps per-sender main threads direct.
   const isGlobalAliasKey =
@@ -145,9 +145,6 @@ export function projectChatTranscript(
   const runOutputTokens = workingIndicator?.runId
     ? (props.runUsageById?.get(workingIndicator.runId)?.outputTokens ?? null)
     : null;
-  if (props.showToolCalls && !searchFiltering) {
-    scheduleToolTitlesForTranscript(collectToolTitleCandidates(chatItems));
-  }
   const latestBrowserTabs =
     props.browserTabPreviewsActive === false
       ? latestBrowserTabCards([], [])
@@ -272,6 +269,7 @@ export function projectChatTranscript(
   const messageRowKeysById = new Map<string, string>();
   const resolveReplyPreview = createReplyPreviewResolver(loadedReplySources, props);
   const sharedMessageRenderOptions = {
+    presented: props.presented,
     onReply: props.onSetReply
       ? (target) => state.transcriptRenderContext.onSetReply?.(target)
       : undefined,
@@ -284,6 +282,7 @@ export function projectChatTranscript(
     onRequestUpdate: requestUpdate,
     resourceBasePath: props.resourceBasePath,
     localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
+    mediaPolicyKey,
     connectionEpoch: props.connectionEpoch,
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
     resolveArtifactDownload: props.resolveArtifactDownload,
@@ -614,10 +613,12 @@ export function projectChatTranscript(
     getChatMediaRenderVersion(),
     // The host minute poll requests an update; this key crosses row guard() memoization.
     Math.floor(Date.now() / 60_000),
-    getToolTitlesVersion(),
     JSON.stringify([...latestBrowserTabs]),
     props.sessionKey,
-    props.selectedSession,
+    props.presented,
+    // Session activity/title patches do not change settled rows. Their visible
+    // session facts (gutter, reasoning, context window, recap) own invalidation.
+    isDirectThread,
     props.boardProvider,
     props.boardProvider?.canPinWidgets,
     props.boardProvider?.canPinMcpApps,
@@ -643,6 +644,7 @@ export function projectChatTranscript(
     props.userAvatar,
     props.resourceBasePath,
     (props.localMediaPreviewRoots ?? []).join("\u0000"),
+    mediaPolicyKey,
     props.assistantAttachmentAuthToken,
     props.connectionEpoch,
     props.canvasPluginSurfaceUrl,

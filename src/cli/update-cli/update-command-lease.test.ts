@@ -150,7 +150,6 @@ async function invoke(lane: Lane): Promise<void> {
     downgradeRisk: true,
     shouldRestart: false,
     opts: { json: true, yes: true },
-    showProgress: false,
     ownedManagedUpdateEnv: { ...process.env },
     controlPlaneUpdateSentinelMeta: null,
     preUpdatePluginInstallRecords: { stale: { source: "path", sourcePath: state.path("stale") } },

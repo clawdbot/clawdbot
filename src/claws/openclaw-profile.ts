@@ -1,6 +1,5 @@
 // Safe loader for the conventional package-local OpenClaw profile.
 import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
-import { isScalar, parseDocument, visit } from "yaml";
 import type { ToolProfileId } from "../agents/tool-policy-shared.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isSafeClawRelativePath } from "./schema-portability.js";
@@ -10,6 +9,7 @@ import {
   resolveClawToolProfileSnapshot,
 } from "./tool-profile-consent.js";
 import type { ClawDiagnostic, ClawOpenClawProfile } from "./types.js";
+import { parseClawYaml } from "./yaml-document.js";
 
 const MAX_PROFILE_BYTES = 256 * 1024;
 const CLAW_PROFILE_PATH = "profiles/openclaw.yml";
@@ -23,66 +23,6 @@ function diagnostic(code: string, message: string, path = "$"): ClawDiagnostic {
 
 function warning(code: string, message: string, path: string): ClawDiagnostic {
   return { level: "warning", code, phase: "parse", path, message };
-}
-
-function parseProfileYaml(
-  raw: string,
-  path: string,
-): { ok: true; value: unknown } | { ok: false; diagnostics: ClawDiagnostic[] } {
-  const document = parseDocument(raw.startsWith("\uFEFF") ? raw.slice(1) : raw, {
-    prettyErrors: false,
-    uniqueKeys: true,
-  });
-  if (document.errors.length > 0) {
-    return {
-      ok: false,
-      diagnostics: document.errors.map((error) =>
-        diagnostic("invalid_openclaw_profile", `Could not parse ${path}: ${error.message}`),
-      ),
-    };
-  }
-  let unsupportedFeature: string | undefined;
-  visit(document, {
-    Alias() {
-      unsupportedFeature ??= "aliases";
-    },
-    Node(_key, node) {
-      if (node.anchor) {
-        unsupportedFeature ??= "anchors";
-      } else if (node.tag) {
-        unsupportedFeature ??= "explicit tags";
-      }
-    },
-    Pair(_key, pair) {
-      if (isScalar(pair.key) && pair.key.value === "<<") {
-        unsupportedFeature ??= "merge keys";
-      }
-    },
-  });
-  if (unsupportedFeature) {
-    return {
-      ok: false,
-      diagnostics: [
-        diagnostic(
-          "unsupported_openclaw_profile_yaml_feature",
-          `${path} uses ${unsupportedFeature}; OpenClaw profile YAML must map directly to JSON data.`,
-        ),
-      ],
-    };
-  }
-  try {
-    return { ok: true, value: document.toJSON() };
-  } catch (error) {
-    return {
-      ok: false,
-      diagnostics: [
-        diagnostic(
-          "invalid_openclaw_profile",
-          `Could not parse ${path}: ${(error as Error).message}`,
-        ),
-      ],
-    };
-  }
 }
 
 function isToolProfileId(value: string): value is ToolProfileId {
@@ -266,7 +206,12 @@ export async function readClawOpenClawProfile(params: {
     };
   }
 
-  const yaml = parseProfileYaml(raw.toString("utf8"), declaredPath);
+  const text = raw.toString("utf8");
+  const yaml = parseClawYaml(
+    text.startsWith("\uFEFF") ? text.slice(1) : text,
+    declaredPath,
+    "profile",
+  );
   if (!yaml.ok) {
     return yaml;
   }

@@ -21,6 +21,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { connectChatMetadataAccount } from "./chat-metadata-runtime.test-support.js";
+import { identifiedClient } from "./sessions-read-cache.test-support.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 function createPersonalMetadataFixture() {
@@ -88,6 +89,50 @@ function createPersonalMetadataFixture() {
 }
 
 describe("chat history model selection defaults", () => {
+  it("keeps a stored literal global conversation separate from main in per-sender scope", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = {
+        session: { scope: "per-sender" },
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      } satisfies OpenClawConfig;
+      await state.writeConfig(cfg);
+      for (const agentId of ["ops", "research"]) {
+        await upsertSessionEntryCore(
+          { agentId, sessionKey: "global" },
+          { sessionId: `global-${agentId}`, updatedAt: 1 },
+        );
+      }
+      await upsertSessionEntryCore(
+        { agentId: "research", sessionKey: "agent:research:main" },
+        { sessionId: "main-research", updatedAt: 1 },
+      );
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const client = identifiedClient("literal-global-operator");
+      client.connect.scopes = ["operator.admin"];
+      for (const [sessionKey, sessionId] of [
+        ["global", "global-research"],
+        ["agent:research:main", "main-research"],
+      ]) {
+        const respond = vi.fn<RespondFn>();
+        await expectDefined(
+          chatHistoryHandlers["chat.history"],
+          "history handler",
+        )({
+          params: { sessionKey, agentId: "research" },
+          context,
+          req: { type: "req", id: "literal-global", method: "chat.history" },
+          client,
+          isWebchatConnect: () => false,
+          respond,
+        });
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ sessionKey, sessionId }),
+        );
+      }
+    });
+  });
+
   it.each(["chat.history", "chat.startup"] as const)(
     "%s projects the non-primary agent's resolved selection target",
     async (method) => {

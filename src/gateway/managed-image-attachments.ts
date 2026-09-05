@@ -29,16 +29,11 @@ import {
 } from "../config/sessions/targets-read-availability.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
 import { probePlaybackMediaFileDescriptor } from "../media/media-probe.js";
-import {
-  createImageProcessor,
-  getImageMetadata,
-  readImageProbeFromHeader,
-} from "../media/media-services.js";
+import { createImageProcessor, getImageMetadata } from "../media/media-services.js";
 import {
   replacePlaybackFileExtension,
   resolvePlaybackModeForSource,
@@ -53,6 +48,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   createGatewayByteStream,
+  createImmutableFileValidators,
   resolveByteResponse,
   writeByteHeaders,
 } from "./http-byte-range.js";
@@ -74,11 +70,11 @@ import {
 } from "./managed-image-record-store.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
-import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
 import {
-  loadGatewaySessionEntryReadOnly,
-  resolveSessionHistoryTranscriptPathAsync,
-} from "./session-utils.js";
+  readSessionMessagesMatchingIdAsync,
+  readSessionMessagesWithSourceAsync,
+} from "./session-transcript-readers.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
@@ -177,28 +173,10 @@ type CleanupManagedOutgoingMediaRecordsResult = {
 };
 
 type SessionManagedOutgoingAttachmentIndex = Set<string>;
-type SessionManagedOutgoingAttachmentIndexRead =
-  | { kind: "available"; index: SessionManagedOutgoingAttachmentIndex | null }
-  | {
-      kind: "unavailable";
-      reason:
-        | "database-missing"
-        | "schema-missing"
-        | "table-missing"
-        | "row-invalid"
-        | "read-failed";
-    };
 type ManagedOutgoingTranscriptMatch = "match" | "missing" | "unavailable";
 type SessionStoreAvailabilityRead = ReturnType<
   typeof resolveExistingAgentSessionStoreTargetsReadOnlyResult
 >;
-
-type SessionManagedOutgoingAttachmentIndexCacheEntry = {
-  transcriptPath: string;
-  mtimeMs: number;
-  size: number;
-  index: SessionManagedOutgoingAttachmentIndex;
-};
 
 type ManagedOutgoingImageTicketPayload = {
   scope: typeof MANAGED_OUTGOING_IMAGE_TICKET_SCOPE;
@@ -276,16 +254,6 @@ async function resolveManagedImageThumbnail(
   managedImageThumbnailJobs.set(cacheKey, pending);
   return await pending;
 }
-type SessionManagedOutgoingAttachmentTranscriptStat = Omit<
-  SessionManagedOutgoingAttachmentIndexCacheEntry,
-  "index"
->;
-
-const sessionManagedOutgoingAttachmentIndexCache = new Map<
-  string,
-  SessionManagedOutgoingAttachmentIndexCacheEntry
->();
-const MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES = 500;
 
 function buildSessionManagedOutgoingAttachmentIndexCacheKey(
   sessionKey: string,
@@ -418,19 +386,6 @@ function getManagedImageMetadataLimitError(
     return `Managed image attachment ${JSON.stringify(alt)} exceeds the ${limits.maxPixels.toLocaleString("en-US")} pixel limit`;
   }
   return null;
-}
-
-function orientManagedImageMetadata(
-  buffer: Buffer,
-  metadata: { width: number; height: number } | null,
-): { width: number; height: number } | null {
-  if (!metadata) {
-    return null;
-  }
-  const orientation = readImageProbeFromHeader(buffer)?.orientation;
-  return orientation === 5 || orientation === 6 || orientation === 7 || orientation === 8
-    ? { width: metadata.height, height: metadata.width }
-    : metadata;
 }
 
 async function resizeManagedImageBufferToLimits(params: {
@@ -1103,79 +1058,28 @@ async function loadPendingPreparedAttachmentIds(stateDir: string): Promise<Set<s
   }
 }
 
-function getCachedSessionManagedOutgoingAttachmentIndex(
-  sessionKey: string,
-  agentId: string | undefined,
-  stat: { transcriptPath: string; mtimeMs: number; size: number },
-) {
-  const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
-  const cached = sessionManagedOutgoingAttachmentIndexCache.get(cacheKey);
-  if (!cached) {
-    return null;
-  }
-  if (
-    cached.transcriptPath !== stat.transcriptPath ||
-    cached.mtimeMs !== stat.mtimeMs ||
-    cached.size !== stat.size
-  ) {
-    sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
-    return null;
-  }
-  sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
-  sessionManagedOutgoingAttachmentIndexCache.set(cacheKey, cached);
-  return cached.index;
-}
-
-function setCachedSessionManagedOutgoingAttachmentIndex(
-  sessionKey: string,
-  agentId: string | undefined,
-  stat: SessionManagedOutgoingAttachmentTranscriptStat,
-  index: SessionManagedOutgoingAttachmentIndex,
-) {
-  sessionManagedOutgoingAttachmentIndexCache.set(
-    buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId),
-    {
-      transcriptPath: stat.transcriptPath,
-      mtimeMs: stat.mtimeMs,
-      size: stat.size,
-      index,
-    },
-  );
-  pruneMapToMaxSize(
-    sessionManagedOutgoingAttachmentIndexCache,
-    MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES,
-  );
-}
-
-function sameManagedOutgoingAttachmentTranscriptStat(
-  left: SessionManagedOutgoingAttachmentTranscriptStat | null,
-  right: SessionManagedOutgoingAttachmentTranscriptStat | null,
-): boolean {
-  return (
-    left?.transcriptPath === right?.transcriptPath &&
-    left?.mtimeMs === right?.mtimeMs &&
-    left?.size === right?.size
-  );
-}
-
-async function getSessionManagedOutgoingAttachmentIndex(
-  sessionKey: string,
+async function recordMatchesTranscriptMessage(
+  record: ManagedImageRecord,
   cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
-  agentId?: string,
   storeAvailabilityCache?: Map<string, SessionStoreAvailabilityRead>,
   storeTargetsReadCache?: SessionStoreTargetsReadCache,
   stateDir?: string,
-): Promise<SessionManagedOutgoingAttachmentIndexRead> {
+): Promise<ManagedOutgoingTranscriptMatch> {
+  if (!record.messageId) {
+    return "missing";
+  }
+  const { sessionKey, agentId, messageId: requestedMessageId } = record;
+  const refKey = buildManagedOutgoingAttachmentRefKey(requestedMessageId, record.attachmentId);
   const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
   if (cache?.has(cacheKey)) {
-    return { kind: "available", index: cache.get(cacheKey) ?? null };
+    return cache.get(cacheKey)?.has(refKey) ? "match" : "missing";
   }
   const cfg = getRuntimeConfig();
   const ownerAgentId =
     resolveManagedSessionOwnerAgentId(sessionKey, agentId) ??
     tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
   if (!ownerAgentId) {
-    return { kind: "unavailable", reason: "read-failed" };
+    return "unavailable";
   }
   const discovery =
     storeAvailabilityCache?.get(ownerAgentId) ??
@@ -1185,7 +1089,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
     });
   storeAvailabilityCache?.set(ownerAgentId, discovery);
   if (!discovery.available) {
-    return { kind: "unavailable", reason: discovery.reason };
+    return "unavailable";
   }
   const usesRuntimeState = !stateDir || path.resolve(stateDir) === path.resolve(resolveStateDir());
   const env = stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env;
@@ -1200,7 +1104,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
       storePath: target.storePath,
     });
     if (!exact.found) {
-      return { kind: "unavailable", reason: exact.reason };
+      return "unavailable";
     }
     let targetEntry = exact.value?.entry;
     if (!targetEntry) {
@@ -1216,12 +1120,12 @@ async function getSessionManagedOutgoingAttachmentIndex(
           { readOnly: true },
         ).existing;
       } catch {
-        return { kind: "unavailable", reason: "row-invalid" };
+        return "unavailable";
       }
     }
     if (targetEntry) {
       if (matched) {
-        return { kind: "unavailable", reason: "read-failed" };
+        return "unavailable";
       }
       matched = { entry: targetEntry, storePath: target.storePath };
     }
@@ -1237,7 +1141,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
       storePath: loaded.storePath,
     });
     if (!exact.found) {
-      return { kind: "unavailable", reason: exact.reason };
+      return "unavailable";
     }
     entry = exact.value?.entry ?? loaded.entry;
     storePath = loaded.storePath;
@@ -1245,78 +1149,21 @@ async function getSessionManagedOutgoingAttachmentIndex(
   const sessionId = entry?.sessionId;
   if (!sessionId) {
     cache?.set(cacheKey, null);
-    return { kind: "available", index: null };
+    return "missing";
   }
 
-  let transcriptStat: SessionManagedOutgoingAttachmentTranscriptStat | null = null;
-  // This path is only a cache/reset-archive hint. Canonical active messages are
-  // read from the structured SQLite identity below even when no artifact exists.
-  const resolvedTranscriptPath = await resolveSessionHistoryTranscriptPathAsync(
-    sessionId,
-    storePath,
-    undefined,
-    { allowResetArchiveFallback: true },
-  );
-  if (resolvedTranscriptPath) {
-    try {
-      const stat = await fs.stat(resolvedTranscriptPath);
-      transcriptStat = {
-        transcriptPath: resolvedTranscriptPath,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-      };
-      const cachedIndex = getCachedSessionManagedOutgoingAttachmentIndex(
-        sessionKey,
-        agentId,
-        transcriptStat,
-      );
-      if (cachedIndex) {
-        cache?.set(cacheKey, cachedIndex);
-        return { kind: "available", index: cachedIndex };
-      }
-    } catch {
-      sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
-    }
-  } else {
-    sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
-  }
-
-  const readResult = await readSessionMessagesWithSourceAsync(
-    {
-      agentId,
-      sessionEntry: entry,
-      sessionId,
-      sessionKey,
-      storePath,
-    },
-    {
-      mode: "full",
-      reason: "managed outgoing attachment index",
-      allowResetArchiveFallback: true,
-    },
-  );
-  const messages = readResult.messages;
-  const preReadTranscriptStat = transcriptStat;
-  if (readResult.transcriptPath) {
-    try {
-      const stat = await fs.stat(readResult.transcriptPath);
-      const postReadTranscriptStat = {
-        transcriptPath: readResult.transcriptPath,
-        mtimeMs: stat.mtimeMs,
-        size: stat.size,
-      };
-      transcriptStat = sameManagedOutgoingAttachmentTranscriptStat(
-        preReadTranscriptStat,
-        postReadTranscriptStat,
-      )
-        ? postReadTranscriptStat
-        : null;
-    } catch {
-      transcriptStat = null;
-    }
-  } else {
-    transcriptStat = null;
-  }
+  // Archive file stats cannot establish current SQLite visibility. Reuse membership
+  // only within a cleanup pass; each new request must select canonical history again.
+  const scope = { agentId, sessionEntry: entry, sessionId, sessionKey, storePath };
+  const messages = cache
+    ? (
+        await readSessionMessagesWithSourceAsync(scope, {
+          mode: "full",
+          reason: "managed outgoing attachment index",
+          allowResetArchiveFallback: true,
+        })
+      ).messages
+    : await readSessionMessagesMatchingIdAsync(scope, requestedMessageId);
   const index: SessionManagedOutgoingAttachmentIndex = new Set();
   for (const message of messages) {
     const meta = (message as { __openclaw?: { id?: string } } | null)?.["__openclaw"];
@@ -1332,39 +1179,8 @@ async function getSessionManagedOutgoingAttachmentIndex(
     }
   }
 
-  if (transcriptStat) {
-    setCachedSessionManagedOutgoingAttachmentIndex(sessionKey, agentId, transcriptStat, index);
-  }
   cache?.set(cacheKey, index);
-  return { kind: "available", index };
-}
-
-async function recordMatchesTranscriptMessage(
-  record: ManagedImageRecord,
-  cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
-  storeAvailabilityCache?: Map<string, SessionStoreAvailabilityRead>,
-  storeTargetsReadCache?: SessionStoreTargetsReadCache,
-  stateDir?: string,
-): Promise<ManagedOutgoingTranscriptMatch> {
-  if (!record.messageId) {
-    return "missing";
-  }
-  const read = await getSessionManagedOutgoingAttachmentIndex(
-    record.sessionKey,
-    cache,
-    record.agentId,
-    storeAvailabilityCache,
-    storeTargetsReadCache,
-    stateDir,
-  );
-  if (read.kind === "unavailable") {
-    return "unavailable";
-  }
-  return read.index?.has(
-    buildManagedOutgoingAttachmentRefKey(record.messageId, record.attachmentId),
-  )
-    ? "match"
-    : "missing";
+  return index.has(refKey) ? "match" : "missing";
 }
 
 async function resolveManagedOutgoingMediaArtifactDownloadForRecord(
@@ -1621,14 +1437,10 @@ export async function createManagedOutgoingMediaBlocks(params: {
           throw createManagedMediaByteLimitError({ kind: mediaKind, label, maxBytes });
         }
 
-        const originalMetadata =
+        const originalDisplayMetadata =
           originalStats.width != null && originalStats.height != null
             ? { width: originalStats.width, height: originalStats.height }
             : await getImageMetadata(originalBuffer);
-        const originalDisplayMetadata = orientManagedImageMetadata(
-          originalBuffer,
-          originalMetadata,
-        );
         let effectiveMetadata = originalDisplayMetadata;
         let metadataLimitError = getManagedImageMetadataLimitError(
           effectiveMetadata,
@@ -1661,12 +1473,10 @@ export async function createManagedOutgoingMediaBlocks(params: {
             buffer: originalBuffer,
             sizeBytes: savedOriginal.size,
           });
-          effectiveMetadata = orientManagedImageMetadata(
-            originalBuffer,
+          effectiveMetadata =
             originalStats.width != null && originalStats.height != null
               ? { width: originalStats.width, height: originalStats.height }
-              : await getImageMetadata(originalBuffer),
-          );
+              : await getImageMetadata(originalBuffer);
           metadataLimitError = getManagedImageMetadataLimitError(effectiveMetadata, label, limits);
           if (!metadataLimitError) {
             resizeWarning = buildManagedImageResizeWarningBlock({
@@ -1950,10 +1760,10 @@ export async function handleManagedOutgoingMediaHttpRequest(
   }
 
   let byteStream = createGatewayByteStream(res, opened.handle, respondNotFound);
-  if (
+  const isPlayback =
     requestUrl.searchParams.get("playback") === "1" &&
-    (mediaKind === "audio" || mediaKind === "video")
-  ) {
+    (mediaKind === "audio" || mediaKind === "video");
+  if (isPlayback) {
     const playback = await resolvePlaybackTranscode({
       sourcePath: opened.realPath,
       sourceStat: opened.stat,
@@ -1988,9 +1798,11 @@ export async function handleManagedOutgoingMediaHttpRequest(
   res.setHeader("referrer-policy", "no-referrer");
   res.setHeader(
     "cache-control",
-    hasValidMediaTicket
-      ? `private, max-age=${MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS / 1000}, immutable`
-      : "private, max-age=31536000, immutable",
+    isPlayback
+      ? "private, no-cache"
+      : hasValidMediaTicket
+        ? `private, max-age=${MANAGED_OUTGOING_IMAGE_TICKET_TTL_MS / 1000}, immutable`
+        : "private, max-age=31536000, immutable",
   );
   res.setHeader(
     "content-disposition",
@@ -1998,6 +1810,8 @@ export async function handleManagedOutgoingMediaHttpRequest(
   );
   const byteResponse = resolveByteResponse({
     file: opened.stat,
+    // Playback can replace a failed rendition with a successful one at the same URL.
+    validators: isPlayback ? undefined : createImmutableFileValidators(opened.stat),
     method: req.method,
     request: req,
   });

@@ -606,8 +606,8 @@ export function missingMessageBoundarySeparator(previousText: string, nextDelta:
   if (!previousText) {
     return "";
   }
-  const trailing = previousText.match(/\n*$/u)?.[0].length ?? 0;
-  const leading = nextDelta.match(/^\n*/u)?.[0].length ?? 0;
+  const trailing = previousText.slice(-2).match(/\n*$/u)?.[0].length ?? 0;
+  const leading = nextDelta.slice(0, 2).match(/^\n*/u)?.[0].length ?? 0;
   return "\n".repeat(Math.max(0, 2 - trailing - leading));
 }
 
@@ -681,6 +681,3 @@ export function readGeminiCliStreamJsonError(parsed: Record<string, unknown>): s
   }
   return undefined;
 }
-
-// A possible leading block stays buffered until visible prose or the message
-// boundary proves where private reasoning ends. Later tags remain literal.

@@ -117,6 +117,23 @@ export interface StreamOptions {
    */
   onResponse?: (response: ProviderResponse, model: Model) => void | Promise<void>;
   /**
+   * Observe a live response that accepts user input before generation finishes.
+   * `steer` resolves false only when the input was definitely not admitted;
+   * admitted input cannot be withdrawn. Providers settle pending submissions
+   * before closing the response and call the returned cleanup on closure.
+   */
+  onActiveResponse?: (control: {
+    steer(messages: readonly UserMessage[]): Promise<boolean>;
+    /** Read-only after closure: deferred input still needs an explicit continuation request. */
+    needsContinuation?: () => boolean;
+  }) => (() => void) | void;
+  /**
+   * The caller can execute completed async calls before generation finishes.
+   * Providers advertise async tools only with this host capability; this is
+   * independent of parallel execution of an ordinary completed tool batch.
+   */
+  asyncToolExecution?: boolean;
+  /**
    * Optional custom HTTP headers to include in API requests.
    * Merged with provider defaults; can override default headers.
    * Not supported by all providers (e.g., AWS Bedrock uses SDK auth).
@@ -271,6 +288,8 @@ export interface ImageContent {
 
 /** Normalized assistant tool call emitted by providers or repaired from text. */
 export interface ToolCall {
+  /** The provider completed this call and permits generation to continue without its result. */
+  async?: true;
   type: "toolCall";
   id: string;
   name: string;
@@ -541,6 +560,10 @@ export interface OpenAICompletionsCompat {
 export interface OpenAIResponsesCompat {
   /** Whether the provider supports the `developer` role (vs `system`). Default: true. */
   supportsDeveloperRole?: boolean;
+  /** Whether to send reasoning effort settings. Defaults to the model's known capabilities. */
+  supportsReasoningEffort?: boolean;
+  /** Provider-native reasoning efforts accepted by the model. Overrides known model defaults. */
+  supportedReasoningEfforts?: string[];
   /** Whether the model accepts the `temperature` parameter. Default: true. */
   supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
@@ -700,7 +723,7 @@ export interface Model<TApi extends Api = Api> {
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
   compat?: TApi extends "openai-completions"
     ? OpenAICompletionsCompat
-    : TApi extends "openai-responses"
+    : TApi extends "openai-responses" | "azure-openai-responses" | "openai-codex-responses"
       ? OpenAIResponsesCompat
       : TApi extends "anthropic-messages"
         ? AnthropicMessagesCompat

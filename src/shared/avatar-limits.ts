@@ -12,6 +12,11 @@ export const AVATAR_MAX_DATA_URL_CHARS =
 
 const AVATAR_IMAGE_DATA_URL_RE = /^data:image\//i;
 
+/** Avatar images render only as <img>; preserve the existing image/* data URL contract. */
+export function isAvatarImageMimeType(value: string): boolean {
+  return /^image\//i.test(value);
+}
+
 /** Accepts image data URLs that fit the Gateway and Control UI payload boundary. */
 export function isRenderableAvatarImageDataUrl(value: string): boolean {
   return value.length <= AVATAR_MAX_DATA_URL_CHARS && AVATAR_IMAGE_DATA_URL_RE.test(value);

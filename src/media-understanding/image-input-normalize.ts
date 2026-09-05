@@ -1,7 +1,7 @@
 // Image input normalization converts HEIC/HEIF payloads through the shared
 // input-file media path before provider execution.
 import { normalizeMimeType } from "@openclaw/media-core/mime";
-import { extractImageContentFromSource } from "../media/input-files.js";
+import { normalizeInputImageBuffer } from "../media/input-files.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 
 const HEIC_MIME_RE = /^image\/hei[cf](?:-sequence)?$/i;
@@ -27,23 +27,17 @@ export async function normalizeImageDescriptionInput(params: {
     return { buffer: params.buffer, mime: params.mime };
   }
   const sourceMime = normalizeMimeType(params.mime) ?? "image/heic";
-  // Reuse input-file extraction so HEIC conversion follows the same MIME and size guards.
-  const image = await extractImageContentFromSource(
-    {
-      type: "base64",
-      data: params.buffer.toString("base64"),
-      mediaType: sourceMime,
-    },
-    {
-      allowUrl: false,
+  // Keep owned bytes through the shared MIME and size guards; only API content needs base64.
+  const image = await normalizeInputImageBuffer({
+    buffer: params.buffer,
+    mimeType: sourceMime,
+    limits: {
       allowedMimes: new Set([sourceMime.toLowerCase(), "image/heic", "image/heif", "image/jpeg"]),
       maxBytes: params.maxBytes ?? DEFAULT_MAX_BYTES.image,
-      maxRedirects: 0,
-      timeoutMs: 0,
     },
-  );
+  });
   return {
-    buffer: Buffer.from(image.data, "base64"),
+    buffer: image.buffer,
     mime: image.mimeType,
   };
 }

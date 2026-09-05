@@ -6,6 +6,7 @@ import {
   pluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "../../scripts/lib/plugin-sdk-entries.mts";
+import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import {
   createFixture,
   declarationCacheRecords,
@@ -98,6 +99,7 @@ describe("write-plugin-sdk-entry-dts", () => {
 
   it("publishes fresh canonical partitions with stable bytes and public nominal identity", () => {
     const { root, write, writeDeclarations, production, qa } = createFixture();
+    materializeNativeCompiler(root);
     expect(production.toSorted()).toEqual(
       publicPluginSdkEntrypoints.map((entry) => `plugin-sdk/${entry}`).toSorted(),
     );
@@ -188,6 +190,7 @@ describe("write-plugin-sdk-entry-dts", () => {
       write: writeRelocated,
       writeDeclarations: writeRelocatedDeclarations,
     } = createFixture();
+    materializeNativeCompiler(relocated);
     writeRelocatedDeclarations("after");
     fs.rmSync(path.join(relocated, "contracts/before.ts"));
     writeRelocated("test/unrelated.test.ts", "export const test = 2;\n");
@@ -292,11 +295,11 @@ describe("write-plugin-sdk-entry-dts", () => {
           `${fs.readFileSync(path.join(root, "tsdown.config.ts"), "utf8")}
 for (const config of configs) {
   if (!config.dts?.emitDtsOnly) continue;
-  const done = config.hooks?.["build:done"];
-  config.hooks = { ...config.hooks, "build:done": async (context) => {
-    await done?.(context);
-    fs.appendFileSync("src/shared.ts", "\\n");
-  }};
+  const register = config.hooks;
+  config.hooks = async hooks => {
+    await register(hooks);
+    hooks.hook("build:done", () => fs.appendFileSync("src/shared.ts", "\\n"));
+  };
 }
 `,
         );

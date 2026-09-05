@@ -1,7 +1,9 @@
-import { copyFile, mkdir, rm } from "node:fs/promises";
+import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -16,7 +18,7 @@ const DRAFT_HASH = "a".repeat(64);
 const REVISION_HASH = "b".repeat(64);
 const ISO_NOW = "2026-07-29T10:00:00.000Z";
 const configuredArtifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-const artifactDir = configuredArtifactDir
+const artifactParent = configuredArtifactDir
   ? path.join(path.resolve(process.cwd(), configuredArtifactDir), "skill-workshop-evaluation")
   : undefined;
 
@@ -78,9 +80,6 @@ function inspectResult(withEvaluation: boolean) {
 
 describeBrowser("Skill Workshop proposal evaluation mocked Gateway E2E", () => {
   beforeAll(async () => {
-    if (artifactDir) {
-      await mkdir(artifactDir, { recursive: true });
-    }
     browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
     server = await startControlUiE2eServer();
   });
@@ -101,9 +100,11 @@ describeBrowser("Skill Workshop proposal evaluation mocked Gateway E2E", () => {
       if (!browser || !server) {
         throw new Error("Expected browser test fixtures");
       }
+      const artifactDir = artifactParent
+        ? createControlUiE2eArtifactDir(viewportName, artifactParent)
+        : undefined;
       const rawVideoDir = artifactDir ? path.join(artifactDir, `${viewportName}-raw`) : undefined;
       if (rawVideoDir) {
-        await rm(rawVideoDir, { force: true, recursive: true });
         await mkdir(rawVideoDir, { recursive: true });
       }
       const context = await browser.newContext({
@@ -150,10 +151,10 @@ describeBrowser("Skill Workshop proposal evaluation mocked Gateway E2E", () => {
           await page.evaluate(() => window.innerWidth + 1),
         );
         if (artifactDir) {
-          await page.screenshot({
-            fullPage: true,
-            path: path.join(artifactDir, `${viewportName}-before.png`),
-          });
+          await writeFile(
+            path.join(artifactDir, `${viewportName}-before.png`),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [evaluate]),
+          );
         }
         await evaluate.click();
 
@@ -175,10 +176,12 @@ describeBrowser("Skill Workshop proposal evaluation mocked Gateway E2E", () => {
           await page.evaluate(() => window.innerWidth + 1),
         );
         if (artifactDir) {
-          await page.screenshot({
-            fullPage: true,
-            path: path.join(artifactDir, `${viewportName}-result.png`),
-          });
+          await writeFile(
+            path.join(artifactDir, `${viewportName}-result.png`),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              page.getByText("Static checks found a release blocker."),
+            ]),
+          );
         }
       } finally {
         const video = page.video();

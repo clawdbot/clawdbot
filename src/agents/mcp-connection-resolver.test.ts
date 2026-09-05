@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { createGatewayCronReconciliation } from "../gateway/server-cron-reconciled.js";
-import { createGatewayReloadHandlers } from "../gateway/server-reload-handlers.js";
+import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
 import {
   isGatewaySigusr1RestartExternallyAllowed,
   setGatewaySigusr1RestartPolicy,
@@ -19,11 +19,8 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
-import {
-  disposeAllSessionMcpRuntimes,
-  getOrCreateSessionMcpRuntime,
-  peekSessionMcpRuntime,
-} from "./agent-bundle-mcp-tools.js";
+import { getOrCreateSessionMcpRuntime } from "./agent-bundle-mcp-manager.test-support.js";
+import { disposeAllSessionMcpRuntimes, peekSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
 import {
   applyMcpConnectionOverride,
   buildMcpRequesterRuntimeCacheKey,
@@ -255,12 +252,6 @@ describe("mcp connection resolver helpers", () => {
       const refreshContextWindowCache = vi
         .spyOn(await import("./context.js"), "refreshContextWindowCache")
         .mockResolvedValue(undefined);
-      const warmCurrentProviderAuthStateOffMainThread = vi
-        .spyOn(
-          await import("./model-provider-auth.js"),
-          "warmCurrentProviderAuthStateOffMainThread",
-        )
-        .mockResolvedValue(undefined);
       const previous = createMcpProofPluginRegistry();
       previous.apiFor("startup-mail").registerMcpServerConnectionResolver({
         serverName: "user-mail",
@@ -359,10 +350,12 @@ describe("mcp connection resolver helpers", () => {
           },
         },
       };
+      let attachedRegistry = previous.registry;
       const gatewayReload = createGatewayReloadHandlers({
         deps: {},
         broadcast() {},
         getState: () => gatewayState,
+        getPluginRegistry: () => attachedRegistry,
         setState(nextState) {
           gatewayState = nextState;
         },
@@ -370,10 +363,12 @@ describe("mcp connection resolver helpers", () => {
           return new Map();
         },
         async stopChannel() {},
+        releaseChannelRouteHandoffs() {},
         pruneInactiveChannelAccountState() {},
         async reloadPlugins({ beforeReplace, commitRuntime }) {
           await beforeReplace(new Set());
           await commitRuntime();
+          attachedRegistry = replacement.registry;
           setActivePluginRegistry(replacement.registry);
           return { restartChannels: new Set(), activeChannels: new Set() };
         },
@@ -396,12 +391,9 @@ describe("mcp connection resolver helpers", () => {
         catalogMode: "static",
       });
       expect(refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
-      expect(warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig, {
-        isCancelled: expect.any(Function),
-      });
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
       expect(isPluginRegistryRetired(previous.registry)).toBe(true);
-      expect(peekSessionMcpRuntime({ sessionId })).toBeUndefined();
+      expect(peekSessionMcpRuntime({ sessionId })?.peekCatalog()?.tools ?? []).toEqual([]);
 
       const legacyRequests = proof.mail.requests;
       await expect(previousRuntime.callTool("user-mail", "owner_probe", {})).rejects.toThrow(

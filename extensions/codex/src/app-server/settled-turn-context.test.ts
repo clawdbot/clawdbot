@@ -1,4 +1,5 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
 import { attachCodexMirrorIdentity, attachUpstreamUserText } from "./upstream-prompt-provenance.js";
@@ -7,9 +8,17 @@ const mocks = vi.hoisted(() => ({
   readHistory: vi.fn(),
 }));
 
-vi.mock("./session-history.js", () => ({
-  readCodexMirroredSessionHistory: mocks.readHistory,
-}));
+vi.mock("../../session-history-worker-runtime.js", async () => {
+  const { projectVerifiedSettledCodexMessages } = await import("./settled-turn-evidence.js");
+  return {
+    projectCodexSettledHistoryInWorker: (
+      params: Parameters<typeof projectVerifiedSettledCodexMessages>[1],
+    ) =>
+      mocks.readHistory(params, (messages: Iterable<AgentMessage>) =>
+        projectVerifiedSettledCodexMessages(messages, params),
+      ),
+  };
+});
 
 function message(value: unknown, identity: string): AgentMessage {
   return attachCodexMirrorIdentity(value as AgentMessage, identity);
@@ -88,6 +97,41 @@ async function captureContext(params: {
 describe("captureCodexSettledTurnFinalizationContext", () => {
   beforeEach(() => {
     mocks.readHistory.mockReset();
+  });
+
+  it.each(["abort", "closure"])("rejects captured evidence after owner %s", async (ending) => {
+    const messages = settledTurn();
+    const reading = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const controller = new AbortController();
+    let active = true;
+    mocks.readHistory.mockImplementationOnce(async (_target, read) => {
+      reading.resolve();
+      await finish.promise;
+      return read(messages);
+    });
+    const pending = captureCodexSettledTurnFinalizationContext({
+      sessionFile: "/tmp/session.jsonl",
+      sessionId: "session-1",
+      mirroredMessages: messages,
+      settledMessages: messages,
+      turnId: "turn-2",
+      model: "gpt-5.6-luna",
+      signal: controller.signal,
+      assertActive: () => {
+        if (!active) {
+          throw new Error("synthetic owner closed");
+        }
+      },
+    });
+    await reading.promise;
+    if (ending === "abort") {
+      controller.abort(new Error("synthetic capture aborted"));
+    } else {
+      active = false;
+    }
+    finish.resolve();
+    await expect(pending).resolves.toBeUndefined();
   });
 
   it.each([undefined, "openai"])(

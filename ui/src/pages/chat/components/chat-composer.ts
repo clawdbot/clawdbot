@@ -199,7 +199,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitDraft: skillMenuHost.commitDraft,
     getTextarea: () => state.composerTextarea,
     resolveArgOptions: (command) => resolveChatSlashCommandArgOptions(command, props),
-    runCommand: () => props.onSend(),
+    runCommand: () => void props.onSend(),
     canRun: (inline) => state.slashCommandDispatchConnected && !(inline && !props.onSlashCommand),
     runInlineCommand: props.connected ? props.onSlashCommand : undefined,
     refreshCommands: props.onSlashIntent,
@@ -477,7 +477,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       void goalComposer.submit(submissionAction);
       return;
     }
-    props.onSend(undefined, submissionAction);
+    void props.onSend(undefined, submissionAction);
     syncComposerDraftAfterSend(state.composerTextarea);
   };
   state.microphonePicker ??= new ComposerMicrophonePicker(requestUpdate);
@@ -586,7 +586,14 @@ export function renderChatComposer(props: ChatComposerProps) {
       state.dictationError = `${message} ${recovery}`;
       requestUpdate();
     },
-    onStateChange: requestUpdate,
+    onStateChange: () => {
+      // A new dictation gesture retires an earlier Talk recovery offer before
+      // either can acquire another microphone, including queued button clicks.
+      if (state.dictation?.locksComposer) {
+        props.onDismissRealtimeTalkError?.();
+      }
+      requestUpdate();
+    },
     onDictationUnavailable: devicePicker.handleOpen,
     // With an initial empty composer, this button retains the existing
     // send-after-typing behavior until the host rerenders the primary actions.

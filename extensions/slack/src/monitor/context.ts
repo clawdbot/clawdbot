@@ -13,7 +13,6 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -47,10 +46,7 @@ import {
 } from "./suggested-prompts.js";
 import { createSlackSystemEventRouteResolver } from "./system-event-session.js";
 
-export {
-  buildSlackAssistantThreadMetadata,
-  parseSlackAssistantThreadMetadata,
-} from "./assistant-thread-context.js";
+export { buildSlackAssistantThreadMetadata } from "./assistant-thread-context.js";
 export type { SlackAssistantThreadContext } from "./assistant-thread-context.js";
 export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
 export { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "./suggested-prompts.js";
@@ -122,7 +118,6 @@ export type SlackMonitorContext = {
   threadInheritParent: boolean;
   slashCommand: Required<import("openclaw/plugin-sdk/config-contracts").SlackSlashCommandConfig>;
   textLimit: number;
-  ackReactionScope: string;
   typingReaction: string;
   mediaMaxBytes: number;
 
@@ -163,14 +158,8 @@ export type SlackMonitorContext = {
     threadTs?: string;
     status: "processing" | "active" | "suspended";
     title?: string;
-    route?: ResolvedAgentRoute;
     eventScope?: SlackEventScope;
   }) => Promise<void>;
-  getSlackSessionRoute: (
-    channelId: string,
-    threadTs: string,
-    eventScope?: SlackEventScope,
-  ) => ResolvedAgentRoute | undefined;
   recordSlackSessionTitle: (params: {
     channelId: string;
     threadTs: string;
@@ -232,7 +221,6 @@ export function createSlackMonitorContext(params: {
   threadInheritParent: SlackMonitorContext["threadInheritParent"];
   slashCommand: SlackMonitorContext["slashCommand"];
   textLimit: number;
-  ackReactionScope: string;
   typingReaction: string;
   mediaMaxBytes: number;
 }): SlackMonitorContext {
@@ -424,12 +412,6 @@ export function createSlackMonitorContext(params: {
   };
 
   const sessionTitles = new Map<string, string>();
-  const sessionRoutes = new Map<string, ResolvedAgentRoute>();
-  const getSlackSessionRoute: SlackMonitorContext["getSlackSessionRoute"] = (
-    channelId,
-    threadTs,
-    eventScope,
-  ) => readLruMapEntry(sessionRoutes, scopedKey(`${channelId}:${threadTs}`, eventScope));
   const recordSlackSessionTitle: SlackMonitorContext["recordSlackSessionTitle"] = (p) => {
     writeLruMapEntry(
       sessionTitles,
@@ -440,11 +422,6 @@ export function createSlackMonitorContext(params: {
   };
   const updateSessionStatus: SlackMonitorContext["setSlackSessionStatus"] = async (p) => {
     const key = scopedKey(`${p.channelId}:${p.threadTs}`, p.eventScope);
-    // A Slack presentation thread may belong to a flat DM/MPIM session. Record
-    // the admitted owner before the API can expose Stop or title events.
-    if (p.threadTs && p.route) {
-      writeLruMapEntry(sessionRoutes, key, p.route, 1024);
-    }
     const previousTitle = readLruMapEntry(sessionTitles, key);
     const client = p.eventScope?.client ?? params.app.client;
     const updated = await setSlackSessionStatus({
@@ -653,7 +630,6 @@ export function createSlackMonitorContext(params: {
     threadInheritParent: params.threadInheritParent,
     slashCommand: params.slashCommand,
     textLimit: params.textLimit,
-    ackReactionScope: params.ackReactionScope,
     typingReaction: params.typingReaction,
     mediaMaxBytes: params.mediaMaxBytes,
     logger,
@@ -666,7 +642,6 @@ export function createSlackMonitorContext(params: {
     resolveUserName,
     resolveUserAvatar,
     setSlackSessionStatus: updateSessionStatus,
-    getSlackSessionRoute,
     recordSlackSessionTitle,
     getSlackAssistantThreadContext: assistantThreadContextStore.get,
     saveSlackAssistantThreadContext: assistantThreadContextStore.save,

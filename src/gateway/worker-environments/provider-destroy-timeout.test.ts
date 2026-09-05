@@ -1,19 +1,21 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import * as support from "./service.test-support.js";
 
 describe("worker provider teardown deadlines", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it.each(["destroy", "bootstrap-failure"] as const)(
+  it.for(["destroy", "bootstrap-failure"] as const)(
     "allows provider-owned checkpointing beyond five minutes during %s",
-    async (entrance) => {
+    async (entrance, { signal }) => {
       const started = createDeferred();
       const finish = createDeferred();
       const destroy = vi.fn(async () => {
         started.resolve();
-        await finish.promise;
+        // A test timeout does not unwind finally; release provider ownership on cancellation.
+        await racePromiseWithAbortSignal(finish.promise, signal);
       });
       const resolveDestroyTimeoutMs = vi.fn(() => 10 * 60_000);
       if (entrance === "destroy") {
@@ -43,7 +45,7 @@ describe("worker provider teardown deadlines", () => {
         },
       );
       try {
-        await started.promise;
+        await support.waitForFast(() => started.promise);
         await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
         expect(settled).toBe(false);
         finish.resolve();
@@ -63,6 +65,7 @@ describe("worker provider teardown deadlines", () => {
         }
       } finally {
         finish.resolve();
+        vi.useRealTimers();
         await operation;
       }
     },
@@ -123,14 +126,16 @@ describe("worker provider teardown deadlines", () => {
     },
   );
 
-  it("keeps timed-out teardown queued and rejects a stale owner before retry side effects", async () => {
+  it("keeps timed-out teardown queued and rejects a stale owner before retry side effects", async ({
+    signal,
+  }) => {
     const initial = support.seedReady("timed-out-destroy");
     const started = createDeferred();
     const finish = createDeferred();
     const resolveDestroyTimeoutMs = vi.fn(() => 20);
     const destroy = vi.fn(async () => {
       started.resolve();
-      await finish.promise;
+      await racePromiseWithAbortSignal(finish.promise, signal);
     });
     const service = support.createService(
       support.createProvider({ destroy, resolveDestroyTimeoutMs }),
@@ -139,7 +144,7 @@ describe("worker provider teardown deadlines", () => {
     const first = service.destroy(initial.environmentId).catch((error: unknown) => error);
     let second: Promise<unknown> | undefined;
     try {
-      await started.promise;
+      await support.waitForFast(() => started.promise);
       await vi.advanceTimersByTimeAsync(21);
       expect(await first).toMatchObject({ code: "provider_failure" });
       expect(support.testState.store.get(initial.environmentId)?.lastError).toBe(
@@ -163,6 +168,7 @@ describe("worker provider teardown deadlines", () => {
       expect(destroy).toHaveBeenCalledOnce();
     } finally {
       finish.resolve();
+      vi.useRealTimers();
       await first;
       await second;
     }

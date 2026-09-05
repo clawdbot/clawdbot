@@ -91,26 +91,6 @@ for (const params of packageManifestContractTests) {
   describePackageManifestContract(params);
 }
 
-it("aligns Anthropic's source SDK pins without a root runtime SDK dependency", () => {
-  const dependencyName = "@anthropic-ai/claude-agent-sdk";
-  const pluginPackagePath = path.resolve(process.cwd(), "extensions/anthropic/package.json");
-  const pluginManifest = JSON.parse(fs.readFileSync(pluginPackagePath, "utf8")) as PackageManifest;
-  const rootManifest = JSON.parse(fs.readFileSync("package.json", "utf8")) as PackageManifest & {
-    devDependencies?: Record<string, string>;
-  };
-  const sdkEntry = createRequire(pluginPackagePath).resolve(dependencyName);
-  // The SDK exports sdk.mjs beside its manifest, but does not export ./package.json.
-  const sdkManifest = JSON.parse(
-    fs.readFileSync(path.join(path.dirname(sdkEntry), "package.json"), "utf8"),
-  ) as PackageManifest;
-
-  expect(sdkManifest.name).toBe(dependencyName);
-  expect(sdkManifest.version).toBeTypeOf("string");
-  expect(sdkManifest.version).toBe(pluginManifest.dependencies?.[dependencyName]);
-  expect(sdkManifest.version).toBe(rootManifest.devDependencies?.[dependencyName]);
-  expect(rootManifest.dependencies?.[dependencyName]).toBeUndefined();
-});
-
 it("bundles LanceDB JavaScript while installing matching native bindings per platform", () => {
   const dependencyName = "@lancedb/lancedb";
   const pluginPackagePath = path.resolve(process.cwd(), "extensions/memory-lancedb/package.json");

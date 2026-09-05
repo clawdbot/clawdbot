@@ -5,6 +5,7 @@ import {
   normalizeConfig,
   projectConfiguredModelRow,
   resolveThinkingProfile,
+  resolveToolSearchMode,
 } from "./provider-policy-api.js";
 import { OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
 
@@ -26,6 +27,47 @@ function createModel(id: string, name: string): ModelDefinitionConfig {
 }
 
 describe("ollama provider policy public artifact", () => {
+  it.each([
+    {
+      provider: "ollama",
+      modelId: "qwen3.5:9b",
+      baseUrl: OLLAMA_DEFAULT_BASE_URL,
+      expected: "tools",
+    },
+    {
+      provider: "ollama",
+      modelId: "qwen3.5:9b",
+      baseUrl: "http://model-host.internal:11434",
+      expected: "tools",
+    },
+    {
+      provider: "ollama",
+      modelId: "untagged-server-alias",
+      baseUrl: OLLAMA_DEFAULT_BASE_URL,
+      expected: "tools",
+    },
+    {
+      provider: "OLLAMA",
+      modelId: "kimi-k2.5:cloud",
+      baseUrl: OLLAMA_DEFAULT_BASE_URL,
+      expected: false,
+    },
+    {
+      provider: "ollama",
+      modelId: "gpt-oss:120b-cloud",
+      baseUrl: OLLAMA_DEFAULT_BASE_URL,
+      expected: false,
+    },
+    {
+      provider: "ollama-cloud",
+      modelId: "kimi-k2.5",
+      baseUrl: OLLAMA_DEFAULT_BASE_URL,
+      expected: false,
+    },
+    { provider: "ollama", modelId: "kimi-k2.5", baseUrl: "https://ollama.com/v1", expected: false },
+  ])("selects Tool Search for $provider/$modelId at $baseUrl", ({ expected, ...context }) => {
+    expect(resolveToolSearchMode({ ...context, api: "ollama" })).toBe(expected);
+  });
   it("injects defaults so implicit discovery can run before validation", () => {
     expect(
       normalizeConfig({

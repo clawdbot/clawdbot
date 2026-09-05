@@ -482,7 +482,6 @@ describe("tsdown config", () => {
       );
       expect(selected).toBeDefined();
       const packages = [
-        ...(declarations ? ["@anthropic-ai/claude-agent-sdk"] : []),
         "@anthropic-ai/vertex-sdk",
         "@slack/bolt",
         "@slack/web-api",
@@ -659,8 +658,9 @@ describe("tsdown config", () => {
         (source) => source.startsWith("src/") && !source.startsWith("src/plugin-sdk/"),
       ),
     ).toEqual(["src/index.ts"]);
-    expect(declarationSources).not.toContain("extensions/anthropic/agent-sdk-user-input.ts");
-    expect(declarationSources).not.toContain("extensions/anthropic/agent-sdk-runtime-helpers.ts");
+    expect(
+      declarationSources.filter((source) => source.startsWith("extensions/anthropic/")).toSorted(),
+    ).toEqual(["extensions/anthropic/api.ts", "extensions/anthropic/contract-api.ts"]);
     expect(declarationSources.every((source) => /\.[cm]?tsx?$/u.test(source))).toBe(true);
     expect(new Set(declarationSources).size).toBe(declarationSources.length);
   });

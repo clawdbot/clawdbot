@@ -43,7 +43,7 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
             let response = try JSONSerialization.data(withJSONObject: [
                 "type": "res", "id": XCTUnwrap(frame["id"] as? String), "ok": true, "payload": payload,
             ])
-            socket.emitReceiveSuccessOnce(.data(response))
+            socket.emitReceiveSuccess(.data(response))
         })
         let delegate = ConsultCancellationDelegate()
         delegate.onListening = { completed.fulfill() }
@@ -74,7 +74,7 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
             } else if frame["method"] as? String == "chat.abort" {
                 aborted.fulfill()
                 let id = try XCTUnwrap(frame["id"] as? String)
-                socket.emitReceiveSuccessOnce(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
             }
         })
         let delegate = ConsultCancellationDelegate()
@@ -95,7 +95,7 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
                     "agentSessionKey": "global",
                 ],
             ])
-            socket.emitReceiveSuccessOnce(.data(ack))
+            socket.emitReceiveSuccess(.data(ack))
             let cancelled = await XCTWaiter.fulfillment(of: [aborted], timeout: 5)
             XCTAssertEqual(cancelled, .completed)
             let capturedAbort = await requests.request(method: "chat.abort")

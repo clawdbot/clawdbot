@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -125,16 +129,18 @@ function holdNextDispatch() {
   return gate.resolve;
 }
 
-function createHandler(debounceMs: number) {
+function createHandler(debounceMs: number, config?: OpenClawConfig) {
   pendingDebounceMs = Math.max(pendingDebounceMs, debounceMs);
   const dmPolicy = "allowlist";
   const allowFrom = ["+15550001111"];
   return createSignalEventHandler(
     createBaseSignalEventHandlerDeps({
-      cfg: {
-        messages: { inbound: { debounceMs } },
-        channels: { signal: { dmPolicy, allowFrom } },
-      } as OpenClawConfig,
+      cfg:
+        config ??
+        ({
+          messages: { inbound: { debounceMs } },
+          channels: { signal: { dmPolicy, allowFrom } },
+        } as OpenClawConfig),
       dmPolicy,
       allowFrom,
       historyLimit: 0,
@@ -193,6 +199,7 @@ describe("Signal active-run control lane", () => {
       await Promise.all(pendingTasks.splice(0));
     } finally {
       pendingDebounceMs = 0;
+      clearRuntimeConfigSnapshot();
       vi.useRealTimers();
     }
   });
@@ -204,6 +211,37 @@ describe("Signal active-run control lane", () => {
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
 
     expect(dispatchedCommandBody(0)).toBe("first\nsecond");
+  });
+
+  it("updates Signal batching while keeping stop on the immediate control lane", async () => {
+    const cfg: OpenClawConfig = {
+      messages: { inbound: { debounceMs: 0 } },
+      channels: { signal: { dmPolicy: "allowlist", allowFrom: ["+15550001111"] } },
+    };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const handler = createHandler(25, cfg);
+    const publish = (debounceMs: number) => {
+      const current = { ...cfg, messages: { inbound: { byChannel: { signal: debounceMs } } } };
+      setRuntimeConfigSnapshot(current, current);
+    };
+    await handler(signalText("immediate", 1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    publish(25);
+    await handler(signalText("first", 2));
+    await handler(signalText("second", 3));
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(25);
+    expect(dispatchedCommandBody(1)).toBe("first\nsecond");
+    publish(0);
+    await handler(signalText("after disable", 4));
+    expect(dispatchedCommandBody(2)).toBe("after disable");
+    publish(25);
+    await handler(signalText("pending", 5));
+    await handler(signalText("stop", 6));
+    expect(dispatchedCommandBody(3)).toBe("stop");
+    await vi.advanceTimersByTimeAsync(25);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
   });
 
   it.each([
@@ -268,6 +306,7 @@ describe("Signal active-run control lane", () => {
 
   it("does not promote or cancel an unauthorized abort", () => {
     const entry = {
+      cfg: {},
       senderName: "Alice",
       senderDisplay: "+15550001111",
       senderRecipient: "+15550001111",
@@ -291,6 +330,7 @@ describe("Signal active-run control lane", () => {
 
   it("shares one group control lane without merging normal sender batches", () => {
     const entry = {
+      cfg: {},
       senderName: "Alice",
       senderDisplay: "+15550001111",
       senderRecipient: "+15550001111",

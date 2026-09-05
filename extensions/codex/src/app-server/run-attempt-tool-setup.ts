@@ -3,6 +3,7 @@ import {
   isHostScopedAgentToolActive,
   materializeRequesterScopedMcpToolsForHarnessRun,
   resolveAgentDir,
+  runAgentCleanupStep,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -271,8 +272,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   let nativeSpecs: CodexDynamicToolSpec[] | undefined;
   if (hasCodexNativeToolCatalog(mutable.startupBinding)) {
     runAbortController.signal.throwIfAborted();
-    params.hostCapabilities.assertActive();
+    connection.assertCurrent();
     const client = await connection.attemptClientFactory({
+      assertCurrent: connection.assertCurrent,
       startOptions: connection.appServer.start,
       authProfileId: connection.startupClientAuthProfileId,
       agentDir,
@@ -287,7 +289,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         agentDir,
         assertCurrent: () => {
           runAbortController.signal.throwIfAborted();
-          params.hostCapabilities.assertActive();
+          connection.assertCurrent();
         },
       });
     } finally {
@@ -420,6 +422,20 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   // Specs come from the session advertised-catalog cache so fingerprints stay stable.
   let scopedMcpTools: Awaited<ReturnType<typeof materializeRequesterScopedMcpToolsForHarnessRun>> =
     undefined;
+  const disposeMcpTools = async () => {
+    for (const [step, materialized] of [
+      ["codex-scoped-mcp-dispose", scopedMcpTools],
+      ["codex-configured-mcp-dispose", configuredMcp],
+    ] as const) {
+      await runAgentCleanupStep({
+        runId: params.runId,
+        sessionId: params.sessionId,
+        step,
+        log: embeddedAgentLog,
+        cleanup: async () => materialized?.dispose(),
+      });
+    }
+  };
   try {
     scopedMcpTools = authenticatedScheduledMode
       ? undefined
@@ -618,6 +634,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       registeredTools: registeredWithScopedMcp,
       scopedMcpTools,
       configuredMcp,
+      disposeMcpTools,
       configuredMcpOwnershipVersion:
         configuredMcpSurface === "scheduled" ? (1 as const) : undefined,
       captureCronCreatorToolAllowlist,
@@ -637,8 +654,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   } catch (error) {
     // Materialized runtimes are attempt-owned only after this function returns.
     // Dispose here when filtering, schema projection, or bridge setup fails first.
-    await scopedMcpTools?.dispose();
-    await configuredMcp?.dispose();
+    await disposeMcpTools();
     throw error;
   }
 }

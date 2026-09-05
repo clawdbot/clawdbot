@@ -347,9 +347,32 @@ describe("Responses reasoning effort", () => {
     expect(params).toMatchObject({ reasoning: { effort: "max", summary: "auto" } });
   });
 
-  it("raises unsupported minimal reasoning to low for GPT-5.6 Sol", () => {
-    expect(resolveResponsesReasoningEffort(gpt56SolModel, "minimal")).toBe("low");
-  });
+  it.each<{
+    model: Model<"openai-responses">;
+    reasoning: "minimal" | "high";
+    expected: string;
+  }>([
+    { model: gpt56SolModel, reasoning: "minimal", expected: "low" },
+    {
+      model: { ...proxyOpenAIModel, compat: { supportedReasoningEfforts: ["ProviderHigh"] } },
+      reasoning: "high",
+      expected: "ProviderHigh",
+    },
+  ])(
+    "normalizes $reasoning to $expected at the request boundary",
+    ({ model, reasoning, expected }) => {
+      const params = {} as ResponseCreateParamsStreaming;
+      applyCommonResponsesParams(
+        params,
+        model,
+        { messages: [] },
+        {
+          reasoningEffort: resolveResponsesReasoningEffort(model, reasoning),
+        },
+      );
+      expect(params.reasoning).toEqual({ effort: expected, summary: "auto" });
+    },
+  );
 
   it("keeps max clamped to xhigh for earlier models", () => {
     const gpt55WithXHigh = {
@@ -899,6 +922,10 @@ describe("convertResponsesMessages", () => {
       ) as unknown as Array<Record<string, unknown>>;
 
       const reasoningItem = input.find((item) => item.type === "reasoning");
+      if (!preservesCiphertext) {
+        expect(reasoningItem).toBeUndefined();
+        return;
+      }
       expect(reasoningItem).toMatchObject({
         type: "reasoning",
         id: "rs_route_fenced",
@@ -906,11 +933,7 @@ describe("convertResponsesMessages", () => {
         content: [{ type: "reasoning_text", text: "safe content" }],
       });
       expect(reasoningItem).not.toHaveProperty("__openclaw_replay");
-      if (preservesCiphertext) {
-        expect(reasoningItem).toHaveProperty("encrypted_content", "route-bound-ciphertext");
-      } else {
-        expect(reasoningItem).not.toHaveProperty("encrypted_content");
-      }
+      expect(reasoningItem).toHaveProperty("encrypted_content", "route-bound-ciphertext");
     },
   );
 

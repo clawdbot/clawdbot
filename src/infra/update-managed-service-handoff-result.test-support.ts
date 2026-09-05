@@ -16,6 +16,37 @@ export function registerManagedTerminalResultTests(
   expect: typeof import("vitest").expect,
   tempDirs: Set<string>,
 ): void {
+  itUnix.each(["ready", "unready"] as const)(
+    "finishes a cancelled handoff ledger when recovery is %s without a Gateway boot",
+    async (gatewayHealth) => {
+      const { run } = await runManagedServiceManagerBoundary("systemd", {
+        ledger: true,
+        cancelAfterPark: true,
+        gatewayHealth,
+      });
+      expect(run).toMatchObject({
+        phase: "finished",
+        status: gatewayHealth === "ready" ? "skipped" : "failed",
+        reason:
+          gatewayHealth === "ready"
+            ? "managed-service-handoff-cancelled"
+            : "managed-service-handoff-restore-failed",
+        verification: { serviceRunning: true, runningVersion: "1.0.0", versionMatch: true },
+      });
+      expect(run?.verification.booted).toBeUndefined();
+      expect(run?.downtimeMs).toEqual(gatewayHealth === "ready" ? expect.any(Number) : null);
+      expect(run?.steps).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            step: "service-stop",
+            status: "completed",
+            startedAtMs: expect.any(Number),
+          }),
+        ]),
+      );
+    },
+  );
+
   itUnix.each(
     (["systemd", "launchd"] as const).flatMap((kind) =>
       (["git", "npm"] as const).flatMap((mode) =>

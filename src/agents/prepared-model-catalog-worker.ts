@@ -7,7 +7,6 @@ import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
-import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { captureProviderSyntheticAuthFacts } from "../plugins/provider-runtime.js";
 import type { PreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
@@ -194,20 +193,23 @@ type PreparedModelCatalogWorker = Readonly<{
   loadCatalog: () => Promise<ModelCatalogSnapshot>;
 }>;
 
-export function createPreparedModelCatalogWorker(params: {
-  input: PreparedModelCatalogWorkerInput;
-  isCurrent: () => boolean;
-  pluginRegistry?: PluginRegistry;
-}): PreparedModelCatalogWorker {
+export function createPreparedModelCatalogWorker(
+  params: Parameters<typeof createPreparedModelCatalogWorkerInput>[0] & {
+    isCurrent: () => boolean;
+    pluginRegistry?: PluginRegistry;
+  },
+): PreparedModelCatalogWorker {
+  const workerInput = createPreparedModelCatalogWorkerInput(params);
+  // Parent probes retain the canonical generation; only the worker restores a cloned payload.
+  const metadataSnapshot = params.pluginMetadataSnapshot;
   const superseded = () =>
     new PreparedModelRuntimePublicationSupersededError(
-      `prepared model runtime catalog generation was superseded for ${params.input.input.agentDir}`,
+      `prepared model runtime catalog generation was superseded for ${workerInput.input.agentDir}`,
     );
   let generationPoll: NodeJS.Timeout | undefined;
   let stoppedError: Error | undefined;
   let expectedFingerprint: string | undefined;
   const captures = new Map<AbortController, Promise<PreparedSyntheticAuthFacts>>();
-  const metadataSnapshot = restorePluginMetadataSnapshot(params.input.pluginMetadataSnapshot);
   const assertCurrent = () => {
     if (stoppedError) {
       throw stoppedError;
@@ -221,7 +223,7 @@ export function createPreparedModelCatalogWorker(params: {
     message: Extract<PreparedModelWorkerResult, { status: "generation-mismatch" }>,
   ) =>
     new PreparedModelCatalogGenerationMismatchError(
-      params.input.input.agentDir,
+      workerInput.input.agentDir,
       message.generationFingerprint,
       message.reconstructedFingerprint,
     );
@@ -238,9 +240,9 @@ export function createPreparedModelCatalogWorker(params: {
       idleTimeoutMs: 0,
       restartOnError: false,
       workerOptions: {
-        workerData: params.input,
+        workerData: workerInput,
         // Establish state/config environment before worker module initialization reads process.env.
-        env: params.input.input.env,
+        env: workerInput.input.env,
       },
       validateResult: (message) => {
         assertCurrent();
@@ -284,7 +286,7 @@ export function createPreparedModelCatalogWorker(params: {
         }
       }, PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS);
       generationPoll.unref();
-      const { input } = params.input;
+      const { input } = workerInput;
       const capture = withPluginRuntimeGenerationScope(
         { metadataSnapshot, pluginRegistry: params.pluginRegistry },
         () =>
@@ -296,9 +298,9 @@ export function createPreparedModelCatalogWorker(params: {
               command.kind === "catalog"
                 ? [
                     ...listManifestSyntheticAuthProviderRefs(metadataSnapshot.index),
-                    ...params.input.providerIds,
+                    ...workerInput.providerIds,
                   ]
-                : [...params.input.providerIds, ...command.providerIds],
+                : [...workerInput.providerIds, ...command.providerIds],
             signal: controller.signal,
           }),
       );
@@ -315,7 +317,7 @@ export function createPreparedModelCatalogWorker(params: {
       message = await requestPool.run(
         () => {
           assertCurrent();
-          expectedFingerprint = fingerprintPreparedModelWorkerRequest(params.input, value);
+          expectedFingerprint = fingerprintPreparedModelWorkerRequest(workerInput, value);
           return value;
         },
         { timeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS, signal: controller.signal },

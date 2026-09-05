@@ -23,6 +23,7 @@ import {
   requireSkillLibraryEntry,
   resolveSkillLibraryActor,
   selectSkillLibraryRevision,
+  selectSkillLibraryRevisionMetadata,
   skillLibraryDb,
   type SkillLibraryAuthority,
 } from "./store.js";
@@ -118,7 +119,7 @@ export function seedSkillLibrarySelection(
           if (
             entry.removed ||
             !entry.enabled ||
-            !selectSkillLibraryRevision(db, pin.skillId, pin.revision)
+            !selectSkillLibraryRevisionMetadata(db, pin.skillId, pin.revision)
           ) {
             throw new SkillLibraryError(
               "CONFLICT",
@@ -165,7 +166,7 @@ export function changeSkillLibrarySelection(
         );
       }
       const revision = params.revision ?? entry.revision;
-      if (!selectSkillLibraryRevision(db, skillId, revision)) {
+      if (!selectSkillLibraryRevisionMetadata(db, skillId, revision)) {
         throw new SkillLibraryError("NOT_FOUND", "Skill revision not found.");
       }
       next.set(skillId, {
@@ -207,7 +208,11 @@ export function loadSkillLibrarySelection(
   const entries = readSkillLibraryStore(
     (db) =>
       selections.map((selection) => {
-        const revision = selectSkillLibraryRevision(db, selection.skillId, selection.revision);
+        const revision = selectSkillLibraryRevisionMetadata(
+          db,
+          selection.skillId,
+          selection.revision,
+        );
         if (!revision) {
           throw new SkillLibraryError(
             "NOT_FOUND",

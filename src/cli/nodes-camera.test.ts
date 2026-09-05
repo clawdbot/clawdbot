@@ -66,7 +66,7 @@ let writeCameraClipPayloadToFile: typeof import("./nodes-camera.js").writeCamera
 let writeCameraPayloadToFile: typeof import("./nodes-camera.js").writeCameraPayloadToFile;
 let writeBase64ToFile: typeof import("./nodes-camera.js").writeBase64ToFile;
 let parseScreenRecordPayload: typeof import("./nodes-screen.js").parseScreenRecordPayload;
-let parseScreenSnapshotPayload: typeof import("./nodes-screen.js").parseScreenSnapshotPayload;
+let parseScreenSnapshotResult: typeof import("../plugins/computer-use-contract.js").parseScreenSnapshotResult;
 let screenRecordTempPath: typeof import("./nodes-screen.js").screenRecordTempPath;
 let screenSnapshotFormatForPath: typeof import("./nodes-screen.js").screenSnapshotFormatForPath;
 let screenSnapshotTempPath: typeof import("./nodes-screen.js").screenSnapshotTempPath;
@@ -121,13 +121,13 @@ describe("nodes camera helpers", () => {
     } = await import("./nodes-camera.js"));
     ({
       parseScreenRecordPayload,
-      parseScreenSnapshotPayload,
       screenRecordTempPath,
       screenSnapshotFormatForPath,
       screenSnapshotTempPath,
       writeScreenRecordToFile,
       writeScreenSnapshotToFile,
     } = await import("./nodes-screen.js"));
+    ({ parseScreenSnapshotResult } = await import("../plugins/computer-use-contract.js"));
     ({ publishOutputFileAtomically } = await vi.importActual("./output-file.runtime.js"));
   });
 
@@ -763,7 +763,7 @@ describe("nodes screen helpers", () => {
 
   it("parses screen.snapshot payload", () => {
     expect(
-      parseScreenSnapshotPayload({
+      parseScreenSnapshotResult({
         format: "png",
         base64: "Zm9v",
         displayFrameId: "display-42-frame",
@@ -782,7 +782,7 @@ describe("nodes screen helpers", () => {
   });
 
   it("rejects invalid screen.snapshot payload", () => {
-    expect(() => parseScreenSnapshotPayload({ format: "png" })).toThrow(
+    expect(() => parseScreenSnapshotResult({ format: "png" })).toThrow(
       /invalid screen\.snapshot payload/i,
     );
   });

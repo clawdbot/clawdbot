@@ -698,6 +698,7 @@ describe("createCodexDynamicToolBridge", () => {
         createTool({ name: "message" }),
         createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME }),
         createTool({ name: "agents_list" }),
+        createTool({ name: "agents_wait" }),
         createTool({ name: "sessions_spawn" }),
         createTool({ name: "sessions_yield" }),
       ],
@@ -709,6 +710,7 @@ describe("createCodexDynamicToolBridge", () => {
     const message = specs.find((tool) => tool.name === "message");
     const heartbeat = specs.find((tool) => tool.name === HEARTBEAT_RESPONSE_TOOL_NAME);
     const agentsList = specs.find((tool) => tool.name === "agents_list");
+    const agentsWait = specs.find((tool) => tool.name === "agents_wait");
     const sessionsSpawn = specs.find((tool) => tool.name === "sessions_spawn");
     const sessionsYield = specs.find((tool) => tool.name === "sessions_yield");
 
@@ -728,6 +730,7 @@ describe("createCodexDynamicToolBridge", () => {
       deferLoading: true,
     });
     expectNoNamespace(agentsList);
+    expectNoNamespace(agentsWait);
     expectNoNamespace(sessionsSpawn);
     expectNoNamespace(sessionsYield);
     expect(bridge.resultContentSourceForTool("web_search")).toBe("network");

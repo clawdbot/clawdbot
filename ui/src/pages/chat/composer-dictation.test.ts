@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { ComposerDictationController, insertComposerDictation } from "./composer-dictation.ts";
 
@@ -380,6 +381,33 @@ describe("ComposerDictationController", () => {
     expect(controller.locksComposer).toBe(false);
     expect(request).not.toHaveBeenCalledWith("talk.session.create", expect.anything());
     controller.dispose();
+  });
+
+  it("does not switch microphones or allocate dictation after a selected-input constraint failure", async () => {
+    const settings = loadSettings();
+    patchSettings({ realtimeTalkInputDeviceId: "selected-mic" });
+    getUserMedia.mockRejectedValueOnce(
+      Object.assign(new Error("Invalid constraint"), {
+        name: "OverconstrainedError",
+        constraint: "",
+      }),
+    );
+    const { controller, onError, target } = createHarness();
+    try {
+      target.dispatchEvent(pointer("pointerdown"));
+      await vi.advanceTimersByTimeAsync(500);
+      expect(onError).toHaveBeenCalledWith(
+        "The selected microphone is unavailable. Choose another input or System default.",
+        { kind: "start", preservesText: false },
+      );
+      expect(controller.active).toBe(false);
+      expect(getUserMedia).toHaveBeenCalledOnce();
+      expect(request).not.toHaveBeenCalledWith("talk.session.create", expect.anything());
+      expect(loadSettings().realtimeTalkInputDeviceId).toBe("selected-mic");
+    } finally {
+      controller.dispose();
+      patchSettings({ realtimeTalkInputDeviceId: settings.realtimeTalkInputDeviceId });
+    }
   });
 
   it("keeps a quick pointer gesture as the existing tap action", async () => {

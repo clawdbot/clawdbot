@@ -52,9 +52,9 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
-import { resolveReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
+  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import {
@@ -3355,6 +3355,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   });
 
   it("finalizes a hook-handled turn when source delivery is intentionally suppressed", async () => {
+    const receipt: ReplyOperationRunState = {};
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
@@ -3365,7 +3366,10 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
     state.runEmbeddedAgentMock.mockImplementationOnce(runHookBackedEmbeddedAgent);
     const { followupRun, run, sourceTurnId } = createMinimalRun({
-      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+      opts: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        [REPLY_OPERATION_RUN_STATE]: receipt,
+      },
       sessionCtx: {
         Provider: "discord",
         OriginatingChannel: "discord",
@@ -3388,6 +3392,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
 
     await expect(run()).resolves.toEqual(expect.objectContaining({ text: "private hook reply" }));
+    expect(resolveReplyOperationAgentTurn(receipt)).toBe("ok");
 
     expect(await readStoredMainSession(storePath)).toMatchObject({
       status: "done",
@@ -4420,6 +4425,70 @@ describe("runReplyAgent typing (heartbeat)", () => {
       replyToId: "msg",
     });
     expect(onPendingContinuation).toHaveBeenCalledOnce();
+  });
+
+  it("prefers a yield acknowledgment over an earlier generated tool warning", async () => {
+    const toolWarning = setReplyPayloadMetadata(
+      { text: "⚠️ Bash failed", isError: true },
+      { toolErrorWarning: { toolName: "bash" } },
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [toolWarning],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+      acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
+    });
+    const { run } = createMinimalRun();
+
+    await expect(run()).resolves.toMatchObject({
+      text: "Research started; results will follow.",
+      replyToId: "msg",
+    });
+  });
+
+  it("keeps a generated tool warning when the yield acknowledgment is not deliverable", async () => {
+    const toolWarning = setReplyPayloadMetadata(
+      { text: "⚠️ Bash failed", isError: true },
+      { toolErrorWarning: { toolName: "bash" } },
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [toolWarning],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      },
+    });
+    const { run } = createMinimalRun({ currentInboundEventKind: "room_event" });
+
+    await expect(run()).resolves.toMatchObject({
+      text: "⚠️ Bash failed",
+      isError: true,
+      replyToId: "msg",
+    });
+  });
+
+  it("keeps a generated tool warning when the yield acknowledgment normalizes to empty", async () => {
+    const toolWarning = setReplyPayloadMetadata(
+      { text: "⚠️ Bash failed", isError: true },
+      { toolErrorWarning: { toolName: "bash" } },
+    );
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [toolWarning],
+      meta: {
+        yielded: true,
+        yieldAcknowledgment: "[[reply_to_current]]",
+      },
+      acceptedSessionSpawns: [{ runId: "child", childSessionKey: "agent:main:child" }],
+    });
+    const { run } = createMinimalRun();
+
+    await expect(run()).resolves.toMatchObject({
+      text: "⚠️ Bash failed",
+      isError: true,
+      replyToId: "msg",
+    });
   });
 
   it("delivers an explicit yield acknowledgment in message-tool-only mode", async () => {
@@ -5831,6 +5900,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 });
 
-import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

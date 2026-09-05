@@ -90,9 +90,33 @@ See [Release channels](/install/development-channels) for channel semantics.
 ### From chat
 
 The OpenClaw owner can say "update" (the agent uses the `gateway` action
-`update.run`) or send `/update`. The bot acknowledges, the Gateway restarts,
-and a completion or failure notice arrives in the same chat. If the update
-cannot start, the bot explains why and provides the manual command when available.
+`update.run`) or send `/update`. Update runs can send these notices in that
+chat as the Gateway observes the recorded milestones:
+
+1. An acknowledgement when the update is accepted.
+2. `⏳ Restarting the gateway now (v<from> → v<to>)…` when activation is recorded before the Gateway stops.
+3. `🔁 Back on v<to>, verifying…` when the new Gateway starts verification.
+4. The final report, including successful updates.
+
+Managed systemd or launchd updates can stop the Gateway before an intermediate
+notice is delivered. The complete four-message sequence is not guaranteed for
+those installations; the durable run report remains available after reconnect.
+
+Runs with an internal origin session, including Control UI and webchat, receive
+these notices directly in that session's transcript. Passing only `sessionKey`
+is enough; the caller does not need to supply `deliveryContext`.
+
+The report includes the outcome, recorded phase durations, failed steps,
+verification facts, and the next action when needed. A run sends each notice
+at most once; an update that stops before restart sends only the notices for
+phases it reached. If the update cannot start, the bot records and explains why
+and provides the manual command when available.
+
+Chat, CLI, Control UI, and automatic updates share a durable run ID. Use
+`openclaw update status` to read the active or latest report, including after a
+restart; `--json` exposes the `activeRun` and `lastRun` records. See
+[Run history and reports](/cli/update#run-history-and-reports) for Gateway history
+queries.
 
 The sender must be in [`commands.ownerAllowFrom`](/tools/slash-commands#configuration).
 `/update` also requires `commands.restart` (enabled by default).
@@ -502,11 +526,13 @@ When `update.run` has a routable chat session, the Gateway sends an update
 acknowledgement before starting the handoff or in-process update. It waits up to
 10 seconds for delivery; a failed chat send does not block the update. The RPC
 response includes `ackDelivered` so clients can distinguish a delivered
-acknowledgement from an unavailable or failed route. A synchronous failure after
-a delivered acknowledgement sends a second notice when no restart is scheduled.
+acknowledgement from an unavailable or failed route. Restart, verification,
+and completion notices follow the durable run state, as described in
+[From chat](/install/updating#from-chat).
 
-The Control UI includes its active session in the update request. Internal/webchat
-sessions receive the outcome as a transcript message after restart; sessions with
+The Control UI includes its active session in the update request. Any run with an
+existing internal/webchat origin session receives its report in that session's
+transcript, whether or not the caller supplied a delivery context. Sessions with
 an external delivery route receive a durable notice in that channel. Updates
 without an originating session send their notice through the system main
 session's external route when available. Otherwise, recovery keeps the
@@ -523,6 +549,11 @@ confirmation naming the target, the installed and available versions when known,
 and the restart impact; it sends nothing until you choose **Update and restart**.
 Cancel, Escape, and dismissing the dialog leave the Gateway untouched. Automatic
 campaigns, the CLI, and `update.run` API clients are unaffected.
+
+After confirmation, the dialog shows the live phase list, step details, and
+verification results. It stays open during restart and resumes from the Gateway's
+run record after reconnecting. Success and failure both leave a final report in
+the dialog and **Settings → Updates**. See [Control UI updates](/web/control-ui#updates).
 
 In the signed macOS app, a local app-owned Gateway changes that card to
 **Update Mac app + Gateway**. Sparkle updates the app first; after relaunch, the
@@ -766,6 +797,17 @@ The failed update retains its nonzero exit code even if the agent repairs it.
 - For `openclaw update --channel dev` on source checkouts, the updater auto-bootstraps `pnpm` when needed. If you see a pnpm/corepack bootstrap error, install `pnpm` manually (or re-enable `corepack`) and rerun the update.
 - Check: [Troubleshooting](/gateway/troubleshooting)
 - Ask in Discord: [https://discord.gg/clawd](https://discord.gg/clawd)
+
+To repair using OpenClaw's configured inference, run `openclaw triage --run`
+in a terminal on the Gateway host. It checks Doctor lint, then runs up to one
+embedded repair turn with time and tool-call limits and checks Doctor again.
+It uses the system-agent owner's model and configured fallbacks before trying
+other agents' authenticated routes. Operator-owned updates and explicit repair requests
+replace interactive exec approval with a prompt-free run scoped to the installation
+or staged candidate root (`fs.workspaceOnly: true`), preserving safe-bin and tool
+allowlists and refusing explicit exec or repair-tool denies with `exec-denied-by-policy`
+and an `openclaw triage` external handoff. See [Triage](/cli/triage#installation-target-and-embedded-handoff)
+for the repair contract, installation targeting, and validation results.
 
 ## Related
 

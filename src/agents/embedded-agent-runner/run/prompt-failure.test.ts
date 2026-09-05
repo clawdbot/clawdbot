@@ -1,6 +1,8 @@
 import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
 import { describe, expect, it, vi } from "vitest";
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { FailoverError } from "../../failover-error.js";
+import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 
 type Params = Parameters<typeof handleEmbeddedPromptFailure>[0];
@@ -14,6 +16,7 @@ function makeParams(overrides: Partial<Params> = {}): Params {
       runId: "run:prompt-failure-test",
     } as Params["runParams"],
     attempt: {
+      terminal: { kind: "ok" },
       replayMetadata: {
         replaySafe: true,
       },
@@ -62,6 +65,71 @@ function makeParams(overrides: Partial<Params> = {}): Params {
 }
 
 describe("handleEmbeddedPromptFailure", () => {
+  it.each(
+    (["prompt", "compaction", "tool_execution"] as const).flatMap((phase) =>
+      [false, true].map((fallbackConfigured) => ({ phase, fallbackConfigured })),
+    ),
+  )(
+    "preserves recorded $phase timeouts with fallback=$fallbackConfigured",
+    async ({ phase, fallbackConfigured }) => {
+      const params = makeParams({
+        promptError: new FailoverError("Provider stopped responding", { reason: "timeout" }),
+        fallbackConfigured,
+        advanceAuthProfile: vi.fn(async () => false),
+        resolveAuthProfileFailureReason: vi.fn(() => null),
+      });
+      params.attempt.terminal = { kind: "timeout", phase, source: "runtime" };
+
+      const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
+
+      const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
+      expect(fields).toEqual({
+        stopReason: "timeout",
+        ...(phase === "prompt" ? { timeoutPhase: "provider", providerStarted: true } : {}),
+      });
+      expect(
+        buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
+      ).toBe(phase === "prompt" ? "hard_timeout" : "timed_out");
+    },
+  );
+
+  it("retains a harness's provider-started timeout without inventing its phase", async () => {
+    const params = makeParams({
+      promptError: new FailoverError("Harness deadline reached", { reason: "timeout" }),
+      advanceAuthProfile: vi.fn(async () => false),
+      resolveAuthProfileFailureReason: vi.fn(() => null),
+    });
+    params.attempt.terminal = { kind: "timeout", phase: "tool_execution", source: "runtime" };
+    params.attempt.promptTimeoutOutcome = { providerStarted: true };
+    const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
+    const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
+    expect(fields).toEqual({ stopReason: "timeout", providerStarted: true });
+    expect(
+      buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
+    ).toBe("hard_timeout");
+  });
+
+  it.each(["prompt", "compaction", "tool_execution"] as const)(
+    "retains an opaque %s watchdog failure without changing its retry routing",
+    async (phase) => {
+      const params = makeParams({
+        promptError: new Error("Opaque provider failure"),
+        resolveAuthProfileFailureReason: vi.fn(() => null),
+      });
+      params.attempt.terminal = { kind: "timeout", phase, source: "runtime" };
+
+      const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
+
+      expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({
+        stopReason: "timeout",
+        ...(phase === "prompt" ? { timeoutPhase: "provider", providerStarted: true } : {}),
+      });
+      expect(params.maybeRetryTransient).not.toHaveBeenCalled();
+      expect(params.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(error).toHaveProperty("cause", params.promptError);
+    },
+  );
+
   it.each([false, true])(
     "surfaces trusted checkpoint recovery without provider failover (altered message: %s)",
     async (alteredMessage) => {

@@ -50,6 +50,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
       key: sessionKey,
       agentId,
       clone: false,
+      exactRead: true,
     });
     const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
     const cancelAndDrain = async (
@@ -146,6 +147,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         key: sessionKey,
         agentId,
         clone: false,
+        exactRead: true,
       });
       const currentEntry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
         current.store,
@@ -311,6 +313,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           key: sessionKey,
           agentId,
           clone: false,
+          exactRead: true,
         });
         const currentEntry = sessionRuntime.resolveCanonicalSessionEntryFromStoreKeys(
           currentTarget.store,
