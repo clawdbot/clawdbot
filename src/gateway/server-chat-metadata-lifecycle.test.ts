@@ -168,7 +168,7 @@ async function createRealMetadataLifecycle(
       owner: () => modelEvent({ phase: "invalidated" }),
     },
     async stop() {
-      await Promise.all(sidecars.map((sidecar) => sidecar.stop()));
+      await Promise.all(sidecars.map((sidecar) => Promise.resolve(sidecar.stop())));
     },
   };
 }
@@ -196,7 +196,9 @@ describe("gateway chat metadata lifecycle", () => {
         );
         queued.release();
         await queued.obsolete.catch(() => undefined);
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
 
         expect(harness.warn).not.toHaveBeenCalled();
         expect(settled).toBe(false);
@@ -232,7 +234,9 @@ describe("gateway chat metadata lifecycle", () => {
             outcome = error;
           },
         );
-        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
 
         expect(outcome).toBe(failure);
         harness.replaceOwner();
@@ -273,7 +277,9 @@ describe("gateway chat metadata lifecycle", () => {
       );
       release.resolve();
       await attachment;
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(settled).toBe(false);
       expect(harness.warn).not.toHaveBeenCalled();
       harness.replaceOwner();
@@ -308,7 +314,9 @@ describe("gateway chat metadata lifecycle", () => {
           return error;
         },
       );
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(settled).toBe(false);
       harness.replaceOwner();
       await expect(read).resolves.toMatchObject({
