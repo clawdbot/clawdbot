@@ -2084,7 +2084,11 @@ class NodeRuntime private constructor(
   private fun publishChatSessionDeletion(deletion: ChatSessionDeletion) {
     synchronized(gatewayDataScopeLock) { chatSelectionSeq.incrementAndGet() }
     deletion.gatewayId?.let { gatewayId ->
-      scope.launch { runCatching { chatReaderPositionStore.deleteSession(gatewayId, deletion.sessionKey) } }
+      // Enter the store fence before listeners can bind a replacement with the same key;
+      // the database delete may finish asynchronously, but newer state cannot be retired by it.
+      scope.launch(start = CoroutineStart.UNDISPATCHED) {
+        runCatching { chatReaderPositionStore.deleteSession(gatewayId, deletion.sessionKey) }
+      }
     }
     chatSessionDeletionListeners.values.forEach { listener -> listener(deletion) }
   }
