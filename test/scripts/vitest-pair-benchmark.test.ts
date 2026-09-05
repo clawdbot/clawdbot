@@ -576,7 +576,7 @@ describe("Vitest pair benchmark contract", () => {
     );
     const gateway = analysis.lanes.find((lane) => lane.id === "gateway");
 
-    expect(gateway?.regressions.length > 0).toBe(regression);
+    expect(gateway?.regressions).toHaveLength(regression ? 1 : 0);
     expect(analysis.verdict).toBe(regression ? "regression" : "pass");
   });
 
