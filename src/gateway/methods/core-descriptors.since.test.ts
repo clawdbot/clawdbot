@@ -100,6 +100,8 @@ const CURRENT_TRAIN_METHODS = [
   "sessions.groups.defaults",
   "sessions.recover",
   "update.hold",
+  "update.runs.get",
+  "update.runs.list",
   "sessions.catalog.startTerminal",
   "sessions.github.publish",
   "sessions.github.options",
