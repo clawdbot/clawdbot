@@ -139,7 +139,7 @@ suite.define(() => {
       await openProfilePage(
         page,
         { "users.self": { profile: { ...testProfile, emails: [longEmail] } } },
-        [{ ...testPresenceUsers[0], email: longEmail }],
+        testPresenceUsers.map((user) => ({ ...user, email: longEmail })),
       );
 
       const handle = page.locator(".profile-hero__handle");
