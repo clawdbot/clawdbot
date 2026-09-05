@@ -79,7 +79,6 @@ vi.mock("./update-command-service.js", async () => {
   return {
     maybeRestartServiceAfterFailedMutableUpdate: mocks.maybeRestartService,
     maybeStopManagedServiceBeforeMutableUpdate: mocks.maybeStopService,
-    resolvePreparedGatewayUpdatePolicy: actual.resolvePreparedGatewayUpdatePolicy,
     shouldBlockMutableUpdateFromGatewayServiceEnv: mocks.shouldBlockServiceUpdate,
     UpdateCommandAbort: actual.UpdateCommandAbort,
   };
@@ -103,8 +102,6 @@ const successfulUpdate: UpdateRunResult = {
 };
 
 const activation: Parameters<PackageUpdateExecutor["activate"]>[0]["activation"] = {
-  allowGatewayActivation: true,
-  allowGatewayServiceRepair: false,
   managedServiceEnv: { OPENCLAW_PROFILE: "default" },
 };
 
