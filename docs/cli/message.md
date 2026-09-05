@@ -51,8 +51,8 @@ Every action accepts: `--channel <name>`, `--account <id>`, `--json`,
 `-t, --target <dest>`.
 
 Discord message bodies, captions, poll context, and component text retain
-meaningful whitespace before channel formatting and chunking. Existing
-empty-message validation still applies.
+leading indentation. Existing empty-message validation still applies.
+Ordinary message and caption delivery still trims trailing whitespace.
 
 Local message actions run the loaded plugins' shutdown hooks before exiting, including
 after an action fails. Cleanup has a 2.5-second overall budget and does not change

@@ -515,7 +515,8 @@ describe("Discord show_widget contextual presenter process proof", () => {
           base64: bytes.toString("base64"),
         },
       ]);
-      expect.soft(caption?.body?.content).toBe("    caption body  ");
+      // Core reply normalization trims the suffix before Discord delivery.
+      expect.soft(caption?.body?.content).toBe("    caption body");
 
       const classic = await invokeMessage("classic component file body", {
         message: "    classic component body  ",
@@ -530,7 +531,7 @@ describe("Discord show_widget contextual presenter process proof", () => {
           base64: bytes.toString("base64"),
         },
       ]);
-      expect.soft(classic?.body?.content).toBe("    classic component body  ");
+      expect.soft(classic?.body?.content).toBe("    classic component body");
 
       const componentText = await invokeMessage("explicit Components V2 body fields", {
         message: "fallback",
