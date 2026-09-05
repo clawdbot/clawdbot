@@ -1,6 +1,7 @@
 // Imported by agent.test.ts to keep its mocked suite in one Vitest module graph.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { FailoverError } from "../../agents/failover-error.js";
@@ -1588,7 +1589,7 @@ describe("gateway agent handler", () => {
         useTestStateDir(root);
         resetAgentTaskRegistryForTests();
         primeMainAgentRun();
-        const run = Promise.withResolvers<{
+        const run = createDeferred<{
           payloads: [];
           meta: { durationMs: number; aborted: boolean; stopReason: string };
         }>();
@@ -1657,7 +1658,7 @@ describe("gateway agent handler", () => {
       useTestStateDir(root);
       resetAgentTaskRegistryForTests();
       primeMainAgentRun();
-      const run = Promise.withResolvers<{
+      const run = createDeferred<{
         payloads: [];
         meta: { durationMs: number; aborted: true; stopReason: "rpc" };
       }>();
@@ -1712,7 +1713,7 @@ describe("gateway agent handler", () => {
         useTestStateDir(root);
         resetAgentTaskRegistryForTests();
         primeMainAgentRun();
-        const run = Promise.withResolvers<{ payloads: []; meta: { durationMs: number } }>();
+        const run = createDeferred<{ payloads: []; meta: { durationMs: number } }>();
         mocks.agentCommand.mockReturnValueOnce(run.promise);
         const context = makeContext();
         const runId = `task-owner-${changedOwner}`;
