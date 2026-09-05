@@ -48,9 +48,19 @@ export function assertSupportedJobSpec(
     job.sessionTarget === "main" &&
     job.payload.kind !== "systemEvent" &&
     job.payload.kind !== "script" &&
+    job.payload.kind !== "wake" &&
     !isSystemOwnedCronPayloadKind(job.payload.kind)
   ) {
-    throw new Error('main cron jobs require payload.kind="systemEvent" or "script"');
+    throw new Error('main cron jobs require payload.kind="systemEvent", "script", or "wake"');
+  }
+  if (
+    job.payload.kind === "wake" &&
+    (job.sessionTarget !== "main" ||
+      (job.schedule.kind !== "at" && job.schedule.kind !== "every" && job.schedule.kind !== "cron"))
+  ) {
+    throw new Error(
+      'wake cron jobs require sessionTarget="main" and an at, every, or cron schedule',
+    );
   }
   if (
     job.payload.kind === "script" &&
@@ -96,11 +106,14 @@ export function assertScriptPayloadSupport(
 }
 
 export function assertTriggerSupport(
-  job: Pick<CronJob, "schedule" | "trigger">,
+  job: Pick<CronJob, "schedule" | "trigger" | "payload">,
   opts?: { cronConfig?: CronConfig; validateAuthoredTrigger?: boolean },
 ) {
   if (!job.trigger) {
     return;
+  }
+  if (job.payload.kind === "wake") {
+    throw new Error("wake cron jobs cannot use condition triggers");
   }
   if (opts?.validateAuthoredTrigger && opts.cronConfig?.triggers?.enabled === false) {
     throw new Error(
@@ -207,9 +220,13 @@ export function assertMainSessionAgentId(
   if (!job.agentId) {
     return;
   }
-  // Script payloads run no agent turn; system-owned monitors invoke Gateway
-  // dependencies directly, so both are valid for non-default agents.
-  if (job.payload.kind === "script" || isSystemOwnedCronPayloadKind(job.payload.kind)) {
+  // Script and wake payloads run no agent turn; system-owned monitors invoke
+  // Gateway dependencies directly, so all are valid for non-default agents.
+  if (
+    job.payload.kind === "script" ||
+    job.payload.kind === "wake" ||
+    isSystemOwnedCronPayloadKind(job.payload.kind)
+  ) {
     return;
   }
   const normalized = normalizeAgentId(job.agentId);

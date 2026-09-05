@@ -85,6 +85,9 @@ export function formatCronPayload(job: CronJob) {
   if (p.kind === "heartbeat") {
     return "Heartbeat monitor";
   }
+  if (p.kind === "wake") {
+    return "Wake only";
+  }
   if (p.kind === "skillCollectionReview") {
     return "Skill collection review";
   }

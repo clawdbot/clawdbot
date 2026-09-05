@@ -249,6 +249,7 @@ const CronPayloadSchema = Type.Union([
   CronAgentTurnPayloadSchema,
   CronCommandPayloadSchema,
   CronScriptPayloadSchema,
+  closedObject({ kind: Type.Literal("wake") }),
 ]);
 
 /**
@@ -260,12 +261,14 @@ const CronReportedPayloadSchema = Type.Union([
   CronAgentTurnPayloadSchema,
   CronCommandPayloadSchema,
   CronScriptPayloadSchema,
+  closedObject({ kind: Type.Literal("wake") }),
   closedObject({ kind: Type.Literal("heartbeat") }),
   closedObject({ kind: Type.Literal("skillCollectionReview") }),
 ]);
 
 /** Partial cron payload for job updates. */
 const CronPayloadPatchSchema = Type.Union([
+  closedObject({ kind: Type.Literal("wake") }),
   closedObject({
     kind: Type.Literal("systemEvent"),
     text: Type.Optional(NonEmptyString),

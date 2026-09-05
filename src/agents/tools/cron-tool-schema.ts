@@ -41,8 +41,8 @@ const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream"] as const;
 // model-facing schema must not advertise them.
 const CRON_SCHEDULE_KINDS_TRIGGERS_DISABLED = ["at", "every", "cron"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
-const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
-const CRON_PAYLOAD_KINDS_TRIGGERS_DISABLED = ["systemEvent", "agentTurn"] as const;
+const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script", "wake"] as const;
+const CRON_PAYLOAD_KINDS_TRIGGERS_DISABLED = ["systemEvent", "agentTurn", "wake"] as const;
 const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
 
@@ -176,7 +176,10 @@ function createCronPayloadSchema(params: {
             ...(params.triggersEnabled ? CRON_PAYLOAD_KINDS : CRON_PAYLOAD_KINDS_TRIGGERS_DISABLED),
             ...(params.management ? ["command"] : []),
           ],
-          { description: "Payload kind" },
+          {
+            description:
+              'Payload kind; "wake" records an occurrence without payload dispatch (main; at/every/cron; no trigger)',
+          },
         ),
         text: Type.Optional(Type.String({ description: "systemEvent text" })),
         message: Type.Optional(Type.String({ description: "agentTurn prompt" })),

@@ -9,7 +9,7 @@ import { isRecord } from "../../utils.js";
 import { isStringOption } from "../../utils/string-readers.js";
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "on-exit", "stream"] as const;
-const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script", "command"] as const;
+const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script", "command", "wake"] as const;
 const CRON_FLAT_PAYLOAD_KEYS = [
   "message",
   "text",

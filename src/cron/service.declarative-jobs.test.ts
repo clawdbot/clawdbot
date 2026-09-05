@@ -86,6 +86,32 @@ function ownedDeclaration(params: {
 }
 
 describe("CronService declarative jobs", () => {
+  it.each([undefined, "host-timer"])(
+    "keeps direct wake creation canonical with declarationKey=%s",
+    async (declarationKey) => {
+      const { storePath } = await makeStorePath();
+      const cron = createCronService(storePath, false);
+      const payload = { kind: "wake" as const, message: "must not run", toolsAllow: ["exec"] };
+      const input = declaration({
+        declarationKey,
+        sessionTarget: "main",
+        payload,
+        delivery: { mode: "none" },
+      });
+      const result = await cron.add(input);
+      const job = "job" in result ? result.job : result;
+      expect(job.payload).toEqual({ kind: "wake" });
+      expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual({ kind: "wake" });
+      if (declarationKey) {
+        const updated = declarativeResult(
+          await cron.add({ ...input, schedule: { kind: "every", everyMs: 120_000 } }),
+        );
+        expect(updated.updated).toBe(true);
+        expect(updated.job.payload).toEqual({ kind: "wake" });
+      }
+    },
+  );
+
   it("rejects malformed declared triggers without changing persisted jobs", async () => {
     const { storePath } = await makeStorePath();
     const cron = createCronService(storePath);

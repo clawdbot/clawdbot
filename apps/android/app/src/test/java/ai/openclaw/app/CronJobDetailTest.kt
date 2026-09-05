@@ -71,6 +71,16 @@ class CronJobDetailTest {
   }
 
   @Test
+  fun parsesWakePayloadAsReadOnlyDetail() {
+    val detail = parseGatewayCronJobDetail(parseJob(payload = """{"kind":"wake"}"""))
+
+    requireNotNull(detail)
+    assertEquals("wake", detail.payloadKind)
+    assertEquals("Wake only", detail.payloadLabel.resolveNativeText())
+    assertNull(detail.payloadText)
+  }
+
+  @Test
   fun rejectsIncompleteGatewayCronJob() {
     val incomplete = Json.parseToJsonElement("""{"id":"job-1","name":"Missing fields"}""").jsonObject
 

@@ -6210,6 +6210,7 @@ export const en: TranslationMap & {
       action: "Action",
       command: "Command",
       script: "Script",
+      wakeOnly: "Wake only",
       readOnlyPayloadHelp:
         "This payload was created outside Control UI. Its contents stay read-only and are preserved when you save other changes.",
       systemEvent: "Post to main timeline",

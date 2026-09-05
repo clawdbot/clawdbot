@@ -64,13 +64,14 @@ export type CronFormState = {
   triggerOnce: boolean;
   sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
   wakeMode: "next-heartbeat" | "now";
-  // System-owned payloads are always payloadLocked; the form only
-  // displays it, never submits it.
+  // Non-form payload kinds are always payloadLocked; the form displays them
+  // without submitting payload changes.
   payloadKind:
     | "systemEvent"
     | "agentTurn"
     | "command"
     | "script"
+    | "wake"
     | "heartbeat"
     | "skillCollectionReview";
   payloadLocked: boolean;
@@ -112,7 +113,7 @@ function isCronPayload(value: unknown): value is CronPayload {
   if (value.kind === "script") {
     return typeof value.script === "string";
   }
-  if (isSystemOwnedCronPayloadKind(value.kind)) {
+  if (value.kind === "wake" || isSystemOwnedCronPayloadKind(value.kind)) {
     return true;
   }
   return false;
@@ -904,6 +905,7 @@ function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
   return (
     payload?.kind === "command" ||
     payload?.kind === "script" ||
+    payload?.kind === "wake" ||
     isSystemOwnedCronPayloadKind(payload?.kind)
   );
 }

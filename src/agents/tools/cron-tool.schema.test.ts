@@ -382,6 +382,33 @@ describe("createCronToolSchema", () => {
     ).toBe(true);
   });
 
+  it.each([true, false])(
+    "accepts wake-only create and update calls with triggers=%s",
+    (enabled) => {
+      const wakeSchema = createCronTool({
+        config: { cron: { triggers: { enabled } } } as OpenClawConfig,
+      }).parameters;
+      expect(
+        Value.Check(wakeSchema, {
+          action: "add",
+          job: {
+            name: "host wake",
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "main",
+            payload: { kind: "wake" },
+          },
+        }),
+      ).toBe(true);
+      expect(
+        Value.Check(wakeSchema, {
+          action: "update",
+          id: "job-1",
+          job: { payload: { kind: "wake" } },
+        }),
+      ).toBe(true);
+    },
+  );
+
   it("job.failureAlert exposes after, channel, to, cooldownMs, includeSkipped, mode, accountId", () => {
     expect(keysAt(schemaRecord, "job.failureAlert")).toEqual(
       ["accountId", "after", "channel", "cooldownMs", "includeSkipped", "mode", "to"].toSorted(),
@@ -517,6 +544,7 @@ describe("createCronToolSchema with cron triggers disabled", () => {
     expect(propertyAt(schemaRecord, "job.payload.kind")?.enum).toEqual([
       "systemEvent",
       "agentTurn",
+      "wake",
     ]);
     const payloadKeys = keysAt(schemaRecord, "job.payload");
     expect(payloadKeys).not.toContain("script");

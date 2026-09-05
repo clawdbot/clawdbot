@@ -57,6 +57,17 @@ openclaw automations create "*/15 * * * *" \
 
 `--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` for exact argv execution. Command jobs capture stdout/stderr, record normal run history, and route output through the same `announce`, `webhook`, or `none` delivery modes as isolated jobs. A command that prints only `NO_REPLY` is suppressed.
 
+Use `--wake-only` when the schedule itself is the complete action and an external host owns any follow-up work:
+
+```bash
+openclaw automations create \
+  --name "External host wake" \
+  --every 5m \
+  --wake-only
+```
+
+Wake-only jobs record a successful occurrence without running a trigger, script, command, heartbeat request, system event, or model turn. They target `main` and support `--at`, `--every`, and `--cron`; process-backed `--stream-command` and `--on-exit` schedules are rejected. A successful occurrence records scheduler completion, not external work completion or host activation. Configured webhook delivery still follows the normal completion lifecycle.
+
 Use `--display-name <name>` when the list and detail views should show a
 human-readable label distinct from the automation's stable name. Set or update
 that label with `automations add|edit --display-name`. Use

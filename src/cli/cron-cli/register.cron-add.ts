@@ -92,6 +92,7 @@ export function registerCronAddCommand(cron: Command) {
     )
       .option("--declaration-key <key>", "Idempotent declaration identity key")
       .option("--disabled", "Create job disabled", false)
+      .option("--wake-only", "Record the scheduled occurrence without running a payload", false)
       .action(
         async (
           nameArg: string | undefined,
@@ -157,11 +158,15 @@ export function registerCronAddCommand(cron: Command) {
                 Boolean(message),
                 Boolean(commandShell) || Boolean(commandArgv),
                 Boolean(scriptPath),
+                opts.wakeOnly === true,
               ].filter(Boolean).length;
               if (chosen !== 1) {
                 throw new Error(
-                  "Choose exactly one payload: --system-event, --message, --command, or --script",
+                  "Choose exactly one payload: --system-event, --wake-only, --message, --command, or --script",
                 );
+              }
+              if (opts.wakeOnly === true) {
+                return { kind: "wake" as const };
               }
               if (systemEvent) {
                 return {
@@ -279,9 +284,10 @@ export function registerCronAddCommand(cron: Command) {
             if (
               sessionTarget === "main" &&
               resolvedPayload.kind !== "systemEvent" &&
-              resolvedPayload.kind !== "script"
+              resolvedPayload.kind !== "script" &&
+              resolvedPayload.kind !== "wake"
             ) {
-              throw new Error("Main jobs require --system-event or --script.");
+              throw new Error("Main jobs require --system-event, --script, or --wake-only.");
             }
             if (
               resolvedPayload.kind === "script" &&

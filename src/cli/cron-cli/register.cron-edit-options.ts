@@ -1,7 +1,6 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CronJob } from "../../cron/types.js";
-import { isSystemOwnedCronPayloadKind } from "../../cron/types.js";
 import {
   parseCronCommandArgv,
   parseCronCommandEnv,
@@ -157,7 +156,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     if (existingKind === "script") {
       throw new Error("Use --script-timeout-seconds for script jobs, not --timeout-seconds.");
     }
-    if (existingKind === "systemEvent" || isSystemOwnedCronPayloadKind(existingKind)) {
+    if (existingKind !== "agentTurn" && existingKind !== "command") {
       throw new Error(`--timeout-seconds is not supported for ${existingKind} jobs.`);
     }
     timeoutOnlyPayloadKind = existingKind;
@@ -171,9 +170,12 @@ export async function resolveCronEditPayloadDeliveryPatch(
     !hasScriptSpecificPayloadField &&
     !hasTimeoutSeconds
   ) {
-    // Tool grants are shared by every payload kind; a policy-only edit must
+    // A policy-only edit must
     // preserve the stored execution kind instead of creating an agent turn.
     toolsOnlyPayloadKind = (await loadExistingJob()).payload.kind;
+    if (toolsOnlyPayloadKind === "wake") {
+      throw new Error("Tool allowlists are not supported for wake jobs.");
+    }
   }
   const hasAgentTurnPayloadField =
     hasAgentTurnSpecificPayloadField ||

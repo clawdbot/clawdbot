@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { assertTriggerSupport } from "./jobs-validation.js";
 
 const triggerJob = {
+  payload: { kind: "systemEvent" as const, text: "tick" },
   schedule: { kind: "every" as const, everyMs: 30_000 },
   trigger: { script: "json({ fire: true })" },
 };

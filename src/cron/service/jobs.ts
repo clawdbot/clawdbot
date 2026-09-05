@@ -257,9 +257,11 @@ export function createJob(
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
     payload:
-      input.payload.kind === "script"
-        ? normalizeCronScriptPayload(structuredClone(input.payload))
-        : structuredClone(input.payload),
+      input.payload.kind === "wake"
+        ? { kind: "wake" }
+        : input.payload.kind === "script"
+          ? normalizeCronScriptPayload(structuredClone(input.payload))
+          : structuredClone(input.payload),
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
     ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
@@ -503,9 +505,11 @@ export function applyDeclarativeJobSpec(
     delete job.pacing;
   }
   job.payload =
-    input.payload.kind === "script"
-      ? normalizeCronScriptPayload(structuredClone(input.payload))
-      : structuredClone(input.payload);
+    input.payload.kind === "wake"
+      ? { kind: "wake" }
+      : input.payload.kind === "script"
+        ? normalizeCronScriptPayload(structuredClone(input.payload))
+        : structuredClone(input.payload);
   if (input.trigger) {
     job.trigger = structuredClone(input.trigger);
   } else {

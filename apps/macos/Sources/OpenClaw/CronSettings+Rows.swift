@@ -90,7 +90,7 @@ extension CronSettings {
                 .help(
                     job.payload.isEditableInMacApp
                         ? "Edit automation"
-                        : "Command and script payloads are read-only in the macOS app")
+                        : "This cron payload is read-only in the macOS app; manage it with the CLI.")
             }
         }
     }
@@ -267,6 +267,8 @@ extension CronSettings {
                         if let toolBudget { StatusPill(text: "\(toolBudget) tools", tint: .secondary) }
                     }
                 }
+            case .wake:
+                StatusPill(text: "wake only · read-only", tint: .secondary)
             }
         }
     }

@@ -100,6 +100,11 @@ export async function executeJobCore(
       return { status: "skipped", error: "stream batch source no longer current" };
     }
   }
+  if (job.payload.kind === "wake") {
+    // An occurrence records the timer firing, not external work completing.
+    // Keep admission checks above, but never enter trigger or payload dispatch.
+    return { status: "ok", summary: "wake-only occurrence" };
+  }
   let effectiveJob = job;
   let triggerEval: CronTriggerEvalOutcome | undefined;
   if (job.trigger) {

@@ -203,6 +203,7 @@ TARGET+PAYLOAD:
 - "current" (agentTurn default) = this conversation: the run stays detached, reads bounded chat context, then commits its final visible assistant result to this conversation's durable history. Self-wakeup/"continue later"/loop = at|every + agentTurn + current.
 - "isolated" = fresh detached session (shows in \`openclaw tasks\`); standalone background work.
 - "main" = heartbeat lane; payload {kind:"systemEvent",text} (systemEvent default target).
+- wake {kind:"wake"}: main only, at|every|cron schedules, no trigger. Records a successful occurrence without a system event, heartbeat request, script, command, or model turn; external hosts own follow-up work. Unlike action:"wake", this does not nudge a session.
 - "session:<key>" = named session.
 - agentTurn {kind:"agentTurn",message,model?,thinking?,timeoutSeconds?}; timeoutSeconds 0=none.
 - Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.${scriptPayloadLine}

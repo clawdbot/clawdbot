@@ -210,6 +210,44 @@ describe("cron service store seam coverage", () => {
     await expectPathMissing(storePath.replace(/\.json$/, "-quarantine.json"));
   });
 
+  it("quarantines wake rows that could dispatch outside the main time-schedule contract", async () => {
+    const { storePath } = await makeStorePath();
+    const invalidSpecs = [
+      { sessionTarget: "isolated" },
+      { sessionTarget: "current" },
+      { sessionTarget: "session:other" },
+      { schedule: { kind: "on-exit", command: "echo unexpected" } },
+      { schedule: { kind: "stream", command: ["echo", "unexpected"] } },
+      { trigger: { script: "return { fire: true }" } },
+    ];
+    const valid = createReloadCronJob({ id: "valid-wake", payload: { kind: "wake" } });
+    const invalid = invalidSpecs.map((_, index) => ({ ...valid, id: `invalid-wake-${index}` }));
+    await saveCronStore(storePath, { version: 1, jobs: [valid, ...invalid] });
+    const db = openOpenClawStateDatabase().db;
+    for (const [index, spec] of invalidSpecs.entries()) {
+      const job = { ...valid, ...spec, id: `invalid-wake-${index}` };
+      db.prepare("UPDATE cron_jobs SET job_json = ? WHERE job_id = ?").run(
+        JSON.stringify(job),
+        job.id,
+      );
+    }
+    const state = createStoreTestState(storePath);
+
+    await ensureLoaded(state, { skipRecompute: true });
+
+    expect(state.store?.jobs.map((job) => job.id)).toEqual([valid.id]);
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([valid.id]);
+    expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual(
+      invalid.map((job, index) =>
+        expect.objectContaining({
+          sourceIndex: index + 1,
+          reason: "invalid-payload",
+          job: expect.objectContaining({ id: job.id }),
+        }),
+      ),
+    );
+  });
+
   it("quarantines malformed job and state JSON with exact recovery bytes", async () => {
     const { storePath } = await makeStorePath();
     const malformedJob = createReloadCronJob({ id: "malformed-job-json" });

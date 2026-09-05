@@ -182,6 +182,7 @@ export function getInvalidPersistedCronJobReason(
     payloadKind !== "agentTurn" &&
     payloadKind !== "command" &&
     payloadKind !== "script" &&
+    payloadKind !== "wake" &&
     !isSystemOwnedCronPayloadKind(payloadKind)
   ) {
     return "invalid-payload";
@@ -212,6 +213,14 @@ export function getInvalidPersistedCronJobReason(
     if (scheduleKind === "stream") {
       return "invalid-payload";
     }
+  }
+  if (
+    payloadKind === "wake" &&
+    (candidate.sessionTarget !== "main" ||
+      (scheduleKind !== "at" && scheduleKind !== "every" && scheduleKind !== "cron") ||
+      Object.hasOwn(candidate, "trigger"))
+  ) {
+    return "invalid-payload";
   }
   return null;
 }

@@ -188,4 +188,18 @@ describe("mergeCronPayload trigger tool caps", () => {
       toolsAllowIsDefault: true,
     });
   });
+
+  it("drops executable and tool fields when changing to wake", () => {
+    expect(
+      mergeCronPayload(
+        {
+          kind: "agentTurn",
+          message: "before",
+          model: "provider/model",
+          toolsAllow: ["exec"],
+        },
+        { kind: "wake", toolsAllow: ["read"] },
+      ),
+    ).toEqual({ kind: "wake" });
+  });
 });

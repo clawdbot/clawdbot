@@ -213,6 +213,28 @@ class CronJobManagementTest {
   }
 
   @Test
+  fun wakePayloadStaysReadOnlyDuringMetadataEdits() {
+    val original =
+      requireNotNull(
+        parseGatewayCronJobDetail(jobJson(payload = """{"kind":"wake"}""")),
+      )
+    val initial = original.toCronJobEdit()
+
+    assertEquals(GatewayCronPayloadEdit.ReadOnlyWake, initial.payload)
+
+    val patch =
+      objectJson(
+        buildCronUpdateParams(
+          original = original,
+          edit = initial.copy(name = "Renamed wake"),
+        ),
+      ).getValue("patch").jsonObject
+
+    assertEquals(setOf("name"), patch.keys)
+    assertEquals("Renamed wake", patch.getValue("name").jsonPrimitive.content)
+  }
+
+  @Test
   fun historyParserRequiresTimestampAndKeepsUsefulFields() {
     val entries =
       Json

@@ -567,7 +567,7 @@ export function normalizeCronJobInput(
       // Agent turns bind to the creating conversation by default: the run carries
       // that chat's context and announces its result there. Callers without session
       // context are downgraded to isolated by resolveCronCurrentSessionTarget.
-      if (kind === "systemEvent" || isSystemOwnedCronPayloadKind(kind)) {
+      if (kind === "systemEvent" || kind === "wake" || isSystemOwnedCronPayloadKind(kind)) {
         next.sessionTarget = "main";
       } else if (kind === "agentTurn") {
         next.sessionTarget = "current";
