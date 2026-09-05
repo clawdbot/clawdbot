@@ -75,10 +75,11 @@ final class WebChatManager {
         ].map { name in
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
                 guard let id = note.userInfo?[MacGatewayProfileStore.changedProfileIDKey] as? String else { return }
+                let removed = note.userInfo?[MacGatewayProfileStore.removedProfileKey] as? Bool == true
                 MainActor.assumeIsolated {
                     if name == MacGatewayProfileStore.willChangePrincipalNotification {
                         self?.closeGatewayWindows(profileID: id)
-                    } else if note.userInfo?[MacGatewayProfileStore.removedProfileKey] as? Bool == true {
+                    } else if removed {
                         self?.selection.forget(profileID: id)
                         self?.closeGatewayWindows(profileID: id)
                     } else {

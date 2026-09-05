@@ -276,7 +276,7 @@ struct MacGatewayBrowserSessionStoreTests {
             await #expect(throws: CancellationError.self) { try await cancelled.value }
             release.signal()
             #expect(await held.value)
-            try await deletion.value
+            _ = try await deletion.value
             await #expect(throws: MacGatewayProfileError.profileNotFound) { try await identity.value }
             await #expect(throws: MacGatewayProfileError.profileNotFound) { try await binding.value }
             let readd = try await store.beginBrowserSignIn(url: url)

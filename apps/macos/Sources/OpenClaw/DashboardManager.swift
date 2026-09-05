@@ -176,10 +176,9 @@ final class DashboardManager {
                     {
                         let removed = notification
                             .userInfo?[MacGatewayProfileStore.removedProfileKey] as? Bool == true
+                        let changeID = notification.userInfo?[MacGatewayProfileStore.changeIDKey] as? UUID
                         MainActor.assumeIsolated {
-                            if removed,
-                               let changeID = notification.userInfo?[MacGatewayProfileStore.changeIDKey] as? UUID
-                            {
+                            if removed, let changeID {
                                 self?.selection.forget(profileID: profileID)
                                 self?.retireRemovedProfile(profileID, removalID: changeID)
                             } else {

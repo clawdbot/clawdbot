@@ -125,14 +125,9 @@ struct GatewayConnectionMediaAuthorityTests {
     func `retiring authority cancels media waiting for HTTP headers`(_ retirement: String) async throws {
         let tls = try DashboardTLSFixture()
         let gate = GatewayConnectionSuspensionGate()
-        var holdResponse = true
         var requests: [String] = []
         let server = try await DashboardHTTPFixture.start(
-            beforeResponse: {
-                if holdResponse {
-                    await gate.suspend()
-                }
-            },
+            beforeResponse: { await gate.suspend() },
             tlsIdentity: tls.identity,
             requestHandler: { request in
                 requests.append(request)
@@ -173,7 +168,6 @@ struct GatewayConnectionMediaAuthorityTests {
                     }
                 })
             #expect(cancelled)
-            holdResponse = false
             await gate.open()
             if retirement != "expiry" {
                 let current = try await connection.acquireServerLease()
