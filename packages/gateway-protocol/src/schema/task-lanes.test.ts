@@ -43,6 +43,40 @@ describe("task-lane protocol", () => {
     ).toBe(true);
   });
 
+  it("accepts source-omission fields on a provider diagnostic so truncation is visible on the wire", () => {
+    // A provider that dropped lanes/items at its own count caps must be
+    // able to publish the omission counts so the UI can surface a
+    // truncation chip instead of a silently-cropped snapshot.
+    expect(
+      Value.Check(TaskLaneSnapshotSchema, {
+        lanes: [],
+        diagnostics: [
+          {
+            providerId: "big",
+            ok: true,
+            laneCount: 20,
+            itemCount: 200,
+            omittedLanes: 5,
+            omittedItems: 12,
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects negative omission counts on a provider diagnostic", () => {
+    // Counts come from arithmetic on observed lengths; a negative value
+    // means the producer miscounted and the closed schema must reject it.
+    expect(
+      Value.Check(TaskLaneSnapshotSchema, {
+        lanes: [],
+        diagnostics: [
+          { providerId: "big", ok: true, laneCount: 1, itemCount: 1, omittedLanes: -1 },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("rejects snapshot payloads with unknown fields or invalid states", () => {
     expect(
       Value.Check(TaskLaneSnapshotSchema, {

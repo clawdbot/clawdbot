@@ -798,6 +798,11 @@
   border-color: color-mix(in srgb, var(--danger) 40%, transparent);
 }
 
+.cron-task-lanes__chip--warn {
+  color: var(--warning, var(--muted));
+  border-color: color-mix(in srgb, var(--warning, var(--border)) 40%, transparent);
+}
+
 .cron-task-lanes__error {
   color: var(--danger);
   font-size: var(--control-ui-text-sm);

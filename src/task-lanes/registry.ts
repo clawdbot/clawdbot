@@ -67,7 +67,11 @@ export async function loadTaskLaneSnapshot(
       continue;
     }
     try {
-      const { lanes: providerLanes } = await provider.load();
+      const {
+        lanes: providerLanes,
+        omittedLanes: providerOmittedLanes,
+        omittedItems: providerOmittedItems,
+      } = await provider.load();
       let itemCount = 0;
       for (const lane of providerLanes) {
         // Lane ids are only unique within a provider; item-to-lane assignment
@@ -82,11 +86,20 @@ export async function loadTaskLaneSnapshot(
           flat.push({ item, laneId: lane.id, laneProviderId: providerId });
         }
       }
+      // Propagate source-level omissions reported by the provider (lanes or
+      // items dropped at the provider's count caps) so the snapshot can
+      // surface a truncation notice instead of presenting a capped set as
+      // the full picture. Only attach when non-zero; older providers that
+      // omit these fields keep a zero default.
+      const omittedLanes = providerOmittedLanes ?? 0;
+      const omittedItems = providerOmittedItems ?? 0;
       diagnostics.push({
         providerId,
         ok: true,
         laneCount: providerLanes.length,
         itemCount,
+        ...(omittedLanes > 0 ? { omittedLanes } : {}),
+        ...(omittedItems > 0 ? { omittedItems } : {}),
       });
     } catch (error) {
       diagnostics.push({

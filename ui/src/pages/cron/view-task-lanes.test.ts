@@ -102,6 +102,31 @@ describe("task lanes panel", () => {
     expect(chips[1]).toContain("5");
   });
 
+  it("renders a truncation chip when a provider dropped lanes or items at its cap", () => {
+    // A provider that hit its count cap must surface "dropped N lanes, M items"
+    // so a capped set cannot masquerade as a complete snapshot. The chip is
+    // visually distinct (warn class) from a clean ok chip.
+    const container = renderPanel({
+      taskLanes: snapshot({
+        lanes: [],
+        diagnostics: [
+          {
+            providerId: "big",
+            ok: true,
+            laneCount: 20,
+            itemCount: 200,
+            omittedLanes: 5,
+            omittedItems: 12,
+          },
+        ],
+      }),
+    });
+    const warn = container.querySelector(".cron-task-lanes__chip--warn");
+    expect(warn?.textContent?.replace(/\s+/g, " ").trim()).toContain("big");
+    expect(warn?.textContent).toContain("5");
+    expect(warn?.textContent).toContain("12");
+  });
+
   it("marks an off-page lane as omitted instead of reading as an empty queue", () => {
     const container = renderPanel({
       taskLanes: snapshot({

@@ -62,6 +62,24 @@ function renderLaneCount(lane: TaskLane) {
 
 function renderDiagnosticChip(diagnostic: TaskLaneDiagnostic) {
   if (diagnostic.ok) {
+    // A provider that dropped lanes or items at its own count cap (before the
+    // registry ever saw them) gets a distinct chip so a silently-cropped
+    // snapshot cannot masquerade as a complete one.
+    const omittedLanes = diagnostic.omittedLanes ?? 0;
+    const omittedItems = diagnostic.omittedItems ?? 0;
+    if (omittedLanes > 0 || omittedItems > 0) {
+      return html`
+        <span class="cron-task-lanes__chip cron-task-lanes__chip--warn">
+          ${t("cron.lanes.providerTruncated", {
+            provider: diagnostic.providerId,
+            lanes: String(diagnostic.laneCount),
+            items: String(diagnostic.itemCount),
+            omittedLanes: String(omittedLanes),
+            omittedItems: String(omittedItems),
+          })}
+        </span>
+      `;
+    }
     return html`
       <span class="cron-task-lanes__chip cron-task-lanes__chip--ok">
         ${t("cron.lanes.providerOk", {

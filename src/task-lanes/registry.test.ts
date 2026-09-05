@@ -82,6 +82,32 @@ describe("task-lane registry", () => {
     ]);
   });
 
+  it("propagates source omissions from the provider to the snapshot diagnostic", async () => {
+    const registry = createTaskLaneRegistry();
+    // A provider that drops lanes and items at its own caps must surface those
+    // omissions so the UI can show a truncation notice instead of treating
+    // the capped set as complete.
+    registerTaskLaneProvider(
+      registry,
+      provider("truncated", async () => ({
+        lanes: [lane("review", [{ id: "t1", title: "t", state: "pending" }])],
+        omittedLanes: 5,
+        omittedItems: 12,
+      })),
+    );
+    const snapshot = await loadTaskLaneSnapshot(registry);
+    expect(snapshot.diagnostics).toEqual([
+      {
+        providerId: "truncated",
+        ok: true,
+        laneCount: 1,
+        itemCount: 1,
+        omittedLanes: 5,
+        omittedItems: 12,
+      },
+    ]);
+  });
+
   it("scopes lane identity per provider when two providers share a lane id", async () => {
     const registry = createTaskLaneRegistry();
     registerTaskLaneProvider(

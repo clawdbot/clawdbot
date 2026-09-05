@@ -53,6 +53,12 @@ export const TaskLaneProviderDiagnosticSchema = Type.Union([
     ok: Type.Literal(true),
     laneCount: Type.Integer({ minimum: 0 }),
     itemCount: Type.Integer({ minimum: 0 }),
+    // Lanes/items dropped at the provider's count caps before the registry
+    // saw them. Optional on the wire so older providers stay valid; the
+    // registry only attaches them when non-zero so the UI can show a
+    // truncation chip instead of treating a capped set as complete.
+    omittedLanes: Type.Optional(Type.Integer({ minimum: 0 })),
+    omittedItems: Type.Optional(Type.Integer({ minimum: 0 })),
   }),
   closedObject({
     providerId: NonEmptyString,

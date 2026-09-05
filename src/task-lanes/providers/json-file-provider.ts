@@ -203,6 +203,16 @@ function fsErrorCode(error: unknown): string {
  */
 async function loadJsonFileProviderLanes(options: JsonFileProviderOptions): Promise<{
   lanes: TaskLane[];
+  /**
+   * Lanes dropped by the provider's count cap. Clients surface this so a
+   * "Showing 20 of 25 lanes" notice is visible instead of a silently-cropped set.
+   */
+  omittedLanes: number;
+  /**
+   * Items dropped by the provider's per-lane count cap. Aggregated across lanes;
+   * the registry reports per-lane totals separately for paging.
+   */
+  omittedItems: number;
 }> {
   let rootRealpath: string;
   try {
@@ -256,11 +266,17 @@ async function loadJsonFileProviderLanes(options: JsonFileProviderOptions): Prom
   if (!Array.isArray(root.lanes)) {
     throw new Error("task lane file is missing the lanes array");
   }
+  const inputLaneCount = root.lanes.length;
   const lanes: TaskLane[] = [];
   const seenLaneIds = new Set<string>();
+  let rawItemCount = 0;
   for (const candidateLane of root.lanes) {
     if (lanes.length >= TASK_LANE_MAX_LANES) {
       break;
+    }
+    // Count raw items before normalization so the cap-gaps are accurate.
+    if (Array.isArray((candidateLane as Record<string, unknown>)?.items)) {
+      rawItemCount += ((candidateLane as Record<string, unknown>).items as unknown[]).length;
     }
     const lane = normalizeLane(candidateLane);
     if (lane) {
@@ -273,7 +289,12 @@ async function loadJsonFileProviderLanes(options: JsonFileProviderOptions): Prom
       lanes.push(lane);
     }
   }
-  return { lanes };
+  const omittedLanes = Math.max(inputLaneCount - lanes.length, 0);
+  // Count items in retained lanes only — items from dropped lanes are already
+  // omitted by the lane cap; count only the per-lane cap gap within kept lanes.
+  const retainedItemCount = lanes.reduce((sum, lane) => sum + lane.items.length, 0);
+  const omittedItems = Math.max(rawItemCount - retainedItemCount, 0);
+  return { lanes, omittedLanes, omittedItems };
 }
 
 /** Builds a provider id-stable wrapper that resolves the file each call. */

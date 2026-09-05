@@ -57,7 +57,27 @@ export type TaskLane = {
 };
 
 export type TaskLaneProviderDiagnostic =
-  | { providerId: string; ok: true; laneCount: number; itemCount: number }
+  | {
+      providerId: string;
+      ok: true;
+      laneCount: number;
+      itemCount: number;
+      /**
+       * Lanes the provider's own count cap dropped before the registry saw
+       * them. Zero/absent when the source input was within bounds; clients
+       * surface this so a "Showing 20 of 25 lanes" notice is visible instead
+       * of a silently-cropped lane set.
+       */
+      omittedLanes?: number;
+      /**
+       * Items the provider's per-lane count cap dropped before the registry
+       * saw them. Aggregated across the provider's lanes; the registry
+       * reports per-lane totals separately for paging. Clients surface this
+       * as a truncation notice so a 200-item cap is not silently treated as
+       * the full queue.
+       */
+      omittedItems?: number;
+    }
   | { providerId: string; ok: false; error: string };
 
 export type TaskLaneSnapshotPaging = {
@@ -81,8 +101,17 @@ export type TaskLaneSnapshot = {
 export type TaskLaneProvider = {
   id: string;
   label: string;
-  /** Loads the lane set; read ops wraps this call, so throwing is allowed. */
-  load: () => Promise<{ lanes: TaskLane[] }>;
+  /**
+   * Loads the lane set; read ops wraps this call, so throwing is allowed.
+   * Providers may report source-level omissions (lanes or items dropped by
+   * their own count caps) so the registry can surface a truncation notice
+   * instead of silently presenting a capped set as the full picture.
+   */
+  load: () => Promise<{
+    lanes: TaskLane[];
+    omittedLanes?: number;
+    omittedItems?: number;
+  }>;
 };
 
 /** Collapses any producer value into the six buyer-visible item states. */

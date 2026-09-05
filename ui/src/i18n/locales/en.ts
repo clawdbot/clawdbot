@@ -6126,6 +6126,8 @@ export const en: TranslationMap & {
       title: "Task lanes",
       empty: "No task lanes are reporting right now.",
       providerOk: "{provider}: {lanes} lanes · {items} items",
+      providerTruncated:
+        "{provider}: {lanes} lanes · {items} items (dropped {omittedLanes} lanes, {omittedItems} items at provider cap)",
       providerError: "{provider}: {error}",
       artifact: "Artifact",
       itemsShownOfTotal: "{shown} of {total}",

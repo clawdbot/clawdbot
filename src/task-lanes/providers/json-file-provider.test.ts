@@ -222,28 +222,33 @@ describe("json-file task-lane provider", () => {
     expect(message).not.toContain("<img");
   });
 
-  it("truncates lanes beyond the lane cap", async () => {
+  it("truncates lanes beyond the lane cap and reports the omission count", async () => {
     const many = Array.from({ length: 25 }, (_, index) => ({
       id: `lane-${index}`,
       label: `Lane ${index}`,
       items: [],
     }));
-    const { lanes } = await loadJsonFileProviderLanes({
+    const result = await loadJsonFileProviderLanes({
       rootDir: "/data/lanes",
       filePath: "board.json",
       reader: readerReturning({ schemaVersion: 1, lanes: many }),
       resolveRealpath: async (p) => p,
     });
-    expect(lanes).toHaveLength(20);
+    expect(result.lanes).toHaveLength(20);
+    // 5 lanes were dropped at the provider cap; this must be surfaced so the
+    // UI can show "Showing 20 of 25 lanes" instead of silently treating 20 as complete.
+    expect(result.omittedLanes).toBe(5);
+    // No per-lane item cap was triggered (all lanes are empty).
+    expect(result.omittedItems).toBe(0);
   });
 
-  it("truncates items beyond the per-lane cap", async () => {
+  it("truncates items beyond the per-lane cap and reports the omission count", async () => {
     const items = Array.from({ length: 205 }, (_, index) => ({
       id: `item-${index}`,
       title: `Item ${index}`,
       state: "pending",
     }));
-    const { lanes } = await loadJsonFileProviderLanes({
+    const result = await loadJsonFileProviderLanes({
       rootDir: "/data/lanes",
       filePath: "board.json",
       reader: readerReturning({
@@ -252,7 +257,44 @@ describe("json-file task-lane provider", () => {
       }),
       resolveRealpath: async (p) => p,
     });
-    expect(lanes[0]?.items).toHaveLength(200);
+    expect(result.lanes[0]?.items).toHaveLength(200);
+    // 5 items were dropped at the per-lane cap; the UI needs this so a
+    // 205-item lane is not silently truncated to 200 with no notice.
+    expect(result.omittedItems).toBe(5);
+    // No lane cap was triggered.
+    expect(result.omittedLanes).toBe(0);
+  });
+
+  it("reports both lane and item omissions when both caps fire simultaneously", async () => {
+    const makeItems = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        id: `item-${i}`,
+        title: `Item ${i}`,
+        state: "pending",
+      }));
+    // 21 lanes: lane 0 has 205 items (per-lane cap drops 5), lanes 1-19 each
+    // hold 1 item, lane 20 is dropped by the lane cap. Both omission
+    // counters must surface so neither cap silently hides source data.
+    const many = [
+      { id: "lane-0", label: "Lane 0", items: makeItems(205) },
+      ...Array.from({ length: 20 }, (_, index) => ({
+        id: `lane-${index + 1}`,
+        label: `Lane ${index + 1}`,
+        items: makeItems(1),
+      })),
+    ];
+    const result = await loadJsonFileProviderLanes({
+      rootDir: "/data/lanes",
+      filePath: "board.json",
+      reader: readerReturning({ schemaVersion: 1, lanes: many }),
+      resolveRealpath: async (p) => p,
+    });
+    expect(result.lanes).toHaveLength(20);
+    expect(result.omittedLanes).toBe(1);
+    // Lane 0 retained 200 of 205 items; lanes 1-19 retained 1 each.
+    // Per-lane cap dropped 5 items from lane 0; items from dropped lane 20
+    // count toward omittedLanes, not omittedItems.
+    expect(result.omittedItems).toBe(5);
   });
 
   it("drops artifactUrl values outside the http(s) allowlist", async () => {
