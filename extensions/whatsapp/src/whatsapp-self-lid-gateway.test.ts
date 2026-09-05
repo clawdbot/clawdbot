@@ -1,29 +1,29 @@
-// E2E: a native WhatsApp self-LID mention reaches an ephemeral Gateway as agent-facing identity text.
+// Integration: a native WhatsApp self-LID mention reaches an ephemeral Gateway as agent-facing identity text.
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { monitorWebChannelWithCapture } from "../extensions/whatsapp/src/auto-reply.broadcast-groups.test-harness.js";
+import type { OpenClawConfig as GatewayConfig } from "../../../src/config/types.openclaw.js";
+import {
+  connectGatewayClient,
+  disconnectGatewayClient,
+} from "../../../src/gateway/test-helpers.e2e.js";
+import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
+import {
+  createOpenClawTestInstance,
+  type OpenClawTestInstance,
+} from "../../../test/helpers/openclaw-test-instance.js";
+import { monitorWebChannelWithCapture } from "./auto-reply.broadcast-groups.test-harness.js";
 import {
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
   sendWebGroupInboundMessage,
   setLoadConfigMock,
-} from "../extensions/whatsapp/src/auto-reply.test-harness.js";
-import {
-  extractMentionedJids,
-  projectWhatsAppInboundMessage,
-} from "../extensions/whatsapp/src/inbound/extract.js";
-import type { OpenClawConfig as GatewayConfig } from "../src/config/types.openclaw.js";
-import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
-import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "./helpers/openclaw-test-instance.js";
+} from "./auto-reply.test-harness.js";
+import { extractMentionedJids, projectWhatsAppInboundMessage } from "./inbound/extract.js";
 
 const SELF_LID_ID = "900000000000001";
 const SELF_LID = SELF_LID_ID + "@lid";
