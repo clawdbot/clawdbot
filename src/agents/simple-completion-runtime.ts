@@ -30,6 +30,10 @@ import type {
 } from "../llm/types.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  attachModelProviderRuntimePluginHandle,
+  resolveProviderRuntimePluginHandle,
+} from "../plugins/provider-hook-runtime.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import {
@@ -456,16 +460,28 @@ async function prepareSimpleCompletionModelCore(
     applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
     params.cfg,
   );
+  const providerRuntimeHandle = resolveProviderRuntimePluginHandle({
+    provider: model.provider,
+    modelId: model.id,
+    config: params.cfg,
+    workspaceDir,
+    env: process.env,
+    pluginMetadataSnapshot: context.preparedModelRuntime.metadataSnapshot,
+  });
+  const preparedModel = attachModelProviderRuntimePluginHandle(model, providerRuntimeHandle);
   // Select transport hooks before releasing this generation. Keep the logical
   // model API visible to callers that build prompts before dispatch.
-  const completionTransport = prepareModelForSimpleCompletion({
-    apiRegistry: modelRuntime.apiRegistry,
-    model,
-    cfg: params.cfg,
-  });
+  const completionTransport = attachModelProviderRuntimePluginHandle(
+    prepareModelForSimpleCompletion({
+      apiRegistry: modelRuntime.apiRegistry,
+      model: preparedModel,
+      cfg: params.cfg,
+    }),
+    providerRuntimeHandle,
+  );
 
   return {
-    model: bindModelLlmRuntime(model, modelRuntime.llmRuntime, completionTransport),
+    model: bindModelLlmRuntime(preparedModel, modelRuntime.llmRuntime, completionTransport),
     auth: resolvedAuth,
     ...(sourceAuthFingerprint ? { sourceAuthFingerprint } : {}),
   };

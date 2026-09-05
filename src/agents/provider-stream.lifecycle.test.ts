@@ -2,18 +2,46 @@ import { createApiRegistry, createLlmRuntime } from "@openclaw/ai";
 import { describe, expect, it, vi } from "vitest";
 import { bindModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+import { getModelProviderLocalServiceReconciler } from "./provider-local-service-reconcile.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 
-const { providerStream } = vi.hoisted(() => ({
-  providerStream: vi.fn(),
-}));
+const { prepare, providerStream, reconcile, runtimeHandle } = vi.hoisted(() => {
+  const prepare = vi.fn(async () => undefined);
+  const reconcile = vi.fn(async () => undefined);
+  return {
+    prepare,
+    providerStream: vi.fn(),
+    reconcile,
+    runtimeHandle: {
+      provider: "test-provider",
+      modelId: "test-model",
+      plugin: {
+        reconcileLocalService: reconcile,
+        wrapStreamFn: ({ streamFn }: { streamFn: typeof providerStream }) => {
+          return async (...args: Parameters<typeof providerStream>) => {
+            await prepare();
+            return streamFn(...args);
+          };
+        },
+      },
+    },
+  };
+});
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderStreamFn: () => providerStream,
 }));
 
+vi.mock("../plugins/provider-hook-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/provider-hook-runtime.js")>();
+  return {
+    ...actual,
+    resolveProviderRuntimePluginHandle: () => runtimeHandle,
+  };
+});
+
 describe("provider stream lifecycle registration", () => {
-  it("registers provider streams into the prepared model runtime", () => {
+  it("registers provider streams with the resolved runtime lifecycle handle", async () => {
     providerStream.mockReturnValue(createAssistantMessageEventStream());
     const apiRegistry = createApiRegistry();
     const llmRuntime = createLlmRuntime(apiRegistry);
@@ -33,7 +61,16 @@ describe("provider stream lifecycle registration", () => {
       llmRuntime,
     );
 
-    expect(registerProviderStreamForModel({ model })).toBeTypeOf("function");
+    const streamFn = registerProviderStreamForModel({ model, wrapProviderStream: true });
+    expect(streamFn).toBeTypeOf("function");
     expect(apiRegistry.getApiProvider("test-lifecycle-provider")).toBeDefined();
+    await streamFn?.(model, {} as never, {});
+    expect(getModelProviderLocalServiceReconciler(providerStream.mock.calls[0]![0])).toBe(
+      reconcile,
+    );
+    expect(prepare).toHaveBeenCalledOnce();
+    expect(prepare.mock.invocationCallOrder[0]).toBeLessThan(
+      providerStream.mock.invocationCallOrder[0]!,
+    );
   });
 });

@@ -295,6 +295,30 @@ describe("managed llama-server", () => {
     },
   );
 
+  it("does not reconcile a configured direct-model service without a router preset", async () => {
+    const root = tempDirs.make("llama-server-direct-model-");
+    let reloads = 0;
+    const server = http.createServer((req, res) => {
+      reloads += Number(req.url === "/models?reload=1");
+      res.end("{}");
+    });
+    servers.push(server);
+    const port = await listen(server);
+
+    await prepareManagedLlamaServer({
+      localService: {
+        command: path.join(root, "custom-server"),
+        args: ["--model", "/models/chat.gguf", "--alias", "chat"],
+      },
+      port,
+      chatModel: { mode: "configure", id: "chat", path: "/models/chat.gguf" },
+      embeddingModelPath: "/models/embedding.gguf",
+    });
+    await reconcileManagedLlamaServer({ baseUrl: `http://127.0.0.1:${port}/v1` });
+
+    expect(reloads).toBe(0);
+  });
+
   it("writes a 2048-token physical batch in the combined preset", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-preset-"));
     const presetPath = path.join(tempRoot, "models.ini");
@@ -444,7 +468,10 @@ describe("managed llama-server", () => {
     };
     const provider = {
       baseUrl: "http://127.0.0.1:29432/v1",
-      localService: { command: path.join(tempRoot, "llama-server"), args: [] },
+      localService: {
+        command: path.join(tempRoot, "llama-server"),
+        args: ["--models-preset", presetPath],
+      },
       models: [first, second],
       params: { modelCacheDir: tempRoot },
     };
@@ -526,7 +553,7 @@ describe("managed llama-server", () => {
     expect(reloads).toBe(1);
   });
 
-  it("reloads an unchanged preset when the managed origin changes and changes back", async () => {
+  it("tracks applied preset revisions independently by managed origin", async () => {
     await createPresetFixture("origin-transition");
     const reloads = [0, 0];
     const createReloadServer = (index: number) =>
@@ -545,6 +572,12 @@ describe("managed llama-server", () => {
       embeddingModelPath: "/models/embedding.gguf",
       port: firstPort,
     });
+    await prepareManagedLlamaServer({
+      chatModel: { mode: "remove" },
+      configuredChatModelIds: [],
+      embeddingModelPath: "/models/embedding.gguf",
+      port: secondPort,
+    });
     const firstBaseUrl = `http://127.0.0.1:${firstPort}/v1`;
     const secondBaseUrl = `http://127.0.0.1:${secondPort}/v1`;
 
@@ -552,7 +585,36 @@ describe("managed llama-server", () => {
     await reconcileManagedLlamaServer({ baseUrl: secondBaseUrl });
     await reconcileManagedLlamaServer({ baseUrl: firstBaseUrl });
 
-    expect(reloads).toEqual([2, 1]);
+    expect(reloads).toEqual([1, 1]);
+  });
+
+  it("reconciles using the configured managed-service origin", async () => {
+    await createPresetFixture("configured-origin");
+    let reloads = 0;
+    const server = http.createServer((req, res) => {
+      reloads += Number(req.url === "/models?reload=1");
+      res.end("{}");
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => {
+      server.listen(0, resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing test server address");
+    }
+    const baseUrl = `http://localhost:${address.port}/v1`;
+    await prepareManagedLlamaServer({
+      chatModel: { mode: "remove" },
+      configuredChatModelIds: [],
+      embeddingModelPath: "/models/embedding.gguf",
+      port: address.port,
+      reconcileBaseUrl: baseUrl,
+    });
+
+    await reconcileManagedLlamaServer({ baseUrl });
+
+    expect(reloads).toBe(1);
   });
 
   it("retains a failed reload revision for the next reconciliation", async () => {
@@ -586,6 +648,31 @@ describe("managed llama-server", () => {
     status = 200;
     await reconcileManagedLlamaServer({ baseUrl: `http://127.0.0.1:${port}/v1` });
     expect(reloads).toBe(2);
+  });
+
+  it("allows reloads to use llama.cpp's pinned model shutdown window", async () => {
+    await createPresetFixture("reload-shutdown-window");
+    let reloads = 0;
+    const server = http.createServer((req, res) => {
+      if (req.url === "/models?reload=1") {
+        reloads += 1;
+        setTimeout(() => res.end("{}"), 2_600);
+        return;
+      }
+      res.end("{}");
+    });
+    servers.push(server);
+    const port = await listen(server);
+    await prepareManagedLlamaServer({
+      chatModel: { mode: "remove" },
+      configuredChatModelIds: [],
+      embeddingModelPath: "/models/embedding.gguf",
+      port,
+    });
+
+    await reconcileManagedLlamaServer({ baseUrl: `http://127.0.0.1:${port}/v1` });
+
+    expect(reloads).toBe(1);
   });
 
   it("reconciles a mutation after the child reads the preset but before it listens", async () => {

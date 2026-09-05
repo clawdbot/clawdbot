@@ -448,6 +448,7 @@ describe("describeImageWithModelCore", () => {
       },
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
+      wrapProviderStream: true,
     });
     expect(completeMock).toHaveBeenCalledOnce();
     expect(fetchMock).not.toHaveBeenCalled();
@@ -756,6 +757,7 @@ describe("describeImageWithModelCore", () => {
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       workspaceDir: "/tmp/openclaw-workspace",
+      wrapProviderStream: true,
     });
   });
 
@@ -866,6 +868,7 @@ describe("describeImageWithModelCore", () => {
       },
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
+      wrapProviderStream: true,
     });
     expect(streamFn).toHaveBeenCalledOnce();
     expect(completeMock).not.toHaveBeenCalled();

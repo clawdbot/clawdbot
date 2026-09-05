@@ -132,6 +132,7 @@ async function prepareEmbeddingServer(
     embeddingModelIsDefault,
     embeddingModelPath,
     port: resolveProviderPort(provider),
+    reconcileBaseUrl: provider.baseUrl,
     localService: provider.localService,
   });
 }

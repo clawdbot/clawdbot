@@ -83,12 +83,14 @@ export type LlamaServerRuntimeFacts = {
 
 const modelPromises = new Map<string, Promise<string>>();
 const presetState = {
-  appliedRevision: "",
-  desiredRevision: "",
+  appliedRevisions: new Map<string, string>(),
+  desiredRevisions: new Map<string, string>(),
   transition: Promise.resolve(),
 };
 // Bound embedding KV memory and fit one input in one physical batch.
 const LLAMA_CPP_EMBEDDING_UBATCH_SIZE = 2048;
+// b10534 can synchronously wait 10 seconds for a model to unload during reload.
+const LLAMA_CPP_PRESET_RELOAD_TIMEOUT_MS = 15_000;
 
 function parseHuggingFaceSource(source: string): {
   user: string;
@@ -406,6 +408,7 @@ async function updatePreset(
     embeddingModelIsDefault?: boolean;
     embeddingModelPath?: string;
     defaultEmbeddingModelPath?: string;
+    reconcileOrigin?: string;
   },
 ): Promise<void> {
   await runPresetTransition(async () => {
@@ -450,8 +453,10 @@ async function updatePreset(
     if (next !== existing) {
       await writePreset(presetPath, next);
     }
-    // A revision becomes applied only after b10534 acknowledges reload; failures stay dirty.
-    presetState.desiredRevision = `${presetPath}\0${next}`;
+    if (params.reconcileOrigin) {
+      // A revision becomes applied only after b10534 acknowledges reload; failures stay dirty.
+      presetState.desiredRevisions.set(params.reconcileOrigin, `${presetPath}\0${next}`);
+    }
   });
 }
 
@@ -461,8 +466,8 @@ export async function reconcileManagedLlamaServer(params: {
 }): Promise<void> {
   await runPresetTransition(async () => {
     const origin = new URL(params.baseUrl).origin;
-    const revision = `${origin}\0${presetState.desiredRevision}`;
-    if (presetState.appliedRevision === revision) {
+    const revision = presetState.desiredRevisions.get(origin);
+    if (!revision || presetState.appliedRevisions.get(origin) === revision) {
       return;
     }
     const { response, release } = await fetchConfiguredLocalOriginWithSsrFGuard({
@@ -470,14 +475,14 @@ export async function reconcileManagedLlamaServer(params: {
       configuredLocalOriginBaseUrl: origin,
       policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(origin),
       signal: params.signal,
-      timeoutMs: 2_500,
+      timeoutMs: LLAMA_CPP_PRESET_RELOAD_TIMEOUT_MS,
       auditContext: "llama-server-preset-reload",
     });
     try {
       if (!response.ok) {
         throw new Error(`llama.cpp preset reload failed: HTTP ${response.status}`);
       }
-      presetState.appliedRevision = revision;
+      presetState.appliedRevisions.set(origin, revision);
     } finally {
       await release();
     }
@@ -511,6 +516,7 @@ export async function prepareManagedLlamaServer(params: {
   embeddingModelPath?: string;
   defaultEmbeddingModelPath?: string;
   port?: number;
+  reconcileBaseUrl?: string;
   localService?: ModelProviderConfig["localService"];
   asset?: LlamaServerAsset;
   isolated?: boolean;
@@ -529,6 +535,9 @@ export async function prepareManagedLlamaServer(params: {
     ).command;
   const port = params.port ?? (await findAvailableLlamaServerPort(params.isolated ? 0 : undefined));
   const rootUrl = `http://127.0.0.1:${port}`;
+  const reconcileOrigin = params.reconcileBaseUrl
+    ? new URL(params.reconcileBaseUrl).origin
+    : rootUrl;
   const endpoint = {
     command,
     baseUrl: `${rootUrl}/v1`,
@@ -540,6 +549,10 @@ export async function prepareManagedLlamaServer(params: {
   // Existing services may own a direct --model command instead of a router preset.
   // Keep that public localService contract; only setup creates a new router.
   if (params.localService && !configuredPreset && !params.isolated) {
+    await runPresetTransition(async () => {
+      presetState.desiredRevisions.delete(reconcileOrigin);
+      presetState.appliedRevisions.delete(reconcileOrigin);
+    });
     return { ...endpoint, args: params.localService.args ?? [] };
   }
   const defaultPreset = configuredPreset
@@ -556,6 +569,7 @@ export async function prepareManagedLlamaServer(params: {
     embeddingModelIsDefault: params.embeddingModelIsDefault,
     embeddingModelPath: params.embeddingModelPath,
     defaultEmbeddingModelPath: params.defaultEmbeddingModelPath,
+    reconcileOrigin: params.isolated ? undefined : reconcileOrigin,
   });
   params.signal?.throwIfAborted();
   return {
@@ -630,6 +644,7 @@ export async function ensureManagedLlamaServerForChat(params: {
     configuredChatModelIds: params.provider.models.map((model) => model.id),
     defaultEmbeddingModelPath: path.join(cacheDir, DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE),
     port: Number.isInteger(port) && port > 0 ? port : undefined,
+    reconcileBaseUrl: params.provider.baseUrl,
     localService: params.provider.localService,
   });
 }
