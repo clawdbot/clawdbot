@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareHostedGatewayStop, type HostedGatewayStop } from "../../daemon/hosted-stop.js";
+import { getGatewayProcessInstanceId } from "../../gateway/process-instance.js";
+import {
+  armGatewaySuspendHandoff,
+  consumeGatewaySuspendHandoff,
+  prepareGatewaySuspend,
+  resumeGatewaySuspend,
+} from "../../infra/gateway-suspend-coordinator.js";
 import { scheduleSafeGatewayRestart } from "../../infra/restart-coordinator.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
 
@@ -134,6 +141,44 @@ describe("Gateway host lifecycle authority", () => {
     await host.retire();
     await expect(host.finishStop()).resolves.toEqual({ outcome: "retired" });
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("does not carry an armed lease into another host iteration in the same process", async () => {
+    const first = owner();
+    const processInstanceId = getGatewayProcessInstanceId();
+    const lease = prepareGatewaySuspend({
+      requestId: "host-iteration-handoff",
+      drain: true,
+      pauseScheduling: () => {},
+      resumeScheduling: () => {},
+      inspect: { getRootRequests: () => 1, getTerminalPersistence: () => 0 },
+    });
+    if (lease.status !== "draining" || !first.capability.externalRestart) {
+      throw new Error("missing owned lease");
+    }
+    try {
+      expect(
+        armGatewaySuspendHandoff({
+          suspensionId: lease.suspensionId,
+          owner: first.capability.externalRestart,
+        }).ok,
+      ).toBe(true);
+      await first.retire();
+      const next = owner();
+      expect(getGatewayProcessInstanceId()).toBe(processInstanceId);
+      expect(first.capability.externalRestart.isCurrent()).toBe(false);
+      expect(next.capability.externalRestart?.isCurrent()).toBe(true);
+      expect(consumeGatewaySuspendHandoff(first.capability.externalRestart)).toEqual({
+        ok: true,
+        value: false,
+      });
+      expect(consumeGatewaySuspendHandoff(next.capability.externalRestart)).toEqual({
+        ok: true,
+        value: false,
+      });
+    } finally {
+      resumeGatewaySuspend(lease.suspensionId);
+    }
   });
 
   it.each(["preparing", "accepted"])(

@@ -87,8 +87,11 @@ function pruneResolvedSessionSuggestions(
       .where("session_key", "=", sessionKey)
       .where("state", "!=", "pending")
       .orderBy("created_at", "desc")
-      .orderBy("id", "desc"),
-  ).rows.slice(MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS);
+      .orderBy("id", "desc")
+      // SQLite requires LIMIT for OFFSET; -1 preserves the unbounded deletion tail.
+      .limit((eb) => eb.lit(-1))
+      .offset((eb) => eb.lit(MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS)),
+  ).rows;
   if (resolvedRows.length === 0) {
     return;
   }
@@ -133,21 +136,27 @@ export function addSessionSuggestion(
     assertSessionInstance(database, sessionKey, params.expectedSessionId);
     const db = suggestionDb(database);
     pruneResolvedSessionSuggestions(database, sessionKey);
-    const pendingRows = executeSqliteQuerySync(
+    // Compare decoded IDs in JS; binding the author here changes malformed-ID
+    // matching and can move binding errors ahead of the session-cap error.
+    const pendingCounts = executeSqliteQuerySync(
       database.db,
       db
         .selectFrom("session_suggestions")
-        .select("author_id")
+        .select((eb) => ["author_id", eb.fn.countAll<number>().as("count")])
         .where("session_key", "=", sessionKey)
-        .where("state", "=", "pending"),
-    ).rows;
-    if (pendingRows.length >= MAX_PENDING_SESSION_SUGGESTIONS_PER_SESSION) {
+        .where("state", "=", "pending")
+        .groupBy("author_id"),
+    ).rows.reduce(
+      (counts, row) => ({
+        session: counts.session + row.count,
+        author: counts.author + (row.author_id === suggestion.authorId ? row.count : 0),
+      }),
+      { session: 0, author: 0 },
+    );
+    if (pendingCounts.session >= MAX_PENDING_SESSION_SUGGESTIONS_PER_SESSION) {
       throw new Error("session pending suggestion limit reached");
     }
-    if (
-      pendingRows.filter((row) => row.author_id === suggestion.authorId).length >=
-      MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR
-    ) {
+    if (pendingCounts.author >= MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR) {
       throw new Error("author pending suggestion limit reached");
     }
     executeSqliteQuerySync(

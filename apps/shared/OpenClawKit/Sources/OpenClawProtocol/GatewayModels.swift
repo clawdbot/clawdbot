@@ -2201,6 +2201,46 @@ public struct GatewaySuspendResumeResult: Codable, Sendable {
     }
 }
 
+public struct GatewaySuspendHandoffParams: Codable, Sendable {
+    public let suspensionid: String
+    public let target: [String: AnyCodable]
+
+    public init(
+        suspensionid: String,
+        target: [String: AnyCodable])
+    {
+        self.suspensionid = suspensionid
+        self.target = target
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case suspensionid = "suspensionId"
+        case target
+    }
+}
+
+public struct GatewaySuspendHandoffResult: Codable, Sendable {
+    public let status: String
+    public let suspensionid: String
+    public let expiresatms: Int
+
+    public init(
+        status: String,
+        suspensionid: String,
+        expiresatms: Int)
+    {
+        self.status = status
+        self.suspensionid = suspensionid
+        self.expiresatms = expiresatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case suspensionid = "suspensionId"
+        case expiresatms = "expiresAtMs"
+    }
+}
+
 public struct UserPrefsLimitExceededErrorDetails: Codable, Sendable {
     public let code: String
     public let limit: Int

@@ -237,6 +237,24 @@ describe("DebugProxyCaptureStore", () => {
       dbPath,
       blobDir,
     });
+    lease.store.upsertSession({
+      id: "legacy-sdk-session",
+      startedAt: 0,
+      mode: "replacement",
+      sourceScope: "openclaw",
+      sourceProcess: "updated-plugin",
+      dbPath: "unused-database",
+      blobDir: "unused-blobs",
+    });
+    expect(lease.store.listSessions()).toEqual([
+      expect.objectContaining({
+        startedAt: 1,
+        mode: "sdk",
+        sourceProcess: "updated-plugin",
+        endedAt: null,
+        proxyUrl: null,
+      }),
+    ]);
     const blob = lease.store.persistPayload(Buffer.from("legacy sdk payload"), "text/plain");
     lease.store.recordEvent({
       sessionId: "legacy-sdk-session",
@@ -374,6 +392,58 @@ describe("DebugProxyCaptureStore", () => {
     }
   });
 
+  it.each(["shared", "path"] as const)(
+    "retries a rejected %s event without retaining an implicit session",
+    (kind) => {
+      const env = makeStateEnv("openclaw-proxy-capture-write-");
+      const lease =
+        kind === "shared"
+          ? acquireDebugProxyCaptureStore({ env })
+          : acquireDebugProxyCaptureStore(
+              path.join(env.OPENCLAW_STATE_DIR!, "capture.sqlite"),
+              path.join(env.OPENCLAW_STATE_DIR!, "blobs"),
+            );
+      const event = {
+        sessionId: "rejected-event",
+        ts: 7,
+        sourceScope: "openclaw",
+        sourceProcess: "capture-test",
+        protocol: "wss",
+        direction: "inbound",
+        kind: "ws-close",
+        flowId: "write-flow",
+        status: 429,
+        closeCode: 1001,
+        headersJson: '{"x-fixture":"header"}',
+        dataText: "preview",
+        dataSha256: "payload-hash",
+        errorText: "fixture error",
+        metaJson: '{"fixture":true}',
+      } as const;
+      try {
+        lease.store.db.setAuthorizer((action, table) =>
+          action === constants.SQLITE_INSERT && table === "capture_events"
+            ? constants.SQLITE_DENY
+            : constants.SQLITE_OK,
+        );
+        expect(() => lease.store.recordEvent(event)).toThrow(/not authorized/u);
+        lease.store.db.setAuthorizer(null);
+        expect(lease.store.listSessions()).toEqual([]);
+        expect(lease.store.getSessionEvents(event.sessionId)).toEqual([]);
+
+        lease.store.recordEvent(event);
+
+        expect(lease.store.getSessionEvents(event.sessionId)).toEqual([
+          expect.objectContaining({ ...event, dataBlobId: null }),
+        ]);
+        expect(lease.store.listSessions()).toHaveLength(kind === "shared" ? 1 : 0);
+      } finally {
+        lease.store.db.setAuthorizer(null);
+        lease.release();
+      }
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "stores capture blobs in the private shared state database",
     () => {
@@ -430,6 +500,17 @@ describe("DebugProxyCaptureStore", () => {
       data: '{"ok":true}',
       contentType: "application/json",
     });
+    const firstBlob = store.db
+      .prepare("SELECT * FROM capture_blobs WHERE blob_id = ?")
+      .get(firstPayload.dataBlobId ?? "");
+    const duplicateBlob = store.persistPayload(Buffer.from('{"ok":true}'), "text/plain");
+    expect(duplicateBlob).toMatchObject({
+      blobId: firstPayload.dataBlobId,
+      contentType: "text/plain",
+    });
+    expect(
+      store.db.prepare("SELECT * FROM capture_blobs WHERE blob_id = ?").get(duplicateBlob.blobId),
+    ).toEqual(firstBlob);
     store.recordEvent({
       sessionId: "session-1",
       ts: 1,
@@ -501,6 +582,22 @@ describe("DebugProxyCaptureStore", () => {
     expect(store.getSessionEvents("session-direct", 10)[0]).toMatchObject({
       dataBlobId: null,
     });
+    store.recordEvent({
+      sessionId: "session-direct",
+      ts: 1,
+      sourceScope: "openclaw",
+      sourceProcess: "another-provider",
+      protocol: "https",
+      direction: "outbound",
+      kind: "request",
+      flowId: "earlier-flow",
+      dataBlobId: "",
+    });
+    expect(store.listSessions()[0]).toMatchObject({ startedAt: 20, mode: "implicit" });
+    expect(store.getSessionEvents("session-direct").map((event) => event.dataBlobId)).toEqual([
+      null,
+      null,
+    ]);
 
     store.upsertSession({
       id: "session-direct",
@@ -508,12 +605,24 @@ describe("DebugProxyCaptureStore", () => {
       mode: "runtime",
       sourceScope: "openclaw",
       sourceProcess: "openclaw",
+      endedAt: 40,
+      proxyUrl: "http://synthetic.invalid",
+    });
+    store.upsertSession({
+      id: "session-direct",
+      startedAt: 30,
+      mode: "replacement",
+      sourceScope: "openclaw",
+      sourceProcess: "updated-process",
     });
 
     expect(store.listSessions(10)[0]).toMatchObject({
       id: "session-direct",
       mode: "runtime",
       startedAt: 10,
+      endedAt: null,
+      proxyUrl: null,
+      sourceProcess: "updated-process",
     });
   });
 

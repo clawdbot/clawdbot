@@ -170,6 +170,20 @@ export function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandl
   return attachedBackendByOperation.get(operation);
 }
 
+export function expireStaleReplyOperation(
+  operation: ReplyOperation,
+  reason: ReplyOperationStaleReason,
+  options?: ReplyOperationStaleExpiryOptions,
+): boolean {
+  return expireReplyOperationByOperation.get(operation)?.(reason, options) ?? false;
+}
+
+// Committed output belongs to the bounded finalization owner. Stale recovery
+// must not cancel delivery after the backend has already produced its answer.
+export function hasCommittedReplyOperationOutcome(operation: ReplyOperation): boolean {
+  return !operation.result && abortFrozenOperations.has(operation);
+}
+
 export function isReplyOperationAbortable(operation: ReplyOperation): boolean {
   if (operation.result || abortFrozenOperations.has(operation)) {
     return false;

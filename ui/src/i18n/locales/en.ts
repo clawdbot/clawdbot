@@ -3236,6 +3236,7 @@ export const en: TranslationMap & {
     ctaAppStore: "App Store",
     ctaPlayStore: "Google Play",
     ctaDownload: "Download",
+    ctaOpenMac: "Open in Mac app",
     ctaDocs: "Docs",
     ctaSetupGuide: "Setup guide",
     ctaChromeWebStore: "Chrome Web Store",

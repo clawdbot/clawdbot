@@ -285,11 +285,12 @@ export function validateExplicitPluginConfig(params: {
 
   const pluginsConfig = config.plugins;
   const entries = pluginsConfig?.entries;
+  // Normalized entries gain optional keys, so inspect the original disable marker shape.
+  const hasIntentionalDisableMarker = (pluginId: string) =>
+    isExplicitPluginDisableMarker(entries?.[pluginId]) && !isRetiredPluginId(pluginId);
   if (entries && isRecord(entries)) {
-    for (const [pluginId, entry] of Object.entries(entries)) {
-      const intentionalDisableMarker =
-        isExplicitPluginDisableMarker(entry) && !isRetiredPluginId(pluginId);
-      if (!knownIds.has(pluginId) && !intentionalDisableMarker) {
+    for (const pluginId of Object.keys(entries)) {
+      if (!knownIds.has(pluginId) && !hasIntentionalDisableMarker(pluginId)) {
         // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
         pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
       }
@@ -310,7 +311,7 @@ export function validateExplicitPluginConfig(params: {
           `"${pluginId}" is not a plugin — it is a command provided by the "${commandAlias.pluginId}" plugin. ` +
           `Use "${commandAlias.pluginId}" in plugins.allow instead.`,
       });
-    } else {
+    } else if (!hasIntentionalDisableMarker(pluginId)) {
       pushMissingPluginIssue("plugins.allow", pluginId, { warnOnly: true });
     }
   }

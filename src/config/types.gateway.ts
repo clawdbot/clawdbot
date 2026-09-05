@@ -207,7 +207,7 @@ export type GatewayTrustedProxyConfig = {
    */
   allowLoopback?: boolean;
   /**
-   * Automatically approve new browser devices and same-key scope upgrades after
+   * Automatically approve new browser/native UI operator devices and same-key scope upgrades after
    * trusted-proxy authentication. Disabled by default; configured scopes cap grants.
    */
   deviceAutoApprove?: {

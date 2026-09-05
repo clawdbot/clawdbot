@@ -13,6 +13,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import {
   appendTranscriptMessage,
+  appendTranscriptMessageSync,
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
@@ -30,6 +31,7 @@ import {
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
 import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
+import { withSessionPendingInputRelocation } from "./session-accessor.sqlite-pending-inputs.js";
 import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
@@ -143,6 +145,59 @@ describe("accepted input custody", () => {
     database().db.exec("DROP TRIGGER reject_pending_consume");
     expect(await promote(receipt)).toMatchObject({ appended: true, messageId: receipt.inputId });
     expect(readSessionPendingInput(scope(), receipt.inputId)).toBeUndefined();
+  });
+
+  it("moves transcript custody only after an authorized relocation commits", async () => {
+    const receipt = await stage("relocation");
+    await promote(receipt);
+    const appendCopy = (sourceInputId: string, eventId: string) =>
+      withSessionPendingInputRelocation(sourceInputId, receipt.message, () =>
+        appendTranscriptMessageSync(scope(), {
+          eventId,
+          idempotencyLookup: "caller-checked",
+          message: receipt.message,
+          parentId: null,
+        }),
+      );
+
+    expect(
+      receipt.run(() =>
+        appendTranscriptMessageSync(scope(), {
+          eventId: "unauthorized-copy",
+          idempotencyLookup: "caller-checked",
+          message: receipt.message,
+        }),
+      ),
+    ).toMatchObject({ ok: true, value: { appended: false, messageId: receipt.inputId } });
+
+    database().db.exec(
+      "CREATE TRIGGER reject_relocation BEFORE INSERT ON transcript_events WHEN NEW.event_json LIKE '%relocation-copy%' BEGIN SELECT RAISE(ABORT, 'relocation failed'); END",
+    );
+    expect(() => receipt.run(() => appendCopy(receipt.inputId, "relocation-copy"))).toThrow(
+      "relocation failed",
+    );
+    database().db.exec("DROP TRIGGER reject_relocation");
+    expect(
+      await receipt.run(() => appendTranscriptMessage(scope(), { message: receipt.message })),
+    ).toMatchObject({ appended: false, messageId: receipt.inputId });
+
+    expect(receipt.run(() => appendCopy(receipt.inputId, "relocated-user"))).toMatchObject({
+      ok: true,
+      value: { appended: true, messageId: "relocated-user" },
+    });
+    expect(() => receipt.run(() => appendCopy(receipt.inputId, "stale-source-copy"))).toThrow(
+      "does not match",
+    );
+    receipt.finish("cancelled");
+    expect(appendCopy("relocated-user", "closed-owner-copy")).toMatchObject({
+      ok: true,
+      value: { appended: true, messageId: "closed-owner-copy" },
+    });
+    await expect(
+      withSessionPendingInputPersistence(receipt, () =>
+        appendTranscriptMessage(scope(), { message: receipt.message }),
+      ),
+    ).rejects.toThrow("conflicts with the admitted message");
   });
 
   it("promotes a queued input with its own custody after another receipt releases the writer", async () => {
