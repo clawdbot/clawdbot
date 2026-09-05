@@ -27,6 +27,20 @@ export function normalizeTelegramCommandDescription(value: string): string {
   return value.trim();
 }
 
+export function hasTelegramCustomCommand(params: {
+  commands?: TelegramCustomCommandInput[] | null;
+  command: string;
+}): boolean {
+  const command = normalizeTelegramCommandName(params.command);
+  if (!command) {
+    return false;
+  }
+  return resolveTelegramCustomCommands({
+    commands: params.commands,
+    checkReserved: false,
+  }).commands.some((entry) => entry.command === command);
+}
+
 export function resolveTelegramCustomCommands(params: {
   commands?: TelegramCustomCommandInput[] | null;
   reservedCommands?: Set<string>;

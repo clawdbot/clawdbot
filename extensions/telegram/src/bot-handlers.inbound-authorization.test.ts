@@ -52,6 +52,7 @@ describe("Telegram inbound admission authorization", () => {
         topicConfig: undefined,
       }),
       shouldSkipUpdate: () => false,
+      removeMessageFromGroupHistory: vi.fn(),
       processMessage: async () => ({ kind: "completed" as const }),
     } satisfies RegisterTelegramHandlerParams;
     const gate = await createTelegramHandlerAuthorization(params).authorizeInboundMessage({

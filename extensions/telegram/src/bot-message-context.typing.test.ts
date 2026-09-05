@@ -89,6 +89,45 @@ describe("buildTelegramMessageContext typing", () => {
     expect(sendChatActionHandler.sendChatAction).not.toHaveBeenCalled();
   });
 
+  it("defers direct typing until the buffered turn starts initial feedback", async () => {
+    const sendChatActionHandler = createSendChatActionHandler();
+
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        text: "hello",
+      },
+      deferInitialFeedback: true,
+      sendChatActionHandler,
+    });
+
+    expect(ctx?.initialTypingCueSent).toBe(false);
+    expect(sendChatActionHandler.sendChatAction).not.toHaveBeenCalled();
+
+    await ctx?.sendTyping();
+    await ctx?.sendRecordVoice();
+    expect(sendChatActionHandler.sendChatAction).not.toHaveBeenCalled();
+
+    ctx?.startInitialFeedback?.();
+    ctx?.startInitialFeedback?.();
+
+    expect(ctx?.initialTypingCueSent).toBe(true);
+    expect(sendChatActionHandler.sendChatAction).toHaveBeenCalledExactlyOnceWith(
+      42,
+      "typing",
+      undefined,
+    );
+
+    await ctx?.sendTyping();
+    await ctx?.sendRecordVoice();
+    expect(sendChatActionHandler.sendChatAction.mock.calls).toEqual([
+      [42, "typing", undefined],
+      [42, "typing", undefined],
+      [42, "record_voice", undefined],
+    ]);
+  });
+
   it("sends forum topic typing after accepted user-request classification and before context construction", async () => {
     const buildInboundContext = vi.fn(
       (params: Parameters<typeof buildChannelInboundEventContext>[0]) =>

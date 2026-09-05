@@ -28,6 +28,7 @@ type BuildTelegramMessageContextForTestParams = {
   replyChain?: BuildTelegramMessageContextParams["replyChain"];
   promptContext?: BuildTelegramMessageContextParams["promptContext"];
   options?: BuildTelegramMessageContextParams["options"];
+  deferInitialFeedback?: BuildTelegramMessageContextParams["deferInitialFeedback"];
   cfg?: Record<string, unknown>;
   accountId?: string;
   dmPolicy?: BuildTelegramMessageContextParams["dmPolicy"];
@@ -134,6 +135,7 @@ export async function buildTelegramMessageContextForTest(
     promptContext: params.promptContext ?? [],
     storeAllowFrom: [],
     options: params.options ?? {},
+    deferInitialFeedback: params.deferInitialFeedback,
     bot: {
       api: {
         sendChatAction: vi.fn(),

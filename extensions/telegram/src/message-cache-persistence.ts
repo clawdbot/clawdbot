@@ -11,6 +11,10 @@ import type {
 
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES = 3000;
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE = "telegram.message-cache";
+// Privacy revocations have an independent bounded LRU. Routine message-cache churn must never
+// evict a still-retained ignore tombstone.
+export const TELEGRAM_MESSAGE_PRIVACY_PERSISTENT_MAX_ENTRIES = 3000;
+export const TELEGRAM_MESSAGE_PRIVACY_PERSISTENT_NAMESPACE = "telegram.message-privacy";
 // Versioned writes preserve projection provenance. Shipped unversioned rows
 // hydrate as markerless context only; they never imply transcript projection.
 export const TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION = 1;
@@ -42,6 +46,80 @@ export type PersistedTelegramMessageCacheValue = {
   threadBinding?: TelegramMessageThreadBinding;
   threadId?: string;
 };
+
+export type PersistedTelegramIgnoredMediaGroup = {
+  version: typeof TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION;
+  kind: "ignored-media-group";
+  accountId: string;
+  chatId: string;
+  mediaGroupId: string;
+};
+
+export type PersistedTelegramIgnoredMessage = {
+  version: typeof TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION;
+  kind: "ignored-message";
+  accountId: string;
+  chatId: string;
+  messageId: string;
+};
+
+export type PersistedTelegramMessagePrivacyEntry =
+  | PersistedTelegramIgnoredMediaGroup
+  | PersistedTelegramIgnoredMessage;
+
+export type PersistedTelegramMessageCacheEntry =
+  | PersistedTelegramMessageCacheValue
+  | PersistedTelegramIgnoredMediaGroup;
+
+export function parsePersistedTelegramIgnoredMediaGroup(
+  value: unknown,
+): PersistedTelegramIgnoredMediaGroup | undefined {
+  if (
+    !isRecord(value) ||
+    value.version !== TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION ||
+    value.kind !== "ignored-media-group" ||
+    typeof value.accountId !== "string" ||
+    !value.accountId ||
+    typeof value.chatId !== "string" ||
+    !value.chatId ||
+    typeof value.mediaGroupId !== "string" ||
+    !value.mediaGroupId
+  ) {
+    return undefined;
+  }
+  return {
+    version: TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION,
+    kind: "ignored-media-group",
+    accountId: value.accountId,
+    chatId: value.chatId,
+    mediaGroupId: value.mediaGroupId,
+  };
+}
+
+export function parsePersistedTelegramIgnoredMessage(
+  value: unknown,
+): PersistedTelegramIgnoredMessage | undefined {
+  if (
+    !isRecord(value) ||
+    value.version !== TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION ||
+    value.kind !== "ignored-message" ||
+    typeof value.accountId !== "string" ||
+    !value.accountId ||
+    typeof value.chatId !== "string" ||
+    !value.chatId ||
+    typeof value.messageId !== "string" ||
+    !value.messageId
+  ) {
+    return undefined;
+  }
+  return {
+    version: TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION,
+    kind: "ignored-message",
+    accountId: value.accountId,
+    chatId: value.chatId,
+    messageId: value.messageId,
+  };
+}
 
 const TELEGRAM_MEDIA_KINDS = new Set<string>(["audio", "document", "image", "sticker", "video"]);
 

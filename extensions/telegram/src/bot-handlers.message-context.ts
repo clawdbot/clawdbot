@@ -2,6 +2,7 @@ import type { Message } from "grammy/types";
 import { formatMediaPlaceholderText } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveNativeCommandsEnabled } from "openclaw/plugin-sdk/native-command-config-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import {
   getSessionEntry,
@@ -26,6 +27,7 @@ import {
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
+import { hasTelegramCustomCommand } from "./command-config.js";
 import {
   resolveTelegramConversationRoute,
   resolveTelegramTargetSession,
@@ -290,12 +292,24 @@ export function createTelegramMessageContextRuntime({
   RegisterTelegramHandlerParams,
   "cfg" | "accountId" | "ownerAgentId" | "opts" | "telegramCfg" | "telegramDeps"
 >) {
+  const ignoreEnabled =
+    resolveNativeCommandsEnabled({
+      providerId: "telegram",
+      providerSetting: telegramCfg.commands?.native,
+      globalSetting: cfg.commands?.native,
+    }) &&
+    !hasTelegramCustomCommand({
+      commands: telegramCfg.customCommands,
+      command: "ignore",
+    });
   const messageCache = createTelegramMessageCache({
+    ignoreEnabled,
     scope: resolveTelegramMessageCacheScope(
       telegramDeps.resolveStorePath(cfg.session?.store, {
         agentId: ownerAgentId,
       }),
     ),
+    ...(opts.botInfo?.username ? { botUsername: opts.botInfo.username } : {}),
   });
   const resolvePromptSender = (
     node: TelegramCachedMessageNode,
@@ -320,14 +334,32 @@ export function createTelegramMessageContextRuntime({
     msg: Message,
     providerObservedThread?: TelegramThreadSpec,
     botUserId?: number,
+    botUsername?: string,
   ) =>
     messageCache.record({
       accountId,
       chatId: msg.chat.id,
       msg,
       ...(botUserId !== undefined ? { botUserId } : {}),
+      ...(botUsername ? { botUsername } : {}),
       ...(providerObservedThread ? { providerObservedThread } : {}),
       ...(providerObservedThread?.id != null ? { threadId: providerObservedThread.id } : {}),
+    });
+
+  const removeMessageFromReplyChain = (msg: Message) =>
+    messageCache.remove({
+      accountId,
+      chatId: msg.chat.id,
+      messageId: String(msg.message_id),
+      ...(msg.media_group_id ? { mediaGroupId: msg.media_group_id } : {}),
+    });
+
+  const isMessageIgnoredForReplyChain = (msg: Message) =>
+    messageCache.isIgnored({
+      accountId,
+      chatId: msg.chat.id,
+      messageId: String(msg.message_id),
+      ...(msg.media_group_id ? { mediaGroupId: msg.media_group_id } : {}),
     });
 
   const recordMessageResolvedMedia = (params: {
@@ -546,6 +578,8 @@ export function createTelegramMessageContextRuntime({
 
   return {
     recordMessageForReplyChain,
+    removeMessageFromReplyChain,
+    isMessageIgnoredForReplyChain,
     recordMessageResolvedMedia,
     recordReplyMessageResolvedMedia,
     resolveCachedMessageThreadSpec,

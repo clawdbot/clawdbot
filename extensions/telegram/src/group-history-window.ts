@@ -6,6 +6,7 @@ import type {
 } from "./bot-message-context.types.js";
 
 const TELEGRAM_SELF_SENDER_SUFFIX = " (you)";
+const telegramSourceMessageIdsByHistoryEntry = new WeakMap<HistoryEntry, ReadonlySet<string>>();
 
 export function buildTelegramSelfSenderName(
   configuredName?: string,
@@ -201,6 +202,7 @@ export function recordTelegramGroupHistoryEntry(params: {
   historyKey?: string;
   limit: number;
   entry: HistoryEntry;
+  sourceMessageIds?: readonly string[];
 }): void {
   if (!params.historyKey) {
     return;
@@ -210,4 +212,40 @@ export function recordTelegramGroupHistoryEntry(params: {
     limit: params.limit,
     entry: params.entry,
   });
+  const sourceMessageIds = new Set(
+    params.sourceMessageIds?.map((messageId) => messageId.trim()).filter(Boolean) ?? [],
+  );
+  if (sourceMessageIds.size > 0) {
+    // Album membership is Telegram-local lifecycle metadata. Keep it beside the in-memory
+    // history entry instead of exposing media paths or provider IDs through InboundHistory.
+    telegramSourceMessageIdsByHistoryEntry.set(params.entry, sourceMessageIds);
+  }
+}
+
+export function removeTelegramGroupHistoryEntry(params: {
+  historyMap: Map<string, HistoryEntry[]>;
+  historyKey?: string;
+  messageId: string;
+}): boolean {
+  if (!params.historyKey) {
+    return false;
+  }
+  const entries = params.historyMap.get(params.historyKey);
+  if (!entries) {
+    return false;
+  }
+  const retained = entries.filter(
+    (entry) =>
+      entry.messageId !== params.messageId &&
+      !telegramSourceMessageIdsByHistoryEntry.get(entry)?.has(params.messageId),
+  );
+  if (retained.length === entries.length) {
+    return false;
+  }
+  if (retained.length === 0) {
+    params.historyMap.delete(params.historyKey);
+  } else {
+    params.historyMap.set(params.historyKey, retained);
+  }
+  return true;
 }

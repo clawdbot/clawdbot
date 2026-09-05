@@ -100,7 +100,7 @@ To require it for every source chat:
 
 The gateway picks up `messages` config changes without a restart after the file is saved. Restart only when config reload is disabled (`gateway.reload.mode: "off"`).
 
-Command turns bypass `visibleReplies: "message_tool"` and always reply visibly: native slash commands (Discord, Telegram, and other surfaces with native command support) and authorized text `/...` commands both post their response to the source chat. Unauthorized text `/...` turns in groups stay message-tool-only; ordinary chat turns follow the configured default.
+Command turns bypass `visibleReplies: "message_tool"` and reply visibly: native slash commands (Discord, Telegram, and other surfaces with native command support) and authorized text `/...` commands both post their response to the source chat. A documented channel-native context control can intentionally be silent; Telegram's `/ignore <message>` is one such control. Unauthorized text `/...` turns in groups stay message-tool-only; ordinary chat turns follow the configured default.
 
 ## Context visibility and allowlists
 

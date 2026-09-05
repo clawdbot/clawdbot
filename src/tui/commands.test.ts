@@ -223,6 +223,10 @@ describe("getSlashCommands", () => {
     );
     expect(names).toEqual(expect.arrayContaining(["goal", "btw", "side", "queue", "stop", "t"]));
   });
+
+  it("does not advertise native-only channel commands", () => {
+    expect(getSlashCommands().map((command) => command.name)).not.toContain("ignore");
+  });
 });
 
 describe("helpText", () => {

@@ -1,15 +1,19 @@
 /** Formats /help and /commands output for text and native command-list surfaces. */
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin } from "../channels/plugins/index.js";
+import { resolveChannelConfigRecord } from "../config/channel-configured-shared.js";
 import { isCommandFlagEnabled } from "../config/commands.flags.js";
+import { resolveNativeCommandsEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginCommands } from "../plugins/commands.js";
 import type { SkillCommandSpec } from "../skills/types.js";
 import {
+  isCommandAvailableOnSurface,
   listChatCommands,
   listChatCommandsForConfig,
   type ChatCommandDefinition,
@@ -92,10 +96,66 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
 
 const COMMANDS_PER_PAGE = 8;
 
+function resolveSurfaceNativeCommandsEnabled(
+  cfg: OpenClawConfig | undefined,
+  surface: string | undefined,
+  accountId: string | undefined,
+): boolean {
+  const plugin = surface ? getChannelPlugin(surface) : undefined;
+  if (!cfg || !plugin) {
+    return true;
+  }
+  const channelConfig = resolveChannelConfigRecord(cfg, plugin.id);
+  const accountConfig = accountId
+    ? asNonArrayRecord(asNonArrayRecord(channelConfig?.["accounts"])[accountId])
+    : undefined;
+  const accountNativeValue = asNonArrayRecord(accountConfig?.["commands"])["native"];
+  const nativeValue =
+    accountNativeValue === undefined
+      ? asNonArrayRecord(channelConfig?.["commands"])["native"]
+      : accountNativeValue;
+  const providerSetting =
+    nativeValue === true || nativeValue === false || nativeValue === "auto"
+      ? nativeValue
+      : undefined;
+  return resolveNativeCommandsEnabled({
+    providerId: plugin.id,
+    providerSetting,
+    globalSetting: cfg.commands?.native,
+    config: cfg,
+  });
+}
+
+function hasTelegramIgnoreCustomShadow(
+  cfg: OpenClawConfig | undefined,
+  surface: string | undefined,
+  accountId: string | undefined,
+): boolean {
+  if (!cfg || surface !== "telegram") {
+    return false;
+  }
+  const channelConfig = resolveChannelConfigRecord(cfg, "telegram");
+  const accountConfig = accountId
+    ? asNonArrayRecord(asNonArrayRecord(channelConfig?.["accounts"])[accountId])
+    : undefined;
+  const accountCommands = accountConfig?.["customCommands"];
+  const rootCommands = channelConfig?.["customCommands"];
+  const configuredCommands = Array.isArray(accountCommands)
+    ? accountCommands
+    : Array.isArray(rootCommands)
+      ? rootCommands
+      : [];
+  return configuredCommands.some((entry) => {
+    const command = normalizeLowercaseStringOrEmpty(asNonArrayRecord(entry)["command"]);
+    return command.replace(/^\/+/, "") === "ignore";
+  });
+}
+
 /** Options for rendering `/commands` output for a specific channel surface. */
 export type CommandsMessageOptions = {
   page?: number;
   surface?: string;
+  accountId?: string;
   forcePaginatedList?: boolean;
 };
 
@@ -212,7 +272,25 @@ export function buildCommandsMessagePaginated(
     ? listChatCommandsForConfig(cfg, { skillCommands })
     : listChatCommands({ skillCommands });
   const pluginCommands = listPluginCommands();
-  const items = buildCommandItems(commands, pluginCommands);
+  const nativeCommandsEnabled = resolveSurfaceNativeCommandsEnabled(
+    cfg,
+    surface,
+    normalizeOptionalString(options?.accountId),
+  );
+  const telegramIgnoreShadowed = hasTelegramIgnoreCustomShadow(
+    cfg,
+    surface,
+    normalizeOptionalString(options?.accountId),
+  );
+  const items = buildCommandItems(
+    commands.filter(
+      (command) =>
+        isCommandAvailableOnSurface(command, surface) &&
+        (command.scope !== "native" || nativeCommandsEnabled) &&
+        !(command.key === "ignore" && telegramIgnoreShadowed),
+    ),
+    pluginCommands,
+  );
 
   if (!prefersPaginatedList) {
     const lines = ["ℹ️ Slash commands", ""];

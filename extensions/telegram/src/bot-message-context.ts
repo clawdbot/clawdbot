@@ -1,5 +1,4 @@
 // Telegram plugin module implements bot message context behavior.
-import type { ReactionTypeEmoji } from "grammy/types";
 import {
   resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
@@ -29,6 +28,11 @@ import {
   resolveTelegramEffectiveDmPolicy,
 } from "./bot-access.js";
 import { resolveTelegramInboundBody } from "./bot-message-context.body.js";
+import {
+  createTelegramStatusReactionGate,
+  type TelegramReactionApi,
+  type TelegramStatusReactionController,
+} from "./bot-message-context.feedback.js";
 import {
   buildTelegramInboundContextPayload,
   resolveTelegramMessageContextStorePath,
@@ -71,22 +75,6 @@ const loadTelegramMessageContextRuntime = createLazyRuntimeModule(
 );
 
 type TelegramMessageContextPayload = Awaited<ReturnType<typeof buildTelegramInboundContextPayload>>;
-type TelegramReactionApi = (
-  chatId: BuildTelegramMessageContextParams["primaryCtx"]["message"]["chat"]["id"],
-  messageId: number,
-  reactions: Array<{ type: "emoji"; emoji: ReactionTypeEmoji["emoji"] }>,
-) => Promise<unknown>;
-type TelegramStatusReactionController = {
-  setQueued: () => void | Promise<void>;
-  setThinking: () => void | Promise<void>;
-  setTool: (name: string) => void | Promise<void>;
-  setCompacting: () => void | Promise<void>;
-  cancelPending: () => void;
-  setError: () => void | Promise<void>;
-  setDone: () => void | Promise<void>;
-  restoreInitial: () => void | Promise<void>;
-};
-
 export type TelegramMessageContext = {
   cfg: BuildTelegramMessageContextParams["cfg"];
   ctxPayload: TelegramMessageContextPayload["ctxPayload"];
@@ -114,6 +102,8 @@ export type TelegramMessageContext = {
   sendRecordVoice: () => Promise<void>;
   sendChatActionHandler: BuildTelegramMessageContextParams["sendChatActionHandler"];
   initialTypingCueSent?: boolean;
+  isInitialFeedbackStarted?: () => boolean;
+  startInitialFeedback?: () => void;
   ackReactionPromise: Promise<boolean> | null;
   reactionApi: TelegramReactionApi | null;
   statusReactionController: TelegramStatusReactionController | null;
@@ -128,6 +118,7 @@ export const buildTelegramMessageContext = async ({
   promptContext = [],
   storeAllowFrom,
   options,
+  deferInitialFeedback = false,
   bot,
   cfg,
   account,
@@ -361,6 +352,17 @@ export const buildTelegramMessageContext = async ({
       logVerbose(`telegram record_voice cue failed for chat ${chatId}: ${String(err)}`);
     }
   };
+  let initialFeedbackGateOpen = !deferInitialFeedback;
+  const gatedSendTyping = async () => {
+    if (initialFeedbackGateOpen) {
+      await sendTyping();
+    }
+  };
+  const gatedSendRecordVoice = async () => {
+    if (initialFeedbackGateOpen) {
+      await sendRecordVoice();
+    }
+  };
 
   if (
     !(await enforceTelegramDmAccess({
@@ -495,13 +497,19 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
-  // Send the first typing cue before expensive context/session construction,
-  // but only after intake has accepted the message as a non-room-event turn.
-  if (bodyResult.inboundEventKind !== "room_event") {
+  const startInitialTypingCue = () => {
+    if (initialTypingCueSent || bodyResult.inboundEventKind === "room_event") {
+      return;
+    }
     initialTypingCueSent = true;
     void sendTyping().catch((err: unknown) => {
       logVerbose(`telegram early typing cue failed for chat ${chatId}: ${String(err)}`);
     });
+  };
+  // Ordinary turns keep the early cue; buffered owners delay every visible feedback effect until
+  // the final cancellation/admission boundary.
+  if (!deferInitialFeedback) {
+    startInitialTypingCue();
   }
 
   const { ctxPayload, skillFilter, turn } = await buildTelegramInboundContextPayload({
@@ -587,7 +595,7 @@ export const buildTelegramMessageContext = async ({
       ? (runtime?.createStatusReactionController ??
         (await loadTelegramMessageContextRuntime()).createStatusReactionController)
       : null;
-  const statusReactionController: TelegramStatusReactionController | null =
+  const rawStatusReactionController: TelegramStatusReactionController | null =
     createStatusReactionController
       ? createStatusReactionController({
           enabled: true,
@@ -639,28 +647,36 @@ export const buildTelegramMessageContext = async ({
         })
       : null;
 
-  const ackReactionPromise: Promise<boolean> | null = statusReactionController
-    ? shouldSendAckReaction
-      ? Promise.resolve(statusReactionController.setQueued()).then(
-          () => true,
-          () => false,
-        )
-      : null
-    : shouldSendAckReaction && msg.message_id && reactionApi && ackReactionEmoji
-      ? withTelegramApiErrorLogging({
-          operation: "setMessageReaction",
-          fn: () =>
-            reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReactionEmoji }]),
-        }).then(
-          () => true,
-          (err: unknown) => {
-            logVerbose(`telegram react failed for chat ${chatId}: ${String(err)}`);
-            return false;
-          },
-        )
-      : null;
-
-  return {
+  const statusReactionGate = createTelegramStatusReactionGate(
+    rawStatusReactionController,
+    deferInitialFeedback,
+  );
+  const startAckReaction = (): Promise<boolean> | null =>
+    rawStatusReactionController
+      ? shouldSendAckReaction
+        ? Promise.resolve(rawStatusReactionController.setQueued()).then(
+            () => true,
+            () => false,
+          )
+        : null
+      : shouldSendAckReaction && msg.message_id && reactionApi && ackReactionEmoji
+        ? withTelegramApiErrorLogging({
+            operation: "setMessageReaction",
+            fn: () =>
+              reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReactionEmoji }]),
+          }).then(
+            () => true,
+            (err: unknown) => {
+              logVerbose(`telegram react failed for chat ${chatId}: ${String(err)}`);
+              return false;
+            },
+          )
+        : null;
+  let ackReactionPromise: Promise<boolean> | null = deferInitialFeedback
+    ? null
+    : startAckReaction();
+  let initialFeedbackStarted = !deferInitialFeedback;
+  const context: TelegramMessageContext = {
     cfg,
     ctxPayload,
     turn,
@@ -679,13 +695,27 @@ export const buildTelegramMessageContext = async ({
     groupHistories,
     route,
     skillFilter,
-    sendTyping,
-    sendRecordVoice,
+    sendTyping: gatedSendTyping,
+    sendRecordVoice: gatedSendRecordVoice,
     sendChatActionHandler,
     initialTypingCueSent,
+    isInitialFeedbackStarted: () => initialFeedbackGateOpen,
     ackReactionPromise,
     reactionApi,
-    statusReactionController,
+    statusReactionController: statusReactionGate.controller,
     accountId: account.accountId,
+    startInitialFeedback: () => {
+      if (initialFeedbackStarted) {
+        return;
+      }
+      initialFeedbackStarted = true;
+      initialFeedbackGateOpen = true;
+      startInitialTypingCue();
+      context.initialTypingCueSent = initialTypingCueSent;
+      ackReactionPromise = startAckReaction();
+      context.ackReactionPromise = ackReactionPromise;
+      statusReactionGate.open();
+    },
   };
+  return context;
 };

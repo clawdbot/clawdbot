@@ -17,15 +17,21 @@ import {
   normalizeForwardedContext,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
+import { resolveTelegramIgnoreDisposition } from "./ignore-command.js";
 import {
   isTelegramMessageCacheSourceMessage,
+  parsePersistedTelegramIgnoredMediaGroup,
+  parsePersistedTelegramIgnoredMessage,
   parseTelegramResolvedMedia,
-  type PersistedTelegramMessageCacheValue,
+  type PersistedTelegramMessageCacheEntry,
+  type PersistedTelegramMessagePrivacyEntry,
   type TelegramResolvedMedia,
   resolveTelegramMessageCachePersistentScopeKey,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
   TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION,
+  TELEGRAM_MESSAGE_PRIVACY_PERSISTENT_MAX_ENTRIES,
+  TELEGRAM_MESSAGE_PRIVACY_PERSISTENT_NAMESPACE,
   type TelegramMessageThreadBinding,
 } from "./message-cache-persistence.js";
 import { parseTelegramMessageThreadId } from "./outbound-params.js";
@@ -59,6 +65,7 @@ type TelegramMessageCache = {
     chatId: string | number;
     msg: Message;
     botUserId?: number;
+    botUsername?: string;
     promptContextProjection?: TelegramPromptContextProjection;
     /** Set only while recording an authenticated provider event or response. */
     providerObservedThread?: TelegramThreadSpec;
@@ -71,6 +78,18 @@ type TelegramMessageCache = {
     messageId: string;
     media: TelegramResolvedMedia & { path?: string; fileName?: string };
   }) => Promise<void>;
+  remove: (params: {
+    accountId: string;
+    chatId: string | number;
+    messageId: string;
+    mediaGroupId?: string;
+  }) => Promise<boolean>;
+  isIgnored: (params: {
+    accountId: string;
+    chatId: string | number;
+    messageId: string;
+    mediaGroupId?: string;
+  }) => Promise<boolean>;
   get: (params: {
     accountId: string;
     chatId: string | number;
@@ -107,9 +126,16 @@ type MessageWithPromptContextTimestamp = Message & {
 
 type TelegramMessageCacheBucket = {
   messages: Map<string, TelegramCachedMessageNode>;
+  ignoredMessages: Set<string>;
+  ignoredMediaGroups: Set<string>;
+  privacyIdentities: Map<
+    string,
+    { kind: "ignored-message" | "ignored-media-group"; identity: string }
+  >;
   hydrated: boolean;
   hydratePromise?: Promise<void>;
   persistentStore?: TelegramMessageCachePersistentStore;
+  privacyStore?: TelegramMessagePrivacyPersistentStore;
 };
 
 type TelegramMessageObservationMode = "authoritative" | "partial";
@@ -139,7 +165,16 @@ function getPersistedMessageCacheBuckets(): Map<string, TelegramMessageCacheBuck
 }
 
 type TelegramMessageCachePersistentStore = {
-  register(key: string, value: PersistedTelegramMessageCacheValue): Promise<void>;
+  register(key: string, value: PersistedTelegramMessageCacheEntry): Promise<void>;
+  lookup(key: string): Promise<PersistedTelegramMessageCacheEntry | undefined>;
+  delete(key: string): Promise<boolean>;
+  entries(): Promise<Array<{ key: string; value: unknown }>>;
+};
+
+type TelegramMessagePrivacyPersistentStore = {
+  register(key: string, value: PersistedTelegramMessagePrivacyEntry): Promise<void>;
+  lookup(key: string): Promise<PersistedTelegramMessagePrivacyEntry | undefined>;
+  delete(key: string): Promise<boolean>;
   entries(): Promise<Array<{ key: string; value: unknown }>>;
 };
 
@@ -162,6 +197,124 @@ function telegramMessageCacheKeyPrefix(params: {
   return params.scopeKey ? `${params.scopeKey}:${prefix}` : prefix;
 }
 
+function telegramIgnoredMediaGroupIdentity(params: {
+  accountId: string;
+  chatId: string | number;
+  mediaGroupId: string;
+}): string {
+  return JSON.stringify([params.accountId, String(params.chatId), params.mediaGroupId]);
+}
+
+function telegramIgnoredMessageIdentity(params: {
+  accountId: string;
+  chatId: string | number;
+  messageId: string;
+}): string {
+  return JSON.stringify([params.accountId, String(params.chatId), params.messageId]);
+}
+
+function telegramIgnoredMessageKey(params: {
+  scopeKey: string | undefined;
+  accountId: string;
+  chatId: string | number;
+  messageId: string;
+}): string {
+  const digest = Buffer.from(telegramIgnoredMessageIdentity(params), "utf8").toString("base64url");
+  return `${params.scopeKey ? `${params.scopeKey}:` : ""}ignored-message:${digest}`;
+}
+
+function telegramIgnoredMediaGroupKey(params: {
+  scopeKey: string | undefined;
+  accountId: string;
+  chatId: string | number;
+  mediaGroupId: string;
+}): string {
+  const digest = Buffer.from(telegramIgnoredMediaGroupIdentity(params), "utf8").toString(
+    "base64url",
+  );
+  return `${params.scopeKey ? `${params.scopeKey}:` : ""}ignored-media-group:${digest}`;
+}
+
+function readIgnoredMessageIds(params: {
+  bucket: TelegramMessageCacheBucket;
+  accountId: string;
+  chatId: string | number;
+}): Set<string> {
+  const expectedAccountId = params.accountId;
+  const expectedChatId = String(params.chatId);
+  return new Set(
+    Array.from(params.bucket.ignoredMessages, (identity) => {
+      // SAFETY: ignored-message identities are created above as three-string JSON tuples.
+      const parsed = JSON.parse(identity) as [string, string, string];
+      return parsed[0] === expectedAccountId && parsed[1] === expectedChatId ? parsed[2] : "";
+    }).filter(Boolean),
+  );
+}
+
+function registerPrivacyIdentity(
+  bucket: TelegramMessageCacheBucket,
+  entry: { kind: "ignored-message" | "ignored-media-group"; identity: string },
+): void {
+  const key = `${entry.kind}\0${entry.identity}`;
+  bucket.privacyIdentities.delete(key);
+  bucket.privacyIdentities.set(key, entry);
+  const target =
+    entry.kind === "ignored-message" ? bucket.ignoredMessages : bucket.ignoredMediaGroups;
+  target.delete(entry.identity);
+  target.add(entry.identity);
+  while (bucket.privacyIdentities.size > TELEGRAM_MESSAGE_PRIVACY_PERSISTENT_MAX_ENTRIES) {
+    const oldest = bucket.privacyIdentities.entries().next().value;
+    if (!oldest) {
+      break;
+    }
+    const [oldestKey, oldestEntry] = oldest;
+    bucket.privacyIdentities.delete(oldestKey);
+    const oldestTarget =
+      oldestEntry.kind === "ignored-message" ? bucket.ignoredMessages : bucket.ignoredMediaGroups;
+    oldestTarget.delete(oldestEntry.identity);
+  }
+}
+
+function readIgnoredMediaGroupIds(params: {
+  bucket: TelegramMessageCacheBucket;
+  accountId: string;
+  chatId: string | number;
+}): Set<string> {
+  const expectedAccountId = params.accountId;
+  const expectedChatId = String(params.chatId);
+  return new Set(
+    Array.from(params.bucket.ignoredMediaGroups, (identity) => {
+      // SAFETY: ignored-media-group identities are created above as three-string JSON tuples.
+      const parsed = JSON.parse(identity) as [string, string, string];
+      return parsed[0] === expectedAccountId && parsed[1] === expectedChatId ? parsed[2] : "";
+    }).filter(Boolean),
+  );
+}
+
+function detachReplyTargetsByPrivacy(
+  msg: Message,
+  params: {
+    chatId: string | number;
+    ignoredMessageIds: ReadonlySet<string>;
+    ignoredMediaGroupIds: ReadonlySet<string>;
+  },
+): Message {
+  const expectedChatId = String(params.chatId);
+  return detachMatchingReplyTarget(msg, (reply, kind) => {
+    if (
+      kind === "external_reply" &&
+      (reply.chat?.id == null || String(reply.chat.id) !== expectedChatId)
+    ) {
+      return false;
+    }
+    return (
+      params.ignoredMessageIds.has(String(reply.message_id)) ||
+      (typeof reply.media_group_id === "string" &&
+        params.ignoredMediaGroupIds.has(reply.media_group_id))
+    );
+  });
+}
+
 function resolveReplyMessage(msg: Message): Message | undefined {
   const externalReply = (msg as MessageWithExternalReply).external_reply;
   return msg.reply_to_message ?? externalReply;
@@ -169,6 +322,92 @@ function resolveReplyMessage(msg: Message): Message | undefined {
 
 function resolveEmbeddedReplyMessage(msg: Message): Message | undefined {
   return msg.reply_to_message;
+}
+
+type TelegramReplyTargetKind = "reply_to_message" | "external_reply";
+
+function detachMatchingReplyTarget<T extends Message>(
+  msg: T,
+  matches: (reply: Message, kind: TelegramReplyTargetKind) => boolean,
+  visited = new Set<string>(),
+): T {
+  let detached: T = msg;
+  // SAFETY: Telegram can supply external_reply even though this grammY Message version omits it.
+  const externalReply = (msg as MessageWithExternalReply).external_reply;
+  if (externalReply && matches(externalReply, "external_reply")) {
+    detached = { ...detached };
+    // SAFETY: the cloned Message preserves T while removing only Telegram's optional extension.
+    delete (detached as MessageWithExternalReply).external_reply;
+    // TextQuote belongs to the detached direct target on external replies too.
+    delete detached.quote;
+  }
+
+  // Telegram external replies are a single, non-recursive envelope. Only an embedded
+  // reply_to_message can carry a reply chain that needs recursive detachment.
+  const replyMessage = msg.reply_to_message;
+  if (!replyMessage) {
+    return detached;
+  }
+  const replyId = String(replyMessage.message_id);
+  if (visited.has(replyId)) {
+    return detached;
+  }
+  visited.add(replyId);
+  if (matches(replyMessage, "reply_to_message")) {
+    const withoutReply = { ...detached };
+    delete withoutReply.reply_to_message;
+    // Telegram's TextQuote belongs to the direct reply target. Keeping it after
+    // detaching an ignored reply would persist a second copy of the hidden text.
+    delete withoutReply.quote;
+    return withoutReply;
+  }
+  const detachedReply = detachMatchingReplyTarget(replyMessage, matches, visited);
+  return detachedReply === replyMessage
+    ? detached
+    : Object.assign({}, detached, { reply_to_message: detachedReply });
+}
+
+function detachReplyTargetsById(
+  msg: Message,
+  messageIds: ReadonlySet<string>,
+  chatId: string | number,
+): Message {
+  const expectedChatId = String(chatId);
+  return detachMatchingReplyTarget(msg, (reply, kind) => {
+    if (!messageIds.has(String(reply.message_id))) {
+      return false;
+    }
+    if (kind === "reply_to_message") {
+      return true;
+    }
+    // external_reply message numbers are chat-local. Missing or different chat identity must
+    // fail closed so removing one chat's message cannot detach another chat's same-number reply.
+    return reply.chat?.id != null && String(reply.chat.id) === expectedChatId;
+  });
+}
+
+/**
+ * Telegram embeds reply payloads. Keep an ignored target available to the live turn, but never
+ * persist it (or a dangling replyToId) where cache hydration could restore it later.
+ */
+function detachIgnoredReplyTarget(
+  msg: Message,
+  botUsername: string | undefined,
+  ignoreEnabled: boolean,
+  ignoredMessageIds?: ReadonlySet<string>,
+  ignoredMediaGroupIds?: ReadonlySet<string>,
+): Message {
+  if (!ignoreEnabled && !ignoredMessageIds?.size && !ignoredMediaGroupIds?.size) {
+    return msg;
+  }
+  return detachMatchingReplyTarget(
+    msg,
+    (reply) =>
+      (ignoreEnabled && resolveTelegramIgnoreDisposition(reply, botUsername) !== "keep") ||
+      ignoredMessageIds?.has(String(reply.message_id)) === true ||
+      (typeof reply.media_group_id === "string" &&
+        ignoredMediaGroupIds?.has(reply.media_group_id) === true),
+  );
 }
 
 export function isTelegramMessageFromCurrentBot(msg: Message, botUserId?: number): boolean {
@@ -208,6 +447,7 @@ function normalizeMessageNode(
     promptContextProjectionMarker?: TelegramPromptContextProjectionMarker;
     resolvedMedia?: TelegramResolvedMedia;
     threadBinding?: TelegramMessageThreadBinding;
+    botUsername?: string;
   },
 ): TelegramCachedMessageNode {
   const media = resolveTelegramPrimaryMedia(msg);
@@ -294,6 +534,10 @@ function normalizeMessageNodes(
     promptContextProjectionMarker?: TelegramPromptContextProjectionMarker;
     resolvedMedia?: TelegramResolvedMedia;
     threadBinding?: TelegramMessageThreadBinding;
+    botUsername?: string;
+    ignoreEnabled?: boolean;
+    ignoredMessageIds?: ReadonlySet<string>;
+    ignoredMediaGroupIds?: ReadonlySet<string>;
   },
 ): TelegramCachedMessageObservation[] {
   const observations: TelegramCachedMessageObservation[] = [];
@@ -301,13 +545,20 @@ function normalizeMessageNodes(
   const nodeThreadId = (node: TelegramCachedMessageNode) =>
     parseTelegramMessageThreadId(node.threadId);
   const visit = (
-    message: Message,
+    observed: Message,
     inheritedThreadId: number | undefined,
     mode: TelegramMessageObservationMode,
     promptContextProjectionMarker?: TelegramPromptContextProjectionMarker,
     threadBinding?: TelegramMessageThreadBinding,
     resolvedMedia?: TelegramResolvedMedia,
   ) => {
+    const message = detachIgnoredReplyTarget(
+      observed,
+      params.botUsername,
+      params.ignoreEnabled === true,
+      params.ignoredMessageIds,
+      params.ignoredMediaGroupIds,
+    );
     const embeddedThreadId = parseTelegramMessageThreadId(
       (message as { message_thread_id?: unknown }).message_thread_id,
     );
@@ -487,7 +738,7 @@ function resolveDefaultPersistentStore(): TelegramMessageCachePersistentStore | 
     return undefined;
   }
   try {
-    return runtime.state.openKeyedStore<PersistedTelegramMessageCacheValue>({
+    return runtime.state.openKeyedStore<PersistedTelegramMessageCacheEntry>({
       namespace: TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
       maxEntries: TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
     });
@@ -497,27 +748,53 @@ function resolveDefaultPersistentStore(): TelegramMessageCachePersistentStore | 
   }
 }
 
+function resolveDefaultPrivacyStore(): TelegramMessagePrivacyPersistentStore | undefined {
+  const runtime = getOptionalTelegramRuntime();
+  if (!runtime) {
+    return undefined;
+  }
+  try {
+    return runtime.state.openKeyedStore<PersistedTelegramMessagePrivacyEntry>({
+      namespace: TELEGRAM_MESSAGE_PRIVACY_PERSISTENT_NAMESPACE,
+      maxEntries: TELEGRAM_MESSAGE_PRIVACY_PERSISTENT_MAX_ENTRIES,
+    });
+  } catch (error) {
+    logVerbose(`telegram: failed to open message privacy state: ${String(error)}`);
+    return undefined;
+  }
+}
+
 function resolveMessageCacheBucket(params: {
   bucketKey?: string;
   persistentStore?: TelegramMessageCachePersistentStore;
+  privacyStore?: TelegramMessagePrivacyPersistentStore;
 }): TelegramMessageCacheBucket {
   const { bucketKey } = params;
   if (!bucketKey) {
     return {
       messages: new Map<string, TelegramCachedMessageNode>(),
+      ignoredMessages: new Set<string>(),
+      ignoredMediaGroups: new Set<string>(),
+      privacyIdentities: new Map(),
       hydrated: true,
+      ...(params.privacyStore ? { privacyStore: params.privacyStore } : {}),
     };
   }
   const persistedMessageCacheBuckets = getPersistedMessageCacheBuckets();
   const existing = persistedMessageCacheBuckets.get(bucketKey);
   if (existing) {
     existing.persistentStore = params.persistentStore ?? existing.persistentStore;
+    existing.privacyStore = params.privacyStore ?? existing.privacyStore;
     return existing;
   }
   const bucket = {
     messages: new Map<string, TelegramCachedMessageNode>(),
+    ignoredMessages: new Set<string>(),
+    ignoredMediaGroups: new Set<string>(),
+    privacyIdentities: new Map(),
     hydrated: false,
     ...(params.persistentStore ? { persistentStore: params.persistentStore } : {}),
+    ...(params.privacyStore ? { privacyStore: params.privacyStore } : {}),
   };
   persistedMessageCacheBuckets.set(bucketKey, bucket);
   return bucket;
@@ -537,17 +814,138 @@ async function hydrateMessageCacheBucket(
   }
   bucket.hydratePromise = (async () => {
     let storeEntries: Array<{ key: string; value: unknown }> = [];
+    let privacyEntries: Array<{ key: string; value: unknown }>;
     try {
       storeEntries = (await bucket.persistentStore?.entries()) ?? [];
     } catch (error) {
       logVerbose(`telegram: failed to hydrate message cache from plugin state: ${String(error)}`);
     }
+    try {
+      privacyEntries = (await bucket.privacyStore?.entries()) ?? [];
+    } catch (error) {
+      logVerbose(`telegram: failed to hydrate message privacy state: ${String(error)}`);
+      // Message rows are unsafe to expose when their authoritative revocations cannot be read.
+      throw error;
+    }
     const scopedStoreEntries = scopeKey
       ? storeEntries.filter(({ key }) => key.startsWith(`${scopeKey}:`))
       : storeEntries;
+    const scopedPrivacyEntries = scopeKey
+      ? privacyEntries.filter(({ key }) => key.startsWith(`${scopeKey}:`))
+      : privacyEntries;
+
+    const ignoredMessages = scopedPrivacyEntries.flatMap(({ value }) => {
+      const ignored = parsePersistedTelegramIgnoredMessage(value);
+      return ignored ? [ignored] : [];
+    });
+    const ignoredMediaGroups = [
+      ...scopedPrivacyEntries,
+      // Read the shipped legacy location so existing revocations survive the namespace split.
+      ...scopedStoreEntries,
+    ].flatMap(({ value }) => {
+      const ignored = parsePersistedTelegramIgnoredMediaGroup(value);
+      return ignored ? [ignored] : [];
+    });
+    for (const ignored of ignoredMessages) {
+      registerPrivacyIdentity(bucket, {
+        kind: "ignored-message",
+        identity: telegramIgnoredMessageIdentity(ignored),
+      });
+    }
+    for (const ignored of ignoredMediaGroups) {
+      registerPrivacyIdentity(bucket, {
+        kind: "ignored-media-group",
+        identity: telegramIgnoredMediaGroupIdentity(ignored),
+      });
+    }
+
+    // Migrate legacy album markers into the independent privacy LRU opportunistically.
+    if (bucket.privacyStore) {
+      for (const { key, value } of scopedStoreEntries) {
+        const ignored = parsePersistedTelegramIgnoredMediaGroup(value);
+        if (!ignored) {
+          continue;
+        }
+        try {
+          await bucket.privacyStore.register(
+            telegramIgnoredMediaGroupKey({ scopeKey, ...ignored }),
+            ignored,
+          );
+          await bucket.persistentStore?.delete(key);
+        } catch (error) {
+          logVerbose(`telegram: failed to migrate ignored album privacy state: ${String(error)}`);
+        }
+      }
+    }
 
     for (const { key, value } of scopedStoreEntries) {
-      for (const entry of parsePersistedCacheValue(key, value)) {
+      if (parsePersistedTelegramIgnoredMediaGroup(value)) {
+        continue;
+      }
+      if (!isRecord(value) || !isTelegramMessageCacheSourceMessage(value.sourceMessage)) {
+        continue;
+      }
+      const relevantIgnoredMessages = ignoredMessages.filter((ignored) =>
+        key.startsWith(
+          telegramMessageCacheKeyPrefix({
+            scopeKey,
+            accountId: ignored.accountId,
+            chatId: ignored.chatId,
+          }),
+        ),
+      );
+      const relevantIgnoredMediaGroups = ignoredMediaGroups.filter((ignored) =>
+        key.startsWith(
+          telegramMessageCacheKeyPrefix({
+            scopeKey,
+            accountId: ignored.accountId,
+            chatId: ignored.chatId,
+          }),
+        ),
+      );
+      const ignoredMessageIds = new Set(
+        relevantIgnoredMessages.map((ignored) => ignored.messageId),
+      );
+      const ignoredMediaGroupIds = new Set(
+        relevantIgnoredMediaGroups.map((ignored) => ignored.mediaGroupId),
+      );
+      const sourceMessage = value.sourceMessage;
+      const sourceIsIgnored =
+        ignoredMessageIds.has(String(sourceMessage.message_id)) ||
+        (typeof sourceMessage.media_group_id === "string" &&
+          ignoredMediaGroupIds.has(sourceMessage.media_group_id));
+      if (sourceIsIgnored) {
+        try {
+          await bucket.persistentStore?.delete(key);
+        } catch (error) {
+          logVerbose(`telegram: failed to purge ignored hydrated message: ${String(error)}`);
+        }
+        continue;
+      }
+      const detachedSourceMessage = detachReplyTargetsByPrivacy(sourceMessage, {
+        chatId: sourceMessage.chat.id,
+        ignoredMessageIds,
+        ignoredMediaGroupIds,
+      });
+      if (detachedSourceMessage !== sourceMessage) {
+        try {
+          const scrubbedValue = {
+            ...value,
+            sourceMessage: detachedSourceMessage,
+          };
+          await bucket.persistentStore?.register(
+            key,
+            // SAFETY: hydration validated the source Message; replacement preserves other fields.
+            scrubbedValue as PersistedTelegramMessageCacheEntry,
+          );
+        } catch (error) {
+          logVerbose(`telegram: failed to scrub ignored hydrated reply: ${String(error)}`);
+        }
+      }
+      for (const entry of parsePersistedCacheValue(key, {
+        ...value,
+        sourceMessage: detachedSourceMessage,
+      })) {
         upsertCachedMessageNode({
           messages: bucket.messages,
           key: entry.key,
@@ -611,22 +1009,50 @@ export function createTelegramMessageCache(params?: {
   maxMessages?: number;
   scope?: string;
   persistentStore?: TelegramMessageCachePersistentStore;
+  privacyStore?: TelegramMessagePrivacyPersistentStore;
   bucketKey?: string;
+  botUsername?: string;
+  ignoreEnabled?: boolean;
 }): TelegramMessageCache {
+  const botUsername = params?.botUsername;
+  const ignoreEnabled = params?.ignoreEnabled !== false;
   const persistentStore = params?.persistentStore ?? resolveDefaultPersistentStore();
+  const privacyStore = params?.privacyStore ?? resolveDefaultPrivacyStore();
   const maxMessages =
     params?.maxMessages ??
     (persistentStore ? TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES : DEFAULT_MAX_MESSAGES);
-  const scopeKey = persistentStore
-    ? resolveTelegramMessageCachePersistentScopeKey(params?.scope ?? "default")
-    : undefined;
+  const scopeKey =
+    persistentStore || privacyStore
+      ? resolveTelegramMessageCachePersistentScopeKey(params?.scope ?? "default")
+      : undefined;
   const bucketKey =
-    params?.bucketKey ?? (persistentStore ? `${PERSISTENT_BUCKET_KEY}:${scopeKey}` : undefined);
+    params?.bucketKey ??
+    (persistentStore || privacyStore ? `${PERSISTENT_BUCKET_KEY}:${scopeKey}` : undefined);
   const bucket = resolveMessageCacheBucket({
     bucketKey,
     ...(persistentStore ? { persistentStore } : {}),
+    ...(privacyStore ? { privacyStore } : {}),
   });
   const { messages } = bucket;
+
+  const isIgnored: TelegramMessageCache["isIgnored"] = async ({
+    accountId,
+    chatId,
+    messageId,
+    mediaGroupId,
+  }) => {
+    await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey);
+    if (
+      bucket.ignoredMessages.has(telegramIgnoredMessageIdentity({ accountId, chatId, messageId }))
+    ) {
+      return true;
+    }
+    return mediaGroupId
+      ? bucket.ignoredMediaGroups.has(
+          telegramIgnoredMediaGroupIdentity({ accountId, chatId, mediaGroupId }),
+        )
+      : false;
+  };
 
   const get: TelegramMessageCache["get"] = async ({ accountId, chatId, messageId }) => {
     await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey);
@@ -666,17 +1092,52 @@ export function createTelegramMessageCache(params?: {
       .toSorted(compareCachedMessageNodes);
   };
 
+  const detachCachedReplyDescendants = (
+    prefix: string,
+    messageIds: ReadonlySet<string>,
+    chatId: string | number,
+  ): boolean => {
+    let removed = false;
+    for (const [cachedKey, node] of messages) {
+      if (!cachedKey.startsWith(prefix)) {
+        continue;
+      }
+      const sourceMessage = detachReplyTargetsById(node.sourceMessage, messageIds, chatId);
+      if (sourceMessage === node.sourceMessage) {
+        continue;
+      }
+      const threadId = parseTelegramMessageThreadId(node.threadId);
+      messages.set(
+        cachedKey,
+        normalizeMessageNode(sourceMessage, {
+          ...(threadId !== undefined ? { threadId } : {}),
+          ...(node.promptContextProjectionMarker
+            ? { promptContextProjectionMarker: node.promptContextProjectionMarker }
+            : {}),
+          ...(node.resolvedMedia ? { resolvedMedia: node.resolvedMedia } : {}),
+          ...(node.threadBinding ? { threadBinding: node.threadBinding } : {}),
+        }),
+      );
+      removed = true;
+    }
+    return removed;
+  };
+
   return {
     record: async ({
       accountId,
       botUserId,
+      botUsername: observedBotUsername,
       chatId,
       msg,
       promptContextProjection,
       providerObservedThread,
       threadId,
     }) => {
+      const effectiveBotUsername = observedBotUsername ?? botUsername;
       await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey);
+      const ignoredMessageIds = readIgnoredMessageIds({ bucket, accountId, chatId });
+      const ignoredMediaGroupIds = readIgnoredMediaGroupIds({ bucket, accountId, chatId });
       const threadBinding = createTelegramMessageThreadBinding(providerObservedThread);
       const observations = normalizeMessageNodes(msg, {
         threadId,
@@ -689,11 +1150,22 @@ export function createTelegramMessageCache(params?: {
             }
           : {}),
         ...(threadBinding ? { threadBinding } : {}),
+        ...(effectiveBotUsername ? { botUsername: effectiveBotUsername } : {}),
+        ignoreEnabled,
+        ignoredMessageIds,
+        ignoredMediaGroupIds,
       });
       const currentObservation = observations.at(-1)!;
       let recordedEntry = currentObservation.node;
       for (const { node, mode } of observations) {
         const { messageId } = node;
+        if (
+          ignoredMessageIds.has(messageId) ||
+          (typeof node.sourceMessage.media_group_id === "string" &&
+            ignoredMediaGroupIds.has(node.sourceMessage.media_group_id))
+        ) {
+          continue;
+        }
         const key = telegramMessageCacheKey({ scopeKey, accountId, chatId, messageId });
         const cachedNode = upsertCachedMessageNode({ messages, key, node, mode });
         if (messageId === currentObservation.node.messageId) {
@@ -732,6 +1204,146 @@ export function createTelegramMessageCache(params?: {
         ...(botUserId !== undefined ? { botUserId } : {}),
       });
     },
+    remove: async ({ accountId, chatId, messageId, mediaGroupId }) => {
+      await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey);
+      const prefix = telegramMessageCacheKeyPrefix({ scopeKey, accountId, chatId });
+      const messageIds = new Set([messageId]);
+      const ignoredMessageIdentity = telegramIgnoredMessageIdentity({
+        accountId,
+        chatId,
+        messageId,
+      });
+      const ignoredMediaGroupIdentity = mediaGroupId
+        ? telegramIgnoredMediaGroupIdentity({ accountId, chatId, mediaGroupId })
+        : undefined;
+      // Revoke live context synchronously before any durable I/O yields.
+      if (ignoredMediaGroupIdentity) {
+        registerPrivacyIdentity(bucket, {
+          kind: "ignored-media-group",
+          identity: ignoredMediaGroupIdentity,
+        });
+      }
+      registerPrivacyIdentity(bucket, {
+        kind: "ignored-message",
+        identity: ignoredMessageIdentity,
+      });
+      // Album members are separate reply nodes but one prompt event. Ignoring any member must
+      // remove the whole album and every embedded reply path that could restore it.
+      if (mediaGroupId) {
+        for (const [cachedKey, node] of messages) {
+          if (cachedKey.startsWith(prefix) && node.sourceMessage.media_group_id === mediaGroupId) {
+            messageIds.add(node.messageId);
+          }
+        }
+      }
+      const removeFromMemory = () => {
+        const initialSize = messages.size;
+        for (const targetId of messageIds) {
+          messages.delete(
+            telegramMessageCacheKey({ scopeKey, accountId, chatId, messageId: targetId }),
+          );
+        }
+        return (
+          detachCachedReplyDescendants(prefix, messageIds, chatId) || messages.size !== initialSize
+        );
+      };
+      // No concurrent prompt-context read may observe an authorized revocation while its durable
+      // tombstone is waiting on storage. A second pass below covers album ids found only on disk.
+      const removedFromMemory = removeFromMemory();
+      try {
+        let removed = removedFromMemory;
+        if (bucket.privacyStore) {
+          if (mediaGroupId) {
+            await bucket.privacyStore.register(
+              telegramIgnoredMediaGroupKey({ scopeKey, accountId, chatId, mediaGroupId }),
+              {
+                version: TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION,
+                kind: "ignored-media-group",
+                accountId,
+                chatId: String(chatId),
+                mediaGroupId,
+              },
+            );
+            removed = true;
+          }
+          await bucket.privacyStore.register(
+            telegramIgnoredMessageKey({ scopeKey, accountId, chatId, messageId }),
+            {
+              version: TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION,
+              kind: "ignored-message",
+              accountId,
+              chatId: String(chatId),
+              messageId,
+            },
+          );
+          removed = true;
+        }
+        if (!bucket.persistentStore) {
+          return removeFromMemory() || removed;
+        }
+        const persistedEntries = await bucket.persistentStore.entries();
+        if (mediaGroupId) {
+          for (const { key: persistedKey, value } of persistedEntries) {
+            if (!persistedKey.startsWith(prefix) || !isRecord(value)) {
+              continue;
+            }
+            const sourceMessage = value.sourceMessage;
+            if (
+              isTelegramMessageCacheSourceMessage(sourceMessage) &&
+              sourceMessage.media_group_id === mediaGroupId
+            ) {
+              messageIds.add(String(sourceMessage.message_id));
+            }
+          }
+        }
+        const targetKeys = new Set(
+          Array.from(messageIds, (targetId) =>
+            telegramMessageCacheKey({ scopeKey, accountId, chatId, messageId: targetId }),
+          ),
+        );
+        const descendantKeys = persistedEntries
+          .filter(({ key: persistedKey, value }) => {
+            if (
+              targetKeys.has(persistedKey) ||
+              !persistedKey.startsWith(prefix) ||
+              !isRecord(value)
+            ) {
+              return false;
+            }
+            const sourceMessage = value.sourceMessage;
+            return (
+              isTelegramMessageCacheSourceMessage(sourceMessage) &&
+              detachReplyTargetsById(sourceMessage, messageIds, chatId) !== sourceMessage
+            );
+          })
+          .map(({ key: persistedKey }) => persistedKey);
+        for (const descendantKey of descendantKeys) {
+          const current = await bucket.persistentStore.lookup(descendantKey);
+          if (
+            !current ||
+            !("sourceMessage" in current) ||
+            !isTelegramMessageCacheSourceMessage(current.sourceMessage)
+          ) {
+            continue;
+          }
+          const sourceMessage = detachReplyTargetsById(current.sourceMessage, messageIds, chatId);
+          if (sourceMessage === current.sourceMessage) {
+            continue;
+          }
+          await bucket.persistentStore.register(descendantKey, { ...current, sourceMessage });
+          removed = true;
+        }
+        for (const targetKey of targetKeys) {
+          removed = (await bucket.persistentStore.delete(targetKey)) || removed;
+        }
+
+        return removeFromMemory() || removed;
+      } catch (error) {
+        logVerbose(`telegram: failed to remove message from persistent cache: ${String(error)}`);
+        throw error;
+      }
+    },
+    isIgnored,
     get,
     recentBefore: async ({ accountId, chatId, messageId, threadId, limit }) => {
       if (!messageId || limit <= 0) {

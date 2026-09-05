@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 export type TelegramMessageProcessingResult =
   | { kind: "completed" }
-  | { kind: "skipped" }
+  | { kind: "skipped"; reason?: "cancelled-before-dispatch" }
   | { kind: "failed-retryable"; error: unknown };
 
 type TelegramUpdateProcessingFrame = {

@@ -348,6 +348,7 @@ export function createTelegramCallbackRouter({
       }
       if (
         await handleTelegramModelCallback({
+          accountId,
           data,
           ctx,
           chatId,
@@ -423,6 +424,7 @@ export function createTelegramCallbackRouter({
 }
 
 async function handleTelegramModelCallback(params: {
+  accountId: string;
   data: string;
   ctx: Pick<TelegramContext, "me">;
   chatId: number;
@@ -436,6 +438,7 @@ async function handleTelegramModelCallback(params: {
   authorizeCallback: () => Promise<boolean>;
 }): Promise<boolean> {
   const {
+    accountId,
     data,
     ctx,
     chatId,
@@ -486,6 +489,7 @@ async function handleTelegramModelCallback(params: {
         page,
         forcePaginatedList: true,
         surface: "telegram",
+        accountId,
       });
     });
     const keyboard =

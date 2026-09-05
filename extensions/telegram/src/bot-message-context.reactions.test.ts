@@ -268,4 +268,136 @@ describe("buildTelegramMessageContext reactions", () => {
 
     expect(setMessageReaction).toHaveBeenCalledWith(1234, 34, [{ type: "emoji", emoji: "❤" }]);
   });
+
+  it("defers ack and status reactions until the buffered turn starts initial feedback", async () => {
+    const setMessageReaction = vi.fn(async () => undefined);
+    const { controller, createStatusReactionController } = createStatusReactionControllerStub();
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 35,
+        chat: { id: 1234, type: "private" },
+        date: 1_700_000_000,
+        text: "hello",
+        from: { id: 42, first_name: "Alice" },
+      },
+      cfg: {
+        agents: {
+          defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" },
+        },
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+        messages: {
+          ackReaction: "👀",
+          groupChat: { mentionPatterns: [] },
+          statusReactions: { enabled: true },
+        },
+      },
+      ackReactionScope: "direct",
+      botApi: { setMessageReaction },
+      deferInitialFeedback: true,
+      runtime: { createStatusReactionController },
+    });
+
+    expect(ctx?.ackReactionPromise).toBeNull();
+    const status = ctx?.statusReactionController;
+    void status?.setThinking();
+    void status?.setCompacting();
+    status?.cancelPending();
+    await status?.setDone();
+    await status?.restoreInitial();
+    expect(controller.setQueued).not.toHaveBeenCalled();
+    expect(controller.setThinking).not.toHaveBeenCalled();
+    expect(controller.setCompacting).not.toHaveBeenCalled();
+    expect(controller.cancelPending).not.toHaveBeenCalled();
+    expect(controller.setDone).not.toHaveBeenCalled();
+    expect(controller.restoreInitial).not.toHaveBeenCalled();
+    expect(setMessageReaction).not.toHaveBeenCalled();
+
+    ctx?.startInitialFeedback?.();
+    ctx?.startInitialFeedback?.();
+    await expect(ctx?.ackReactionPromise).resolves.toBe(true);
+
+    expect(controller.setQueued).toHaveBeenCalledTimes(1);
+    expect(controller.setThinking).toHaveBeenCalledTimes(1);
+    expect(controller.setCompacting).toHaveBeenCalledTimes(1);
+    expect(controller.cancelPending).toHaveBeenCalledTimes(1);
+    expect(controller.setDone).toHaveBeenCalledTimes(1);
+    expect(controller.restoreInitial).toHaveBeenCalledTimes(1);
+    expect(
+      controller.setQueued.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    ).toBeLessThan(controller.setThinking.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY);
+  });
+
+  it("observes a deferred status failure and continues draining later reactions", async () => {
+    const setMessageReaction = vi.fn(async () => undefined);
+    const { controller, createStatusReactionController } = createStatusReactionControllerStub();
+    controller.setThinking.mockRejectedValueOnce(new Error("reaction unavailable"));
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 37,
+        chat: { id: 1234, type: "private" },
+        date: 1_700_000_000,
+        text: "hello",
+        from: { id: 42, first_name: "Alice" },
+      },
+      cfg: {
+        agents: {
+          defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" },
+        },
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+        messages: {
+          ackReaction: "👀",
+          groupChat: { mentionPatterns: [] },
+          statusReactions: { enabled: true },
+        },
+      },
+      ackReactionScope: "direct",
+      botApi: { setMessageReaction },
+      deferInitialFeedback: true,
+      runtime: { createStatusReactionController },
+    });
+
+    void ctx?.statusReactionController?.setThinking();
+    await ctx?.statusReactionController?.setDone();
+    ctx?.startInitialFeedback?.();
+
+    await vi.waitFor(() => expect(controller.setDone).toHaveBeenCalledOnce());
+    expect(controller.setThinking).toHaveBeenCalledOnce();
+    expect(
+      controller.setThinking.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    ).toBeLessThan(controller.setDone.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY);
+  });
+
+  it("defers a plain ack reaction until buffered feedback starts", async () => {
+    const setMessageReaction = vi.fn(async () => undefined);
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 36,
+        chat: { id: 1234, type: "private" },
+        date: 1_700_000_000,
+        text: "hello",
+        from: { id: 42, first_name: "Alice" },
+      },
+      cfg: {
+        agents: {
+          defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" },
+        },
+        channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+        messages: { ackReaction: "👀", groupChat: { mentionPatterns: [] } },
+      },
+      ackReactionScope: "direct",
+      botApi: { setMessageReaction },
+      deferInitialFeedback: true,
+    });
+
+    expect(ctx?.ackReactionPromise).toBeNull();
+    expect(setMessageReaction).not.toHaveBeenCalled();
+
+    ctx?.startInitialFeedback?.();
+    ctx?.startInitialFeedback?.();
+    await expect(ctx?.ackReactionPromise).resolves.toBe(true);
+
+    expect(setMessageReaction).toHaveBeenCalledExactlyOnceWith(1234, 36, [
+      { type: "emoji", emoji: "👀" },
+    ]);
+  });
 });

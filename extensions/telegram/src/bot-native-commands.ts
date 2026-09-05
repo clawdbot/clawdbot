@@ -31,6 +31,7 @@ import {
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import {
+  hasTelegramCustomCommand,
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
   TELEGRAM_COMMAND_NAME_PATTERN,
@@ -123,9 +124,18 @@ export const registerTelegramNativeCommands = ({
   for (const command of skillCommands) {
     reservedCommands.add(normalizeTelegramCommandName(command.name));
   }
+  const customReservedCommands = new Set(reservedCommands);
+  if (
+    hasTelegramCustomCommand({
+      commands: telegramCfg.customCommands,
+      command: "ignore",
+    })
+  ) {
+    customReservedCommands.delete("ignore");
+  }
   const customResolution = resolveTelegramCustomCommands({
     commands: telegramCfg.customCommands,
-    reservedCommands,
+    reservedCommands: customReservedCommands,
   });
   for (const issue of customResolution.issues) {
     runtime.error?.(danger(issue.message));
@@ -170,7 +180,9 @@ export const registerTelegramNativeCommands = ({
   const fullCommandCatalog = buildCappedTelegramMenuCommands({
     allCommands: [
       ...customCommands,
-      ...nativeMenuCommands.filter((command) => !command.isAlias),
+      ...nativeMenuCommands.filter(
+        (command) => !command.isAlias && !customCommandNames.has(command.command),
+      ),
       ...(nativeEnabled
         ? pluginCatalog.commands.filter((command) => !customCommandNames.has(command.command))
         : []),
@@ -257,6 +269,9 @@ export const registerTelegramNativeCommands = ({
     | undefined;
   for (const command of nativeCommandsToHandle) {
     const normalizedCommandName = normalizeTelegramCommandName(command.name);
+    if (normalizedCommandName === "ignore") {
+      continue;
+    }
     const handleNativeCommand = async (
       botUser: Context["me"],
       msg: NonNullable<Context["message"]>,

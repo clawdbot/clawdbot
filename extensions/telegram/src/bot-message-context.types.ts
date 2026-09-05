@@ -110,6 +110,8 @@ export type BuildTelegramMessageContextParams = {
   promptContext?: TelegramPromptContextEntry[];
   storeAllowFrom: string[];
   options?: TelegramMessageContextOptions;
+  /** Delay provider-visible typing/reactions until the buffered turn owns dispatch. */
+  deferInitialFeedback?: boolean;
   bot: Bot;
   cfg: OpenClawConfig;
   account: { accountId: string };

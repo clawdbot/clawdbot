@@ -96,6 +96,17 @@ function supportsNativeProvider(command: ChatCommandDefinition, provider?: strin
   );
 }
 
+/** Whether a command can be presented as available on a channel surface. */
+export function isCommandAvailableOnSurface(
+  command: ChatCommandDefinition,
+  surface?: string,
+): boolean {
+  return (
+    command.scope !== "native" ||
+    Boolean(normalizeOptionalLowercaseString(surface) && supportsNativeProvider(command, surface))
+  );
+}
+
 function listNativeSpecsFromCommands(
   commands: ChatCommandDefinition[],
   provider?: string,

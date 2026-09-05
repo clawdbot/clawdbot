@@ -106,6 +106,7 @@ describe("Telegram supergroup ingress with a stalled Bot API response body", () 
       resolveGroupRequireMention: () => false,
       resolveTelegramGroupConfig: () => ({}),
       shouldSkipUpdate: () => false,
+      removeMessageFromGroupHistory: vi.fn(),
       processMessage: async () => ({ kind: "completed" }),
     };
     const authorizeInboundMessage = vi.fn<

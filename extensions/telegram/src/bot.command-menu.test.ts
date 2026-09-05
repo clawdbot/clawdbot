@@ -212,6 +212,49 @@ describe("createTelegramBot command menu", () => {
     expect(errorSpy).toHaveBeenCalled();
   });
 
+  it("lets an account-scoped custom /ignore command shadow the native command", async () => {
+    const errorSpy = vi.fn();
+    const config = {
+      commands: { native: true },
+      agents: { defaults: { envelopeTimezone: "utc" } },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          accounts: {
+            custom: {
+              customCommands: [{ command: "ignore", description: "Custom ignore workflow" }],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    loadConfig.mockReturnValue(config);
+    const commandsSynced = waitForNextSetMyCommands();
+
+    createTelegramBot({
+      token: "tok",
+      accountId: "custom",
+      runtime: {
+        log: vi.fn(),
+        error: errorSpy,
+        exit: ((code: number) => {
+          throw new Error(`exit ${code}`);
+        }) as (code: number) => never,
+      },
+    });
+
+    await commandsSynced;
+
+    const registered = registeredCommands();
+    expect(registered.filter((command) => command.command === "ignore")).toEqual([
+      { command: "ignore", description: "Custom ignore workflow" },
+    ]);
+    expect(errorSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('Telegram custom command "/ignore" conflicts with a native command.'),
+    );
+  });
+
   it("registers custom commands when native commands are disabled", async () => {
     const errorSpy = vi.fn();
     const config = {

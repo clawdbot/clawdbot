@@ -491,6 +491,7 @@ describe("info command handlers", () => {
     } as OpenClawConfig);
     params.agentId = "target";
     params.sessionKey = "agent:target:whatsapp:direct:12345";
+    params.command.accountId = "work";
 
     const result = await handleCommandsListCommand(params, true);
 
@@ -500,6 +501,11 @@ describe("info command handlers", () => {
       "listSkillCommandsForAgents",
     ) as { agentIds?: string[] };
     expect(listParams.agentIds).toEqual(["target"]);
+    expect(buildCommandsMessagePaginatedMock).toHaveBeenCalledWith(
+      params.cfg,
+      [],
+      expect.objectContaining({ accountId: "work", page: 1 }),
+    );
   });
 
   it("lists commands for the prepared owner of a global session", async () => {

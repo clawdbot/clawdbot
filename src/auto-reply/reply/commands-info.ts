@@ -70,6 +70,7 @@ export const handleCommandsListCommand: CommandHandler = defineAuthorizedTextCom
     const paginated = buildCommandsMessagePaginated(params.cfg, skillCommands, {
       page: 1,
       surface,
+      accountId: params.command.accountId,
     });
     const channelData = commandPlugin?.commands?.buildCommandsListChannelData?.({
       currentPage: paginated.currentPage,
@@ -86,7 +87,12 @@ export const handleCommandsListCommand: CommandHandler = defineAuthorizedTextCom
       };
     }
 
-    return commandReply(buildCommandsMessage(params.cfg, skillCommands, { surface }));
+    return commandReply(
+      buildCommandsMessage(params.cfg, skillCommands, {
+        surface,
+        accountId: params.command.accountId,
+      }),
+    );
   },
 );
 

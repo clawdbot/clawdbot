@@ -2,6 +2,7 @@ import type { Message } from "grammy/types";
 import { describe, expect, it, vi } from "vitest";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import { describeReplyTarget } from "./bot/helpers.js";
+import { removeTelegramGroupHistoryEntry } from "./group-history-window.js";
 
 vi.mock("./sticker-vision.runtime.js", () => ({
   resolveStickerVisionSupportRuntime: vi.fn(async () => false),
@@ -196,6 +197,48 @@ describe("buildTelegramMessageContext media carriers", () => {
     expect(context?.ctxPayload.CommandSource).toBeUndefined();
     expect(context?.ctxPayload.media?.map((fact) => fact.kind)).toEqual(["image"]);
     expect([...groupHistories.values()].flat().at(-1)?.body).toBe("<media:image>");
+    expect([...groupHistories.values()].flat().at(-1)?.media).toBeUndefined();
+  });
+
+  it("keeps album ownership out of later inbound media history", async () => {
+    const groupHistories = new Map();
+    const chat = { id: -1001, type: "supergroup", title: "Ops" };
+    await buildTelegramMessageContextForTest({
+      message: {
+        chat,
+        message_id: 100,
+        text: undefined,
+        caption: "private album detail",
+        photo: [{ file_id: "photo-1", file_unique_id: "photo-u1", width: 1, height: 1 }],
+      },
+      allMedia: [
+        { kind: "image", path: "/tmp/album-100.jpg", sourceMessageId: "100" },
+        { kind: "image", path: "/tmp/album-101.jpg", sourceMessageId: "101" },
+      ],
+      groupHistories,
+      historyLimit: 5,
+    });
+
+    const followup = await buildTelegramMessageContextForTest({
+      message: { chat, message_id: 102, text: "later text only" },
+      groupHistories,
+      historyLimit: 5,
+    });
+    const historyKey = [...groupHistories.keys()][0];
+
+    expect(followup?.ctxPayload.InboundHistory).toEqual([
+      expect.objectContaining({ body: "private album detail", messageId: "100" }),
+    ]);
+    expect(followup?.ctxPayload.InboundHistory?.[0]?.media).toBeUndefined();
+    expect([...groupHistories.values()].flat()[0]?.media).toBeUndefined();
+    expect(
+      removeTelegramGroupHistoryEntry({
+        historyMap: groupHistories,
+        historyKey,
+        messageId: "101",
+      }),
+    ).toBe(true);
+    expect([...groupHistories.values()].flat().map((entry) => entry.messageId)).toEqual(["102"]);
   });
 
   it("admits an unavailable native sticker as a type-only fact", async () => {

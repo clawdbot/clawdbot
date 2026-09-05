@@ -16,6 +16,7 @@ import {
   saveRemoteMedia,
   shouldRetryTelegramTransportFallback,
   sleepWithAbort,
+  unlinkIfExists,
 } from "./delivery.resolve-media.runtime.js";
 import { resolveTelegramPrimaryMedia } from "./helpers.js";
 import type { TelegramContext } from "./types.js";
@@ -271,6 +272,59 @@ function isTrustedLocalTelegramFileMissing(error: unknown): boolean {
   );
 }
 
+function createTrustedLocalTelegramSaveAbortError(params: {
+  abortSignal: AbortSignal;
+  failureContext: string;
+}): MediaFetchError {
+  const cause = params.abortSignal.reason ?? new Error("Telegram media save cancelled");
+  return new MediaFetchError(
+    "fetch_failed",
+    `${params.failureContext}: ${formatErrorMessage(cause)}`,
+    { cause },
+  );
+}
+
+async function saveTrustedLocalTelegramFile(params: {
+  buffer: Buffer;
+  mimeType?: string;
+  maxBytes: number;
+  fileName: string;
+  abortSignal?: AbortSignal;
+  failureContext: string;
+}) {
+  let saved;
+  try {
+    params.abortSignal?.throwIfAborted();
+    saved = await saveMediaBuffer(
+      params.buffer,
+      params.mimeType,
+      "inbound",
+      params.maxBytes,
+      params.fileName,
+    );
+  } catch (err) {
+    if (!params.abortSignal?.aborted) {
+      throw err;
+    }
+    throw createTrustedLocalTelegramSaveAbortError({
+      abortSignal: params.abortSignal,
+      failureContext: params.failureContext,
+    });
+  }
+  if (!params.abortSignal?.aborted) {
+    return saved;
+  }
+  try {
+    await unlinkIfExists(saved.path);
+  } catch {
+    // Cleanup is best effort; preserve the cancellation as the owning failure.
+  }
+  throw createTrustedLocalTelegramSaveAbortError({
+    abortSignal: params.abortSignal,
+    failureContext: params.failureContext,
+  });
+}
+
 async function downloadAndSaveTelegramFile(params: {
   filePath: string;
   token: string;
@@ -290,24 +344,28 @@ async function downloadAndSaveTelegramFile(params: {
   if (trustedLocalFile) {
     let localFile;
     try {
+      params.abortSignal?.throwIfAborted();
       const root = await fsRoot(trustedLocalFile.rootDir);
       localFile = await root.read(trustedLocalFile.relativePath, {
         maxBytes: params.maxBytes,
       });
+      params.abortSignal?.throwIfAborted();
     } catch (err) {
+      const cause = params.abortSignal?.aborted ? (params.abortSignal.reason ?? err) : err;
       throw new MediaFetchError(
         "fetch_failed",
-        `Failed to read local Telegram Bot API media from ${params.filePath}: ${formatErrorMessage(err)}`,
-        { cause: err },
+        `Failed to read local Telegram Bot API media from ${params.filePath}: ${formatErrorMessage(cause)}`,
+        { cause },
       );
     }
-    return await saveMediaBuffer(
-      localFile.buffer,
-      params.mimeType,
-      "inbound",
-      params.maxBytes,
-      params.telegramFileName ?? path.basename(localFile.realPath),
-    );
+    return await saveTrustedLocalTelegramFile({
+      buffer: localFile.buffer,
+      mimeType: params.mimeType,
+      maxBytes: params.maxBytes,
+      fileName: params.telegramFileName ?? path.basename(localFile.realPath),
+      abortSignal: params.abortSignal,
+      failureContext: `Failed to save local Telegram Bot API media from ${params.filePath}`,
+    });
   }
   const containerRelativePaths = resolveTelegramBotApiContainerRelativePaths(
     params.filePath,
@@ -317,25 +375,29 @@ async function downloadAndSaveTelegramFile(params: {
     for (const relativePath of containerRelativePaths) {
       let localFile;
       try {
+        params.abortSignal?.throwIfAborted();
         const root = await fsRoot(rootDir);
         localFile = await root.read(relativePath, { maxBytes: params.maxBytes });
+        params.abortSignal?.throwIfAborted();
       } catch (err) {
-        if (isTrustedLocalTelegramFileMissing(err)) {
+        if (!params.abortSignal?.aborted && isTrustedLocalTelegramFileMissing(err)) {
           continue;
         }
+        const cause = params.abortSignal?.aborted ? (params.abortSignal.reason ?? err) : err;
         throw new MediaFetchError(
           "fetch_failed",
-          `Failed to read mapped local Telegram Bot API media: ${formatErrorMessage(err)}`,
-          { cause: err },
+          `Failed to read mapped local Telegram Bot API media: ${formatErrorMessage(cause)}`,
+          { cause },
         );
       }
-      return await saveMediaBuffer(
-        localFile.buffer,
-        params.mimeType,
-        "inbound",
-        params.maxBytes,
-        params.telegramFileName ?? path.basename(localFile.realPath),
-      );
+      return await saveTrustedLocalTelegramFile({
+        buffer: localFile.buffer,
+        mimeType: params.mimeType,
+        maxBytes: params.maxBytes,
+        fileName: params.telegramFileName ?? path.basename(localFile.realPath),
+        abortSignal: params.abortSignal,
+        failureContext: "Failed to save mapped local Telegram Bot API media",
+      });
     }
   }
   if (path.isAbsolute(params.filePath)) {

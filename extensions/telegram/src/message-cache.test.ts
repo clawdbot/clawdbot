@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveTelegramMessageCachePersistentScopeKey,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
-  type TelegramResolvedMedia,
+  type PersistedTelegramMessageCacheValue,
 } from "./message-cache-persistence.js";
 import {
   buildTelegramConversationContext,
@@ -17,20 +17,12 @@ import { resetTelegramMessageCacheForTest as resetCache } from "./runtime.test-s
 type PersistentStore = NonNullable<
   NonNullable<Parameters<typeof createTelegramMessageCache>[0]>["persistentStore"]
 >;
+type PrivacyStore = NonNullable<
+  NonNullable<Parameters<typeof createTelegramMessageCache>[0]>["privacyStore"]
+>;
 type Cache = ReturnType<typeof createTelegramMessageCache>;
 type ReplyChain = Awaited<ReturnType<typeof replyChain>>;
-type PersistedValue = {
-  version: 1;
-  sourceMessage: Message;
-  botUserId?: number;
-  promptContextProjection?: unknown;
-  resolvedMedia?: TelegramResolvedMedia;
-  threadBinding?: {
-    kind: "provider-observed-v1";
-    threadSpec: { scope: "direct-messages" | "dm" | "forum"; id: number };
-  };
-  threadId?: string;
-};
+type PersistedValue = PersistedTelegramMessageCacheValue;
 
 let persistentStoreId = 0;
 
@@ -42,7 +34,7 @@ function createMemoryStore(maxEntries = TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_ME
     store: {
       async register(key, value) {
         entries.delete(key);
-        entries.set(key, structuredClone(value));
+        entries.set(key, structuredClone(value) as PersistedValue);
         while (entries.size > maxEntries) {
           const oldest = entries.keys().next().value;
           if (oldest === undefined) {
@@ -51,11 +43,30 @@ function createMemoryStore(maxEntries = TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_ME
           entries.delete(oldest);
         }
       },
+      async lookup(key) {
+        const value = entries.get(key);
+        return value ? structuredClone(value) : undefined;
+      },
+      async delete(key) {
+        return entries.delete(key);
+      },
       async entries() {
         return Array.from(entries, ([key, value]) => ({ key, value: structuredClone(value) }));
       },
     } satisfies PersistentStore,
   };
+}
+
+const privacyStores = new WeakMap<object, PrivacyStore>();
+
+function privacyStoreFor(store: PersistentStore): PrivacyStore {
+  const existing = privacyStores.get(store);
+  if (existing) {
+    return existing;
+  }
+  const created = createMemoryStore().store as unknown as PrivacyStore;
+  privacyStores.set(store, created);
+  return created;
 }
 
 const sender = (id: number, first_name: string, is_bot = false) => ({ id, is_bot, first_name });
@@ -110,11 +121,17 @@ const replyChain = (cache: Cache, msg: Message, chatId = 7) =>
   buildTelegramReplyChain({ cache, accountId: "default", chatId, msg });
 
 const cacheFor = (bucketKey: string, persistentStore: PersistentStore) =>
-  createTelegramMessageCache({ bucketKey, persistentStore });
+  createTelegramMessageCache({
+    bucketKey,
+    persistentStore,
+    privacyStore: privacyStoreFor(persistentStore),
+  });
 
 function entryStore(store: PersistentStore, key: string, value: unknown): PersistentStore {
   return {
     register: (nextKey, nextValue) => store.register(nextKey, nextValue),
+    lookup: (nextKey) => store.lookup(nextKey),
+    delete: (nextKey) => store.delete(nextKey),
     entries: async () => [{ key, value }],
   } as PersistentStore;
 }
@@ -146,6 +163,112 @@ const projection = (transcriptMessageId: string) => ({
 });
 
 describe("telegram message cache", () => {
+  it("removes a cached message from memory and persistent storage", async () => {
+    const { bucketKey, entries, store } = createMemoryStore();
+    const cache = cacheFor(bucketKey, store);
+    await record(cache, message(9000, "Nora", { text: "private detail" }));
+
+    await expect(
+      cache.remove({ accountId: "default", chatId: 7, messageId: "9000" }),
+    ).resolves.toBe(true);
+    await expect(get(cache, "9000")).resolves.toBeNull();
+    expect(entries).toHaveLength(0);
+    await expect(reloadGet(bucketKey, store, "9000")).resolves.toBeNull();
+  });
+
+  it("removes a cached message from persisted reply descendants", async () => {
+    const { bucketKey, entries, store } = createMemoryStore();
+    const cache = cacheFor(bucketKey, store);
+    const privateDetail = message(9001, "Nora", { text: "private detail" });
+    const reply = message(9002, "Ada", {
+      text: "ordinary reply",
+      reply_to_message: privateDetail,
+      quote: { text: "private detail", position: 0 },
+    });
+    await record(cache, privateDetail);
+    await record(cache, reply);
+
+    await cache.remove({ accountId: "default", chatId: 7, messageId: "9001" });
+    expect(entries).toHaveLength(1);
+
+    resetCache();
+    const reloaded = cacheFor(bucketKey, store);
+    await expect(get(reloaded, "9001")).resolves.toBeNull();
+    const reloadedReply = await get(reloaded, "9002");
+    expect(reloadedReply?.body).toBe("ordinary reply");
+    expect(reloadedReply?.replyToId).toBeUndefined();
+    expect(reloadedReply?.sourceMessage?.quote).toBeUndefined();
+  });
+
+  it("detaches a same-chat external reply target across topics and restart", async () => {
+    const { bucketKey, store } = createMemoryStore();
+    const forum = { id: -1001, type: "supergroup", title: "QA", is_forum: true };
+    const privateDetail = message(9003, "Nora", {
+      chat: forum,
+      message_thread_id: 77,
+      is_topic_message: true,
+      text: "private detail",
+    });
+    const reply = message(9004, "Ada", {
+      chat: forum,
+      message_thread_id: 88,
+      is_topic_message: true,
+      text: "ordinary cross-topic reply",
+      external_reply: privateDetail,
+      quote: { text: "private detail", position: 0 },
+    });
+    const cache = cacheFor(bucketKey, store);
+    await record(cache, privateDetail, { chatId: -1001, threadId: 77 });
+    await record(cache, reply, { chatId: -1001, threadId: 88 });
+
+    await cache.remove({ accountId: "default", chatId: -1001, messageId: "9003" });
+    resetCache();
+    const reloadedReply = await get(cacheFor(bucketKey, store), "9004", { chatId: -1001 });
+
+    expect(reloadedReply?.body).toBe("ordinary cross-topic reply");
+    expect(reloadedReply?.replyToId).toBeUndefined();
+    const reloadedSource = reloadedReply?.sourceMessage as
+      | (Message & { external_reply?: Message })
+      | undefined;
+    expect(reloadedSource?.external_reply).toBeUndefined();
+    expect(reloadedSource?.quote).toBeUndefined();
+  });
+
+  it("keeps a same-number external reply target from another chat", async () => {
+    const { bucketKey, store } = createMemoryStore();
+    const localChat = { id: -1001, type: "supergroup", title: "Local" };
+    const externalChat = { id: -1002, type: "supergroup", title: "External" };
+    const localTarget = message(9005, "Nora", {
+      chat: localChat,
+      text: "local target",
+    });
+    const externalTarget = message(9005, "Grace", {
+      chat: externalChat,
+      text: "external target",
+    });
+    const reply = message(9006, "Ada", {
+      chat: localChat,
+      text: "ordinary cross-chat reply",
+      external_reply: externalTarget,
+    });
+    const cache = cacheFor(bucketKey, store);
+    await record(cache, localTarget, { chatId: -1001 });
+    await record(cache, reply, { chatId: -1001 });
+
+    await cache.remove({ accountId: "default", chatId: -1001, messageId: "9005" });
+    resetCache();
+    const reloadedReply = await get(cacheFor(bucketKey, store), "9006", { chatId: -1001 });
+
+    expect(reloadedReply?.replyToId).toBe("9005");
+    const reloadedSource = reloadedReply?.sourceMessage as
+      | (Message & { external_reply?: Message })
+      | undefined;
+    expect(reloadedSource?.external_reply).toMatchObject({
+      message_id: 9005,
+      chat: { id: -1002 },
+    });
+  });
+
   it("persists resolved media with its source message and drops it when the media changes", async () => {
     const { bucketKey, entries, store } = createMemoryStore();
     const cache = cacheFor(bucketKey, store);
@@ -227,6 +350,145 @@ describe("telegram message cache", () => {
       expect(hasProviderObservedTelegramThreadBinding(node, 77)).toBe(true);
       expect(resolveProviderObservedTelegramThreadSpec(node)).toEqual({ scope: "forum", id: 77 });
     }
+  });
+
+  it("shows an ignored live reply target without persisting it", async () => {
+    const { bucketKey, store } = createMemoryStore();
+    const cache = cacheFor(bucketKey, store);
+    const ignored = message(920, "Ada", {
+      text: "/ignore side chatter",
+      entities: [{ type: "bot_command", offset: 0, length: 7 }],
+    });
+    const reply = message(921, "Grace", {
+      text: "This reply intentionally restores it",
+      reply_to_message: ignored,
+    });
+
+    await record(cache, reply, { botUsername: "OurBot" });
+
+    expect((await replyChain(cache, reply)).map((entry) => entry.body)).toContain(
+      "/ignore side chatter",
+    );
+    expect(await get(cache, "920")).toBeNull();
+    expect(await reloadGet(bucketKey, store, "920")).toBeNull();
+  });
+
+  it("keeps every ignored album member out of later persisted replies after restart", async () => {
+    const { bucketKey, store } = createMemoryStore();
+    const cache = cacheFor(bucketKey, store);
+    const ignored = message(926, "Ada", {
+      text: "/ignore side album",
+      entities: [{ type: "bot_command", offset: 0, length: 7 }],
+      media_group_id: "ignored-album-1",
+      photo: photo("ignored-1"),
+    });
+    const sibling = message(927, "Ada", {
+      caption: "private album sibling",
+      media_group_id: "ignored-album-1",
+      photo: photo("ignored-2"),
+    });
+    await record(cache, ignored);
+    await record(cache, sibling);
+    await cache.remove({
+      accountId: "default",
+      chatId: 7,
+      messageId: "926",
+      mediaGroupId: "ignored-album-1",
+    });
+
+    resetCache();
+    const restarted = createTelegramMessageCache({
+      bucketKey,
+      persistentStore: store,
+      privacyStore: privacyStoreFor(store),
+      // A prior ignore remains a privacy boundary even if native commands are later disabled.
+      ignoreEnabled: false,
+    });
+    const laterReply = message(928, "Grace", {
+      text: "ordinary later reply",
+      reply_to_message: sibling,
+      quote: { text: "private album sibling", position: 0 },
+    });
+    await record(restarted, laterReply);
+
+    expect(await get(restarted, "927")).toBeNull();
+    const recordedReply = await get(restarted, "928");
+    expect(recordedReply?.replyToId).toBeUndefined();
+    expect(recordedReply?.sourceMessage.reply_to_message).toBeUndefined();
+    expect(recordedReply?.sourceMessage.quote).toBeUndefined();
+
+    resetCache();
+    const reloadedReply = await get(cacheFor(bucketKey, store), "928");
+    expect(reloadedReply?.replyToId).toBeUndefined();
+    expect(reloadedReply?.sourceMessage.reply_to_message).toBeUndefined();
+  });
+
+  it("filters an addressed ignored reply target when the cache reloads", async () => {
+    const { bucketKey, store } = createMemoryStore();
+    const ignored = message(922, "Ada", {
+      text: "/ignore@OurBot side chatter",
+      entities: [{ type: "bot_command", offset: 0, length: 14 }],
+    });
+    const reply = message(923, "Grace", {
+      text: "Reply after restart",
+      reply_to_message: ignored,
+    });
+    const cache = createTelegramMessageCache({
+      bucketKey,
+      persistentStore: store,
+      privacyStore: privacyStoreFor(store),
+      botUsername: "OurBot",
+      ignoreEnabled: true,
+    });
+    await record(cache, reply);
+
+    expect((await replyChain(cache, reply)).map((entry) => entry.body)).toContain(
+      "/ignore@OurBot side chatter",
+    );
+    expect(await get(cache, "922")).toBeNull();
+
+    resetCache();
+    const reloaded = createTelegramMessageCache({
+      bucketKey,
+      persistentStore: store,
+      privacyStore: privacyStoreFor(store),
+    });
+
+    expect(await get(reloaded, "922")).toBeNull();
+    const reloadedReply = await get(reloaded, "923");
+    expect(reloadedReply?.replyToId).toBeUndefined();
+    expect(reloadedReply?.sourceMessage.reply_to_message).toBeUndefined();
+  });
+
+  it("keeps a command-shaped reply target when native commands are disabled", async () => {
+    const { bucketKey, store } = createMemoryStore();
+    const commandShaped = message(924, "Ada", {
+      text: "/ignore ordinary text",
+      entities: [{ type: "bot_command", offset: 0, length: 7 }],
+    });
+    const reply = message(925, "Grace", {
+      text: "Reply after restart",
+      reply_to_message: commandShaped,
+    });
+    const cache = createTelegramMessageCache({
+      bucketKey,
+      persistentStore: store,
+      privacyStore: privacyStoreFor(store),
+      ignoreEnabled: false,
+    });
+    await record(cache, reply);
+
+    resetCache();
+    const reloaded = createTelegramMessageCache({
+      bucketKey,
+      persistentStore: store,
+      privacyStore: privacyStoreFor(store),
+      ignoreEnabled: false,
+    });
+    expect((await get(reloaded, "924"))?.body).toBe("/ignore ordinary text");
+    const reloadedReply = await get(reloaded, "925");
+    expect(reloadedReply?.replyToId).toBe("924");
+    expect(reloadedReply?.sourceMessage.reply_to_message?.message_id).toBe(924);
   });
 
   it("keeps an authoritative supplied thread ahead of conflicting root message metadata", async () => {
@@ -593,6 +855,12 @@ describe("telegram message cache", () => {
     const bucketKey = `test:${process.pid}:${Date.now()}:${persistentStoreId++}`;
     const persistentStore: PersistentStore = {
       async register() {
+        throw new Error("state store unavailable");
+      },
+      async lookup() {
+        throw new Error("state store unavailable");
+      },
+      async delete() {
         throw new Error("state store unavailable");
       },
       async entries() {

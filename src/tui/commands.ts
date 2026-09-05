@@ -3,6 +3,7 @@ import type { SlashCommand } from "@earendil-works/pi-tui";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import {
+  isCommandAvailableOnSurface,
   listChatCommands,
   listChatCommandsForConfig,
   resolveTextCommand,
@@ -281,6 +282,9 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
 
   const gatewayCommands = options.cfg ? listChatCommandsForConfig(options.cfg) : listChatCommands();
   for (const command of gatewayCommands) {
+    if (!isCommandAvailableOnSurface(command)) {
+      continue;
+    }
     const descriptor = resolveTuiCommandDescriptor(command.key);
     if (options.local && !seen.has(command.key) && !descriptor?.shared) {
       continue;

@@ -312,6 +312,17 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Group history context is always on and bounded by `historyLimit`. Set `channels.telegram.historyLimit: 0` to disable the group history window. `openclaw doctor --fix` removes the retired `includeGroupHistoryContext` key.
 
+    Mention and activation settings are chat-wide controls for whether a message
+    triggers the bot; they do not provide a per-message context boundary. Without
+    `/ignore`, holding a one-off human-only aside means changing those persistent
+    settings and changing them back, and activation gating alone does not
+    selectively remove the message from rolling group history. Prefix the aside
+    with `/ignore`, for example `/ignore dinner at 7?`, to keep that update out of
+    reply history, media processing, prompt context, and agent dispatch. `/ignore`
+    is available when native Telegram commands are enabled. An authorized
+    `/ignore <message>` intentionally sends no bot reply; bare `/ignore` replies
+    with usage help.
+
     Getting the group chat ID: forward a group message to `@userinfobot` / `@getidsbot`, read `chat.id` from `openclaw logs --follow`, inspect Bot API `getUpdates`, or (once the group is allowed) run `/whoami@<bot_username>`.
 
   </Tab>
@@ -450,6 +461,13 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   <Accordion title="Native commands and custom commands">
     Telegram's command menu is registered at startup with `setMyCommands`. `commands.native: "auto"` enables native commands for Telegram.
 
+    `/ignore <message>` marks one authorized update as human-only and drops it
+    before it reaches agent context, without sending a bot reply. Bare `/ignore`
+    returns usage help. This is context control, not message deletion: the
+    original Telegram message remains visible in the chat. A direct reply to the
+    ignored message can include it for that turn, but OpenClaw does not retain the
+    ignored text in later reply history.
+
     Add custom command menu entries:
 
 ```json5
@@ -465,7 +483,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
-    Rules: names are normalized (strip leading `/`, lowercase); valid pattern `a-z`, `0-9`, `_`, length 1-32; custom commands cannot override native commands; conflicts/duplicates are skipped and logged.
+    Rules: names are normalized (strip leading `/`, lowercase); valid pattern `a-z`, `0-9`, `_`, length 1-32; custom commands cannot override native commands; conflicts/duplicates are skipped and logged. `/ignore` is the deliberate exception: a configured custom `/ignore` owns that command for its Telegram account, replaces the native menu entry, and disables native human-only context control for that account.
 
     When Telegram menu limits require trimming, configured custom commands come first unless omitted per-skill entries are replaced by a leading `/skill` fallback.
 
