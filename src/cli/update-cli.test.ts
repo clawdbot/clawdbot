@@ -7559,7 +7559,7 @@ describe("update-cli", () => {
     }
   });
 
-  it.each(["interrupted", "completed"] as const)(
+  it.each(["interrupted", "settling", "completed"] as const)(
     "refuses mutation through a %s Windows task recovery owner",
     async (outcome) => {
       const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -7586,12 +7586,15 @@ describe("update-cli", () => {
           listener();
         } else {
           await recovery.restore();
-          recovery.complete();
+          const completion = recovery.complete();
+          if (outcome === "completed") {
+            await completion;
+          }
         }
         expect(() => recovery.beginMutation()).toThrow(UpdateCommandAbort);
       } finally {
         await recovery.restore();
-        recovery.complete();
+        await recovery.complete();
         if (outcome === "interrupted") {
           await vi.waitFor(() => expect(processExitSpy).toHaveBeenCalledWith(130));
         }
@@ -7717,7 +7720,7 @@ describe("update-cli", () => {
 
   it.each(
     (["SIGINT", "SIGBREAK"] as const).flatMap((signal) =>
-      (["suspension", "schema preflight"] as const).map((phase) => ({ signal, phase })),
+      (["package suspension", "Git schema preflight"] as const).map((phase) => ({ signal, phase })),
     ),
   )(
     "restores Windows Scheduled Task autostart on $signal during $phase",
@@ -7727,33 +7730,41 @@ describe("update-cli", () => {
       const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
       const gate = createDeferred();
       const entered = createDeferred();
+      const gitMutation = vi.fn();
+      let taskSuspended = false;
       const waitForSignal = async () => {
         entered.resolve();
         await gate.promise;
       };
       suspendScheduledTaskAutoStartForUpdate.mockImplementationOnce(async () => {
-        if (phase === "suspension") {
+        if (phase === "package suspension") {
           await waitForSignal();
         }
+        taskSuspended = true;
         return true;
       });
-      if (phase === "schema preflight") {
-        vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-          packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
-        );
-        databasePreflightMocks.preflightOpenClawDatabaseSchemas
-          .mockReturnValueOnce({ incompatible: [], indeterminate: [] })
-          .mockImplementationOnce(async () => {
+      if (phase === "Git schema preflight") {
+        mockOwnedGitService();
+        serviceLoaded.mockResolvedValue(true);
+        vi.mocked(runGatewayUpdate).mockImplementationOnce(async (options) => {
+          await options?.beforeGitMutation?.({ schemaVersions: { state: 3, agent: 11 } });
+          gitMutation();
+          return makeOkUpdateResult({ mode: "git" });
+        });
+        databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(async () => {
+          if (taskSuspended) {
             await waitForSignal();
-            return { incompatible: [], indeterminate: [] };
-          });
+          }
+          return { incompatible: [], indeterminate: [] };
+        });
+      } else {
+        await mockPackageInstallAtCaseDir("openclaw-update-suspension-signal");
+        primeServiceCommand(["openclaw", "gateway", "run"], {
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        });
       }
       resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
-      await mockPackageInstallAtCaseDir("openclaw-update-suspension-signal");
-      primeServiceCommand(["openclaw", "gateway", "run"], {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-      });
       serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
 
       const updatePromise = updateCommand({ yes: true, restart: false });
@@ -7771,13 +7782,15 @@ describe("update-cli", () => {
         signalListener();
         signalListener();
         expect(resumeScheduledTaskAutoStartAfterUpdate).not.toHaveBeenCalled();
-        expect(packageInstallCommandCall()).toBeDefined();
+        expect(gitMutation).not.toHaveBeenCalled();
         gate.resolve();
 
         await updatePromise;
         expect(resumeScheduledTaskAutoStartAfterUpdate).toHaveBeenCalledOnce();
         expect(serviceStop).not.toHaveBeenCalled();
-        expect(packageInstallCommandCall()).toBeDefined();
+        expect(Boolean(packageInstallCommandCall())).toBe(phase === "package suspension");
+        expect(gitMutation).not.toHaveBeenCalled();
+        expect(freshRestartCalls()).toEqual([]);
         expect(listUpdateRuns({ limit: 1 })).toMatchObject([
           { phase: "finished", status: "skipped", reason: "cancelled" },
         ]);

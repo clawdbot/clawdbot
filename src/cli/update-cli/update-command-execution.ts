@@ -294,7 +294,10 @@ export async function executeMutableUpdate(params: {
       );
     }
     const config = snapshot.config;
-    const schemaPreflight = checkTargetDatabaseSchemas(params.packageTargetSchemaVersions, env);
+    const schemaPreflight = await checkTargetDatabaseSchemas(
+      params.packageTargetSchemaVersions,
+      env,
+    );
     if (hasSchemaRefusal(schemaPreflight)) {
       throw new UpdatePreMutationError(
         "database-schema-preflight",
@@ -372,7 +375,10 @@ export async function executeMutableUpdate(params: {
     } else {
       await stopManagedServiceBeforeMutableUpdate(roots);
     }
-    preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
+    // Git owns this fence after its post-stop schema check completes.
+    if (params.updateInstallKind === "package") {
+      preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
+    }
     params.onActivation?.();
   };
   try {

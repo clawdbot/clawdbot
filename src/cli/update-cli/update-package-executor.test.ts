@@ -257,7 +257,7 @@ describe("mutable update execution", () => {
     const pendingExecution = executeMutableUpdate(executionParams("package"));
     try {
       await vi.waitFor(() => expect(mocks.checkTargetSchemas).toHaveBeenCalledOnce());
-      expect(events).toEqual(["prepare", "stop", "schema"]);
+      expect(events).toEqual(["prepare", "inspect", "schema"]);
       expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
     } finally {
       schemaGate.resolve();

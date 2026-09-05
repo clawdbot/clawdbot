@@ -372,7 +372,7 @@ async function maybeSuspendWindowsTaskAutoStartForUpdate(params: {
     beginMutation: () => {
       // Async preflight may outlive a signal or settled recovery. Admit mutation
       // only while this owner can still keep native autostart suspended.
-      if (interrupted || !finishUpdate) {
+      if (interrupted || settlement || !finishUpdate) {
         throw new UpdateCommandAbort();
       }
       restoreAllowed = false;
