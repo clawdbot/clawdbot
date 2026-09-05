@@ -2171,7 +2171,6 @@ src/auto-reply/reply/session.ts	3
 src/auto-reply/reply/source-reply-delivery-runtime.ts	2
 src/auto-reply/reply/source-turn-id.ts	4
 src/auto-reply/reply/strip-inbound-meta.ts	4
-src/auto-reply/reply/system-event-session-key.ts	1
 src/auto-reply/templating.ts	1
 src/auto-reply/thinking.ts	1
 src/auto-reply/tokens.ts	1
@@ -2256,10 +2255,10 @@ src/channels/turn/lifecycle.ts	3
 src/channels/turn/route-dm-scope.ts	1
 src/channels/turn/run-channel-turn.ts	6
 src/claws/add.ts	7
-src/claws/cron.ts	15
+src/claws/cron.ts	13
 src/claws/doctor.ts	2
 src/claws/export.ts	8
-src/claws/lifecycle-delete-support.ts	7
+src/claws/lifecycle-delete-support.ts	5
 src/claws/mcp.ts	4
 src/claws/openclaw-profile.ts	1
 src/claws/package-update.ts	1
@@ -2572,7 +2571,6 @@ src/config/io.audit.ts	3
 src/config/io.clobber-snapshot.ts	2
 src/config/io.context.ts	1
 src/config/io.health-state.ts	1
-src/config/io.invalid-config.ts	1
 src/config/io.load.ts	2
 src/config/io.observe-recovery.ts	11
 src/config/io.observe.ts	1
@@ -3065,12 +3063,12 @@ src/infra/kysely-sync.ts	9
 src/infra/net/fetch-guard.ts	3
 src/infra/net/form-data.ts	2
 src/infra/net/node-proxy-agent.ts	4
-src/infra/net/proxy-fetch.ts	3
+src/infra/net/proxy-fetch.ts	2
 src/infra/net/proxy/proxy-validation.ts	1
 src/infra/net/runtime-fetch.ts	5
 src/infra/net/ssrf.ts	7
-src/infra/net/undici-dispatcher-options.ts	4
-src/infra/net/undici-global-dispatcher.ts	4
+src/infra/net/undici-dispatcher-options.ts	3
+src/infra/net/undici-global-dispatcher.ts	2
 src/infra/node-commands.ts	1
 src/infra/node-sqlite.ts	3
 src/infra/npm-managed-root.ts	8
@@ -3526,7 +3524,7 @@ src/projects/project-registry.ts	1
 src/provider-runtime/operation-retry.ts	3
 src/proxy-capture/env.ts	1
 src/proxy-capture/runtime.ts	10
-src/proxy-capture/store.sqlite.ts	23
+src/proxy-capture/store.sqlite.ts	16
 src/realtime-transcription/websocket-session.ts	2
 src/routing/binding-scope.ts	1
 src/runtime.ts	4

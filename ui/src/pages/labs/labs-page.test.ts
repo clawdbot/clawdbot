@@ -178,6 +178,12 @@ describe("LabsPage", () => {
       note: "labs: update codeMode",
     },
     {
+      label: "Lean tools for local models",
+      sourceConfig: { agents: { defaults: { experimental: { localModelLean: true } } } },
+      expectedPatch: { agents: { defaults: { experimental: { localModelLean: null } } } },
+      note: "labs: update localModelLean",
+    },
+    {
       label: "Custom plugin UI",
       sourceConfig: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
       expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: null } } } },
@@ -237,7 +243,7 @@ describe("LabsPage", () => {
       // Enabling must pin the mode: resolveToolSearchConfig defaults an unset
       // mode to "code", so a bare `enabled: true` would select the surface with
       // the weakest recall rather than the one this row advertises.
-      label: "Tool Search",
+      label: "Tool Search for all models",
       sourceConfig: { tools: { toolSearch: { enabled: false } } },
       expectedPatch: { tools: { toolSearch: { enabled: true, mode: "directory" } } },
       note: "labs: update toolSearch",
@@ -366,74 +372,6 @@ describe("LabsPage", () => {
     });
     expect(labRow(overridden.page, "Code Mode").textContent).toContain("Default: Disabled");
     expect(labRow(overridden.page, "Swarm").textContent).toContain("Default: Enabled");
-  });
-
-  it.each([{ model: "ollama/qwen3:8b" }, { model: { primary: "ollama/qwen3:8b", fallbacks: [] } }])(
-    "treats onboarding-owned local model lean as inherited for $model",
-    async ({ model }) => {
-      const { page } = await mountPage({
-        wizard: { localModelLeanAutoModel: "ollama/qwen3:8b" },
-        agents: {
-          defaults: {
-            model,
-            experimental: { localModelLean: true },
-          },
-        },
-      });
-      const row = labRow(page, "Lean tools for local models");
-
-      expect(row.textContent).toContain("Using default: Enabled");
-    },
-  );
-
-  it("releases onboarding ownership when local model lean is disabled", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      wizard: { localModelLeanAutoModel: "ollama/qwen3:8b" },
-      agents: {
-        defaults: {
-          model: "ollama/qwen3:8b",
-          experimental: { localModelLean: true },
-        },
-      },
-    });
-    const toggle = labToggle(page, "Lean tools for local models");
-
-    toggle.checked = false;
-    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: {
-        agents: { defaults: { experimental: { localModelLean: false } } },
-        wizard: { localModelLeanAutoModel: null },
-      },
-      note: "labs: update localModelLean",
-    });
-  });
-
-  it("clears a stale onboarding marker when restoring local model lean", async () => {
-    const { page, runtimeConfig } = await mountPage({
-      wizard: { localModelLeanAutoModel: "ollama/old-model" },
-      agents: {
-        defaults: {
-          model: "openai/gpt-5",
-          experimental: { localModelLean: true },
-        },
-      },
-    });
-
-    const toggle = labToggle(page, "Lean tools for local models");
-    toggle.checked = false;
-    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-
-    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
-    expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: {
-        agents: { defaults: { experimental: { localModelLean: null } } },
-        wizard: { localModelLeanAutoModel: null },
-      },
-      note: "labs: update localModelLean",
-    });
   });
 });
 
@@ -599,10 +537,15 @@ describe("LabsPage tool search enablement", () => {
     },
     { label: "boolean false", config: { tools: { toolSearch: false } }, expected: false },
     { label: "unset", config: {}, expected: false },
+    {
+      label: "local model without a global override",
+      config: { agents: { defaults: { model: "ollama/qwen3.5:4b" } } },
+      expected: false,
+    },
   ])("reads $label as $expected", async ({ config, expected }) => {
     const { page, provider } = await mountPage(config);
 
-    expect(labToggle(page, "Tool Search").checked).toBe(expected);
+    expect(labToggle(page, "Tool Search for all models").checked).toBe(expected);
     provider.remove();
   });
 
@@ -610,10 +553,10 @@ describe("LabsPage tool search enablement", () => {
     const { page, runtimeConfig } = await mountPage({
       tools: { toolSearch: { mode: "tools" } },
     });
-    const toggle = labToggle(page, "Tool Search");
+    const toggle = labToggle(page, "Tool Search for all models");
 
     expect(toggle.checked).toBe(true);
-    expect(labRow(page, "Tool Search").textContent).toContain("Default: Disabled");
+    expect(labRow(page, "Tool Search for all models").textContent).toContain("Default: Disabled");
     toggle.checked = false;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
@@ -628,7 +571,7 @@ describe("LabsPage tool search enablement", () => {
     const { page, runtimeConfig } = await mountPage({
       tools: { toolSearch: { enabled: false, mode: "tools" } },
     });
-    const toggle = labToggle(page, "Tool Search");
+    const toggle = labToggle(page, "Tool Search for all models");
 
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));

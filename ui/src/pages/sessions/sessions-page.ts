@@ -32,7 +32,6 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
-  scopedSessionPullRequestKey,
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
 } from "../../lib/session-pull-requests.ts";
@@ -57,6 +56,7 @@ import {
   canDeleteSessionRows,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
+  scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
 import {
   canCopySessionMarkdown,
@@ -1404,7 +1404,7 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     const store = sessionPullRequestsForGateway(scope.context.gateway);
-    const pullRequestKey = scopedSessionPullRequestKey(
+    const pullRequestKey = scopedSessionArtifactKey(
       row.key,
       this.sessionAgentId(row.key, scope.context),
     );

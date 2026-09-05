@@ -752,12 +752,18 @@ describe("chat pane connection lifecycle", () => {
       client: { request: vi.fn() } as unknown as GatewayBrowserClient,
       sessions: {} as SessionCapability,
     });
-    const lifecycle = pane as TestChatPane & { render: () => unknown };
+    const lifecycle = pane as TestChatPane & {
+      render: () => unknown;
+      readonly conversationPresented: boolean;
+    };
     lifecycle.render = () => null;
     const shell = document.createElement("openclaw-app-shell");
-    const paneCounts: number[] = [];
+    const presentations: Array<{ paneCount: number; conversationPresented: boolean }> = [];
     shell.addEventListener("openclaw-chat-pane-lifecycle-changed", () => {
-      paneCounts.push(shell.querySelectorAll("openclaw-chat-pane").length);
+      presentations.push({
+        paneCount: shell.querySelectorAll("openclaw-chat-pane").length,
+        conversationPresented: lifecycle.conversationPresented,
+      });
     });
     shell.append(pane);
     ChatPaneBase.prototype.connectedCallback.call(lifecycle);
@@ -765,7 +771,11 @@ describe("chat pane connection lifecycle", () => {
     pane.remove();
     ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
 
-    expect(paneCounts).toEqual([1, 0]);
+    expect(presentations).toEqual([
+      { paneCount: 1, conversationPresented: false },
+      { paneCount: 1, conversationPresented: true },
+      { paneCount: 0, conversationPresented: false },
+    ]);
   });
 
   it("renders once while initially hidden, then reconciles hidden invalidations", async () => {

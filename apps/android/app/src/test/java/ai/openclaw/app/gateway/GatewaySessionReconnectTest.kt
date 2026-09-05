@@ -707,6 +707,29 @@ class GatewaySessionReconnectTest {
     }
 
   @Test
+  fun connectedHelloScopesGlobalSessionsOnlyForTheCurrentConnection() =
+    runBlocking {
+      for (mainSessionKey in listOf("global", "agent:main:conversation")) {
+        val hello = CompletableDeferred<GatewayHelloSummary>()
+        val server =
+          startGatewayServer(json = Json { ignoreUnknownKeys = true }) { webSocket, id, method ->
+            if (method == "connect") webSocket.send(connectResponseFrame(id, mainSessionKey = mainSessionKey, mainKey = "conversation"))
+          }
+        val harness = createReconnectHarness(onHello = hello::complete)
+        try {
+          assertNull(harness.session.sessionRouting)
+          connectNodeSession(harness.session, server.port)
+          assertEquals(mainSessionKey, withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { hello.await() }.mainSessionKey)
+          assertEquals(GatewaySessionRouting(mainSessionKey, "conversation"), harness.session.sessionRouting)
+          harness.session.disconnectAndJoin()
+          assertNull(harness.session.sessionRouting)
+        } finally {
+          shutdownReconnectHarness(harness, server)
+        }
+      }
+    }
+
+  @Test
   fun connectedHelloKeepsMethodCatalogUnknownWhenHelloOmitsFeatures() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
@@ -1885,13 +1908,17 @@ class GatewaySessionReconnectTest {
     id: String,
     methods: Set<String>? = emptySet(),
     capabilities: Set<String> = emptySet(),
+    mainSessionKey: String = "main",
+    mainKey: String = "main",
   ): String {
+    val encodedMainSessionKey = JsonPrimitive(mainSessionKey)
+    val encodedMainKey = JsonPrimitive(mainKey)
     if (methods == null) {
-      return """{"type":"res","id":"$id","ok":true,"payload":{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}"""
+      return """{"type":"res","id":"$id","ok":true,"payload":{"snapshot":{"sessionDefaults":{"mainSessionKey":$encodedMainSessionKey,"mainKey":$encodedMainKey}}}}"""
     }
     val encodedMethods = methods.joinToString(",") { JsonPrimitive(it).toString() }
     val encodedCapabilities = capabilities.joinToString(",") { JsonPrimitive(it).toString() }
-    return """{"type":"res","id":"$id","ok":true,"payload":{"features":{"methods":[$encodedMethods],"capabilities":[$encodedCapabilities]},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}"""
+    return """{"type":"res","id":"$id","ok":true,"payload":{"features":{"methods":[$encodedMethods],"capabilities":[$encodedCapabilities]},"snapshot":{"sessionDefaults":{"mainSessionKey":$encodedMainSessionKey,"mainKey":$encodedMainKey}}}}"""
   }
 
   private fun startGatewayServer(

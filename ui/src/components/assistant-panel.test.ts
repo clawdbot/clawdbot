@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { RouteId } from "../app-route-paths.ts";
 import { chatInputOwnerForContext } from "../app/chat-input-owner.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../app/route-transition.ts";
@@ -62,6 +62,8 @@ async function mountPanel(options: { global?: boolean } = {}) {
     ...baseContext,
     sessions: createSessionCapability(baseContext.gateway, baseContext.agentSelection),
   };
+  // The app owns this capability; removing its panel does not stop subscription retries.
+  onTestFinished(() => context.sessions.dispose());
   const provider = createApplicationContextProvider(context);
   const store = new CustodianSessionStore();
   const panel = document.createElement("openclaw-assistant-panel") as TestAssistantPanel;

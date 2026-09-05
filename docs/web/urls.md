@@ -70,7 +70,11 @@ When an otherwise literal one-segment rest could be mistaken for a short id,
 the builder inserts `~key` before it, for example
 `agent:main:release-deadbeef` becomes
 `/chat/main/~key/release-deadbeef`. The marker forces literal interpretation
-and appears only when the unescaped form would be ambiguous.
+when a reference could otherwise be ambiguous. Builders also use it for the
+ordinary key `agent:research:global`, producing `/chat/research/~key/global`
+to distinguish it from the raw `global` home-session key, which uses
+`/chat/research`. Existing `/chat/research/global` literal links still resolve
+to `agent:research:global`.
 
 The reserved single-segment literal rest names are `main`, `global`, `boot`,
 and `sessions`. Exactly one segment after the agent id is literal when it is

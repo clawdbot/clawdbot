@@ -1344,6 +1344,7 @@ describe("scripts/changed-lanes", () => {
 
   it("targets mixed core, extension, script, and root test lint without full-owner fan-out", () => {
     const result = detectChangedLanes([
+      "config/assertion-safety-baseline.txt",
       "src/gateway/node-registry.ts",
       "extensions/lmstudio/src/models.fetch.ts",
       "scripts/check-changed.mjs",
@@ -1392,6 +1393,7 @@ describe("scripts/changed-lanes", () => {
       ]),
     );
     const commandNames = plan.commands.map((command) => command.args[0]);
+    expect(commandNames).toContain("check:assertion-safety");
     for (const fullLane of ["lint:core", "lint:extensions", "lint:scripts"]) {
       expect(commandNames).not.toContain(fullLane);
     }
@@ -1689,6 +1691,7 @@ describe("scripts/changed-lanes", () => {
     expect(
       createTargetedCoreLintCommand(
         [
+          "config/assertion-safety-baseline.txt",
           "config/tsconfig/oxlint.core.json",
           "packages/normalization-core/src/string-normalization.ts",
         ],
@@ -1703,6 +1706,7 @@ describe("scripts/changed-lanes", () => {
       name: "targets small core lint diffs",
       create: createTargetedCoreLintCommand,
       targets: [
+        "config/assertion-safety-baseline.txt",
         ".github/workflows/ci.yml",
         "scripts/check-changed.mjs",
         "src/agents/auth-profiles/usage.ts",
@@ -1717,7 +1721,11 @@ describe("scripts/changed-lanes", () => {
     {
       name: "targets small extension lint diffs",
       create: createTargetedExtensionLintCommand,
-      targets: ["extensions/lmstudio/src/model-reasoning.ts", "docs/help/testing.md"],
+      targets: [
+        "config/assertion-safety-baseline.txt",
+        "extensions/lmstudio/src/model-reasoning.ts",
+        "docs/help/testing.md",
+      ],
       expected: {
         name: "lint extension changed file",
         tsconfig: "extensions/tsconfig.json",
@@ -1727,7 +1735,11 @@ describe("scripts/changed-lanes", () => {
     {
       name: "targets small script lint diffs",
       create: createTargetedScriptLintCommand,
-      targets: ["scripts/check-changed.mjs", "test/scripts/changed-lanes.test.ts"],
+      targets: [
+        "config/assertion-safety-baseline.txt",
+        "scripts/check-changed.mjs",
+        "test/scripts/changed-lanes.test.ts",
+      ],
       expected: {
         name: "lint script changed file",
         tsconfig: "config/tsconfig/oxlint.scripts.json",

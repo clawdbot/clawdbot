@@ -219,6 +219,11 @@ data class GatewayHelloSummary(
   val capabilities: Set<String>? = null,
 )
 
+internal data class GatewaySessionRouting(
+  val mainSessionKey: String?,
+  val mainKey: String?,
+)
+
 data class GatewayUpdateAvailableSummary(
   val currentVersion: String?,
   val latestVersion: String?,
@@ -383,7 +388,8 @@ class GatewaySession(
 
   @Volatile private var pluginSurfaceUrls: Map<String, String> = emptyMap()
 
-  @Volatile private var mainSessionKey: String? = null
+  @Volatile internal var sessionRouting: GatewaySessionRouting? = null
+    private set
 
   private class DesiredConnection(
     val endpoint: GatewayEndpoint,
@@ -478,7 +484,7 @@ class GatewaySession(
           synchronized(notificationLock) {
             if (desired == null) {
               pluginSurfaceUrls = emptyMap()
-              mainSessionKey = null
+              sessionRouting = null
               onDisconnected("Offline")
             }
           }
@@ -929,7 +935,7 @@ class GatewaySession(
 
   private data class ConnectedGateway(
     val pluginSurfaceUrls: Map<String, String>,
-    val mainSessionKey: String?,
+    val sessionRouting: GatewaySessionRouting,
     val hello: GatewayHelloSummary,
   )
 
@@ -1534,7 +1540,7 @@ class GatewaySession(
       val nextMainSessionKey = sessionDefaults?.get("mainSessionKey").asStringOrNull()
       return ConnectedGateway(
         pluginSurfaceUrls = nextPluginSurfaceUrls,
-        mainSessionKey = nextMainSessionKey,
+        sessionRouting = GatewaySessionRouting(nextMainSessionKey, sessionDefaults?.get("mainKey").asStringOrNull()),
         hello =
           GatewayHelloSummary(
             serverName = serverName,
@@ -1953,7 +1959,7 @@ class GatewaySession(
             if (currentConnection !== conn || desired !== target || job?.isActive != true || !conn.markReady()) return@withContext
             // Ready metadata precedes callbacks; retries requested by a callback remain queued.
             pluginSurfaceUrls = connected.pluginSurfaceUrls
-            mainSessionKey = connected.mainSessionKey
+            sessionRouting = connected.sessionRouting
             drainReconnectSignals()
             onConnected(connected.hello)
           }
@@ -1970,7 +1976,7 @@ class GatewaySession(
           if (currentConnection === conn) {
             currentConnection = null
             pluginSurfaceUrls = emptyMap()
-            mainSessionKey = null
+            sessionRouting = null
           }
         }
       }
