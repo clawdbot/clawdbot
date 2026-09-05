@@ -709,88 +709,94 @@ describe("memory index", () => {
     }
   });
 
-  it("keeps transient CLI search off the serving manager write path", async () => {
+  it("refreshes added, edited, and deleted memory files before each standalone CLI search", async () => {
+    providerFixture.forceNoProvider = true;
+    const cfg = createCfg({ provider: "none", sources: ["memory"], minScore: 0 });
+    const initialManager = await getFreshManager(cfg, "cli");
+    await initialManager.sync({ reason: "test" });
+    await initialManager.close();
+    const file = path.join(fixture.paths.memory, "cli-refresh.md");
+    for (const content of ["quartz", "cobalt", null]) {
+      if (content === null) {
+        await fs.unlink(file);
+      } else {
+        await fs.writeFile(file, `${content} standalone memory refresh.`);
+      }
+      const manager = await getFreshManager(cfg, "cli", true);
+      try {
+        const results = await manager.search(content ?? "cobalt", { minScore: 0 });
+        expect(results.some((entry) => entry.path === "memory/cli-refresh.md")).toBe(
+          content !== null,
+        );
+        if (content === "cobalt") {
+          expect(await manager.search("quartz", { minScore: 0 })).toEqual([]);
+        }
+        expect(manager.status().dirty).toBe(false);
+      } finally {
+        await manager.close();
+      }
+    }
+  });
+
+  it("refreshes newly discovered session transcripts before standalone CLI search", async () => {
     providerFixture.forceNoProvider = true;
     const cfg = createCfg({
       provider: "none",
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
       minScore: 0,
-      onSearch: false,
-      hybrid: { enabled: true },
     });
     const initialManager = await getFreshManager(cfg, "cli");
-    await initialManager.sync({ reason: "test", force: true });
-    await initialManager.close?.();
-    await fs.writeFile(
-      path.join(fixture.paths.memory, "cli-refresh.md"),
-      "Content published after transient CLI maintenance.",
-    );
-
-    const manager = await getFreshManager(cfg, "cli", true);
-    const servingFields = manager as unknown as {
-      syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
-    };
-    Reflect.set(manager, "dirty", true);
-    Reflect.set(manager, "memoryFullRetryDirty", true);
-    const servingSync = vi.spyOn(servingFields, "syncMemoryFiles");
-    const maintenanceReady = createDeferred<void>();
-    const releaseMaintenance = createDeferred<void>();
-    let closePromise: Promise<void> | undefined;
-    let maintenanceClosed = false;
-    const originalGet = MemoryIndexManager.get.bind(MemoryIndexManager);
-    const getSpy = vi.spyOn(MemoryIndexManager, "get").mockImplementation(async (params) => {
-      const acquired = await originalGet(params);
-      if (params.purpose !== "maintenance" || !acquired) {
-        return acquired;
-      }
-      const closeMaintenance = acquired.close.bind(acquired);
-      vi.spyOn(acquired, "close").mockImplementation(async () => {
-        await closeMaintenance();
-        maintenanceClosed = true;
-      });
-      const fields = acquired as unknown as {
-        syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
-      };
-      const syncMemoryFiles = fields.syncMemoryFiles.bind(acquired);
-      vi.spyOn(fields, "syncMemoryFiles").mockImplementation(async (syncParams) => {
-        const result = await syncMemoryFiles(syncParams);
-        maintenanceReady.resolve();
-        await releaseMaintenance.promise;
-        return result;
-      });
-      return acquired;
+    await initialManager.sync({ reason: "test" });
+    await initialManager.close();
+    await seedMemoryIndexSessionTranscript({
+      sessionId: "cli-fresh-transcript",
+      messages: [{ role: "user", timestamp: Date.now(), content: "cinnabar transcript discovery" }],
     });
-
-    try {
-      const search = manager.search("zebra", {
-        maxResults: 5,
-        minScore: 0,
-        sessionKey: "agent:main:cli:memory-search",
-      });
-      await vi.waitFor(() =>
-        expect(getSpy).toHaveBeenCalledWith(expect.objectContaining({ purpose: "maintenance" })),
-      );
-      await maintenanceReady.promise;
-      const results = await search;
-
-      expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
-      expect(servingSync).not.toHaveBeenCalled();
-      if (typeof manager.close !== "function") {
-        throw new Error("Expected CLI memory manager close support");
-      }
-      closePromise = manager.close();
-      let closeSettled = false;
-      void closePromise.then(() => {
-        closeSettled = true;
-      });
-      await vi.waitFor(() => expect(closeSettled).toBe(true));
-      expect(maintenanceClosed).toBe(false);
-    } finally {
-      releaseMaintenance.resolve();
-      await closePromise;
-      getSpy.mockRestore();
-      await manager.close?.();
-    }
+    const manager = await getFreshManager(cfg, "cli", true);
+    const results = await manager.search("cinnabar", { minScore: 0 });
+    expect(
+      results.some((entry) => entry.source === "sessions" && entry.snippet.includes("cinnabar")),
+    ).toBe(true);
+    expect(manager.status().dirty).toBe(false);
   });
+
+  it.each(["memory", "sessions"] as const)(
+    "refreshes ordinary CLI changes alongside a %s full retry",
+    async (fullRetrySource) => {
+      providerFixture.forceNoProvider = true;
+      const cfg = createCfg({
+        provider: "none",
+        sources: ["memory", "sessions"],
+        sessionMemory: true,
+        minScore: 0,
+      });
+      const initialManager = await getFreshManager(cfg, "cli");
+      await initialManager.sync({ reason: "test" });
+      await initialManager.close();
+      await fs.writeFile(path.join(fixture.paths.memory, "cli-mixed.md"), "cobalt mixed refresh");
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "cli-mixed-transcript",
+        messages: [{ role: "user", timestamp: Date.now(), content: "cinnabar mixed refresh" }],
+      });
+      const manager = await getFreshManager(cfg, "cli", true);
+      Reflect.set(
+        manager,
+        fullRetrySource === "memory" ? "memoryFullRetryDirty" : "sessionsFullRetryDirty",
+        true,
+      );
+      const ordinaryQuery = fullRetrySource === "memory" ? "cinnabar" : "cobalt";
+      try {
+        const results = await manager.search(ordinaryQuery, { minScore: 0 });
+        expect(results.some((entry) => entry.snippet.includes(ordinaryQuery))).toBe(true);
+        expect(manager.status().dirty).toBe(false);
+      } finally {
+        const pending = Reflect.get(manager, "activeBackgroundMaintenance") as Set<Promise<void>>;
+        await Promise.allSettled(pending);
+        await manager.close();
+      }
+    },
+  );
 
   it.each([
     {

@@ -81,7 +81,8 @@ export abstract class MemoryManagerLifecycleOps extends MemoryKeywordRetrieval {
             settings: this.settings,
             concurrency: this.getIndexConcurrency(),
           });
-          this.sourceInspections.set("memory", inspection);
+          // Lifecycle drift checks must not opt interactive status calls into
+          // explicit diagnostics and their storage payload scans.
           if (inspection.dirty) {
             this.dirty = true;
           }

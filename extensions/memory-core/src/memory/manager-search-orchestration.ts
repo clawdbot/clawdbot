@@ -215,8 +215,23 @@ export abstract class MemorySearchOrchestration extends MemoryManagerLifecycleOp
       if (repairedIndexIdentity.status !== "valid") {
         return [];
       }
+      if (
+        this.purpose === "cli" &&
+        searchSyncEnabled &&
+        (this.dirty ||
+          this.sessionsDirty ||
+          this.memoryFullRetryDirty ||
+          this.sessionsFullRetryDirty)
+      ) {
+        // Standalone CLI managers have no watcher or lifecycle sweep to consume
+        // source drift. Finish their admitted refresh before taking a read lease,
+        // including ordinary changes alongside either source's full retry.
+        await this.syncAdmitted({ reason: "search" }).catch((err: unknown) => {
+          log.warn(`memory sync failed (cli-search): ${formatErrorMessage(err)}`);
+        });
+      }
       const backgroundSearchSync = startAsyncSearchSync({
-        enabled: searchSyncEnabled,
+        enabled: searchSyncEnabled && this.purpose === "default",
         memoryFullRetryDirty: this.memoryFullRetryDirty,
         sessionsFullRetryDirty: this.sessionsFullRetryDirty,
         sync: async (params) => await this.syncPublishedIndexInBackground(params),
