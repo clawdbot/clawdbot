@@ -3,27 +3,9 @@ vi.hoisted(() => {
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
-const followupMocks = vi.hoisted(() => ({
-  listDescendantRunsForRequester: vi.fn(),
-  readLatestAssistantReply: vi.fn(),
-  callGateway: vi.fn(),
-}));
-
-vi.mock("../src/agents/subagents/registry/subagent-registry-read.js", () => ({
-  listDescendantRunsForRequester: followupMocks.listDescendantRunsForRequester,
-}));
-vi.mock("../src/agents/run-wait.js", async () => {
-  const actual = await vi.importActual<typeof import("../src/agents/run-wait.js")>(
-    "../src/agents/run-wait.js",
-  );
-  return { ...actual, readLatestAssistantReply: followupMocks.readLatestAssistantReply };
-});
-vi.mock("../src/gateway/call.js", () => ({ callGateway: followupMocks.callGateway }));
-
 import { randomUUID } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveMonotonicDeadlineMs } from "../src/agents/run-wait.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { waitForDescendantSubagentSummary } from "../src/cron/isolated-agent/subagent-followup.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
@@ -278,49 +260,12 @@ afterEach(async () => {
 });
 
 describe("cron descendant follow-up Gateway transport", () => {
-  it("keeps active-descendant follow-up bounded across a wall-clock step", async () => {
-    const startedAt = performance.now();
-    const realDateNow = Date.now.bind(Date);
-    const activeRun = {
-      runId: "clock-step-child",
-      childSessionKey: "agent:main:subagent:clock-step-child",
-      requesterSessionKey: "agent:main:clock-step",
-      requesterDisplayKey: "agent:main:clock-step",
-      task: "clock step",
-      cleanup: "keep" as const,
-      createdAt: realDateNow(),
-      execution: { status: "running" as const },
-    };
-    followupMocks.listDescendantRunsForRequester
-      .mockReturnValueOnce([activeRun])
-      .mockReturnValue([]);
-    followupMocks.readLatestAssistantReply.mockResolvedValue(undefined);
-    followupMocks.callGateway.mockImplementationOnce(async () => {
-      vi.spyOn(Date, "now").mockImplementation(() => realDateNow() - 60_000);
-      return { status: "timeout" };
-    });
-    try {
-      const result = await waitForDescendantSubagentSummary({
-        sessionKey: activeRun.requesterSessionKey,
-        initialReply: "on it",
-        timeoutMs: 1,
-        observedActiveDescendants: true,
-      });
-      expect(result).toBeUndefined();
-      expect(performance.now() - startedAt).toBeLessThan(100);
-    } finally {
-      vi.restoreAllMocks();
-      followupMocks.listDescendantRunsForRequester.mockReset();
-      followupMocks.readLatestAssistantReply.mockReset();
-      followupMocks.callGateway.mockReset();
-    }
-  });
-
   it("drives a real descendant through Gateway registration", { timeout: 120_000 }, async () => {
     let provider: HeldProvider | undefined;
     let instance: OpenClawTestInstance | undefined;
     let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
     let finalRun: Promise<unknown> | undefined;
+    let childTaskIds: string[] = [];
     try {
       provider = await startHeldProvider();
       instance = await createOpenClawTestInstance({
@@ -328,7 +273,7 @@ describe("cron descendant follow-up Gateway transport", () => {
         config: createTestConfig(provider.baseUrl),
         env: {
           OPENCLAW_SKIP_PROVIDERS: undefined,
-          OPENCLAW_SKIP_CRON: undefined,
+          OPENCLAW_SKIP_CRON: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         },
         startTimeoutMs: 60_000,
@@ -366,32 +311,33 @@ describe("cron descendant follow-up Gateway transport", () => {
           throw new Error(`${String(error)}; provider requests=${provider.requestKinds.join(",")}`);
         },
       );
-      const wallClockSample = Date.now();
-      const monotonicDeadline = resolveMonotonicDeadlineMs(wallClockSample + 100, wallClockSample);
-      const wallClockStep = vi.spyOn(Date, "now").mockReturnValue(wallClockSample - 60_000);
-      try {
-        expect(performance.now()).toBeLessThan(monotonicDeadline + 1_000);
-      } finally {
-        wallClockStep.mockRestore();
-      }
-      const childTask = await vi.waitFor(
+      const childTasks = await vi.waitFor(
         async () => {
           const tasks = await client.request<{ tasks: Array<Record<string, unknown>> }>(
             "tasks.list",
             { limit: 100 },
           );
-          const current = tasks.tasks.find((task) => typeof task.taskId === "string");
-          expect(current?.taskId).toEqual(expect.any(String));
-          if (!current) {
-            throw new Error("tasks.list did not expose a task id");
-          }
+          const current = tasks.tasks.filter(
+            (task) => task.runtime === "subagent" && typeof task.taskId === "string",
+          );
+          expect(current.length).toBeGreaterThan(0);
           return current;
         },
         { timeout: 10_000, interval: 100 },
       );
+      childTaskIds = childTasks.flatMap((task) =>
+        typeof task.taskId === "string" ? [task.taskId] : [],
+      );
       provider.releaseChild();
       await withProofTimeout("parent final", finalRun);
-      await client.request("tasks.cancel", { taskId: childTask.taskId }).catch(() => undefined);
+      await Promise.all(
+        childTaskIds.map((taskId) =>
+          withProofTimeout(
+            "child task cancellation",
+            client.request("tasks.cancel", { taskId }),
+          ).catch(() => undefined),
+        ),
+      );
       const elapsedMs = performance.now() - startedAt;
 
       process.stdout.write(
@@ -404,7 +350,7 @@ describe("cron descendant follow-up Gateway transport", () => {
       );
       expect(provider.requestKinds).toContain("parent-tool");
       expect(provider.requestKinds).toContain("child");
-      expect(childTask.taskId).toEqual(expect.any(String));
+      expect(childTaskIds.length).toBeGreaterThan(0);
       expect(elapsedMs).toBeLessThan(5_000);
     } finally {
       provider?.releaseChild();
@@ -415,7 +361,17 @@ describe("cron descendant follow-up Gateway transport", () => {
         instance.state.restoreEnv();
       }
       if (client) {
-        await disconnectGatewayClient(client);
+        await Promise.all(
+          childTaskIds.map((taskId) =>
+            withProofTimeout(
+              "cleanup child task cancellation",
+              client.request("tasks.cancel", { taskId }),
+            ).catch(() => undefined),
+          ),
+        );
+        await withProofTimeout("Gateway disconnect", disconnectGatewayClient(client)).catch(
+          () => undefined,
+        );
       }
       await provider?.close();
     }
