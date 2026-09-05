@@ -342,8 +342,12 @@ that mandatory join cannot be abandoned at the append deadline.
 
 Reclamation page maintenance uses a PASSIVE checkpoint and at most 512 pages of
 incremental vacuum per pass. PASSIVE does not wait for readers, but does not cap
-the number of WAL frames copied. Full logical deletion with resumable physical
-cleanup remains a separate design; existing deletion visibility and rollback
+the number of WAL frames copied. Before pruning retained archives, disk-budget
+enforcement drains the initially observed free pages in units of at most 512,
+yields between units, and reacquires the database owner after each yield. It
+preserves physical checkpointing before measuring pressure, so unreclaimed pages
+do not cause unnecessary archive deletion. Full logical deletion with resumable
+physical cleanup remains a separate design; existing deletion visibility and rollback
 semantics are unchanged.
 
 ### Preserve the data and concurrency contracts

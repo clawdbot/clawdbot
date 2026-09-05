@@ -1,7 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -16,6 +18,7 @@ import {
   appendTranscriptEventSync,
   replaceTranscriptEventsSync,
 } from "./session-accessor.sqlite-transcript-write.js";
+import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 
 const hooks = vi.hoisted(() => ({ beforeAuthorization: undefined as (() => void) | undefined }));
 vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
@@ -161,4 +164,21 @@ test("one reclamation pass leaves a large freelist for bounded later maintenance
       value: true,
     });
   }
+  const budgetBefore = freePages();
+  const databaseOptions = plan.databaseOptions;
+  const duringDrain = yieldToEventLoop().then(() => {
+    expect(budgetBefore - freePages()).toBeGreaterThan(0);
+    expect(budgetBefore - freePages()).toBeLessThanOrEqual(512);
+    expect(database.db.isTransaction).toBe(false);
+    closeOpenClawAgentDatabaseByPath(database.path);
+    for (const scope of scopes) {
+      expect(appendTranscriptEventSync(scope, { type: "budget-progress" })).toEqual({
+        ok: true,
+        value: true,
+      });
+    }
+  });
+  await Promise.all([reclaimSqliteFreePages(databaseOptions), duringDrain]);
+  const reopened = openOpenClawAgentDatabase(databaseOptions);
+  expect(Number(reopened.db.prepare("PRAGMA freelist_count").get()?.freelist_count)).toBe(0);
 });
