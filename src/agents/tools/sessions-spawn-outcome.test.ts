@@ -1,6 +1,6 @@
 import { realpath } from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
@@ -20,7 +20,7 @@ import { buildPayloads } from "../embedded-agent-runner/run/payloads.test-helper
 import { isToolResultError, registerTrustedToolNoStartError } from "../tool-result-error.js";
 import { snapshotToolSearchTargetTranscriptResult } from "../tool-search-transcript.js";
 import { createToolTerminalObserver } from "../tool-terminal-outcome.js";
-import type { InProcessGatewayCaller } from "./in-process-gateway.js";
+import * as inProcessGateway from "./in-process-gateway.js";
 import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 
 const report = "Seven blue boxes remain. Thursday delivery is confirmed.";
@@ -95,6 +95,8 @@ function observeRecoveredSpawn(result: unknown, mutatingAction: boolean) {
 }
 
 describe("sessions_spawn terminal effects", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it.each([
     { name: "target policy", args: { agentId: "excluded" } },
     { name: "invalid agent id", args: { agentId: "bad/name" } },
@@ -107,7 +109,7 @@ describe("sessions_spawn terminal effects", () => {
       subagents: { requireAgentId: true },
     },
   ])("keeps recovered $name rejection out of heartbeat failure", async (testCase) => {
-    const callGateway = vi.fn<InProcessGatewayCaller>();
+    const callGateway = vi.spyOn(inProcessGateway, "callInProcessGatewayTool");
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       config: {
@@ -117,7 +119,7 @@ describe("sessions_spawn terminal effects", () => {
           defaults: { subagents: { maxChildrenPerAgent: 1, ...testCase.subagents } },
         },
       },
-      callGateway,
+      callGateway: inProcessGateway.callInProcessGatewayTool,
       countActiveRuns: () => testCase.activeChildren ?? 0,
     });
     const result = await tool.execute("spawn", {
@@ -198,7 +200,7 @@ describe("sessions_spawn terminal effects", () => {
   it("rejects a sandbox cwd before reserving or creating a child", async () => {
     await withTestDir({ prefix: "spawn-outcome-" }, async (dir) => {
       const workspace = await realpath(dir);
-      const callGateway = vi.fn<InProcessGatewayCaller>();
+      const callGateway = vi.spyOn(inProcessGateway, "callInProcessGatewayTool");
       const tool = createSessionsSpawnTool({
         agentSessionKey: "agent:main:main",
         config: {
@@ -207,7 +209,7 @@ describe("sessions_spawn terminal effects", () => {
             list: [{ id: "main", workspace }],
           },
         },
-        callGateway,
+        callGateway: inProcessGateway.callInProcessGatewayTool,
         countActiveRuns: () => 0,
       });
       const result = await tool.execute("spawn", {
@@ -228,11 +230,13 @@ describe("sessions_spawn terminal effects", () => {
       if (nestedNoStart) {
         registerTrustedToolNoStartError(failure);
       }
-      const callGateway = vi.fn<InProcessGatewayCaller>().mockRejectedValue(failure);
+      const callGateway = vi
+        .spyOn(inProcessGateway, "callInProcessGatewayTool")
+        .mockRejectedValue(failure);
       const tool = createSessionsSpawnTool({
         agentSessionKey: "agent:main:main",
         config,
-        callGateway,
+        callGateway: inProcessGateway.callInProcessGatewayTool,
         countActiveRuns: () => 0,
       });
       const error = await tool
@@ -245,8 +249,7 @@ describe("sessions_spawn terminal effects", () => {
   );
 
   it("preserves a failure after a child run was created", async () => {
-    const callGateway = vi
-      .fn<InProcessGatewayCaller>()
+    vi.spyOn(inProcessGateway, "callInProcessGatewayTool")
       .mockResolvedValueOnce({
         key: "agent:main:dashboard:child",
         sessionId: "child",
@@ -260,7 +263,7 @@ describe("sessions_spawn terminal effects", () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       config,
-      callGateway,
+      callGateway: inProcessGateway.callInProcessGatewayTool,
       registerRun,
       countActiveRuns: () => 0,
     });
@@ -274,7 +277,7 @@ describe("sessions_spawn terminal effects", () => {
   });
 
   it("records a successful allowed spawn as a committed mutation", async () => {
-    const callGateway = vi.fn<InProcessGatewayCaller>().mockResolvedValue({
+    vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockResolvedValue({
       key: "agent:main:dashboard:child",
       sessionId: "child",
       runId: "child-run",
@@ -283,7 +286,7 @@ describe("sessions_spawn terminal effects", () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       config,
-      callGateway,
+      callGateway: inProcessGateway.callInProcessGatewayTool,
       registerRun: vi.fn(),
       countActiveRuns: () => 0,
     });
