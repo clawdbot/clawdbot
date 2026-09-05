@@ -61,11 +61,14 @@ it.each(["bulk", "admin"] as const)(
       });
     }
     const interrupted: string[] = [];
-    const firstInterrupted = createDeferred<void>();
+    const firstInterrupted = createDeferred();
     const leases: SessionWorkAdmissionLease[] = [];
-    const handles = running.map((runId) => createEmbeddedRunHandle({ runId }));
-    for (const [index, runId] of running.entries()) {
-      setActiveEmbeddedRun(`${runId}-session`, handles[index], sessionKey(runId));
+    const activeRuns = running.map((runId) => ({
+      runId,
+      handle: createEmbeddedRunHandle({ runId }),
+    }));
+    for (const { runId, handle } of activeRuns) {
+      setActiveEmbeddedRun(`${runId}-session`, handle, sessionKey(runId));
       leases.push(
         await beginSessionWorkAdmission({
           scope: storePath,
@@ -119,8 +122,8 @@ it.each(["bulk", "admin"] as const)(
         lease.release();
       }
       await pending;
-      for (const [index, runId] of running.entries()) {
-        clearActiveEmbeddedRun(`${runId}-session`, handles[index], sessionKey(runId));
+      for (const { runId, handle } of activeRuns) {
+        clearActiveEmbeddedRun(`${runId}-session`, handle, sessionKey(runId));
       }
       expect(getActiveSessionWorkAdmissionCount()).toBe(0);
       expect(getActiveSessionLifecycleMutationCount()).toBe(0);
@@ -173,9 +176,9 @@ it.each(["after interrupt", "before capacity release"] as const)(
       start: unrelatedStart,
       onStartFailure: startFailure,
     });
-    const aInterrupted = createDeferred<void>();
-    const bInterrupted = createDeferred<void>();
-    const bReleased = createDeferred<void>();
+    const aInterrupted = createDeferred();
+    const bInterrupted = createDeferred();
+    const bReleased = createDeferred();
     const admissionA = await beginSessionWorkAdmission({
       scope: storePath,
       identities: [key("a"), "a-session"],

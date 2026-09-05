@@ -81,10 +81,10 @@ test.each([false, true])(
 
     const socket = await gateway.openWs();
     const parentStarted = createDeferred<AgentCommandOpts>();
-    const parentFinish = createDeferred<void>();
+    const parentFinish = createDeferred();
     const leases: SessionWorkAdmissionLease[] = [];
     const interrupted: string[] = [];
-    const firstInterrupted = createDeferred<void>();
+    const firstInterrupted = createDeferred();
     const slotReleaseResults: boolean[] = [];
     const start = vi.fn(async () => {});
     let parentRequestId: string | undefined;
@@ -235,7 +235,8 @@ test.each([false, true])(
         const tasks = [...persistedTasks.snapshot.tasks.values()].filter((task) =>
           selected.includes(task.runId ?? ""),
         );
-        expect(tasks.map((task) => task.runId).toSorted()).toEqual(selected.toSorted());
+        expect(tasks).toHaveLength(selected.length);
+        expect(tasks.map((task) => task.runId)).toEqual(expect.arrayContaining(selected));
         expect([...persistedRuns.keys()].toSorted()).toEqual(selected.toSorted());
         for (const runId of selected) {
           const task = tasks.find((candidate) => candidate.runId === runId)!;
