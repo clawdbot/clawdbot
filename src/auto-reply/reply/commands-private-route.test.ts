@@ -11,6 +11,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { MsgContext } from "../templating.js";
 import {
+  resolveCommandExecApprovalRoute,
   resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
 } from "./commands-private-route.js";
@@ -148,6 +149,31 @@ function buildApprovalRequest(): ExecApprovalRequest {
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+});
+
+describe("resolveCommandExecApprovalRoute", () => {
+  it("preserves origin reviewer custody when delivery moves to a private target", () => {
+    const commandParams = buildCommandParams({} as OpenClawConfig);
+    commandParams.ctx.ApprovalReviewerDeviceId = "  device-origin-reviewer  ";
+
+    expect(
+      resolveCommandExecApprovalRoute({
+        commandParams,
+        privateApprovalTarget: {
+          channel: "telegram",
+          to: "849985193",
+          accountId: "telegram-owner-account",
+          threadId: 42,
+        },
+      }),
+    ).toEqual({
+      messageProvider: "telegram",
+      currentChannelId: "849985193",
+      currentThreadTs: "42",
+      accountId: "telegram-owner-account",
+      approvalReviewerDeviceId: "device-origin-reviewer",
+    });
+  });
 });
 
 describe("resolvePrivateCommandApprovalRouteExpiresAtMs", () => {

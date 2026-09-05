@@ -9,10 +9,12 @@ import path from "node:path";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import { resolveCommandExecApprovalRoute } from "../auto-reply/reply/commands-private-route.js";
+import type { HandleCommandsParams } from "../auto-reply/reply/commands-types.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../gateway/method-scopes.js";
 import { startGatewayServer } from "../gateway/server.js";
 import {
   connectGatewayClient,
@@ -20,11 +22,13 @@ import {
   getGatewayE2ePortBlock,
 } from "../gateway/test-helpers.e2e.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-types.js";
+import { createExecTool } from "./bash-tools.js";
 
 const TEST_ENV_KEYS = [
   "HOME",
@@ -135,6 +139,39 @@ describe("gateway-hosted exec approvals", () => {
       });
       cleanup.push(() => disconnectGatewayClient(operator));
 
+      const originReviewerIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(stateDir, "test-device-identities", "origin-reviewer.sqlite"),
+      });
+      const otherReviewerIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(stateDir, "test-device-identities", "other-reviewer.sqlite"),
+      });
+      const originReviewer = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token,
+        clientName: GATEWAY_CLIENT_NAMES.TEST,
+        clientDisplayName: "origin approval reviewer",
+        mode: GATEWAY_CLIENT_MODES.TEST,
+        scopes: [APPROVALS_SCOPE],
+        caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
+        deviceIdentity: originReviewerIdentity,
+        requestTimeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+        timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+      });
+      cleanup.push(() => disconnectGatewayClient(originReviewer));
+      const otherReviewer = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token,
+        clientName: GATEWAY_CLIENT_NAMES.TEST,
+        clientDisplayName: "other approval reviewer",
+        mode: GATEWAY_CLIENT_MODES.TEST,
+        scopes: [APPROVALS_SCOPE],
+        caps: [GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
+        deviceIdentity: otherReviewerIdentity,
+        requestTimeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+        timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+      });
+      cleanup.push(() => disconnectGatewayClient(otherReviewer));
+
       let resolveOutcome: (outcome: ExecApprovalFollowupOutcome) => void = () => {};
 
       const tools = createOpenClawCodingTools({
@@ -199,6 +236,63 @@ describe("gateway-hosted exec approvals", () => {
       expect(outcome.status).toBe("completed");
       expect(outcome.exitCode).toBe(0);
       expect(outcome.aggregated).toBe("smoke");
+
+      const commandRoute = resolveCommandExecApprovalRoute({
+        commandParams: {
+          command: { channel: "webchat", from: "owner", to: "owner" },
+          ctx: {
+            ApprovalReviewerDeviceId: originReviewerIdentity.deviceId,
+            OriginatingTo: "owner",
+          },
+        } as HandleCommandsParams,
+      });
+      let resolveRoutedOutcome: (outcome: ExecApprovalFollowupOutcome) => void = () => {};
+      const routedOutcomePromise = new Promise<ExecApprovalFollowupOutcome>((resolve) => {
+        resolveRoutedOutcome = resolve;
+      });
+      const routedTool = createExecTool({
+        host: "gateway",
+        security: "allowlist",
+        ask: "always",
+        allowBackground: true,
+        approvalRunningNoticeMs: 0,
+        approvalFollowupMode: "direct",
+        approvalFollowup: ({ outcome: routedOutcome }) => {
+          resolveRoutedOutcome(routedOutcome);
+          return undefined;
+        },
+        cwd: workspaceDir,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        ...commandRoute,
+      });
+      const routedPending = await routedTool.execute("exec-approval-device-custody", {
+        command: "printf 'device-bound-smoke\\n'",
+        workdir: workspaceDir,
+        background: true,
+        timeoutSeconds: 5,
+      });
+      const routedApprovalId = requireApprovalId(routedPending.details);
+
+      await expect(
+        otherReviewer.request(
+          "exec.approval.resolve",
+          { id: routedApprovalId, decision: "allow-once" },
+          { timeoutMs: 10_000 },
+        ),
+      ).rejects.toThrow("unknown or expired approval id");
+      await originReviewer.request(
+        "exec.approval.resolve",
+        { id: routedApprovalId, decision: "allow-once" },
+        { timeoutMs: 10_000 },
+      );
+
+      const routedOutcome = await withTimeout(routedOutcomePromise, 15_000, {
+        message: "timed out waiting for device-bound exec outcome",
+      });
+      expect(routedOutcome.status).toBe("completed");
+      expect(routedOutcome.exitCode).toBe(0);
+      expect(routedOutcome.aggregated).toBe("device-bound-smoke");
     },
     EXEC_APPROVAL_E2E_TIMEOUT_MS,
   );

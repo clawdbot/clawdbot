@@ -132,6 +132,7 @@ describe("buildExportTrajectoryCommandReply", () => {
   it("requests per-run exec approval for trajectory exports", async () => {
     const { execCalls, deps } = createExecDeps();
     const params = makeParams();
+    params.ctx.ApprovalReviewerDeviceId = "device-trajectory-reviewer";
 
     const reply = await buildExportTrajectoryCommandReply(params, deps);
 
@@ -152,6 +153,7 @@ describe("buildExportTrajectoryCommandReply", () => {
     expect(execCall.defaults.sessionStore).toBe("/tmp/openclaw-sessions.json");
     expect(execCall.defaults.currentChannelId).toBe("bot");
     expect(execCall.defaults.accountId).toBe("account-1");
+    expect(execCall.defaults.approvalReviewerDeviceId).toBe("device-trajectory-reviewer");
     expect(execCall.params.ask).toBe("always");
     expect(execCall.params.background).toBe(true);
     const command = typeof execCall.params.command === "string" ? execCall.params.command : "";

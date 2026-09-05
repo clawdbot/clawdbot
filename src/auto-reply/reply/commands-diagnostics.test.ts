@@ -52,6 +52,7 @@ type ExecCall = {
 
 type ExecDefaults = {
   accountId?: string;
+  approvalReviewerDeviceId?: string;
   approvalFollowup?: () => Promise<string | undefined>;
   approvalFollowupMode?: string;
   approvalFollowupText?: string;
@@ -305,7 +306,9 @@ afterEach(() => {
 describe("diagnostics command", () => {
   it("requests Gateway diagnostics approval without a duplicate pending chat reply", async () => {
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
-    const result = await handleDiagnosticsCommand(buildDiagnosticsParams("/diagnostics"), true);
+    const params = buildDiagnosticsParams("/diagnostics");
+    params.ctx.ApprovalReviewerDeviceId = "device-diagnostics-reviewer";
+    const result = await handleDiagnosticsCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply).toBeUndefined();
@@ -315,6 +318,7 @@ describe("diagnostics command", () => {
     expect(execCall.defaults.security).toBe("allowlist");
     expect(execCall.defaults.ask).toBe("always");
     expect(execCall.defaults.trigger).toBe("diagnostics");
+    expect(execCall.defaults.approvalReviewerDeviceId).toBe("device-diagnostics-reviewer");
     expect(execCall.defaults.approvalFollowupMode).toBe("direct");
     expect(execCall.defaults.approvalWarningText).toContain(
       "Diagnostics can include sensitive local logs and host-level runtime metadata.",
