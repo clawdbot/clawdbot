@@ -168,7 +168,7 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
         kind: "missing-required-dependencies",
         pluginId,
         installPath: resolveRecordInstallPath(record, env),
-        ...(record.spec ? { installSpec: record.spec } : {}),
+        ...(record?.spec ? { installSpec: record.spec } : {}),
         missingRequired: missingDependencies.missingRequired,
       });
       reportedPluginIds.add(pluginId);
