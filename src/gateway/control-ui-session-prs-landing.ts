@@ -95,7 +95,8 @@ export async function resolveBranchLanding(
     "--quiet",
     `refs/remotes/origin/${params.branch}`,
   ]);
-  const headSha = await gitOutput(root, ["rev-parse", "HEAD"]);
+  // HEAD is only used to compare landed PR heads; keep its read order when needed.
+  const headSha = params.mergedHeads.length ? await gitOutput(root, ["rev-parse", "HEAD"]) : null;
   // Only merges whose content reached this checkout's default branch prove
   // the tip landed there: a direct default-base merge, or a landing through
   // another branch (feature -> release -> main) whose merge commit is now
