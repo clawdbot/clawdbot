@@ -477,7 +477,7 @@ test("sessions.describe and sessions.get hide foreign drafts at operator role bo
       ),
     ).toBe("inserted");
   }
-  const roleConfig = (others: "view" | "suggest" | "write"): OpenClawConfig => ({
+  const roleConfig = (others: "none" | "view" | "suggest" | "write"): OpenClawConfig => ({
     gateway: {
       roles: {
         default: "limited",
@@ -493,6 +493,8 @@ test("sessions.describe and sessions.get hide foreign drafts at operator role bo
   });
   const admin = identifiedClient(profileId("draft-admin"));
   admin.connect!.scopes = ["operator.admin"];
+  const missingProfile = identifiedClient(profileId("draft-missing-profile"));
+  delete missingProfile.authenticatedUserProfile;
   const cases = [
     {
       name: "view",
@@ -513,6 +515,7 @@ test("sessions.describe and sessions.get hide foreign drafts at operator role bo
       hidden: true,
     },
     { name: "member", client: identifiedClient(memberId), cfg: roleConfig("write"), hidden: true },
+    { name: "missing profile", client: missingProfile, cfg: roleConfig("view"), hidden: true },
     { name: "owner", client: identifiedClient(ownerId), cfg: roleConfig("view"), hidden: false },
     { name: "admin", client: admin, cfg: roleConfig("view"), hidden: false },
     {
@@ -593,6 +596,34 @@ test("sessions.describe and sessions.get hide foreign drafts at operator role bo
     } finally {
       readSpy.mockRestore();
     }
+  }
+
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey, storePath },
+    {
+      sessionId,
+      updatedAt: 44,
+      createdActor: { type: "human", source: "profile", id: ownerId },
+      visibility: "shared",
+    },
+  );
+  let currentCfg = roleConfig("view");
+  const roleDriftRead = vi
+    .spyOn(sessionTranscriptReaders, "readRecentSessionMessagesWithStatsAsync")
+    .mockImplementationOnce(async (...args) => {
+      currentCfg = roleConfig("none");
+      return await originalRead(...args);
+    });
+  try {
+    const transcript = await directSessionReq<{ messages: Array<{ content?: unknown }> }>(
+      "sessions.get",
+      { key: sessionKey },
+      { client: cases[0].client, context: { getRuntimeConfig: () => currentCfg } },
+    );
+    expect(transcript.ok, "role/config change").toBe(true);
+    expect(transcript.payload?.messages, "role/config change").toEqual([]);
+  } finally {
+    roleDriftRead.mockRestore();
   }
 });
 
