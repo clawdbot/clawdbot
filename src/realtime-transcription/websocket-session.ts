@@ -1,7 +1,9 @@
 // Realtime transcription websocket session streams audio to transcription providers.
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
+import path from "node:path";
 import { toErrorObject, toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import WebSocket from "ws";
+import type WebSocket from "ws";
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
@@ -10,6 +12,12 @@ import type {
   RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCallbacks,
 } from "./provider-types.js";
+
+// The installed receiver enforces maxPayload; Bun's built-in ws adapter ignores it.
+const require = createRequire(import.meta.url);
+const { WebSocket: NpmWebSocket }: typeof import("ws") = require(
+  path.join(path.dirname(require.resolve("ws/package.json")), "index.js"),
+);
 
 // Generic websocket-backed realtime transcription session. Providers supply URL,
 // protocol messages, and audio framing while core owns reconnection and queues.
@@ -118,7 +126,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     if (this.closed || audio.byteLength === 0) {
       return;
     }
-    if (this.ws?.readyState === WebSocket.OPEN && this.ready && this.transport) {
+    if (this.ws?.readyState === NpmWebSocket.OPEN && this.ready && this.transport) {
       this.options.sendAudio(audio, this.transport);
       return;
     }
@@ -139,7 +147,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     this.clearQueuedAudio();
     const socket = this.ws;
     const transport = this.transport;
-    if (!socket || socket.readyState !== WebSocket.OPEN || !transport) {
+    if (!socket || socket.readyState !== NpmWebSocket.OPEN || !transport) {
       this.forceClose(socket);
       return;
     }
@@ -272,7 +280,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
             failConnect(error);
           }
         },
-        isOpen: () => ownsSocket() && socket?.readyState === WebSocket.OPEN,
+        isOpen: () => ownsSocket() && socket?.readyState === NpmWebSocket.OPEN,
         isReady: () => ownsSocket() && this.ready,
         markReady: () => {
           if (ownsSocket()) {
@@ -311,7 +319,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
 
         this.currentUrl = connection.url;
         try {
-          socket = new WebSocket(this.currentUrl, {
+          socket = new NpmWebSocket(this.currentUrl, {
             headers: connection.headers,
             maxPayload: REALTIME_TRANSCRIPTION_WS_MAX_PAYLOAD_BYTES,
             ...(proxyAgent ? { agent: proxyAgent } : {}),
@@ -505,7 +513,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
       !socket ||
       generation !== this.connectionGeneration ||
       this.ws !== socket ||
-      socket.readyState !== WebSocket.OPEN
+      socket.readyState !== NpmWebSocket.OPEN
     ) {
       return false;
     }
