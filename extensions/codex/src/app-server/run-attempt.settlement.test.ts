@@ -150,25 +150,16 @@ describe("Codex app-server terminal settlement", () => {
         expect.objectContaining({ message: "codex app-server terminal settlement timed out" }),
       );
 
-      const interrupt = await waitForHarnessRequest(physical, "turn/interrupt");
-      expect(interrupt.params).toEqual({
-        threadId: "thread-settlement",
-        turnId: "turn-settlement",
-      });
-      await vi.advanceTimersByTimeAsync(4_000);
-      physical.send({
-        id: interrupt.id,
-        error: { code: -32_600, message: "no active turn to interrupt" },
-      });
       const list = await waitForHarnessRequest(physical, "thread/backgroundTerminals/list");
+      expect(wireRequests().some(({ method }) => method === "turn/interrupt")).toBe(false);
       await vi.advanceTimersByTimeAsync(4_000);
       expect(firstSettled).not.toHaveBeenCalled();
       expect(wireRequests().some(({ method }) => method === "thread/unsubscribe")).toBe(false);
       physical.send({ id: list.id, result: { data: [], nextCursor: null } });
       await vi.advanceTimersByTimeAsync(0);
 
-      // Native cleanup consumed more than five seconds. Projection gets its own
-      // full grace after cleanup, rather than spending it on the interrupt RPCs.
+      // Native cleanup consumed four seconds. Projection gets its own
+      // full grace after cleanup, rather than spending it on cleanup RPCs.
       await vi.advanceTimersByTimeAsync(TURN_FINALIZE_DRAIN_ABORT_GRACE_MS - 1);
       expect(firstSettled).not.toHaveBeenCalled();
       expect(wireRequests().some(({ method }) => method === "thread/unsubscribe")).toBe(false);
@@ -193,7 +184,7 @@ describe("Codex app-server terminal settlement", () => {
               method === "thread/unsubscribe",
           )
           .map(({ params }) => params?.threadId),
-      ).toEqual(["thread-settlement", "thread-settlement", "thread-settlement"]);
+      ).toEqual(["thread-settlement", "thread-settlement"]);
       expect(physical.stdinDestroyed).toBe(false);
       expect(resolveActiveEmbeddedRunSessionId(firstParams.sessionKey)).toBeUndefined();
       expect(resolveActiveEmbeddedRunSessionId(siblingParams.sessionKey)).toBe(

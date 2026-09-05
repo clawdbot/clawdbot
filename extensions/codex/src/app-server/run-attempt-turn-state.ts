@@ -97,6 +97,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
       threadId: resourceState.thread.threadId,
       turnId,
       timeoutMs: completionOptions?.timeoutMs,
+      ownershipSignal: resourceState.turnRoute?.signal,
     });
     if (!completed) {
       await closeCodexStartupClientBestEffort(resourceState.client);
