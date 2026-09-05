@@ -66,6 +66,7 @@ import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 type ChatTranscriptProjection = {
+  positionMessages: readonly unknown[];
   isDirectThread: boolean;
   isEmpty: boolean;
   showLoadingSkeleton: boolean;
@@ -281,7 +282,6 @@ export function projectChatTranscript(
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onRequestUpdate: requestUpdate,
     resourceBasePath: props.resourceBasePath,
-    localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
     mediaPolicyKey,
     connectionEpoch: props.connectionEpoch,
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
@@ -523,7 +523,33 @@ export function projectChatTranscript(
     (tailStatusOwner.kind !== "group" || !tailStatusOwner.isStreaming)
       ? tailStatusOwner.key
       : null;
+  const positionMessages: unknown[] = [];
   for (const item of transcriptItems) {
+    // Completed runs also contain folded work that is not a visible landmark.
+    const frameActionOwner =
+      item.kind === "agent-run-frame" && item.outcome.kind === "completed"
+        ? item.outcome.actionOwner
+        : null;
+    const visibleFrameSources =
+      item.kind === "agent-run-frame"
+        ? item.parts.flatMap((part) =>
+            part.kind === "group" && part.role === "assistant" && part.visibleContent !== "none"
+              ? part.messages.filter((source) => persistedMessageEntryId(source.message))
+              : [],
+          )
+        : [];
+    const positionSource =
+      item.kind === "group" &&
+      (item.role === "user" || item.role === "assistant") &&
+      item.visibleContent !== "none"
+        ? item.messages.find((source) => persistedMessageEntryId(source.message))
+        : item.kind === "agent-run-frame" && item.outcome.kind === "completed"
+          ? (visibleFrameSources.find((source) => source === frameActionOwner) ??
+            visibleFrameSources.at(-1))
+          : null;
+    if (positionSource) {
+      positionMessages.push(positionSource.message);
+    }
     const groups =
       item.kind === "agent-run-frame"
         ? agentRunFrameGroups(item)
@@ -643,7 +669,6 @@ export function projectChatTranscript(
     props.userName,
     props.userAvatar,
     props.resourceBasePath,
-    (props.localMediaPreviewRoots ?? []).join("\u0000"),
     mediaPolicyKey,
     props.assistantAttachmentAuthToken,
     props.connectionEpoch,
@@ -678,6 +703,7 @@ export function projectChatTranscript(
   };
   return {
     isDirectThread,
+    positionMessages: showLoadingSkeleton ? [] : positionMessages,
     isEmpty,
     showLoadingSkeleton,
     searchOpen: state.searchOpen,

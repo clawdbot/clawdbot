@@ -1,6 +1,7 @@
 /** Starts, stops, and inspects plugin service registrations. */
 import { STATE_DIR } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getGatewayProcessInstanceId } from "../gateway/process-instance.js";
 import type { GatewayPluginEventBroadcastFn } from "../gateway/server-broadcast-types.js";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
@@ -14,6 +15,7 @@ import {
   type DiagnosticExporterHealthUpdate,
 } from "../logging/diagnostic-stability.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveRuntimeServiceBuildId } from "../version.js";
 import {
   createPluginRuntimeCapabilityLease,
   type PluginRuntimeCapabilityLease,
@@ -69,6 +71,14 @@ function createServiceContext(params: {
   const internalDiagnostics: TrustedExporterInternalDiagnostics | undefined =
     grantsInternalDiagnostics
       ? {
+          getRuntimeIdentity: () => {
+            params.lease.assertActive("runtime diagnostic identity");
+            const buildId = resolveRuntimeServiceBuildId();
+            return {
+              processInstanceId: getGatewayProcessInstanceId(),
+              ...(buildId ? { buildId } : {}),
+            };
+          },
           emit: (event, privateData) => {
             params.lease.assertActive("internal diagnostic emitter");
             emitTrustedDiagnosticEventWithPrivateData(event, privateData);

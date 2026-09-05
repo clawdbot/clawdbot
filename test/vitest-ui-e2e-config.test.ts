@@ -114,6 +114,7 @@ const realGatewayFiles = [
   "chat-widget-sandbox.real-gateway",
   "control-ui-auth-transports",
   "cron-duration-save.real-gateway",
+  "device-alias-rename.real-gateway",
   "logs-lifecycle",
   "mcp-app-conformance",
   "session-progress-hovercard.real-gateway",
@@ -507,13 +508,20 @@ describe("Control UI E2E resource ownership", () => {
         realGatewayFiles.toSorted(),
       );
       expect(result.shards.flat().toSorted()).toEqual(realGatewayFiles.toSorted());
-      expect(new Set(result.shards.flat()).size).toBe(14);
+      expect(new Set(result.shards.flat()).size).toBe(realGatewayFiles.length);
       expect(result.rootWorkers).toBeGreaterThan(0);
       expect(result.rootWorkers).toBeLessThanOrEqual(2);
       if (workers !== undefined) {
         expect(result.rootWorkers).toBe(workers);
       }
       expect(result.files.filter((entry) => entry.phase === 1)).toEqual([
+        {
+          file: "ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
         {
           file: mcpFile,
           project: "ui-e2e-serial-standalone",

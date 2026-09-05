@@ -31,6 +31,7 @@ import {
   maxTranscriptScrollOffset,
   measureConnectedTranscriptRows,
   resolveTranscriptScrollMargin,
+  PositionRailGutterController,
   syncScrollMargin,
 } from "./chat-transcript-geometry.ts";
 import {
@@ -57,6 +58,7 @@ import {
 export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscriptSession {
   expandedAssistantMessages = new Map<string, AssistantMessageExpansionState>();
   private readonly controllers = new Set<ReactiveController>();
+  private readonly positionRail: PositionRailGutterController;
   private readonly virtualizerController: VirtualizerController<HTMLDivElement, HTMLElement>;
   private threadInnerElement: HTMLDivElement | null = null;
   private connected = false;
@@ -131,6 +133,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
   private readonly handleGeometryCommit = (event: Event) => {
     this.reconcileInteractionResize(event.target);
+    this.positionRail.sync();
     if (event instanceof CustomEvent && event.detail?.widthChanged === false) {
       return;
     }
@@ -210,6 +213,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     onInitialOffsetSettled?: (position: ChatSessionScrollPosition) => void,
     private readonly callbacks: TranscriptCallbacks = {},
   ) {
+    this.positionRail = new PositionRailGutterController(this, () => this.threadInnerElement);
     this.implicitEndAnchorPending = initialOffset === null;
     this.virtualizerController = new VirtualizerController(this, {
       count: 0,
@@ -232,6 +236,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           const heightChanged = previousHeight !== null && previousHeight !== rect.height;
           this.observedWidth = rect.width;
           this.observedHeight = rect.height;
+          this.positionRail.sync();
           // appliedHeaderHeight, not headerHeight: only the render paths fold a
           // header toggle into the margin, because they own its compensation.
           syncScrollMargin(instance.scrollElement, instance, this.appliedHeaderHeight);
@@ -246,17 +251,28 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           }
           if (widthChanged || heightChanged) {
             this.callbacks.onViewportResize?.();
+            this.host.requestUpdate();
           }
         }),
       observeElementOffset: (instance, callback) => {
         const element = this.scrollElement;
+        const publishOffset = (offset: number, scrolling: boolean) => {
+          const changed = offset !== instance.scrollOffset;
+          callback(offset, scrolling);
+          // Range notifications are memoized: the viewport midpoint can cross
+          // a rail landmark without changing the visible rows. Lit coalesces
+          // this request with the virtualizer's own update when both fire.
+          if (changed) {
+            this.host.requestUpdate();
+          }
+        };
         const syncOffset = () => {
           if (!element || element !== this.scrollElement || instance.scrollElement !== element) {
             return;
           }
           const offset = element.scrollTop;
           if (offset !== instance.scrollOffset) {
-            callback(offset, instance.isScrolling);
+            publishOffset(offset, instance.isScrolling);
           }
         };
         this.syncNativeOffset = syncOffset;
@@ -282,7 +298,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           if (element !== this.scrollElement) {
             return;
           }
-          callback(offset, scrolling);
+          publishOffset(offset, scrolling);
           // Idle can arrive between smooth retargets. Completion needs the
           // restore path's 1px precision, not the 8px UI-follow boundary.
           // The input listeners above own reader takeover.
@@ -513,6 +529,40 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
 
   syncMessageRows(messageRowKeysById: ReadonlyMap<string, string>): void {
     this.messageRowKeysById = messageRowKeysById;
+  }
+
+  activeMessageId(messageIds: readonly string[]): string | null {
+    const scrollElement = this.scrollElement;
+    if (!scrollElement || messageIds.length === 0) {
+      return null;
+    }
+    const virtualizer = this.virtualizerController.getVirtualizer();
+    const maxOffset = maxTranscriptScrollOffset(scrollElement);
+    // The reader has reached the final section even though the normal midpoint
+    // viewport anchor still points into the preceding row.
+    if (maxOffset !== null && Math.abs(maxOffset - scrollElement.scrollTop) <= 1) {
+      return messageIds.findLast((messageId) => this.messageRowKeysById.has(messageId)) ?? null;
+    }
+    // Measurements already include scrollMargin. Query the complete row model,
+    // not the rendered range, which can lag a jump or include a focused outlier.
+    const viewportAnchor = scrollElement.scrollTop + scrollElement.clientHeight * 0.5;
+    const activeRow = virtualizer.getVirtualItemForOffset(viewportAnchor);
+    if (!activeRow) {
+      return null;
+    }
+    let precedingId: string | null = null;
+    for (const messageId of messageIds) {
+      const rowKey = this.messageRowKeysById.get(messageId);
+      const rowIndex = rowKey ? this.rowIndexesByKey.get(rowKey) : undefined;
+      if (rowIndex === undefined) {
+        continue;
+      }
+      if (rowIndex > activeRow.index) {
+        return precedingId ?? messageId;
+      }
+      precedingId = messageId;
+    }
+    return precedingId;
   }
 
   revealMessage(messageId: string): boolean {

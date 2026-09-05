@@ -399,23 +399,26 @@ describe("markAuthProfileFailure", () => {
     });
   });
 
-  it("fires the auth profile failure hook so callers can self-heal", async () => {
-    await withAuthProfileStore(async ({ agentDir, store }) => {
-      const hook = vi.fn();
-      setAuthProfileFailureHook(hook);
-      try {
-        await markAuthProfileFailure({
-          store,
-          profileId: "anthropic:default",
-          reason: "auth",
-          agentDir,
-        });
-        expect(hook).toHaveBeenCalledTimes(1);
-      } finally {
-        setAuthProfileFailureHook(undefined);
-      }
-    });
-  });
+  it.each(["rate_limit", "auth", "billing"] as const)(
+    "reports %s to the auth failure subscriber",
+    async (reason) => {
+      await withAuthProfileStore(async ({ agentDir, store }) => {
+        const hook = vi.fn();
+        setAuthProfileFailureHook(hook);
+        try {
+          await markAuthProfileFailure({
+            store,
+            profileId: "anthropic:default",
+            reason,
+            agentDir,
+          });
+          expect(hook).toHaveBeenCalledExactlyOnceWith(reason);
+        } finally {
+          setAuthProfileFailureHook(undefined);
+        }
+      });
+    },
+  );
 
   it("fires the auth profile failure hook for inline provider api key failures", async () => {
     await withAuthProfileStore(async ({ agentDir, store }) => {
@@ -428,7 +431,7 @@ describe("markAuthProfileFailure", () => {
           reason: "billing",
           agentDir,
         });
-        expect(hook).toHaveBeenCalledTimes(1);
+        expect(hook).toHaveBeenCalledExactlyOnceWith("billing");
       } finally {
         setAuthProfileFailureHook(undefined);
       }

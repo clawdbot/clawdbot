@@ -91,11 +91,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       authRetryPending: boolean;
       codexAppServerRecoveryRetries: number;
       lastRetryFailoverReason: FailoverReason | null;
-      thinkLevel: PreparedRuntime["snapshot"] extends () => infer Snapshot
-        ? Snapshot extends { thinkLevel: infer ThinkLevel }
-          ? ThinkLevel
-          : never
-        : never;
+      thinkLevel: ReturnType<PreparedRuntime["snapshot"]>["thinkLevel"];
     }
   | { action: "proceed" }
 > {
@@ -437,12 +433,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       externalAbort,
       pluginHarnessOwnsTransport: runtime.pluginHarnessOwnsTransport,
       timedOutByRunBudget,
-      resolveAuthProfileFailureReason: failoverRetryController.resolveAuthProfileFailureReason,
-      advanceAuthProfile: failoverRetryController.advanceAuthProfile,
-      advanceRateLimitAuthProfile: failoverRetryController.advanceRateLimitAuthProfile,
-      maybeMarkAuthProfileFailure: failoverRetryController.maybeMarkAuthProfileFailure,
-      maybeRetryTransient: failoverRetryController.maybeRetryTransient,
-      getTransientRetryCount: () => failoverRetryController.transientRetryCount,
+      failover: failoverRetryController,
       attemptedThinking: preparedRuntime.attemptedThinking,
       thinkLevel: runtime.thinkLevel,
       getThinkLevel: () => preparedRuntime.snapshot().thinkLevel,

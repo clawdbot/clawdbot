@@ -21,6 +21,7 @@ export function buildCodexMessagesSnapshot(params: {
   assistantMessages?: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   toolMessages: readonly AgentMessage[];
   lastAssistant: AssistantMessage | undefined;
+  turnTainted?: boolean;
 }): AgentMessage[] {
   const messages = promptSnapshot(params.runParams, params.turnId, params.upstreamUserText);
   if (params.reasoningText) {
@@ -53,7 +54,10 @@ export function buildCodexMessagesSnapshot(params: {
   );
   messages.push(...visibleWorkMessages);
   if (params.lastAssistant) {
-    messages.push(attachCodexMirrorIdentity(params.lastAssistant, `${params.turnId}:assistant`));
+    const assistant = applyCodexTranscriptTaint(params.lastAssistant, {
+      tainted: params.turnTainted === true,
+    });
+    messages.push(attachCodexMirrorIdentity(assistant, `${params.turnId}:assistant`));
   }
   const taint = { tainted: false };
   return messages.map((message) =>

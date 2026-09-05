@@ -22,6 +22,7 @@ import {
   CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
   renderChatHistoryBoundary,
 } from "./chat-history-boundary.ts";
+import { renderChatPositionRail } from "./chat-position-rail.ts";
 import {
   handleTranscriptContextMenu,
   handleTranscriptPointerUp,
@@ -154,6 +155,11 @@ function renderTranscriptShell(
         aria-atomic="true"
         >${transcript.liveAnnouncementText}</span
       >
+      ${renderChatPositionRail({
+        messages: projection.positionMessages,
+        transcript,
+        requestUpdate: props.onRequestUpdate ?? (() => {}),
+      })}
       ${transcriptContents}
     </div>
   `;
