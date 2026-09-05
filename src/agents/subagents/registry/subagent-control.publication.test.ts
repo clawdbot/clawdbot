@@ -461,7 +461,9 @@ it.each([
         }
       }
       if (priorChildKill) {
-        expect(findTaskByRunId("publication-first")?.status).toBe("cancelled");
+        await vi.waitFor(() => {
+          expect(findTaskByRunId("publication-first")?.status).toBe("cancelled");
+        });
       }
       if (replace) {
         // The root lifecycle lock and any marker write have finished before follow-up admission.

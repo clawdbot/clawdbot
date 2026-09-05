@@ -368,9 +368,10 @@ async function killSubagentDescendants(
 async function killSubagentRunTree(
   params: KillTraversal & { trees: KillTree[] },
 ): Promise<{ killed: number; labels: string[] }> {
-  let killed = 0;
-  const labels: string[] = [];
-  for (const tree of params.trees) {
+  // Interrupt siblings before waiting for any one's cleanup; each branch still
+  // drains its parent before traversing descendants. Preserve selection order.
+  const cancellations = params.trees.map(async (tree) => {
+    const labels: string[] = [];
     try {
       if (!tree.entry.execution.endedAt || tree.entry.pauseReason === "sessions_yield") {
         const stopped = await killLatestSubagentRun({ ...params, tree });
@@ -378,22 +379,22 @@ async function killSubagentRunTree(
           tree.errors.add(stopped.result.error);
         }
         if (stopped.result.killed) {
-          killed += 1;
           labels.push(resolveSubagentLabel(stopped.entry));
         }
         if (stopped.result.superseded) {
-          continue;
+          return labels;
         }
       }
       // Resolve recovery before checking traversal; ended ancestors need the same fence.
       const cascade = await killSubagentDescendants({ ...params, tree });
-      killed += cascade.killed;
       labels.push(...cascade.labels);
     } catch (error) {
       tree.errors.add(formatErrorMessage(error));
     }
-  }
-  return { killed, labels };
+    return labels;
+  });
+  const labels = (await Promise.all(cancellations)).flat();
+  return { killed: labels.length, labels };
 }
 
 async function killSubagentRoot(params: Parameters<typeof killLatestSubagentRun>[0]) {
