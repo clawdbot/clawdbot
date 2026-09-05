@@ -39,13 +39,16 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     principal,
     registerToolEventRecipient: context.registerToolEventRecipient,
   });
+  const assertAdmissionCurrent =
+    sessionMutationCommitGuard || runtimeAuthority.commitGuard
+      ? () => {
+          sessionMutationCommitGuard?.();
+          runtimeAuthority.commitGuard?.();
+        }
+      : undefined;
   try {
-    await createAgentTurnService({
-      context,
-      isWebchatConnect,
-      assertRuntimeAuthorityCurrent: runtimeAuthority.commitGuard,
-    }).startTurn({
-      assertAdmissionCurrent: sessionMutationCommitGuard,
+    await createAgentTurnService({ context, isWebchatConnect }).startTurn({
+      assertAdmissionCurrent,
       preflight,
       principal,
       io,

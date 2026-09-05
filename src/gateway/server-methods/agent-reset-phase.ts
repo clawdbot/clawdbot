@@ -61,7 +61,6 @@ export async function runAgentResetPhase(params: {
   context: GatewayRequestHandlerOptions["context"];
   respond: GatewayRequestHandlerOptions["respond"];
   abortForLifecycleRotation: (target?: { sessionKey?: string; agentId?: string }) => boolean;
-  assertRuntimeAuthorityCurrent?: () => void;
   setCommittedResetCompletion: (completion: CommittedResetCompletion) => void;
 }): Promise<AgentResetPhaseResult> {
   const base = {
@@ -93,7 +92,7 @@ export async function runAgentResetPhase(params: {
   }
   const resetReason =
     normalizeOptionalLowercaseString(resetCommandMatch[1]) === "new" ? "new" : "reset";
-  params.assertRuntimeAuthorityCurrent?.();
+  params.assertAdmissionCurrent?.();
   let resetResult: Awaited<ReturnType<typeof runSessionResetFromAgent>>;
   try {
     const creation = prepareSkillLibrarySessionCreation(
@@ -114,7 +113,6 @@ export async function runAgentResetPhase(params: {
         : {}),
       assertCurrent: () => {
         params.assertAdmissionCurrent?.();
-        params.assertRuntimeAuthorityCurrent?.();
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
         assertPreparedSkillLibrarySelection(creation.skillLibrarySelections);
       },
@@ -128,7 +126,7 @@ export async function runAgentResetPhase(params: {
         });
       },
     });
-    params.assertRuntimeAuthorityCurrent?.();
+    params.assertAdmissionCurrent?.();
   } catch (err) {
     if (
       params.abortForLifecycleRotation({
@@ -191,11 +189,11 @@ export async function runAgentResetPhase(params: {
       request: params.sessionKeyFromTo ? { ...params.request, to: undefined } : params.request,
       runId: params.runId,
       assertCurrent: () => {
-        params.assertRuntimeAuthorityCurrent?.();
+        params.assertAdmissionCurrent?.();
         assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       },
     });
-    params.assertRuntimeAuthorityCurrent?.();
+    params.assertAdmissionCurrent?.();
     const responsePayload = buildBareSessionResetResponse({
       runId: params.runId,
       result: resetAckResult,

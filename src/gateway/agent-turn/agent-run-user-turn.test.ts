@@ -177,8 +177,7 @@ describe("prepareAgentRunUserTurn", () => {
         runId: "closed-run",
         client: null,
         context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
-        assertCurrent: () => {},
-        assertRuntimeAuthorityCurrent: () => {
+        assertCurrent: () => {
           if (!authorityActive) {
             throw new TypeError("agent runtime authority is no longer active");
           }
@@ -213,8 +212,7 @@ describe("prepareAgentRunUserTurn", () => {
         runId: "revoked-media-run",
         client: null,
         context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
-        assertCurrent: () => {},
-        assertRuntimeAuthorityCurrent: () => {
+        assertCurrent: () => {
           if (!authorityActive) {
             throw new TypeError("agent runtime authority is no longer active");
           }
