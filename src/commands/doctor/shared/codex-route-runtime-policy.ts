@@ -433,28 +433,11 @@ export function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {
     key: "primary",
     path: `${params.path}.primary`,
   });
-  rewriteModelRefArrayIfCanonicalCodexRuntime({
-    ...params,
-    refs: Array.isArray(record.fallbacks) ? record.fallbacks : undefined,
-    path: `${params.path}.fallbacks`,
-  });
-}
-
-/** Rewrites retired Codex refs in any dispatchable list of model refs. */
-export function rewriteModelRefArrayIfCanonicalCodexRuntime(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  hits: CodexRouteHit[];
-  refs: unknown[] | undefined;
-  path: string;
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
-  env?: NodeJS.ProcessEnv;
-}): void {
-  const { refs } = params;
-  if (!refs) {
+  const fallbacks = Array.isArray(record.fallbacks) ? record.fallbacks : undefined;
+  if (!fallbacks) {
     return;
   }
-  for (const [index, entry] of refs.entries()) {
+  for (const [index, entry] of fallbacks.entries()) {
     if (typeof entry !== "string") {
       continue;
     }
@@ -474,9 +457,9 @@ export function rewriteModelRefArrayIfCanonicalCodexRuntime(params: {
     ) {
       continue;
     }
-    refs[index] = canonicalModel;
+    fallbacks[index] = canonicalModel;
     params.hits.push({
-      path: `${params.path}.${index}`,
+      path: `${params.path}.fallbacks.${index}`,
       model: entry.trim(),
       canonicalModel,
     });

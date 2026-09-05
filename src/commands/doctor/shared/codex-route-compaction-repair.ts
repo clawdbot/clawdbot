@@ -20,7 +20,7 @@ import { rewriteStringModelSlot } from "./codex-route-model-slots.js";
 import {
   agentIdFromAgentPath,
   ensureCodexRuntimePolicy,
-  rewriteModelRefArrayIfCanonicalCodexRuntime,
+  rewriteModelConfigSlotIfCanonicalCodexRuntime,
   rewriteStringModelSlotIfCanonicalCodexRuntime,
 } from "./codex-route-runtime-policy.js";
 import type {
@@ -180,25 +180,15 @@ function rewriteCompactionMemoryFlushModel(
   params: Parameters<typeof rewriteAgentCompactionRefs>[0],
   compaction: MutableRecord | undefined,
 ): void {
-  const memoryFlush = asMutableRecord(compaction?.memoryFlush);
-  rewriteStringModelSlotIfCanonicalCodexRuntime({
+  // The flush override is the canonical selector, so a retired route hiding in
+  // its fallbacks is repaired the same way every other selector's is.
+  rewriteModelConfigSlotIfCanonicalCodexRuntime({
     cfg: params.cfg,
     agentId: params.agentId,
     hits: params.hits,
-    container: memoryFlush,
+    container: asMutableRecord(compaction?.memoryFlush),
     key: "model",
     path: `${params.path}.compaction.memoryFlush.model`,
-    blockedModelIdentities: params.blockedModelIdentities,
-    env: params.env,
-  });
-  // The fallback list is dispatchable too, so a retired route hiding in it has
-  // to be repaired, not just reported.
-  rewriteModelRefArrayIfCanonicalCodexRuntime({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    hits: params.hits,
-    refs: Array.isArray(memoryFlush?.fallbacks) ? memoryFlush.fallbacks : undefined,
-    path: `${params.path}.compaction.memoryFlush.fallbacks`,
     blockedModelIdentities: params.blockedModelIdentities,
     env: params.env,
   });

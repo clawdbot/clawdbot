@@ -349,8 +349,7 @@ Config (`agents.defaults.compaction.memoryFlush`), full reference at [/gateway/c
 | Key                         | Default | Notes                                                                                                                                                  |
 | --------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `enabled`                   | `true`  |                                                                                                                                                        |
-| `model`                     | unset   | exact provider/model override for the flush turn only, for example `ollama/qwen3:8b`                                                                   |
-| `fallbacks`                 | unset   | model refs tried in order when `model` is unavailable; unset keeps the exact override so the flush never falls through to the paid conversation model   |
+| `model`                     | unset   | model ref or `{ primary, fallbacks }` selector for the flush turn only; a bare ref stays exact                                                          |
 | `softThresholdTokens`       | `4000`  | gap below the compaction threshold that triggers a flush                                                                                               |
 | `forceFlushTranscriptBytes` | `"2mb"` | force a flush once active transcript history reaches this estimated byte size (or string like `"2mb"`), even if token counters are stale; `0` disables |
 

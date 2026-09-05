@@ -231,7 +231,7 @@ To keep that housekeeping turn on a local model, set an exact override that
 applies only to the memory-flush turn. The override is exact: it does not
 inherit the active session's model fallback chain, so a local or free-tier
 maintenance model never silently falls through to the paid conversation model.
-Add `fallbacks` when you want named replacements for that path anyway:
+Use the `{ primary, fallbacks }` selector form when you want named replacements for that path anyway:
 
 ```json
 {

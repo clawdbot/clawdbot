@@ -82,26 +82,14 @@ export function collectConfiguredModelRefs(
     );
     if (isRecord(agent.compaction)) {
       pushModelRef(`${path}.compaction.model`, agent.compaction.model);
-      const memoryFlush = isRecord(agent.compaction.memoryFlush)
-        ? agent.compaction.memoryFlush
-        : undefined;
-      const memoryFlushModel = memoryFlush?.model;
-      pushModelRef(`${path}.compaction.memoryFlush.model`, memoryFlushModel);
-      // Dispatchable only once memoryFlush.model is set, so a provider named
-      // here still needs validation, plugin auto-enable, and prepared catalog
-      // setup — otherwise the fallback fails exactly when the primary is
-      // unavailable, which is the case it exists for. Without the override the
-      // setting is ignored at runtime, so it must not reach provider setup
-      // either.
-      if (
-        typeof memoryFlushModel === "string" &&
-        memoryFlushModel.trim() &&
-        Array.isArray(memoryFlush?.fallbacks)
-      ) {
-        memoryFlush.fallbacks.forEach((fallbackRef, index) => {
-          pushModelRef(`${path}.compaction.memoryFlush.fallbacks.${index}`, fallbackRef);
-        });
-      }
+      // The flush override is the canonical selector, so its fallbacks reach
+      // validation, plugin auto-enable, and prepared catalog setup the same way
+      // every other selector's do — otherwise a provider named only there fails
+      // exactly when the primary is unavailable, which is the case it exists for.
+      collectModelConfig(
+        `${path}.compaction.memoryFlush.model`,
+        isRecord(agent.compaction.memoryFlush) ? agent.compaction.memoryFlush.model : undefined,
+      );
     }
     if (isRecord(agent.models)) {
       for (const modelRef of Object.keys(agent.models)) {

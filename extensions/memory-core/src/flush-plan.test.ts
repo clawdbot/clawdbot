@@ -24,8 +24,10 @@ describe("buildMemoryFlushPlan", () => {
           defaults: {
             compaction: {
               memoryFlush: {
-                model: "ollama/qwen3:8b",
-                fallbacks: ["anthropic/claude-haiku-4-5", "  ", "openai/gpt-5.4"],
+                model: {
+                  primary: "ollama/qwen3:8b",
+                  fallbacks: ["anthropic/claude-haiku-4-5", "  ", "openai/gpt-5.4"],
+                },
               },
             },
           },
@@ -35,20 +37,20 @@ describe("buildMemoryFlushPlan", () => {
     // Blank refs are dropped; order is preserved.
     expect(withFallbacks?.fallbacks).toEqual(["anthropic/claude-haiku-4-5", "openai/gpt-5.4"]);
 
-    // Omitted, empty, and all-blank lists all keep the exact-override default,
-    // so an unreachable maintenance model never silently bills the paid model.
-    for (const fallbacks of [undefined, [], ["", "   "]]) {
-      expect(
-        buildMemoryFlushPlan({
-          cfg: {
-            agents: {
-              defaults: {
-                compaction: { memoryFlush: { model: "ollama/qwen3:8b", fallbacks } },
-              },
-            },
-          },
-        })?.fallbacks,
-      ).toBeUndefined();
+    // A bare string keeps the exact-override default, and so do empty or
+    // all-blank lists, so an unreachable maintenance model never silently
+    // bills the paid conversation model.
+    for (const model of [
+      "ollama/qwen3:8b",
+      { primary: "ollama/qwen3:8b" },
+      { primary: "ollama/qwen3:8b", fallbacks: [] },
+      { primary: "ollama/qwen3:8b", fallbacks: ["", "   "] },
+    ]) {
+      const plan = buildMemoryFlushPlan({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: { model } } } } },
+      });
+      expect(plan?.model).toBe("ollama/qwen3:8b");
+      expect(plan?.fallbacks).toBeUndefined();
     }
   });
 
