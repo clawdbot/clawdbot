@@ -478,6 +478,7 @@ export type PluginRecord = {
   origin: PluginOrigin;
   workspaceDir?: string;
   trustedOfficialInstall?: boolean;
+  trust?: import("./plugin-trust.js").PluginTrust;
   enabled: boolean;
   explicitlyEnabled?: boolean;
   activated?: boolean;

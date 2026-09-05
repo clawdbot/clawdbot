@@ -18,6 +18,7 @@ import {
 } from "./installed-plugin-index-policy.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   INSTALLED_PLUGIN_INDEX_VERSION,
@@ -84,6 +85,11 @@ function buildInstalledPluginIndex(
         }
       : baseDiscovery;
   const registry = loadPluginManifestRegistryCore({
+    registryPath: resolveInstalledPluginIndexStorePath({
+      env,
+      stateDir: params.stateDir,
+      filePath: params.pluginIndexFilePath,
+    }),
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,

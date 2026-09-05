@@ -37,6 +37,7 @@ import type {
 } from "./package-manifest.types.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import type { PluginTrust } from "./plugin-trust.js";
 import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
 
 export type PluginManifestContractListKey =
@@ -111,6 +112,7 @@ export type PluginManifestRecord = {
   packageChannel?: PluginPackageChannel;
   packageInstall?: PluginPackageInstall;
   trustedOfficialInstall?: boolean;
+  trust?: PluginTrust;
   qaRunners?: PluginManifestQaRunner[];
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
