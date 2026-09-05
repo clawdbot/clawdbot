@@ -4,11 +4,11 @@ import Testing
 
 struct GatewayBrowserSignInCoordinatorTests {
     @Test(arguments: [
-        ("gateway.example", "wss://gateway.example:443"),
+        ("gateway.example", "wss://gateway.example:443/"),
         ("https://another.example/workspace", "wss://another.example:443/workspace"),
         ("wss://gateway.example:9443/proxy/a%2Fb", "wss://gateway.example:9443/proxy/a%2Fb"),
-        ("http://localhost:18789", "ws://localhost:18789"),
-        ("ws://192.168.1.20:18789/", "ws://192.168.1.20:18789"),
+        ("http://localhost:18789", "ws://localhost:18789/"),
+        ("ws://192.168.1.20:18789/", "ws://192.168.1.20:18789/"),
     ])
     func `address entry preserves gateway authority and base path`(address: String, expected: String) throws {
         #expect(try GatewayBrowserSignInCoordinator.gatewayURL(from: address).absoluteString == expected)

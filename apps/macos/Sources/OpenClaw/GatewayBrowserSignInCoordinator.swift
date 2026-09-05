@@ -11,7 +11,7 @@ enum GatewayBrowserSignInCoordinator {
               let link = GatewayConnectDeepLink.fromSetupInput(input),
               let url = link.websocketURL
         else { throw MacGatewayProfileError.invalidURL }
-        return url
+        return try MacGatewayProfileStore.canonicalURL(url)
     }
 
     static func connect(
