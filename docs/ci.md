@@ -932,9 +932,12 @@ credentials disabled.
 The committed lane manifest covers representative core unit, Gateway, Control
 UI jsdom, and worker-lifecycle tests. Both commits must expose identical
 selected test/config paths and bytes and pass correctness before timing state
-is created. The harness then runs one excluded warmup per side and lane, seven paired rounds with
-alternating side order and rotated lane order, plus one separately labeled cold
-pair with fresh caches. Frozen installs are setup and are never timed.
+is created. Correctness also requires both sides to report the same normalized
+test files, test identities, statuses, and counts. Every later run must match
+that established execution digest. The harness then runs one excluded warmup
+per side and lane, seven paired rounds with alternating side order and rotated
+lane order, plus one separately labeled cold pair with fresh caches. Frozen
+installs are setup and are never timed.
 
 Each child has a fixed deadline and process-group owner. A separate 165-minute
 harness deadline reserves 15 minutes inside the 180-minute job timeout for
@@ -945,17 +948,17 @@ executable through `npm_execpath`, with private Corepack and pnpm state; the
 resolved executable and version are recorded in the environment and run
 records.
 
-The artifact includes raw logs, sampled Linux recursive descendant RSS across
-process groups, GNU time user/system CPU, environment and Git identities,
+The artifact includes raw logs, raw Vitest JSON reports, execution digests and
+counts, GNU time user/system CPU, wall timing, environment and Git identities,
 source/config hashes, per-run records, paired-ratio analysis, and a terminal
 success or failure manifest. The workflow attempts finalization and artifact
 upload after harness failures. Runner loss or external workflow cancellation
 can still prevent those steps from running. Mutable pnpm and runtime caches stay
 in an unuploaded scratch tree. Thresholds are fixed in
 `scripts/vitest-pair-benchmark-lanes.json`; the report claims an improvement
-only when every representative lane clears the improvement ratio in at least
-five of seven pairs. Otherwise it reports per-lane evidence without a broad
-improvement claim.
+only when every representative lane's median clears the improvement ratio and
+at least five of its seven pairs individually meet that ratio. Otherwise it
+reports per-lane evidence without a broad improvement claim.
 
 ## Full Release Validation
 

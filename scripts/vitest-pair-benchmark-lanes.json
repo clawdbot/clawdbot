@@ -4,7 +4,6 @@
   "thresholds": {
     "overallWallRatio": 1.1,
     "criticalLaneWallRatio": 1.15,
-    "criticalLaneRssRatio": 1.2,
     "coldWallRatio": 1.2,
     "improvementRatio": 0.95,
     "improvementPairCount": 5
@@ -46,11 +45,9 @@
     {
       "id": "worker-lifecycle",
       "critical": true,
+      "config": "test/vitest/vitest.tooling-isolated.config.ts",
       "files": [
-        "test/scripts/run-vitest-profile.test.ts",
-        "test/scripts/run-vitest-state-cleanup.test.ts",
-        "test/scripts/vitest-fork-shutdown.test.ts",
-        "test/scripts/vitest-runner-task-updates.test.ts"
+        "test/scripts/vitest-fork-shutdown.test.ts"
       ]
     }
   ]

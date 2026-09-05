@@ -1,15 +1,17 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   analyzeBenchmark,
   assertEquivalentInventories,
+  assertExecutionDigest,
   assertInventoryAvailable,
   assertSingleWorkflowAttempt,
   buildBenchmarkCommandEnv,
   buildBenchmarkSchedule,
   loadBenchmarkManifest,
+  parseVitestExecutionReport,
   resolvePackageManagerIdentity,
   runOwnedCommand,
   validateBenchmarkManifest,
@@ -37,7 +39,6 @@ const manifest: BenchmarkManifest = {
   thresholds: {
     overallWallRatio: 1.1,
     criticalLaneWallRatio: 1.15,
-    criticalLaneRssRatio: 1.2,
     coldWallRatio: 1.2,
     improvementRatio: 0.95,
     improvementPairCount: 5,
@@ -59,14 +60,34 @@ const manifest: BenchmarkManifest = {
   ],
 };
 
-function recordsFor(candidateRatio: number | ((lane: string) => number)): BenchmarkRunRecord[] {
+const execution = {
+  digest: "a".repeat(64),
+  fileCount: 1,
+  assertionCount: 1,
+  counts: {
+    numTotalTestSuites: 1,
+    numPassedTestSuites: 1,
+    numFailedTestSuites: 0,
+    numPendingTestSuites: 0,
+    numTotalTests: 1,
+    numPassedTests: 1,
+    numFailedTests: 0,
+    numPendingTests: 0,
+    numTodoTests: 0,
+  },
+  success: true as const,
+};
+
+function recordsFor(
+  candidateRatio: number | ((lane: string, round: number | null) => number),
+): BenchmarkRunRecord[] {
   const ratioFor = typeof candidateRatio === "function" ? candidateRatio : () => candidateRatio;
   const records: BenchmarkRunRecord[] = [];
   for (const lane of manifest.lanes) {
     for (let round = 1; round <= manifest.rounds; round += 1) {
       const pair = `measured-${round}-${lane.id}`;
       for (const side of ["baseline", "candidate"] as const) {
-        const ratio = side === "candidate" ? ratioFor(lane.id) : 1;
+        const ratio = side === "candidate" ? ratioFor(lane.id, round) : 1;
         records.push({
           id: `${pair}-${side}`,
           phase: "measured",
@@ -81,14 +102,13 @@ function recordsFor(candidateRatio: number | ((lane: string) => number)): Benchm
           durationMs: 100 * ratio,
           userCpuMs: 50,
           systemCpuMs: 10,
-          peakRssBytes: 1_000 * ratio,
-          processSampleCount: 2,
+          execution,
           exitCode: 0,
         });
       }
     }
     for (const side of ["baseline", "candidate"] as const) {
-      const ratio = side === "candidate" ? ratioFor(lane.id) : 1;
+      const ratio = side === "candidate" ? ratioFor(lane.id, null) : 1;
       records.push({
         id: `cold-${lane.id}-${side}`,
         phase: "cold",
@@ -103,8 +123,7 @@ function recordsFor(candidateRatio: number | ((lane: string) => number)): Benchm
         durationMs: 100 * ratio,
         userCpuMs: 50,
         systemCpuMs: 10,
-        peakRssBytes: 1_000 * ratio,
-        processSampleCount: 2,
+        execution,
         exitCode: 0,
       });
     }
@@ -123,6 +142,48 @@ function gatewayRegressionRatio(lane: string): number {
 function writeExecutable(file: string, contents: string): void {
   writeFileSync(file, contents);
   chmodSync(file, 0o755);
+}
+
+type ReportAssertion = { fullName: string; status: "passed" | "skipped" };
+type ReportFile = { path: string; assertions: ReportAssertion[] };
+
+function writeSelectedFiles(root: string, files: string[]): void {
+  for (const relative of files) {
+    const file = path.join(root, relative);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, `${relative}\n`);
+  }
+}
+
+function writeVitestReport(
+  reportFile: string,
+  root: string,
+  files: ReportFile[],
+  success = true,
+): void {
+  const assertions = files.flatMap((file) => file.assertions);
+  const passed = assertions.filter((assertion) => assertion.status === "passed").length;
+  const pending = assertions.filter((assertion) => assertion.status === "skipped").length;
+  writeFileSync(
+    reportFile,
+    JSON.stringify({
+      numTotalTestSuites: files.length,
+      numPassedTestSuites: success ? files.length : 0,
+      numFailedTestSuites: success ? 0 : files.length,
+      numPendingTestSuites: 0,
+      numTotalTests: assertions.length,
+      numPassedTests: success ? passed : 0,
+      numFailedTests: success ? 0 : assertions.length,
+      numPendingTests: success ? pending : 0,
+      numTodoTests: 0,
+      success,
+      testResults: files.map((file) => ({
+        name: path.join(root, file.path),
+        status: success ? "passed" : "failed",
+        assertionResults: file.assertions,
+      })),
+    }),
+  );
 }
 
 describe("Vitest pair benchmark contract", () => {
@@ -193,6 +254,70 @@ describe("Vitest pair benchmark contract", () => {
     ).toThrow("benchmark workload bytes differ");
   });
 
+  it("requires successful JSON execution reports with the exact selected file set", () => {
+    const root = tempDirs.make("vitest-pair-report-files-");
+    const lane = {
+      id: "report-files",
+      critical: true,
+      files: ["src/first.test.ts", "src/second.test.ts"],
+    };
+    writeSelectedFiles(root, lane.files);
+    const reportFile = path.join(root, "report.json");
+    writeVitestReport(reportFile, root, [
+      {
+        path: lane.files[0]!,
+        assertions: [{ fullName: "first test", status: "passed" }],
+      },
+    ]);
+
+    expect(() => parseVitestExecutionReport(reportFile, root, lane)).toThrow(
+      "executed files differ",
+    );
+
+    writeVitestReport(
+      reportFile,
+      root,
+      lane.files.map((file) => ({
+        path: file,
+        assertions: [{ fullName: `${file} test`, status: "passed" }],
+      })),
+      false,
+    );
+    expect(() => parseVitestExecutionReport(reportFile, root, lane)).toThrow(
+      "did not report success",
+    );
+  });
+
+  it("fails closed when test identities or statuses diverge from correctness", () => {
+    const root = tempDirs.make("vitest-pair-report-digest-");
+    const lane = {
+      id: "report-digest",
+      critical: true,
+      files: ["src/example.test.ts"],
+    };
+    writeSelectedFiles(root, lane.files);
+    const baselineFile = path.join(root, "baseline.json");
+    writeVitestReport(baselineFile, root, [
+      {
+        path: lane.files[0]!,
+        assertions: [{ fullName: "suite stable test", status: "passed" }],
+      },
+    ]);
+    const baseline = parseVitestExecutionReport(baselineFile, root, lane);
+
+    for (const [label, assertion] of [
+      ["identity", { fullName: "suite renamed test", status: "passed" as const }],
+      ["status", { fullName: "suite stable test", status: "skipped" as const }],
+    ] as const) {
+      const candidateFile = path.join(root, `candidate-${label}.json`);
+      writeVitestReport(candidateFile, root, [{ path: lane.files[0]!, assertions: [assertion] }]);
+      const candidate = parseVitestExecutionReport(candidateFile, root, lane);
+      expect(() =>
+        assertExecutionDigest(candidate, baseline.digest, `${label} timing run`),
+      ).toThrow("execution digest differs");
+    }
+  });
+
   it("rotates lane order and alternates paired side order", () => {
     const schedule = buildBenchmarkSchedule(manifest);
     const measured = schedule.filter((entry) => entry.phase === "measured");
@@ -240,6 +365,14 @@ describe("Vitest pair benchmark contract", () => {
     const improved = analyzeBenchmark(recordsFor(0.9), manifest);
     expect(improved.verdict).toBe("pass");
     expect(improved.performance).toBe("improved");
+
+    const noisyFaster = analyzeBenchmark(
+      recordsFor((_lane, round) => (round !== null && round <= 4 ? 0.9 : 0.999)),
+      manifest,
+    );
+    expect(noisyFaster.verdict).toBe("pass");
+    expect(noisyFaster.performance).toBe("no-material-change");
+    expect(noisyFaster.lanes.every((lane) => lane.candidateImprovedPairs === 4)).toBe(true);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -426,109 +559,6 @@ describe("Vitest pair benchmark lifecycle", () => {
       await waitForFile(pidFile, 3_000);
       const pid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
       await waitForDead(pid, 5_000);
-    },
-  );
-
-  it.runIf(process.platform === "linux")(
-    "attributes recursive detached RSS without including an unrelated process",
-    async () => {
-      const root = tempDirs.make("vitest-pair-rss-");
-      const unrelatedReady = path.join(root, "unrelated.ready");
-      const unrelatedScript = [
-        'const { writeFileSync } = require("node:fs");',
-        "global.buffer = Buffer.alloc(192 * 1024 * 1024, 1);",
-        `writeFileSync(${JSON.stringify(unrelatedReady)}, "ready");`,
-        "setInterval(() => {}, 1000);",
-      ].join("\n");
-      const unrelated = spawn(process.execPath, ["-e", unrelatedScript], {
-        detached: true,
-        stdio: "ignore",
-      });
-      const unrelatedPid = unrelated.pid;
-      if (!unrelatedPid) {
-        throw new Error("unrelated memory process did not acquire a PID");
-      }
-
-      try {
-        await waitForFile(unrelatedReady, 5_000);
-        const wrapperPidFile = path.join(root, "wrapper.pid");
-        const memoryPidFile = path.join(root, "memory.pid");
-        const memoryReady = path.join(root, "memory.ready");
-        const memoryScript = [
-          'const { writeFileSync } = require("node:fs");',
-          "global.buffer = Buffer.alloc(64 * 1024 * 1024, 1);",
-          `writeFileSync(${JSON.stringify(memoryReady)}, "ready");`,
-          "setInterval(() => {}, 1000);",
-        ].join("\n");
-        const wrapperScript = [
-          'const { spawn } = require("node:child_process");',
-          'const { writeFileSync } = require("node:fs");',
-          `const memory = spawn(process.execPath, ["-e", ${JSON.stringify(memoryScript)}], { detached: true, stdio: "ignore" });`,
-          `writeFileSync(${JSON.stringify(memoryPidFile)}, String(memory.pid));`,
-          "memory.unref();",
-          "setInterval(() => {}, 1000);",
-        ].join("\n");
-        const rootScript = [
-          'const { spawn } = require("node:child_process");',
-          'const { writeFileSync } = require("node:fs");',
-          `const wrapper = spawn(process.execPath, ["-e", ${JSON.stringify(wrapperScript)}], { detached: true, stdio: "ignore" });`,
-          `writeFileSync(${JSON.stringify(wrapperPidFile)}, String(wrapper.pid));`,
-          "wrapper.unref();",
-          "setTimeout(() => {}, 800);",
-        ].join("\n");
-        const samplePath = path.join(root, "samples.jsonl");
-
-        await expect(
-          runOwnedCommand({
-            bin: process.execPath,
-            args: ["-e", rootScript],
-            cwd: root,
-            env: { PATH: process.env.PATH },
-            logPath: path.join(root, "output.log"),
-            samplePath,
-            timeoutMs: 10_000,
-          }),
-        ).rejects.toThrow("attributed descendants remained active");
-
-        await waitForFile(memoryReady, 5_000);
-        const wrapperPid = Number.parseInt(readFileSync(wrapperPidFile, "utf8"), 10);
-        const memoryPid = Number.parseInt(readFileSync(memoryPidFile, "utf8"), 10);
-        await waitForDead(wrapperPid, 5_000);
-        await waitForDead(memoryPid, 5_000);
-        expect(() => process.kill(unrelatedPid, 0)).not.toThrow();
-
-        const samples = readFileSync(samplePath, "utf8")
-          .trim()
-          .split("\n")
-          .map(
-            (line) =>
-              JSON.parse(line) as {
-                processes: Array<{ pid: number; processGroup: number; rssBytes: number }>;
-                rssBytes: number;
-              },
-          );
-        expect(
-          samples.some((sample) => sample.processes.some((entry) => entry.pid === wrapperPid)),
-        ).toBe(true);
-        expect(
-          samples.some((sample) =>
-            sample.processes.some(
-              (entry) =>
-                entry.pid === memoryPid &&
-                entry.processGroup === memoryPid &&
-                entry.rssBytes >= 64 * 1024 * 1024,
-            ),
-          ),
-        ).toBe(true);
-        expect(
-          samples.every((sample) => sample.processes.every((entry) => entry.pid !== unrelatedPid)),
-        ).toBe(true);
-      } finally {
-        try {
-          process.kill(-unrelatedPid, "SIGKILL");
-        } catch {}
-        await waitForDead(unrelatedPid, 5_000);
-      }
     },
   );
 

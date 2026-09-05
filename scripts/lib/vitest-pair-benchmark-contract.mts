@@ -30,7 +30,6 @@ export type BenchmarkLane = {
 export type BenchmarkThresholds = {
   overallWallRatio: number;
   criticalLaneWallRatio: number;
-  criticalLaneRssRatio: number;
   coldWallRatio: number;
   improvementRatio: number;
   improvementPairCount: number;
@@ -53,23 +52,30 @@ export type BenchmarkRunPlan = {
   cacheMode: "fresh" | "warm";
 };
 
-export type ProcessSample = {
-  atMs: number;
-  processCount: number;
-  rssBytes: number;
-  processes: Array<{
-    pid: number;
-    parentPid: number;
-    processGroup: number;
-    startTimeTicks: string;
-    rssBytes: number;
-  }>;
-};
-
 export type PackageManagerIdentity = {
   executable: string;
   resolvedExecutable: string;
   version: string;
+};
+
+export type BenchmarkExecutionCounts = {
+  numTotalTestSuites: number;
+  numPassedTestSuites: number;
+  numFailedTestSuites: number;
+  numPendingTestSuites: number;
+  numTotalTests: number;
+  numPassedTests: number;
+  numFailedTests: number;
+  numPendingTests: number;
+  numTodoTests: number;
+};
+
+export type BenchmarkExecutionSummary = {
+  digest: string;
+  fileCount: number;
+  assertionCount: number;
+  counts: BenchmarkExecutionCounts;
+  success: true;
 };
 
 export type BenchmarkRunRecord = {
@@ -86,8 +92,7 @@ export type BenchmarkRunRecord = {
   durationMs: number;
   userCpuMs: number;
   systemCpuMs: number;
-  peakRssBytes: number;
-  processSampleCount: number;
+  execution: BenchmarkExecutionSummary | null;
   exitCode: number | null;
   error?: string;
 };
@@ -97,18 +102,16 @@ export type BenchmarkAnalysis = {
   performance: "improved" | "no-material-change";
   overall: {
     measuredWallRatio: number;
-    measuredRssRatio: number;
     coldWallRatio: number;
-    candidateFasterPairs: number;
+    candidateImprovedPairs: number;
     measuredPairCount: number;
   };
   lanes: Array<{
     id: string;
     critical: boolean;
     measuredWallRatio: number;
-    measuredRssRatio: number;
     coldWallRatio: number;
-    candidateFasterPairs: number;
+    candidateImprovedPairs: number;
     measuredPairCount: number;
     regressions: string[];
   }>;
@@ -148,7 +151,6 @@ export function validateBenchmarkManifest(value: unknown): BenchmarkManifest {
   for (const name of [
     "overallWallRatio",
     "criticalLaneWallRatio",
-    "criticalLaneRssRatio",
     "coldWallRatio",
     "improvementRatio",
   ]) {
@@ -205,7 +207,6 @@ export function validateBenchmarkManifest(value: unknown): BenchmarkManifest {
     thresholds: {
       overallWallRatio: thresholds.overallWallRatio as number,
       criticalLaneWallRatio: thresholds.criticalLaneWallRatio as number,
-      criticalLaneRssRatio: thresholds.criticalLaneRssRatio as number,
       coldWallRatio: thresholds.coldWallRatio as number,
       improvementRatio: thresholds.improvementRatio as number,
       improvementPairCount: Number(thresholds.improvementPairCount),
@@ -234,6 +235,172 @@ function stableManifestValue(manifest: BenchmarkManifest) {
 
 export function sha256(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+const VITEST_EXECUTION_COUNT_KEYS = [
+  "numTotalTestSuites",
+  "numPassedTestSuites",
+  "numFailedTestSuites",
+  "numPendingTestSuites",
+  "numTotalTests",
+  "numPassedTests",
+  "numFailedTests",
+  "numPendingTests",
+  "numTodoTests",
+] as const satisfies readonly (keyof BenchmarkExecutionCounts)[];
+const VITEST_ASSERTION_STATUSES = new Set(["failed", "passed", "pending", "skipped", "todo"]);
+
+function readNonNegativeInteger(value: unknown, name: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+  return Number(value);
+}
+
+function normalizeReportedTestPath(root: string, value: unknown, name: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${name} must be a test file path`);
+  }
+  const absolute = path.isAbsolute(value) ? value : path.resolve(root, value);
+  const real = realpathSync(absolute);
+  if (real !== root && !real.startsWith(`${root}${path.sep}`)) {
+    throw new Error(`${name} escapes its checkout`);
+  }
+  const relative = path.relative(root, real).split(path.sep).join("/");
+  assertSafeRelativePath(relative, name);
+  return relative;
+}
+
+export function parseVitestExecutionReport(
+  reportFile: string,
+  checkoutRoot: string,
+  lane: BenchmarkLane,
+): BenchmarkExecutionSummary {
+  const report = JSON.parse(readFileSync(reportFile, "utf8")) as unknown;
+  if (!isRecord(report)) {
+    throw new Error("Vitest JSON report must be an object");
+  }
+  if (report.success !== true) {
+    throw new Error(`Vitest JSON report did not report success for lane ${lane.id}`);
+  }
+
+  const counts = Object.fromEntries(
+    VITEST_EXECUTION_COUNT_KEYS.map((key) => [
+      key,
+      readNonNegativeInteger(report[key], `Vitest JSON report ${key}`),
+    ]),
+  ) as BenchmarkExecutionCounts;
+  if (
+    counts.numPassedTestSuites + counts.numFailedTestSuites + counts.numPendingTestSuites !==
+    counts.numTotalTestSuites
+  ) {
+    throw new Error("Vitest JSON report suite counts are inconsistent");
+  }
+  if (
+    counts.numPassedTests + counts.numFailedTests + counts.numPendingTests + counts.numTodoTests !==
+    counts.numTotalTests
+  ) {
+    throw new Error("Vitest JSON report test counts are inconsistent");
+  }
+  if (counts.numFailedTestSuites !== 0 || counts.numFailedTests !== 0) {
+    throw new Error(`Vitest JSON report contains failures for lane ${lane.id}`);
+  }
+  if (!Array.isArray(report.testResults)) {
+    throw new Error("Vitest JSON report testResults must be an array");
+  }
+
+  const root = realpathSync(checkoutRoot);
+  const files = report.testResults
+    .map((testResult, fileIndex) => {
+      if (!isRecord(testResult)) {
+        throw new Error(`Vitest JSON report testResults[${String(fileIndex)}] must be an object`);
+      }
+      if (testResult.status !== "passed") {
+        throw new Error(`Vitest JSON report file did not pass for lane ${lane.id}`);
+      }
+      if (!Array.isArray(testResult.assertionResults)) {
+        throw new Error(
+          `Vitest JSON report testResults[${String(fileIndex)}].assertionResults must be an array`,
+        );
+      }
+      const assertions = testResult.assertionResults
+        .map((assertion, assertionIndex) => {
+          if (!isRecord(assertion)) {
+            throw new Error(
+              `Vitest JSON report assertion ${String(fileIndex)}:${String(assertionIndex)} must be an object`,
+            );
+          }
+          if (typeof assertion.fullName !== "string" || assertion.fullName.length === 0) {
+            throw new Error(
+              `Vitest JSON report assertion ${String(fileIndex)}:${String(assertionIndex)} fullName is invalid`,
+            );
+          }
+          if (
+            typeof assertion.status !== "string" ||
+            !VITEST_ASSERTION_STATUSES.has(assertion.status)
+          ) {
+            throw new Error(
+              `Vitest JSON report assertion ${String(fileIndex)}:${String(assertionIndex)} status is invalid`,
+            );
+          }
+          return { fullName: assertion.fullName, status: assertion.status };
+        })
+        .toSorted(
+          (left, right) =>
+            left.fullName.localeCompare(right.fullName) || left.status.localeCompare(right.status),
+        );
+      return {
+        path: normalizeReportedTestPath(
+          root,
+          testResult.name,
+          `Vitest JSON report testResults[${String(fileIndex)}].name`,
+        ),
+        assertions,
+      };
+    })
+    .toSorted((left, right) => left.path.localeCompare(right.path));
+  const executedFiles = files.map((entry) => entry.path);
+  if (new Set(executedFiles).size !== executedFiles.length) {
+    throw new Error(`Vitest JSON report contains duplicate files for lane ${lane.id}`);
+  }
+  const expectedFiles = lane.files.toSorted();
+  if (
+    executedFiles.length !== expectedFiles.length ||
+    executedFiles.some((file, index) => file !== expectedFiles[index])
+  ) {
+    throw new Error(
+      `Vitest JSON report executed files differ for lane ${lane.id}: expected ${expectedFiles.join(", ")}, got ${executedFiles.join(", ")}`,
+    );
+  }
+  const assertionCount = files.reduce((total, file) => total + file.assertions.length, 0);
+  if (assertionCount !== counts.numTotalTests) {
+    throw new Error(`Vitest JSON report assertion count differs for lane ${lane.id}`);
+  }
+  const canonical = {
+    version: 1,
+    files,
+    counts,
+    success: true,
+  };
+  return {
+    digest: sha256(JSON.stringify(canonical)),
+    fileCount: files.length,
+    assertionCount,
+    counts,
+    success: true,
+  };
+}
+
+export function assertExecutionDigest(
+  execution: BenchmarkExecutionSummary,
+  expectedDigest: string,
+  label: string,
+): void {
+  if (execution.digest !== expectedDigest) {
+    throw new Error(
+      `${label} execution digest differs: expected ${expectedDigest}, got ${execution.digest}`,
+    );
+  }
 }
 
 export function benchmarkInventoryDigest(manifest: BenchmarkManifest): string {
@@ -380,7 +547,6 @@ function ratiosFor(
   records: BenchmarkRunRecord[],
   phase: "measured" | "cold",
   lane: string,
-  field: "durationMs" | "peakRssBytes",
 ): number[] {
   const selected = records.filter((record) => record.phase === phase && record.lane === lane);
   const pairs = new Map<string, Partial<Record<BenchmarkSide, BenchmarkRunRecord>>>();
@@ -399,10 +565,10 @@ function ratiosFor(
     if (!pair.baseline || !pair.candidate) {
       throw new Error(`benchmark pair is incomplete: ${pairId}`);
     }
-    const baseline = pair.baseline[field];
-    const candidate = pair.candidate[field];
+    const baseline = pair.baseline.durationMs;
+    const candidate = pair.candidate.durationMs;
     if (baseline <= 0 || candidate <= 0) {
-      throw new Error(`benchmark pair has a non-positive ${field}: ${pairId}`);
+      throw new Error(`benchmark pair has a non-positive duration: ${pairId}`);
     }
     return candidate / baseline;
   });
@@ -413,27 +579,20 @@ export function analyzeBenchmark(
   manifest: BenchmarkManifest,
 ): BenchmarkAnalysis {
   const lanes = manifest.lanes.map((lane) => {
-    const wallRatios = ratiosFor(records, "measured", lane.id, "durationMs");
-    const rssRatios = ratiosFor(records, "measured", lane.id, "peakRssBytes");
-    const coldRatios = ratiosFor(records, "cold", lane.id, "durationMs");
-    if (wallRatios.length !== manifest.rounds || rssRatios.length !== manifest.rounds) {
+    const wallRatios = ratiosFor(records, "measured", lane.id);
+    const coldRatios = ratiosFor(records, "cold", lane.id);
+    if (wallRatios.length !== manifest.rounds) {
       throw new Error(`lane ${lane.id} does not have exactly ${manifest.rounds} measured pairs`);
     }
     if (coldRatios.length !== 1) {
       throw new Error(`lane ${lane.id} does not have exactly one cold pair`);
     }
     const measuredWallRatio = median(wallRatios);
-    const measuredRssRatio = median(rssRatios);
     const coldWallRatio = median(coldRatios);
     const regressions: string[] = [];
     if (lane.critical && measuredWallRatio > manifest.thresholds.criticalLaneWallRatio) {
       regressions.push(
         `${lane.id} median paired wall ratio ${measuredWallRatio.toFixed(3)} exceeds ${manifest.thresholds.criticalLaneWallRatio.toFixed(3)}`,
-      );
-    }
-    if (lane.critical && measuredRssRatio > manifest.thresholds.criticalLaneRssRatio) {
-      regressions.push(
-        `${lane.id} median paired RSS ratio ${measuredRssRatio.toFixed(3)} exceeds ${manifest.thresholds.criticalLaneRssRatio.toFixed(3)}`,
       );
     }
     if (coldWallRatio > manifest.thresholds.coldWallRatio) {
@@ -445,22 +604,16 @@ export function analyzeBenchmark(
       id: lane.id,
       critical: lane.critical,
       measuredWallRatio,
-      measuredRssRatio,
       coldWallRatio,
-      candidateFasterPairs: wallRatios.filter((ratio) => ratio < 1).length,
+      candidateImprovedPairs: wallRatios.filter(
+        (ratio) => ratio <= manifest.thresholds.improvementRatio,
+      ).length,
       measuredPairCount: wallRatios.length,
       regressions,
     };
   });
-  const allWallRatios = manifest.lanes.flatMap((lane) =>
-    ratiosFor(records, "measured", lane.id, "durationMs"),
-  );
-  const allRssRatios = manifest.lanes.flatMap((lane) =>
-    ratiosFor(records, "measured", lane.id, "peakRssBytes"),
-  );
-  const allColdRatios = manifest.lanes.flatMap((lane) =>
-    ratiosFor(records, "cold", lane.id, "durationMs"),
-  );
+  const allWallRatios = manifest.lanes.flatMap((lane) => ratiosFor(records, "measured", lane.id));
+  const allColdRatios = manifest.lanes.flatMap((lane) => ratiosFor(records, "cold", lane.id));
   const overallWallRatio = median(allWallRatios);
   const regressions = lanes.flatMap((lane) => lane.regressions);
   if (overallWallRatio > manifest.thresholds.overallWallRatio) {
@@ -471,7 +624,7 @@ export function analyzeBenchmark(
   const improvedLanes = lanes.filter(
     (lane) =>
       lane.measuredWallRatio <= manifest.thresholds.improvementRatio &&
-      lane.candidateFasterPairs >= manifest.thresholds.improvementPairCount,
+      lane.candidateImprovedPairs >= manifest.thresholds.improvementPairCount,
   );
   const performance =
     regressions.length === 0 && improvedLanes.length === lanes.length
@@ -482,9 +635,10 @@ export function analyzeBenchmark(
     performance,
     overall: {
       measuredWallRatio: overallWallRatio,
-      measuredRssRatio: median(allRssRatios),
       coldWallRatio: median(allColdRatios),
-      candidateFasterPairs: allWallRatios.filter((ratio) => ratio < 1).length,
+      candidateImprovedPairs: allWallRatios.filter(
+        (ratio) => ratio <= manifest.thresholds.improvementRatio,
+      ).length,
       measuredPairCount: allWallRatios.length,
     },
     lanes,

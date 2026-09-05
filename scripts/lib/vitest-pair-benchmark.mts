@@ -9,7 +9,6 @@ import {
   readdirSync,
   realpathSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { cpus, totalmem } from "node:os";
 import path from "node:path";
@@ -17,29 +16,33 @@ import { inspectManagedProcessGroup, runManagedCommand } from "./managed-child-p
 import {
   analyzeBenchmark,
   assertEquivalentInventories,
+  assertExecutionDigest,
   assertExactSha,
   assertInventoryAvailable,
   buildBenchmarkSchedule,
+  parseVitestExecutionReport,
   sha256,
   writeJsonAtomic,
+  type BenchmarkExecutionSummary,
   type BenchmarkLane,
   type BenchmarkManifest,
   type BenchmarkRunPlan,
   type BenchmarkRunRecord,
   type BenchmarkSide,
   type PackageManagerIdentity,
-  type ProcessSample,
 } from "./vitest-pair-benchmark-contract.mts";
 
 export {
   analyzeBenchmark,
   assertEquivalentInventories,
+  assertExecutionDigest,
   assertExactSha,
   assertInventoryAvailable,
   assertSingleWorkflowAttempt,
   benchmarkInventoryDigest,
   buildBenchmarkSchedule,
   loadBenchmarkManifest,
+  parseVitestExecutionReport,
   sha256,
   validateBenchmarkManifest,
   withTerminalManifest,
@@ -47,6 +50,8 @@ export {
 } from "./vitest-pair-benchmark-contract.mts";
 export type {
   BenchmarkAnalysis,
+  BenchmarkExecutionCounts,
+  BenchmarkExecutionSummary,
   BenchmarkLane,
   BenchmarkManifest,
   BenchmarkPhase,
@@ -55,16 +60,10 @@ export type {
   BenchmarkSide,
   BenchmarkThresholds,
   PackageManagerIdentity,
-  ProcessSample,
 } from "./vitest-pair-benchmark-contract.mts";
 
-const SAMPLE_INTERVAL_MS = 100;
 const CHILD_TIMEOUT_MS = 15 * 60 * 1000;
-const ATTRIBUTED_DESCENDANT_KILL_GRACE_MS = 2_000;
-const ATTRIBUTED_DESCENDANT_DRAIN_MS = 5_000;
-const ATTRIBUTED_DESCENDANT_POLL_MS = 25;
 export const VITEST_PAIR_HARNESS_DEADLINE_MS = 165 * 60 * 1000;
-let cachedLinuxPageSize: number | undefined;
 
 type RunCommandOptions = {
   bin: string;
@@ -72,7 +71,6 @@ type RunCommandOptions = {
   cwd: string;
   env: NodeJS.ProcessEnv;
   logPath: string;
-  samplePath?: string;
   deadline?: VitestPairDeadline;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -81,8 +79,6 @@ type RunCommandOptions = {
 type RunCommandResult = {
   exitCode: number;
   durationMs: number;
-  samples: ProcessSample[];
-  childPid: number | null;
 };
 
 type BenchmarkContext = {
@@ -96,196 +92,11 @@ type BenchmarkContext = {
   scratchDir: string;
 };
 
-type LinuxProcess = {
-  pid: number;
-  parentPid: number;
-  processGroup: number;
-  rssBytes: number;
-  startTimeTicks: string;
-  state: string;
-};
-
 export type VitestPairDeadline = {
   deadlineAt: number;
   signal: AbortSignal;
   throwIfExpired: () => void;
 };
-
-function parseProcStat(contents: string, pageSize: number): LinuxProcess {
-  const close = contents.lastIndexOf(")");
-  if (close < 0) {
-    throw new Error("invalid /proc stat row");
-  }
-  const pid = Number.parseInt(contents.slice(0, contents.indexOf(" ")), 10);
-  const fields = contents
-    .slice(close + 2)
-    .trim()
-    .split(/\s+/u);
-  return {
-    pid,
-    state: fields[0] ?? "",
-    parentPid: Number.parseInt(fields[1] ?? "", 10),
-    processGroup: Number.parseInt(fields[2] ?? "", 10),
-    startTimeTicks: fields[19] ?? "",
-    rssBytes: Math.max(0, Number.parseInt(fields[21] ?? "", 10)) * pageSize,
-  };
-}
-
-function linuxPageSize(): number {
-  if (cachedLinuxPageSize !== undefined) {
-    return cachedLinuxPageSize;
-  }
-  const result = spawnSync("getconf", ["PAGESIZE"], { encoding: "utf8" });
-  const pageSize = Number.parseInt(result.stdout.trim(), 10);
-  if (result.status !== 0 || !Number.isSafeInteger(pageSize) || pageSize <= 0) {
-    throw new Error("unable to resolve Linux page size");
-  }
-  cachedLinuxPageSize = pageSize;
-  return cachedLinuxPageSize;
-}
-
-function readLinuxProcess(pid: number, pageSize: number): LinuxProcess | undefined {
-  try {
-    return parseProcStat(readFileSync(`/proc/${String(pid)}/stat`, "utf8"), pageSize);
-  } catch {
-    return undefined;
-  }
-}
-
-function readLinuxProcessSnapshot(pageSize: number): Map<number, LinuxProcess> {
-  const snapshot = new Map<number, LinuxProcess>();
-  for (const entry of readdirSync("/proc")) {
-    if (!/^[0-9]+$/u.test(entry)) {
-      continue;
-    }
-    const process = readLinuxProcess(Number.parseInt(entry, 10), pageSize);
-    if (process) {
-      snapshot.set(process.pid, process);
-    }
-  }
-  return snapshot;
-}
-
-function isLiveLinuxProcess(process: LinuxProcess): boolean {
-  return process.state !== "Z" && process.state !== "X" && process.state !== "x";
-}
-
-class LinuxDescendantTracker {
-  private readonly identities = new Map<number, string>();
-  private readonly pageSize: number;
-
-  constructor(rootPid: number, pageSize = linuxPageSize()) {
-    this.pageSize = pageSize;
-    const root = readLinuxProcess(rootPid, pageSize);
-    if (!root) {
-      throw new Error(`unable to read benchmark root process identity ${String(rootPid)}`);
-    }
-    this.identities.set(root.pid, root.startTimeTicks);
-  }
-
-  sample(): Omit<ProcessSample, "atMs"> {
-    const snapshot = readLinuxProcessSnapshot(this.pageSize);
-    this.discover(snapshot);
-    const processes = this.liveProcesses(snapshot);
-    return {
-      processCount: processes.length,
-      rssBytes: processes.reduce((total, process) => total + process.rssBytes, 0),
-      processes: processes.map(({ pid, parentPid, processGroup, startTimeTicks, rssBytes }) => ({
-        pid,
-        parentPid,
-        processGroup,
-        startTimeTicks,
-        rssBytes,
-      })),
-    };
-  }
-
-  async terminateRemaining(rootPid: number): Promise<{ hadLiveDescendants: boolean }> {
-    let live = this.liveDescendants(rootPid);
-    const hadLiveDescendants = live.length > 0;
-    if (!hadLiveDescendants) {
-      return { hadLiveDescendants: false };
-    }
-
-    const forceAt = Date.now() + ATTRIBUTED_DESCENDANT_KILL_GRACE_MS;
-    const deadlineAt = forceAt + ATTRIBUTED_DESCENDANT_DRAIN_MS;
-    while (live.length > 0 && Date.now() < deadlineAt) {
-      const signal: NodeJS.Signals = Date.now() >= forceAt ? "SIGKILL" : "SIGTERM";
-      for (const process of live) {
-        this.signalExact(process, signal);
-      }
-      await new Promise((resolve) => {
-        setTimeout(resolve, ATTRIBUTED_DESCENDANT_POLL_MS);
-      });
-      live = this.liveDescendants(rootPid);
-    }
-    if (live.length > 0) {
-      throw Object.assign(
-        new Error(
-          `benchmark cleanup could not terminate attributed descendants: ${live
-            .map((process) => `${String(process.pid)}:${process.startTimeTicks}`)
-            .join(", ")}`,
-        ),
-        { code: "EPROCESS_TREE_CLEANUP_FAILED", processTreeState: "live" },
-      );
-    }
-    return { hadLiveDescendants };
-  }
-
-  private discover(snapshot: Map<number, LinuxProcess>): void {
-    let added = true;
-    while (added) {
-      added = false;
-      for (const process of snapshot.values()) {
-        const knownIdentity = this.identities.get(process.pid);
-        if (knownIdentity !== undefined) {
-          continue;
-        }
-        const parentIdentity = this.identities.get(process.parentPid);
-        const parent = snapshot.get(process.parentPid);
-        if (parentIdentity && parent?.startTimeTicks === parentIdentity) {
-          this.identities.set(process.pid, process.startTimeTicks);
-          added = true;
-        }
-      }
-    }
-  }
-
-  private liveProcesses(snapshot: Map<number, LinuxProcess>): LinuxProcess[] {
-    const processes: LinuxProcess[] = [];
-    for (const [pid, startTimeTicks] of this.identities) {
-      const process = snapshot.get(pid);
-      if (process && process.startTimeTicks === startTimeTicks && isLiveLinuxProcess(process)) {
-        processes.push(process);
-      }
-    }
-    return processes.toSorted((left, right) => left.pid - right.pid);
-  }
-
-  private liveDescendants(rootPid: number): LinuxProcess[] {
-    const snapshot = readLinuxProcessSnapshot(this.pageSize);
-    this.discover(snapshot);
-    return this.liveProcesses(snapshot).filter((process) => process.pid !== rootPid);
-  }
-
-  private signalExact(process: LinuxProcess, signal: NodeJS.Signals): void {
-    const current = readLinuxProcess(process.pid, this.pageSize);
-    if (!current || current.startTimeTicks !== process.startTimeTicks) {
-      return;
-    }
-    try {
-      processKill(current.pid, signal);
-    } catch (error) {
-      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ESRCH") {
-        throw error;
-      }
-    }
-  }
-}
-
-function processKill(pid: number, signal: NodeJS.Signals): void {
-  process.kill(pid, signal);
-}
 
 function deadlineError(timeoutMs: number): Error {
   return Object.assign(
@@ -342,32 +153,12 @@ export async function runOwnedCommand(options: RunCommandOptions): Promise<RunCo
   options.deadline?.throwIfExpired();
   signal?.throwIfAborted();
   mkdirSync(path.dirname(options.logPath), { recursive: true });
-  if (options.samplePath) {
-    mkdirSync(path.dirname(options.samplePath), { recursive: true });
-  }
   const logFd = openSync(options.logPath, "wx", 0o600);
-  const samples: ProcessSample[] = [];
   let childPid: number | null = null;
-  let tracker: LinuxDescendantTracker | undefined;
-  let sampler: ReturnType<typeof setInterval> | undefined;
-  let exitCode: number | undefined;
-  let commandError: Error | undefined;
-  let durationMs = 0;
-  let hadLiveDescendants = false;
   const started = process.hrtime.bigint();
-  const sample = () => {
-    if (!tracker) {
-      return;
-    }
-    const reading = tracker.sample();
-    samples.push({
-      atMs: Number(process.hrtime.bigint() - started) / 1_000_000,
-      ...reading,
-    });
-  };
   try {
     options.deadline?.throwIfExpired();
-    exitCode = await runManagedCommand({
+    const exitCode = await runManagedCommand({
       bin: options.bin,
       args: options.args,
       cwd: options.cwd,
@@ -381,11 +172,6 @@ export async function runOwnedCommand(options: RunCommandOptions): Promise<RunCo
       abortKillGraceMs: 2_000,
       onReady(child) {
         childPid = child.pid ?? null;
-        if (childPid && process.platform === "linux") {
-          tracker = new LinuxDescendantTracker(childPid);
-        }
-        sample();
-        sampler = setInterval(sample, SAMPLE_INTERVAL_MS);
       },
     });
     if (
@@ -397,52 +183,13 @@ export async function runOwnedCommand(options: RunCommandOptions): Promise<RunCo
     ) {
       throw new Error(`managed command process group ${String(childPid)} did not quiesce`);
     }
-    durationMs = Number(process.hrtime.bigint() - started) / 1_000_000;
-  } catch (error) {
-    durationMs = Number(process.hrtime.bigint() - started) / 1_000_000;
-    commandError = normalizeError(signal?.aborted ? (signal.reason ?? error) : error);
+    return {
+      exitCode,
+      durationMs: Number(process.hrtime.bigint() - started) / 1_000_000,
+    };
   } finally {
-    clearInterval(sampler);
-    sample();
-    try {
-      if (tracker && childPid) {
-        ({ hadLiveDescendants } = await tracker.terminateRemaining(childPid));
-      }
-    } catch (cleanupError) {
-      const normalizedCleanupError = normalizeError(cleanupError);
-      commandError = commandError
-        ? new AggregateError(
-            [commandError, normalizedCleanupError],
-            "benchmark command and attributed descendant cleanup failed",
-            { cause: normalizedCleanupError },
-          )
-        : normalizedCleanupError;
-    } finally {
-      closeSync(logFd);
-      if (options.samplePath) {
-        writeFileSync(
-          options.samplePath,
-          samples.map((entry) => JSON.stringify(entry)).join("\n") + (samples.length ? "\n" : ""),
-          { flag: "wx", mode: 0o600 },
-        );
-      }
-    }
+    closeSync(logFd);
   }
-  if (commandError) {
-    throw commandError;
-  }
-  if (hadLiveDescendants) {
-    throw Object.assign(
-      new Error("managed command exited while attributed descendants remained active"),
-      { code: "EPROCESS_TREE_CLEANUP_FAILED", processTreeState: "terminated" },
-    );
-  }
-  return {
-    exitCode: exitCode ?? 1,
-    durationMs,
-    samples,
-    childPid,
-  };
 }
 
 function parseGnuTime(file: string) {
@@ -521,18 +268,30 @@ export function buildBenchmarkCommandEnv(
   };
 }
 
-function runVitestArgs(lane: BenchmarkLane): string[] {
+function runVitestArgs(lane: BenchmarkLane, reportFile: string): string[] {
+  if (!path.isAbsolute(reportFile)) {
+    throw new Error("Vitest JSON report path must be absolute");
+  }
   if (lane.config) {
     return [
       "scripts/run-vitest.mjs",
       "run",
       "--config",
       lane.config,
-      "--reporter=dot",
+      "--reporter=json",
+      "--outputFile",
+      reportFile,
       ...lane.files,
     ];
   }
-  return ["scripts/run-vitest.mjs", ...lane.files, "--", "--reporter=dot"];
+  return [
+    "scripts/run-vitest.mjs",
+    ...lane.files,
+    "--",
+    "--reporter=json",
+    "--outputFile",
+    reportFile,
+  ];
 }
 
 async function runBenchmarkCommand(
@@ -540,6 +299,7 @@ async function runBenchmarkCommand(
   plan: BenchmarkRunPlan,
   packageManager: PackageManagerIdentity,
   deadline: VitestPairDeadline,
+  expectedExecutionDigest?: string,
 ): Promise<BenchmarkRunRecord> {
   deadline.throwIfExpired();
   const checkout = plan.side === "baseline" ? context.baselineDir : context.candidateDir;
@@ -561,11 +321,13 @@ async function runBenchmarkCommand(
   mkdirSync(path.join(cacheRoot, "tmp"), { recursive: true });
   const timePath = path.join(runRoot, "gnu-time.txt");
   const logPath = path.join(runRoot, "output.log");
-  const samplePath = path.join(runRoot, "process-samples.jsonl");
-  const vitestArgs = runVitestArgs(plan.lane);
+  const reportPath = path.resolve(runRoot, "vitest-report.json");
+  const vitestArgs = runVitestArgs(plan.lane, reportPath);
   const command = ["/usr/bin/time", "-v", "-o", timePath, process.execPath, ...vitestArgs];
   const startedAt = new Date().toISOString();
   let result: RunCommandResult | undefined;
+  let timing: ReturnType<typeof parseGnuTime> | undefined;
+  let execution: BenchmarkExecutionSummary | null = null;
   try {
     result = await runOwnedCommand({
       bin: command[0]!,
@@ -573,10 +335,16 @@ async function runBenchmarkCommand(
       cwd: checkout,
       env: buildBenchmarkCommandEnv(home, cacheRoot, packageManager),
       logPath,
-      samplePath,
       deadline,
     });
-    const timing = parseGnuTime(timePath);
+    timing = parseGnuTime(timePath);
+    if (result.exitCode !== 0) {
+      throw new Error(`${plan.id} exited with status ${result.exitCode}`);
+    }
+    execution = parseVitestExecutionReport(reportPath, checkout, plan.lane);
+    if (expectedExecutionDigest !== undefined) {
+      assertExecutionDigest(execution, expectedExecutionDigest, plan.id);
+    }
     const record: BenchmarkRunRecord = {
       id: plan.id,
       phase: plan.phase,
@@ -591,14 +359,10 @@ async function runBenchmarkCommand(
       durationMs: result.durationMs,
       userCpuMs: timing.userCpuMs,
       systemCpuMs: timing.systemCpuMs,
-      peakRssBytes: Math.max(...result.samples.map((sample) => sample.rssBytes), 1),
-      processSampleCount: result.samples.length,
+      execution,
       exitCode: result.exitCode,
     };
     writeJsonAtomic(path.join(runRoot, "record.json"), record);
-    if (result.exitCode !== 0) {
-      throw new Error(`${plan.id} exited with status ${result.exitCode}`);
-    }
     return record;
   } catch (error) {
     const record: BenchmarkRunRecord = {
@@ -613,10 +377,9 @@ async function runBenchmarkCommand(
       packageManager,
       startedAt,
       durationMs: result?.durationMs ?? 0,
-      userCpuMs: 0,
-      systemCpuMs: 0,
-      peakRssBytes: Math.max(...(result?.samples ?? []).map((sample) => sample.rssBytes), 0),
-      processSampleCount: result?.samples.length ?? 0,
+      userCpuMs: timing?.userCpuMs ?? 0,
+      systemCpuMs: timing?.systemCpuMs ?? 0,
+      execution,
       exitCode: result?.exitCode ?? null,
       error: error instanceof Error ? error.message : String(error),
     };
@@ -718,7 +481,7 @@ async function runVitestPairBenchmarkBeforeDeadline(
 ): Promise<void> {
   deadline.throwIfExpired();
   if (process.platform !== "linux") {
-    throw new Error("vitest-pair benchmark requires Linux /proc");
+    throw new Error("vitest-pair benchmark requires Linux");
   }
   assertExactSha(context.baselineSha, "baseline SHA");
   assertExactSha(context.candidateSha, "candidate SHA");
@@ -771,31 +534,45 @@ async function runVitestPairBenchmarkBeforeDeadline(
   await runSetupCommand(context, "candidate", packageManager, deadline);
 
   const correctness: BenchmarkRunRecord[] = [];
+  const correctnessDigests = new Map<string, string>();
   for (const lane of context.manifest.lanes) {
+    const laneRecords = new Map<BenchmarkSide, BenchmarkRunRecord>();
     for (const side of ["baseline", "candidate"] as const) {
       deadline.throwIfExpired();
-      correctness.push(
-        await runBenchmarkCommand(
-          context,
-          {
-            id: `correctness-${lane.id}-${side}`,
-            phase: "correctness",
-            side,
-            lane,
-            round: null,
-            pair: null,
-            cacheMode: "fresh",
-          },
-          packageManager,
-          deadline,
-        ),
+      const record = await runBenchmarkCommand(
+        context,
+        {
+          id: `correctness-${lane.id}-${side}`,
+          phase: "correctness",
+          side,
+          lane,
+          round: null,
+          pair: null,
+          cacheMode: "fresh",
+        },
+        packageManager,
+        deadline,
       );
+      correctness.push(record);
+      laneRecords.set(side, record);
     }
+    const baselineExecution = laneRecords.get("baseline")?.execution;
+    const candidateExecution = laneRecords.get("candidate")?.execution;
+    if (!baselineExecution || !candidateExecution) {
+      throw new Error(`correctness execution inventory is missing for lane ${lane.id}`);
+    }
+    assertExecutionDigest(
+      candidateExecution,
+      baselineExecution.digest,
+      `correctness lane ${lane.id}`,
+    );
+    correctnessDigests.set(lane.id, baselineExecution.digest);
   }
   writeJsonAtomic(path.join(context.outputDir, "correctness-manifest.json"), {
     version: 1,
     status: "success",
     inventorySha256: baselineInventory.inventorySha256,
+    executionDigests: Object.fromEntries(correctnessDigests),
     records: correctness,
   });
 
@@ -804,7 +581,13 @@ async function runVitestPairBenchmarkBeforeDeadline(
   const records: BenchmarkRunRecord[] = [];
   for (const plan of buildBenchmarkSchedule(context.manifest)) {
     deadline.throwIfExpired();
-    records.push(await runBenchmarkCommand(context, plan, packageManager, deadline));
+    const expectedExecutionDigest = correctnessDigests.get(plan.lane.id);
+    if (!expectedExecutionDigest) {
+      throw new Error(`correctness execution digest is missing for lane ${plan.lane.id}`);
+    }
+    records.push(
+      await runBenchmarkCommand(context, plan, packageManager, deadline, expectedExecutionDigest),
+    );
   }
   writeJsonAtomic(path.join(context.outputDir, "timing", "records.json"), {
     version: 1,
