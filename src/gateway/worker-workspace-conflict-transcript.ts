@@ -33,6 +33,7 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
       key: identity.sessionKey,
       agentId: identity.agentId,
       clone: false,
+      exactRead: true,
     });
     const lostSession = () => {
       if (missingMessage) {
