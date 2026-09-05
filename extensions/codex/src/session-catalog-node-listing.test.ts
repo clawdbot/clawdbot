@@ -5,12 +5,14 @@ import {
   nodeHostMocks,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+  CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
   tempDirs,
   listCodexSessionCatalog,
   registerCodexSessionCatalog,
   createCodexSessionCatalogNodeHostCommands,
   config,
   idleThread,
+  catalogThreadItem,
   createControl,
   createEligibleControl,
   createRuntime,
@@ -460,14 +462,33 @@ describe("Codex supervision catalog", () => {
     }
   });
 
+  it.each([
+    { mode: "app-owned", execHost: "app", boundedReader: false },
+    { mode: "standalone", execHost: undefined, boundedReader: true },
+  ])("preserves native catalog ownership in $mode workers", ({ execHost, boundedReader }) => {
+    vi.stubEnv("OPENCLAW_NODE_EXEC_HOST", execHost);
+    const commands = createCodexSessionCatalogNodeHostCommands(createEligibleControl()).map(
+      (command) => command.command,
+    );
+
+    expect(commands).toEqual(
+      expect.arrayContaining([
+        CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+        CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+      ]),
+    );
+    expect(commands.includes(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND)).toBe(boundedReader);
+  });
+
   it("serves one bounded transcript page from the node host command", async () => {
+    const item = catalogThreadItem("item-1", { text: "bounded answer" });
     const listTurnPage = vi.fn(async () => ({
       data: [
         {
           id: "turn-1",
-          items: [{ id: "item-1", type: "agentMessage", text: "bounded answer" }],
+          items: [item],
         },
-      ] as never,
+      ],
       nextCursor: "turns-page-2",
     }));
     const control = createEligibleControl({ listTurnPage });
@@ -485,7 +506,7 @@ describe("Codex supervision catalog", () => {
         data: [
           {
             id: "turn-1",
-            items: [{ id: "item-1", type: "agentMessage", text: "bounded answer" }],
+            items: [item],
           },
         ],
         nextCursor: "turns-page-2",
@@ -497,6 +518,53 @@ describe("Codex supervision catalog", () => {
       limit: 25,
       sortDirection: "desc",
       itemsView: "full",
+    });
+  });
+
+  it("serves bounded generic items through the optional node transcript command", async () => {
+    const output = "x".repeat(600 * 1024);
+    const source = catalogThreadItem("tool-1", {
+      type: "commandExecution",
+      aggregatedOutput: output,
+    });
+    const listItemPage = vi.fn(async () => ({
+      data: [{ turnId: "turn-1", item: source }],
+      nextCursor: "native-older",
+    }));
+    const control = createEligibleControl({
+      requireEligibleThread: vi.fn(async () => idleThread({ historyMode: "paginated" })),
+      listItemPage,
+    });
+    const command = createCodexSessionCatalogNodeHostCommands(control).find(
+      (candidate) => candidate.command === CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
+    );
+    if (!command) {
+      throw new Error("Codex bounded transcript node command was not registered");
+    }
+
+    const payload = await command.handle(
+      JSON.stringify({ threadId: "thread-1", cursor: "native-start", limit: 2 }),
+    );
+    expect(JSON.parse(payload)).toEqual({
+      items: [
+        {
+          id: "tool-1",
+          type: "toolResult",
+          text: `${output.slice(0, 512 * 1024 - 3)}…`,
+          raw: source,
+          truncated: true,
+        },
+      ],
+      nextCursor: "native-older",
+    });
+    expect(Buffer.byteLength(JSON.stringify({ payloadJSON: payload }), "utf8")).toBeLessThan(
+      20 * 1024 * 1024,
+    );
+    expect(listItemPage).toHaveBeenCalledWith({
+      threadId: "thread-1",
+      cursor: "native-start",
+      limit: 2,
+      sortDirection: "desc",
     });
   });
 
@@ -533,7 +601,10 @@ describe("Codex supervision catalog", () => {
     const transcriptCommand = commands.find(
       (candidate) => candidate.command === CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
     );
-    if (!listCommand || !transcriptCommand) {
+    const boundedTranscriptCommand = commands.find(
+      (candidate) => candidate.command === CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
+    );
+    if (!listCommand || !transcriptCommand || !boundedTranscriptCommand) {
       throw new Error("Codex node catalog commands were not registered");
     }
 
@@ -547,6 +618,11 @@ describe("Codex supervision catalog", () => {
         JSON.stringify({ agentId: "beta", threadId: "thread-beta", limit: 25 }),
       ),
     ).resolves.toBe(JSON.stringify({ data: [] }));
+    await expect(
+      boundedTranscriptCommand.handle(
+        JSON.stringify({ agentId: "beta", threadId: "thread-beta", limit: 25 }),
+      ),
+    ).resolves.toBe(JSON.stringify({ items: [] }));
     await expect(listCommand.handle(JSON.stringify({ limit: 25 }))).rejects.toThrow(
       "session agent resolution has no explicit owner",
     );

@@ -494,6 +494,16 @@ export function retainGatewayRootWorkAdmissionContinuation(): (() => void) | nul
   return retainGatewayRootWorkAdmissionContinuationScope()?.release ?? null;
 }
 
+/** Retains an existing root for started effects without admitting or parking unrooted work. */
+export async function runWithRetainedGatewayRootWork<T>(run: () => T | Promise<T>): Promise<T> {
+  const release = retainGatewayRootWorkAdmissionContinuation();
+  try {
+    return await run();
+  } finally {
+    release?.();
+  }
+}
+
 /** Starts process-lifetime work without inheriting the request root that created it. */
 export function runOutsideGatewayRootWorkAdmission<T>(run: () => T): T {
   return GATEWAY_WORK_ADMISSION_STATE.currentRootWork.exit(run);

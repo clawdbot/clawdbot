@@ -2,7 +2,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
@@ -15,10 +15,14 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { GatewayConnectionWork } from "./server-connection-work.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import { createPreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import { attachGatewayWsConnectionHandler } from "./server/ws-connection.js";
-import { createGatewayWsTestLogger } from "./server/ws-connection.test-helpers.js";
+import {
+  createGatewayWsTestLogger,
+  createGatewayWsTestRequestContext,
+} from "./server/ws-connection.test-helpers.js";
 import type { WorkerConnectionService } from "./server/ws-connection/worker-connection.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { withTempConfig } from "./test-temp-config.js";
@@ -43,7 +47,6 @@ const BUILD = {
 } as const;
 const WORKER_GATEWAY_PATH = "/__openclaw__/worker";
 const RESOLVED_AUTH: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
-const activeHarnesses: PublicWorkerHarness[] = [];
 
 type PayloadLimited = {
   _maxPayload: number;
@@ -154,6 +157,7 @@ class PublicWorkerHarness {
   readonly store: WorkerEnvironmentStore;
   readonly workerService: WorkerConnectionService;
   readonly clients = new Set<GatewayWsClient>();
+  readonly connectionWork = new GatewayConnectionWork();
   // Mirrors the production server options so a client that offers
   // permessage-deflate negotiates it here too (server-runtime-state.ts).
   readonly wss = new WebSocketServer({
@@ -237,6 +241,7 @@ class PublicWorkerHarness {
     attachGatewayWsConnectionHandler({
       wss: this.wss,
       clients: this.clients,
+      connectionWork: this.connectionWork,
       bootId: "worker-ingress-test-boot",
       preauthConnectionBudget: this.preauthBudget,
       port: 0,
@@ -250,7 +255,7 @@ class PublicWorkerHarness {
       logWsControl: this.logWsControl as never,
       extraHandlers: {},
       broadcast: vi.fn(),
-      buildRequestContext: () => ({}) as never,
+      buildRequestContext: () => createGatewayWsTestRequestContext() as never,
       workerConnectionService: this.workerService,
     });
     attachGatewayUpgradeHandler({
@@ -274,10 +279,9 @@ class PublicWorkerHarness {
   }
 
   async close(): Promise<void> {
+    this.connectionWork.beginClose();
+    await this.connectionWork.drain();
     this.publicRateLimiter.dispose();
-    for (const socket of this.wss.clients) {
-      socket.terminate();
-    }
     await new Promise<void>((resolve) => {
       this.wss.close(() => resolve());
     });
@@ -298,18 +302,15 @@ async function withHarness(
     prefix: "openclaw-public-worker-ingress-",
     run: async () => {
       const harness = new PublicWorkerHarness(options);
-      activeHarnesses.push(harness);
-      await harness.start();
-      await run(harness);
+      try {
+        await harness.start();
+        await run(harness);
+      } finally {
+        await harness.close();
+      }
     },
   });
 }
-
-afterEach(async () => {
-  for (const harness of activeHarnesses.splice(0)) {
-    await harness.close();
-  }
-});
 
 describe("public worker ingress", () => {
   it("admits a store-backed worker on the reserved public path", async () => {

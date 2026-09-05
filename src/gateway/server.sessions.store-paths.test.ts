@@ -1,18 +1,20 @@
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import * as sessionDirs from "../agents/session-dirs.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import * as agentDatabaseRegistry from "../state/openclaw-agent-db-registry.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { testState, writeSessionStore } from "./test-helpers.js";
+import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   setupGatewaySessionsTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
 test("session RPC paths name the physical SQLite store", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -210,4 +212,112 @@ test("configured-only parent-owned stores keep lineage children without director
       enumerateAgentDirs.mockRestore();
     }
   });
+});
+
+test("filters sessions by agentId", async () => {
+  const { dir } = await createSessionStoreDir();
+  testState.sessionStorePath = undefined;
+  testState.sessionConfig = {
+    store: path.join(dir, "{agentId}", "sessions.json"),
+  };
+  testState.agentsConfig = {
+    list: [{ id: "home", default: true }, { id: "work" }],
+  };
+  const homeDir = path.join(dir, "home");
+  const workDir = path.join(dir, "work");
+  await fs.mkdir(homeDir, { recursive: true });
+  await fs.mkdir(workDir, { recursive: true });
+  await writeSessionStore({
+    storePath: path.join(homeDir, "sessions.json"),
+    agentId: "home",
+    entries: {
+      main: {
+        sessionId: "sess-home-main",
+        updatedAt: Date.now(),
+      },
+      "discord:group:dev": {
+        sessionId: "sess-home-group",
+        updatedAt: Date.now() - 1000,
+      },
+    },
+  });
+  await writeSessionStore({
+    storePath: path.join(workDir, "sessions.json"),
+    agentId: "work",
+    entries: {
+      main: {
+        sessionId: "sess-work-main",
+        updatedAt: Date.now(),
+      },
+    },
+  });
+
+  const { ws } = await openClient();
+  try {
+    const homeSessions = await rpcReq<{
+      sessions: Array<{ key: string }>;
+    }>(ws, "sessions.list", {
+      includeGlobal: false,
+      includeUnknown: false,
+      agentId: "home",
+    });
+    expect(homeSessions.ok).toBe(true);
+    expect(homeSessions.payload?.sessions.map((s) => s.key).toSorted()).toEqual([
+      "agent:home:discord:group:dev",
+      "agent:home:main",
+    ]);
+
+    const workSessions = await rpcReq<{
+      sessions: Array<{ key: string }>;
+    }>(ws, "sessions.list", {
+      includeGlobal: false,
+      includeUnknown: false,
+      agentId: "work",
+    });
+    expect(workSessions.ok).toBe(true);
+    expect(workSessions.payload?.sessions.map((s) => s.key)).toEqual(["agent:work:main"]);
+  } finally {
+    ws.close();
+  }
+});
+
+test("resolves and patches main alias to default agent main key", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  testState.sessionConfig = { mainKey: "work" };
+
+  await writeSessionStore({
+    storePath,
+    agentId: "ops",
+    mainKey: "work",
+    entries: {
+      main: {
+        sessionId: "sess-ops-main",
+        updatedAt: Date.now(),
+      },
+    },
+  });
+
+  const { ws } = await openClient();
+  try {
+    const resolved = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
+      key: "main",
+    });
+    expect(resolved.ok).toBe(true);
+    expect(resolved.payload?.key).toBe("agent:ops:work");
+
+    const patched = await rpcReq<{ ok: true; key: string }>(ws, "sessions.patch", {
+      key: "main",
+      thinkingLevel: "medium",
+    });
+    expect(patched.ok).toBe(true);
+    expect(patched.payload?.key).toBe("agent:ops:work");
+
+    expect(
+      loadSessionEntry({ agentId: "ops", sessionKey: "agent:ops:work", storePath })?.thinkingLevel,
+    ).toBe("medium");
+    expect(loadSessionEntry({ agentId: "ops", sessionKey: "main", storePath })).toBeUndefined();
+  } finally {
+    ws.close();
+  }
 });

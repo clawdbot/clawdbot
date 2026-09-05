@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
+import { controlUiSource } from "../src/plugins/package-manifest.js";
 
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 
@@ -29,6 +30,7 @@ const repositoryScriptEntries = [
   "scripts/check-control-ui-precompressed-assets.mts!",
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
+  "scripts/check-plugin-sdk-exports.mts!",
   // Cloudflare deployment template: wrangler bundles the Worker from this entry.
   "scripts/cloudflare/src/index.ts!",
   // Invoked by the documented macOS Computer Use live-proof shell rig.
@@ -183,6 +185,8 @@ const rootEntries = [
   "src/docker-healthcheck.ts!",
   // Uploaded in the worker bundle and launched by rsync; no static host import exists.
   "src/worker/workspace-rsync-receiver.ts!",
+  // v2026.9.1 Gateways lazy-import this stable dist entry after an in-place update.
+  "src/gateway/plugin-channel-reload-targets.ts!",
   // Shipped compatibility facade for statusCommand and getStatusSummary.
   "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
@@ -230,6 +234,8 @@ const rootEntries = [
   "src/mcp/plugin-tools-serve.ts!",
   // Dedicated tsdown entry exercised against built plugin singletons.
   "src/plugins/build-smoke-entry.ts!",
+  // Released Gateways still import this stable entry after an on-disk update.
+  "src/gateway/plugin-channel-reload-targets.ts!",
   // Package-script owners invoke these generated-artifact modules directly.
   "src/config/doc-baseline.ts!",
   "src/plugins/runtime-sidecar-paths-baseline.ts!",
@@ -277,6 +283,7 @@ const bundledPluginEntries = [
   // Provider catalogs and web tools resolve these manifest/convention-owned
   // modules from the plugin root at runtime.
   "provider-discovery.ts!",
+  "capability-catalog.ts!",
   "{web-search,web-fetch}-provider.ts!",
   "{api,contract-api,helper-api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,setup-api}.ts!",
   "subagent-hooks-api.ts!",
@@ -896,4 +903,23 @@ const config = {
   },
 } as const;
 
-export default config;
+const configuredWorkspaces = new Map(Object.entries(config.workspaces));
+// Browser roots come from authoring metadata; the runtime manifest names only
+// compiled assets. Keep each plugin's remaining files subject to reachability.
+const browserWorkspaces = Object.fromEntries(
+  fs
+    .globSync(`${BUNDLED_PLUGIN_ROOT_DIR}/*/package.json`)
+    .toSorted()
+    .flatMap((manifestPath) => {
+      const source = controlUiSource(JSON.parse(fs.readFileSync(manifestPath, "utf8")));
+      if (!source) {
+        return [];
+      }
+      const workspace = path.dirname(manifestPath).replaceAll("\\", "/");
+      const settings =
+        configuredWorkspaces.get(workspace) ?? config.workspaces[`${BUNDLED_PLUGIN_ROOT_DIR}/*`];
+      return [[workspace, { ...settings, entry: [...settings.entry, `${source}!`] }]];
+    }),
+);
+
+export default { ...config, workspaces: { ...config.workspaces, ...browserWorkspaces } };

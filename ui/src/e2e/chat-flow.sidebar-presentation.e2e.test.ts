@@ -1,6 +1,10 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -87,12 +91,15 @@ suite.define(() => {
       const heightBefore = await secondRow.evaluate((row) => row.getBoundingClientRect().height);
       if (captureUiProofEnabled) {
         await page.waitForTimeout(800);
-        await secondRow.screenshot({
-          path: path.join(
+        await writeFile(
+          path.join(
             path.join(suite.artifactDir, "sidebar-subtitle-stability"),
             "01-running-before-open.png",
           ),
-        });
+          await takeControlUiElementScreenshot(page, secondRow, [
+            secondRow.getByText("Using bash"),
+          ]),
+        );
       }
 
       await secondRow.locator("a.sidebar-recent-session__link").click();
@@ -106,12 +113,15 @@ suite.define(() => {
       expect(heightAfter).toBeCloseTo(heightBefore, 1);
       if (captureUiProofEnabled) {
         await page.waitForTimeout(800);
-        await secondRow.screenshot({
-          path: path.join(
+        await writeFile(
+          path.join(
             path.join(suite.artifactDir, "sidebar-subtitle-stability"),
             "02-running-after-open.png",
           ),
-        });
+          await takeControlUiElementScreenshot(page, secondRow, [
+            secondRow.getByText("Using bash"),
+          ]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);
@@ -200,13 +210,13 @@ suite.define(() => {
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.getByText("Implementing the repair").waitFor();
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(
+        await writeFile(
+          path.join(
             path.join(suite.artifactDir, "remote-session-sidebar-metadata"),
             "01-running-subtitle.png",
           ),
-        });
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [row]),
+        );
       }
       await gateway.setSessionsListResponse(completed);
       const listCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
@@ -228,13 +238,13 @@ suite.define(() => {
       await expectRequestCountStable(gateway, "sessions.list", listCount, 500, rosterMatch);
       expect(await row.textContent()).not.toContain("[[");
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(
+        await writeFile(
+          path.join(
             path.join(suite.artifactDir, "remote-session-sidebar-metadata"),
             "02-final-reply-subtitle.png",
           ),
-        });
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [row]),
+        );
       }
       const listRequests = await gateway.getRequests("sessions.list", rosterMatch);
       expect(listRequests.at(-1)?.params).toMatchObject({ includeLastMessage: true });
@@ -423,12 +433,13 @@ suite.define(() => {
       expect(await busyRow.locator(".sidebar-recent-session__subtitle").count()).toBe(0);
       expect(await busyRow.getAttribute("class")).toContain("sidebar-recent-session--single-line");
       if (captureUiProofEnabled) {
-        await page.locator(".shell-nav").screenshot({
-          path: path.join(
+        await writeFile(
+          path.join(
             path.join(suite.artifactDir, "session-status-second-row-implementation"),
             "00-default-hidden-preview.png",
           ),
-        });
+          await takeControlUiElementScreenshot(page, page.locator(".shell-nav"), [busyRow]),
+        );
       }
       await page.locator(".sidebar-session-toolbar .sidebar-session-sort").click();
       const previewToggle = page.locator('wa-dropdown-item[value="show-preview"]');
@@ -460,13 +471,13 @@ suite.define(() => {
         }
         await page.emulateMedia({ reducedMotion: "no-preference" });
         if (captureUiProofEnabled) {
-          await page.locator(".shell-nav").screenshot({
-            animations: "disabled",
-            path: path.join(
+          await writeFile(
+            path.join(
               path.join(suite.artifactDir, "session-status-second-row-implementation"),
               `indicators-${colorScheme}.png`,
             ),
-          });
+            await takeControlUiElementScreenshot(page, page.locator(".shell-nav"), [busyRow]),
+          );
         }
       }
       const shellNav = page.locator(".shell-nav");
@@ -482,21 +493,20 @@ suite.define(() => {
           .toBe(sidebarWidth);
         await page.mouse.move(900, 400);
         if (captureUiProofEnabled) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(
+          await writeFile(
+            path.join(
               path.join(suite.artifactDir, "session-status-second-row-implementation"),
               `01-second-row-endcap-${sidebarWidth}.png`,
             ),
-          });
-          await shellNav.screenshot({
-            animations: "disabled",
-            path: path.join(
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [busyRow]),
+          );
+          await writeFile(
+            path.join(
               path.join(suite.artifactDir, "session-status-second-row-implementation"),
               `01-sidebar-${sidebarWidth}.png`,
             ),
-          });
+            await takeControlUiElementScreenshot(page, shellNav, [busyRow]),
+          );
         }
         badgeSizes.push(
           await ordinaryBadge.evaluate((element) => {
@@ -613,13 +623,13 @@ suite.define(() => {
       const restingWidth = await unreadTitle.evaluate((element) => element.clientWidth);
       await unreadRow.hover();
       if (captureUiProofEnabled) {
-        await shellNav.screenshot({
-          animations: "disabled",
-          path: path.join(
+        await writeFile(
+          path.join(
             path.join(suite.artifactDir, "session-status-second-row-implementation"),
             "03-unread-hover.png",
           ),
-        });
+          await takeControlUiElementScreenshot(page, shellNav, [unreadRow]),
+        );
       }
       await unreadDot.waitFor({ state: "hidden" });
       const hoverWidth = await unreadTitle.evaluate((element) => element.clientWidth);
@@ -654,13 +664,13 @@ suite.define(() => {
         )
         .toBe("1");
       if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(
+        await writeFile(
+          path.join(
             path.join(suite.artifactDir, "session-status-second-row-implementation"),
             "02-hover-actions.png",
           ),
-        });
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [busyRow]),
+        );
       }
       await plainRow.waitFor();
       for (const size of badgeSizes) {

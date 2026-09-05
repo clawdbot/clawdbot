@@ -1,10 +1,12 @@
 // Dashboard MCP App E2E covers the real Control UI, sandbox proxy, and mocked Gateway lease flow.
+import { writeFile } from "node:fs/promises";
 import type { Server as HttpServer } from "node:http";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
@@ -385,7 +387,10 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     await expectRetainedBoardPresentation(page, "split");
     if (artifactDir) {
       await appContent.waitFor();
-      await page.screenshot({ path: `${artifactDir}/01-dashboard.png`, fullPage: true });
+      await writeFile(
+        `${artifactDir}/01-dashboard.png`,
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [appContent]),
+      );
     }
 
     await focusChatSidePanel(page);
@@ -433,14 +438,22 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
     await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
     const inactiveIdentity = await readBoardIdentity(page);
     if (artifactDir) {
-      await page.screenshot({ path: `${artifactDir}/02-tasks.png`, fullPage: true });
+      await writeFile(
+        `${artifactDir}/02-tasks.png`,
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+          sidePanel.getByRole("tab", { name: "Tasks", exact: true }),
+        ]),
+      );
     }
 
     await sidePanel.getByRole("tab", { name: "Dashboard", exact: true }).click();
     await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(true);
     if (artifactDir) {
       await appContent.waitFor();
-      await page.screenshot({ path: `${artifactDir}/03-dashboard-restored.png`, fullPage: true });
+      await writeFile(
+        `${artifactDir}/03-dashboard-restored.png`,
+        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [appContent]),
+      );
     }
     expect(inactiveIdentity).toEqual({ connected: true, hidden: true, inert: true, same: true });
     await expectRetainedBoardPresentation(page, "split");

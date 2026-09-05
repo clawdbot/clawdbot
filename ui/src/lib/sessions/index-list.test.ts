@@ -1,8 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
-import { createSessionCapability } from "./index.ts";
+import {
+  createSessionCapabilityHarness,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
+
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
 
 type ListParams = {
   agentId?: string;
@@ -38,7 +45,7 @@ function sessionHarness(request: unknown) {
     hello: null,
   };
   let listener: ((next: typeof snapshot) => void) | undefined;
-  const sessions = createSessionCapability({
+  const sessions = createTestSessionCapability({
     snapshot,
     subscribe(next) {
       listener = next;
@@ -58,6 +65,186 @@ function sessionHarness(request: unknown) {
 }
 
 describe("session list requests", () => {
+  it("keeps an observed active query independent and retires its disposed handle", async () => {
+    const pending = createDeferred<SessionsListResult>();
+    let holdRefresh = false;
+    const request = vi.fn(async (_method: string, params?: ListParams) => {
+      if (holdRefresh) {
+        return pending.promise;
+      }
+      const keys = Array.from({ length: 3 }, (_, index) => `agent:${params?.agentId}:${index}`);
+      return listResult(keys.slice(0, params?.limit ?? 3), keys.length);
+    });
+    const { sessions } = sessionHarness(request);
+    await sessions.refresh({ agentId: "main", limit: 1, force: true });
+    const primary = sessions.state.result;
+    const query = { agentId: "writer", limit: 2 };
+    const listener = vi.fn();
+    const observation = sessions.observeList(query, listener);
+
+    try {
+      expect(listener).toHaveBeenCalledExactlyOnceWith({
+        result: null,
+        agentId: null,
+        loading: false,
+        error: null,
+      });
+      expect(request).toHaveBeenCalledOnce();
+      query.agentId = "research";
+      query.limit = 1;
+
+      await observation.refresh();
+
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.list",
+        expect.objectContaining({ agentId: "writer", limit: 2 }),
+      );
+      expect(listener).toHaveBeenLastCalledWith({
+        result: listResult(["agent:writer:0", "agent:writer:1"], 3),
+        agentId: "writer",
+        loading: false,
+        error: null,
+      });
+      expect(sessions.state.result).toEqual(primary);
+
+      holdRefresh = true;
+      const refresh = observation.refresh();
+      const retired = expect(refresh).rejects.toThrow("disposed");
+      observation.dispose();
+      const callbacksAfterDispose = listener.mock.calls.length;
+      pending.resolve(listResult(["agent:writer:late"]));
+      await retired;
+
+      expect(listener).toHaveBeenCalledTimes(callbacksAfterDispose);
+      expect(sessions.state.result).toEqual(primary);
+      const requestsAfterDispose = request.mock.calls.length;
+      await expect(observation.refresh()).rejects.toThrow("disposed");
+      expect(request).toHaveBeenCalledTimes(requestsAfterDispose);
+    } finally {
+      pending.resolve(listResult());
+      observation.dispose();
+      sessions.dispose();
+    }
+  });
+
+  it("queues a reentrant observed refresh behind the current request", async () => {
+    const firstResponse = createDeferred<SessionsListResult>();
+    const secondResponse = createDeferred<SessionsListResult>();
+    const secondStarted = createDeferred();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(async () => firstResponse.promise)
+      .mockImplementationOnce(async () => {
+        secondStarted.resolve();
+        return secondResponse.promise;
+      });
+    const { sessions } = sessionHarness(request);
+    let requestedAgain = false;
+    let reentrant: Promise<void> | undefined;
+    let observedKeys: string[] = [];
+    const observation = sessions.observeList({ agentId: "writer", limit: 2 }, (snapshot) => {
+      observedKeys = snapshot.result?.sessions.map((row) => row.key) ?? [];
+      if (snapshot.loading && !requestedAgain) {
+        requestedAgain = true;
+        reentrant = observation.refresh();
+      }
+    });
+    const initial = observation.refresh();
+
+    try {
+      expect(requestedAgain).toBe(true);
+      expect(request).toHaveBeenCalledOnce();
+
+      firstResponse.resolve(listResult(["agent:writer:first"]));
+      await secondStarted.promise;
+      expect(request).toHaveBeenCalledTimes(2);
+
+      secondResponse.resolve(listResult(["agent:writer:current"]));
+      await Promise.all([initial, reentrant]);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(observedKeys).toEqual(["agent:writer:current"]);
+    } finally {
+      firstResponse.resolve(listResult());
+      secondResponse.resolve(listResult());
+      await Promise.allSettled([initial, reentrant]);
+      observation.dispose();
+      sessions.dispose();
+    }
+  });
+
+  it("refreshes a managed query after a local terminal outside the primary roster", async () => {
+    vi.useFakeTimers();
+    const key = "agent:writer:linked";
+    let writerFinished = false;
+    const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      const agentId = params?.agentId ?? "main";
+      const done = agentId === "writer" && writerFinished;
+      return sessionsResult(
+        [
+          {
+            key: agentId === "writer" ? key : `agent:${agentId}:main`,
+            kind: "direct",
+            updatedAt: done ? 2 : 1,
+            hasActiveRun: !done,
+            activeRunIds: done ? [] : [`${agentId}-run`],
+            status: done ? "done" : "running",
+          },
+        ],
+        done ? 2 : 1,
+      );
+    });
+    const { sessions } = createSessionCapabilityHarness(
+      request as unknown as GatewayBrowserClient["request"],
+    );
+    const writerQuery = { agentId: "writer", archivedFilter: "all" as const, limit: 2 };
+    const researchQuery = { ...writerQuery, agentId: "research" };
+    const stopWriter = sessions.subscribeList(writerQuery, () => undefined);
+    const stopResearch = sessions.subscribeList(researchQuery, () => undefined);
+
+    try {
+      await sessions.refresh({ agentId: "main", force: true });
+      await sessions.refreshList(writerQuery);
+      await sessions.refreshList(researchQuery);
+      const primary = sessions.state.result;
+      expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
+        key,
+        hasActiveRun: true,
+        status: "running",
+      });
+      request.mockClear();
+      writerFinished = true;
+
+      sessions.reconcileRunTerminal({
+        sessionKeys: [key],
+        runId: "writer-run",
+        status: "done",
+        endedAt: 2,
+      });
+      await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
+
+      expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
+        key,
+        hasActiveRun: false,
+        status: "done",
+      });
+      expect(sessions.state.result).toEqual(primary);
+      expect(sessions.listSnapshot(researchQuery).result?.sessions[0]).toMatchObject({
+        key: "agent:research:main",
+        hasActiveRun: true,
+        status: "running",
+      });
+      expect(request.mock.calls.map(([, params]) => params?.agentId)).not.toContain("research");
+    } finally {
+      stopWriter();
+      stopResearch();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("forwards a trimmed parent key when listing child sessions", async () => {
     const request = vi.fn(async (_method: string, _params?: unknown) => listResult());
     const { sessions } = sessionHarness(request);

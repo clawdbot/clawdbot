@@ -1,9 +1,10 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -43,10 +44,13 @@ async function captureSidebar(page: Page, fileName: string) {
     return;
   }
   await mkdir(path.join(suite.artifactDir, "session-owner-warm"), { recursive: true });
-  await page.locator(".sidebar-sessions").screenshot({
-    animations: "disabled",
-    path: path.join(path.join(suite.artifactDir, "session-owner-warm"), fileName),
-  });
+  const sidebar = page.locator(".sidebar-sessions");
+  await writeFile(
+    path.join(suite.artifactDir, "session-owner-warm", fileName),
+    await takeControlUiElementScreenshot(page, sidebar, [
+      sidebar.locator(".sidebar-recent-session").first(),
+    ]),
+  );
 }
 
 suite.define(() => {

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { pluginContractPatterns } from "../../test/vitest/vitest.contracts-paths.mjs";
-import { isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
+import { isPluginControlUiPath, isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
 import { detectChangedLanes } from "../changed-lanes.mts";
 import {
   buildVitestRunPlans,
@@ -12,6 +12,7 @@ import {
   isTestFileTarget,
   isTestSupportFileTarget,
   resolveChangedTestTargetPlan,
+  UI_E2E_VITEST_CONFIG,
 } from "../test-projects.test-support.mts";
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import {
@@ -450,6 +451,7 @@ function createChangedExtensionConfigShardsForPaths(changedPaths: string[], cwd:
   const relevantPaths = changedPaths.filter(
     (changedPath) =>
       changedPath.startsWith("extensions/") &&
+      !isPluginControlUiPath(changedPath) &&
       (existsSync(path.join(cwd, changedPath)) || !isTestFileTarget(changedPath)),
   );
   return createChangedExtensionConfigShards(resolveChangedExtensionRoots(relevantPaths));
@@ -554,6 +556,7 @@ export function createChangedNodeTestShards(
   changedPaths: string[],
   options: CwdOptions & {
     dedicatedContractShards?: readonly { task: string; includePatterns: readonly string[] }[];
+    dedicatedUiE2e?: boolean;
   } = {},
 ): ChangedNodeTestShard[] | null {
   const cwd = options.cwd ?? process.cwd();
@@ -576,11 +579,16 @@ export function createChangedNodeTestShards(
 
   const policyTargetsByPath = new Map(
     livePaths
-      .filter((changedPath) => !changedPath.startsWith("extensions/"))
+      .filter(
+        (changedPath) =>
+          !changedPath.startsWith("extensions/") || isPluginControlUiPath(changedPath),
+      )
       .map((changedPath) => [changedPath, resolvePolicyTestTargets([changedPath])]),
   );
   const regularLivePaths = livePaths.filter(
-    (changedPath) => !changedPath.startsWith("extensions/") && !isPolicyTestOwnedPath(changedPath),
+    (changedPath) =>
+      (!changedPath.startsWith("extensions/") || isPluginControlUiPath(changedPath)) &&
+      !isPolicyTestOwnedPath(changedPath),
   );
 
   // Workspace package consumers often use package specifiers, which the
@@ -606,9 +614,13 @@ export function createChangedNodeTestShards(
   if (targetPlans === null) {
     return null;
   }
-  // CI supplies the same enabled envelopes it emits. Validate all changed paths
-  // first, then subtract only exact targets owned by those configs and includes.
+  // CI supplies the suite owners it emits. Validate every changed path first,
+  // then subtract covered plans; local runs and unselected owners keep their targets.
   const targets = targetPlans
+    .filter(
+      ({ plans }) =>
+        !options.dedicatedUiE2e || !plans.every(({ config }) => config === UI_E2E_VITEST_CONFIG),
+    )
     .filter(
       ({ target, plans }) =>
         !plans.every((plan) => {

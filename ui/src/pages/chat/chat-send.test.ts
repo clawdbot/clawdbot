@@ -26,9 +26,9 @@ import {
   storageTargetForGateway,
   subscribeStoredChatOutboxChanges,
 } from "../../lib/chat/outbox-store.ts";
-import { createSessionCapability } from "../../lib/sessions/index.ts";
 import {
   createGatewayHarness,
+  createTestSessionCapability,
   sessionsResult as sessionListFixture,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
@@ -1119,7 +1119,7 @@ describe("refreshChat", () => {
     });
     const client = clientWithRequest(request);
     const harness = createGatewayHarness(client);
-    const sessions = createSessionCapability(harness.gateway);
+    const sessions = createTestSessionCapability(harness.gateway);
     const { pane, state } = createTestChatPane({ client, sessions });
     state.sessionKey = "agent:work:main";
     state.assistantAgentId = "work";
@@ -10604,13 +10604,14 @@ describe("handleSendChat", () => {
         { id: "sibling", text: "keep me", createdAt: 2 },
       ],
     });
+    expect(getChatAttachmentPreviewUrl(attachment)).toBe("blob:queued");
 
     expect(removeQueuedMessage(host, "queued")).toBe("removed");
     expect(removeQueuedMessage(host, "queued")).toBe("absent");
 
     expect(host.chatQueue).toEqual([expect.objectContaining({ id: "sibling" })]);
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:queued");
+    expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:queued");
   });
 
   it("surfaces a terminal send failure through the global toast when the pane is not visible", async () => {

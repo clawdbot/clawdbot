@@ -189,11 +189,14 @@ describe("session placement recovery", () => {
         },
       });
       expect(pauseSessionPlacementRecovery(retained, "later failure", true)).toMatchObject({
-        message: retained.message,
-        messageId: retained.messageId,
-        phase: "paused",
-        reason: "not-sent",
-        error: expect.stringContaining("Keep this page open"),
+        persisted: false,
+        recovery: {
+          message: retained.message,
+          messageId: retained.messageId,
+          phase: "paused",
+          reason: "not-sent",
+          error: expect.stringContaining("Keep this page open"),
+        },
       });
       expect(
         readSessionPlacementRecovery(

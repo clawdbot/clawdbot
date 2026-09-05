@@ -15,6 +15,7 @@ import type {
   PluginManifestChannelCommandDefaults,
   PluginManifestChannelConfig,
   PluginManifestContracts,
+  PluginManifestControlUi,
   PluginManifestDashboard,
   PluginManifestMediaUnderstandingProviderMetadata,
   PluginManifestMcpServer,
@@ -82,6 +83,8 @@ export type PluginManifestRecord = {
   channels: string[];
   providers: string[];
   providerDiscoverySource?: string;
+  /** Undefined is undeclared; null retains a rejected declaration without enabling full-entry fallback. */
+  capabilityCatalogSource?: string | null;
   modelSupport?: PluginManifestModelSupport;
   modelCatalog?: PluginManifestModelCatalog;
   modelPricing?: PluginManifestModelPricing;
@@ -110,6 +113,7 @@ export type PluginManifestRecord = {
   trustedOfficialInstall?: boolean;
   qaRunners?: PluginManifestQaRunner[];
   dashboard?: PluginManifestDashboard;
+  controlUi?: PluginManifestControlUi;
   mcpServers?: Record<string, PluginManifestMcpServer>;
   skills: string[];
   settingsFiles?: string[];

@@ -4566,6 +4566,62 @@ describe("buildCachedChatItems", () => {
     },
   );
 
+  it.each(
+    ["live", "history-before", "history-after"].flatMap((source) =>
+      ["mcp", "board"].map((kind) => ({ source, kind })),
+    ),
+  )("preserves rich $kind metadata over a shortcode from $source", ({ source, kind }) => {
+    const viewId = "cv_rich_shortcode";
+    const callId = "call-rich-shortcode";
+    const url = `/__openclaw__/canvas/documents/${viewId}/index.html`;
+    const boardOutput = JSON.stringify({
+      kind: "canvas",
+      view: { id: viewId, url, title: "Widget", boardWidgetName: "saved-widget" },
+      presentation: { target: "assistant_message", sandbox: "strict" },
+    });
+    const result =
+      kind === "mcp"
+        ? mcpAppResult(viewId, callId, 1_002)
+        : toolResultMessage(callId, "show_widget", boardOutput, 1_002);
+    const assistant = assistantMessage(
+      [{ type: "text", text: `[embed ref="${viewId}" title="Widget" /]\n\nReady.` }],
+      source === "history-after" ? 1_001 : 1_003,
+    );
+    const original = structuredClone(assistant);
+    const history =
+      source === "live"
+        ? [assistant]
+        : source === "history-before"
+          ? [result, assistant]
+          : [assistant, result];
+    const groups = messageGroups({
+      messages: [userMessage("Show a widget", 1_000), ...history],
+      toolMessages:
+        source !== "live"
+          ? []
+          : kind === "mcp"
+            ? [mcpAppLiveResult(viewId, callId, 1_002)]
+            : [toolMessage(callId, "show_widget", boardOutput, 1_002)],
+      showToolCalls: false,
+    });
+
+    const previews = groups.flatMap(canvasBlocksAcross);
+    expect(previews).toHaveLength(1);
+    expect(previews[0]).toMatchObject({
+      type: "canvas",
+      preview:
+        kind === "mcp"
+          ? { viewId, sandbox: "scripts", mcpApp: mcpAppCanvasBlock(viewId, callId).preview.mcpApp }
+          : { viewId, url, sandbox: "strict", boardWidgetName: "saved-widget" },
+    });
+    expect(
+      groups.flatMap((group) =>
+        group.messages.flatMap(({ message }) => normalizeMessage(message).content),
+      ),
+    ).toContainEqual({ type: "text", text: "Ready." });
+    expect(assistant).toEqual(original);
+  });
+
   it("deduplicates a Gateway Canvas copy that matches only by URL", () => {
     const viewId = "cv_url_match";
     const result = toolResultMessage(

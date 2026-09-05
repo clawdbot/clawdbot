@@ -4,6 +4,7 @@ read_when:
   - Diagnosing a newer database schema error
   - Checking database compatibility before an update or downgrade
   - Proposing a SQLite or persistent-store change
+  - Preparing storage operations for another database backend
   - Recovering a database for an older OpenClaw release
 title: "Database schemas"
 ---
@@ -17,7 +18,7 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 | Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
 | Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
 
-A few high-volume or lifecycle-specific features use dedicated SQLite stores, including the task registry and trajectory data.
+The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
 ### Meeting transcript tables
 
@@ -273,6 +274,76 @@ client state.
 
 The [accepted design](https://github.com/openclaw/openclaw/issues/136617) records
 the schema, migration, ownership, retention and validation boundaries.
+
+## Preparing for another database backend
+
+SQLite remains the supported runtime store. Preparation for PostgreSQL should
+improve the existing store owners and their tests before adding a driver or
+configuration option. The initial target is remote persistence for one Gateway;
+multiple active Gateways would require a separate ownership and coordination
+design. A shared database alone does not make process-local writer queues,
+session lifecycles, or host-owned leases safe across Gateway instances.
+
+### Keep operations at the owning store
+
+Callers should request domain operations, such as claiming a cron run or
+appending a transcript report, from the store that owns the invariant. That
+owner selects and decodes rows, validates current authority, commits changes,
+and publishes the result. Avoid exposing a generic SQL callback to application
+code or adding an asynchronous wrapper around an existing asynchronous facade.
+The plugin KV API already has asynchronous methods over its SQLite owner.
+
+Use Kysely for ordinary queries and mutations. The current
+`getNodeSqliteKysely` facade compiles queries; `executeSqliteQuerySync` runs them
+on the supplied `node:sqlite` connection. Calling Kysely's asynchronous
+`execute` method on that facade is an error. Query compilation with another
+dialect can identify syntax coupling, but does not prove driver behavior,
+isolation, or database compatibility.
+
+Acquire a connection once for an operation and pass that exact connection
+through its transactional helpers. SQLite write callbacks remain synchronous:
+finish asynchronous planning first, then reread authoritative rows after write
+admission. Publish live session changes and other dependent effects only after
+the durable write succeeds. A future network-backed owner must preserve that
+ordering while awaiting its driver.
+
+### Preserve the data and concurrency contracts
+
+An adapter must make these contracts explicit and verify them against a real
+database:
+
+| Contract           | Required behavior                                                                                                                                                                                                                   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Store identity     | Keep global and per-agent ownership, incognito lifetime, quarantine, and disposal explicit. Filesystem paths currently participate in admission and registry identity; replacing a path with a connection string is not sufficient. |
+| Read consistency   | Define whether each operation needs one snapshot or a fresh authoritative reread. Keep ordered, bounded queries and batch enrichment inside that consistency boundary.                                                              |
+| Conditional writes | Preserve exact revision, session generation, writer claim, and lease-owner predicates. A stale or refused mutation must not publish a success result or alter live state.                                                           |
+| Canonical payloads | Preserve serialized transcript and record text where byte identity, replay, or exact JSON comparison is part of the contract. Keep derived query projections separate.                                                              |
+| Scalar decoding    | Decode driver values at the store boundary, including counts, integer ranges, nullable booleans, timestamps, JSON, and binary bytes. Match TypeScript declarations to observed driver values.                                       |
+| Failure and retry  | Define which failures permit retry of the whole operation. Keep external effects outside a retried transaction, and revalidate authority after awaited work.                                                                        |
+
+Kysely's TypeScript types do not convert driver results; the driver determines
+runtime values. See [Kysely data types](https://kysely.dev/docs/recipes/data-types).
+PostgreSQL transactions must use one acquired client, and its default Read
+Committed isolation can give successive statements different snapshots. An
+adapter therefore needs operation-specific isolation and retry decisions, not
+a mechanical replacement of `BEGIN IMMEDIATE`. See
+[node-postgres transactions](https://node-postgres.com/features/transactions)
+and [PostgreSQL isolation](https://www.postgresql.org/docs/current/transaction-iso.html).
+
+Do not automatically convert canonical JSON text to `jsonb`: PostgreSQL's
+`jsonb` representation changes whitespace, object-key order, and duplicate-key
+handling. A searchable `jsonb` projection would need an explicit design and
+migration decision. See [PostgreSQL JSON types](https://www.postgresql.org/docs/current/datatype-json.html).
+
+### Keep engine-specific capabilities owned
+
+SQLite FTS5/BM25, vector tables, JSON table-valued queries, attached shadow
+databases, WAL maintenance, integrity checks, and backup operations remain
+SQLite capabilities. Keep their implementation behind the memory or database
+lifecycle owner. A future backend must supply equivalent product behavior or
+an explicit capability boundary; a second SQL dialect alone cannot replace
+these features. Schema, retention, migration, and multi-host changes still use
+the review checkpoint below.
 
 ## Review checkpoint for material changes
 

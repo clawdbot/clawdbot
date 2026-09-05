@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { createGatewayCronReconciliation } from "../gateway/server-cron-reconciled.js";
-import { createGatewayReloadHandlers } from "../gateway/server-reload-handlers.js";
+import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
 import {
   isGatewaySigusr1RestartExternallyAllowed,
   setGatewaySigusr1RestartPolicy,
@@ -255,12 +255,6 @@ describe("mcp connection resolver helpers", () => {
       const refreshContextWindowCache = vi
         .spyOn(await import("./context.js"), "refreshContextWindowCache")
         .mockResolvedValue(undefined);
-      const warmCurrentProviderAuthStateOffMainThread = vi
-        .spyOn(
-          await import("./model-provider-auth.js"),
-          "warmCurrentProviderAuthStateOffMainThread",
-        )
-        .mockResolvedValue(undefined);
       const previous = createMcpProofPluginRegistry();
       previous.apiFor("startup-mail").registerMcpServerConnectionResolver({
         serverName: "user-mail",
@@ -359,10 +353,12 @@ describe("mcp connection resolver helpers", () => {
           },
         },
       };
+      let attachedRegistry = previous.registry;
       const gatewayReload = createGatewayReloadHandlers({
         deps: {},
         broadcast() {},
         getState: () => gatewayState,
+        getPluginRegistry: () => attachedRegistry,
         setState(nextState) {
           gatewayState = nextState;
         },
@@ -374,6 +370,7 @@ describe("mcp connection resolver helpers", () => {
         async reloadPlugins({ beforeReplace, commitRuntime }) {
           await beforeReplace(new Set());
           await commitRuntime();
+          attachedRegistry = replacement.registry;
           setActivePluginRegistry(replacement.registry);
           return { restartChannels: new Set(), activeChannels: new Set() };
         },
@@ -396,9 +393,6 @@ describe("mcp connection resolver helpers", () => {
         catalogMode: "static",
       });
       expect(refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
-      expect(warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig, {
-        isCancelled: expect.any(Function),
-      });
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
       expect(isPluginRegistryRetired(previous.registry)).toBe(true);
       expect(peekSessionMcpRuntime({ sessionId })).toBeUndefined();

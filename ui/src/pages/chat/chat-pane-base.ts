@@ -68,7 +68,13 @@ import { handleChatScrollTakeover } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import type { SidebarLayout } from "./sidebar-layout-types.ts";
-import { closeSlot, isSidebarSlotVisible, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
+import {
+  closeSlot,
+  isSidebarSlotVisible,
+  openSlot,
+  promoteSidebarPanel,
+  setSidebarOpen,
+} from "./sidebar-layout.ts";
 
 export abstract class ChatPaneBase extends OpenClawLightDomElement {
   // The first Lit update must render even while hidden; later hidden work parks.
@@ -302,6 +308,17 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     return visible ? "expanded" : "hidden";
   }
 
+  protected restorePaneSidebarLayout(layout: SidebarLayout): SidebarLayout {
+    if (!this.compact) {
+      return layout;
+    }
+    // Home's visibility consumers share the restored Chat-first layout;
+    // the saved full-page task layout stays intact.
+    const conversation = layout.columns[0]?.panels.find((panel) => panel.slot === "conversation");
+    const restored = conversation ? promoteSidebarPanel(layout, conversation.id) : layout;
+    return { ...restored, open: false, expanded: false };
+  }
+
   protected setChatSidePanelOpen(open: boolean, layout?: SidebarLayout): void {
     const state = this.state;
     if (!state) {
@@ -504,6 +521,10 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
       .watch(
         () => this.context?.theme,
         (theme, notify) => theme.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.plugins,
+        (plugins, notify) => plugins.subscribe(notify),
       )
       .watch(
         () => this.resolveBoardProvider(),

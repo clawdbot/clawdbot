@@ -53,6 +53,13 @@ Internal OpenClaw runtime code follows the same direction: load config once at t
 
 Provider and channel execution paths must use the active runtime config snapshot, not a file snapshot returned for config readback or editing. File snapshots preserve source values such as SecretRef markers for UI and writes; provider callbacks need the resolved runtime view. When a helper may be called with either the active source snapshot or the active runtime snapshot, route through `selectApplicableRuntimeConfig()` before reading credentials.
 
+Retained channel monitors can bind `createRuntimeConfigReader(cfg)` from
+`openclaw/plugin-sdk/runtime-config-snapshot` once at startup. The reader follows
+runtime updates when the supplied config belongs to the active runtime, and
+preserves an explicitly scoped config otherwise, including when no runtime has
+been published yet. Read once per turn and carry that snapshot through admission
+and replies.
+
 ## Reusable runtime utilities
 
 Native command probes should use `runCommandWithTimeout` from
@@ -1207,6 +1214,18 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 </AccordionGroup>
 
 ## Gateway service events
+
+Gateway-hosted services also receive `ctx.getCron?.()` for the scheduler operations
+already available to Gateway hooks: `list`, `add`, `update`, `remove`, and
+`removeStaleJobFamily`. Non-Gateway service hosts omit this getter.
+
+Use the service's `start()` and `stop()` methods to own recurring reconciliation.
+They run for plugin replacement as well as Gateway startup and shutdown;
+`gateway_start` and `gateway_stop` do not replay on plugin-only reload.
+Each returned scheduler handle belongs to one service lifetime and one scheduler
+instance. Calls, including queued writes, reject once service shutdown begins or
+that scheduler is replaced. Call `ctx.getCron()` again to obtain the replacement
+scheduler while the service remains active.
 
 Long-lived services registered with `api.registerService(...)` receive a process-local
 `ctx.gatewayEvents` facade when the process runs a Gateway broadcaster; in runtimes without one the

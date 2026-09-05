@@ -153,6 +153,12 @@ restrictions still override broader global policy. OpenClaw-owned MCP tools
 remain authorized by the Gateway rather than receiving duplicate native
 approval; other MCP tools stay host-permission controlled.
 
+Claude's native `AskUserQuestion` uses OpenClaw's structured question flow. When
+OpenClaw rejects malformed questions, it reports the failed field and
+constraint without repeating the submitted text, and asks Claude to correct
+the field and retry. Invalid questions do not prompt the user. If the user
+skips a valid question, Claude instead continues with its best judgment.
+
 When the effective exec ask setting is `on-miss` or `always`, OpenClaw relays
 native or extension tool requests as interactive approvals to the session's
 channel: **Allow once** permits the single call, **Allow always** permits that

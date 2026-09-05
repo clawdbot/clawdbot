@@ -4,6 +4,7 @@
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
@@ -165,6 +166,10 @@ export async function compactNativeCliSession(params: {
       await runControlOperation();
     }
   } catch (err) {
+    const signal = params.compactParams.abortSignal;
+    if (signal?.aborted && (isAbortError(err) || err === signal.reason)) {
+      throw err;
+    }
     return {
       ok: false,
       compacted: false,

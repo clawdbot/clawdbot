@@ -3,7 +3,9 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
+import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { MAX_BUFFERED_BYTES } from "../server-constants.js";
 import {
@@ -212,6 +214,55 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(handlerParams.pluginSurfaceBaseUrl).toBe("https://gateway.example.com:443");
     expect(handlerParams.pluginNodeCapabilities).toEqual([{ surface: "canvas", ttlMs: 1234 }]);
   });
+
+  it.each([
+    { capability: "documents", accepted: false },
+    { capability: "browser", accepted: true },
+  ])(
+    "rechecks $capability node registration after hosted capabilities change",
+    async ({ capability, accepted }) => {
+      let surfaces: PluginNodeCapabilitySurface[] = [];
+      const { passed, socket, clients } = await connectTestWs({
+        options: { getPluginNodeCapabilities: () => surfaces },
+      });
+      const handler = passed as {
+        setClient: (client: unknown) => boolean;
+        send: (frame: unknown) => { kind: string };
+        pluginNodeCapabilities: PluginNodeCapabilitySurface[];
+      };
+      expect(handler.pluginNodeCapabilities).toEqual([]);
+      surfaces = [{ surface: "documents", scopeKey: "publisher:documents" }];
+      const node = {
+        socket,
+        connect: {
+          role: "node",
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          caps: [capability],
+          client: { id: "openclaw-macos", mode: "node" },
+        },
+        connId: "pending-node",
+        usesSharedGatewayAuth: false,
+      };
+
+      try {
+        expect(handler.setClient(node)).toBe(accepted);
+        if (accepted) {
+          expect(clients).toEqual(new Set([node]));
+          expect(socket.close).not.toHaveBeenCalled();
+        } else {
+          expect(node).toMatchObject({ invalidated: true });
+          expect(clients.size).toBe(0);
+          expect(socket.close).toHaveBeenCalledExactlyOnceWith(1012, "node capabilities changed");
+          expect(handler.send({ type: "res", id: "stale-connect", ok: true })).toEqual({
+            kind: "unavailable",
+          });
+        }
+      } finally {
+        socket.emit("close", 1000, Buffer.from("done"));
+      }
+    },
+  );
 
   it("prefers forwarded host over bind host for generic plugin surface URLs", async () => {
     const { passed } = await connectTestWs({

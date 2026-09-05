@@ -5,9 +5,9 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createSessionCapability } from "../../lib/sessions/index.ts";
 import {
   createSessionCapabilityHarness,
+  createTestSessionCapability,
   sessionChangedEvent,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createContext, createGateway, createRenderedPage } from "./sessions-page.test-support.ts";
@@ -42,7 +42,7 @@ async function mountTypingPage(initialResult = result("agent:main:initial")) {
   });
   const client = { request } as unknown as GatewayBrowserClient;
   const connection = createGateway(client);
-  const sessions = createSessionCapability(connection.gateway);
+  const sessions = createTestSessionCapability(connection.gateway);
   const context = createContext(connection.gateway, sessions);
   let notifyScope: Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0] = () =>
     undefined;
@@ -244,7 +244,7 @@ describe("Sessions page typing ownership", () => {
         return pageRequests === 1 ? before : pageRequests === 2 ? older.promise : after;
       });
       const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
-      const sessions = createSessionCapability(gateway);
+      const sessions = createTestSessionCapability(gateway);
       const page = await createRenderedPage(createContext(gateway, sessions), before);
       try {
         page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
@@ -309,7 +309,7 @@ describe("Sessions page typing ownership", () => {
       vi.useFakeTimers();
       const harness = await mountTypingPage();
       const { page, input, edit, requests, pending, connection, client } = harness;
-      let replacementSessions: ReturnType<typeof createSessionCapability> | undefined;
+      let replacementSessions: ReturnType<typeof createTestSessionCapability> | undefined;
       try {
         await edit("older");
         await vi.advanceTimersByTimeAsync(200);
@@ -326,7 +326,7 @@ describe("Sessions page typing ownership", () => {
           document.body.append(page);
         } else if (retirement === "context") {
           const replacement = createGateway(client);
-          replacementSessions = createSessionCapability(replacement.gateway);
+          replacementSessions = createTestSessionCapability(replacement.gateway);
           page.context = createContext(replacement.gateway, replacementSessions);
           page.requestUpdate();
         } else {

@@ -15,6 +15,7 @@ import { peekSystemEvents } from "../infra/system-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import { getGatewayProcessInstanceId } from "./process-instance.js";
 import type { GatewayCronState } from "./server-cron.js";
@@ -1816,6 +1817,7 @@ describe("gateway server cron", () => {
       );
       const runtime = createPluginRuntime();
       const context = {
+        trackExecution: trackAsyncWork,
         cron: cronState.cron,
         cronStorePath: cronState.storePath,
         logGateway: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },

@@ -350,18 +350,10 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   const resolvedSubsystem = normalizeSubsystemLabel(subsystem);
-  let fileChild: { generation: number; logger: TsLogger<LogObj> } | undefined;
+  let fileChild: TsLogger<LogObj> | undefined;
   let formatConsoleLine: ReturnType<typeof createConsoleLineFormatter> | undefined;
 
-  const getFileLogger = () => {
-    if (fileChild?.generation !== loggingState.generation) {
-      fileChild = {
-        generation: loggingState.generation,
-        logger: getChildLogger({ subsystem: resolvedSubsystem }),
-      };
-    }
-    return fileChild.logger;
-  };
+  const getFileLogger = () => (fileChild ??= getChildLogger({ subsystem: resolvedSubsystem }));
 
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();

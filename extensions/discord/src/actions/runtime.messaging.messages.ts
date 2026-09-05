@@ -1,4 +1,3 @@
-// Discord plugin module implements runtime.messaging.messages behavior.
 import {
   jsonResult,
   readPositiveIntegerParam,
@@ -127,6 +126,8 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       });
       const content = readStringParam(ctx.params, "content", {
         required: true,
+        allowEmpty: true,
+        trim: false,
       });
       await ctx.assertReadTargetAllowed({ channelId });
       const message = await discordMessagingActionRuntime.editMessageDiscord(

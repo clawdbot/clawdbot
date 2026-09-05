@@ -551,7 +551,8 @@ export async function handleControlUiAssistantMediaRequest(
     );
     res.setHeader("Cache-Control", "no-cache");
     const byteResponse = resolveByteResponse({
-      file: opened.stat,
+      // Allowed paths are mutable; matching size and mtime cannot prove unchanged bytes.
+      file: { size: opened.stat.size },
       method: req.method,
       request: req,
     });
@@ -930,6 +931,7 @@ export async function handleControlUiHttpRequest(
       communityInvite: config?.gateway?.controlUi?.communityInvite !== false,
       terminalEnabled,
       cliAgentsEnabled: config?.gateway?.cliAgents?.enabled === true,
+      pluginAssetsRequireAuth: opts?.auth !== undefined && opts.auth.mode !== "none",
       pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
         pluginId,
         path: grantPath,

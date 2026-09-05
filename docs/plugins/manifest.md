@@ -39,7 +39,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 - QA runner metadata the shared `openclaw qa` host can inspect
 - channel-specific config metadata merged into catalog and validation surfaces
 
-**Do not use it for:** registering native runtime hooks, declaring plugin code entrypoints, or npm install metadata. Those belong in your plugin code and `package.json`.
+**Do not use it for:** registering native runtime hooks, declaring the full plugin runtime entrypoint, or npm install metadata. Those belong in your plugin code and `package.json`.
 
 ## Minimal example
 
@@ -148,6 +148,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `channels`                           | No       | `string[]`                   | Channel ids owned by this plugin. Used for discovery and config validation.                                                                                                                                                                                                                                                                                                                      |
 | `providers`                          | No       | `string[]`                   | Provider ids owned by this plugin.                                                                                                                                                                                                                                                                                                                                                               |
 | `providerCatalogEntry`               | No       | `string`                     | Lightweight provider-catalog module path, relative to the plugin root, for manifest-scoped provider catalog metadata that can be loaded without activating the full plugin runtime.                                                                                                                                                                                                              |
+| `capabilityCatalogEntry`             | No       | `string`                     | Lightweight module of typed speech, realtime transcription, and realtime voice provider descriptors, relative to the plugin root. See [Capability catalogs](#capability-catalogs).                                                                                                                                                                                                               |
 | `modelSupport`                       | No       | `object`                     | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                                                                                                                                                                                                      |
 | `modelCatalog`                       | No       | `object`                     | Declarative model catalog metadata for providers owned by this plugin. This is the control-plane contract for future read-only listing, onboarding, model pickers, aliases, and suppression without loading plugin runtime.                                                                                                                                                                      |
 | `modelPricing`                       | No       | `object`                     | Provider-owned hosted-pricing publication policy. Use it to opt local/self-hosted providers out of published pricing or map provider refs to supported public pricing catalogs without hardcoding provider ids in core.                                                                                                                                                                          |
@@ -291,6 +292,36 @@ plugin can recreate.
 ```
 
 OpenClaw includes these servers only while the owning plugin is enabled. Relative `command`, `args`, `cwd`, and `workingDirectory` paths resolve from the plugin root. User configuration remains authoritative: `mcp.servers.<name>` can replace a plugin default or set `enabled: false` to omit it. MCP App rendering and server-tool calls still require the normal MCP Apps setting and effective tool policy; declaring a server does not bypass either boundary.
+
+## controlUi reference
+
+`controlUi` declares a trusted native browser entry and optional stylesheets for
+the Control UI. Paths are relative to the plugin root and must name compiled
+JavaScript and CSS. Assets follow the Gateway's authentication policy, are
+captured as immutable revisions, and refresh only through the explicit UI reload
+flow.
+
+User-installed native UI requires **Settings → Labs → Custom plugin UI**
+(`gateway.controlUi.experimental.customPlugins`, default `false`). Native UI
+from enabled bundled plugins remains available. See
+[Enable custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui) for
+restart and browser reload requirements. This gate does not disable the
+plugin's backend APIs or the sandboxed dashboard bindings below.
+
+```json
+{
+  "controlUi": {
+    "entry": "dist/control-ui/<content-hash>/index.js",
+    "styles": ["dist/control-ui/<content-hash>/index.css"]
+  }
+}
+```
+
+Use `package.json.openclaw.controlUi` for the source entry and let
+`openclaw plugins build` generate this declaration. Native UI executes with the
+browser application's trust; it is distinct from the scoped dashboard widget
+bindings below. See [Feature plugins](/plugins/feature-plugins) for authoring,
+replacements, reload, and activation receipts.
 
 ## dashboard reference
 
@@ -1557,6 +1588,28 @@ Example schema extension:
 ```
 
 ## Validation behavior
+
+### Capability catalogs
+
+`capabilityCatalogEntry` declares a lightweight module relative to the selected
+plugin root, for example `"./capability-catalog.ts"`. It exports actual speech,
+realtime transcription, or realtime voice provider descriptors without importing
+the full plugin entry. See the [typed SDK contract](/plugins/sdk-subpaths#capability-catalog-entry).
+
+Each supplied family is authoritative, including an empty array. An omitted
+family, or a plugin without this declaration, retains the existing `register()`
+discovery contract for installed plugins. A malformed, missing, or broken declared
+entry fails with a repair diagnostic; it does not fall through to full registration.
+Already registered runtime providers remain authoritative, including live broker
+and readiness closures.
+
+The entry uses the same plugin-root boundary checks, installed-owner precedence,
+prepared metadata generation, and source/built artifact policy as other plugin
+surfaces. Repository builds include declared entries and rewrite emitted manifest
+paths to the corresponding JavaScript artifacts. Plugin reload owns invalidation;
+catalog requests do not poll files for changes.
+
+### Configuration validation
 
 - Required-field errors identify every missing field after schema defaults are applied. For dependencies on multiple fields, the error reports the dependency condition without claiming that fields already present are missing.
 - Unknown `channels.*` keys are **errors**, unless the channel id is declared by a plugin manifest. If the same id also appears in `plugins.allow`, `plugins.entries`, or `plugins.installs` (a plugin that is referenced but not currently discoverable), OpenClaw downgrades this to a **warning** instead.

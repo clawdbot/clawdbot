@@ -1,8 +1,13 @@
 // Control UI tests cover WhatsApp logout feedback against a mocked Gateway.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { buildChannelWizardMocks } from "../../../scripts/control-ui-mock-channels.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  takeControlUiElementScreenshot,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -145,7 +150,17 @@ suite.define(() => {
         const detail = page.locator(".channels-detail");
         await detail.getByRole("switch", { name: "Enabled" }).waitFor();
         if (captureUiProofEnabled) {
-          await detail.screenshot({ path: path.join(uiProofArtifactDir, "00-editor-before.png") });
+          // The native dialog owns the scale/fade around this slotted detail panel.
+          await waitForControlUiProofSurface(
+            page.locator("openclaw-modal-dialog").filter({ has: detail }).locator("dialog"),
+            [detail.getByRole("switch", { name: "Enabled" })],
+          );
+          await writeFile(
+            path.join(uiProofArtifactDir, "00-editor-before.png"),
+            await takeControlUiElementScreenshot(page, detail, [
+              detail.getByRole("switch", { name: "Enabled" }),
+            ]),
+          );
         }
 
         await gateway.deferNext("config.set");
@@ -181,7 +196,10 @@ suite.define(() => {
         expect(await detail.getByRole("switch", { name: "Enabled" }).isChecked()).toBe(false);
         expect(await gateway.getRequests("config.get")).toHaveLength(readsBefore);
         if (captureUiProofEnabled) {
-          await detail.screenshot({ path: path.join(uiProofArtifactDir, "01-visible-error.png") });
+          await writeFile(
+            path.join(uiProofArtifactDir, "01-visible-error.png"),
+            await takeControlUiElementScreenshot(page, detail, [alert]),
+          );
         }
       },
     );

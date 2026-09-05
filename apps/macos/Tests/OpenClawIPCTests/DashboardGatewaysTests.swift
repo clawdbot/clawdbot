@@ -222,24 +222,26 @@ struct DashboardManagerGatewayTargetTests {
     }
 
     @Test func `primary window configuration retains resolved TLS policy`() async throws {
-        let state = AppStateStore.shared
-        let originalMode = state.connectionMode
-        state.connectionMode = .remote
-        defer { state.connectionMode = originalMode }
-        let url = try #require(URL(string: "wss://studio.example:443/"))
-        let params = GatewayTLSParams(
-            required: true,
-            expectedFingerprint: String(repeating: "a", count: 64),
-            allowTOFU: false,
-            storeKey: "primary")
-        let manager = DashboardManager._testMake(primaryEndpointProvider: { _ in
-            GatewayConnection.EndpointSnapshot(
-                config: (url: url, token: "primary-token", password: nil),
-                tls: GatewayTLSRoute(params: params, allowsTrustedPinReplacement: false),
-                routeAuthority: nil)
-        })
+        try await TestIsolation.withEnvValues([:]) {
+            let state = AppStateStore.shared
+            let originalMode = state.connectionMode
+            state.connectionMode = .remote
+            defer { state.connectionMode = originalMode }
+            let url = try #require(URL(string: "wss://studio.example:443/"))
+            let params = GatewayTLSParams(
+                required: true,
+                expectedFingerprint: String(repeating: "a", count: 64),
+                allowTOFU: false,
+                storeKey: "primary")
+            let manager = DashboardManager._testMake(primaryEndpointProvider: { _ in
+                GatewayConnection.EndpointSnapshot(
+                    config: (url: url, token: "primary-token", password: nil),
+                    tls: GatewayTLSRoute(params: params, allowsTrustedPinReplacement: false),
+                    routeAuthority: nil)
+            })
 
-        #expect(try await manager._testWindowTLSParams(for: .primary) == params)
+            #expect(try await manager._testWindowTLSParams(for: .primary) == params)
+        }
     }
 
     @Test func `primary endpoint subscription does not mutate profile targeted main window`() async throws {
@@ -282,101 +284,103 @@ struct DashboardManagerGatewayTargetTests {
     }
 
     @Test func `opening primary creates isolated auxiliary window`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
-        let replacementServer = try await DashboardHTTPFixture.start()
-        defer { replacementServer.stop() }
-        let studio = "studio-\(UUID().uuidString)"
-        let dataStore = WKWebsiteDataStore.nonPersistent()
-        let state = AppStateStore.shared
-        let originalMode = state.connectionMode
-        state.connectionMode = .local
-        defer { state.connectionMode = originalMode }
-        let url = server.url("/#token=current")
-        let controller = DashboardWindowController(
-            url: url,
-            auth: DashboardWindowAuth(
-                gatewayUrl: server.websocketURL("/").absoluteString,
-                token: "current",
-                password: nil),
-            websiteDataStore: dataStore,
-            windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
-            requestBrowserProfileImportOffer: { _ in false })
-        defer { controller.closeDashboard() }
-        let frame = NSRect(x: 180, y: 180, width: 960, height: 720)
-        controller.window?.setFrame(frame, display: false)
-        controller.show()
-        // CI display bounds clamp window frames during show, so preserve the post-clamp source frame.
-        let sourceFrame = try #require(controller.window).frame
-        let entries = DashboardGatewayTestEntries.withProfiles([studio])
-        let manager = DashboardManager._testMake(
-            websiteDataStore: dataStore,
-            primaryEndpointProvider: { _ in
-                GatewayConnection.EndpointSnapshot(
-                    config: (url: replacementServer.websocketURL(), token: "primary-token", password: nil),
-                    routeAuthority: nil)
-            },
-            profileEndpointProvider: { profileID in
-                GatewayConnection.EndpointSnapshot(
-                    config: (url: server.websocketURL(), token: profileID, password: nil),
-                    routeAuthority: nil)
-            },
-            gatewayEntriesProvider: { entries })
-        manager.configure(updater: DashboardGatewayTestUpdater())
-        manager._testSetController(controller)
-        manager._testSetMainTarget(.profile(studio))
-        defer { manager.close() }
+        try await TestIsolation.withEnvValues([:]) {
+            let server = try await DashboardHTTPFixture.start()
+            defer { server.stop() }
+            let replacementServer = try await DashboardHTTPFixture.start()
+            defer { replacementServer.stop() }
+            let studio = "studio-\(UUID().uuidString)"
+            let dataStore = WKWebsiteDataStore.nonPersistent()
+            let state = AppStateStore.shared
+            let originalMode = state.connectionMode
+            state.connectionMode = .local
+            defer { state.connectionMode = originalMode }
+            let url = server.url("/#token=current")
+            let controller = DashboardWindowController(
+                url: url,
+                auth: DashboardWindowAuth(
+                    gatewayUrl: server.websocketURL("/").absoluteString,
+                    token: "current",
+                    password: nil),
+                websiteDataStore: dataStore,
+                windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
+                requestBrowserProfileImportOffer: { _ in false })
+            defer { controller.closeDashboard() }
+            let frame = NSRect(x: 180, y: 180, width: 960, height: 720)
+            controller.window?.setFrame(frame, display: false)
+            controller.show()
+            // CI display bounds clamp window frames during show, so preserve the post-clamp source frame.
+            let sourceFrame = try #require(controller.window).frame
+            let entries = DashboardGatewayTestEntries.withProfiles([studio])
+            let manager = DashboardManager._testMake(
+                websiteDataStore: dataStore,
+                primaryEndpointProvider: { _ in
+                    GatewayConnection.EndpointSnapshot(
+                        config: (url: replacementServer.websocketURL(), token: "primary-token", password: nil),
+                        routeAuthority: nil)
+                },
+                profileEndpointProvider: { profileID in
+                    GatewayConnection.EndpointSnapshot(
+                        config: (url: server.websocketURL(), token: profileID, password: nil),
+                        routeAuthority: nil)
+                },
+                gatewayEntriesProvider: { entries })
+            manager.configure(updater: DashboardGatewayTestUpdater())
+            manager._testSetController(controller)
+            manager._testSetMainTarget(.profile(studio))
+            defer { manager.close() }
 
-        await manager._testOpenWindow(for: .primary)
+            await manager._testOpenWindow(for: .primary)
 
-        #expect(manager._testController() === controller)
-        #expect(manager._testMainTarget() == .profile(studio))
-        #expect(controller.window?.frame == sourceFrame)
-        let auxiliaryWindows = manager._testAuxiliaryWindows()
-        #expect(auxiliaryWindows.count == 1)
-        let auxiliary = try #require(auxiliaryWindows.first)
-        #expect(auxiliary.target == .primary)
-        #expect(auxiliary.controller !== controller)
-        #expect(auxiliary.controller.window !== controller.window)
-        #expect(auxiliary.controller.window?.frameAutosaveName != controller.window?.frameAutosaveName)
-        let primaryAutosaveName = try #require(auxiliary.controller.window?.frameAutosaveName)
-        #expect(primaryAutosaveName.hasPrefix("OpenClawDashboardWindow-Test-"))
-        #expect(!auxiliary.controller._testUpdateBridgeAvailable)
-        #expect(auxiliary.controller.currentURL == replacementServer.url("/#token=primary-token"))
-        #expect(auxiliary.controller._testDashboardDataStore === dataStore)
-        #expect(!auxiliary.controller._testDashboardDataStore.isPersistent)
-        auxiliary.controller._testOpenLinkBrowser(server.url("/reader/auxiliary"))
-        #expect(auxiliary.controller._testLinkBrowserDataStore === dataStore)
+            #expect(manager._testController() === controller)
+            #expect(manager._testMainTarget() == .profile(studio))
+            #expect(controller.window?.frame == sourceFrame)
+            let auxiliaryWindows = manager._testAuxiliaryWindows()
+            #expect(auxiliaryWindows.count == 1)
+            let auxiliary = try #require(auxiliaryWindows.first)
+            #expect(auxiliary.target == .primary)
+            #expect(auxiliary.controller !== controller)
+            #expect(auxiliary.controller.window !== controller.window)
+            #expect(auxiliary.controller.window?.frameAutosaveName != controller.window?.frameAutosaveName)
+            let primaryAutosaveName = try #require(auxiliary.controller.window?.frameAutosaveName)
+            #expect(primaryAutosaveName.hasPrefix("OpenClawDashboardWindow-Test-"))
+            #expect(!auxiliary.controller._testUpdateBridgeAvailable)
+            #expect(auxiliary.controller.currentURL == replacementServer.url("/#token=primary-token"))
+            #expect(auxiliary.controller._testDashboardDataStore === dataStore)
+            #expect(!auxiliary.controller._testDashboardDataStore.isPersistent)
+            auxiliary.controller._testOpenLinkBrowser(server.url("/reader/auxiliary"))
+            #expect(auxiliary.controller._testLinkBrowserDataStore === dataStore)
 
-        let auxiliaryWindow = auxiliary.controller.window
-        await manager.handleEndpointState(.connecting(mode: .remote, detail: "Switching Gateway"))
-        let reconnecting = try #require(manager._testAuxiliaryWindows().first?.controller)
-        #expect(reconnecting.currentURL == URL(string: "about:blank"))
-        #expect(!reconnecting.auth.hasCredential)
-        #expect(reconnecting.window === auxiliaryWindow)
-        #expect(manager._testController() === controller)
+            let auxiliaryWindow = auxiliary.controller.window
+            await manager.handleEndpointState(.connecting(mode: .remote, detail: "Switching Gateway"))
+            let reconnecting = try #require(manager._testAuxiliaryWindows().first?.controller)
+            #expect(reconnecting.currentURL == URL(string: "about:blank"))
+            #expect(!reconnecting.auth.hasCredential)
+            #expect(reconnecting.window === auxiliaryWindow)
+            #expect(manager._testController() === controller)
 
-        await manager.handleEndpointState(.ready(
-            mode: .remote,
-            url: replacementServer.websocketURL(),
-            token: "rotated-primary-token",
-            password: nil,
-            routeRevision: 2))
-        let recovered = try #require(manager._testAuxiliaryWindows().first?.controller)
-        #expect(recovered.auth.token == "rotated-primary-token")
-        #expect(recovered.window === auxiliaryWindow)
-        #expect(!recovered._testUpdateBridgeAvailable)
-        #expect(manager._testController() === controller)
+            await manager.handleEndpointState(.ready(
+                mode: .remote,
+                url: replacementServer.websocketURL(),
+                token: "rotated-primary-token",
+                password: nil,
+                routeRevision: 2))
+            let recovered = try #require(manager._testAuxiliaryWindows().first?.controller)
+            #expect(recovered.auth.token == "rotated-primary-token")
+            #expect(recovered.window === auxiliaryWindow)
+            #expect(!recovered._testUpdateBridgeAvailable)
+            #expect(manager._testController() === controller)
 
-        await manager._testSwitchTarget(.profile(studio), in: recovered)
-        let replacement = try #require(manager._testAuxiliaryWindows().first?.controller)
-        #expect(replacement !== auxiliary.controller)
-        #expect(replacement.window === auxiliaryWindow)
-        let profileAutosaveName = try #require(replacement.window?.frameAutosaveName)
-        #expect(profileAutosaveName.hasPrefix("\(primaryAutosaveName)-\(studio)-"))
-        #expect(replacement._testDashboardDataStore === dataStore)
-        replacement._testOpenLinkBrowser(server.url("/reader/replacement"))
-        #expect(replacement._testLinkBrowserDataStore === dataStore)
+            await manager._testSwitchTarget(.profile(studio), in: recovered)
+            let replacement = try #require(manager._testAuxiliaryWindows().first?.controller)
+            #expect(replacement !== auxiliary.controller)
+            #expect(replacement.window === auxiliaryWindow)
+            let profileAutosaveName = try #require(replacement.window?.frameAutosaveName)
+            #expect(profileAutosaveName.hasPrefix("\(primaryAutosaveName)-\(studio)-"))
+            #expect(replacement._testDashboardDataStore === dataStore)
+            replacement._testOpenLinkBrowser(server.url("/reader/replacement"))
+            #expect(replacement._testLinkBrowserDataStore === dataStore)
+        }
     }
 
     @Test func `concurrent switches keep the latest selection for one window`() async throws {
@@ -674,8 +678,8 @@ struct DashboardManagerGatewayTargetTests {
         await manager._testOpenWindow(for: .profile("secondary"))
         let secondary = try #require(manager._testAuxiliaryWindows().first?.controller)
         let window = try #require(secondary.window)
-        secondary.showFailure(title: "Unavailable", message: "Synthetic connection failure")
         if scenario == "command-during-refresh" { await catalogGate.hold() }
+        secondary.showFailure(title: "Unavailable", message: "Synthetic connection failure")
         saved.setEndpoint(GatewayConnection.EndpointSnapshot(
             config: (url: server.websocketURL(), token: "suspended", password: nil), routeAuthority: nil))
         manager.dispatchNativeCommand(.newSession)
@@ -695,6 +699,7 @@ struct DashboardManagerGatewayTargetTests {
                 #expect(manager._testAuxiliaryWindows().first?.target == target)
             }
         } else if scenario == "reselect-current" {
+            secondary.show()
             manager.switchFrontmostDashboard(to: .profile("secondary"))
         }
         await gate.release()
@@ -708,6 +713,7 @@ struct DashboardManagerGatewayTargetTests {
                 try await Task.sleep(for: .milliseconds(10))
             }
             #expect(recovered.canDeliverNativeCommands)
+            recovered.show()
             manager.dispatchNativeCommand(.commandPalette)
             await catalogGate.release()
         }
@@ -946,6 +952,7 @@ extension DashboardManagerGatewayTargetTests {
         try Data("{}".utf8).write(to: URL(fileURLWithPath: configPath))
         try await TestIsolation.withEnvValues([
             "OPENCLAW_CONFIG_PATH": configPath,
+            "OPENCLAW_GATEWAY_PORT": nil,
             "OPENCLAW_GATEWAY_TOKEN": nil,
             "OPENCLAW_GATEWAY_PASSWORD": nil,
         ]) {
@@ -977,9 +984,11 @@ extension DashboardManagerGatewayTargetTests {
             let presentation = Task { try await manager.show() }
             if entry == "initial-command" {
                 let config = """
-                {"gateway":{"remote":{"transport":"direct","url":"\(server.websocketURL())","token":"primary"}}}
+                {"gateway":{"port":\(server.port),"auth":{"token":"primary"}}}
                 """
                 try Data(config.utf8).write(to: URL(fileURLWithPath: configPath))
+                // Only a local endpoint may open synchronously while the older remote lookup is suspended.
+                state.connectionMode = .local
                 #expect(manager.showConfiguredWindowIfPossible())
             }
             let source = try #require(manager._testController())
@@ -1108,7 +1117,14 @@ extension DashboardManagerGatewayTargetTests {
             (reconnect ? "reconnected" : "primary"))
     }
 
-    @Test(arguments: ["primary-endpoint", "primary-reconnect", "profile-credentials", "picker", "close"])
+    @Test(arguments: [
+        "primary-endpoint",
+        "primary-reconnect",
+        "profile-credentials",
+        "profile-reconnect",
+        "picker",
+        "close",
+    ])
     func `loading document actions follow only the surviving window selection`(_ scenario: String) async throws {
         let responseGate = DashboardWindowOwnershipPresentationGate()
         let html = """
@@ -1122,6 +1138,8 @@ extension DashboardManagerGatewayTargetTests {
           event.preventDefault(); history.pushState({}, '', event.detail.path);
           window.commandEvents.push('navigation');
         });
+        window.__OPENCLAW_NATIVE_COMMANDS_READY__ = true;
+        window.dispatchEvent(new Event('openclaw:native-commands-state'));
         </script></body></html>
         """
         let server = try await DashboardHTTPFixture.start(
@@ -1136,9 +1154,23 @@ extension DashboardManagerGatewayTargetTests {
             Task { await responseGate.release() }
         }
         let source = GatewayConnectionEndpointSource(url: server.websocketURL(), token: "before")
-        let profile = scenario == "profile-credentials" || scenario == "picker" || scenario == "close"
+        let profile = scenario.hasPrefix("profile-") || scenario == "picker" || scenario == "close"
+        let identity = scenario == "profile-reconnect" ? try DashboardIdentityFixture(
+            announcement: nil, source: source) : nil
         let manager = DashboardManager._testMake(
-            observeGatewayChanges: scenario == "profile-credentials",
+            connectionProvider: { target in
+                if let identity { return identity.connection }
+                switch target {
+                case .primary: return GatewayConnection.shared
+                case let .profile(id): return await MacGatewayConnectionFleet.shared.connection(profileID: id)
+                }
+            },
+            browserIdentityURLProvider: { _, config in
+                guard let identity else { return nil }
+                let announcement = try await identity.connection.controlUiBrowserIdentityURL(config: config)
+                return announcement == nil ? nil : server.url()
+            },
+            observeGatewayChanges: scenario.hasPrefix("profile-"),
             primaryEndpointProvider: { _ in
                 scenario == "picker"
                     ? GatewayConnection.EndpointSnapshot(
@@ -1149,61 +1181,74 @@ extension DashboardManagerGatewayTargetTests {
             profileEndpointProvider: { _ in source.snapshot() },
             gatewayEntriesProvider: { DashboardGatewayTestEntries.withProfiles(["secondary"]) })
         defer { manager.close() }
-        await manager._testOpenWindow(for: profile ? .profile("secondary") : .primary)
-        await responseGate.waitUntilRequested()
-        let original = try #require(manager._testAuxiliaryWindows().first?.controller)
-        let window = try #require(original.window)
-        #expect(original.webView.isLoading)
-        #expect(original.canDeliverNativeCommands)
-        manager.dispatchNativeCommand(.newSession)
-        manager.dispatchNativeCommand(.commandPalette)
-        manager.dispatchNativeCommand(.commandPalette)
-        #expect(original._testPendingNativeCommands == [.newSession, .commandPalette, .commandPalette])
-        let path = "/chat/main/dashboard/preserved"
-        original.dispatchNativeNavigation(DashboardNativeNavigation(
-            path: path, search: nil, fallbackURL: server.url(path)))
-        let intent = original.windowIntentGeneration
+        do {
+            await manager._testOpenWindow(for: profile ? .profile("secondary") : .primary)
+            await responseGate.waitUntilRequested()
+            let original = try #require(manager._testAuxiliaryWindows().first?.controller)
+            let window = try #require(original.window)
+            #expect(original.webView.isLoading)
+            #expect(original.canDeliverNativeCommands)
+            manager.dispatchNativeCommand(.newSession)
+            manager.dispatchNativeCommand(.commandPalette)
+            manager.dispatchNativeCommand(.commandPalette)
+            #expect(original._testPendingNativeCommands == [.newSession, .commandPalette, .commandPalette])
+            let path = "/chat/main/dashboard/preserved"
+            original.dispatchNativeNavigation(DashboardNativeNavigation(
+                path: path, search: nil, fallbackURL: server.url(path)))
+            let intent = original.windowIntentGeneration
 
-        switch scenario {
-        case "close":
-            window.performClose(nil)
-            #expect(original._testPendingNativeCommands.isEmpty)
-            #expect(original._testPendingNativeNavigation == nil)
-            #expect(manager._testAuxiliaryWindows().isEmpty)
-            return
-        case "picker":
-            manager.handleGatewayRequest(.select(.primary), from: original)
-        case "profile-credentials":
-            source.setEndpoint(GatewayConnection.EndpointSnapshot(
-                config: (url: server.websocketURL(), token: "after", password: nil), routeAuthority: nil))
-            NotificationCenter.default.post(name: MacGatewayProfileStore.didChangeNotification, object: nil)
-        default:
-            if scenario == "primary-reconnect" {
-                await manager.handleEndpointState(.connecting(mode: .remote, detail: "Reconnecting"))
+            switch scenario {
+            case "close":
+                window.performClose(nil)
+                #expect(original._testPendingNativeCommands.isEmpty)
+                #expect(original._testPendingNativeNavigation == nil)
+                #expect(manager._testAuxiliaryWindows().isEmpty)
+                await identity?.connection.shutdown()
+                return
+            case "picker":
+                manager.handleGatewayRequest(.select(.primary), from: original)
+            case "profile-credentials":
+                source.setEndpoint(GatewayConnection.EndpointSnapshot(
+                    config: (url: server.websocketURL(), token: "after", password: nil), routeAuthority: nil))
+                NotificationCenter.default.post(name: MacGatewayProfileStore.didChangeNotification, object: nil)
+            case "profile-reconnect":
+                try await identity?.reconnect(announcement: "https://renewed.example.test/")
+            default:
+                if scenario == "primary-reconnect" {
+                    await manager.handleEndpointState(.connecting(mode: .remote, detail: "Reconnecting"))
+                }
+                await manager.handleEndpointState(.ready(
+                    mode: .remote,
+                    url: replacementServer.websocketURL(),
+                    token: "after",
+                    password: nil,
+                    routeRevision: 2))
             }
-            await manager.handleEndpointState(.ready(
-                mode: .remote, url: replacementServer.websocketURL(), token: "after", password: nil, routeRevision: 2))
+            let replacementDeadline = ContinuousClock.now + .seconds(5)
+            while window.windowController === original, ContinuousClock.now < replacementDeadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let replacement = try #require(window.windowController as? DashboardWindowController)
+            #expect(replacement !== original)
+            #expect(replacement.window === window)
+            if scenario != "picker" { #expect(replacement.windowIntentGeneration == intent) }
+            await responseGate.release()
+            let deadline = ContinuousClock.now + .seconds(5)
+            let expected = scenario == "picker" ? [] :
+                ["new-session", "palette", "palette"] + (scenario.hasPrefix("profile-") ? ["navigation"] : [])
+            var events: [String] = []
+            repeat {
+                events = await (try? replacement.webView.evaluateJavaScript("window.commandEvents") as? [String]) ?? []
+                if !replacement.webView.isLoading, replacement.canDeliverNativeCommands, events == expected { break }
+                try await Task.sleep(for: .milliseconds(10))
+            } while ContinuousClock.now < deadline
+            #expect(events == expected)
+            #expect(replacement.webView.url?.path == (scenario.hasPrefix("profile-") ? path : "/"))
+        } catch {
+            await identity?.connection.shutdown()
+            throw error
         }
-        let replacementDeadline = ContinuousClock.now + .seconds(5)
-        while window.windowController === original, ContinuousClock.now < replacementDeadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        let replacement = try #require(window.windowController as? DashboardWindowController)
-        #expect(replacement !== original)
-        #expect(replacement.window === window)
-        if scenario != "picker" { #expect(replacement.windowIntentGeneration == intent) }
-        await responseGate.release()
-        let deadline = ContinuousClock.now + .seconds(5)
-        let expected = scenario == "picker" ? [] :
-            ["new-session", "palette", "palette"] + (scenario == "profile-credentials" ? ["navigation"] : [])
-        var events: [String] = []
-        repeat {
-            events = await (try? replacement.webView.evaluateJavaScript("window.commandEvents") as? [String]) ?? []
-            if !replacement.webView.isLoading, replacement.canDeliverNativeCommands, events == expected { break }
-            try await Task.sleep(for: .milliseconds(10))
-        } while ContinuousClock.now < deadline
-        #expect(events == expected)
-        #expect(replacement.webView.url?.path == (scenario == "profile-credentials" ? path : "/"))
+        await identity?.connection.shutdown()
     }
 }
 

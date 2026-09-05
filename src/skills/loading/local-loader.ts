@@ -150,16 +150,13 @@ export function loadSkillsFromDirSafe(params: {
   maxBytes?: number;
   rejectHardlinks?: boolean;
   onDiagnostic?: (diagnostic: LocalSkillLoadDiagnostic) => void;
-}): {
-  skills: Skill[];
-  frontmatterByFilePath: ReadonlyMap<string, ParsedSkillFrontmatter>;
-} {
+}): LoadedLocalSkill[] {
   const rootDir = path.resolve(params.dir);
   let rootRealPath: string;
   try {
     rootRealPath = fs.realpathSync(rootDir);
   } catch {
-    return { skills: [], frontmatterByFilePath: new Map() };
+    return [];
   }
 
   const rootSkill = loadSingleSkillDirectory({
@@ -171,13 +168,10 @@ export function loadSkillsFromDirSafe(params: {
     onDiagnostic: params.onDiagnostic,
   });
   if (rootSkill) {
-    return {
-      skills: [rootSkill.skill],
-      frontmatterByFilePath: new Map([[rootSkill.skill.filePath, rootSkill.frontmatter]]),
-    };
+    return [rootSkill];
   }
 
-  const loadedSkills = listCandidateSkillDirs(rootDir)
+  return listCandidateSkillDirs(rootDir)
     .map((skillDir) =>
       loadSingleSkillDirectory({
         skillDir,
@@ -189,41 +183,4 @@ export function loadSkillsFromDirSafe(params: {
       }),
     )
     .filter((skill): skill is LoadedLocalSkill => skill !== null);
-  const frontmatterByFilePath = new Map<string, ParsedSkillFrontmatter>();
-  for (const loaded of loadedSkills) {
-    frontmatterByFilePath.set(loaded.skill.filePath, loaded.frontmatter);
-  }
-
-  return {
-    skills: loadedSkills.map((loaded) => loaded.skill),
-    frontmatterByFilePath,
-  };
-}
-
-export function readSkillFrontmatterSafe(params: {
-  rootDir: string;
-  filePath: string;
-  maxBytes?: number;
-  rejectHardlinks?: boolean;
-}): Record<string, string> | null {
-  let rootRealPath: string;
-  try {
-    rootRealPath = fs.realpathSync(path.resolve(params.rootDir));
-  } catch {
-    return null;
-  }
-  const raw = readSkillFileSync({
-    rootRealPath,
-    filePath: path.resolve(params.filePath),
-    maxBytes: params.maxBytes,
-    rejectHardlinks: params.rejectHardlinks,
-  });
-  if (raw === null) {
-    return null;
-  }
-  try {
-    return parseSkillFrontmatter(raw);
-  } catch {
-    return null;
-  }
 }
