@@ -1,6 +1,7 @@
 // Discord plugin module dispatches inbound messages into the processing queue.
 import {
   createChannelInboundDebouncer,
+  resolveInboundDebounceMs,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -113,6 +114,7 @@ export function createDiscordMessageDispatcher(
   const { debouncer } = createChannelInboundDebouncer<DiscordDebounceEntry>({
     cfg: params.cfg,
     channel: "discord",
+    resolveDebounceMs: () => resolveInboundDebounceMs({ cfg: readConfig(), channel: "discord" }),
     buildKey: resolveDebounceKey,
     shouldDebounce: (entry) => {
       const message = entry.data.message;
