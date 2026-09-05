@@ -65,6 +65,9 @@ async function api(endpoint: string): Promise<unknown> {
 }
 const apiId = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const attemptPath = `${repo}/actions/runs/${identity.run.id}/attempts/${identity.run.attempt}`;
+const workflowBranch = process.env.GITHUB_REF?.startsWith("refs/heads/")
+  ? process.env.GITHUB_REF.slice("refs/heads/".length)
+  : undefined;
 const run = z
   .object({
     id: apiId,
@@ -82,7 +85,9 @@ if (
   run.run_attempt !== identity.run.attempt ||
   run.event !== "workflow_dispatch" ||
   run.head_sha !== identity.workflow.sha ||
-  run.path !== identity.workflow.path ||
+  // Only the current trusted workflow branch may qualify GitHub's run path.
+  (run.path !== identity.workflow.path &&
+    (!workflowBranch || run.path !== `${identity.workflow.path}@${workflowBranch}`)) ||
   run.display_title !== `${definition.runName} [${identity.request_id}]` ||
   String(run.repository.id) !== identity.repository.id ||
   String(run.head_repository.id) !== identity.repository.id

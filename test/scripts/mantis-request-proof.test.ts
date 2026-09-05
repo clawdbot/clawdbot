@@ -262,6 +262,8 @@ describe("trusted finalizer CLI", () => {
   const parser = path.resolve("scripts/mantis/read-request-archive.py");
   it.each([
     "complete",
+    "qualified-path",
+    "wrong-path-ref",
     "redirect",
     "digest-mismatch",
     "wrong-run",
@@ -290,7 +292,12 @@ describe("trusted finalizer CLI", () => {
         run_attempt: fault === "wrong-attempt" ? 2 : 1,
         event: "workflow_dispatch",
         head_sha: identity.workflow.sha,
-        path: identity.workflow.path,
+        path:
+          fault === "qualified-path"
+            ? identity.workflow.path + "@mantis-proof-v1"
+            : fault === "wrong-path-ref"
+              ? identity.workflow.path + "@other-ref"
+              : identity.workflow.path,
         display_title:
           fault === "wrong-title" ? "other request" : `Mantis request [${identity.request_id}]`,
         repository: { id: 123 },
@@ -373,11 +380,20 @@ describe("trusted finalizer CLI", () => {
             GITHUB_REPOSITORY: "openclaw/openclaw",
             GITHUB_REPOSITORY_ID: "123",
             GITHUB_WORKFLOW_SHA: identity.workflow.sha,
+            GITHUB_REF: "refs/heads/mantis-proof-v1",
             GITHUB_RUN_ID: "456",
             GITHUB_RUN_ATTEMPT: "1",
           },
         });
-      if (["wrong-attempt", "wrong-title", "wrong-job-run", "incomplete-jobs"].includes(fault)) {
+      if (
+        [
+          "wrong-attempt",
+          "wrong-title",
+          "wrong-job-run",
+          "incomplete-jobs",
+          "wrong-path-ref",
+        ].includes(fault)
+      ) {
         expect(invoke).toThrow();
         return;
       }
@@ -388,9 +404,9 @@ describe("trusted finalizer CLI", () => {
         ),
       );
       expect(receipt.assertion_outcome).toBe(
-        ["complete", "redirect"].includes(fault) ? "pass" : "inconclusive",
+        ["complete", "redirect", "qualified-path"].includes(fault) ? "pass" : "inconclusive",
       );
-      if (["complete", "redirect"].includes(fault)) {
+      if (["complete", "redirect", "qualified-path"].includes(fault)) {
         expect(receipt.evidence?.sha256).toBe(requestEvidenceDigest(archive));
       }
       if (["digest-mismatch", "wrong-run"].includes(fault)) {
