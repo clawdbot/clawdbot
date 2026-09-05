@@ -2,8 +2,8 @@ import SwiftUI
 
 @MainActor
 struct GatewaySettings: View {
-    // Keep inputs and sheet identity together so reconnect cannot initialize
-    // the editor's state from an earlier blank Add Gateway presentation.
+    /// Keep inputs and sheet identity together so reconnect cannot initialize
+    /// the editor's state from an earlier blank Add Gateway presentation.
     private struct EditorPresentation: Identifiable {
         let id = UUID()
         var name = ""
