@@ -150,4 +150,23 @@ describe("memory search result monotonicity", () => {
       await manager.close?.();
     }
   });
+
+  it("returns more than the candidate universe when the caller asks for more", async () => {
+    // The fixed universe must behave as a retrieval floor. If it also caps selection,
+    // a request above it silently loses qualifying hits that retrieval already held.
+    await seedGradedCorpus(260);
+    const manager = await getFreshManager(hybridConfig());
+    try {
+      await manager.sync({ reason: "test" });
+      const wide = await manager.search("alpha", { maxResults: 250, minScore: 0 });
+      expect(wide.length).toBeGreaterThan(200);
+
+      // Widening past the universe must still not disturb the leader.
+      const single = await manager.search("alpha", { maxResults: 1, minScore: 0 });
+      expect(single[0]?.path).toBe(wide[0]?.path);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
 });

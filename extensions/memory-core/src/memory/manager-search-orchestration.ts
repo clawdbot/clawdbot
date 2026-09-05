@@ -65,7 +65,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     // Fusion ranks only what retrieval fetched, so a window that tracks the requested
     // count lets a wider request surface a better top hit. Retrieve one fixed universe
     // for every count and every path, then trim to the caller.
-    const candidateMaxResults = SEARCH_CANDIDATE_UNIVERSE;
+    // The universe is a floor, not a cap: a request above it must still be able to
+    // return every qualifying hit, so selection stays caller-sized.
+    const candidateMaxResults = Math.max(SEARCH_CANDIDATE_UNIVERSE, maxResults);
     // Retrieval owners apply project ranking and eligibility, including lexical recall.
     // Only cap the expanded window here so partial and final recall survive together.
     const selectResults = (results: MemorySearchResult[]) => results.slice(0, maxResults);
