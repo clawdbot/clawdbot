@@ -272,24 +272,31 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     ? nothing
     : renderChatRunStatusIndicator(composerRunStatus);
   const fallbackStatus = renderFallbackIndicator(props.fallbackStatus);
-  const progressCard = props.progressCard
-    ? html`<div class="agent-chat__progress-float">
-        ${renderSessionProgressCard(
-          props.progressCard,
-          "composer",
-          props.onDismissProgressCard,
-          activeSession?.status,
-          activeSession?.startedAt,
-          activeSession?.endedAt,
-          props.runActive,
-          props.collapseTaskProgress,
-          {
-            activeRunId: props.runId,
-            completedRunId: props.runStatus?.phase === "done" ? props.runStatus.runId : null,
-          },
-        )}
-      </div>`
-    : nothing;
+  const progressCard =
+    props.progressCard || props.progressCardError
+      ? html`<div class="agent-chat__progress-float">
+          ${props.progressCardError ? html`<div class="callout info" role="status">${props.progressCardError}</div>` : nothing}
+          ${
+            props.progressCard
+              ? renderSessionProgressCard(
+                  props.progressCard,
+                  "composer",
+                  props.onDismissProgressCard,
+                  activeSession?.status,
+                  activeSession?.startedAt,
+                  activeSession?.endedAt,
+                  props.runActive,
+                  props.collapseTaskProgress,
+                  {
+                    activeRunId: props.runId,
+                    completedRunId:
+                      props.runStatus?.phase === "done" ? props.runStatus.runId : null,
+                  },
+                )
+              : nothing
+          }
+        </div>`
+      : nothing;
   const queue = renderChatQueue({
     queue: props.queue,
     offline: props.offline,

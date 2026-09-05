@@ -133,6 +133,71 @@ function targetLocation(target: ReturnType<typeof sessionNavigationTarget>) {
 }
 
 describe("gateway-backed session route resolution", () => {
+  it.each([false, true])(
+    "opens qualified global navigation without selecting the home session (exactKey=%s)",
+    async (exactKey) => {
+      const ordinary = row({ key: "agent:research:global", boardFace: "dashboard" });
+      const {
+        context: baseContext,
+        list,
+        request,
+      } = contextFor({
+        ok: true,
+        ...ordinary,
+        agentId: "research",
+      });
+      const context = { ...baseContext, basePath: "/control" };
+      const target = sessionNavigationTarget({
+        context,
+        face: "chat",
+        sessionKey: ordinary.key,
+        agentId: "main",
+        preferenceDerivedFace: true,
+        exactKey,
+      });
+
+      const loaded = await loadChatRoute(
+        context,
+        targetLocation(target),
+        "chat",
+        new AbortController().signal,
+      );
+      expect(loaded).toMatchObject({
+        kind: "session",
+        sessionKey: ordinary.key,
+        face: "dashboard",
+        canonicalLocation: {
+          pathname: "/control/dashboard/research/~key/global",
+          search: "",
+        },
+      });
+      expect(target.href).toBe("/control/chat/research/~key/global");
+
+      for (const rest of ["~key/global", "global"]) {
+        const reloaded = await loadChatRoute(
+          context,
+          { pathname: `/control/dashboard/research/${rest}`, search: "", hash: "" },
+          "dashboard",
+          new AbortController().signal,
+        );
+        expect(reloaded).toMatchObject({
+          kind: "session",
+          sessionKey: ordinary.key,
+          face: "dashboard",
+        });
+        expect(reloaded).not.toHaveProperty("canonicalLocation");
+      }
+      expect(request).toHaveBeenCalledExactlyOnceWith("sessions.resolve", {
+        reference: { key: ordinary.key },
+        agentId: "research",
+        includeGlobal: true,
+        includeUnknown: true,
+        allowMissing: true,
+      });
+      expect(list).not.toHaveBeenCalled();
+    },
+  );
+
   it("resolves a non-default agent's canonical global face from its scoped row", async () => {
     const globalRow = row({ key: "global", kind: "global", boardFace: "dashboard" });
     const { context, list, request } = contextFor({ ok: true, ...globalRow, agentId: "research" });

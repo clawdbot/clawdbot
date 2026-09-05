@@ -535,11 +535,18 @@ actor GatewayConnection: Observable {
             }
             throw CancellationError()
         }
-        let data = try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+        let result: Result<Data, Error>
+        do {
+            result = try await .success(client.request(method: method, params: params, timeoutMs: timeoutMs))
+        } catch {
+            result = .failure(error)
+        }
+        // A late error has the same route authority as a late payload.
+        // Revalidate before either outcome reaches a replacement owner.
         guard await self.isCurrentRoute(route), self.configuredConnection?.client === client else {
             throw CancellationError()
         }
-        return data
+        return try result.get()
     }
 
     /// Server-bound requests never reconfigure, reconnect, or cross onto a
@@ -555,15 +562,22 @@ actor GatewayConnection: Observable {
         }
         // Untagged channel cancellation can follow a send. Only the guard above
         // proves this wrapper rejected the request before dispatch.
-        let data = try await lease.client.request(
-            method: method,
-            params: params,
-            timeoutMs: timeoutMs,
-            ifCurrentConnectionGeneration: lease.socketGeneration)
+        let result: Result<Data, Error>
+        do {
+            result = try await .success(lease.client.request(
+                method: method,
+                params: params,
+                timeoutMs: timeoutMs,
+                ifCurrentConnectionGeneration: lease.socketGeneration))
+        } catch {
+            result = .failure(error)
+        }
+        // A late error has the same route authority as a late payload.
+        // Revalidate before either outcome reaches a replacement owner.
         guard await self.isCurrentServerLease(lease) else {
             throw CancellationError()
         }
-        return data
+        return try result.get()
     }
 }
 

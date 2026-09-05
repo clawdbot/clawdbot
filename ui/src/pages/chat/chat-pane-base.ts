@@ -35,7 +35,11 @@ import type {
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { GitHubPublicationBinding } from "../../lib/sessions/session-capability.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  parseAgentSessionKey,
+  resolveUiConversationIdentity,
+} from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -43,7 +47,7 @@ import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.ts";
 import { CHAT_PANE_LIFECYCLE_CHANGED_EVENT } from "./chat-history-events.ts";
-import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { getAcceptedChatHistorySession, getChatHistoryLoadState } from "./chat-history-state.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import type {
   ChatPaneConnectionScope,
@@ -253,8 +257,18 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected readonly taskSidebarTranscript = new ChatTranscriptController(this);
   protected readonly progressCard = new SessionProgressCardController(this, {
     gateway: () => this.context?.gateway,
-    sessionKey: () =>
-      this.state && !this.isCurrentSessionArchived(this.state) ? this.state.sessionKey : undefined,
+    target: () => {
+      const state = this.state;
+      if (!state || this.isCurrentSessionArchived(state)) {
+        return undefined;
+      }
+      const identity = resolveUiConversationIdentity(state, state.sessionKey);
+      const session = !identity.agentId ? getAcceptedChatHistorySession(state) : undefined;
+      // Raw retained panes follow their accepted history owner, never the selected assistant.
+      return session && parseAgentSessionKey(session.key)
+        ? resolveUiConversationIdentity(state, session.key)
+        : identity;
+    },
   });
   protected readonly questionPromptState = createQuestionPromptState(() => {
     this.questionPrompts = listQuestionPrompts(this.questionPromptState);
