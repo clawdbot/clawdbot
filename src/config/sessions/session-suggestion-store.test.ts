@@ -4,12 +4,14 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
 import {
   addSessionSuggestion,
   claimSessionSuggestionDispatch,
   finalizeSessionSuggestionClaim,
   listSessionSuggestions,
+  releaseSessionSuggestionDispatch,
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
 } from "./session-suggestion-store.js";
 
@@ -129,6 +131,55 @@ describe("session suggestion store", () => {
 
       await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 2 });
       expect(listSessionSuggestions(scope)).toEqual([]);
+    });
+  });
+
+  it("skips suggestion identity checks only when the expected instance is omitted", async () => {
+    await withTestDir({ prefix: "openclaw-session-suggestions-identity-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
+      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+      database.db
+        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+        .run("{", scope.sessionKey);
+      const mutations = [
+        (expectedSessionId?: string) =>
+          addSessionSuggestion(scope, {
+            id: "suggestion",
+            authorId: "author",
+            text: "idea",
+            expectedSessionId,
+          }),
+        (expectedSessionId?: string) =>
+          claimSessionSuggestionDispatch(scope, {
+            id: "suggestion",
+            resolution: "edit",
+            expectedSessionId,
+          }),
+        (expectedSessionId?: string) =>
+          releaseSessionSuggestionDispatch(scope, {
+            id: "suggestion",
+            token: "other-token",
+            expectedSessionId,
+          }),
+        (expectedSessionId?: string) =>
+          finalizeSessionSuggestionClaim(scope, {
+            id: "suggestion",
+            token: "other-token",
+            state: "accepted",
+            expectedSessionId,
+          }),
+      ];
+      for (const mutate of mutations) {
+        for (const expectedSessionId of ["session-a", ""]) {
+          expect(() => mutate(expectedSessionId)).toThrow(SessionWorkStartInvalidatedError);
+          expect(() => mutate(expectedSessionId)).toThrow(
+            "session changed before suggestion mutation",
+          );
+        }
+        expect(() => mutate()).not.toThrow();
+      }
     });
   });
 

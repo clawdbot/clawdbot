@@ -13,6 +13,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 
 type SuggestionDatabase = Pick<OpenClawAgentKyselyDatabase, "session_suggestions">;
@@ -68,27 +69,7 @@ function assertSessionInstance(
   if (expectedSessionId === undefined) {
     return;
   }
-  const row =
-    database.db /* sqlite-allow-raw: sync session-instance check inside the suggestion write transaction */
-      .prepare("SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?")
-      .get(sessionKey) as { current_session_id?: string; entry_json?: string } | undefined;
-  let entrySessionId: string | undefined;
-  try {
-    const entry = row?.entry_json ? (JSON.parse(row.entry_json) as unknown) : undefined;
-    const candidate =
-      entry && typeof entry === "object" && !Array.isArray(entry)
-        ? (entry as { sessionId?: unknown }).sessionId
-        : undefined;
-    entrySessionId = typeof candidate === "string" ? candidate : undefined;
-  } catch {
-    entrySessionId = undefined;
-  }
-  if (
-    !row ||
-    entrySessionId === undefined ||
-    row.current_session_id !== entrySessionId ||
-    entrySessionId !== expectedSessionId
-  ) {
+  if (readSessionEntryInstanceId(database, sessionKey) !== expectedSessionId) {
     throw new SessionWorkStartInvalidatedError("session changed before suggestion mutation");
   }
 }
