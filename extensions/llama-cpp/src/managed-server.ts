@@ -82,15 +82,14 @@ export type LlamaServerRuntimeFacts = {
 };
 
 const modelPromises = new Map<string, Promise<string>>();
+const resolvedModelArtifacts = new Map<string, ModelArtifact>(); // Presets remain request-scoped.
 const presetState = {
   appliedRevisions: new Map<string, string>(),
   desiredRevisions: new Map<string, string>(),
   transition: Promise.resolve(),
 };
-// Bound embedding KV memory and fit one input in one physical batch.
-const LLAMA_CPP_EMBEDDING_UBATCH_SIZE = 2048;
-// b10534 can synchronously wait 10 seconds for a model to unload during reload.
-const LLAMA_CPP_PRESET_RELOAD_TIMEOUT_MS = 15_000;
+const LLAMA_CPP_EMBEDDING_UBATCH_SIZE = 2048; // Fit one input in one physical batch.
+const LLAMA_CPP_PRESET_RELOAD_TIMEOUT_MS = 15_000; // b10534 unload window: 10 seconds.
 
 function parseHuggingFaceSource(source: string): {
   user: string;
@@ -276,42 +275,45 @@ export async function ensureLlamaCppModel(params: {
     await assertGguf(localPath);
     return localPath;
   }
-  const artifact = await resolveModelArtifact(localSource, params.signal);
+  const artifactCacheKey = `${path.resolve(params.cacheDir)}\0${localSource}`;
+  const artifact =
+    resolvedModelArtifacts.get(artifactCacheKey) ??
+    (await resolveModelArtifact(localSource, params.signal));
+  resolvedModelArtifacts.set(artifactCacheKey, artifact);
   const destination = path.join(params.cacheDir, artifact.fileName);
-  const pending = modelPromises.get(destination);
-  if (pending) {
-    return await pending;
-  }
-  const load = (async () => {
-    const exists = await fsp
-      .stat(destination)
-      .then((stat) => stat.isFile())
-      .catch(() => false);
-    if (exists) {
-      if (artifact.expectedSha256) {
-        if ((await sha256File(destination, params.signal)) === artifact.expectedSha256) {
-          return destination;
-        }
-      } else {
+  const load =
+    modelPromises.get(destination) ??
+    (async () => {
+      const exists = await fsp
+        .stat(destination)
+        .then((stat) => stat.isFile())
+        .catch(() => false);
+      if (
+        exists &&
+        artifact.expectedSha256 &&
+        (await sha256File(destination, params.signal)) === artifact.expectedSha256
+      ) {
+        return destination;
+      }
+      if (exists && !artifact.expectedSha256) {
         await assertGguf(destination);
         return destination;
       }
-    }
-    if (!params.download) {
-      throw new Error(`Model is not cached at ${destination}`);
-    }
-    await downloadVerifiedFile({
-      url: artifact.url,
-      destination,
-      expectedSha256: artifact.expectedSha256,
-      expectedSize: artifact.expectedSize,
-      requireServerDigest: !artifact.expectedSha256,
-      signal: params.signal,
-      onProgress: params.onProgress,
-    });
-    await assertGguf(destination);
-    return destination;
-  })();
+      if (!params.download) {
+        throw new Error(`Model is not cached at ${destination}`);
+      }
+      await downloadVerifiedFile({
+        url: artifact.url,
+        destination,
+        expectedSha256: artifact.expectedSha256,
+        expectedSize: artifact.expectedSize,
+        requireServerDigest: !artifact.expectedSha256,
+        signal: params.signal,
+        onProgress: params.onProgress,
+      });
+      await assertGguf(destination);
+      return destination;
+    })();
   modelPromises.set(destination, load);
   try {
     return await load;

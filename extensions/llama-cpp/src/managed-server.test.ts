@@ -34,6 +34,7 @@ async function withHuggingFaceMetadataFixture(
   endpoint: "manifest" | "file" | "tree",
   run: (params: {
     cacheDir: string;
+    setMetadataAvailable: (available: boolean) => void;
     setPadding: (target: "manifest" | "file" | "tree", padding: string) => void;
     pathInfoBodies: unknown[];
     requestedUrls: string[];
@@ -44,11 +45,17 @@ async function withHuggingFaceMetadataFixture(
   const cacheDir = tempDirs.make(`llama-cpp-hf-${endpoint}-`);
   await fs.writeFile(path.join(cacheDir, "hf_owner_repo_model.gguf"), "GGUF");
   let padding = "x".repeat(1024 * 1024);
+  let metadataAvailable = true;
   const pathInfoBodies: unknown[] = [];
   const requestedUrls: string[] = [];
   const server = http.createServer((req, res) => {
     res.setHeader("content-type", "application/json");
     requestedUrls.push(req.url ?? "");
+    if (!metadataAvailable) {
+      res.statusCode = 503;
+      res.end("{}");
+      return;
+    }
     if (req.url?.startsWith("/v2/owner/repo/manifests/latest")) {
       res.end(
         JSON.stringify({
@@ -58,7 +65,7 @@ async function withHuggingFaceMetadataFixture(
       );
       return;
     }
-    if (req.url?.startsWith("/api/models/owner/repo/paths-info/main")) {
+    if (req.url?.startsWith("/api/models/owner/repo/paths-info/")) {
       const chunks: Buffer[] = [];
       req.on("data", (chunk: Buffer) => chunks.push(chunk));
       req.on("end", () => {
@@ -72,7 +79,7 @@ async function withHuggingFaceMetadataFixture(
       });
       return;
     }
-    if (req.url?.startsWith("/api/models/owner/repo/tree/main")) {
+    if (req.url?.startsWith("/api/models/owner/repo/tree/")) {
       res.end(
         JSON.stringify([
           { path: "model.gguf", size: 4, lfs: { oid: TEST_GGUF_SHA256 } },
@@ -103,6 +110,9 @@ async function withHuggingFaceMetadataFixture(
   try {
     await run({
       cacheDir,
+      setMetadataAvailable: (available) => {
+        metadataAvailable = available;
+      },
       setPadding: (target, next) => {
         if (target === endpoint) {
           padding = next;
@@ -747,7 +757,7 @@ describe("managed llama-server", () => {
         setPadding(endpoint, "x".repeat(16 * 1024 * 1024 + 1));
         await expect(
           ensureLlamaCppModel({
-            source: "hf:owner/repo",
+            source: `hf:owner/repo#oversized-${endpoint}`,
             cacheDir,
             download: false,
           }),
@@ -785,6 +795,38 @@ describe("managed llama-server", () => {
         );
         expect(pathInfoBodies).toEqual([{ paths: ["model.gguf"], expand: false }]);
         expect(requestedUrls).not.toContain("/v2/owner/repo/manifests/latest");
+      },
+      "hf:owner/repo/model.gguf",
+    );
+  });
+
+  it("keeps a verified custom Hugging Face artifact available while refreshing its preset", async () => {
+    await withHuggingFaceMetadataFixture(
+      "file",
+      async ({ cacheDir, setMetadataAvailable, source }) => {
+        const presetPath = path.join(cacheDir, "models.ini");
+        const localService = {
+          command: path.join(cacheDir, "llama-server"),
+          args: ["--models-preset", presetPath],
+        };
+        const model = {
+          id: "custom-chat",
+          params: { modelPath: source, contextSize: 8192 },
+          maxTokens: 1024,
+        };
+        const provider = {
+          baseUrl: "http://127.0.0.1:19432/v1",
+          localService,
+          models: [model],
+          params: { modelCacheDir: cacheDir },
+        };
+
+        await ensureManagedLlamaServerForChat({ provider, model });
+        setMetadataAvailable(false);
+        model.maxTokens = 2048;
+        await ensureManagedLlamaServerForChat({ provider, model });
+
+        expect(await fs.readFile(presetPath, "utf8")).toContain("n-predict = 2048");
       },
       "hf:owner/repo/model.gguf",
     );
