@@ -16,6 +16,7 @@ import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { trackAsyncWork } from "../../../shared/async-work-scope.js";
 import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
 import * as taskControlRuntime from "../../../tasks/task-registry-control.runtime.js";
 import {
@@ -166,6 +167,7 @@ async function createBoundParent() {
     defaultSessionId: "parent-session",
   });
   const context = createChatAbortContext({
+    trackExecution: trackAsyncWork,
     getRuntimeConfig: () => cfg,
     getSessionEventSubscriberConnIds: () => new Set(),
     broadcastToConnIds: vi.fn(),
