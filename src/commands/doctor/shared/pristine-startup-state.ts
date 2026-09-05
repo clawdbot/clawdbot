@@ -225,7 +225,7 @@ function configIsPristineStateSafe(
   }
   return !configMayRequireStartupPluginConvergence({
     config: config as OpenClawConfig,
-    env,
+    env: {},
   });
 }
 

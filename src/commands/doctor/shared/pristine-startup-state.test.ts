@@ -126,6 +126,22 @@ describe("pristine startup state", () => {
     expect(fs.existsSync(stateDir)).toBe(false);
   });
 
+  it.each([
+    ["web search", { EXA_API_KEY: "synthetic-fixture" }],
+    ["model provider", { GROQ_API_KEY: "synthetic-fixture" }],
+    ["browser search", { BRAVE_API_KEY: "synthetic-fixture" }],
+    ["channel", { QQBOT_APP_ID: "synthetic-app", QQBOT_CLIENT_SECRET: "synthetic-fixture" }],
+  ])(
+    "does not mistake ambient-only %s credentials for persisted migration state",
+    (_label, env) => {
+      const fixture = { ...createFixture({}), ...env };
+      const expected = { skipAllStateMigrations: true, skipCoreStateMigrations: true };
+
+      expect(planPristineStartupStateMigrations(fixture)).toEqual(expected);
+      expect(planPristineStartupConfigMigrations({}, fixture)).toEqual(expected);
+    },
+  );
+
   it("accepts the core-only Gateway benchmark config", () => {
     const env = createFixture({
       browser: { enabled: false },

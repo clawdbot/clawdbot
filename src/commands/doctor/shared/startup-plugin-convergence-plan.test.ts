@@ -43,6 +43,19 @@ describe("startup plugin convergence planning", () => {
     });
   });
 
+  it.each([
+    ["web search", { EXA_API_KEY: "synthetic-fixture" }],
+    ["model provider", { GROQ_API_KEY: "synthetic-fixture" }],
+    ["browser search", { BRAVE_API_KEY: "synthetic-fixture" }],
+    ["channel", { QQBOT_APP_ID: "synthetic-app", QQBOT_CLIENT_SECRET: "synthetic-fixture" }],
+  ])("retains real Gateway convergence for ambient-only %s credentials", async (_label, env) => {
+    await expect(planStartupPluginConvergence({ config: {}, env })).resolves.toEqual({
+      required: true,
+      installRecords: {},
+    });
+    expect(loadInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({ env });
+  });
+
   it("retains convergence for explicit plugin and runtime configuration", () => {
     expect(
       configMayRequireStartupPluginConvergence({
