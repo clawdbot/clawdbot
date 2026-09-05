@@ -39,6 +39,32 @@ function createAutomaticUpdateHarness(request: RequestFn) {
 }
 
 describe("application update campaign overlays", () => {
+  it.each(["succeeded", "failed", "skipped"] as const)(
+    "retires only the applying campaign owned by a %s run",
+    async (status) => {
+      const run = updateRunFixture({
+        status,
+        phase: "finished",
+        origin: { campaignId: AUTO_UPDATE_SCHEDULE.campaign.id },
+      });
+      const harness = createAutomaticUpdateHarness(async () => ({ lastRun: run }));
+      const overlays = createApplicationOverlays(harness.gateway);
+      try {
+        await flushMicrotasks();
+        harness.emitEvent("update.available", {
+          schedule: {
+            ...AUTO_UPDATE_SCHEDULE,
+            campaign: { ...AUTO_UPDATE_SCHEDULE.campaign, state: "applying" },
+          },
+        });
+        expect(overlays.snapshot.updateRun).toEqual(run);
+        expect(overlays.snapshot.updateRunning).toBe(false);
+      } finally {
+        overlays.dispose();
+      }
+    },
+  );
+
   it("owns the running interlock while an automatic campaign applies", async () => {
     const request = vi.fn<RequestFn>(async () => ({}));
     const harness = createAutomaticUpdateHarness(request);

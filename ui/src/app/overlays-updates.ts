@@ -153,15 +153,18 @@ export function createApplicationUpdateOverlays(
   }
 
   function publish() {
+    const campaign = snapshot.updateSchedule?.campaign;
+    const applying =
+      campaign?.state === "applying" && snapshot.updateRun?.origin.campaignId !== campaign.id;
     snapshot = {
       ...snapshot,
-      updateRunning:
-        updateRequestRunning ||
-        snapshot.updateRun?.status === "running" ||
-        (!snapshot.updateRun && snapshot.updateSchedule?.campaign?.state === "applying"),
+      updateRunning: updateRequestRunning || snapshot.updateRun?.status === "running" || applying,
       updateReconciliationPending:
         runId !== null && (!snapshot.updateRun || snapshot.updateRun.status === "running"),
     };
+    if (applying) {
+      currentFailure = null;
+    }
     onChange();
     presentFailureTriage();
   }

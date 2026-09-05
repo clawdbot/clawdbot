@@ -7,11 +7,7 @@ import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
-import {
-  getUpdateRun,
-  listUpdateRuns,
-  recordUpdateRunPhase,
-} from "../../infra/update-run-ledger.js";
+import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -210,17 +206,21 @@ describe("update.run acknowledgement", () => {
     );
   });
 
-  it("awaits a managed restart notice only after the orchestrator enters activating", async () => {
+  it("records activation and awaits its notice before parking the managed gateway", async () => {
     mockGlobalInstallSurface();
     detectRespawnSupervisorMock.mockReturnValue("launchd");
+    getUpdateAvailableMock.mockReturnValue({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    });
     const response = await captureUpdateRunPayload({ sessionKey });
     const beforePark = startManagedServiceUpdateHandoffMock.mock.calls[0]?.[0].beforePark;
     if (!response || !beforePark) {
       throw new Error("expected admitted managed handoff");
     }
-    await beforePark();
+    expect(getUpdateRun(response.runId)?.phase).toBe("requested");
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledOnce();
-    recordUpdateRunPhase(response.runId, "activating", { after: { version: "2.0.0" } });
     const delivered = createDeferredCore<boolean>();
     const started = createDeferredCore();
     sendGatewayLifecycleNoticeMock.mockImplementationOnce(() => {
@@ -231,9 +231,14 @@ describe("update.run acknowledgement", () => {
     const park = beforePark().then(() => {
       parked = true;
     });
-    await started.promise;
-    expect(parked).toBe(false);
-    delivered.resolve(true);
+    try {
+      await Promise.race([started.promise, park]);
+      expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledTimes(2);
+      expect(getUpdateRun(response.runId)?.phase).toBe("activating");
+      expect(parked).toBe(false);
+    } finally {
+      delivered.resolve(true);
+    }
     await park;
     await beforePark();
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenCalledTimes(2);

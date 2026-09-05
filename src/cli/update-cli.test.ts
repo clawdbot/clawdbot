@@ -4065,7 +4065,10 @@ describe("update-cli", () => {
           : updateCommand({ yes: true, json: true });
       await expect(command).rejects.toEqual(new ExitError(1));
 
-      const { run, ...jsonOutput } = expectDefined(lastWriteJsonCall()) as UpdateRunResult & {
+      const { run, ...jsonOutput } = expectDefined(
+        lastWriteJsonCall(),
+        "JSON update failure",
+      ) as UpdateRunResult & {
         run?: UpdateRunRecord;
       };
       expect(jsonOutput?.status).toBe("error");

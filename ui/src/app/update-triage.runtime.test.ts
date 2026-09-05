@@ -275,7 +275,6 @@ describe("update triage presentation", () => {
   it("waits for the run to finish and diagnoses once even when campaign metadata is stale", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
-    let run = createUpdateRunFixture({ phase: "verifying" });
     const schedule = {
       channel: "stable",
       autoEnabled: true,
@@ -287,6 +286,10 @@ describe("update triage presentation", () => {
         updatedAtMs: 2_000,
       },
     } as const;
+    let run = createUpdateRunFixture({
+      phase: "verifying",
+      origin: { campaignId: schedule.campaign.id },
+    });
     const request = vi.fn(
       async (method: string, params?: { sessionId?: string; message?: string }) => {
         if (method === "update.run") {

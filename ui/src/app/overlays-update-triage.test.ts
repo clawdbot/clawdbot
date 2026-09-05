@@ -40,6 +40,27 @@ afterEach(() => {
 });
 
 describe("update failure triage admission", () => {
+  it("presents a manual terminal failure after its admission request releases the interlock", async () => {
+    const harness = updateRunHarness(async (method) => {
+      if (method === "update.run") {
+        return { runId: FAILURE.runId };
+      }
+      return method === "update.runs.get" ? { run: FAILURE } : {};
+    });
+    const onUpdateFailure = vi.fn<NonNullable<ApplicationUpdateOverlayHooks["onUpdateFailure"]>>();
+    const overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+    try {
+      await flushMicrotasks();
+      await overlays.runUpdate();
+      expect(overlays.snapshot.updateRun).toEqual(FAILURE);
+      expect(overlays.snapshot.updateRunning).toBe(false);
+      expect(onUpdateFailure).toHaveBeenCalledOnce();
+      expect(onUpdateFailure.mock.calls[0]![1].admit()).toBe(true);
+    } finally {
+      overlays.dispose();
+    }
+  });
+
   it("carries the run failure once across events, status refreshes, access changes, and reload", async () => {
     let run = updateRunFixture();
     const request = vi.fn<RequestFn>(async (method) =>
@@ -140,31 +161,45 @@ describe("update failure triage admission", () => {
     },
   );
 
-  it("retires a queued failure admission when a newer run starts", async () => {
-    let run = FAILURE;
-    const request = vi.fn<RequestFn>(async () => ({ activeRun: run }));
-    const harness = updateRunHarness(request);
-    const onUpdateFailure = vi.fn<NonNullable<ApplicationUpdateOverlayHooks["onUpdateFailure"]>>();
-    const overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
-    try {
-      await flushMicrotasks();
-      const admission = onUpdateFailure.mock.calls[0]![1];
-      run = updateRunFixture({
-        runId: "00000000-0000-4000-8000-000000000002",
-        createdAtMs: 4_000,
-        updatedAtMs: 4_000,
-      });
-      harness.emitEvent("update.run.changed", run);
-      await flushMicrotasks();
-      expect(admission.isCurrent()).toBe(false);
-      expect(admission.admit()).toBe(false);
-      expect(overlays.snapshot.updateRun).toEqual(run);
-      expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
-      expect(onUpdateFailure).toHaveBeenCalledOnce();
-    } finally {
-      overlays.dispose();
-    }
-  });
+  it.each(["run", "campaign"])(
+    "retires a queued failure admission when a newer %s starts",
+    async (source) => {
+      let run = FAILURE;
+      const request = vi.fn<RequestFn>(async () => ({ activeRun: run }));
+      const harness = updateRunHarness(request);
+      const onUpdateFailure =
+        vi.fn<NonNullable<ApplicationUpdateOverlayHooks["onUpdateFailure"]>>();
+      const overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+      try {
+        await flushMicrotasks();
+        const admission = onUpdateFailure.mock.calls[0]![1];
+        run = updateRunFixture({
+          runId: "00000000-0000-4000-8000-000000000002",
+          createdAtMs: 4_000,
+          updatedAtMs: 4_000,
+          origin: { campaignId: CAMPAIGN.campaign.id },
+        });
+        if (source === "campaign") {
+          harness.emitEvent("update.available", { schedule: CAMPAIGN });
+          expect(overlays.snapshot.updateRunning).toBe(true);
+          expect(overlays.snapshot.updateRun).toEqual(FAILURE);
+          expect(admission.isCurrent()).toBe(false);
+          expect(admission.admit()).toBe(false);
+          await overlays.runUpdate();
+          expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(false);
+        }
+        harness.emitEvent("update.run.changed", run);
+        await flushMicrotasks();
+        expect(admission.isCurrent()).toBe(false);
+        expect(admission.admit()).toBe(false);
+        expect(overlays.snapshot.updateRun).toEqual(run);
+        expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
+        expect(onUpdateFailure).toHaveBeenCalledOnce();
+      } finally {
+        overlays.dispose();
+      }
+    },
+  );
 
   it("reports a preparation failure without dispatching or diagnosing an update", async () => {
     const request = vi.fn<RequestFn>(async () => ({}));

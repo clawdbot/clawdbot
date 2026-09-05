@@ -52,7 +52,6 @@ import {
 import {
   createUpdateRun,
   finishUpdateRun,
-  getUpdateRun,
   recordUpdateRunPhase,
   recordUpdateRunStep,
   recordUpdateRunVerification,
@@ -413,10 +412,8 @@ export const updateHandlers: GatewayRequestHandlers = {
             const started = await startManagedServiceUpdateHandoff({
               runId,
               beforePark: async () => {
-                const current = getUpdateRun(runId);
-                if (current?.phase === "activating" && current.status === "running") {
-                  await notify(current, "activating");
-                }
+                const activating = recordUpdateRunPhase(runId, "activating");
+                await notify(activating, "activating");
               },
               requester: params.requester,
               root: installRoot,
