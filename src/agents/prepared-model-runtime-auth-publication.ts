@@ -246,7 +246,8 @@ export class PreparedModelRuntimeAuthPublicationOwner {
     let requiredError = params.requiredError;
     while (this.#events.length > 0) {
       const components = partitionAuthMutationOwners(this.#events.splice(0));
-      for (const componentOwners of components) {
+      for (let componentIndex = 0; componentIndex < components.length; componentIndex += 1) {
+        const componentOwners = components[componentIndex]!;
         if (
           requiredError &&
           params.requiredOwner &&
@@ -279,6 +280,7 @@ export class PreparedModelRuntimeAuthPublicationOwner {
           }
         } catch (error) {
           if (this.#transaction?.adoptedBy && !params.requiredOwner) {
+            this.#events.unshift(...components.slice(componentIndex + 1));
             throw error;
           }
           if (params.requiredOwner && componentOwners.includes(params.requiredOwner)) {

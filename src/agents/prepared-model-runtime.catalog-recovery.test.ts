@@ -176,6 +176,63 @@ describe("prepared model runtime catalog recovery", () => {
     ).resolves.toMatchObject({ agentId: "default", config: stampedConfig });
   });
 
+  it("preserves unfinished auth components when recovery adopts a running drain", async () => {
+    mocks.configuredAgentIds = ["default", "secondary", "tertiary"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const defaultInput = {
+      agentId: "default",
+      config,
+      agentDir: "/tmp/unused-agent",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/unused-workspace",
+    };
+    const initialDefault = getPreparedModelRuntimeSnapshot(defaultInput);
+    expect(initialDefault).toBeDefined();
+    if (!initialDefault) {
+      throw new Error("default prepared model runtime owner was not published");
+    }
+
+    let signalAuthBuildStarted: (() => void) | undefined;
+    const authBuildStarted = new Promise<void>((resolve) => {
+      signalAuthBuildStarted = resolve;
+    });
+    let releaseAuthBuild: (() => void) | undefined;
+    const authBuildBlocked = new Promise<void>((resolve) => {
+      releaseAuthBuild = resolve;
+    });
+    const authError = new Error("secondary auth failed before recovery adoption");
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async () => {
+      signalAuthBuildStarted?.();
+      await authBuildBlocked;
+      throw authError;
+    });
+    mocks.mutationListener?.({
+      agentDir: "/tmp/configured-secondary",
+      affectsInheritedStores: false,
+    });
+    mocks.mutationListener?.({
+      agentDir: "/tmp/configured-tertiary",
+      affectsInheritedStores: false,
+    });
+    await authBuildStarted;
+
+    const recovery =
+      replacePreparedModelRuntimeSnapshotAfterCatalogGenerationMismatch(initialDefault);
+    releaseAuthBuild?.();
+
+    await expect(recovery).resolves.toBe(true);
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+    ).resolves.toMatchObject({ agentId: "default" });
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "secondary" }),
+    ).rejects.toThrow("prepared reply dispatch runtime owner was not published for secondary");
+    await expect(
+      loadPublishedGatewayReplyDispatchRuntime({ agentId: "tertiary" }),
+    ).resolves.toMatchObject({ agentId: "tertiary" });
+  });
+
   it("publishes recovered dispatch while an unrelated owner remains degraded", async () => {
     mocks.configuredAgentIds = ["default", "secondary"];
     const config = {};
