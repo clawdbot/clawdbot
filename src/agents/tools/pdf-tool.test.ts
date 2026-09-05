@@ -8,6 +8,8 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import * as modelAuth from "../model-auth.js";
@@ -686,10 +688,12 @@ describe("createPdfTool", () => {
 
   it("uses the prepared provider stream for extraction fallback", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
+      const pluginRegistry = createEmptyPluginRegistry();
       await stubPdfToolInfra(agentDir, {
         provider: "openai",
         api: "openai-completions",
         input: ["text"],
+        pluginRegistry,
       });
       vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
         text: "Managed model content",
@@ -708,6 +712,7 @@ describe("createPdfTool", () => {
       });
       registerProviderStreamForModelMock.mockImplementationOnce(() => {
         order.push("prepare");
+        expect(getPluginRuntimeGenerationRegistry()).toBe(pluginRegistry);
         return providerStreamFn;
       });
       completeMock.mockImplementationOnce(() => {

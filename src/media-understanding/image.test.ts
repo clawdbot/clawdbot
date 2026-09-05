@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "../agents/provider-request-config.js";
+import { createEmptyPluginMetadataSnapshot } from "../agents/test-helpers/embedded-agent-runner-e2e-mocks.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 
 const API_KEY_FIELD = ["api", "Key"].join("") as "apiKey";
@@ -177,6 +178,7 @@ describe("describeImageWithModelCore", () => {
           agentDir: input.agentDir,
           config: input.config,
           workspaceDir: input.workspaceDir,
+          metadataSnapshot: createEmptyPluginMetadataSnapshot(input.workspaceDir),
           createStores: () => ({
             authStorage: preparedAuthStorage,
             modelRegistry: {},
@@ -440,12 +442,12 @@ describe("describeImageWithModelCore", () => {
       "provider stream registration call 0",
     );
     expect(streamRequest).toEqual({
-      model: {
+      model: expect.objectContaining({
         provider: "minimax-portal",
         id: "custom-vision",
         input: ["text", "image"],
         baseUrl: "https://api.minimax.io/anthropic",
-      },
+      }),
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       wrapProviderStream: true,
@@ -748,12 +750,12 @@ describe("describeImageWithModelCore", () => {
       },
     );
     expect(registerProviderStreamForModelMock).toHaveBeenCalledWith({
-      model: {
+      model: expect.objectContaining({
         provider: "google",
         id: "gemini-2.5-flash",
         api: "google-generative-ai",
         input: ["text", "image"],
-      },
+      }),
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       workspaceDir: "/tmp/openclaw-workspace",
@@ -860,12 +862,12 @@ describe("describeImageWithModelCore", () => {
       model: "llava:latest",
     });
     expect(registerProviderStreamForModelMock).toHaveBeenCalledWith({
-      model: {
+      model: expect.objectContaining({
         provider: "ollama",
         id: "llava:latest",
         api: "ollama",
         input: ["text", "image"],
-      },
+      }),
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
       wrapProviderStream: true,

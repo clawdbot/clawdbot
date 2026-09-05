@@ -18,6 +18,7 @@ import {
 } from "../../media/media-reference.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { resolveModelAsync } from "../embedded-agent-runner/model.js";
@@ -301,14 +302,16 @@ async function runPdfPrompt(params: {
 
         // Provider hooks may own request preparation such as managed preset reloads.
         // Registration alone is insufficient when a built-in API already owns dispatch.
-        const providerStreamFn = registerProviderStreamForModel({
-          model,
-          cfg: effectiveCfg,
-          agentDir: runtimeAgentDir,
-          wrapProviderStream: true,
-          apiRegistry: modelRuntime.apiRegistry,
-          ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
-        });
+        const providerStreamFn = withPluginRuntimeGenerationScope(preparedRuntime, () =>
+          registerProviderStreamForModel({
+            model,
+            cfg: effectiveCfg,
+            agentDir: runtimeAgentDir,
+            wrapProviderStream: true,
+            apiRegistry: modelRuntime.apiRegistry,
+            ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
+          }),
+        );
 
         const extractions = await getExtractions();
         const completeExtraction = async (context: Context) => {
