@@ -81,6 +81,92 @@ describe("buildPluginDependencyStatus", () => {
     expect(status.dependencies[0]?.resolvedPath).toBe(hoistedDir);
   });
 
+  describe.each(["example-plugin", "@example/plugin"])("bounded project for %s", (pluginName) => {
+    it.each(["nested", "hoisted", "ancestor", "outside-symlink", "inside-symlink"])(
+      "checks %s dependencies without escaping the managed project",
+      (layout) => {
+        const parent = createPluginRoot();
+        const projectRoot = path.join(parent, "project");
+        const rootDir = path.join(projectRoot, "node_modules", pluginName);
+        const dependencyDir = path.join(rootDir, "node_modules", "required-runtime");
+        fs.mkdirSync(rootDir, { recursive: true });
+        if (layout === "nested") {
+          writeDependency(rootDir, "required-runtime");
+        } else if (layout === "hoisted") {
+          fs.mkdirSync(dependencyDir, { recursive: true });
+          writeDependency(projectRoot, "required-runtime");
+        } else {
+          const targetRoot = layout === "inside-symlink" ? projectRoot : parent;
+          const targetDir = writeDependency(targetRoot, "required-runtime");
+          if (layout.endsWith("symlink")) {
+            fs.mkdirSync(path.dirname(dependencyDir), { recursive: true });
+            fs.symlinkSync(targetDir, dependencyDir, "junction");
+          }
+        }
+
+        const status = buildPluginDependencyStatus({
+          rootDir,
+          dependencyRootDir: projectRoot,
+          dependencies: { "required-runtime": "1.0.0" },
+          optionalDependencies: { "optional-runtime": "1.0.0" },
+        });
+
+        const installed = layout !== "ancestor" && layout !== "outside-symlink";
+        expect(status.requiredInstalled).toBe(installed);
+        expect(status.missing).toEqual(installed ? [] : ["required-runtime"]);
+        expect(status.missingOptional).toEqual(["optional-runtime"]);
+      },
+    );
+  });
+
+  it("preserves unbounded ancestor lookup for generic dependency status", () => {
+    const parent = createPluginRoot();
+    const rootDir = path.join(parent, "project", "node_modules", "example-plugin");
+    const availableDir = writeDependency(parent, "required-runtime");
+    fs.mkdirSync(rootDir, { recursive: true });
+
+    const status = buildPluginDependencyStatus({
+      rootDir,
+      dependencies: { "required-runtime": "1.0.0" },
+    });
+
+    expect(status.requiredInstalled).toBe(true);
+    expect(status.dependencies[0]?.resolvedPath).toBe(availableDir);
+  });
+
+  it("does not inspect a plugin outside the requested dependency root", () => {
+    const rootDir = createPluginRoot();
+    writeDependency(rootDir, "required-runtime");
+
+    const status = buildPluginDependencyStatus({
+      rootDir,
+      dependencyRootDir: path.join(rootDir, "different-project"),
+      dependencies: { "required-runtime": "1.0.0" },
+    });
+
+    expect(status.requiredInstalled).toBe(false);
+    expect(status.missing).toEqual(["required-runtime"]);
+  });
+
+  it("accepts a project alias whose canonical dependency stays inside the project", () => {
+    const parent = createPluginRoot();
+    const projectRoot = path.join(parent, "project");
+    const alias = path.join(parent, "alias");
+    const rootDir = path.join(projectRoot, "node_modules", "example-plugin");
+    fs.mkdirSync(rootDir, { recursive: true });
+    const availableDir = writeDependency(projectRoot, "required-runtime");
+    fs.symlinkSync(projectRoot, alias, "junction");
+
+    const status = buildPluginDependencyStatus({
+      rootDir: path.join(alias, "node_modules", "example-plugin"),
+      dependencyRootDir: projectRoot,
+      dependencies: { "required-runtime": "1.0.0" },
+    });
+
+    expect(status.requiredInstalled).toBe(true);
+    expect(status.dependencies[0]?.resolvedPath).toBe(availableDir);
+  });
+
   it("keeps missing optional overrides out of required failures", () => {
     const status = buildPluginDependencyStatus({
       rootDir: createPluginRoot(),
