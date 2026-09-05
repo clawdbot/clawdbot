@@ -202,8 +202,12 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
 
 async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { resolveSecretInputRef } = await loadSecretTypesModule();
-  const { buildGatewayTokenSecretRefFixHint, buildGatewayTokenSecretRefUnavailableMessage } =
-    await loadDoctorCoreChecksModule();
+  const {
+    buildGatewayTokenSecretRefFixHint,
+    buildGatewayTokenSecretRefUnavailableMessage,
+    GATEWAY_TOKEN_PLACEHOLDER_MESSAGE,
+  } = await loadDoctorCoreChecksModule();
+  const { isStringifiedNullishToken } = await import("../gateway/auth-token-sentinel.js");
   const { resolveGatewayAuth } = await import("../gateway/auth.js");
   const { resolveGatewayAuthToken } = await import("../gateway/auth-token-resolution.js");
   const { note } = await loadNoteModule();
@@ -224,16 +228,24 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   // Previously, only "password" and "token" (with a token present) were excluded,
   // causing doctor --fix to overwrite trusted-proxy/none configs with token mode.
   const hasInlineToken = typeof auth.token === "string" && auth.token.trim() !== "";
+  // A stringified nullish literal is truthy everywhere downstream, so treat it as a
+  // missing token here and skip resolution, which would otherwise accept it and return.
+  const hasPlaceholderToken =
+    isStringifiedNullishToken(ctx.cfg.gateway?.auth?.token) ||
+    isStringifiedNullishToken(auth.token);
   const needsToken =
-    auth.mode !== "password" &&
-    auth.mode !== "none" &&
-    auth.mode !== "trusted-proxy" &&
-    (auth.mode !== "token" || !hasInlineToken || Boolean(gatewayTokenRef));
+    hasPlaceholderToken ||
+    (auth.mode !== "password" &&
+      auth.mode !== "none" &&
+      auth.mode !== "trusted-proxy" &&
+      (auth.mode !== "token" || !hasInlineToken || Boolean(gatewayTokenRef)));
   if (!needsToken) {
     return;
   }
   let unresolvedRefReason: string | undefined;
-  if (gatewayTokenRef && gatewayTokenRef.source === "exec") {
+  if (hasPlaceholderToken) {
+    unresolvedRefReason = undefined;
+  } else if (gatewayTokenRef && gatewayTokenRef.source === "exec") {
     const { getSkippedExecRefStaticError } = await import("../secrets/exec-resolution-policy.js");
     const staticError = getSkippedExecRefStaticError({ ref: gatewayTokenRef, config: ctx.cfg });
     if (staticError) {
@@ -263,7 +275,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
     }
     unresolvedRefReason = resolvedToken.unresolvedRefReason;
   }
-  if (gatewayTokenRef) {
+  if (gatewayTokenRef && !hasPlaceholderToken) {
     const reason = buildGatewayTokenSecretRefUnavailableMessage({
       cfg: ctx.cfg,
       ref: gatewayTokenRef,
@@ -281,7 +293,9 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
 
   note(
-    "Gateway auth is off or missing a token. Token auth is now the recommended default (including loopback).",
+    hasPlaceholderToken
+      ? GATEWAY_TOKEN_PLACEHOLDER_MESSAGE
+      : "Gateway auth is off or missing a token. Token auth is now the recommended default (including loopback).",
     "Gateway auth",
   );
   const shouldSetToken =

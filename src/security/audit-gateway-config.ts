@@ -10,6 +10,7 @@ import { hasUnresolvedConfigPath } from "../config/resolution-facts.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
+import { isStringifiedNullishToken } from "../gateway/auth-token-sentinel.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
@@ -283,7 +284,27 @@ export function collectGatewayConfigFindings(
 
   const token =
     typeof auth.token === "string" && auth.token.trim().length > 0 ? auth.token.trim() : null;
-  if (auth.mode === "token" && token && token.length < 24) {
+  // Configs written before the wizard/doctor guards rejected stringified nullish
+  // values still carry them, and every truthiness check downstream accepts them
+  // as a real bearer token. Report the placeholder instead of its length.
+  const placeholderSource = [auth.token, sourceConfig.gateway?.auth?.token].find((value) =>
+    isStringifiedNullishToken(value),
+  );
+  const placeholderToken = typeof placeholderSource === "string" ? placeholderSource.trim() : null;
+  if (placeholderToken) {
+    findings.push({
+      checkId: "gateway.token_placeholder_value",
+      severity: "critical",
+      title: "Gateway token is a stringified undefined/null placeholder",
+      detail:
+        `gateway.auth.token is the literal string "${placeholderToken}", not a real secret. ` +
+        "This is what a JavaScript undefined/null value looks like once it is serialized into the config. " +
+        "The Gateway accepts it as a valid bearer token, so anyone who guesses this well-known value gets full Gateway access.",
+      remediation:
+        "Run `openclaw doctor --fix --generate-gateway-token` to replace it with a random token, then restart the Gateway.",
+    });
+  }
+  if (auth.mode === "token" && !placeholderToken && token && token.length < 24) {
     findings.push({
       checkId: "gateway.token_too_short",
       severity: "warn",

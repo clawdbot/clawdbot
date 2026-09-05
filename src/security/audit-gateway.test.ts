@@ -36,6 +36,36 @@ describe("security audit gateway config findings", () => {
     expect(hasFindingWithSeverity(checkId, "critical", findings)).toBe(testCase.missingAuth);
   });
 
+  it.each(["undefined", "null", "  undefined  "])(
+    'flags a stringified nullish gateway token as critical: "%s"',
+    (token) => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "loopback",
+          auth: { mode: "token", token },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      expect(hasFindingWithSeverity("gateway.token_placeholder_value", "critical", findings)).toBe(
+        true,
+      );
+      // The placeholder finding replaces the misleading length-only warning.
+      expect(hasFinding("gateway.token_too_short", findings)).toBe(false);
+    },
+  );
+
+  it("keeps the short-token warning for a real short gateway token", () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "loopback",
+        auth: { mode: "token", token: "undefined-ish" },
+      },
+    };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {});
+    expect(hasFinding("gateway.token_placeholder_value", findings)).toBe(false);
+    expect(hasFindingWithSeverity("gateway.token_too_short", "warn", findings)).toBe(true);
+  });
+
   it("evaluates gateway auth presence and rate-limit guardrails", async () => {
     await Promise.all([
       withEnvAsync(

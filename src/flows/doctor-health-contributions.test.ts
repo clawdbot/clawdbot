@@ -2129,6 +2129,31 @@ describe("doctor health contributions", () => {
     );
   });
 
+  it("regenerates a stringified nullish Gateway token instead of accepting it", async () => {
+    const contribution = requireDoctorContribution("doctor:gateway-auth");
+    const ctx = createDoctorContext({
+      cfg: {
+        gateway: {
+          mode: "local",
+          auth: { mode: "token", token: "undefined" },
+        },
+      },
+      options: { generateGatewayToken: true, nonInteractive: true },
+      configPath: "/tmp/openclaw.json",
+    });
+
+    await contribution.run(ctx);
+
+    // The placeholder is truthy, so token resolution would have accepted it and
+    // returned before any repair could run.
+    expect(mocks.resolveGatewayAuthToken).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("gateway.auth.token is the literal string"),
+      "Gateway auth",
+    );
+    expect(ctx.cfg.gateway?.auth?.token).toBe("generated-gateway-token");
+  });
+
   it("forwards allow-exec to Gateway service repair", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-services");
     const ctx = createDoctorContext({

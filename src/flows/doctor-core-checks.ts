@@ -36,6 +36,7 @@ import type { CronListPageResult } from "../cron/service/list-page-types.js";
 import type { CronJob } from "../cron/types.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
+import { isStringifiedNullishToken } from "../gateway/auth-token-sentinel.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
@@ -414,6 +415,14 @@ export function buildGatewayTokenSecretRefFixHint(ref: SecretRef): string {
   return "Resolve or rotate the external secret source, then rerun doctor.";
 }
 
+/** Shared wording so doctor detection and the doctor --fix flow report the same defect. */
+export const GATEWAY_TOKEN_PLACEHOLDER_MESSAGE =
+  'gateway.auth.token is the literal string "undefined"/"null", not a real secret. ' +
+  "The Gateway accepts it as a valid bearer token, so it must be replaced.";
+
+export const GATEWAY_TOKEN_PLACEHOLDER_FIX_HINT =
+  "Run `openclaw doctor --fix --generate-gateway-token` to replace it, then restart the Gateway.";
+
 const gatewayAuthCheck: HealthCheck = {
   id: "core/doctor/gateway-auth",
   kind: "core",
@@ -431,6 +440,20 @@ const gatewayAuthCheck: HealthCheck = {
       authConfig: ctx.cfg.gateway?.auth,
       tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
     });
+    if (
+      isStringifiedNullishToken(ctx.cfg.gateway?.auth?.token) ||
+      isStringifiedNullishToken(auth.token)
+    ) {
+      return [
+        {
+          checkId: "core/doctor/gateway-auth",
+          severity: "error",
+          message: GATEWAY_TOKEN_PLACEHOLDER_MESSAGE,
+          path: "gateway.auth.token",
+          fixHint: GATEWAY_TOKEN_PLACEHOLDER_FIX_HINT,
+        },
+      ];
+    }
     const hasInlineToken = typeof auth.token === "string" && auth.token.trim() !== "";
     const needsToken =
       auth.mode !== "password" &&
