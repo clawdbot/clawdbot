@@ -221,10 +221,14 @@ export function parseLaunchAgentEnabled(output: string, label: string): boolean 
       continue;
     }
     const state = entry.slice(labelPrefix.length).trim();
-    if (state === "=> enabled") {
+    if (state === "=> enabled" || state === "=> false") {
+      // macOS 13+ prints "=> enabled"; macOS 12 prints the boolean
+      // "=> false" (disabled=false, i.e. enabled).
       return true;
     }
-    if (state === "=> disabled") {
+    if (state === "=> disabled" || state === "=> true") {
+      // macOS 13+ prints "=> disabled"; macOS 12 prints "=> true"
+      // (disabled=true, i.e. disabled).
       return false;
     }
     throw new Error(`launchctl print-disabled returned an unrecognized state for ${label}`);
