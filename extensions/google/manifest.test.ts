@@ -211,4 +211,23 @@ describe("google manifest webSearch headers", () => {
     expect(manifest.uiHints?.["webSearch.headers"]?.sensitive).not.toBe(true);
     expect(manifest.uiHints?.["webSearch.headers.*"]?.sensitive).not.toBe(true);
   });
+  it("declares the Gemini static model families in the manifest catalog", () => {
+    const manifest = loadManifest();
+    const models = manifest.modelCatalog?.providers?.google?.models ?? [];
+    const ids = new Set(models.map((m: { id: string }) => m.id));
+    // These mirror the runtime GOOGLE_GEMINI_TEXT_MODEL_ROWS so the doctor
+    // recognizes google/* references without a live discovery round-trip.
+    for (const id of [
+      "gemini-2.5-pro",
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite",
+      "gemini-3.5-flash",
+      "gemini-3.7-flash",
+      "gemini-3.1-pro-preview",
+    ]) {
+      expect(ids.has(id)).toBe(true);
+    }
+    expect(models.length).toBeGreaterThanOrEqual(10);
+  });
+
 });
