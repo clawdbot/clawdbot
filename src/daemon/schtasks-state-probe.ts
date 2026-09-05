@@ -8,35 +8,38 @@ type ScheduledTaskStateProbe =
   | { status: "missing" }
   | { status: "unknown"; detail: string };
 
+// Task Scheduler status probe body. `powershell -EncodedCommand` trips
+// Defender's obfuscation heuristic even though this script only reads task
+// state, so the body stays a literal string and the task name is passed as
+// base64 data on the child's stdin, keeping the spawned command line fixed
+// and auditable. See #138224.
+const SCHEDULED_TASK_STATE_PROBE_SCRIPT = [
+  "$ErrorActionPreference='Stop'",
+  "$taskName=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadLine()))",
+  "$lookup=$false",
+  "try { $service=New-Object -ComObject 'Schedule.Service'; $service.Connect(); $lookup=$true; $task=$service.GetFolder('\\').GetTask($taskName); $lookup=$false } catch { $exception=$_.Exception; while($null -ne $exception.InnerException){$exception=$exception.InnerException}; [Console]::Out.Write($exception.HResult); if($lookup){exit 1}; exit 2 }",
+  // A registered task stays found even when state or optional history cannot be read.
+  "$result=@{state=$null}",
+  "try { $result.state=[int]$task.State } catch {}",
+  "try { $result.lastRunResult=[int]$task.LastTaskResult } catch {}",
+  "try { $result.lastRunTime=$task.LastRunTime.ToUniversalTime().ToString('o', [Globalization.CultureInfo]::InvariantCulture) } catch {}",
+  "$result | ConvertTo-Json -Compress; exit 0",
+].join("; ");
+
 export function probeScheduledTaskState(
   taskName: string,
   timeoutMs?: number,
 ): ScheduledTaskStateProbe {
-  const encodedTaskName = Buffer.from(taskName, "utf8").toString("base64");
-  const script = [
-    "$ErrorActionPreference='Stop'",
-    `$taskName=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedTaskName}'))`,
-    "$lookup=$false",
-    "try { $service=New-Object -ComObject 'Schedule.Service'; $service.Connect(); $lookup=$true; $task=$service.GetFolder('\\').GetTask($taskName); $lookup=$false } catch { $exception=$_.Exception; while($null -ne $exception.InnerException){$exception=$exception.InnerException}; [Console]::Out.Write($exception.HResult); if($lookup){exit 1}; exit 2 }",
-    // A registered task stays found even when state or optional history cannot be read.
-    "$result=@{state=$null}",
-    "try { $result.state=[int]$task.State } catch {}",
-    "try { $result.lastRunResult=[int]$task.LastTaskResult } catch {}",
-    "try { $result.lastRunTime=$task.LastRunTime.ToUniversalTime().ToString('o', [Globalization.CultureInfo]::InvariantCulture) } catch {}",
-    "$result | ConvertTo-Json -Compress; exit 0",
-  ].join("; ");
   const probe = spawnSync(
     getWindowsPowerShellExePath(),
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64"),
-    ],
+    ["-NoProfile", "-NonInteractive", "-Command", SCHEDULED_TASK_STATE_PROBE_SCRIPT],
     {
       encoding: "utf8",
       timeout: timeoutMs && timeoutMs > 0 ? Math.min(timeoutMs, 5_000) : 5_000,
       windowsHide: true,
+      // The task name rides on the child's stdin as base64 data, so the command
+      // body stays a fixed literal without adding a global environment name.
+      input: `${Buffer.from(taskName, "utf8").toString("base64")}\n`,
     },
   );
   if (probe.error) {
