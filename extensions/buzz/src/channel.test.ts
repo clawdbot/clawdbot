@@ -15,8 +15,9 @@ describe("Buzz channel guidance", () => {
 
   it.each([
     { mode: "off", automatic: true, flat: true },
-    { mode: "all", automatic: true, flat: false },
+    { mode: "all", automatic: true, flat: true },
     { mode: "off", automatic: false, flat: false },
+    { mode: "all", automatic: false, flat: false },
   ] as const)(
     "routes $mode automatic=$automatic without flattening explicit tools",
     ({ mode, automatic, flat }) => {
@@ -28,7 +29,13 @@ describe("Buzz channel guidance", () => {
           replyToIsExplicit: !automatic,
           replyDelivery: automatic ? { replyToMode: mode } : undefined,
         }) ?? original;
-      expect(transport).toEqual(flat ? { threadId: null, replyToId: null } : original);
+      expect(transport).toEqual(
+        flat
+          ? mode === "all" && automatic
+            ? { threadId: "thread-root", replyToId: "thread-root" }
+            : { threadId: null, replyToId: null }
+          : original,
+      );
     },
   );
   it("advertises directory room targets and native mention syntax", () => {

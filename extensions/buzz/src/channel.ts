@@ -72,8 +72,15 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
     },
     threading: {
       // Only automatic replies carry replyDelivery; explicit message-tool targets stay intact.
-      resolveReplyTransport: ({ replyDelivery }) =>
-        replyDelivery?.replyToMode === "off" ? { threadId: null, replyToId: null } : null,
+      resolveReplyTransport: ({ replyDelivery, threadId, replyToId, replyToIsExplicit }) => {
+        if (replyDelivery?.replyToMode === "off") {
+          return { threadId: null, replyToId: null };
+        }
+        if (threadId && replyToId && !replyToIsExplicit && replyToId !== threadId) {
+          return { threadId, replyToId: String(threadId) };
+        }
+        return null;
+      },
     },
     agentPrompt: {
       messageToolHints: () => [
