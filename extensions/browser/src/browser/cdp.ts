@@ -552,7 +552,7 @@ async function findCursorInteractiveElements(
         const roles = new Set(["button","link","textbox","checkbox","radio","combobox","listbox","menuitem","menuitemcheckbox","menuitemradio","option","searchbox","slider","spinbutton","switch","tab","treeitem"]);
         const tags = new Set(["a","button","input","select","textarea","details","summary"]);
         document.querySelectorAll("[${attr}]").forEach((el) => el.removeAttribute("${attr}"));
-        for (const el of Array.from(document.body ? document.body.querySelectorAll("*") : [])) {
+        for (const el of document.body ? document.body.querySelectorAll("*") : []) {
           if (!(el instanceof HTMLElement) || el.closest("[hidden],[aria-hidden='true']")) continue;
           const tagName = el.tagName.toLowerCase();
           if (tags.has(tagName)) continue;
