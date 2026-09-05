@@ -1749,7 +1749,7 @@ src/agents/embedded-agent-runner/model.ts	5
 src/agents/embedded-agent-runner/openrouter-model-capabilities.ts	2
 src/agents/embedded-agent-runner/prepared-compaction-runtime.ts	1
 src/agents/embedded-agent-runner/prompt-cache-observability.ts	2
-src/agents/embedded-agent-runner/replay-history.ts	59
+src/agents/embedded-agent-runner/replay-history.ts	53
 src/agents/embedded-agent-runner/result-fallback-classifier.ts	2
 src/agents/embedded-agent-runner/run-entry.ts	3
 src/agents/embedded-agent-runner/run-orchestrator.ts	1
@@ -1932,7 +1932,7 @@ src/agents/session-model-auto-revert.ts	1
 src/agents/session-placement-admission.ts	1
 src/agents/session-raw-append-message.ts	2
 src/agents/session-suspension.ts	1
-src/agents/session-tool-result-guard.ts	24
+src/agents/session-tool-result-guard.ts	23
 src/agents/session-transcript-repair.ts	14
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-extensions.ts	1
@@ -3907,7 +3907,7 @@ ui/src/pages/chat/attachment-api.ts	1
 ui/src/pages/chat/chat-avatar.ts	4
 ui/src/pages/chat/chat-command-executor.ts	1
 ui/src/pages/chat/chat-composer-capability-host.ts	4
-ui/src/pages/chat/chat-gateway.ts	2
+ui/src/pages/chat/chat-gateway.ts	1
 ui/src/pages/chat/chat-history-retry.ts	1
 ui/src/pages/chat/chat-page-retained-sessions.ts	1
 ui/src/pages/chat/chat-page.ts	1

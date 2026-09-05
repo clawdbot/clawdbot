@@ -10,6 +10,7 @@ import {
   type AdmittedRunContext,
   type PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
@@ -510,6 +511,9 @@ describe("runMemoryFlushIfNeeded", () => {
       .mockReset()
       .mockImplementation(
         async (params: Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0]) => {
+          const assistantErrorTranscript = createAssistantErrorTranscript({
+            runId: params.identity.runId,
+          });
           const fallbackResult = (await runWithModelFallbackMock({
             ...params.selection,
             ...params.identity,
@@ -541,6 +545,7 @@ describe("runMemoryFlushIfNeeded", () => {
               options: Parameters<ModelFallbackParams["run"]>[2],
             ) =>
               params.runCandidate(provider, model, {
+                assistantErrorTranscript,
                 classifyResult: () => undefined,
                 allowTransientCooldownProbe: options.allowTransientCooldownProbe,
                 isFinalFallbackAttempt: options.isFinalFallbackAttempt,

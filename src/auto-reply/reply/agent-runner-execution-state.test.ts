@@ -563,7 +563,7 @@ describe("executeAgentTurn: session state", () => {
     expect(sessionEntry.modelOverrideSource).toBe("user");
   });
 
-  it("latches assistant error stub suppression across main reply fallback candidates", async () => {
+  it("shares one deferred assistant error owner across main reply fallback candidates", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       await params
         .run("anthropic", "claude-opus-4-7", initialFallbackAttemptOptions(params))
@@ -578,22 +578,7 @@ describe("executeAgentTurn: session state", () => {
         attempts: [],
       };
     });
-    state.runEmbeddedAgentMock.mockImplementationOnce(
-      async (args: {
-        onAssistantErrorMessagePersisted?: (message: {
-          role: "assistant";
-          content: string;
-          stopReason: "error";
-        }) => void;
-      }) => {
-        args.onAssistantErrorMessagePersisted?.({
-          role: "assistant",
-          content: "[assistant turn failed before producing content]",
-          stopReason: "error",
-        });
-        throw new Error("upstream 500");
-      },
-    );
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("upstream 500"));
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("upstream 500"));
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -604,18 +589,14 @@ describe("executeAgentTurn: session state", () => {
     await executeAgentTurn(createMinimalRunAgentTurnParams());
 
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(3);
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "primary candidate", {
-      suppressAssistantErrorPersistence: false,
-    });
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 1, "first fallback candidate", {
-      suppressAssistantErrorPersistence: true,
-    });
-    expectMockCallArgFields(state.runEmbeddedAgentMock, 2, "second fallback candidate", {
-      suppressAssistantErrorPersistence: true,
-    });
+    const owner = state.runEmbeddedAgentMock.mock.calls[0]?.[0].assistantErrorTranscript;
+    expect(owner).toMatchObject({ record: expect.any(Function), settle: expect.any(Function) });
+    for (const [args] of state.runEmbeddedAgentMock.mock.calls) {
+      expect(args.assistantErrorTranscript).toBe(owner);
+    }
   });
 
-  it("does not suppress the first embedded assistant error after a CLI fallback failure", async () => {
+  it("defers the first embedded assistant error after a CLI fallback failure", async () => {
     state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "anthropic");
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       await params
@@ -640,7 +621,10 @@ describe("executeAgentTurn: session state", () => {
     expect(state.runCliAgentMock).toHaveBeenCalledOnce();
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded fallback candidate", {
-      suppressAssistantErrorPersistence: false,
+      assistantErrorTranscript: expect.objectContaining({
+        record: expect.any(Function),
+        settle: expect.any(Function),
+      }),
     });
   });
 

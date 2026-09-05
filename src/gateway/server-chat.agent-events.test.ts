@@ -847,6 +847,72 @@ describe("agent event handler", () => {
     expect(agentBroadcastCalls(broadcast)).toHaveLength(1);
   });
 
+  it("keeps rate-limit retries transient through long backoff and subsequent assistant output", () => {
+    vi.useFakeTimers();
+    const { broadcast, chatRunState, clearAgentRunContext, handler } = createHarness();
+    registerNamedChatRun(chatRunState, "retry");
+    for (let attempt = 2; attempt <= 5; attempt++) {
+      emitAgentEvent(
+        handler,
+        "run-retry",
+        "lifecycle",
+        {
+          phase: "finishing",
+          error: "provider rate limit",
+        },
+        { seq: attempt * 2 },
+      );
+      emitAgentEvent(
+        handler,
+        "run-retry",
+        "run_status",
+        {
+          phase: "retrying",
+          attempt,
+          maxAttempts: 10,
+          reason: "rate_limit",
+        },
+        { seq: attempt * 2 + 1 },
+      );
+      vi.advanceTimersByTime(30_000);
+    }
+    expect(chatBroadcastCalls(broadcast).map(([, payload]) => payload)).toEqual(
+      [2, 3, 4, 5].map((attempt) =>
+        expect.objectContaining({
+          runId: "client-retry",
+          state: "status",
+          phase: "starting_model",
+          retry: { attempt, maxAttempts: 10, reason: "rate_limit" },
+        }),
+      ),
+    );
+    expect(clearAgentRunContext).not.toHaveBeenCalled();
+    expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
+    emitAgentEvent(handler, "run-retry", "assistant", { text: "I", delta: "I" }, { seq: 12 });
+    vi.advanceTimersByTime(500);
+    emitAgentEvent(
+      handler,
+      "run-retry",
+      "assistant",
+      { text: "I agree", delta: " agree" },
+      { seq: 13 },
+    );
+    emitLifecycleEnd(handler, "run-retry", 14);
+    expect(chatBroadcastCalls(broadcast).map(([, payload]) => payload.state)).toEqual([
+      "status",
+      "status",
+      "status",
+      "status",
+      "delta",
+      "delta",
+      "final",
+    ]);
+    expect(chatBroadcastCalls(broadcast).at(-1)?.[1]).toMatchObject({
+      runId: "client-retry",
+      message: { content: [{ type: "text", text: "I agree" }] },
+    });
+  });
+
   it("coalesces assistant agent events inside one live-text pacing window", () => {
     let now = 10_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);

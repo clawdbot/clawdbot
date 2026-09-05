@@ -2,6 +2,10 @@
 
 import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  isSessionProjectionErrorMessage,
+  readSessionMessageDisplayContent,
+} from "./session-projection-message-content.js";
+import {
   normalizeSessionProjectionRunId,
   readAssistantStreamSegmentIdentity,
   readSessionMessageIdentity,
@@ -17,6 +21,7 @@ export {
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "./session-projection-message-identity.js";
+export { isSessionProjectionErrorMessage } from "./session-projection-message-content.js";
 export type {
   SessionMessageEnvelope,
   SessionMessageIdentity,
@@ -459,31 +464,13 @@ export function reconcileSessionProjectionSnapshot(
 }
 
 function hasDisplayableSessionMessage(message: unknown): boolean {
-  if (typeof message === "string") {
-    return message.trim().length > 0;
-  }
-  const record = readRecord(message);
-  if (!record) {
-    return false;
-  }
-  const displayableBlocks =
-    Array.isArray(record.content) &&
-    record.content.some((block) => {
-      const entry = readRecord(block);
-      return entry
-        ? entry.type !== "text" || readNonemptyString(entry.text) !== null
-        : typeof block === "string" && block.trim().length > 0;
-    });
-  const media = readRecord(record["__openclaw"])?.media;
-  return Boolean(
-    (typeof record.content === "string" && record.content.trim()) ||
-    displayableBlocks ||
-    (Array.isArray(media) && media.length > 0),
-  );
+  const { text, hasNonText } = readSessionMessageDisplayContent(message);
+  return Boolean(text) || hasNonText;
 }
 
 function readSessionProjectionFinalMessageIdentity(message: unknown): string | null {
-  if (!hasDisplayableSessionMessage(message)) {
+  const display = readSessionMessageDisplayContent(message);
+  if (!display.text && !display.hasNonText) {
     return null;
   }
   const identity = readSessionMessageIdentity(message);
@@ -510,6 +497,7 @@ function readSessionProjectionFinalMessageIdentity(message: unknown): string | n
             metadata?.externalId ?? null,
           ]
         : null,
+      ...(display.usesFallbackText ? [record?.text] : []),
     ])}`;
   } catch {
     return null;
@@ -557,7 +545,12 @@ function updateRun(
     delete normalizedIncoming.errorMessage;
   }
   const current = state.runs[incoming.runId];
-  if (current && current.status !== "streaming") {
+  // A later delta proves a diagnostic-only failed attempt was not the end of this run.
+  const resumesErrorProjection =
+    current?.status === "error" &&
+    incoming.status === "streaming" &&
+    isSessionProjectionErrorMessage(current.message, current.errorMessage);
+  if (current && current.status !== "streaming" && !resumesErrorProjection) {
     const incomingFinalIdentity = readSessionProjectionFinalMessageIdentity(incoming.message);
     const incomingIsFinal = incoming.status === "completed" || incoming.status === "yielded";
     const canRecoverFinal =
@@ -603,6 +596,20 @@ function updateRun(
       },
     };
   }
+  const resumedState = resumesErrorProjection
+    ? withEntries(
+        state,
+        state.entries.filter(
+          (entry) =>
+            !(
+              (entry.identity?.runId === incoming.runId || entry.message === current.message) &&
+              (readRecord(entry.message)?.stopReason === "error" ||
+                entry.message === current.message) &&
+              isSessionProjectionErrorMessage(entry.message, current.errorMessage)
+            ),
+        ),
+      )
+    : state;
   // Completing a previously active run moves it behind older completed diagnostics.
   const previousRuns =
     current && current.status === "streaming" && incoming.status !== "streaming"
@@ -613,16 +620,18 @@ function updateRun(
       ? readSessionProjectionFinalMessageIdentity(incoming.message)
       : null;
   return {
-    ...state,
+    ...resumedState,
     runs: retainSessionProjectionRuns({
       ...previousRuns,
       [incoming.runId]: {
-        ...current,
+        ...(resumesErrorProjection ? {} : current),
         ...normalizedIncoming,
         ...(acceptedFinalIdentity
           ? { acceptedFinalMessageIdentities: [acceptedFinalIdentity] }
           : {}),
-        ...(incoming.message === undefined && current?.message !== undefined
+        ...(!resumesErrorProjection &&
+        incoming.message === undefined &&
+        current?.message !== undefined
           ? { message: current.message }
           : {}),
       },

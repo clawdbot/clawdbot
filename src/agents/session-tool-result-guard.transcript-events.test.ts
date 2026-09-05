@@ -13,6 +13,7 @@ import {
   persistCompactionBoundaryWithSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
+import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -28,8 +29,11 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import { createAssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
+import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 const listeners: Array<() => void> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -61,6 +65,27 @@ afterEach(() => {
 });
 
 describe("guardSessionManager transcript updates", () => {
+  it("refreshes the deferred error owner when a session manager serves a new run", async () => {
+    const { sessionManager, target } = await openPersistedSessionManager();
+    const first = createAssistantErrorTranscript({ runId: "run-first" });
+    const second = createAssistantErrorTranscript({ runId: "run-second" });
+    guardSessionManager(sessionManager, { runId: "run-first", assistantErrorTranscript: first });
+    sessionManager.appendMessage(makeAgentAssistantMessage({ content: [], stopReason: "error" }));
+    await first.settle(false);
+    guardSessionManager(sessionManager, { runId: "run-second", assistantErrorTranscript: second });
+    sessionManager.appendMessage(makeAgentAssistantMessage({ content: [], stopReason: "error" }));
+    await second.settle(true);
+    await first.settle(true);
+    const messages = SessionManager.open(target)
+      .getBranch()
+      .filter((entry) => entry.type === "message");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.message).toMatchObject({
+      stopReason: "error",
+      __openclaw: { runId: "run-second" },
+    });
+  });
+
   it("persists compaction item identity under each current run across reload", async () => {
     const { sessionManager, root, target } = await openPersistedSessionManager();
     for (const runId of ["run-first", "run-second"]) {
@@ -695,4 +720,65 @@ describe("guardSessionManager transcript updates", () => {
       ]);
     },
   );
+});
+
+describe("deferred assistant error transcript", () => {
+  async function setup() {
+    const { sessionManager: manager, target } = await openPersistedSessionManager();
+    const owner = createAssistantErrorTranscript({ runId: "run-test" });
+    installSessionToolResultGuard(manager, { assistantErrorTranscript: owner });
+    return { target, owner, manager };
+  }
+
+  it.each([false, true])("persists only the last failure when terminal=%s", async (terminal) => {
+    const { target, owner, manager } = await setup();
+    for (let attempt = 1; attempt <= 10; attempt++) {
+      manager.appendMessage(
+        makeAgentAssistantMessage({
+          content: [],
+          stopReason: "error",
+          errorMessage: `provider rate limit ${attempt}`,
+        }),
+      );
+      expect(SessionManager.open(target).getBranch()).toHaveLength(0);
+    }
+    if (!terminal) {
+      manager.appendMessage(
+        makeAgentAssistantMessage({ content: [{ type: "text", text: "Recovered" }] }),
+      );
+    }
+    await owner.settle(terminal);
+    await owner.settle(terminal);
+    const messages = SessionManager.open(target)
+      .getBranch()
+      .filter((entry) => entry.type === "message");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.message).toMatchObject(
+      terminal
+        ? { stopReason: "error", errorMessage: "provider rate limit 10" }
+        : { content: [{ type: "text", text: "Recovered" }] },
+    );
+  });
+
+  it("revalidates the captured writer before committing a terminal failure", async () => {
+    const { target, owner, manager } = await setup();
+    let active = true;
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: target,
+        assertCommitAllowed: () => {
+          if (!active) {
+            throw new Error("writer retired");
+          }
+        },
+        withTranscriptWrite: async (operation) => await operation(),
+      },
+      async () => {
+        manager.appendMessage(makeAgentAssistantMessage({ content: [], stopReason: "error" }));
+      },
+    );
+    active = false;
+    await expect(owner.settle(true)).rejects.toThrow("writer retired");
+    expect(SessionManager.open(target).getBranch()).toHaveLength(0);
+  });
 });

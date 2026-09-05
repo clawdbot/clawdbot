@@ -4647,6 +4647,7 @@ export const en: TranslationMap & {
     },
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
+      retrying: "Retrying… {attempt}/{maxAttempts}",
       preparingWorkspace: "Preparing workspace…",
       namingWorktree: "Naming worktree…",
       creatingWorktree: "Creating worktree…",

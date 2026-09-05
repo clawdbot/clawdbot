@@ -2,9 +2,11 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { getMediaDir } from "../media/store.js";
 import {
   projectChatDisplayMessages,
+  projectChatDisplayMessagesWithState,
   sanitizeChatHistoryMessages,
 } from "./chat-display-projection.js";
 import { mirrorMessageToolVisibleReplies } from "./chat-display-projection.message-tool.js";
@@ -22,6 +24,73 @@ function projectHistoryTransports(message: Record<string, unknown>) {
   const sse = buildSessionHistorySnapshot({ rawMessages: [message], limit: 5 }).history.messages;
   return [websocket, sse];
 }
+
+describe("retried assistant error history", () => {
+  const user = { role: "user", content: "hello" };
+  const reply = {
+    role: "assistant",
+    content: [{ type: "text", text: "I agree with that product direction." }],
+    __openclaw: { runId: "run-retry" },
+  };
+
+  it.each([
+    { content: [] },
+    { content: [{ type: "input_text", text: "" }] },
+    { content: [{ type: "input_text", text: STREAM_ERROR_FALLBACK_TEXT }] },
+    { content: [{ type: "thinking", thinking: "Internal reasoning" }] },
+    { content: [{ type: "reasoning", text: "Internal reasoning" }] },
+    { content: [{ type: "redacted_thinking", data: "redacted" }] },
+    { content: "" },
+    { content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }] },
+  ])(
+    "repairs repeated empty or placeholder errors without rewriting the transcript ($content)",
+    ({ content }) => {
+      const errors = Array.from({ length: 4 }, (_, attempt) => ({
+        role: "assistant",
+        content,
+        stopReason: "error",
+        errorCode: "rate_limit_exceeded",
+        errorMessage: "provider rate limit",
+        __openclaw: { runId: "run-retry", id: `attempt-${attempt}` },
+      }));
+      const rawMessages = [user, ...errors, reply];
+      const original = structuredClone(rawMessages);
+
+      expect(projectChatDisplayMessages(rawMessages)).toEqual([user, reply]);
+      expect(buildSessionHistorySnapshot({ rawMessages }).history.messages).toEqual([user, reply]);
+      expect(rawMessages).toEqual(original);
+
+      const terminal = projectChatDisplayMessages([user, ...errors]);
+      expect(terminal).toHaveLength(2);
+      expect(terminal[1]).toEqual({
+        role: "assistant",
+        stopReason: "error",
+        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        __openclaw: { runId: "run-retry", id: "attempt-3" },
+      });
+      expect(projectChatDisplayMessages([user, ...errors, user, reply])).toEqual([
+        ...terminal,
+        user,
+        reply,
+      ]);
+    },
+  );
+
+  it("refreshes prior inline error projections when replaced or repaired", () => {
+    const error = { role: "assistant", stopReason: "error", content: [] };
+    expect(projectChatDisplayMessagesWithState([error]).streamErrorFallbackPending).toBe(true);
+    for (const message of [error, reply]) {
+      expect(
+        projectChatDisplayMessagesWithState([message], { streamErrorFallbackPending: true })
+          .streamErrorFallbackRepaired,
+      ).toBe(true);
+    }
+    expect(
+      projectChatDisplayMessagesWithState([user, reply], { streamErrorFallbackPending: true })
+        .streamErrorFallbackRepaired,
+    ).toBe(false);
+  });
+});
 
 describe("managed document chat history", () => {
   it("projects durable display content without dropping canonical assistant blocks", () => {

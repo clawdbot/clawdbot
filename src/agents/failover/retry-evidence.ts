@@ -1,4 +1,8 @@
-import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
+import {
+  parseRetryAfterHttpDateMs,
+  parseRetryAfterErrorSeconds,
+} from "@openclaw/ai/internal/retry-after";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import milliseconds from "ms";
 import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import {
@@ -92,14 +96,29 @@ function parseRetryAfterSeconds(valueText: string, nowMs: number): number | unde
   return retryAtMs === undefined ? undefined : Math.max(0, (retryAtMs - nowMs) / 1000);
 }
 
-/** Extracts a bounded retry hint from provider error text. */
+function retryTextSeconds(message: string | undefined, nowMs: number): number | undefined {
+  let floor: number | undefined;
+  for (const match of message?.matchAll(new RegExp(RETRY_AFTER_VALUE_RE, "gi")) ?? []) {
+    const seconds = parseRetryAfterSeconds(match[1]?.trim() ?? "", nowMs);
+    if (seconds !== undefined) {
+      floor = Math.max(floor ?? 0, seconds);
+    }
+  }
+  return floor;
+}
+
+/** Extracts the provider retry floor from error text and response headers. */
 export function resolveRetryAfterMs(
   message: string | undefined,
   nowMs = Date.now(),
+  errorBody?: unknown,
 ): number | undefined {
-  const value = message?.trim() ? RETRY_AFTER_VALUE_RE.exec(message)?.[1]?.trim() : undefined;
-  const seconds = value ? parseRetryAfterSeconds(value, nowMs) : undefined;
-  return seconds === undefined ? undefined : Math.ceil(seconds * 1000);
+  const body = typeof errorBody === "string" ? safeParseJsonRecord(errorBody) : errorBody;
+  const headerSeconds = parseRetryAfterErrorSeconds(body, nowMs);
+  const seconds = retryTextSeconds(message, nowMs);
+  return headerSeconds === undefined && seconds === undefined
+    ? undefined
+    : Math.ceil(Math.max(headerSeconds ?? 0, seconds ?? 0) * 1000);
 }
 
 /** Classify provider rate-limit text without deciding a caller's retry policy. */
@@ -112,17 +131,14 @@ export function classifyRateLimitWindow(
     return { kind: "unknown" };
   }
   const hasShortRateLimitUnit = SHORT_RATE_LIMIT_UNIT_RE.test(raw);
-  const retryAfterValue = RETRY_AFTER_VALUE_RE.exec(raw)?.[1]?.trim();
-  const retryAfterSeconds = retryAfterValue
-    ? parseRetryAfterSeconds(retryAfterValue, nowMs)
-    : undefined;
+  const retryAfterSeconds = retryTextSeconds(raw, nowMs);
 
   if (retryAfterSeconds !== undefined) {
     return retryAfterSeconds > MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS
       ? { kind: "long" }
       : { kind: "short", retryAfterSeconds };
   }
-  if (retryAfterValue && !hasShortRateLimitUnit) {
+  if (RETRY_AFTER_VALUE_RE.test(raw) && !hasShortRateLimitUnit) {
     return { kind: "long" };
   }
   if (LONG_WINDOW_RATE_LIMIT_RE.test(raw) && !hasShortRateLimitUnit) {

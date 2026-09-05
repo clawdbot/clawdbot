@@ -618,6 +618,7 @@ export function runAgentAttempt(params: {
   fallbackRuntimeState?: { originRuntime?: "cli" | "embedded" };
   suppressPromptPersistenceOnRetry?: boolean;
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  assistantErrorTranscript?: RunEmbeddedAgentInternalParams["assistantErrorTranscript"];
   contextEngineLogicalTurnLease?: ContextEngineLogicalTurnLease;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
@@ -1419,6 +1420,7 @@ export function runAgentAttempt(params: {
     onDeferredLifecycleAbort: params.deferredLifecycle?.abort,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    assistantErrorTranscript: params.assistantErrorTranscript,
     contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     onUserMessagePersisted: params.onUserMessagePersisted,
