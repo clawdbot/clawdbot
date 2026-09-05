@@ -757,6 +757,7 @@ describe("gateway server cron", () => {
         enabled: true,
         scheduleKind: "every",
         schedule: { kind: "every", everyMs: 60_000 },
+        lastRunAt: null,
         lastRunStatus: null,
       });
       expect(Object.keys(compactJobs?.[0] ?? {}).toSorted()).toEqual(
@@ -764,14 +765,17 @@ describe("gateway server cron", () => {
           "enabled",
           "id",
           "lastRunAtMs",
+          "lastRunAt",
           "lastRunError",
           "lastRunStatus",
           "name",
           "nextRunAtMs",
+          "nextRunAt",
           "scheduleKind",
           "schedule",
         ].toSorted(),
       );
+      expect(Date.parse(String(compactJobs?.[0]?.nextRunAt))).toBe(compactJobs?.[0]?.nextRunAtMs);
       expect(
         (compactListRes.payload as { deliveryPreviews?: unknown } | null)?.deliveryPreviews,
       ).toBeUndefined();

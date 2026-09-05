@@ -977,6 +977,9 @@ describe("cron method validation", () => {
               id: "cron-1",
               enabled: false,
               nextRunAtMs: null,
+              nextRunAt: null,
+              lastRunAtMs: null,
+              lastRunAt: null,
               scheduleKind: schedule.kind,
               schedule,
             }),
@@ -992,6 +995,30 @@ describe("cron method validation", () => {
       expect(JSON.stringify(payload)).not.toContain("foreign-private-job");
     },
   );
+
+  it("lists readable run timestamps alongside their exact epoch values", async () => {
+    const context = createCronContext(
+      createCronJob({
+        state: { nextRunAtMs: 1_788_591_095_278, lastRunAtMs: 1_788_587_495_278 },
+      }),
+    );
+    const { respond } = await invokeCron("cron.list", { compact: true }, { context });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        jobs: [
+          expect.objectContaining({
+            nextRunAtMs: 1_788_591_095_278,
+            nextRunAt: "2026-09-05T06:51:35.278Z",
+            lastRunAtMs: 1_788_587_495_278,
+            lastRunAt: "2026-09-05T05:51:35.278Z",
+          }),
+        ],
+      }),
+      undefined,
+    );
+  });
 
   it.each([
     { kind: "on-exit", command: "fixture-watcher-command", cwd: "/fixture/private-watcher" },
