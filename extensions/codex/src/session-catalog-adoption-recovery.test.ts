@@ -70,9 +70,9 @@ describe("Codex supervision actions", () => {
         sessionKey,
       }),
     );
-    await expect(
+    expect(
       bindingStore.read(sessionBindingIdentity({ sessionId, sessionKey, config })),
-    ).resolves.toMatchObject({
+    ).toMatchObject({
       threadId: "thread-1",
       connectionScope: "supervision",
       supervisionSourceThreadId: "thread-1",
@@ -135,7 +135,7 @@ describe("Codex supervision actions", () => {
       },
     });
     expect(mutate).not.toHaveBeenCalled();
-    await expect(bindingStore.read(identity)).resolves.toMatchObject({
+    expect(bindingStore.read(identity)).toMatchObject({
       threadId: "thread-1",
       connectionScope: "supervision",
       supervisionSourceThreadId: "thread-1",
@@ -227,7 +227,7 @@ describe("Codex supervision actions", () => {
     expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledWith(
       expect.objectContaining({ throughTurnId: null, modelProvider: undefined }),
     );
-    await expect(
+    expect(
       bindingStore.read(
         sessionBindingIdentity({
           sessionId: runtime.agent.session.getSessionEntry({ sessionKey: result.sessionKey })!
@@ -236,12 +236,12 @@ describe("Codex supervision actions", () => {
           config,
         }),
       ),
-    ).resolves.toMatchObject({
+    ).toMatchObject({
       connectionScope: "supervision",
       supervisionSourceThreadId: "thread-1",
       pendingSupervisionBranch: { sourceThreadId: "thread-1" },
     });
-    const binding = await bindingStore.read(
+    const binding = bindingStore.read(
       sessionBindingIdentity({
         sessionId: runtime.agent.session.getSessionEntry({ sessionKey: result.sessionKey })!
           .sessionId,

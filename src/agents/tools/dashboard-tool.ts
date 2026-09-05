@@ -32,7 +32,7 @@ const DASHBOARD_ACTIONS = [
   "widget_resize",
   "widget_remove",
   "focus_tab",
-  "set_chat_dock",
+  "set_presentation",
 ] as const;
 const BOARD_TAB_ID_PATTERN = "^[a-z0-9-]{1,40}$";
 const BOARD_TAB_ID_REGEX = /^[a-z0-9-]{1,40}$/;
@@ -50,11 +50,8 @@ const DashboardToolSchema = Type.Object(
       Type.String({ pattern: BOARD_TAB_ID_PATTERN, description: "Stable tab slug" }),
     ),
     title: Type.Optional(Type.String({ minLength: 1, maxLength: 80, description: "Tab title" })),
-    chatDock: Type.Optional(
-      Type.String({ enum: ["left", "right", "bottom", "hidden"], description: "Chat dock" }),
-    ),
-    dock: Type.Optional(
-      Type.String({ enum: ["left", "right", "bottom", "hidden"], description: "Chat dock" }),
+    presentation: Type.Optional(
+      Type.String({ enum: ["split", "expanded"], description: "Dashboard panel presentation" }),
     ),
     position: Type.Optional(Type.Integer({ minimum: 0, description: "Zero-based position" })),
     tabIds: Type.Optional(
@@ -121,23 +118,6 @@ function requireSessionKey(value: string | undefined): string {
   return sessionKey;
 }
 
-function readDock(
-  params: Record<string, unknown>,
-  key: "chatDock" | "dock",
-): "left" | "right" | "bottom" | "hidden" | undefined {
-  const value = readToolStringParam(params, key);
-  if (
-    value === undefined ||
-    value === "left" ||
-    value === "right" ||
-    value === "bottom" ||
-    value === "hidden"
-  ) {
-    return value;
-  }
-  throw new ToolInputError(`${key} must be left, right, bottom, or hidden`);
-}
-
 function requireInteger(params: Record<string, unknown>, key: string): number {
   const value = readNumberParam(params, key, { required: true, integer: true, strict: true });
   if (value === undefined) {
@@ -181,20 +161,17 @@ function opForAction(action: string, params: Record<string, unknown>): BoardOp {
         kind: "tab_create",
         tabId: readTabId(params),
         title: readToolStringParam(params, "title", { required: true }),
-        ...(readDock(params, "chatDock") ? { chatDock: readDock(params, "chatDock") } : {}),
       };
     case "tab_update": {
       const title = readToolStringParam(params, "title");
-      const chatDock = readDock(params, "chatDock");
       const position = readNumberParam(params, "position", { integer: true, strict: true });
-      if (title === undefined && chatDock === undefined && position === undefined) {
-        throw new ToolInputError("tab_update requires title, chatDock, or position");
+      if (title === undefined && position === undefined) {
+        throw new ToolInputError("tab_update requires title or position");
       }
       return {
         kind: "tab_update",
         tabId: readTabId(params),
         ...(title !== undefined ? { title } : {}),
-        ...(chatDock !== undefined ? { chatDock } : {}),
         ...(position !== undefined ? { position } : {}),
       };
     }
@@ -274,6 +251,7 @@ function snapshotResult(snapshot: BoardSnapshot) {
   }
   const details = {
     ...snapshot,
+    tabs: snapshot.tabs.map(({ tabId, title, position }) => ({ tabId, title, position })),
     ...(snapshot.widgets.length > 0 ? { contentUpdatePaths } : {}),
   };
   return textResult(
@@ -299,7 +277,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
     label: "Dashboard",
     name: "dashboard",
     description:
-      "Keep one ad hoc visualization inline; use only for an explicit dashboard request or multiple non-code visualizations. Read layout; widget_put updates plugin widgets only. Read and arrange this session dashboard: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab; set_chat_dock moves or hides the chat dock (left/right/bottom/hidden). focus_tab and set_chat_dock require a connected Control UI. Widgets use stable names. widget_put creates or updates trusted plugin widgets only; update other content through its owning authoring capability discovered in the tool catalog. Plugin examples: session:progress props {sessionKey?} renders the session's live progress card (omit sessionKey for the current session), workboard:card props {cardId}, workboard:mini props {boardId, limit}, workboard:board props {boardId}. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
+      "Keep one ad hoc visualization inline; use only for an explicit dashboard request or multiple non-code visualizations. Read layout; widget_put updates plugin widgets only. Read and arrange this session dashboard: read snapshot; tab_create/tab_update/tab_delete/tabs_reorder; widget_put/widget_move/widget_resize/widget_remove; focus_tab opens the dashboard side panel; set_presentation shows the dashboard alongside chat (split) or across the task area (expanded). focus_tab and set_presentation require a connected Control UI. Widgets use stable names. widget_put creates or updates trusted plugin widgets only; update other content through its owning authoring capability discovered in the tool catalog. Plugin examples: session:progress props {sessionKey?} renders the session's live progress card (omit sessionKey for the current session), workboard:card props {cardId}, workboard:mini props {boardId, limit}, workboard:board props {boardId}. Sizes: sm=3x3, md=6x4, lg=8x6, xl=12x8, full=12x8 single-widget emphasis.",
     parameters: DashboardToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -333,16 +311,20 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
         );
         return commandResult(delivered);
       }
-      if (action === "set_chat_dock") {
-        const dock = readDock(params, "dock");
-        if (!dock) {
-          throw new ToolInputError("dock required");
+      if (action === "set_presentation") {
+        const presentation = readToolStringParam(params, "presentation", { required: true });
+        if (presentation !== "split" && presentation !== "expanded") {
+          throw new ToolInputError("presentation must be split or expanded");
         }
         const delivered = emitCommand(
           {
             sessionKey,
             agentId: opts.agentId,
-            command: { kind: "set_chat_dock", dock },
+            // Keep the shipped BoardCommand wire format; the panel owns its dock position.
+            command: {
+              kind: "set_chat_dock",
+              dock: presentation === "expanded" ? "hidden" : "right",
+            },
           },
           admittedResolver,
         );

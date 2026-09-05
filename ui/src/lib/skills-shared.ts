@@ -47,9 +47,11 @@ export function renderSkillStatusChips(params: {
       <span class="chip ${available ? "chip-ok" : "chip-warn"}">
         ${available ? t("skillStatus.eligible") : t("skillStatus.blocked")}
       </span>
-      ${skill.disabled
-        ? html` <span class="chip chip-warn">${t("skillStatus.disabled")}</span> `
-        : nothing}
+      ${
+        skill.disabled
+          ? html` <span class="chip chip-warn">${t("skillStatus.disabled")}</span> `
+          : nothing
+      }
     </div>
   `;
 }

@@ -1,7 +1,10 @@
 import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
-import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcomeFromAttempt,
+  type AgentRunAttemptFailureSource,
+} from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import {
   classifyFailoverReason,
@@ -14,6 +17,7 @@ import {
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
+  isCliTerminalStopCode,
   resolveFailoverStatus,
 } from "../../failover-error.js";
 import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
@@ -107,14 +111,26 @@ export async function handleEmbeddedPromptFailure(input: {
   const promptAuthMode = input.authProfileId
     ? input.authProfileStore.profiles?.[input.authProfileId]?.type
     : undefined;
-  const normalizedPromptFailover = coerceToFailoverError(input.promptError, {
+  const terminalOutcome = buildAgentRunTerminalOutcomeFromAttempt({
+    terminal: input.attempt.terminal,
+    promptTimeoutOutcome: input.attempt.promptTimeoutOutcome,
+  });
+  const failoverContext = {
     provider: input.activeErrorContext.provider,
     model: input.activeErrorContext.model,
     profileId: input.authProfileId,
     authMode: promptAuthMode,
     sessionId: input.sessionIdUsed,
     lane: input.lane,
-  });
+    timeout:
+      terminalOutcome.status === "timeout"
+        ? {
+            timeoutPhase: terminalOutcome.timeoutPhase,
+            providerStarted: terminalOutcome.providerStarted,
+          }
+        : undefined,
+  };
+  const normalizedPromptFailover = coerceToFailoverError(input.promptError, failoverContext);
   const promptErrorDetails = normalizedPromptFailover
     ? describeFailoverError(normalizedPromptFailover)
     : describeFailoverError(input.promptError);
@@ -129,7 +145,14 @@ export async function handleEmbeddedPromptFailure(input: {
     });
   }
   const errorText = promptErrorDetails.message || formatErrorMessage(input.promptError);
-  if (await input.maybeRefreshRuntimeAuthForAuthError(errorText, input.runtimeAuthRetry)) {
+  // A recorded CLI terminal stop outranks every text-derived recovery below:
+  // its message repeats a backend-controlled reason, so an auth-shaped value
+  // would otherwise refresh and retry a turn whose tool effects already ran.
+  const recordedTerminalStop = isCliTerminalStopCode(promptErrorDetails.code);
+  if (
+    !recordedTerminalStop &&
+    (await input.maybeRefreshRuntimeAuthForAuthError(errorText, input.runtimeAuthRetry))
+  ) {
     return {
       action: "retry",
       thinkLevel: input.thinkLevel,
@@ -138,7 +161,9 @@ export async function handleEmbeddedPromptFailure(input: {
     };
   }
 
-  const blockedResult = resolveBlockedPromptResult(input, errorText);
+  const blockedResult = recordedTerminalStop
+    ? undefined
+    : resolveBlockedPromptResult(input, errorText);
   if (blockedResult) {
     return blockedResult;
   }
@@ -192,6 +217,7 @@ export async function handleEmbeddedPromptFailure(input: {
   const canRetryRateLimit =
     promptFailoverReason !== "rate_limit" || isShortWindowRateLimitMessage(errorText);
   if (
+    !recordedTerminalStop &&
     !input.externalAbort &&
     canRetryRateLimit &&
     promptFailoverReason &&
@@ -288,10 +314,9 @@ export async function handleEmbeddedPromptFailure(input: {
       log.warn(`prompt profile failure mark failed: ${String(error)}`);
     }
   }
-  const fallbackThinking = pickFallbackThinkingLevel({
-    message: errorText,
-    attempted: input.attemptedThinking,
-  });
+  const fallbackThinking = recordedTerminalStop
+    ? undefined
+    : pickFallbackThinkingLevel({ message: errorText, attempted: input.attemptedThinking });
   if (fallbackThinking) {
     log.warn(
       `unsupported thinking level for ${input.provider}/${input.modelId}; retrying with ${fallbackThinking}`,
@@ -325,13 +350,10 @@ export async function handleEmbeddedPromptFailure(input: {
     throw (
       (normalizedPromptFailover?.reason === fallbackReason ? normalizedPromptFailover : null) ??
       new FailoverError(errorText, {
+        ...failoverContext,
         reason: fallbackReason,
         provider: input.provider,
         model: input.modelId,
-        profileId: input.authProfileId,
-        authMode: promptAuthMode,
-        sessionId: input.sessionIdUsed,
-        lane: input.lane,
         status,
       })
     );
@@ -348,6 +370,16 @@ export async function handleEmbeddedPromptFailure(input: {
       retryCount: input.getTransientRetryCount(),
       profileRotationCount: 0,
     });
+  }
+  if (failoverContext.timeout) {
+    throw (
+      normalizedPromptFailover ??
+      new FailoverError(errorText, {
+        ...failoverContext,
+        reason: "timeout",
+        cause: input.promptError,
+      })
+    );
   }
   throw toErrorObject(input.promptError, "Prompt failed");
 }

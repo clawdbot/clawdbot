@@ -40,6 +40,17 @@ const transactionMutations = new AsyncLocalStorage<{
   initializations: Set<SessionInitialization>;
 }>();
 
+/** Worker commits cannot carry parent-thread native-owner rollback closures. */
+export function hasPreparedNativeSessionDeletion(): boolean {
+  const prepared = deletions.getStore();
+  return (
+    prepared !== undefined &&
+    [...prepared.values()].some(
+      (entry) => entry.mutations.length > 0 || entry.target.initialization !== undefined,
+    )
+  );
+}
+
 type PreparedSessionWrite<T> = {
   deletedEntries: readonly DeletionEntry[];
   beforeCommit?: () => Promise<void>;
@@ -80,6 +91,7 @@ export async function withSqliteSessionDeletions<T>(
   scope: Pick<ResolvedSqliteReadScope, "agentId" | "env" | "ownerStorePath" | "path">,
   entries: readonly DeletionEntry[],
   run: (assertCurrent: () => void) => Promise<T>,
+  options: { additionalIdentities?: readonly string[] } = {},
 ): Promise<T> {
   const targets: AgentHarnessSessionDeletionTarget[] = [
     ...new Map(
@@ -143,7 +155,10 @@ export async function withSqliteSessionDeletions<T>(
   };
   return await runExclusiveSessionLifecycleMutation({
     scope: ownerStorePath,
-    identities: targets.flatMap((target) => [target.sessionKey, target.sessionId]),
+    identities: [
+      ...targets.flatMap((target) => [target.sessionKey, target.sessionId]),
+      ...(options.additionalIdentities ?? []),
+    ],
     run: async () => (prepare ? await prepare(targets, invoke) : await invoke(new Map())),
   });
 }

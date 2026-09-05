@@ -1,5 +1,6 @@
 import { createContext } from "@lit/context";
-import type { RouteLocation } from "@openclaw/uirouter";
+import type { RouteLocation, Router } from "@openclaw/uirouter";
+import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
@@ -7,7 +8,7 @@ import type { ChannelCapability } from "../lib/channels/index.ts";
 import type { ChatAttachment, ChatComposerMemoryFallback } from "../lib/chat/chat-types.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import type { WorkboardCapability } from "../lib/workboard/capability.ts";
+import type { ControlUiPluginCapability } from "../plugins/control-ui-capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationConfigCapability } from "./config.ts";
@@ -15,6 +16,7 @@ import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
+import type { NativeDeviceSettingsCapability } from "./native-device-settings.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
 import type { ApplicationPlacementStartup } from "./session-placement-startup.ts";
@@ -76,12 +78,14 @@ export type ApplicationChatAttachmentHandoff = {
       attachments: readonly ChatAttachment[];
       fallbacks: Readonly<Record<string, ChatComposerMemoryFallback>>;
       message?: string;
+      mentions?: readonly HumanMention[];
     },
   ): void;
   consume(handoff: ChatAttachmentHandoffKey): {
     attachments: ChatAttachment[];
     fallbacks: Record<string, ChatComposerMemoryFallback>;
     message?: string;
+    mentions?: readonly HumanMention[];
   } | null;
   retireScope(scopeKey: string, beforeRevision: number): void;
   clearPane(paneId: string): void;
@@ -92,6 +96,7 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly basePath: string;
   readonly resourceBasePath: string;
   readonly lifecycleAbortSignal?: AbortSignal;
+  readonly router: Pick<Router<RouteId, unknown, unknown, unknown>, "getState" | "subscribe">;
   readonly gateway: ApplicationGateway;
   /** App-owned queue for automatic Gateway reconnect bootstrap work. */
   readonly connectionBootstrap: ConnectionBootstrapCoordinator;
@@ -105,11 +110,12 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly runtimeConfig: RuntimeConfigCapability;
   readonly sessions: SessionCapability;
   readonly placementStartup: ApplicationPlacementStartup;
-  readonly workboard: WorkboardCapability;
+  readonly plugins: ControlUiPluginCapability;
   readonly overlays: ApplicationOverlays;
   readonly navigation: ApplicationNavigationPreferences;
   readonly theme: ApplicationTheme;
   readonly nativeChatDrafts: NativeChatDrafts;
+  readonly nativeDeviceSettings: NativeDeviceSettingsCapability | null;
   readonly nativeNotifications: NativeNotificationsCapability | null;
   readonly webPush: WebPushCapability;
   readonly chatSubmissions: ApplicationChatSubmissions;
@@ -122,7 +128,8 @@ export type ApplicationContext<TRouteId extends string = string> = {
   ) => Promise<void>;
   readonly replace: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly revalidate: (routeId?: TRouteId) => Promise<void>;
-  readonly preload: (routeId: TRouteId, options?: ApplicationNavigationOptions) => Promise<void>;
+  /** Warms a named route; dynamic locations load as part of navigation. */
+  readonly preload: (routeId: TRouteId) => Promise<void>;
 };
 
 export const applicationContext =

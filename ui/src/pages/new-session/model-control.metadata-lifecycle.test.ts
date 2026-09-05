@@ -6,11 +6,189 @@ import {
   revalidateChatMetadata,
   invalidateChatMetadataStore,
   subscribeChatMetadata,
+  type ChatMetadataResult,
 } from "../../lib/chat/chat-metadata-store.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { contextWith, deferred, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
+function retainedAccountDraft() {
+  const model: ModelCatalogEntry = {
+    id: "model",
+    name: "Model",
+    provider: "anthropic",
+    available: false,
+    unavailableReason: "missing-auth",
+  };
+  const account = {
+    authProfileId: "personal:person-a:anthropic:one",
+    provider: "anthropic",
+    label: "Saved account A1",
+    authType: "token",
+    selected: false,
+  };
+  const agent = { id: "main", model: { primary: "anthropic/model" } };
+  const { context, request } = contextWith([model]);
+  Object.assign(context.gateway.snapshot, { selfUser: { id: "person-a", name: "Person A" } });
+  const preview = deferred<ChatMetadataResult>();
+  const neutral: ChatMetadataResult = {
+    commands: [],
+    models: [model],
+    accountSelection: { kind: "automatic", label: "Automatic" },
+  };
+  const connected: ChatMetadataResult = {
+    commands: [],
+    models: [{ ...model, available: true, unavailableReason: undefined }],
+    accountSelection: {
+      kind: "personal",
+      authProfileId: account.authProfileId,
+      label: account.label,
+    },
+  };
+  request.mockImplementation((method: string, params: { authProfileId?: string }) => {
+    if (method === "users.listModelAccounts") {
+      return Promise.resolve({ profileId: "person-a", accounts: [account], links: [] });
+    }
+    return params.authProfileId ? preview.promise : Promise.resolve(neutral);
+  });
+  const savePreference = vi.fn();
+  const control = new NewSessionModelControl(() => undefined, savePreference);
+  control.load(context, "main", true, { agent });
+  const draw = (id = "main") => renderControl(control, context, id, { ...agent, id });
+  const select = (value: string) =>
+    draw()
+      .querySelector(".chat-model-account__picker")!
+      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } } }));
+  const chooseAccount = async () => {
+    await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
+    const picker = draw().querySelector(".chat-model-account__picker");
+    expect(picker).not.toBeNull();
+    picker!.dispatchEvent(new Event("wa-show"));
+    await vi.waitFor(() => expect(draw().textContent).toContain(account.label));
+    select(`account:${account.authProfileId}`);
+    return {
+      completion: revalidateChatMetadata(context.gateway.snapshot.client!, {
+        agentId: "main",
+        authProfileId: account.authProfileId,
+      }).catch(() => undefined),
+    };
+  };
+  return {
+    account,
+    agent,
+    context,
+    control,
+    request,
+    preview,
+    connected,
+    neutral,
+    draw,
+    select,
+    chooseAccount,
+    savePreference,
+  };
+}
+
 describe("new-session model metadata lifecycle", () => {
+  it("selects a retained account for an unavailable draft without changing saved preferences", async () => {
+    const {
+      account,
+      agent,
+      control,
+      request,
+      preview,
+      connected,
+      draw,
+      select,
+      chooseAccount,
+      savePreference,
+    } = retainedAccountDraft();
+    const { completion } = await chooseAccount();
+    expect(request).toHaveBeenLastCalledWith(
+      "chat.metadata",
+      { agentId: "main", authProfileId: account.authProfileId },
+      { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+    );
+    expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
+    preview.resolve(connected);
+    await completion;
+    expect(control.modelSelectionBlockedReason(agent)).toBeUndefined();
+    expect(draw().querySelector("[data-chat-account-trigger]")?.textContent).toContain(
+      account.label,
+    );
+    expect(control.modelForSubmission()).toBe(`anthropic/model@${account.authProfileId}`);
+    expect(control.selected).toBe("");
+    select("automatic");
+    expect(control.modelUnavailableReason(agent)).toBe("missing-auth");
+    expect(control.modelForSubmission()).toBe("");
+    expect(draw().querySelector("[data-chat-account-trigger]")?.textContent).toContain("Automatic");
+    expect(savePreference).not.toHaveBeenCalled();
+    expect(
+      request.mock.calls.some(([method]) => /users\.(selectModelAccount|prefs\.set)/.test(method)),
+    ).toBe(false);
+    control.reset();
+  });
+
+  it.each(["request failure", "missing model", "unconfirmed account", "unknown availability"])(
+    "keeps an explicit account blocked after a preview with $0",
+    async (outcome) => {
+      const { agent, control, preview, connected, chooseAccount } = retainedAccountDraft();
+      const { completion } = await chooseAccount();
+      expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
+      if (outcome === "request failure") {
+        preview.reject(new Error("Preview unavailable"));
+      } else {
+        preview.resolve({
+          ...connected,
+          ...(outcome === "missing model" ? { models: [] } : {}),
+          ...(outcome === "unconfirmed account" ? { accountSelection: undefined } : {}),
+          ...(outcome === "unknown availability"
+            ? {
+                models: connected.models?.map((model) =>
+                  Object.assign({}, model, { available: undefined }),
+                ),
+              }
+            : {}),
+        });
+      }
+      await completion;
+      expect(control.modelSelectionBlockedReason(agent)).toBe("Models unavailable");
+      control.reset();
+    },
+  );
+
+  it.each(["identity", "client", "agent", "Automatic", "reset"])(
+    "retires the pending account preview after changing $0",
+    async (change) => {
+      const { agent, context, control, preview, connected, neutral, chooseAccount, select, draw } =
+        retainedAccountDraft();
+      const { completion } = await chooseAccount();
+      let agentId = "main";
+      if (change === "identity") {
+        Object.assign(context.gateway.snapshot, { selfUser: { id: "person-b", name: "Person B" } });
+      } else if (change === "client") {
+        Object.assign(context.gateway.snapshot, {
+          client: createTestGatewayClient(async () => neutral),
+        });
+      } else if (change === "agent") {
+        agentId = "research";
+      } else if (change === "Automatic") {
+        select("automatic");
+      } else {
+        control.reset();
+      }
+      control.load(context, agentId, true, { agent: { ...agent, id: agentId } });
+      preview.resolve(connected);
+      await completion;
+      await vi.waitFor(() => expect(control.modelUnavailableReason(agent)).toBe("missing-auth"));
+      expect(control.modelForSubmission()).toBe("");
+      expect(draw(agentId).querySelector("[data-chat-account-trigger]")?.textContent).toContain(
+        "Automatic",
+      );
+      control.reset();
+    },
+  );
+
   it("retains draft model controls across client replacement but clears them for another agent", async () => {
     const model: ModelCatalogEntry = {
       id: "model",

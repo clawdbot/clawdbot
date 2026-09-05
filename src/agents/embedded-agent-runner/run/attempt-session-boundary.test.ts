@@ -135,6 +135,34 @@ async function withPersistedOrphanBoundary(
 }
 
 describe("prepareEmbeddedAttemptSessionBoundary", () => {
+  it("strips persisted carriers when a session switches to transient replay", async () => {
+    const previousUser: AgentMessage = { role: "user", content: "first question", timestamp: 1 };
+    const previousCarrier = buildRuntimeContextCustomMessage("persisted context")!;
+    const reply = makeAssistantMessageFixture({
+      content: [{ type: "text", text: "first answer" }],
+    });
+    const currentCarrier = buildRuntimeContextCustomMessage("current context")!;
+    const currentUser: AgentMessage = { role: "user", content: "next question", timestamp: 2 };
+    const messages = [previousUser, previousCarrier, reply, currentCarrier, currentUser];
+    const { activeSession } = createActiveSession();
+    await prepareEmbeddedAttemptSessionBoundary({
+      activeSession,
+      appendOnlyRuntimeContext: false,
+      attempt: { prompt: "next question", trigger: "user" },
+      getUserTranscriptContexts: () => undefined,
+      isRawModelRun: false,
+      preparedUserTurnMessage: undefined,
+      sessionManager: createSessionManager(),
+      setActiveSessionSystemPrompt: vi.fn(),
+    });
+    const converted = await activeSession.agent.convertToLlm(messages);
+    expect(converted).toHaveLength(4);
+    expect(converted).not.toContain(previousCarrier);
+    expect(converted.at(-1)).toBe(currentCarrier);
+    expect(converted.slice(0, -1)).not.toContain(currentCarrier);
+    expect(await activeSession.agent.convertToLlm(messages)).toEqual(converted);
+  });
+
   it.each([false, true])(
     "replays turn and tool-loop prefixes with append-only runtime context %s",
     async (appendOnlyRuntimeContext) => {

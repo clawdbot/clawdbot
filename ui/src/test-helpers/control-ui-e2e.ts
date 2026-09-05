@@ -11,11 +11,13 @@ import type { ConsoleMessage, Frame, Locator, Page, Request } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
+import { controlUiPluginAssetRoot } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
 import type { ModelCatalogEntry, UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
+import type { NativeControlUiPluginFixture } from "./control-ui-plugin-fixture.ts";
 import {
   createControlUiSessionFixtures,
   type ControlUiSessionFixture,
@@ -96,6 +98,23 @@ export function controlUiBundledGatewayUrl(baseUrl: string): string {
 
 export function controlUiBundledSettingsStorageKey(baseUrl: string): string {
   return `openclaw.control.settings.v1:${controlUiBundledGatewayUrl(baseUrl)}`;
+}
+
+export function createControlUiMockSameOriginGatewayScript(): string {
+  return `;(${installControlUiMockSameOriginGateway.toString()})();`;
+}
+
+function installControlUiMockSameOriginGateway() {
+  // Standalone mock pages emulate Gateway-served UI so same-origin security
+  // checks exercise package assets instead of falling back to initials.
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  (
+    window as Window & {
+      ["__OPENCLAW_NATIVE_CONTROL_AUTH__"]?: { gatewayUrl: string };
+    }
+  )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+    gatewayUrl: `${protocol}//${window.location.host}`,
+  };
 }
 
 type ControlUiRouteTarget = {
@@ -291,6 +310,8 @@ export const defaultControlUiFeatureMethods = [
   "tools.github.authorize.cancel",
   "update.hold",
   "update.run",
+  "update.runs.get",
+  "update.runs.list",
   "update.status",
   "worktrees.branches",
 ] as const;
@@ -302,11 +323,14 @@ export type MockGatewayRequest = {
 };
 
 export type ControlUiMockGatewayScenario = {
+  nativePlugins?: readonly NativeControlUiPluginFixture[];
+  pluginAssetsRequireAuth?: boolean;
   attachmentMaxBytes?: number;
   agentModel?: string | null;
   assistantAgentId?: string;
   assistantName?: string;
   automaticallyFetchFavicons?: boolean;
+  communityInvite?: boolean;
   basePath?: string;
   controlUiTabs?: Array<{
     group?: string;
@@ -423,7 +447,9 @@ export type ControlUiMockGatewayScenario = {
   localMediaPreviewRoots?: string[];
 };
 
-type NormalizedControlUiMockGatewayScenario = Required<ControlUiMockGatewayScenario>;
+type NormalizedControlUiMockGatewayScenario = Required<
+  Omit<ControlUiMockGatewayScenario, "nativePlugins">
+>;
 
 const DEFAULT_MOCK_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
 const DEFAULT_MOCK_ATTACHMENT_MAX_BYTES = Math.floor(
@@ -580,7 +606,7 @@ export type MockGatewayControls = {
   deferNext: (method: string, match?: Record<string, unknown>) => Promise<void>;
   emitChatFinal: (params: { runId: string; sessionKey?: string; text: string }) => Promise<void>;
   emitGatewayEvent: (event: string, payload?: unknown) => Promise<void>;
-  getRequests: (method?: string) => Promise<MockGatewayRequest[]>;
+  getRequests: (method?: string, match?: Record<string, unknown>) => Promise<MockGatewayRequest[]>;
   getSocketCount: () => Promise<number>;
   getSocketUrls: () => Promise<string[]>;
   rejectDeferred: (
@@ -604,10 +630,13 @@ export type MockGatewayControls = {
    * Resolves with a captured request for `method`. Without `after` this is
    * satisfied by ANY prior request of the method (and returns the latest), so
    * a second same-method wait can return a stale earlier request on slow
-   * runners; pass `after` = the pre-action count from `getRequests(method)`
-   * to wait for and return the next new request instead.
+   * runners; pass `after` = the pre-action count from `getRequests(method, match)`
+   * to wait for and return the next new request in that same parameter scope.
    */
-  waitForRequest: (method: string, options?: { after?: number }) => Promise<MockGatewayRequest>;
+  waitForRequest: (
+    method: string,
+    options?: { after?: number; match?: Record<string, unknown> },
+  ) => Promise<MockGatewayRequest>;
 };
 
 const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
@@ -765,6 +794,7 @@ function controlUiE2ePreviewConfigPlugin(
     basePath: "/",
     assistantName: "",
     assistantAvatar: "",
+    communityInvite: true,
   },
 ): Plugin {
   return {
@@ -952,8 +982,10 @@ function normalizeScenario(
       ? basePathWithSlash.slice(0, -1)
       : basePathWithSlash;
   return {
+    pluginAssetsRequireAuth: scenario.pluginAssetsRequireAuth ?? true,
     attachmentMaxBytes: scenario.attachmentMaxBytes ?? DEFAULT_MOCK_ATTACHMENT_MAX_BYTES,
     automaticallyFetchFavicons: scenario.automaticallyFetchFavicons ?? false,
+    communityInvite: scenario.communityInvite ?? true,
     agentModel:
       scenario.agentModel === undefined ? "openai/gpt-5.5" : scenario.agentModel?.trim() || null,
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
@@ -1035,9 +1067,22 @@ function normalizeScenario(
 
 export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewayScenario = {}) {
   const normalizedScenario = normalizeScenario(scenario);
+  const nativeCatalog = normalizedScenario.methodResponses["plugins.controlUi.list"] as
+    | { plugins?: { pluginId: string }[] }
+    | undefined;
   return {
+    pluginAssetsRequireAuth: normalizedScenario.pluginAssetsRequireAuth,
+    pluginFrameGrants: (normalizedScenario.pluginAssetsRequireAuth
+      ? (nativeCatalog?.plugins ?? [])
+      : []
+    ).map(({ pluginId }) => ({
+      pluginId,
+      path: `/__openclaw__/plugins/control-ui/${encodeURIComponent(pluginId)}/`,
+      match: "prefix",
+    })),
     allowExternalEmbedUrls: false,
     automaticallyFetchFavicons: normalizedScenario.automaticallyFetchFavicons,
+    communityInvite: normalizedScenario.communityInvite,
     assistantAgentId: normalizedScenario.assistantAgentId,
     assistantAvatar: "",
     assistantName: normalizedScenario.assistantName,
@@ -1073,7 +1118,7 @@ export type ControlUiMockGateway = {
   deliverLatest: (frame: unknown) => void;
   deferNext: (method: string, match?: Record<string, unknown>) => void;
   emit: (event: string, payload?: unknown) => void;
-  findRequests: (method?: string) => MockGatewayRequest[];
+  findRequests: (method?: string, match?: Record<string, unknown>) => MockGatewayRequest[];
   rejectDeferred: (
     method: string,
     error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
@@ -1913,6 +1958,19 @@ function installControlUiMockGateway(
           shared: { source: "system-configured", accountId: 1, login: "system-bot" },
           pendingPersonal: null,
         };
+      case "users.listAuthLinks":
+        return { links: [] };
+      case "users.listModelAccounts":
+        return {
+          profileId:
+            isRecord(params) && typeof params.profileId === "string"
+              ? params.profileId
+              : (scenario.presenceUsers.find((user) => user.self)?.id ?? "profile-1"),
+          accounts: [],
+          links: [],
+        };
+      case "users.list":
+        return { profiles: [] };
       case "users.github.status":
       case "tools.github.status": {
         const system = {
@@ -2017,10 +2075,20 @@ function installControlUiMockGateway(
         return { artifacts: [] };
       case "artifacts.download":
         return null;
+      case "sessions.resolve":
+        return sessions.resolve(isRecord(params) ? params : {});
       case "chat.history":
       case "chat.startup": {
-        const key =
-          isRecord(params) && typeof params.sessionKey === "string"
+        const resolution =
+          method === "chat.startup" && isRecord(params) && typeof params.shortId === "string"
+            ? sessions.resolve(params)
+            : undefined;
+        if (resolution && !resolution.ok) {
+          return { resolution, messages: [] };
+        }
+        const key = resolution?.ok
+          ? resolution.key
+          : isRecord(params) && typeof params.sessionKey === "string"
             ? params.sessionKey
             : scenario.sessionKey;
         const row = sessions.read(key);
@@ -2031,6 +2099,7 @@ function installControlUiMockGateway(
             : null;
         return {
           messages: scenario.historyMessages,
+          ...(resolution ? { resolution } : {}),
           sessionId: row.sessionId,
           ...(info || override ? { sessionInfo: { ...info, ...override } } : {}),
           thinkingLevel: null,
@@ -2094,6 +2163,8 @@ function installControlUiMockGateway(
         };
       case "commands.list":
         return { commands: [] };
+      case "plugins.list":
+        return { plugins: [] };
       case "health":
         return {
           agents: [],
@@ -2517,8 +2588,11 @@ function installControlUiMockGateway(
     emit(event, payload) {
       emitGatewayEvent(MockWebSocket.latest, event, payload);
     },
-    findRequests(method) {
-      return method ? requests.filter((request) => request.method === method) : [...requests];
+    findRequests(method, match) {
+      // Capture and deferral must select the same RPC scope; child lists share the roster method.
+      return requests.filter(
+        (request) => (!method || request.method === method) && paramsMatch(request.params, match),
+      );
     },
     rejectDeferred(method, error) {
       for (const response of takeDeferredResponses(method)) {
@@ -2694,11 +2768,45 @@ function installControlUiMockGateway(
   });
 }
 
+export async function prepareControlUiMockGatewayScenario(
+  scenario: ControlUiMockGatewayScenario = {},
+) {
+  const { prepareNativeControlUiPluginFixtures } = await import("./control-ui-plugin-fixture.ts");
+  const { catalog, assets } = await prepareNativeControlUiPluginFixtures(
+    scenario.nativePlugins ?? [],
+  );
+  const preparedScenario = catalog.plugins.length
+    ? {
+        ...scenario,
+        featureMethods: [
+          ...new Set([
+            ...(scenario.featureMethods ?? defaultControlUiFeatureMethods),
+            "plugins.controlUi.list",
+            "plugins.controlUi.report",
+          ]),
+        ],
+        methodResponses: {
+          ...scenario.methodResponses,
+          "plugins.controlUi.list": catalog,
+          "plugins.controlUi.report": { ok: true },
+        },
+      }
+    : scenario;
+  return { scenario: preparedScenario, assets };
+}
+
 export async function installMockGateway(
   page: Page,
   scenario: ControlUiMockGatewayScenario = {},
 ): Promise<MockGatewayControls> {
-  const normalizedScenario = normalizeScenario(scenario);
+  const prepared = await prepareControlUiMockGatewayScenario(scenario);
+  if (prepared.assets.size) {
+    await page.route(`**${controlUiPluginAssetRoot()}**`, async (route) => {
+      const asset = prepared.assets.get(new URL(route.request().url()).pathname);
+      await route.fulfill(asset ? { status: 200, ...asset } : { status: 404 });
+    });
+  }
+  const normalizedScenario = normalizeScenario(prepared.scenario);
   const diagnosticEvents = installControlUiE2ePageDiagnosticRing(page);
   await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
     route.fulfill({
@@ -2709,13 +2817,19 @@ export async function installMockGateway(
   );
   await installControlUiE2eUnhandledRejectionRing(page);
   await page.addInitScript({ content: createControlUiMockGatewayInitScript(normalizedScenario) });
-  return createMockGatewayControls(page, normalizedScenario.sessionKey, diagnosticEvents);
+  return createMockGatewayControls(
+    page,
+    normalizedScenario.sessionKey,
+    diagnosticEvents,
+    normalizedScenario.methodResponses,
+  );
 }
 
 function createMockGatewayControls(
   page: Page,
   defaultSessionKey: string,
   diagnosticEvents: ControlUiE2eDiagnosticEvent[],
+  methodResponses: Record<string, unknown>,
 ): MockGatewayControls {
   const emitGatewayEvent = async (event: string, payload?: unknown) => {
     await page.evaluate(
@@ -2740,11 +2854,14 @@ function createMockGatewayControls(
     }, frame);
   };
 
-  const getRequests = async (method?: string) =>
-    page.evaluate((targetMethod) => {
-      const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-      return gateway?.findRequests(targetMethod) ?? [];
-    }, method);
+  const getRequests = async (method?: string, match?: Record<string, unknown>) =>
+    page.evaluate(
+      ({ targetMethod, requestMatch }) => {
+        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
+        return gateway?.findRequests(targetMethod, requestMatch) ?? [];
+      },
+      { targetMethod: method, requestMatch: match },
+    );
 
   return {
     async closeLatest(code, reason) {
@@ -2877,6 +2994,7 @@ function createMockGatewayControls(
       }, messages);
     },
     async setMethodResponse(method, payload) {
+      methodResponses[method] = payload;
       await page.evaluate(
         ({ targetMethod, responsePayload }) => {
           const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
@@ -2909,21 +3027,21 @@ function createMockGatewayControls(
     async waitForRequest(method, options) {
       const deadline = Date.now() + controlUiE2eWaitTimeoutMs;
       const after = options?.after;
+      const match = options?.match;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           await page.waitForFunction(
-            ({ targetMethod, priorCount }) => {
+            ({ targetMethod, priorCount, requestMatch }) => {
               const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-              const matching =
-                gateway?.requests.filter((request) => request.method === targetMethod) ?? [];
+              const matching = gateway?.findRequests(targetMethod, requestMatch) ?? [];
               return matching.length > (priorCount ?? 0);
             },
-            { targetMethod: method, priorCount: after ?? 0 },
+            { targetMethod: method, priorCount: after ?? 0, requestMatch: match },
             // Request capture is non-rendering state. Interval polling avoids background-page
             // requestAnimationFrame throttling when CI runs several headless pages concurrently.
             { polling: 25, timeout: Math.max(1, deadline - Date.now()) },
           );
-          const matching = await getRequests(method);
+          const matching = await getRequests(method, match);
           // With an `after` cursor, return the first NEW request; otherwise keep
           // the historical latest-match behavior existing callers rely on.
           const request = after === undefined ? matching.at(-1) : matching.at(after);
@@ -3152,7 +3270,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
       githubJob: process.env.GITHUB_JOB ?? null,
       runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null,
       runId: process.env.GITHUB_RUN_ID ?? null,
-      shardIndex: process.env.SHARD_INDEX ?? null,
+      shardIndex: process.env.VITEST_SHARD_INDEX ?? null,
       vitestShardCount: process.env.VITEST_SHARD_COUNT ?? null,
     },
     pageEvents: [...pageEvents],

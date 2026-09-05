@@ -46,6 +46,7 @@ import type { SandboxContext } from "../../sandbox/types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
@@ -55,6 +56,7 @@ import {
   mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "../sandbox-skills.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -279,6 +281,8 @@ export function installEmbeddedAttemptContextGuards(input: {
   getPromptCache: () => EmbeddedRunAttemptResult["promptCache"];
   getPromptCacheRetention: () => PromptCacheRetention;
   getCompactionReplayEnabled: () => boolean;
+  getServerToolClearingEnabled: () => boolean;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
   getSystemPrompt: () => string;
   onCurrentTurnImageFailure?: (count: number) => void;
   isOpenAIResponsesApi: boolean;
@@ -357,10 +361,14 @@ export function installEmbeddedAttemptContextGuards(input: {
         lastCacheTouchAt,
         dropThinkingBlocksForEstimate: input.dropThinkingBlocksForEstimate,
         now: Date.now(),
+        projectionState: input.toolResultPromptProjectionState,
+        // Server-side clearing owns new rounds; earlier client projections still
+        // replay so the prefix already sent for this session does not change.
+        pruneNewRounds: !input.getServerToolClearingEnabled(),
+        onPruned: () => {
+          lastCacheTouchAt = Date.now();
+        },
       });
-      if (projected !== sourceMessages) {
-        lastCacheTouchAt = Date.now();
-      }
       return projected;
     };
   }
@@ -493,7 +501,13 @@ export function prepareEmbeddedAttemptSkills(params: {
   sandbox: AttemptSetup["sandbox"];
   sessionAgentId: string;
 }) {
-  if (params.attempt.operation === "settled-tool-finalization") {
+  const executionAllow = params.attempt.toolExecutionAllow;
+  // Retained schemas are not execution permission. An unreadable skill catalog
+  // creates impossible prerequisites and exposes an ungated Code Mode reader.
+  if (
+    params.attempt.operation === "settled-tool-finalization" ||
+    (executionAllow && !isToolExecutionAllowed(executionAllow, "read"))
+  ) {
     return {
       restoreSkillEnv: () => {},
       skillUsagePaths: undefined,

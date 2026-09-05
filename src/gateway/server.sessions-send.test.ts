@@ -15,6 +15,7 @@ import {
   type Mock,
 } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import { testing as agentStepTesting } from "../agents/tools/agent-step.test-support.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import {
@@ -23,6 +24,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
@@ -125,7 +127,12 @@ async function emitLifecycleAssistantReply(params: {
   emitAgentEvent({
     runId,
     stream: "lifecycle",
-    data: { phase: "end", startedAt, endedAt: Date.now() },
+    data: {
+      phase: "end",
+      startedAt,
+      endedAt: Date.now(),
+      terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text, rawText: text }),
+    },
   });
 }
 
@@ -391,7 +398,7 @@ describe("sessions_send gateway loopback", () => {
   );
 
   it(
-    "does not re-announce a trailing message-tool delivery mirror after a waited A2A run",
+    "honors source delivery from agent.wait when the transcript has no tool result",
     { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
     async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-mirror-"));
@@ -467,7 +474,7 @@ describe("sessions_send gateway loopback", () => {
               {
                 message: {
                   role: "assistant",
-                  content: [{ type: "text", text: "previous real reply" }],
+                  content: [{ type: "text", text: deliveredReply }],
                   timestamp: 1,
                 },
               },
@@ -488,24 +495,6 @@ describe("sessions_send gateway loopback", () => {
                   timestamp: 2,
                 },
               },
-              {
-                message: {
-                  role: "toolResult",
-                  toolName: "message",
-                  toolCallId: "call-message-duplicate-proof",
-                  content: { ok: true, messageId: "24271", chatId: "peer-1" },
-                  timestamp: 3,
-                },
-              },
-              {
-                message: {
-                  role: "assistant",
-                  provider: "openclaw",
-                  model: "delivery-mirror",
-                  content: [{ type: "text", text: deliveredReply }],
-                  timestamp: 4,
-                },
-              },
             ],
           },
         );
@@ -516,19 +505,11 @@ describe("sessions_send gateway loopback", () => {
           params: { sessionKey, limit: 10 },
           timeoutMs: 5_000,
         });
-        expect(history.messages).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              role: "assistant",
-              content: expect.arrayContaining([
-                expect.objectContaining({ type: "text", text: deliveredReply }),
-              ]),
-              openclawMessageToolMirror: expect.objectContaining({
-                toolName: "message",
-                toolCallId: "call-message-duplicate-proof",
-              }),
-            }),
-          ]),
+        expect(history.messages).not.toContainEqual(
+          expect.objectContaining({ role: "toolResult" }),
+        );
+        expect(history.messages).not.toContainEqual(
+          expect.objectContaining({ openclawMessageToolMirror: expect.anything() }),
         );
 
         const startedAt = Date.now();
@@ -540,7 +521,30 @@ describe("sessions_send gateway loopback", () => {
         emitAgentEvent({
           runId,
           stream: "lifecycle",
-          data: { phase: "end", startedAt, endedAt: Date.now() },
+          data: {
+            phase: "end",
+            startedAt,
+            endedAt: Date.now(),
+            terminalReply: { disposition: "visible", text: deliveredReply },
+            terminalReceipt: {
+              runId,
+              sessionId,
+              turnId: runId,
+              requested: { provider: "test", model: "test" },
+              effective: { provider: "test", model: "test", responseModel: "test" },
+              successfulToolNames: ["message"],
+              rerouted: false,
+              terminalDisposition: "visible",
+              sourceReplyDelivered: true,
+            },
+          },
+        });
+        expect(
+          await callGateway({ method: "agent.wait", params: { runId, timeoutMs: 5_000 } }),
+        ).toMatchObject({
+          status: "ok",
+          terminalReply: { disposition: "visible", text: deliveredReply },
+          terminalReceipt: { runId, sourceReplyDelivered: true },
         });
         agentStepTesting.setDepsForTest({
           agentCommandFromIngress: async () => ({
@@ -551,6 +555,8 @@ describe("sessions_send gateway loopback", () => {
 
         await runSessionsSendA2AFlow({
           targetSessionKey: sessionKey,
+          requesterSessionKey: sessionKey,
+          requesterChannel: "whatsapp",
           displayKey: sessionKey,
           message: "proof ping",
           announceTimeoutMs: 5_000,
@@ -630,24 +636,43 @@ describe("sessions_send label lookup", () => {
 });
 
 describe("sessions_send agent targeting", () => {
-  it(
-    "starts configured agent main session by agentId before sending",
-    { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
+  // The announce/ping-pong flow is detached from the tool request and keeps
+  // running agent steps for agent:orion:main; drain it outside the row's own
+  // timeout budget so a slow tail neither fails the row nor pollutes the next.
+  afterEach(
     async () => {
+      await waitForGatewayActiveWork(SESSION_SEND_E2E_TIMEOUT_MS * 3);
+    },
+    SESSION_SEND_E2E_TIMEOUT_MS * 3 + 1_000,
+  );
+
+  it.each([
+    { name: "default cross-agent access", tools: undefined },
+    {
+      name: "explicit cross-agent access",
+      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
+    },
+    {
+      name: "disabled agent-to-agent access",
+      tools: { agentToAgent: { enabled: false } },
+      error: "Agent-to-agent messaging is disabled",
+    },
+    {
+      name: "restrictive allow list",
+      tools: { agentToAgent: { allow: ["main"] } },
+      error: "denied by tools.agentToAgent.allow",
+    },
+  ] satisfies Array<{ name: string; tools: OpenClawConfig["tools"]; error?: string }>)(
+    "enforces $name when targeting a configured agent main session by agentId",
+    { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
+    async ({ tools, error }) => {
       const configPath = process.env.OPENCLAW_CONFIG_PATH;
       if (!configPath) {
         throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
       }
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
       const config: OpenClawConfig = {
-        tools: {
-          sessions: {
-            visibility: "all",
-          },
-          agentToAgent: {
-            enabled: true,
-          },
-        },
+        ...(tools ? { tools } : {}),
         agents: {
           list: [{ id: "main", default: true }, { id: "orion" }],
         },
@@ -691,6 +716,22 @@ describe("sessions_send agent targeting", () => {
           message: "hello orion",
           timeoutSeconds: 5,
         });
+        if (error) {
+          expect(spy.mock.calls.map(([opts]) => opts)).not.toContainEqual(
+            expect.objectContaining({ sessionKey: "agent:orion:main" }),
+          );
+          expect(
+            loadSessionEntry({
+              sessionKey: "agent:orion:main",
+              storePath: testState.sessionStorePath,
+            }),
+          ).toBeUndefined();
+          expect(result.details).toMatchObject({
+            status: "forbidden",
+            error: expect.stringContaining(error),
+          });
+          return;
+        }
         expectSessionsSendDetails(result, {
           reply: "orion response",
           sessionKey: "agent:orion:main",

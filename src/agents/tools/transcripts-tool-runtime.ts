@@ -392,6 +392,7 @@ export async function startTranscripts(params: {
   configuredLifecycle?: true;
   lifecycleToken?: symbol;
   existingSession?: TranscriptSessionDescriptor;
+  startedAt?: string;
   onCaptureEnded?: () => void;
 }) {
   if (params.abortSignal?.aborted) {
@@ -430,7 +431,7 @@ export async function startTranscripts(params: {
       readTranscriptStringParam(params.rawParams, "title", { trim: true }) ??
       params.existingSession?.title,
     source: sanitizeTranscriptSourceLocator(providerSource),
-    startedAt: params.existingSession?.startedAt ?? new Date().toISOString(),
+    startedAt: params.existingSession?.startedAt ?? params.startedAt ?? new Date().toISOString(),
     metadata: {
       ...params.existingSession?.metadata,
       ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),

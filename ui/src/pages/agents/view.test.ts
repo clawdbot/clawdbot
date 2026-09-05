@@ -1,9 +1,11 @@
 // Control UI tests cover agents behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { flattenTranslations } from "../../../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChannelAccountSnapshot, CronJob } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { zh_CN } from "../../i18n/locales/zh-CN.ts";
 import { createInitialCronState, loadCronJobsPage } from "../../lib/cron/index.ts";
 import { formatNextRun } from "../../lib/presenter.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -646,17 +648,16 @@ describe("renderAgents", () => {
         container.querySelectorAll<HTMLElement>(".agents-hub-tabs .hub-tab"),
       ).map((button) => button.textContent?.trim());
 
-      expect(tabLabels).toEqual([
-        "概览",
-        "文件",
-        "工具",
-        "技能",
-        "频道",
-        t("agents.tabs.cronJobs"),
-        "记忆",
-      ]);
+      const chinese = flattenTranslations(zh_CN);
+      const tabs = ["overview", "files", "tools", "skills", "channels", "cronJobs", "memory"];
+      expect(tabLabels).toEqual(tabs.map((tab) => chinese.get(`agents.tabs.${tab}`)));
       const sectionDescs = Array.from(container.querySelectorAll(".settings-section__desc"));
-      expect(sectionDescs.some((desc) => desc.textContent?.includes("上次刷新：从未"))).toBe(true);
+      const lastRefresh = chinese
+        .get("agents.channels.lastRefresh")
+        ?.replace("{time}", chinese.get("common.never") ?? "");
+      expect(sectionDescs.map((desc) => desc.textContent?.replace(/\s+/gu, " ").trim())).toContain(
+        `${chinese.get("agents.channels.subtitle")} ${lastRefresh}`,
+      );
     } finally {
       await i18n.setLocale("en");
       vi.unstubAllGlobals();

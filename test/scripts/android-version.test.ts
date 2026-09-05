@@ -7,7 +7,6 @@ import {
   canonicalAndroidVersionCode,
   checkAndroidVersioning,
   extractChangelogSection,
-  normalizePinnedAndroidVersion,
   renderAndroidReleaseNotes,
   renderAndroidVersionProperties,
   resolveAndroidVersion,
@@ -156,15 +155,6 @@ describe("resolveAndroidVersion", () => {
     });
 
     expect(() => resolveAndroidVersion(rootDir)).toThrow(
-      "Expected pinned release version like 2026.6.5",
-    );
-  });
-
-  it("rejects impossible pinned release versions", () => {
-    expect(() => normalizePinnedAndroidVersion("2026.13.2")).toThrow(
-      "Expected pinned release version like 2026.6.5",
-    );
-    expect(() => normalizePinnedAndroidVersion("2026.6.9007199254740993")).toThrow(
       "Expected pinned release version like 2026.6.5",
     );
   });

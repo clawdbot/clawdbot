@@ -12,6 +12,7 @@ import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import { logConfigWarningsOnce } from "../config/io.warnings.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { resolveStateDir } from "../config/paths.js";
+import { inspectShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -161,18 +162,17 @@ export async function runDoctorConfigPreflight(
       baseConfig: snapshot.sourceConfig ?? snapshot.config ?? {},
       pluginMigrationFingerprint,
     });
-    shouldRecordStateCheckpoint =
-      stateMigrationsRequested &&
-      checkpoint.needsStateMigrationCheckpoint({
+    shouldRecordStateCheckpoint = stateMigrationsRequested;
+    shouldRecordStartupCheckpoint = gatewayStartupCheckpointRequired;
+    if (shouldRecordStateCheckpoint || shouldRecordStartupCheckpoint) {
+      // One admitted read supplies both decisions; each physical open scans the whole database.
+      const checkpointStatus = checkpoint.readMigrationCheckpointStatus({
         env: startupMigrationEnv,
         identity: migrationCheckpointIdentity,
       });
-    shouldRecordStartupCheckpoint =
-      gatewayStartupCheckpointRequired &&
-      checkpoint.needsStartupMigrationCheckpoint({
-        env: startupMigrationEnv,
-        identity: migrationCheckpointIdentity,
-      });
+      shouldRecordStateCheckpoint &&= checkpointStatus === "stale";
+      shouldRecordStartupCheckpoint &&= checkpointStatus !== "startup-current";
+    }
     shouldPersistRefreshedPluginIndex = needsRefreshedPluginIndexPersistence(snapshotRead);
   };
   const ensureStartupMigrationLease = async () => {
@@ -317,6 +317,8 @@ export async function runDoctorConfigPreflight(
     let snapshot = configSnapshotRead.snapshot;
     let activeConfigRepair: ReturnType<typeof planAutomaticConfigRepair> = null;
     if (options.repairPrefixedConfig === true && snapshot.exists && !snapshot.valid) {
+      const pendingPluginInstallConfig =
+        inspectShippedPluginInstallConfigRecords(snapshot.sourceConfig).status !== "missing";
       // Migrate readable active bytes before rollback; otherwise one retired key can discard
       // newer valid settings that the canonical Doctor migration would preserve.
       activeConfigRepair =
@@ -335,6 +337,8 @@ export async function runDoctorConfigPreflight(
         configRepaired = true;
       } else if (
         !activeConfigRepair &&
+        // Config preparation imports these records; backup recovery would erase its source.
+        !pendingPluginInstallConfig &&
         (await recoverConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" }))
       ) {
         note(
@@ -635,12 +639,12 @@ export async function runDoctorConfigPreflight(
     }
     if (
       migrationCheckpoint &&
-      shouldPersistRefreshedPluginIndex &&
-      configSnapshotRead.pluginMetadataSnapshot?.policyHash !==
+      configSnapshotRead.pluginMetadataSnapshot &&
+      configSnapshotRead.pluginMetadataSnapshot.policyHash !==
         resolveInstalledPluginIndexPolicyHash(baseConfig, startupMigrationEnv)
     ) {
-      // State migration can change activation policy after the initial index was derived.
-      // Persist only a generation that describes the post-migration policy.
+      // State migration can invalidate an initially persisted inventory too.
+      // Refresh before deciding whether the post-migration index needs persistence.
       configSnapshotRead = await readConfigSnapshotForPreflight(false);
       snapshot = configSnapshotRead.snapshot;
       baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};

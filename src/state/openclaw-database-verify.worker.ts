@@ -1,3 +1,4 @@
+import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
 const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
@@ -28,7 +29,8 @@ function isVerifyTarget(value: unknown): value is OpenClawDatabaseVerifyTarget {
 }
 
 function formatVerifyError(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  return `${message}${formatSqliteErrorCodeSuffix(error)}`;
 }
 
 async function verifyOpenClawDatabase(

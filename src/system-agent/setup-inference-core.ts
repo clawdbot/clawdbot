@@ -1,3 +1,7 @@
+import type {
+  SetupInferenceActivationRejection,
+  SetupInferenceFailureStatus,
+} from "../../packages/gateway-protocol/src/schema/setup-inference.js";
 import type { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import type {
   loadAuthProfileStoreForRuntime,
@@ -53,9 +57,6 @@ export const SETUP_INFERENCE_TEST_PROMPT = "Reply with the single word OK. Do no
 
 const PROVIDER_AUTO_SETUP_KIND_PREFIX = "provider-auto:";
 
-export const AUTO_LOCAL_MODEL_LEAN_ANNOUNCEMENT =
-  "This model is small, so I set up the lean surface — switching to a bigger model later lifts it.";
-
 export type ProviderAutoSetupInferenceKind = `provider-auto:${string}`;
 
 export type SetupInferenceKind = InferenceBackendKind | ProviderAutoSetupInferenceKind;
@@ -108,17 +109,8 @@ export type SetupInferenceDetection = {
   setupComplete: boolean;
 };
 
-export type SetupInferenceStatus =
-  | "ok"
-  | "auth"
-  | "rate_limit"
-  | "billing"
-  | "timeout"
-  | "format"
-  | "unavailable"
-  | "unknown";
-
-export type SetupInferenceFailureStatus = Exclude<SetupInferenceStatus, "ok">;
+export type { SetupInferenceFailureStatus };
+export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 
 export type ActivateSetupInferenceResult =
   | {
@@ -128,7 +120,12 @@ export type ActivateSetupInferenceResult =
       lines: string[];
       gatewayRestartRequired?: true;
     }
-  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+  | {
+      ok: false;
+      status: SetupInferenceFailureStatus;
+      error: string;
+      disposition?: SetupInferenceActivationRejection["disposition"];
+    };
 
 /**
  * The config commit may have happened, so callers must verify current setup

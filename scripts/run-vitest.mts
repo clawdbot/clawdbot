@@ -6,7 +6,11 @@ import path from "node:path";
 import { assertTestHomeSelection } from "../test/test-home-policy.mts";
 import { agentVitestProjectOwners } from "../test/vitest/vitest.agents-paths.mjs";
 import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
-import { isUiBrowserTestFile, isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
+import {
+  isPluginControlUiPath,
+  isUiBrowserTestFile,
+  isUiTestTarget,
+} from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { resolveExtensionTestConfig } from "./lib/extension-test-plan.mts";
@@ -311,6 +315,7 @@ function isExplicitProjectRouterTargetArg(
   return fsImpl.existsSync(filePath)
     ? isDelegableBroadProjectRouterTarget(arg, cwd) ||
         isOwnedAgentDirectoryTarget(arg, cwd, fsImpl) ||
+        isPluginControlUiPath(toRepoRelativeArg(arg, cwd)) ||
         isOwnedExtensionRootTarget(arg, cwd, fsImpl)
     : path.extname(arg) === "" &&
         /^(?:src|test|extensions|ui|packages|apps)\//u.test(toRepoRelativeArg(arg, cwd));

@@ -42,13 +42,9 @@ export function resolveChannelPairingRequestId(
     .slice(0, 32);
 }
 
-function parseTimestamp(value: string | undefined): number | null {
-  return parseDateStringTimestampMs(value) ?? null;
-}
-
 function isExpired(entry: PairingRequest, nowMs: number): boolean {
-  const createdAt = parseTimestamp(entry.createdAt);
-  return createdAt === null || nowMs - createdAt > CHANNEL_PAIRING_PENDING_TTL_MS;
+  const createdAt = parseDateStringTimestampMs(entry.createdAt);
+  return createdAt === undefined || nowMs - createdAt > CHANNEL_PAIRING_PENDING_TTL_MS;
 }
 
 function pruneExpiredRequests(reqs: PairingRequest[], nowMs: number) {
@@ -65,7 +61,9 @@ function pruneExpiredRequests(reqs: PairingRequest[], nowMs: number) {
 }
 
 function resolveLastSeenAt(entry: PairingRequest): number {
-  return parseTimestamp(entry.lastSeenAt) ?? parseTimestamp(entry.createdAt) ?? 0;
+  return (
+    parseDateStringTimestampMs(entry.lastSeenAt) ?? parseDateStringTimestampMs(entry.createdAt) ?? 0
+  );
 }
 
 function normalizePairingAccountId(accountId?: string): string {

@@ -7,6 +7,7 @@ import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { resolveSandboxContext as resolveRealSandboxContext } from "../../sandbox/context.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { buildEmbeddedForegroundPromptContext } from "./agent-end-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -142,6 +143,8 @@ describe("prepareEmbeddedAttemptSetup", () => {
       getPromptCache: () => undefined,
       getPromptCacheRetention: () => undefined,
       getCompactionReplayEnabled: () => false,
+      getServerToolClearingEnabled: () => false,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
       getSystemPrompt: () => "",
       isOpenAIResponsesApi: false,
       repairToolUseResultPairing: false,
@@ -291,7 +294,12 @@ describe("prepareEmbeddedAttemptSetup", () => {
 });
 
 describe("prepareEmbeddedAttemptSkills", () => {
-  it("discovers fallback skills from the agent and execution workspaces", async () => {
+  it.each([
+    { label: "unrestricted", toolExecutionAllow: undefined, readable: true },
+    { label: "read allowed", toolExecutionAllow: ["read"], readable: true },
+    { label: "read denied", toolExecutionAllow: ["skill_workshop"], readable: false },
+    { label: "all execution denied", toolExecutionAllow: [], readable: false },
+  ])("prepares readable skills with $label execution", async ({ toolExecutionAllow, readable }) => {
     const agentWorkspace = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-skills-")),
     );
@@ -314,14 +322,25 @@ describe("prepareEmbeddedAttemptSkills", () => {
         attempt: {
           bootstrapWorkspaceDir: agentWorkspace,
           config: {},
+          toolExecutionAllow,
         } as EmbeddedRunAttemptParams,
         effectiveWorkspace: executionWorkspace,
         sandbox: null,
         sessionAgentId: "main",
       });
       try {
-        expect(prepared.skillsPrompt).toContain("agent-workspace-skill");
-        expect(prepared.skillsPrompt).toContain("execution-workspace-skill");
+        if (readable) {
+          expect(prepared.skillsPrompt).toContain("agent-workspace-skill");
+          expect(prepared.skillsPrompt).toContain("execution-workspace-skill");
+          expect(prepared.codeModeSkills.map((skill) => skill.name)).toEqual(
+            expect.arrayContaining(["agent-workspace-skill", "execution-workspace-skill"]),
+          );
+        } else {
+          expect(prepared.skillsPrompt).toBe("");
+          expect(prepared.codeModeSkills).toEqual([]);
+          expect(prepared.skillsSnapshotForRun).toBeUndefined();
+          expect(prepared.skillUsagePaths).toBeUndefined();
+        }
       } finally {
         prepared.restoreSkillEnv();
       }

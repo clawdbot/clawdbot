@@ -10,7 +10,6 @@ import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   createOutboundPayloadPlan,
   formatOutboundPayloadLog,
-  normalizeOutboundPayloadsForJson,
   normalizeReplyPayloadsForDelivery,
   projectOutboundPayloadPlanForDelivery,
   projectOutboundPayloadPlanForJson,
@@ -187,7 +186,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       { text: "v2026.5.20 release note" },
     ]);
     expect(resolveMirrorProjection(payloads).text).toBe("v2026.5.20 release note");
-    expect(normalizeOutboundPayloadsForJson(payloads)).toMatchObject([
+    expect(projectOutboundPayloadPlanForJson(createOutboundPayloadPlan(payloads))).toMatchObject([
       { text: "v2026.5.20 release note" },
     ]);
   });
@@ -544,10 +543,8 @@ describe("normalizeReplyPayloadsForDelivery", () => {
   });
 });
 
-describe("normalizeOutboundPayloadsForJson", () => {
-  function cloneReplyPayloads(
-    input: Parameters<typeof normalizeOutboundPayloadsForJson>[0],
-  ): ReplyPayload[] {
+describe("JSON payload projection", () => {
+  function cloneReplyPayloads(input: readonly ReplyPayload[]): ReplyPayload[] {
     return input.map((payload) =>
       "mediaUrls" in payload
         ? ({
@@ -561,8 +558,8 @@ describe("normalizeOutboundPayloadsForJson", () => {
   it.each(
     typedCases<{
       name: string;
-      input: Parameters<typeof normalizeOutboundPayloadsForJson>[0];
-      expected: ReturnType<typeof normalizeOutboundPayloadsForJson>;
+      input: readonly ReplyPayload[];
+      expected: ReturnType<typeof projectOutboundPayloadPlanForJson>;
     }>([
       {
         name: "text + media variants",
@@ -617,15 +614,19 @@ describe("normalizeOutboundPayloadsForJson", () => {
       },
     ]),
   )("$name", ({ input, expected }) => {
-    expect(normalizeOutboundPayloadsForJson(cloneReplyPayloads(input))).toEqual(expected);
+    expect(
+      projectOutboundPayloadPlanForJson(createOutboundPayloadPlan(cloneReplyPayloads(input))),
+    ).toEqual(expected);
   });
 
   it("suppresses reasoning payloads during JSON normalization", () => {
     expect(
-      normalizeOutboundPayloadsForJson([
-        { text: "Reasoning:\n_step_", isReasoning: true },
-        { text: "final answer" },
-      ]),
+      projectOutboundPayloadPlanForJson(
+        createOutboundPayloadPlan([
+          { text: "Reasoning:\n_step_", isReasoning: true },
+          { text: "final answer" },
+        ]),
+      ),
     ).toEqual([
       { text: "final answer", mediaUrl: null, mediaUrls: undefined, audioAsVoice: undefined },
     ]);
@@ -633,7 +634,7 @@ describe("normalizeOutboundPayloadsForJson", () => {
 
   it("preserves portable locations during JSON normalization", () => {
     const location = { latitude: 48.858844, longitude: 2.294351 };
-    expect(normalizeOutboundPayloadsForJson([{ location }])).toEqual([
+    expect(projectOutboundPayloadPlanForJson(createOutboundPayloadPlan([{ location }]))).toEqual([
       {
         text: "",
         mediaUrl: null,
@@ -699,11 +700,29 @@ describe("OutboundPayloadPlan projections", () => {
     ]);
   });
 
-  it("matches normalizeOutboundPayloadsForJson", () => {
-    const plan = createOutboundPayloadPlan(matrix);
-    expect(projectOutboundPayloadPlanForJson(plan)).toEqual(
-      normalizeOutboundPayloadsForJson(matrix),
-    );
+  it("keeps status-notice flags on the transport projection", () => {
+    const plan = createOutboundPayloadPlan([
+      { text: "✅ New session started.", isStatusNotice: true },
+      { text: "hello" },
+    ]);
+    expect(projectOutboundPayloadPlanForOutbound(plan)).toEqual([
+      expect.objectContaining({
+        text: "✅ New session started.",
+        mediaUrls: [],
+        isStatusNotice: true,
+      }),
+      expect.objectContaining({ text: "hello", mediaUrls: [] }),
+    ]);
+    expect(projectOutboundPayloadPlanForOutbound(plan)[1]?.isStatusNotice).toBeUndefined();
+    expect(
+      summarizeOutboundPayloadForTransport({
+        text: "✅ Session reset.",
+        isStatusNotice: true,
+      }),
+    ).toMatchObject({
+      text: "✅ Session reset.",
+      isStatusNotice: true,
+    });
   });
 
   it("matches mirror projection behavior", () => {

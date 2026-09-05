@@ -476,7 +476,21 @@ export class GatewayProtocolClient<TPlan> {
     this.invoke("close", () => this.opts.onClose?.(context, decision));
     // A close callback can reconnect synchronously and already own the next socket or retry.
     if (decision.retry && !this.stopped && !this.socket && !this.reconnectSignal) {
-      this.scheduleReconnect(decision.reconnectDelayMs ?? context.connectFailure?.reconnectDelayMs);
+      const error = context.connectFailure?.error;
+      // Apply server timing only after adapter policy admits retry; a hint
+      // must never turn terminal authentication failures into reconnects.
+      const retryAfterMs =
+        error instanceof GatewayProtocolRequestError &&
+        error.retryable &&
+        error.retryAfterMs !== undefined &&
+        Number.isFinite(error.retryAfterMs) &&
+        error.retryAfterMs > 0
+          ? error.retryAfterMs
+          : undefined;
+      this.scheduleReconnect(
+        decision.reconnectDelayMs ?? context.connectFailure?.reconnectDelayMs,
+        retryAfterMs,
+      );
     }
   }
 
@@ -488,10 +502,9 @@ export class GatewayProtocolClient<TPlan> {
     this.opts.onConnectError?.(error);
   }
 
-  private scheduleReconnect(overrideMs?: number): void {
+  private scheduleReconnect(overrideMs?: number, minimumMs = 0): void {
     if (overrideMs !== undefined) {
-      // Retry-After is a floor for this wait, not a failed attempt. Preserve
-      // the exponential sequence for the next transport failure.
+      // Adapter-owned startup timing does not consume a transport attempt.
       this.reconnectSupervisor.nextDelayOverrideMs = overrideMs;
     }
     const retry = this.reconnectSupervisor.next();
@@ -500,7 +513,10 @@ export class GatewayProtocolClient<TPlan> {
     }
     this.reconnectSignal = retry.signal;
     // Ignore cancelled sleeps only; reconnect start failures stay observable.
-    void sleepWithAbort(retry.delayMs, retry.signal).then(
+    // Wire Retry-After is a floor: repeated short hints must still advance
+    // normal backoff, while adapter-owned startup overrides stay independent.
+    const delayMs = overrideMs ?? Math.max(retry.delayMs, minimumMs);
+    void sleepWithAbort(delayMs, retry.signal).then(
       () => {
         if (this.reconnectSignal !== retry.signal) {
           return;

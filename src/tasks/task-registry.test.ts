@@ -1,4 +1,5 @@
 // Covers task registry lifecycle, delivery, notification, and query behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { emitAcpLifecycleStart } from "../agents/command/attempt-execution.js";
@@ -55,6 +56,7 @@ import {
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskActivitySnapshot } from "./task-registry-activity.js";
+import { updateTaskStateByRunId } from "./task-registry-record-api.js";
 import {
   cancelTaskById,
   deleteTaskRecordById,
@@ -94,6 +96,7 @@ import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import { createAcpTaskRecord, createTaskFixture } from "./task-registry.test-support.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
+import { bindTaskRunOwner, getTaskRunOwner } from "./task-run-owner.js";
 import {
   configureTaskFlowRegistryRuntime,
   maybeDeliverTaskStateChangeUpdate,
@@ -4103,6 +4106,29 @@ describe("task-registry", () => {
     });
   });
 
+  it("records the transition time when a generic update becomes terminal", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskFixture("cli", {
+        runId: "run-generic-terminal",
+        task: "Generic terminal transition",
+        status: "running",
+        deliveryStatus: "pending",
+        lastEventAt: 100,
+      });
+      updateTaskStateByRunId({ runId: "run-generic-terminal", endedAt: 150 });
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(300);
+
+      updateTaskStateByRunId({ runId: "run-generic-terminal", status: "failed" });
+      nowSpy.mockRestore();
+
+      expectRecordFields(requireTaskById(task.taskId), {
+        status: "failed",
+        endedAt: 300,
+        lastEventAt: 300,
+      });
+    });
+  });
+
   it("normalizes restored task timestamps before exposing them", async () => {
     await withTaskRegistryTempDir(async () => {
       configureTaskRegistryRuntime({
@@ -4138,6 +4164,43 @@ describe("task-registry", () => {
         createdAt: 100,
         startedAt: 100,
         lastEventAt: 150,
+      });
+    });
+  });
+
+  it("materializes a restored legacy terminal timestamp", async () => {
+    await withTaskRegistryTempDir(async () => {
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => ({
+            tasks: new Map([
+              [
+                "task-restored-terminal",
+                {
+                  taskId: "task-restored-terminal",
+                  runtime: "cli",
+                  requesterSessionKey: "agent:main:main",
+                  ownerKey: "agent:main:main",
+                  scopeKind: "session",
+                  runId: "run-restored-terminal",
+                  task: "Restored terminal task",
+                  status: "failed",
+                  deliveryStatus: "not_applicable",
+                  notifyPolicy: "done_only",
+                  createdAt: 100,
+                  lastEventAt: 250,
+                },
+              ],
+            ]),
+            deliveryStates: new Map(),
+          }),
+          saveSnapshot: () => {},
+        },
+      });
+
+      expectRecordFields(requireTaskByRunId("run-restored-terminal"), {
+        endedAt: 250,
+        lastEventAt: 250,
       });
     });
   });
@@ -5328,56 +5391,113 @@ describe("task-registry", () => {
     });
   });
 
-  it.each([
-    {
-      name: "cancels CLI-tracked tasks in the registry without ACP or subagent teardown",
-      runId: "run-cancel-cli",
-      task: "Investigate issue",
-      childSessionKey: "agent:main:main",
-      expectedError: "Cancelled by operator.",
-      expectedMessage: "Background task cancelled: Investigate issue (run run-canc).",
-    },
-    {
-      name: "cancels CLI-tracked tasks without childSessionKey",
-      runId: "run-cli-no-child",
-      task: "Legacy row",
-      childSessionKey: undefined,
-      expectedError: undefined,
-      expectedMessage: undefined,
-    },
-  ])(
-    "$name",
-    async ({ runId, task: taskName, childSessionKey, expectedError, expectedMessage }) => {
-      await withTaskRegistryTempDir(async () => {
-        const task = createTaskFixture("cli", {
-          requesterOrigin: NOTIFYCHAT_ORIGIN,
-          childSessionKey,
-          runId,
-          task: taskName,
-          deliveryStatus: "pending",
+  it("fences a retained cancellation callback without removing its replacement owner", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskFixture("cli", {
+        runId: "replaced-task-owner",
+        childSessionKey: "agent:main:main",
+        task: "Keep the current owner",
+      });
+      const oldCancel = vi.fn(async () => ({
+        ok: false as const,
+        error: "Old owner must not run.",
+      }));
+      const releaseOld = bindTaskRunOwner(task, oldCancel);
+      const retained = expectDefined(getTaskRunOwner(task), "task run owner missing");
+      const currentCancel = vi.fn(async () => ({
+        ok: false as const,
+        error: "Current owner received cancellation.",
+      }));
+      const releaseCurrent = bindTaskRunOwner(task, currentCancel);
+      try {
+        releaseOld();
+        expect(await retained.cancel("stop")).toMatchObject({ ok: false });
+        expect(oldCancel).not.toHaveBeenCalled();
+        expect(currentCancel).not.toHaveBeenCalled();
+        expect(await cancelTask(task.taskId)).toMatchObject({
+          cancelled: false,
+          reason: "Current owner received cancellation.",
         });
-        const result = await cancelTask(task.taskId);
+        expect(currentCancel).toHaveBeenCalledOnce();
+      } finally {
+        releaseOld();
+        releaseCurrent();
+      }
+    });
+  });
 
-        expectRecordFields(result, { found: true, cancelled: true });
-        expectRecordFields(result.task, {
-          taskId: task.taskId,
-          status: "cancelled",
-          ...(expectedError === undefined ? {} : { error: expectedError }),
+  it.each(["end", "error"] as const)(
+    "leaves a live-owned task running until its producer settles after lifecycle %s",
+    async (phase) => {
+      await withTaskRegistryTempDir(async () => {
+        const runId = `live-task-${phase}`;
+        const task = createTaskFixture("cli", {
+          runId,
+          childSessionKey: "agent:main:main",
+          task: "Work still unwinding",
         });
-        if (expectedMessage !== undefined) {
-          expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
-          expect(hoisted.killSubagentRunAdminMock).not.toHaveBeenCalled();
-          await waitForAssertion(() =>
-            expectRecordFields(sentMessageCall(), {
-              channel: "notifychat",
-              to: "notifychat:123",
-              content: expectedMessage,
-            }),
-          );
+        const release = bindTaskRunOwner(task, async () => ({
+          ok: false,
+          error: "Cancellation was not requested.",
+        }));
+        try {
+          emitAgentEvent({
+            runId,
+            sessionKey: "agent:main:main",
+            stream: "lifecycle",
+            data: {
+              phase,
+              status: "cancelled",
+              aborted: true,
+              stopReason: "rpc",
+              endedAt: Date.now(),
+            },
+          });
+          expect(getTaskById(task.taskId)).toMatchObject({ status: "running" });
+          expect(getTaskById(task.taskId)?.endedAt).toBeUndefined();
+          markTaskTerminalById({ taskId: task.taskId, status: "cancelled", endedAt: Date.now() });
+          expect(getTaskById(task.taskId)?.status).toBe("cancelled");
+        } finally {
+          release();
         }
       });
     },
   );
+
+  it.each([
+    {
+      name: "refuses CLI-tracked cancellation without a live owner",
+      runId: "run-cancel-cli",
+      task: "Investigate issue",
+      childSessionKey: "agent:main:main",
+    },
+    {
+      name: "refuses ownerless CLI-tracked cancellation without a child session",
+      runId: "run-cli-no-child",
+      task: "Legacy row",
+      childSessionKey: undefined,
+    },
+  ])("$name", async ({ runId, task: taskName, childSessionKey }) => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskFixture("cli", {
+        requesterOrigin: NOTIFYCHAT_ORIGIN,
+        childSessionKey,
+        runId,
+        task: taskName,
+        deliveryStatus: "pending",
+      });
+      const result = await cancelTask(task.taskId);
+
+      expectRecordFields(result, { found: true, cancelled: false });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        status: "running",
+      });
+      expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
+      expect(hoisted.killSubagentRunAdminMock).not.toHaveBeenCalled();
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+    });
+  });
 
   it("cancels active cron tasks through the cron runtime abort handle", async () => {
     await withTaskRegistryTempDir(async () => {

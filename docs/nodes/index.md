@@ -53,6 +53,19 @@ Pending pairing requests expire 5 minutes after the device's last retry — a de
   - non-exec node commands: `operator.pairing` + `operator.write`
   - `system.run` / `system.run.prepare` / `system.which`: `operator.pairing` + `operator.admin`
 
+Headless node hosts report the hardware model on macOS and Linux.
+
+Connected CLI node hosts and the macOS app report CPU count, load averages,
+memory, and home-volume disk capacity every 60 seconds, starting on connection.
+The Gateway exposes the latest snapshot as `hostStats` in `node.list` and
+`node.describe`. When received, it saves the snapshot on the paired node
+record, so offline nodes keep showing last-known stats with the original
+`updatedAtMs`. Connected nodes use live session stats. `openclaw nodes status`
+and `openclaw nodes describe` show a compact stats summary with a last-known age
+for offline nodes. Windows omits load averages, and unavailable disk capacity is
+omitted. See
+[Node host stats](/gateway/protocol#node-host-stats) for the wire contract.
+
 ## Version skew and upgrade order
 
 The Gateway WebSocket accepts authenticated node clients across an N-1 protocol window.
@@ -684,6 +697,35 @@ node command execution.
 The Control UI can drag files into an open paired-node terminal. The native node host advertises the admin-only `terminal.upload` command; approve the pairing upgrade when it first appears. Each file is limited to 16 MiB, staged in a private temporary directory on that node, and returned to the terminal as a shell-quoted path without executing it.
 
 Path insertion supports PowerShell, `cmd.exe`, and recognized POSIX shells (`sh`, Bash, Dash, Ash, Ksh, Zsh, and Fish), including Git Bash on Windows. Other shell overrides are refused because their quoting rules cannot be inferred safely; run the node host inside WSL for native WSL paths. `cmd.exe` paths containing `%` or `!` are also refused because that shell expands those characters even inside double quotes.
+
+### Agent file transfers
+
+The [File Transfer plugin](/plugins/reference/file-transfer) provides independently
+selectable directory-listing, fetch, and write tools. Allowing one tool does not
+make the others available; node-command and path policies still apply.
+
+Every successful file fetch saves the bytes in the Gateway's file-transfer media
+store and returns both `localPath` and `mediaId`, including for inlined text and
+images. When node writing is available, pass that `mediaId` as `sourceMediaId` to
+reuse the saved bytes. `sourceMediaId` does not accept a local path or an ID from
+another media store. For inline bytes, use `contentBase64` instead.
+
+Directory tools return at most 8192 UTF-8 bytes of model-visible text, including
+the external-content wrapper. `dir_list` shows complete names, directory flags,
+and sizes. To continue a text-limited listing, pass the **text's** `nextPageToken`
+as `pageToken` with the same node and path; it resumes immediately after the last
+displayed entry. The default request remains 200 entries, with a ceiling of 5000.
+Full returned metadata and the original page token remain in structured details.
+
+`dir_fetch` saves the whole tree and shows its local `rootDir`, total `fileCount`,
+and a bounded prefix of complete `relPath` and size records. Combine `rootDir`
+with a listed `relPath` for local follow-up operations. Omitted files remain
+saved under that root and can be inspected with available local file or directory
+capabilities; fetching has no pagination. Full manifest and attachment metadata
+remain in structured details. If a path exceeds the text budget or would be
+rewritten by security sanitization, the text reports the omission rather than
+showing a partial or altered path. A listing that cannot display its first entry
+explicitly reports that pagination cannot advance.
 
 ## Invoking commands
 

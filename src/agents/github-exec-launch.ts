@@ -1,7 +1,9 @@
 import { fileURLToPath } from "node:url";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
-import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import {
+  resolveRuntimeProcessEntrypointUrl,
+  resolveRuntimeWorkerArgv,
+} from "../infra/runtime-worker-url.js";
 
 function quotePowerShellLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
@@ -9,7 +11,7 @@ function quotePowerShellLiteral(value: string): string {
 
 /** Carry only a selected profile path through supervision; resolve its token in the child. */
 export function buildGitHubExecLaunchArgv(argv: string[], profileDir: string): string[] {
-  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.githubExec);
+  const workerUrl = resolveRuntimeProcessEntrypointUrl("githubExec");
   const launcher = [process.execPath, ...resolveRuntimeWorkerArgv(workerUrl), profileDir];
   if (process.platform === "win32") {
     // getShellConfig owns a fresh PowerShell -Command process on Windows. Keep it as

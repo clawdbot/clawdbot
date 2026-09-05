@@ -244,34 +244,40 @@ export function renderActivityGroup(
             >${groupSummaryLabel}</span
           >
         </span>
-        ${reviewOutcome
-          ? html`<span
-              class="chat-activity-group__review-status"
-              data-outcome=${reviewOutcome}
-              role="img"
-              aria-label=${reviewAriaLabel}
-              >${reviewOutcome === "denied"
-                ? icons.shieldX
-                : reviewOutcome === "reviewing"
-                  ? icons.shieldQuestion
-                  : icons.shieldCheck}</span
-            >`
-          : nothing}
+        ${
+          reviewOutcome
+            ? html`<span
+                class="chat-activity-group__review-status"
+                data-outcome=${reviewOutcome}
+                role="img"
+                aria-label=${reviewAriaLabel}
+                >${
+                  reviewOutcome === "denied"
+                    ? icons.shieldX
+                    : reviewOutcome === "reviewing"
+                      ? icons.shieldQuestion
+                      : icons.shieldCheck
+                }</span
+              >`
+            : nothing
+        }
         <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
       <div class="chat-activity-group__body" id=${activityBodyId} ?hidden=${!activityExpanded}>
-        ${activityExpanded
-          ? groups.map((group) =>
-              group.messages.map((item, index) =>
-                renderGroupedMessage(
-                  item.message,
-                  item.key,
-                  buildGroupedMessageRenderOptions(group, item, index, opts),
-                  opts.onOpenSidebar,
+        ${
+          activityExpanded
+            ? groups.map((group) =>
+                group.messages.map((item, index) =>
+                  renderGroupedMessage(
+                    item.message,
+                    item.key,
+                    buildGroupedMessageRenderOptions(group, item, index, opts),
+                    opts.onOpenSidebar,
+                  ),
                 ),
-              ),
-            )
-          : nothing}
+              )
+            : nothing
+        }
       </div>
       ${renderBrowserTabPreviews(groups, opts)}
     </div>
@@ -340,9 +346,9 @@ export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessa
       opts.onOpenSidebar,
     ),
   );
-  return html`${messages}${opts.showToolCalls === false
-    ? nothing
-    : renderBrowserTabPreviews([group], opts)}`;
+  return html`${messages}${
+    opts.showToolCalls === false ? nothing : renderBrowserTabPreviews([group], opts)
+  }`;
 }
 
 export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
@@ -407,13 +413,17 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           class="chat-group-footer-actions"
           data-message-actions-for=${footerActionMessageKey ?? nothing}
         >
-          ${footerActionDetails?.replyTarget && opts.onReply
-            ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
-            : nothing}
+          ${
+            footerActionDetails?.replyTarget && opts.onReply
+              ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
+              : nothing
+          }
           ${opts.onRewind && !opts.rewindDisabled ? renderRewindButton(opts.onRewind) : nothing}
-          ${footerActionDetails?.markdown
-            ? renderMessageActionButtons(footerActionDetails, {})
-            : nothing}
+          ${
+            footerActionDetails?.markdown
+              ? renderMessageActionButtons(footerActionDetails, {})
+              : nothing
+          }
         </div>
       `
     : nothing;
@@ -433,112 +443,136 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
 
   return html`
     <div
-      class="chat-group ${roleClass} chat-group--with-footer${opts.latestAssistant
-        ? " chat-group--latest-assistant"
-        : ""}${isPeerGroup ? " chat-group--peer" : ""}${isForwarded
-        ? " chat-group--forwarded"
-        : ""}${senderHue === null ? "" : " chat-group--sender-tint"}"
+      class="chat-group ${roleClass} chat-group--with-footer${
+        opts.latestAssistant ? " chat-group--latest-assistant" : ""
+      }${isPeerGroup ? " chat-group--peer" : ""}${
+        isForwarded ? " chat-group--forwarded" : ""
+      }${senderHue === null ? "" : " chat-group--sender-tint"}"
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
-      ${normalizedRole !== "tool" &&
-      showAvatarGutter &&
-      (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
-        ? isForwarded
-          ? renderForwardedAvatar(group.senderSession?.agentId, opts)
-          : renderChatAvatar(
-              group.role,
-              assistantAvatarIdentity,
-              {
-                name: opts.userName ?? null,
-                avatar: opts.userAvatar ?? null,
-              },
-              opts.resourceBasePath,
-              opts.assistantAttachmentAuthToken,
-              group.sender,
-            )
-        : nothing}
+      ${
+        normalizedRole !== "tool" &&
+        showAvatarGutter &&
+        (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
+          ? isForwarded
+            ? renderForwardedAvatar(group.senderSession?.agentId, opts)
+            : renderChatAvatar(
+                group.role,
+                assistantAvatarIdentity,
+                {
+                  name: opts.userName ?? null,
+                  avatar: opts.userAvatar ?? null,
+                },
+                opts.resourceBasePath,
+                group.sender,
+              )
+          : nothing
+      }
       <div class="chat-group-messages">
         ${isForwarded ? renderForwardedAttribution(group, opts) : nothing}
-        ${replyToLabel
-          ? html`
-              <div class="chat-reply-attribution" title=${replyToTitle} aria-label=${replyToTitle}>
-                <span class="chat-reply-attribution__icon" aria-hidden="true"
-                  >${icons.cornerDownLeft}</span
+        ${
+          replyToLabel
+            ? html`
+                <div
+                  class="chat-reply-attribution"
+                  title=${replyToTitle}
+                  aria-label=${replyToTitle}
                 >
-                <span>${replyToLabel}</span>
-              </div>
-            `
-          : nothing}
-        ${opts.frameContent ??
-        group.messages.map((item, index) => {
-          const actionDetails = messageActionDetails[index];
-          return html`
-            ${renderGroupedMessage(
-              item.message,
-              item.key,
-              buildGroupedMessageRenderOptions(group, item, index, opts, actionDetails),
-              opts.onOpenSidebar,
-            )}
-            ${actionDetails && index < lastMessageIndex && !ownsRunFrame
-              ? html`
-                  <div class="chat-message-actions-row" data-message-actions-for=${item.key}>
-                    ${renderMessageActionButtons(actionDetails, opts)}
-                  </div>
-                `
-              : nothing}
-          `;
-        })}
-        ${ownsRunFrame || opts.showToolCalls === false
-          ? nothing
-          : renderBrowserTabPreviews([group], opts)}
-        ${opts.activeContinuation
-          ? renderStreamGroupParts(
-              opts.activeContinuation.parts,
-              opts.activeContinuation.options,
-              "continuation",
-            )
-          : opts.turnRecap
-            ? renderTurnRecapRow(opts.turnRecap, { presentation: "continuation" })
-            : nothing}
+                  <span class="chat-reply-attribution__icon" aria-hidden="true"
+                    >${icons.cornerDownLeft}</span
+                  >
+                  <span>${replyToLabel}</span>
+                </div>
+              `
+            : nothing
+        }
+        ${
+          opts.frameContent ??
+          group.messages.map((item, index) => {
+            const actionDetails = messageActionDetails[index];
+            return html`
+              ${renderGroupedMessage(
+                item.message,
+                item.key,
+                buildGroupedMessageRenderOptions(group, item, index, opts, actionDetails),
+                opts.onOpenSidebar,
+              )}
+              ${
+                actionDetails && index < lastMessageIndex && !ownsRunFrame
+                  ? html`
+                      <div class="chat-message-actions-row" data-message-actions-for=${item.key}>
+                        ${renderMessageActionButtons(actionDetails, opts)}
+                      </div>
+                    `
+                  : nothing
+              }
+            `;
+          })
+        }
+        ${
+          ownsRunFrame || opts.showToolCalls === false
+            ? nothing
+            : renderBrowserTabPreviews([group], opts)
+        }
+        ${
+          opts.activeContinuation
+            ? renderStreamGroupParts(
+                opts.activeContinuation.parts,
+                opts.activeContinuation.options,
+                "continuation",
+              )
+            : opts.turnRecap
+              ? renderTurnRecapRow(opts.turnRecap, { presentation: "continuation" })
+              : nothing
+        }
       </div>
-      ${normalizedRole === "tool" || group.isStreaming || opts.activeContinuation
-        ? nothing
-        : html`<div
-            class="chat-group-footer ${persistUserIdentity
-              ? "chat-group-footer--persistent-identity"
-              : ""}${sendFailure ? " chat-group-footer--send-failure" : ""}"
-          >
-            <div class="chat-group-footer__meta">
-              ${isPeerGroup ? nothing : userFooterActions}
-              ${normalizedRole === "user" && !showAvatarGutter
-                ? renderChatAuthorAvatar(group.sender)
-                : nothing}
-              ${isForwarded
-                ? nothing
-                : renderPersonName(
-                    who,
-                    // Only other people's messages: your own name links nowhere useful.
-                    isPeerGroup && group.sender?.identity?.type === "profile"
-                      ? personActivityLink(group.sender.identity.id, opts.personActivity)
-                      : null,
-                    "chat-sender-name",
-                  )}
-              ${renderChatSendStatus(sendFailure, opts)} ${renderMessageMeta(group.timestamp, meta)}
-            </div>
-            ${isPeerGroup
-              ? userFooterActions
-              : normalizedRole !== "user" && footerActionDetails
-                ? html`
-                    <div
-                      class="chat-group-footer-actions"
-                      data-message-actions-for=${footerActionMessageKey ?? nothing}
-                    >
-                      ${renderMessageActionButtons(footerActionDetails, opts)}
-                    </div>
-                  `
-                : nothing}
-          </div>`}
+      ${
+        normalizedRole === "tool" || group.isStreaming || opts.activeContinuation
+          ? nothing
+          : html`<div
+              class="chat-group-footer ${
+                persistUserIdentity ? "chat-group-footer--persistent-identity" : ""
+              }${sendFailure ? " chat-group-footer--send-failure" : ""}"
+            >
+              <div class="chat-group-footer__meta">
+                ${isPeerGroup ? nothing : userFooterActions}
+                ${
+                  normalizedRole === "user" && !showAvatarGutter
+                    ? renderChatAuthorAvatar(group.sender)
+                    : nothing
+                }
+                ${
+                  isForwarded
+                    ? nothing
+                    : renderPersonName(
+                        who,
+                        // Only other people's messages: your own name links nowhere useful.
+                        isPeerGroup && group.sender?.identity?.type === "profile"
+                          ? personActivityLink(group.sender.identity.id, opts.personActivity, who)
+                          : null,
+                        "chat-sender-name",
+                      )
+                }
+                ${renderChatSendStatus(sendFailure, opts)}
+                ${renderMessageMeta(group.timestamp, meta)}
+              </div>
+              ${
+                isPeerGroup
+                  ? userFooterActions
+                  : normalizedRole !== "user" && footerActionDetails
+                    ? html`
+                        <div
+                          class="chat-group-footer-actions"
+                          data-message-actions-for=${footerActionMessageKey ?? nothing}
+                        >
+                          ${renderMessageActionButtons(footerActionDetails, opts)}
+                        </div>
+                      `
+                    : nothing
+              }
+            </div>`
+      }
     </div>
   `;
 }

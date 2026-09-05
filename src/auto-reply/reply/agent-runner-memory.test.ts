@@ -47,6 +47,7 @@ import {
 } from "./agent-runner.test-fixtures.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { createSourceReplyDeliveryRuntime } from "./source-reply-delivery-runtime.js";
+import { createMockReplyOperation } from "./test-helpers.js";
 
 const {
   compactEmbeddedAgentSessionMock,
@@ -182,49 +183,12 @@ type TestReplyOperation = ReplyOperation & {
 };
 
 function createReplyOperation(): TestReplyOperation {
-  const now = Date.now();
-  return {
-    key: "test",
-    sessionId: "session",
-    turnKind: "visible",
-    abortSignal: new AbortController().signal,
-    staleExpiryReason: undefined,
-    resetTriggered: false,
-    terminalRecovery: false,
-    acceptedSteeredInboundAudio: false,
-    startedAtMs: now,
-    lastActivityAtMs: now,
-    phase: "queued",
-    result: null,
-    recordActivity: vi.fn(),
-    hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
+  const { replyOperation } = createMockReplyOperation({ key: "test" });
+  return Object.assign(replyOperation, {
+    phase: "queued" as const,
     setPhase: vi.fn<ReplyOperation["setPhase"]>(),
     updateSessionId: vi.fn<ReplyOperation["updateSessionId"]>(),
-    updateSessionKey: vi.fn<ReplyOperation["updateSessionKey"]>(),
-    bindToolAuthorityFingerprint: vi.fn(),
-    bindToolAuthorityProjector: vi.fn(),
-    projectToolAuthorityFingerprint: vi.fn(),
-    bindToolAuthorityRoute: vi.fn(),
-    attachBackend: vi.fn(),
-    detachBackend: vi.fn(),
-    freezeAbort: vi.fn(),
-    retainFailureUntilComplete: vi.fn(),
-    complete: vi.fn(),
-    completeThen: vi.fn((afterClear: () => void) => {
-      afterClear();
-    }),
-    completeWithAfterClearBarrier: vi.fn(),
-    fail: vi.fn(),
-    abortByUser: vi.fn(() => true),
-    abortForRestart: vi.fn(() => true),
-    supersede: vi.fn(() => true),
-    markTerminalRecovery: vi.fn(),
-    markAcceptedSteeredInboundAudio: vi.fn(),
-    markWaitingForDeferredMaintenance: vi.fn(),
-    markDeferredMaintenanceWaitEnded: vi.fn(),
-    markWaitingForGlobalLane: vi.fn(),
-    markGlobalLaneWaitEnded: vi.fn(),
-  };
+  });
 }
 
 function createCompactionLifecycle(replyOperation: ReplyOperation) {
@@ -654,10 +618,10 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it.each([
-    ["default", 8_767, false, false],
-    ["default", 8_768, true, false],
-    ["default", 12_767, true, false],
-    ["default", 12_768, true, true],
+    ["provider", 8_767, false, false],
+    ["provider", 8_768, true, false],
+    ["provider", 12_767, true, false],
+    ["provider", 12_768, true, true],
     ["custom", 18_767, false, false],
     ["custom", 18_768, true, false],
     ["custom", 20_767, true, false],
@@ -953,74 +917,85 @@ describe("runMemoryFlushIfNeeded", () => {
     );
   });
 
-  it("revalidates immutable Ultra for each memory-flush fallback candidate", async () => {
-    const storePath = path.join(rootDir, "sessions.json");
-    const sessionKey = "main";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 80_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      thinkingLevel: "ultra",
-    };
-    const sessionStore = { [sessionKey]: sessionEntry };
-    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
-    runWithModelFallbackMock.mockImplementationOnce(
-      async (params: { run: ModelFallbackParams["run"] }) => {
-        await params.run("openai", "gpt-5.6-sol", {
-          modelRoutingProvenance: modelRoutingProvenance("openai", "gpt-5.6-sol"),
-        });
-        return {
-          result: await params.run("demo", "basic", {
-            modelRoutingProvenance: modelRoutingProvenance("openai", "gpt-5.6-sol", "fallback"),
-          }),
-          provider: "demo",
-          model: "basic",
-          attempts: [],
-        };
-      },
-    );
-    const followupRun = createTestFollowupRun({
-      provider: "openai",
-      model: "gpt-5.6-sol",
-      thinkLevel: "ultra",
-      thinkingCatalog: [
-        { provider: "openai", id: "gpt-5.6-sol", input: ["text"] },
-        { provider: "demo", id: "basic", input: ["text"] },
-      ],
-    });
+  it.each([undefined, "default", "ultra"] as const)(
+    "revalidates original thinking for memory-flush fallback with turn request=%s",
+    async (override) => {
+      const storePath = path.join(rootDir, "sessions.json");
+      const sessionKey = "main";
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 80_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        thinkingLevel: "ultra",
+      };
+      const sessionStore = { [sessionKey]: sessionEntry };
+      await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+      runWithModelFallbackMock.mockImplementationOnce(
+        async (params: { run: ModelFallbackParams["run"] }) => {
+          await params.run("openai", "gpt-5.6-sol", {
+            modelRoutingProvenance: modelRoutingProvenance("openai", "gpt-5.6-sol"),
+          });
+          return {
+            result: await params.run("demo", "basic", {
+              modelRoutingProvenance: modelRoutingProvenance("openai", "gpt-5.6-sol", "fallback"),
+            }),
+            provider: "demo",
+            model: "basic",
+            attempts: [],
+          };
+        },
+      );
+      const followupRun = createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        thinkLevel: "ultra",
+        thinkingCatalog: [
+          { provider: "openai", id: "gpt-5.6-sol", input: ["text"] },
+          { provider: "demo", id: "basic", input: ["text"] },
+        ],
+      });
 
-    await runMemoryFlushIfNeeded({
-      cfg: {
-        agents: {
-          defaults: {
-            compaction: { memoryFlush: {} },
-            models: {
-              "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+      if (override !== undefined) {
+        followupRun.run = {
+          ...followupRun.run,
+          thinkLevel: override === "ultra" ? "off" : "ultra",
+          thinkLevelOverride: override,
+        };
+      }
+
+      await runMemoryFlushIfNeeded({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: { memoryFlush: {} },
+              models: {
+                "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+              },
             },
           },
         },
-      },
-      followupRun,
-      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
-      defaultModel: "openai/gpt-5.6-sol",
-      modelContextTokens: 100_000,
-      resolvedVerboseLevel: "off",
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
-    });
+        followupRun,
+        sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
+        defaultModel: "openai/gpt-5.6-sol",
+        modelContextTokens: 100_000,
+        resolvedVerboseLevel: "off",
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
 
-    expect(runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual([
-      "ultra",
-      "high",
-    ]);
-    expect(followupRun.run.thinkLevel).toBe("ultra");
-  });
+      expect(runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.thinkLevel)).toEqual([
+        "ultra",
+        "high",
+      ]);
+      expect(followupRun.run.thinkLevel).toBe(override === "ultra" ? "off" : "ultra");
+    },
+  );
 
   it("preserves thinking for runtime-discovered Ollama memory-flush models", async () => {
     const storePath = path.join(rootDir, "sessions.json");
@@ -1550,84 +1525,95 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(agentCall.authProfileIdSource).toBeUndefined();
   });
 
-  it("loads the selected harness before memory-flush fallback preflight", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          compaction: {
-            memoryFlush: {},
+  it.each([undefined, "model-owner"])(
+    "prepares the requested memory runtime without pinning observations (owner %s)",
+    async (pluginOwnerId) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {},
+            },
           },
         },
-      },
-    };
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 80_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      compactionCount: 1,
-      agentRuntimeOverride: "codex",
-    };
-    const runtimePolicySessionKey = "agent:main:telegram:default:direct:12345";
-    runWithModelFallbackMock.mockImplementationOnce(
-      async (params: { provider: string; model: string; run: ModelFallbackParams["run"] }) => ({
-        result: await params.run(params.provider, params.model, {
-          isFinalFallbackAttempt: false,
-          modelRoutingProvenance: modelRoutingProvenance(params.provider, params.model),
+      };
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 80_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+        compactionCount: 1,
+        agentRuntimeOverride: "codex",
+        modelSelectionLocked: pluginOwnerId !== undefined,
+        pluginOwnerId,
+        agentHarnessId: "openclaw",
+      };
+      const runtimePolicySessionKey = "agent:main:telegram:default:direct:12345";
+      runWithModelFallbackMock.mockImplementationOnce(
+        async (params: { provider: string; model: string; run: ModelFallbackParams["run"] }) => ({
+          result: await params.run(params.provider, params.model, {
+            isFinalFallbackAttempt: false,
+            modelRoutingProvenance: modelRoutingProvenance(params.provider, params.model),
+          }),
+          provider: params.provider,
+          model: params.model,
+          attempts: [],
         }),
-        provider: params.provider,
-        model: params.model,
-        attempts: [],
-      }),
-    );
+      );
 
-    await runMemoryFlushIfNeeded({
-      cfg,
-      followupRun: createTestFollowupRun({
-        agentId: "main",
+      await runMemoryFlushIfNeeded({
+        cfg,
+        followupRun: createTestFollowupRun({
+          agentId: "main",
+          sessionKey: "main",
+          runtimePolicySessionKey,
+          workspaceDir: rootDir,
+          provider: "openai",
+          model: "gpt-5.4",
+          modelSelectionLocked: sessionEntry.modelSelectionLocked,
+        }),
+        sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
+        defaultModel: "openai/gpt-5.4",
+        modelContextTokens: 100_000,
+        resolvedVerboseLevel: "off",
+        sessionEntry,
+        sessionStore: { main: sessionEntry },
         sessionKey: "main",
         runtimePolicySessionKey,
-        workspaceDir: rootDir,
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      });
+
+      const fallbackCall = requireModelFallbackCall();
+      expect(fallbackCall.agentId).toBe("main");
+      expect(fallbackCall.sessionKey).toBe(runtimePolicySessionKey);
+      expect(fallbackCall.resolveAgentHarnessRuntimeOverride?.("openai", "gpt-5.4")).toBe("codex");
+      expect(requireEmbeddedAgentCall()).toMatchObject({
+        isFinalFallbackAttempt: false,
+        agentHarnessId: undefined,
+        agentHarnessRuntimeOverride: "codex",
+      });
+
+      await fallbackCall.prepareAgentHarnessRuntime?.({
         provider: "openai",
         model: "gpt-5.4",
-      }),
-      sessionCtx: createTestTemplateContext({ Provider: "telegram" }),
-      defaultModel: "openai/gpt-5.4",
-      modelContextTokens: 100_000,
-      resolvedVerboseLevel: "off",
-      sessionEntry,
-      sessionStore: { main: sessionEntry },
-      sessionKey: "main",
-      runtimePolicySessionKey,
-      isHeartbeat: false,
-      replyOperation: createReplyOperation(),
-    });
-
-    const fallbackCall = requireModelFallbackCall();
-    expect(fallbackCall.agentId).toBe("main");
-    expect(fallbackCall.sessionKey).toBe(runtimePolicySessionKey);
-    expect(fallbackCall.resolveAgentHarnessRuntimeOverride?.("openai", "gpt-5.4")).toBe("codex");
-    expect(requireEmbeddedAgentCall().isFinalFallbackAttempt).toBe(false);
-
-    await fallbackCall.prepareAgentHarnessRuntime?.({
-      provider: "openai",
-      model: "gpt-5.4",
-      agentHarnessRuntimeOverride: "codex",
-    });
-
-    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        modelId: "gpt-5.4",
-        agentId: "main",
-        sessionKey: runtimePolicySessionKey,
-        agentHarnessId: "codex",
         agentHarnessRuntimeOverride: "codex",
-        workspaceDir: rootDir,
-      }),
-    );
-  });
+      });
+
+      expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "openai",
+          modelId: "gpt-5.4",
+          agentId: "main",
+          sessionKey: runtimePolicySessionKey,
+          agentHarnessId: "codex",
+          agentHarnessRuntimeOverride: "codex",
+          workspaceDir: rootDir,
+        }),
+      );
+    },
+  );
 
   it("ignores stale runtime pins before memory-flush fallback preflight", async () => {
     const sessionEntry: SessionEntry = {
@@ -2219,29 +2205,36 @@ describe("runMemoryFlushIfNeeded", () => {
   );
   it.each([
     {
+      label: "fresh local tool turn in a 32K window",
+      totalTokens: 12_824,
+      shouldCompact: false,
+      requestedRuntime: "openclaw",
+      contextWindowTokens: 32_768,
+    },
+    {
       label: "below the 32K threshold",
-      totalTokens: 12_767,
+      totalTokens: 24_575,
       shouldCompact: false,
       requestedRuntime: "openclaw",
       contextWindowTokens: 32_768,
     },
     {
       label: "at the 32K threshold",
-      totalTokens: 12_768,
+      totalTokens: 24_576,
       shouldCompact: true,
       requestedRuntime: "openclaw",
       contextWindowTokens: 32_768,
     },
     {
       label: "below the capped 8K threshold",
-      totalTokens: 3_999,
+      totalTokens: 5_999,
       shouldCompact: false,
       requestedRuntime: "openclaw",
       contextWindowTokens: 8_000,
     },
     {
       label: "at the capped 8K threshold",
-      totalTokens: 4_000,
+      totalTokens: 6_000,
       shouldCompact: true,
       requestedRuntime: "openclaw",
       contextWindowTokens: 8_000,

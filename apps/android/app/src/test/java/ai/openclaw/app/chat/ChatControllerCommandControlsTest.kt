@@ -20,8 +20,11 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerCommandControlsTest {
   private val json = chatControllerTestJson
 
@@ -263,7 +266,7 @@ class ChatControllerCommandControlsTest {
             }
 
             else -> {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           }
         }
@@ -471,6 +474,7 @@ class ChatControllerCommandControlsTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
           json = json,
           requestGateway = { method, _ ->
             check(method != "sessions.patch") { "archive must use its captured request lease" }
@@ -508,6 +512,8 @@ class ChatControllerCommandControlsTest {
       val controller =
         ChatController(
           scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
           json = json,
           requestGateway = { method, _ ->
             requests += method
@@ -916,7 +922,8 @@ class ChatControllerCommandControlsTest {
           respond("chat.send", """{"runId":"run-new"}""")
           respond("health", "{}")
         }
-      controller.handleGatewayEvent("health", null)
+      controller.load("main")
+      runCurrent()
 
       assertTrue(controller.sendMessageAwaitAcceptance("/new", "off", emptyList()))
 
@@ -933,7 +940,8 @@ class ChatControllerCommandControlsTest {
           respond("chat.send", """{"runId":"run-1"}""")
           respond("health", "{}")
         }
-      controller.handleGatewayEvent("health", null)
+      controller.load("main")
+      runCurrent()
 
       assertTrue(controller.sendMessageAwaitAcceptance("hello", "off", emptyList()))
       assertEquals(1, controller.pendingRunCount.value)

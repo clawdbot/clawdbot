@@ -181,6 +181,7 @@ function makeInput(overrides: RecoveryInputOverrides = {}): RecoveryInput {
       replacements: new Map(),
       frozen: new Set(),
       ambiguousBaseKeys: new Set(),
+      restoredCacheTtl: new Map(),
       sourceTextByKey: new Map(),
     },
     attemptCompactionCount: 0,
@@ -371,6 +372,7 @@ describe("recoverEmbeddedRunOverflow", () => {
       replacements: new Map(),
       frozen: new Set(["tool:call_1:1"]),
       ambiguousBaseKeys: new Set(),
+      restoredCacheTtl: new Map(),
       sourceTextByKey: new Map(),
     };
     const messagesSnapshot = [

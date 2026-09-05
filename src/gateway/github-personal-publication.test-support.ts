@@ -107,7 +107,10 @@ export async function createPersonalPublicationFixture() {
     getClientConnIds: (filter?: (candidate: GatewayClient) => boolean) =>
       new Set(runtime.live && (!filter || filter(runtime.client)) ? [runtime.client.connId!] : []),
   } as unknown as GatewayRequestContext;
-  const action = preparePersonalGitHubSessionAction({ client, context }, SESSION_KEY);
+  const action = preparePersonalGitHubSessionAction(
+    { client, context },
+    { sessionKey: SESSION_KEY },
+  );
   const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
   const coordinator = createTestGitHubPublicationCoordinator({ placements });
   return {

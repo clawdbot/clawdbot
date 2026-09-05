@@ -49,8 +49,6 @@ Coverage is deliberately evidence-led: an area does not become "ready" just beca
 
 ## Surface explorer
 
-<a id="surface-explorer" />
-
 Surfaces are ordered by maturity level, completeness, and quality. LTS support is shown alongside each row so release-ready options are easy to compare.
 
 <Tabs>

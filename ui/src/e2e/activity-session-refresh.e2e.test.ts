@@ -73,6 +73,55 @@ suite.define(() => {
         await expect.poll(() => row.textContent()).toContain("Latest activity");
         expect(await activityRequests()).toBe(initialRequests + 2);
         await page.screenshot({ path: path.join(suite.artifactDir, "03-visible-burst.png") });
+
+        await gateway.emitGatewayEvent("agent", {
+          runId: "run-activity",
+          stream: "tool",
+          sessionKey: "main",
+          data: {
+            phase: "result",
+            name: "exec",
+            toolCallId: "tool-activity",
+            result: { content: [{ type: "text", text: "Retained while viewing sessions." }] },
+          },
+        });
+        await page.getByRole("tab", { name: "Live activity", exact: true }).click();
+        const entry = page.locator(".activity-entry");
+        await expect.poll(() => entry.count()).toBe(1);
+        await entry.locator("summary").click();
+        await entry.getByText("Retained while viewing sessions.", { exact: true }).waitFor();
+        await page.screenshot({ path: path.join(suite.artifactDir, "04-live-activity.png") });
+        for (let index = 0; index < 20; index += 1) {
+          await gateway.emitGatewayEvent("agent", {
+            runId: "run-activity",
+            stream: "tool",
+            sessionKey: "main",
+            data: { phase: "start", name: "exec", toolCallId: `tool-${index}` },
+          });
+        }
+        const stream = page.locator(".activity-stream");
+        await expect
+          .poll(() =>
+            stream.evaluate((element) => element.scrollHeight > element.clientHeight + 120),
+          )
+          .toBe(true);
+        const autoFollow = page.locator(".activity-live-autofollow wa-switch");
+        await autoFollow.click();
+        await stream.evaluate((element) => {
+          element.scrollTop = 0;
+          element.dispatchEvent(new Event("scroll"));
+        });
+        await autoFollow.click();
+        await page.clock.runFor(100);
+        await expect
+          .poll(() =>
+            stream.evaluate(
+              (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+            ),
+          )
+          .toBeLessThanOrEqual(1);
+        await page.getByRole("tab", { name: "Sessions", exact: true }).click();
+        await expect.poll(() => row.textContent()).toContain("Latest activity");
       },
     );
   });

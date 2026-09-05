@@ -103,8 +103,8 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.152.1`. The plugin ships and manages
-  `@openai/codex` `0.152.1` by default, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.153.4`. The plugin ships and manages
+  `@openai/codex` `0.153.4` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime
@@ -350,8 +350,9 @@ for agent-scoped connections and simply does not hand it to the native home. Use
 
 Owner turns gain the `codex_threads` tool: list, search, read, fork, rename,
 archive, and restore native threads. Fork a thread to continue it in
-OpenClaw; the fork attaches to the current OpenClaw session and stays
-visible to other native Codex clients. Archiving requires explicit
+OpenClaw; the fork attaches to the current OpenClaw session and remains readable
+by ID from other native Codex clients. It appears in native thread lists after
+its first user turn. Archiving requires explicit
 confirmation that the thread is closed elsewhere. When supervision is also
 enabled, transcript fields and mutations require the matching
 `supervision.allowRawTranscripts` or `supervision.allowWriteControls` opt-in.
@@ -1069,6 +1070,11 @@ the problem and keeps the selected native thread intact. It does not silently
 start another thread. Use `/new` to start with the current harness tools, or
 continue the preserved thread in native Codex.
 
+If an ordinary OpenClaw-managed native thread was deleted, the next turn starts
+a fresh native thread while keeping the selected model and provider. This
+recovery preserves pending manual attachments and native-model-owned threads.
+It does not replay a turn whose native outcome is uncertain.
+
 ### Shared Fast mode and Codex fast mode
 
 `/fast` controls the shared OpenClaw policy. A directive-only `/fast off`
@@ -1160,14 +1166,14 @@ An authorized app can initially appear disabled or non-callable because Codex
 has not yet applied the target thread's restrictive app configuration.
 OpenClaw provisionally admits only explicitly allowed, ownership-proven apps,
 starts the thread with `_default.enabled = false`, and reads `app/installed`
-once with that thread's ID and `forceRefresh: false`. An app is exposed only
-after Codex confirms it is enabled and callable for the actual thread. Missing
-metadata, revoked auth, managed restrictions, workspace policy, and unavailable
-tools remain fail-closed.
+once with that thread's ID and `forceRefresh: false`. Missing, disabled, or
+non-callable apps produce one warning without blocking unrelated chat or
+heartbeat runs. Codex still enforces app/tool permissions, managed restrictions,
+and workspace policy; continuing the conversation does not enable an unavailable app.
 
-The check runs before OpenClaw starts a turn or commits a thread binding. A
-failed persistent provisional thread is deleted; an ephemeral thread is
-unsubscribed. If cleanup cannot be confirmed, OpenClaw retires the app-server
+The check runs before OpenClaw starts a turn or commits a thread binding. If the
+snapshot request fails, a persistent provisional thread is deleted and an
+ephemeral thread is unsubscribed. If cleanup cannot be confirmed, OpenClaw retires the app-server
 connection instead of reusing an unsafe thread.
 
 Account-wide app access never overrides an explicitly disabled configured
@@ -1428,7 +1434,8 @@ does not reserve it against a subsequent native reload.
 
 - `OPENCLAW_CODEX_APP_SERVER_BIN` bypasses the managed binary when
   `appServer.command` is unset.
-- `OPENCLAW_CODEX_APP_SERVER_ARGS`
+- `OPENCLAW_CODEX_APP_SERVER_ARGS` accepts a quoted argument string; see
+  [argument parsing](/plugins/codex-harness-reference#app-server-transport).
 - `OPENCLAW_CODEX_APP_SERVER_MODE=yolo|guardian`
 - `OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY`
 - `OPENCLAW_CODEX_APP_SERVER_SANDBOX`

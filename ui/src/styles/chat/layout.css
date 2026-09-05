@@ -56,6 +56,19 @@ openclaw-chat-page {
   user-select: text;
 }
 
+@media (max-width: 560px) {
+  .chat-error:has(> .chat-error__discard) {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .chat-error__discard {
+    grid-column: 2;
+    justify-self: start;
+    white-space: normal;
+    text-align: start;
+  }
+}
+
 .chat-error:has(details[open]) {
   align-items: start;
 }
@@ -1302,101 +1315,6 @@ openclaw-chat-video-player {
   background: var(--bg);
 }
 
-/* Reply preview bar above composer */
-.chat-reply-preview {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-height: 36px;
-  padding: 7px 10px 7px 12px;
-  margin: 0 0 6px;
-  background: color-mix(in srgb, var(--text-strong) 4%, transparent);
-  border: 1px solid color-mix(in srgb, var(--text-strong) 10%, transparent);
-  border-radius: calc(12px * var(--openclaw-corner-radius-scale));
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.chat-reply-preview__icon {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  color: var(--muted);
-}
-
-.chat-reply-preview__icon svg {
-  width: 14px;
-  height: 14px;
-}
-
-.chat-reply-preview__label {
-  font-weight: 600;
-  flex-shrink: 0;
-  color: var(--text);
-}
-
-.chat-reply-preview__text {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--muted);
-}
-
-.chat-reply-preview__dismiss {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--muted);
-  border-radius: 4px;
-  flex-shrink: 0;
-}
-
-.chat-reply-preview__dismiss:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--text) 10%, transparent);
-}
-
-.chat-reply-preview__dismiss svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2px;
-}
-
-.chat-reply-preview--message {
-  width: 100%;
-  margin: 0 0 8px;
-  font: inherit;
-  text-align: left;
-}
-
-button.chat-reply-preview--message {
-  cursor: var(--cursor-action);
-}
-
-button.chat-reply-preview--message:hover {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
-}
-
-button.chat-reply-preview--message:disabled {
-  cursor: var(--cursor-default);
-  opacity: 0.8;
-}
-
-.chat-reply-preview--unavailable {
-  border-color: var(--border);
-  background: color-mix(in srgb, var(--bg) 70%, transparent);
-}
-
 .chat-bubble--reply-target {
   animation: chat-reply-target-highlight 1.4s ease-out;
 }
@@ -1482,7 +1400,10 @@ button.chat-reply-preview--message:disabled {
 /* Bare composers need this fade to cover transcript underlap. A progress card owns
    that boundary itself; painting behind it exposes a veil above the card. */
 .chat-main__conversation
-  > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
+  > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before,
+.chat-main__conversation
+  > openclaw-plugin-view[data-plugin-composer]
+  .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
   position: absolute;
   inset: calc(0px - var(--chat-transcript-fade-height, 20px)) 0 auto;
   height: calc(
@@ -2814,7 +2735,10 @@ button.chat-pr__diff {
   }
 
   .chat-main__conversation
-    > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
+    > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before,
+  .chat-main__conversation
+    > openclaw-plugin-view[data-plugin-composer]
+    .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
     inset-inline: calc(var(--chat-thread-gutter) - var(--chat-mobile-edge-inset, 4px));
   }
 

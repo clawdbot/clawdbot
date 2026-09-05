@@ -61,6 +61,9 @@ function main() {
     mainChangelog: readFileSync(resolve(mainDir, "CHANGELOG.md"), "utf8"),
     tagChangelog: readFileSync(resolve(tagDir, "CHANGELOG.md"), "utf8"),
     mainAppcast: readFileSync(resolve(mainDir, "appcast.xml"), "utf8"),
+    publishedAppcast: args["published-appcast"]
+      ? readFileSync(resolve(args["published-appcast"]), "utf8")
+      : undefined,
     release: readJson(resolve(args["release-json"])),
     releaseTagSha: gitSha(tagDir),
     mainSha: gitSha(mainDir),
@@ -70,9 +73,10 @@ function main() {
     rollbackDrillId: args["rollback-drill-id"],
     rollbackDrillDate: args["rollback-drill-date"],
     allowStaleRollbackDrill: args["allow-stale-rollback-drill"] === "true",
-    requireCompletePlatformAssets: args["require-complete-platform-assets"] === "true",
-    windowsNodeReleaseRunId: args["windows-node-release-run-id"],
-    windowsNodeInstallerDigests: args["windows-node-installer-digests"],
+    allowFailedPublishRecovery: args["allow-failed-publish-recovery"] === "true",
+    existingManifest: args["existing-manifest"]
+      ? readJson(resolve(args["existing-manifest"]))
+      : undefined,
     nowMs: Date.now(),
   });
   if (result.errors.length > 0 || !result.manifest) {

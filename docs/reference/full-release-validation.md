@@ -318,10 +318,15 @@ keep Telegram selected by default. The existing
 deferral; it is rejected for `stable` and `full` and does not disable the focused
 `rerun_group=npm-telegram` workflow.
 
-Best effort is separate from an explicit omission. For the release owner's
-2026.8.1 exception, pass
-`-f telegram_waiver=2026.8.1-owner-approved`. This is accepted only when the
-actual target package is `2026.8.1` and the profile is `stable` or `full`.
+Best effort is separate from an explicit omission. The reviewed exceptions are
+`-f telegram_waiver=2026.8.1-owner-approved` and
+`-f telegram_waiver=2026.9.1-owner-approved`. Any future exception requires a
+reviewed code change; a matching `<target-version>-owner-approved` string alone
+is not authorization. The value must name the validated target's actual
+`package.json` version, the sealed candidate version must match, and the profile
+must be `stable` or `full`. Beta, prerelease, and unlisted targets are rejected.
+Package-spec overrides must be exactly `openclaw@<target-version>`; blank specs
+select the sealed candidate.
 It omits source Telegram QA, Package Acceptance Telegram E2E, and the
 published-package Telegram E2E; their evidence states **waived / not run**,
 never passed. Telegram unit tests and every other selected gate remain active,

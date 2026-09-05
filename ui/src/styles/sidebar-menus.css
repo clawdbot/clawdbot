@@ -28,6 +28,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 wa-dropdown-item.sidebar-session-owner-submenu::part(submenu) {
   width: min(220px, calc(100dvw - 16px));
   max-width: calc(100dvw - 16px);
+}
+
+wa-dropdown-item.sidebar-session-owner-submenu::part(submenu),
+.session-menu__item::part(submenu) {
   max-height: calc(100dvh - 16px);
   overflow: auto;
 }

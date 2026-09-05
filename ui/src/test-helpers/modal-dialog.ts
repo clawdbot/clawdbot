@@ -1,5 +1,4 @@
 import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
-// Control UI test helper supports modal dialog setup.
 import { expect, vi } from "vitest";
 import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
 
@@ -43,7 +42,17 @@ export function installDialogPolyfill(): () => void {
   };
 }
 
-export function createModalDialogTestFixture() {
+async function waitForDialog<T>(read: () => T): Promise<T> {
+  // Lazy module loading is fixture setup, not part of the DOM readiness deadline.
+  await vi.dynamicImportSettled();
+  return vi.waitFor(read);
+}
+
+export function createModalDialogTestFixture(
+  dismissModal: (modal: HTMLElement) => void = (modal) => {
+    modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+  },
+) {
   const restoreDialogPolyfill = installDialogPolyfill();
   const operations: Promise<unknown>[] = [];
   const requests: Promise<unknown>[] = [];
@@ -74,7 +83,7 @@ export function createModalDialogTestFixture() {
       captureModals();
       for (const modal of modals) {
         if (modal.parentElement) {
-          modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+          dismissModal(modal);
         }
       }
       const results = await Promise.allSettled(operations);
@@ -99,6 +108,7 @@ export function createModalDialogTestFixture() {
   }
 
   return {
+    waitFor: waitForDialog,
     track: <T>(completion: Promise<T>) => track(completion, operations),
     mockRequest: <Args extends unknown[], Result>(request: (...args: Args) => Promise<Result>) =>
       vi.fn((...args: Args) => track(request(...args), requests)),
@@ -112,7 +122,7 @@ export function createModalDialogTestFixture() {
  * reconnect, an agent switch) while the decision is still pending.
  */
 export function waitForConfirmDialogActions(): Promise<HTMLElement> {
-  return vi.waitFor(() => {
+  return waitForDialog(() => {
     const actions = document.body.querySelector<HTMLElement>(
       "openclaw-modal-dialog .exec-approval-actions",
     );
@@ -135,7 +145,7 @@ export function answerConfirmDialog(actions: HTMLElement, choice: "confirm" | "c
 
 /** Await a dialog whose owner loads it behind a lazy import, then read it. */
 export async function waitForRenderedModalDialog(container: HTMLElement) {
-  await vi.waitFor(() => {
+  await waitForDialog(() => {
     if (!container.querySelector("openclaw-modal-dialog")) {
       throw new Error("Expected openclaw-modal-dialog");
     }
@@ -144,6 +154,7 @@ export async function waitForRenderedModalDialog(container: HTMLElement) {
 }
 
 export async function waitForInputDialog(): Promise<HTMLInputElement> {
+  await vi.dynamicImportSettled();
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const input = document.body.querySelector("openclaw-modal-dialog input");
     if (input instanceof HTMLInputElement) {

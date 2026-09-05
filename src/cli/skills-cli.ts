@@ -304,8 +304,7 @@ function formatSkillProposalList(manifest: SkillProposalManifest): string {
   }
   return `${manifest.proposals
     .map(
-      (entry) =>
-        `${entry.id}  ${entry.status}  ${entry.kind}  ${entry.skillKey}  ${entry.title}${entry.workspaceMismatch ? "  [previous workspace]" : ""}`,
+      (entry) => `${entry.id}  ${entry.status}  ${entry.kind}  ${entry.skillKey}  ${entry.title}`,
     )
     .join("\n")}\n`;
 }
@@ -375,9 +374,9 @@ function formatSkillCuratorStatus(status: SkillCuratorStatus): string {
     lines.push(`Last error: ${status.lastError}`);
   }
   const relative = (value: number) => formatTimeAgo(Math.max(0, Date.now() - value));
-  for (const [workspace, review] of Object.entries(status.collectionReview)) {
+  for (const review of Object.values(status.collectionReview)) {
     lines.push(
-      `Collection review ${workspace.slice(0, 8)}: attempted ${relative(review.attemptedAtMs)}; ${review.error ? `failed: ${review.error}` : review.succeededAtMs ? `succeeded ${relative(review.succeededAtMs)}` : "running"}`,
+      `Collection review: attempted ${relative(review.attemptedAtMs)}; ${review.error ? `failed: ${review.error}` : review.succeededAtMs ? `succeeded ${relative(review.succeededAtMs)}` : "running"}`,
     );
   }
   for (const [workspace, review] of Object.entries(status.experienceReview)) {
@@ -492,7 +491,7 @@ async function runSkillProposalApply(
     return await withOfflineGatewayLock(resolved.config, err, async () => {
       const reviewedProposal = await inspectSkillProposal(proposalId, {
         agentId: resolved.agentId,
-        workspaceDir: resolved.workspaceDir,
+        config: resolved.config,
       });
       if (!reviewedProposal) {
         throw new Error(`Skill proposal not found: ${proposalId}`, { cause: err });
@@ -1031,7 +1030,7 @@ export function registerSkillsCli(program: Command) {
       runWorkshopAction(
         opts,
         command,
-        ({ agentId, workspaceDir }) => listSkillProposals({ agentId, workspaceDir }),
+        ({ config, agentId }) => listSkillProposals({ config, agentId }),
         formatSkillProposalList,
       ),
     );
@@ -1045,8 +1044,8 @@ export function registerSkillsCli(program: Command) {
       runWorkshopAction(
         opts,
         command,
-        async ({ agentId, workspaceDir }) => {
-          const proposal = await inspectSkillProposal(proposalId, { agentId, workspaceDir });
+        async ({ agentId, config }) => {
+          const proposal = await inspectSkillProposal(proposalId, { agentId, config });
           if (!proposal) {
             throw new Error(`Skill proposal not found: ${proposalId}`);
           }
@@ -1058,7 +1057,7 @@ export function registerSkillsCli(program: Command) {
 
   workshop
     .command("propose-create")
-    .description("Create a pending proposal for a new workspace skill")
+    .description("Create a pending proposal for a new Workshop-generated skill")
     .requiredOption("--name <name>", "Skill name")
     .requiredOption("--description <description>", "Skill description")
     .option("--proposal <path>", "Path to PROPOSAL.md draft content")
@@ -1086,7 +1085,7 @@ export function registerSkillsCli(program: Command) {
 
   workshop
     .command("propose-update")
-    .description("Create a pending proposal for an existing workspace skill")
+    .description("Create a pending proposal for an existing Workshop-generated skill")
     .argument("<skill>", "Skill name or key")
     .option("--proposal <path>", "Path to PROPOSAL.md draft content")
     .option(
@@ -1195,10 +1194,10 @@ export function registerSkillsCli(program: Command) {
           runWorkshopAction(
             opts,
             command,
-            async ({ agentId, workspaceDir }) => {
+            async ({ agentId, config, workspaceDir }) => {
               const reviewed =
                 name === "reject"
-                  ? await inspectSkillProposal(proposalId, { agentId, workspaceDir })
+                  ? await inspectSkillProposal(proposalId, { agentId, config })
                   : undefined;
               if (name === "reject" && !reviewed) {
                 throw new Error(`Skill proposal not found: ${proposalId}`);
@@ -1207,6 +1206,7 @@ export function registerSkillsCli(program: Command) {
                 agentId,
                 eventActor: { type: "system", id: "cli" },
                 workspaceDir,
+                config,
                 proposalId,
                 ...(reviewed ? { expectedRevisionHash: reviewed.revisionHash } : {}),
                 reason: opts.reason,

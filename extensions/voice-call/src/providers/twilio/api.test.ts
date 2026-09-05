@@ -1,5 +1,6 @@
 // Voice Call tests cover api plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../../../../test-support/streaming-error-response.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -32,28 +33,6 @@ function requireFirstFetchGuardRequest(): FetchGuardRequest {
     throw new Error("expected guarded fetch request");
   }
   return request as FetchGuardRequest;
-}
-
-function cancelTrackedTextResponse(
-  text: string,
-  init?: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
 }
 
 describe("twilioApiRequest", () => {

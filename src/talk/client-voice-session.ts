@@ -319,11 +319,21 @@ export function registerClientVoiceConsultRun(params: {
       params.runId,
     );
   }
-  voiceSessionByRunId.set(params.runId, {
-    agentId: params.agentId,
-    voiceSessionId: params.voiceSessionId,
-    sessionKey: params.sessionKey,
-  });
+  if (
+    previousBinding?.agentId !== params.agentId ||
+    previousBinding.voiceSessionId !== params.voiceSessionId ||
+    previousBinding.sessionKey !== params.sessionKey
+  ) {
+    // Replays keep the operational claim; a reassignment must never revive it.
+    voiceSessionByRunId.set(
+      params.runId,
+      Object.freeze({
+        agentId: params.agentId,
+        voiceSessionId: params.voiceSessionId,
+        sessionKey: params.sessionKey,
+      }),
+    );
+  }
   // Bound to a call that already closed: re-arm the point-in-time summary owner so
   // the run completion becomes a retry point without coupling it to transcript work.
   if (recordClosed && params.config) {

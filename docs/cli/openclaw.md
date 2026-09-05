@@ -123,6 +123,12 @@ that the requesting run and verified inference route remain valid. Interactive
 setup and agent handoffs still require a direct operator session; delegated chat
 cannot start a wizard, even when a model proposes it.
 
+While a human reviews the proposal, the requesting tool stays open. **Allow once**
+applies the exact proposal and returns its application outcome; **Deny** or expiry
+returns a non-applied outcome instead of leaving the agent reporting a pending
+change. Stopping the requesting run cancels its approval. A late approval cannot
+restart a closed run: request the change again from an active run if still needed.
+
 Configured agents can ask OpenClaw to create another agent through their
 `openclaw` tool. The request enters the same typed create-agent operation and
 host authorization flow; any approval summary names the requesting agent.

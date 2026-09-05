@@ -28,6 +28,7 @@ import {
   resolvePersonalGitHubOwner,
 } from "../../state/user-github-connections.js";
 import {
+  ensureGatewayOwnerProfile,
   ensureProfileForEmail,
   getUserProfileListItem,
   linkEmail,
@@ -388,25 +389,29 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     expect(getUserProfileListItem(owner())).toEqual(before);
     expect(config.tools?.github).toBeUndefined();
     expect(prepareGitHubToolEnvironment({ config, agentId: "main" }).localIdentityEnv).toEqual({});
-    expect(await rpc(alice, "users.self")).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "FORBIDDEN",
-        details: expect.objectContaining({ missingScope: "operator.write" }),
-      }),
-    );
-    for (const method of [
-      "tools.github.authorize.start",
-      "tools.github.configure",
-      "secrets.store.set",
-      "sessions.github.publish",
-    ]) {
+    expect(await rpc(alice, "users.self")).toHaveBeenCalledWith(true, { profile: before });
+    for (const [method, missingScope] of [
+      ["tools.github.authorize.start", "operator.admin"],
+      ["tools.github.configure", "operator.admin"],
+      ["secrets.store.set", "operator.admin"],
+      ["sessions.github.publish", "operator.write"],
+    ] as const) {
       const denied = await rpc(alice, method, {
         sessionKey: "agent:main:main",
         idempotencyKey: "reader",
       });
-      expect(denied.mock.calls[0]?.[0], method).toBe(false);
+      expect(denied, method).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "FORBIDDEN",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope,
+            requiredScopes: [missingScope],
+          },
+        }),
+      );
     }
     const restarted = await start();
     expect(readUserGitHubConnection(owner())?.generation).toBe(connection.generation);
@@ -465,32 +470,63 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     expect(network.poll).toHaveBeenCalledOnce();
   });
 
-  it.each(["unbound", "synthetic", "copied-client", "system-actor"] as const)(
-    "rejects %s profile-like authorization",
-    async (mode) => {
-      let client = alice;
-      if (mode === "unbound") {
-        delete client.authenticatedUserProfile;
-      }
-      if (mode === "synthetic") {
-        client.internal = { syntheticClient: true };
-      }
-      if (mode === "copied-client") {
-        client = { ...client };
-      }
-      if (mode === "system-actor") {
-        client.internal = { operatorRoleActor: { kind: "system" } };
-      }
-      for (const method of [
-        "users.github.status",
-        "users.github.authorize.start",
-        "users.github.disconnect",
-      ]) {
-        expect((await rpc(client, method)).mock.calls[0]?.[0]).toBe(false);
-      }
-      expect(network.start).not.toHaveBeenCalled();
-    },
-  );
+  it("lets a shared-secret owner without a login read status and start My GitHub authorization", async () => {
+    const profile = ensureGatewayOwnerProfile("Gateway Owner");
+    delete alice.authenticatedUserId;
+    alice.authenticatedUserProfile = {
+      profileId: profile.id,
+      displayName: profile.displayName,
+      hasAvatar: false,
+      updatedAt: profile.updatedAt,
+    };
+    alice.internal = { operatorRoleActor: { kind: "system" } };
+
+    expect(await rpc(alice, "users.github.status")).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ personal: expect.objectContaining({ state: "disconnected" }) }),
+    );
+    const started = await start(alice);
+    expect(readUserGitHubConnection(profile.id)?.pending?.requestId).toBe(started.requestId);
+  });
+
+  it.each([
+    "unbound",
+    "synthetic",
+    "synthetic-system",
+    "copied-client",
+    "system-without-profile",
+    "operator-actor",
+  ] as const)("rejects %s profile-like authorization", async (mode) => {
+    let client = alice;
+    if (mode === "unbound") {
+      delete client.authenticatedUserProfile;
+    }
+    if (mode === "synthetic") {
+      client.internal = { syntheticClient: true };
+    }
+    if (mode === "synthetic-system") {
+      client.internal = { syntheticClient: true, operatorRoleActor: { kind: "system" } };
+    }
+    if (mode === "operator-actor") {
+      client.internal = { operatorRoleActor: { kind: "operator", profileId: owner(client) } };
+    }
+    if (mode === "copied-client") {
+      client = { ...client };
+    }
+    if (mode === "system-without-profile") {
+      delete client.authenticatedUserId;
+      delete client.authenticatedUserProfile;
+      client.internal = { operatorRoleActor: { kind: "system" } };
+    }
+    for (const method of [
+      "users.github.status",
+      "users.github.authorize.start",
+      "users.github.disconnect",
+    ]) {
+      expect((await rpc(client, method)).mock.calls[0]?.[0]).toBe(false);
+    }
+    expect(network.start).not.toHaveBeenCalled();
+  });
 
   it.each(["cancel", "disconnect", "replacement", "merge", "role", "expiry"] as const)(
     "fences installation when %s wins the awaited poll",

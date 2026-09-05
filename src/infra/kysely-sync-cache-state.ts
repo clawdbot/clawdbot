@@ -1,14 +1,20 @@
 // Shared per-database Kysely cache state, split from kysely-sync so lifecycle
 // owners (sqlite-transaction) can clear caches without value-loading kysely.
 // Doctor/setup closures cold-load transaction consumers; keep this file
-// dependency-free beyond node:sqlite types.
+// independent of the Kysely value graph.
 import type { DatabaseSync } from "node:sqlite";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-export const kyselyByDatabase = new WeakMap<DatabaseSync, unknown>();
-export const queryErrorHandlerByDatabase = new WeakMap<DatabaseSync, (error: unknown) => void>();
+export const { kyselyByDatabase, queryErrorHandlerByDatabase } = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteKyselyCacheState"),
+  () => ({
+    kyselyByDatabase: new WeakMap<DatabaseSync, unknown>(),
+    queryErrorHandlerByDatabase: new WeakMap<DatabaseSync, (error: unknown) => void>(),
+  }),
+);
 // Cached statements retain their database. Per-instance lifecycle wrappers clear
-// both caches before the native database handle closes.
-export const statementCacheSymbol = Symbol("openclaw.kyselySyncStatementCache");
+// both caches before close, including callers from transformed SDK module graphs.
+export const statementCacheSymbol = Symbol.for("openclaw.kyselySyncStatementCache");
 
 /** Register the lifecycle owner's handler for synchronous Kysely query failures. */
 export function registerNodeSqliteKyselyQueryErrorHandler(

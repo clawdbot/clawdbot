@@ -126,6 +126,58 @@ describe("native app i18n inventory", () => {
     expect(isConditionalBranchIdentifier(`a${"A".repeat(4_096)}!`)).toBe(false);
   });
 
+  it.each([
+    { surface: "apple", value: String.raw`agent:\(owner):global` },
+    { surface: "android", value: "agent:$agentId:global" },
+    { surface: "apple", value: String.raw`cache:\(scope.path):\(makeKey(value: token)):entry` },
+    { surface: "apple", value: String.raw`cache:\(makeKey(name: "local")):entry` },
+    { surface: "android", value: "cache:${scope.path}:$entryId" },
+    { surface: "android", value: "cache:${keys.getOrElse(index) { fallback }}:$entryId" },
+  ] as const)(
+    "excludes $surface interpolated identifiers but preserves explicit UI copy: $value",
+    ({ surface, value }) => {
+      const repoPath = `apps/${surface}/Fixture.${surface === "apple" ? "swift" : "kt"}`;
+      const branch = (text: string) =>
+        surface === "apple"
+          ? `let key = enabled ? "${text}" : fallback`
+          : `val key = if (enabled) "${text}" else fallback`;
+
+      expect(extractNativeI18nCandidates(surface, repoPath, branch(value))).toEqual([]);
+      expect(
+        extractNativeI18nCandidates(surface, repoPath, `Text("${value}")`).map(
+          (entry) => entry.source,
+        ),
+      ).toEqual([value]);
+      const prose = `Current route: ${value}`;
+      expect(
+        extractNativeI18nCandidates(surface, repoPath, branch(prose)).map((entry) => entry.source),
+      ).toEqual([prose]);
+    },
+  );
+
+  it.each(["apple", "android"] as const)(
+    "preserves compact %s prose and the candidate length boundary",
+    (surface) => {
+      const repoPath = `apps/${surface}/Fixture.${surface === "apple" ? "swift" : "kt"}`;
+      const value = surface === "apple" ? String.raw`\(hours)h` : "${hours}h";
+      const source =
+        surface === "apple"
+          ? `let label = enabled ? "${value}" : fallback`
+          : `val label = if (enabled) "${value}" else fallback`;
+      expect(
+        extractNativeI18nCandidates(surface, repoPath, source).map((entry) => entry.source),
+      ).toEqual([value]);
+      for (const length of [500, 501]) {
+        const text = "a".repeat(length);
+        expect(
+          extractNativeI18nCandidates(surface, repoPath, `Text("${text}")`).map(
+            (entry) => entry.source,
+          ),
+        ).toEqual(length === 500 ? [text] : []);
+      }
+    },
+  );
+
   it("preserves the typed expiry key from Swift extraction through macOS catalog projection", () => {
     const entries = assignNativeI18nIds(
       extractNativeI18nCandidates(
@@ -357,6 +409,21 @@ describe("native app i18n inventory", () => {
           ) && entry.source === "Current session",
       ),
     ).toBe(true);
+    // Wear-only entries do not reach phone resources; the phone owner must declare its modes.
+    expect(
+      entries
+        .filter(
+          (entry) =>
+            entry.surface === "android" &&
+            hasSite(
+              entry,
+              (site) =>
+                site.path ===
+                "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+            ),
+        )
+        .map((entry) => entry.source),
+    ).toEqual(expect.arrayContaining(["System", "Dark", "Light"]));
     expect(
       entries.some(
         (entry) =>
@@ -494,6 +561,27 @@ describe("native app i18n inventory", () => {
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "No threads yet")).toBe(true);
+    expect
+      .soft(
+        entries
+          .filter(
+            (entry) => entry.source === "Update the gateway to load progress cards for this agent.",
+          )
+          .map((entry) => entry.surface)
+          .toSorted(),
+      )
+      .toEqual(["android", "apple"]);
+    expect
+      .soft(
+        entries
+          .filter(
+            (entry) =>
+              entry.source ===
+              "Update the gateway before sending queued messages. This version requires safe delivery routing.",
+          )
+          .map((entry) => entry.surface),
+      )
+      .toEqual(["apple"]);
     expect(
       entries.some(
         (entry) =>
@@ -506,8 +594,12 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some(
         (entry) =>
+          hasSite(
+            entry,
+            (site) => site.path === "apps/ios/WatchApp/Sources/WatchInboxView.swift",
+          ) &&
           entry.source ===
-          "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.",
+            "Direct mode supports device info, status, and notifications. Set up standalone voice on iPhone to use Talk on Watch. Chat and approvals still use the iPhone.",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "Session target")).toBe(true);
@@ -630,15 +722,12 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some(
         (entry) =>
+          hasSite(
+            entry,
+            (site) => site.path === "apps/ios/Sources/Design/SettingsProTabSections.swift",
+          ) &&
           entry.source ===
-          "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.",
-      ),
-    ).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          entry.source ===
-          "The watch receives a one-time pairing code and stores its own device token. A reachable secure Gateway URL is required away from the iPhone.",
+            "The watch receives a one-time pairing code and stores its own device token. Standalone voice also grants read and Talk access, without admin access. A reachable secure Gateway URL is required away from the iPhone.",
       ),
     ).toBe(true);
     expect(
@@ -805,6 +894,31 @@ describe("native app i18n inventory", () => {
         `native translation changed placeholders or line breaks for sv:${entry.id}`,
       );
       expect(translatorReturned).toBe(false);
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("retranslates existing native strings only when a full refresh is requested", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
+    const entry = testEntry("native.apple.open", "apple", "Open");
+    try {
+      await syncNativeLocale("sv", [entry], {
+        glossary: [],
+        translationsDir,
+        translate: async () => new Map([[entry.id, "Tidigare"]]),
+      });
+      const refreshed = await syncNativeLocale("sv", [entry], {
+        force: true,
+        glossary: [],
+        translationsDir,
+        translate: async (pending) => new Map(pending.map((item) => [item.id, "Öppna"])),
+      });
+      expect(refreshed.translated).toBe(1);
+      expect(
+        JSON.parse(await readFile(path.join(translationsDir, "sv.json"), "utf8")).translations,
+      ).toEqual({ [entry.id]: "Öppna" });
     } finally {
       cleanupTempDirs(tempDirs);
     }
@@ -1000,6 +1114,12 @@ describe("native app i18n inventory", () => {
     });
     expect(() => parseNativeI18nCommand(["sync", "--write", "--locale"])).toThrow(
       "requires a locale value",
+    );
+    expect(parseNativeI18nCommand(["sync", "--write", "--locale", "sv", "--force"]).force).toBe(
+      true,
+    );
+    expect(() => parseNativeI18nCommand(["sync", "--write", "--force"])).toThrow(
+      "requires `sync --write --locale",
     );
     expect(() => parseNativeI18nCommand(["sync", "--write", "--locale", "--write"])).toThrow(
       "requires a locale value",

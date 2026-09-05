@@ -9,6 +9,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/cont
 import { clawhubVerdictKey } from "../lib/skills/index.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ModelProvidersData } from "./model-providers/load.ts";
+import { createEmptyModelProvidersRouteData } from "./model-providers/model-providers-page.test-support.ts";
 import type { ModelProvidersRouteData } from "./model-providers/route.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
 import { createSkill } from "./skills/view.test-support.ts";
@@ -473,7 +474,11 @@ describe("gateway source replacement across reconnect with a reused client", () 
     const page = createPage(
       "openclaw-model-providers-page",
       contextWithClient(client, { connected: true, agentsList, selectedAgentId: "main" }),
-    ) as TestPage & { data: ModelProvidersData | null };
+    ) as TestPage & {
+      data: ModelProvidersData | null;
+      routeData: ModelProvidersRouteData;
+    };
+    page.routeData = createEmptyModelProvidersRouteData(page.context);
     document.body.append(page);
     await waitForFast(() => expect(authCalls).toBe(1));
 

@@ -221,7 +221,7 @@ export async function createCanonicalForkFixture(params: {
           abortSignal: host.abortController.signal,
         } as unknown as EmbeddedRunAttemptParamsV2;
         const runAbortController = host.abortController;
-        const startupBinding = await bindingStore.read(session);
+        const startupBinding = bindingStore.read(session);
         const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
           workspaceDir,
           agentId: attempt.agentId,
@@ -232,6 +232,7 @@ export async function createCanonicalForkFixture(params: {
         // Tool factories, admitted composition, and schema projection remain real.
         const toolRuntime = {
           connection: {
+            assertCurrent: host.capabilities.assertActive,
             params: attempt,
             attemptClientFactory: getLeasedSharedCodexAppServerClient,
             startupClientAuthProfileId: null,
@@ -339,8 +340,7 @@ export async function createCanonicalForkFixture(params: {
           startup?.turnRoute.release();
           startup?.releaseSharedClientLease();
           runAbortController.abort();
-          await preparedTools.scopedMcpTools?.dispose();
-          await preparedTools.configuredMcp?.dispose();
+          await preparedTools.disposeMcpTools();
           for (const cleanup of preparedTools.runCleanups) {
             await cleanup("fixture complete");
           }

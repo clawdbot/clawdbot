@@ -78,6 +78,7 @@ function createFixture() {
     getMessagingToolSentTargets: vi.fn(() => []),
     getMessagingToolSentTexts: vi.fn(() => []),
     getMessagingToolSourceReplyPayloads: vi.fn(() => []),
+    getSourceReplyDelivered: vi.fn(() => undefined),
     getPendingToolMediaReply: vi.fn(() => undefined),
     getToolAutoDeliveryMediaUrls: vi.fn(() => []),
     getReplayState: vi.fn(() => ({ replayInvalid: false, hadPotentialSideEffects: false })),
@@ -177,11 +178,8 @@ function createFixture() {
     agentSession: {
       activeSession,
       clientToolCallSlots: [],
-      coreReadAuthorized: true,
-      getCodeModeRecoveryCandidate: vi.fn(() => undefined),
       hasDeliveredSourceReply: vi.fn(() => true),
       hookRunner,
-      setCodeModeReconciliationReadAuthorized: vi.fn(),
       setActiveSessionSystemPrompt: vi.fn(),
       settingsManager: { getCompactionReserveTokens: vi.fn(() => 1_000) },
     },
@@ -292,7 +290,7 @@ function createFixture() {
     promptInput.lifecycle.setPromptCacheChangesForTurn([{ type: "cache" }]);
     promptInput.lifecycle.setFinalPromptText("final prompt");
     promptInput.lifecycle.markBeforeAgentRunBlocked({ blockedBy: "before_agent" });
-    return { promptStartedAt: 100 };
+    return { promptStartedAt: 100, transcriptLeafId: "before-prompt" };
   });
   mocks.settleStream.mockImplementation(async () => {
     order.push("finalize");
@@ -385,6 +383,11 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         preflight: expect.objectContaining({ appendOnlyRuntimeContext: true }),
         submission: expect.objectContaining({ appendOnlyRuntimeContext: true }),
         toolPolicy: fixture.input.prepared.promptToolPolicy,
+      }),
+    );
+    expect(mocks.completeAfterTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        state: expect.objectContaining({ transcriptLeafId: "before-prompt" }),
       }),
     );
     expect(mocks.completeResult).toHaveBeenCalledWith(
@@ -630,7 +633,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     fixture.state.terminal = { kind: "timeout", phase: "prompt", source: "external" };
     mocks.runPrompt.mockImplementationOnce(async (promptInput) => {
       promptInput.lifecycle.markYieldAborted();
-      return { promptStartedAt: 100 };
+      return { promptStartedAt: 100, transcriptLeafId: null };
     });
 
     await runEmbeddedAttemptSettledPhase(fixture.input);
@@ -648,7 +651,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     fixture.state.terminal = { kind: "aborted", source: "external" };
     mocks.runPrompt.mockImplementationOnce(async (promptInput) => {
       promptInput.lifecycle.markYieldAborted();
-      return { promptStartedAt: 100 };
+      return { promptStartedAt: 100, transcriptLeafId: null };
     });
 
     await runEmbeddedAttemptSettledPhase(fixture.input);

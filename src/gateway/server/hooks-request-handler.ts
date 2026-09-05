@@ -66,13 +66,11 @@ async function settleFanOutDispatches(
   // Rejections must settle to failures even when the race already resolved
   // pending, or the detached dispatch promise rejects unhandled later.
   const guarded = dispatches.map((dispatch) =>
-    dispatch.catch(
-      (err: unknown): HookAgentDispatchResult => ({
-        ok: false,
-        statusCode: 502,
-        error: String(err),
-      }),
-    ),
+    dispatch.catch((err: unknown): HookAgentDispatchResult => ({
+      ok: false,
+      statusCode: 502,
+      error: String(err),
+    })),
   );
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<typeof FAN_OUT_PENDING>((resolve) => {

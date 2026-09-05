@@ -44,17 +44,18 @@ describe("appendWorkspaceMountArgs", () => {
   });
 
   it("omits agent workspace mount when workspaceAccess is none", () => {
+    const workspaceDir = makeTempWorkspace();
+    const agentWorkspaceDir = makeTempWorkspace();
     const args: string[] = [];
     appendWorkspaceMountArgs({
       args,
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/agent-workspace",
+      workspaceDir,
+      agentWorkspaceDir,
       workdir: "/workspace",
       workspaceAccess: "none",
     });
 
-    const mounts = args.filter((arg) => arg.startsWith("/tmp/"));
-    expect(mounts).toEqual(["/tmp/workspace:/workspace:z"]);
+    expect(args).toEqual(["-v", `${workspaceDir}:/workspace:z`]);
   });
 
   it("omits agent workspace mount when paths are identical", () => {

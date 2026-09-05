@@ -26,27 +26,50 @@ import {
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { readTaskTranscript, type TaskDetailHost } from "./components/chat-task-detail-state.ts";
-import { openSlot } from "./sidebar-layout.ts";
+import {
+  isSidebarSlotVisible,
+  openSlot,
+  promoteSidebarPanel,
+  sidebarMainPanel,
+} from "./sidebar-layout.ts";
 
 describe("chat pane retained presentation lifecycle", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it.each([false, true])(
-    "restores sidebar tabs without opening a compact=%s presentation",
+    "restores dormant sidebar tabs for compact=%s without replacing saved task preferences",
     (compact) => {
       vi.stubGlobal("localStorage", createStorageMock());
       const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
       const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-      const layout = openSlot({ columns: [] }, "workspace");
+      const layout = promoteSidebarPanel(
+        openSlot(openSlot({ columns: [] }, "workspace"), "companion"),
+        "companion",
+      );
       patchSettings({ sidebarSessionLayouts: { [state.sessionKey]: layout } });
-      (pane as TestChatPane & { compact: boolean }).compact = compact;
+      const presentation = pane as TestChatPane & {
+        compact: boolean;
+        selectedSessionRailMode: (sessionKey: string) => "expanded" | "hidden";
+      };
+      presentation.compact = compact;
       pane.connectedClient = null;
 
       pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "reconnecting" });
 
-      expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("workspace");
+      expect(state.sidebarLayout.columns[0]?.panels).toEqual(layout.columns[0]?.panels);
+      expect(sidebarMainPanel(state.sidebarLayout)?.slot).toBe(
+        compact ? "conversation" : "companion",
+      );
       expect(state.sidebarLayout.open).toBe(!compact);
-      expect(loadSettings().sidebarSessionLayouts?.[state.sessionKey]?.open).toBe(true);
+      expect(isSidebarSlotVisible(state.sidebarLayout, "companion")).toBe(!compact);
+      expect(presentation.selectedSessionRailMode(state.sessionKey)).toBe(
+        compact ? "hidden" : "expanded",
+      );
+      expect(isSidebarSlotVisible(state.sidebarLayout, "conversation")).toBe(true);
+      expect(loadSettings().sidebarSessionLayouts?.[state.sessionKey]).toMatchObject(layout);
+      expect(isSidebarSlotVisible(openSlot(state.sidebarLayout, "workspace"), "workspace")).toBe(
+        true,
+      );
     },
   );
 
@@ -102,8 +125,8 @@ describe("chat pane retained presentation lifecycle", () => {
           mounted.handleDocumentKeydown(key);
         }
       }
-      expect(page.state.handleChatDraftChange).toHaveBeenCalledExactlyOnceWith("page");
-      expect(dock.state.handleChatDraftChange).toHaveBeenCalledExactlyOnceWith("dock");
+      expect(page.state.handleChatDraftChange).toHaveBeenCalledExactlyOnceWith("page", []);
+      expect(dock.state.handleChatDraftChange).toHaveBeenCalledExactlyOnceWith("dock", []);
       for (const { focus } of panes) {
         expect(focus).toHaveBeenCalledOnce();
       }
@@ -251,7 +274,7 @@ describe("chat pane retained presentation lifecycle", () => {
     Object.defineProperty(pane, "active", { configurable: true, value: true });
     await Promise.resolve();
 
-    expect(state.handleChatDraftChange).toHaveBeenCalledWith("continue from the catalog");
+    expect(state.handleChatDraftChange).toHaveBeenCalledWith("continue from the catalog", []);
     expect(state.handleSendChat).toHaveBeenCalledOnce();
   });
 
@@ -344,20 +367,34 @@ describe("chat pane retained presentation lifecycle", () => {
     expect(announcement.getAttribute("aria-live")).toBe("off");
   });
 
-  it("does not stage a created-session handoff when its logical pane rejects navigation", async () => {
-    const sessions = {
-      create: vi.fn().mockResolvedValue("agent:main:rejected-created-session"),
-    } as unknown as SessionCapability;
-    const { pane } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
-    advertiseSessionCreate(pane);
-    pane.onPaneSessionChange = vi.fn(() => false);
+  it.each([false, true])(
+    "stages a created-session draft only when its pane accepts navigation (%s)",
+    async (accepted) => {
+      const nextSessionKey = "agent:main:created-session";
+      const sessions = {
+        create: vi.fn().mockResolvedValue(nextSessionKey),
+      } as unknown as SessionCapability;
+      const { pane, state } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+      advertiseSessionCreate(pane);
+      pane.onPaneSessionChange = vi.fn(() => accepted);
+      state.chatMessage = "@Alex continue";
+      const mention = { profileId: "original-profile", start: 0, end: 5 };
+      state.chatMentions = [mention];
 
-    await expect(pane.createSession()).resolves.toBe(false);
+      await expect(pane.createSession()).resolves.toBe(accepted);
+      mention.profileId = "replacement-profile";
 
-    expect(
-      consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:rejected-created-session"),
-    ).toBeNull();
-  });
+      expect(consumePaneSessionHandoff(pane.context, pane.paneId, nextSessionKey)).toEqual(
+        accepted
+          ? {
+              attachments: [],
+              draft: "@Alex continue",
+              mentions: [{ profileId: "original-profile", start: 0, end: 5 }],
+            }
+          : null,
+      );
+    },
+  );
 });
 
 function advertiseSessionCreate(pane: TestChatPane) {

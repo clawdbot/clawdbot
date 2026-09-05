@@ -88,6 +88,7 @@ async function updateOwnedAuthProfileUsage(
   let changed = false;
   const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
     ...update,
+    profileId,
     agentDir: resolvePersistedAuthProfileOwnerAgentDir({
       agentDir: update.agentDir,
       profileId,
@@ -289,6 +290,18 @@ function applyWhamCooldownResult(params: {
     };
   }
   const cooldownClassification = resolveWhamCooldownClassification(params.whamResult.reason);
+  if (
+    !cooldownClassification &&
+    !params.whamResult.available &&
+    params.computed.cooldownReason === "rate_limit"
+  ) {
+    // A failed or incomplete probe supplied no authoritative retry deadline.
+    // Keep the persisted local backoff instead of replacing it with a fixed delay.
+    return {
+      ...params.computed,
+      lastProbeAt: params.now,
+    };
+  }
   return {
     ...params.computed,
     lastProbeAt: params.now,
@@ -741,6 +754,11 @@ export function calculateAuthProfileCooldownMs(errorCount: number): number {
   return 5 * 60_000; // 5 minutes max
 }
 
+// Without a provider reset, grow failed half-open probes up to one billing day:
+// frequent retries risk metered fallback spend, while a finite cap still retries daily.
+const RATE_LIMIT_BACKOFF_BASE_MS = 30_000;
+const RATE_LIMIT_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000;
+
 type ResolvedAuthCooldownConfig = {
   billingBackoffMs: number;
   billingMaxMs: number;
@@ -762,15 +780,16 @@ const DISABLED_FAILURE_BACKOFF_POLICIES = {
     maxMs: (cfg) => cfg.billingMaxMs,
   },
   auth_permanent: {
-    // Keep high-confidence permanent-auth failures in the disabled lane, but
-    // recover much sooner than billing because some providers surface
-    // auth-looking payloads transiently during incidents.
+    // Recover quickly because some providers surface auth-looking payloads
+    // transiently during incidents.
     baseMs: (cfg) => cfg.authPermanentBackoffMs,
     maxMs: (cfg) => cfg.authPermanentMaxMs,
   },
 } as const satisfies Record<DisabledFailureReason, DisabledFailureBackoffPolicy>;
 
-const DEFAULT_BILLING_BACKOFF_HOURS = 5;
+// Keep the initial billing disable short so inline API keys can retry soon
+// after recharge, even though they cannot probe during an active window.
+const DEFAULT_BILLING_BACKOFF_MINUTES = 10;
 const DEFAULT_BILLING_MAX_HOURS = 24;
 const DEFAULT_AUTH_PERMANENT_BACKOFF_MINUTES = 10;
 const DEFAULT_AUTH_PERMANENT_MAX_MINUTES = 60;
@@ -778,7 +797,7 @@ const DEFAULT_FAILURE_WINDOW_HOURS = 24;
 
 function resolveAuthCooldownConfig(): ResolvedAuthCooldownConfig {
   return {
-    billingBackoffMs: DEFAULT_BILLING_BACKOFF_HOURS * 60 * 60 * 1000,
+    billingBackoffMs: DEFAULT_BILLING_BACKOFF_MINUTES * 60 * 1000,
     billingMaxMs: DEFAULT_BILLING_MAX_HOURS * 60 * 60 * 1000,
     authPermanentBackoffMs: DEFAULT_AUTH_PERMANENT_BACKOFF_MINUTES * 60 * 1000,
     authPermanentMaxMs: DEFAULT_AUTH_PERMANENT_MAX_MINUTES * 60 * 1000,
@@ -786,15 +805,16 @@ function resolveAuthCooldownConfig(): ResolvedAuthCooldownConfig {
   };
 }
 
-function calculateDisabledLaneBackoffMs(params: {
+function calculateCappedExponentialBackoffMs(params: {
   errorCount: number;
   baseMs: number;
   maxMs: number;
 }): number {
   const normalized = Math.max(1, params.errorCount);
-  const baseMs = Math.max(60_000, params.baseMs);
+  const baseMs = Math.max(1, params.baseMs);
   const maxMs = Math.max(baseMs, params.maxMs);
-  const exponent = Math.min(normalized - 1, 10);
+  const maxExponent = Math.max(0, Math.ceil(Math.log2(maxMs / baseMs)));
+  const exponent = Math.min(normalized - 1, maxExponent);
   const raw = baseMs * 2 ** exponent;
   return Math.min(maxMs, raw);
 }
@@ -805,7 +825,7 @@ function resolveDisabledFailureBackoffMs(params: {
   cfgResolved: ResolvedAuthCooldownConfig;
 }): number {
   const policy = DISABLED_FAILURE_BACKOFF_POLICIES[params.reason];
-  return calculateDisabledLaneBackoffMs({
+  return calculateCappedExponentialBackoffMs({
     errorCount: params.errorCount,
     baseMs: policy.baseMs(params.cfgResolved),
     maxMs: policy.maxMs(params.cfgResolved),
@@ -919,10 +939,18 @@ function computeNextProfileUsageStats(params: {
   const unusableUntil = resolveProfileUnusableUntil(params.existing);
   const previousCooldownExpired = typeof unusableUntil === "number" && params.now >= unusableUntil;
 
-  const shouldResetCounters = windowExpired || previousCooldownExpired;
-  const baseErrorCount = shouldResetCounters ? 0 : (params.existing.errorCount ?? 0);
+  // A rate-limit profile remains half-open until a real request succeeds. Its
+  // dedicated counter survives expiry, while the aggregate counter resets so
+  // unrelated failures do not inherit the rate-limit backoff history.
+  const shouldResetAggregateCounter = windowExpired || previousCooldownExpired;
+  const baseErrorCount = shouldResetAggregateCounter ? 0 : (params.existing.errorCount ?? 0);
   const nextErrorCount = baseErrorCount + 1;
-  const failureCounts = shouldResetCounters ? {} : { ...params.existing.failureCounts };
+  const preservedRateLimitCount = params.existing.failureCounts?.rate_limit;
+  const failureCounts = shouldResetAggregateCounter
+    ? preservedRateLimitCount
+      ? { rate_limit: preservedRateLimitCount }
+      : {}
+    : { ...params.existing.failureCounts };
   failureCounts[params.reason] = (failureCounts[params.reason] ?? 0) + 1;
 
   const updatedStats: ProfileUsageStats = {
@@ -954,7 +982,14 @@ function computeNextProfileUsageStats(params: {
     });
     updatedStats.disabledReason = disabledFailureReason;
   } else {
-    const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
+    const backoffMs =
+      params.reason === "rate_limit"
+        ? calculateCappedExponentialBackoffMs({
+            errorCount: failureCounts.rate_limit ?? 1,
+            baseMs: RATE_LIMIT_BACKOFF_BASE_MS,
+            maxMs: RATE_LIMIT_BACKOFF_MAX_MS,
+          })
+        : calculateAuthProfileCooldownMs(nextErrorCount);
     // Keep active cooldown windows immutable so retries within the window
     // cannot push recovery further out.
     updatedStats.cooldownUntil = keepActiveWindowOrRecompute({

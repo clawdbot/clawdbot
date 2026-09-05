@@ -100,14 +100,8 @@ internal class MicCaptureManager(
   private val _liveTranscript = MutableStateFlow<String?>(null)
   val liveTranscript: StateFlow<String?> = _liveTranscript
 
-  private val _queuedMessages = MutableStateFlow<List<String>>(emptyList())
-  val queuedMessages: StateFlow<List<String>> = _queuedMessages
-
   private val _conversation = MutableStateFlow<List<VoiceConversationEntry>>(emptyList())
   val conversation: StateFlow<List<VoiceConversationEntry>> = _conversation
-
-  private val _inputLevel = MutableStateFlow(0f)
-  val inputLevel: StateFlow<Float> = _inputLevel
 
   private val _isSending = MutableStateFlow(false)
   val isSending: StateFlow<Boolean> = _isSending
@@ -144,11 +138,6 @@ internal class MicCaptureManager(
       messageQueue.addLast(message)
     }
   }
-
-  private fun snapshotMessageQueue(): List<String> =
-    synchronized(messageQueueLock) {
-      messageQueue.toList()
-    }
 
   private fun hasQueuedMessages(): Boolean =
     synchronized(messageQueueLock) {
@@ -237,7 +226,6 @@ internal class MicCaptureManager(
           transcriptFlushJob?.cancel()
           transcriptFlushJob = null
           _isListening.value = false
-          _inputLevel.value = 0f
           _liveTranscript.value = null
           _statusText.value = if (_isSending.value) nativeText("Speaking · waiting for reply") else nativeText("Speaking…")
           stopTranscription(preserveStatus = true)
@@ -312,7 +300,6 @@ internal class MicCaptureManager(
     pendingRunId = null
     pendingAssistantEntryId = null
     synchronized(messageQueueLock) { messageQueue.clear() }
-    publishQueue()
     _conversation.value = emptyList()
     _liveTranscript.value = null
     flushedPartialTranscript = null
@@ -499,7 +486,6 @@ internal class MicCaptureManager(
       transcriptFlushJob?.cancel()
       transcriptFlushJob = null
       _isListening.value = false
-      _inputLevel.value = 0f
       if (!preserveStatus) {
         _statusText.value = if (_isSending.value) nativeText("Mic off · sending…") else nativeText("Mic off")
       } else {
@@ -527,7 +513,6 @@ internal class MicCaptureManager(
       text = message,
     )
     enqueueMessage(message)
-    publishQueue()
   }
 
   private fun scheduleTranscriptFlush(expectedText: String) {
@@ -542,10 +527,6 @@ internal class MicCaptureManager(
         queueRecognizedMessage(current)
         sendQueuedIfIdle()
       }
-  }
-
-  private fun publishQueue() {
-    _queuedMessages.value = snapshotMessageQueue()
   }
 
   private fun sendQueuedIfIdle() {
@@ -649,9 +630,7 @@ internal class MicCaptureManager(
   private fun completePendingTurn() {
     pendingRunTimeoutJob?.cancel()
     pendingRunTimeoutJob = null
-    if (removeFirstQueuedMessage() != null) {
-      publishQueue()
-    }
+    removeFirstQueuedMessage()
     pendingRunId = null
     pendingAssistantEntryId = null
     _isSending.value = false
@@ -806,7 +785,6 @@ internal class MicCaptureManager(
           while (isCurrent() && _micEnabled.value) {
             val read = audioInput.read(buffer, 0, buffer.size)
             if (read <= 0) continue
-            _inputLevel.value = TalkAudioLevel.pcm16Level(buffer, read)
             audioFrames.trySend(buffer.copyOf(read))
           }
         } catch (err: Throwable) {

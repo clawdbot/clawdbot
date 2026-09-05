@@ -9,7 +9,6 @@ import {
   collectPluginDeclarationSourceEntries,
   collectSourceCheckoutPluginBuildEntries,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
-import { createClaudeAgentSdkAssetPlugin } from "./scripts/lib/claude-agent-sdk-assets.mts";
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
@@ -26,6 +25,7 @@ import {
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "./scripts/lib/tsdown-config-groups.mts";
+import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
 import { createDeclarationInputCapture } from "./scripts/lib/tsdown-declaration-inputs.mts";
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
 import { runtimeProcessDeclarationEntries } from "./scripts/lib/vitest-worker-artifacts.mts";
@@ -169,6 +169,7 @@ function nodeBuildConfig(
   return {
     ...config,
     dts: declarations,
+    hooks: createDeclarationBoundaryHooks(config.hooks),
     env,
     outExtensions: () => ({ js: ".js", dts: ".d.ts" }),
     fixedExtension: false,
@@ -232,10 +233,31 @@ function workerRsyncReceiverBuildConfig(): UserConfig {
   };
 }
 
+function workerGitHubExecLauncherBuildConfig(): UserConfig {
+  return {
+    name: TSDOWN_UNIFIED_CONFIG_GROUP,
+    entry: { "worker/github-exec-launcher": "src/agents/github-exec-launcher.ts" },
+    outDir: "dist",
+    dts: false,
+    env,
+    deps: {
+      alwaysBundle: (id) => !isBuiltin(id),
+      onlyBundle: false,
+    },
+    fixedExtension: false,
+    outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
+    outputOptions: { codeSplitting: false },
+    shims: true,
+    sourcemap: OUTPUT_SOURCE_MAPS,
+    inputOptions: (options) => buildInputOptions(options, { bundleAllDependencies: true }),
+  };
+}
+
 function nodeWorkspacePackageBuildConfig(packageDir: string, config: UserConfig = {}): UserConfig {
   return {
     ...config,
     dts: TSDOWN_DECLARATIONS,
+    hooks: createDeclarationBoundaryHooks(config.hooks),
     entry: config.entry ?? buildPackageDistEntriesFromExports(packageDir),
     env,
     name: config.name ?? TSDOWN_PACKAGE_CONFIG_GROUP,
@@ -321,9 +343,7 @@ function shouldNeverBundleDeclarationDependency(id: string): boolean {
   // Arrow's relative module augmentations must stay beside their package modules.
   return (
     shouldNeverBundleDependency(id) ||
-    ["@anthropic-ai/claude-agent-sdk", "zod", "apache-arrow"].some(
-      (name) => id === name || id.startsWith(`${name}/`),
-    )
+    ["zod", "apache-arrow"].some((name) => id === name || id.startsWith(`${name}/`))
   );
 }
 
@@ -385,6 +405,9 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/tool-images.runtime": "src/agents/tool-images.runtime.ts",
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
     "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
+    "config/sessions/session-model-context.worker":
+      "src/config/sessions/session-model-context.worker.ts",
+    "config/sessions/disk-budget.worker": "src/config/sessions/disk-budget.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "agents/prepared-model-catalog.worker": "src/agents/prepared-model-catalog.worker.ts",
     ...runtimeProcessBuildEntries,
@@ -787,7 +810,7 @@ const configs = [
       // and bundled hooks in one graph so runtime singletons are emitted once.
       entry: unifiedDistEntries,
       deps: unifiedDeps,
-      plugins: [createClaudeAgentSdkAssetPlugin(), createStateSchemaInlinePlugin()],
+      plugins: [createStateSchemaInlinePlugin()],
     },
     false,
   ),
@@ -804,6 +827,7 @@ const configs = [
     false,
   ),
   workerRsyncReceiverBuildConfig(),
+  workerGitHubExecLauncherBuildConfig(),
   ...(TSDOWN_DECLARATIONS
     ? buildUnifiedDeclarationPartitions(unifiedDistEntries).map(({ name, sources }) =>
         nodeBuildConfig(

@@ -15,7 +15,13 @@ import {
 } from "./ask-user-tool.js";
 import { resetPendingAskUserQuestionsForTest } from "./ask-user-tool.test-support.js";
 
-type GatewayCall = NonNullable<Parameters<typeof createAskUserTool>[0]["gatewayCall"]>;
+type GatewayCall = Extract<
+  NonNullable<Parameters<typeof createAskUserTool>[0]["gatewayCall"]>,
+  (...args: never[]) => unknown
+>;
+type SentPrompt = Parameters<
+  NonNullable<Parameters<typeof createAskUserTool>[0]["questionPrompt"]>["send"]
+>[0];
 
 const replyDispatchOutcomeModuleUrl = new URL(
   "../../auto-reply/reply/reply-dispatch-outcome.ts",
@@ -359,9 +365,80 @@ describe("ask_user execution", () => {
       2,
       "question.waitAnswer",
       { timeoutMs: 910_000 },
-      { id: questionId, timeoutMs: 900_000 },
+      { id: questionId, timeoutMs: 900_000, includeResolutionId: true },
       undefined,
     );
+  });
+
+  it("publishes its own prompt when no harness reserved one", async () => {
+    // A harness that dispatches tools directly reserves nothing before the call.
+    // Without a prompt of its own the tool waits on an answer nobody was asked for.
+    const answers = { answers: { deploy_target: ["Production"] } };
+    const sent: SentPrompt[] = [];
+    let promptDelivered: () => void = () => {};
+    const promptIsOut = new Promise<void>((resolve) => {
+      promptDelivered = resolve;
+    });
+    const gateway = gatewayStub(async (method, _opts, params) => {
+      if (method === "question.request") {
+        return { id: params.id };
+      }
+      if (method === "question.waitAnswer") {
+        // Answering only after the prompt is out keeps the assertion about the prompt.
+        await promptIsOut;
+        return { status: "answered", answers };
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const result = await createAskUserTool({
+      sessionKey: "agent:main:direct-dispatch",
+      gatewayCall: gateway.call,
+      questionPrompt: {
+        send: (payload) => {
+          sent.push(payload);
+          promptDelivered();
+        },
+      },
+    }).execute("call-direct-dispatch", validArgs);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.channelData).toMatchObject({
+      askUser: { questionId: requestedQuestionId(gateway.mock) },
+    });
+    expect(sent[0]?.text).toContain("Where should this deploy?");
+    expect(result.details).toEqual({ status: "answered", answers });
+  });
+
+  it("leaves the prompt to a harness that already reserved one", async () => {
+    // The embedded tool lifecycle publishes the prompt itself. Publishing here too
+    // would show the same question twice in the conversation.
+    const sessionKey = "agent:main:reserved-prompt";
+    const normalized = normalizeAskUserParams(validArgs);
+    const reservation = reserveAskUserPromptDelivery({
+      toolCallId: "call-reserved",
+      sessionKey,
+      questions: normalized.questions,
+      timeoutSeconds: normalized.timeoutSeconds,
+    });
+    const sent: SentPrompt[] = [];
+    const gateway = gatewayStub(async (method, _opts, params) =>
+      method === "question.request" ? { id: params.id } : { status: "expired" },
+    );
+
+    const result = await createAskUserTool({
+      sessionKey,
+      gatewayCall: gateway.call,
+      questionPrompt: {
+        send: (payload) => {
+          sent.push(payload);
+        },
+      },
+    }).execute("call-reserved", validArgs);
+
+    expect(reservation).toBeDefined();
+    expect(sent).toEqual([]);
+    expect(result.details).toEqual({ status: "no_answer" });
   });
 
   it.each([
@@ -808,6 +885,7 @@ describe("ask_user execution", () => {
         id: questionId,
         answers: { answers: { deploy_target: ["A custom destination"] } },
         resolvedBy: "plain-text",
+        resolutionId: expect.stringMatching(/^[a-f0-9]{32}$/),
       },
     );
     await expect(pending).resolves.toMatchObject({ details: { status: "answered" } });
@@ -887,22 +965,27 @@ describe("ask_user execution", () => {
 
   it("confirms a committed plain-text answer after its resolve response is lost", async () => {
     let finishWait: ((value: unknown) => void) | undefined;
-    let committedAnswers: unknown;
+    let committedAnswer: unknown;
     const gateway = gatewayStub(async (method, _opts, params) => {
       if (method === "question.request") {
         return { id: params.id };
       }
       if (method === "question.waitAnswer") {
-        if (committedAnswers) {
-          return { status: "answered", answers: committedAnswers };
+        expect(params.includeResolutionId).toBe(true);
+        if (committedAnswer) {
+          return committedAnswer;
         }
         return await new Promise((resolve) => {
           finishWait = resolve;
         });
       }
       if (method === "question.resolve") {
-        committedAnswers = params.answers;
-        finishWait?.({ status: "answered", answers: committedAnswers });
+        committedAnswer = {
+          status: "answered",
+          answers: params.answers,
+          resolutionId: params.resolutionId,
+        };
+        finishWait?.(committedAnswer);
         throw new Error("response lost after commit");
       }
       throw new Error(`unexpected method ${method}`);

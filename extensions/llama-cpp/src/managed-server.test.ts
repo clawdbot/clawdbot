@@ -15,6 +15,7 @@ vi.mock("./llama-server-install.js", async (importOriginal) => ({
   resolveManagedLlamaServerPaths: installMocks.resolveManagedLlamaServerPaths,
 }));
 
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { selectLlamaServerAsset } from "./llama-server-install.js";
 import {
   ensureLlamaCppModel,
@@ -24,6 +25,96 @@ import {
 } from "./managed-server.js";
 
 const servers: http.Server[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+const TEST_GGUF_SHA256 = "b83633aa785344791618f2fddf131b010ea04912a60430760b070bad293f65bd";
+
+async function withHuggingFaceMetadataFixture(
+  endpoint: "manifest" | "file" | "tree",
+  run: (params: {
+    cacheDir: string;
+    setPadding: (target: "manifest" | "file" | "tree", padding: string) => void;
+    pathInfoBodies: unknown[];
+    requestedUrls: string[];
+    source: string;
+  }) => Promise<void>,
+  source = "hf:owner/repo",
+): Promise<void> {
+  const cacheDir = tempDirs.make(`llama-cpp-hf-${endpoint}-`);
+  await fs.writeFile(path.join(cacheDir, "hf_owner_repo_model.gguf"), "GGUF");
+  let padding = "x".repeat(1024 * 1024);
+  const pathInfoBodies: unknown[] = [];
+  const requestedUrls: string[] = [];
+  const server = http.createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    requestedUrls.push(req.url ?? "");
+    if (req.url?.startsWith("/v2/owner/repo/manifests/latest")) {
+      res.end(
+        JSON.stringify({
+          ggufFile: { rfilename: "model.gguf", size: 4 },
+          ...(endpoint === "manifest" ? { padding } : {}),
+        }),
+      );
+      return;
+    }
+    if (req.url?.startsWith("/api/models/owner/repo/paths-info/main")) {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        pathInfoBodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        res.end(
+          JSON.stringify([
+            { path: "model.gguf", size: 4, lfs: { oid: TEST_GGUF_SHA256 } },
+            ...(endpoint === "file" ? [padding] : []),
+          ]),
+        );
+      });
+      return;
+    }
+    if (req.url?.startsWith("/api/models/owner/repo/tree/main")) {
+      res.end(
+        JSON.stringify([
+          { path: "model.gguf", size: 4, lfs: { oid: TEST_GGUF_SHA256 } },
+          ...(endpoint === "tree" ? [padding] : []),
+        ]),
+      );
+      return;
+    }
+    res.statusCode = 404;
+    res.end("{}");
+  });
+  servers.push(server);
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("missing test server address");
+  }
+  const realFetch = globalThis.fetch;
+  const localFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const upstream = new URL(
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+    );
+    return await realFetch(`http://127.0.0.1:${address.port}${upstream.pathname}`, init);
+  });
+  vi.stubGlobal("fetch", localFetch);
+  try {
+    await run({
+      cacheDir,
+      setPadding: (target, next) => {
+        if (target === endpoint) {
+          padding = next;
+        }
+      },
+      pathInfoBodies,
+      requestedUrls,
+      source,
+    });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+}
 
 afterEach(async () => {
   vi.clearAllMocks();
@@ -107,6 +198,74 @@ describe("managed llama-server", () => {
     );
   });
 
+  it("prepares an isolated candidate without changing the active restart preset", async () => {
+    const root = tempDirs.make("llama-server-candidate-");
+    const presetPath = path.join(root, "models.ini");
+    const active = "version = 1\n\n[active-chat]\nmodel = /models/active.gguf\n";
+    await fs.writeFile(presetPath, active);
+    const asset = selectLlamaServerAsset("darwin", "arm64");
+    const command = path.join(root, "llama-server");
+    installMocks.ensureLlamaServerInstalled.mockResolvedValue({ command, asset });
+    installMocks.resolveManagedLlamaServerPaths.mockReturnValue({
+      installDir: root,
+      command,
+      presetPath,
+    });
+
+    const candidate = await prepareManagedLlamaServer({
+      chatModel: {
+        mode: "configure",
+        id: "candidate-chat",
+        path: "/models/candidate.gguf",
+        contextSize: 16_384,
+      },
+      embeddingModelPath: "/models/embedding.gguf",
+      asset,
+      isolated: true,
+      port: 19_435,
+    });
+    const candidatePreset = candidate.args[candidate.args.indexOf("--models-preset") + 1]!;
+    expect(candidatePreset).not.toBe(presetPath);
+    expect(await fs.readFile(presetPath, "utf8")).toBe(active);
+    const contents = await fs.readFile(candidatePreset, "utf8");
+    expect(contents).toContain(
+      "[candidate-chat]\nmodel = /models/candidate.gguf\nctx-size = 16384",
+    );
+    expect(contents).toContain("[embeddinggemma-300m-qat-q8_0]\nmodel = /models/embedding.gguf");
+    expect(contents).not.toContain("active-chat");
+  });
+
+  it.each(["environment preset", "direct model"])(
+    "preserves a configured %s service",
+    async (mode) => {
+      const root = tempDirs.make("llama-server-configured-");
+      const presetPath = path.join(root, "custom.ini");
+      const localService = {
+        command: path.join(root, "custom-server"),
+        cwd: root,
+        args: mode === "direct model" ? ["--model", "/models/chat.gguf", "--alias", "chat"] : [],
+        ...(mode === "environment preset"
+          ? { env: { LLAMA_ARG_MODELS_PRESET: "custom.ini" } }
+          : {}),
+      };
+      const runtime = await prepareManagedLlamaServer({
+        localService,
+        port: 19436,
+        chatModel: { mode: "configure", id: "chat", path: "/models/chat.gguf" },
+        embeddingModelPath: "/models/embedding.gguf",
+      });
+      expect(runtime.command).toBe(localService.command);
+      expect(runtime.args).toEqual(localService.args);
+      if (mode === "environment preset") {
+        expect(await fs.readFile(presetPath, "utf8")).toContain(
+          "[chat]\nmodel = /models/chat.gguf",
+        );
+      } else {
+        expect(await fs.readdir(root)).toEqual([]);
+      }
+    },
+  );
+
   it("writes a 2048-token physical batch in the combined preset", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-preset-"));
     const presetPath = path.join(tempRoot, "models.ini");
@@ -180,37 +339,32 @@ describe("managed llama-server", () => {
     }
   });
 
-  it("preserves a custom embedding model when chat prepares the shared restart preset", async () => {
+  it("preserves both model stanzas and the configured CUDA runtime during concurrent preparation", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "llama-server-chat-preset-"));
     const presetPath = path.join(tempRoot, "models.ini");
     const chatModelPath = path.join(tempRoot, "chat.gguf");
     const embeddingModelPath = path.join(tempRoot, "custom-embedding.gguf");
-    const asset = selectLlamaServerAsset("darwin", "arm64");
-    installMocks.ensureLlamaServerInstalled.mockResolvedValue({
-      command: path.join(tempRoot, "llama-server"),
-      asset,
-    });
-    installMocks.resolveManagedLlamaServerPaths.mockReturnValue({
-      installDir: tempRoot,
-      command: path.join(tempRoot, "llama-server"),
-      presetPath,
-    });
+    const localService = {
+      command: path.join(tempRoot, "win32-x64-cuda-12.4", "llama-server.exe"),
+      args: ["--models-preset", presetPath],
+    };
 
     try {
       await Promise.all([
         fs.writeFile(chatModelPath, "GGUF"),
         fs.writeFile(embeddingModelPath, "GGUF"),
       ]);
-      await Promise.all([
+      const [embeddingRuntime] = await Promise.all([
         prepareManagedLlamaServer({
           chatModel: { mode: "preserve" },
           embeddingModelPath,
           port: 19_434,
+          localService,
         }),
         ensureManagedLlamaServerForChat({
           provider: {
             baseUrl: "http://127.0.0.1:19434/v1",
-            localService: { command: path.join(tempRoot, "llama-server"), args: [] },
+            localService,
             models: [],
             params: { modelCacheDir: tempRoot },
           },
@@ -222,6 +376,10 @@ describe("managed llama-server", () => {
         }),
       ]);
 
+      expect(embeddingRuntime.command).toBe(localService.command);
+      expect(embeddingRuntime.args).toContain(presetPath);
+      expect(installMocks.ensureLlamaServerInstalled).not.toHaveBeenCalled();
+      expect(installMocks.resolveManagedLlamaServerPaths).not.toHaveBeenCalled();
       const preset = await fs.readFile(presetPath, "utf8");
       expect(preset).toContain(`[chat-model]\nmodel = ${chatModelPath}\nctx-size = 8192`);
       expect(preset).toContain(
@@ -241,6 +399,64 @@ describe("managed llama-server", () => {
         download: false,
       }),
     ).rejects.toThrow("Run interactive llama.cpp setup or correct params.modelPath");
+  });
+
+  it.each(["manifest", "file"] as const)(
+    "bounds Hugging Face %s metadata while preserving a legitimate response",
+    async (endpoint) => {
+      await withHuggingFaceMetadataFixture(endpoint, async ({ cacheDir, setPadding }) => {
+        await expect(
+          ensureLlamaCppModel({
+            source: "hf:owner/repo",
+            cacheDir,
+            download: false,
+          }),
+        ).resolves.toBe(path.join(cacheDir, "hf_owner_repo_model.gguf"));
+
+        setPadding(endpoint, "x".repeat(16 * 1024 * 1024 + 1));
+        await expect(
+          ensureLlamaCppModel({
+            source: "hf:owner/repo",
+            cacheDir,
+            download: false,
+          }),
+        ).rejects.toThrow(
+          `llama.cpp Hugging Face ${endpoint === "manifest" ? "manifest" : "file metadata"}: JSON response exceeds 16777216 bytes`,
+        );
+      });
+    },
+  );
+
+  it("resolves a cached GGUF when unrelated repository tree metadata is oversized", async () => {
+    await withHuggingFaceMetadataFixture(
+      "tree",
+      async ({ cacheDir, setPadding, pathInfoBodies, requestedUrls, source }) => {
+        setPadding("tree", "x".repeat(16 * 1024 * 1024 + 1));
+        await expect(
+          ensureLlamaCppModel({
+            source,
+            cacheDir,
+            download: false,
+          }),
+        ).resolves.toBe(path.join(cacheDir, "hf_owner_repo_model.gguf"));
+        expect(pathInfoBodies).toEqual([{ paths: ["model.gguf"], expand: false }]);
+        expect(requestedUrls.some((url) => url.includes("/tree/"))).toBe(false);
+      },
+    );
+  });
+
+  it("resolves an explicit Hugging Face GGUF file without a manifest request", async () => {
+    await withHuggingFaceMetadataFixture(
+      "file",
+      async ({ cacheDir, pathInfoBodies, requestedUrls, source }) => {
+        await expect(ensureLlamaCppModel({ source, cacheDir, download: false })).resolves.toBe(
+          path.join(cacheDir, "hf_owner_repo_model.gguf"),
+        );
+        expect(pathInfoBodies).toEqual([{ paths: ["model.gguf"], expand: false }]);
+        expect(requestedUrls).not.toContain("/v2/owner/repo/manifests/latest");
+      },
+      "hf:owner/repo/model.gguf",
+    );
   });
 
   it("reports only facts observed from health, models, props, and metrics", async () => {

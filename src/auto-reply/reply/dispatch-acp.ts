@@ -29,6 +29,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { QuestionAnswerUnconfirmedError } from "../../agents/harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
 import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
 import { recordRuntimeActionDecision } from "../../audit/runtime-action-decision.js";
@@ -509,23 +510,6 @@ export async function tryDispatchAcpReplyCore(params: {
     onError: (error: unknown) =>
       logVerbose(`dispatch-acp: participant persistence failed: ${formatErrorMessage(error)}`),
   };
-  const pendingAnswerText = resolveAcpPromptText(params.ctx);
-  if (
-    pendingAnswerText &&
-    !params.images?.length &&
-    !params.extractedFileImages?.length &&
-    !hasInboundMediaForUnderstanding(params.ctx) &&
-    (await claimPendingAgentQuestionAnswer({
-      sessionKey: acpResolution.sessionKey,
-      text: pendingAnswerText,
-    }))
-  ) {
-    recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
-    const counts = params.dispatcher.getQueuedCounts();
-    params.recordProcessed("completed", { reason: "acp_question_answer" });
-    params.markIdle("message_completed");
-    return { queuedFinal: false, counts };
-  }
   const progressSessionKeys = isDiagnosticsEnabled(params.cfg)
     ? Array.from(
         new Set(
@@ -611,6 +595,48 @@ export async function tryDispatchAcpReplyCore(params: {
     abortSignal: params.abortSignal,
     runId: params.runId,
   });
+  const pendingAnswerText = resolveAcpPromptText(params.ctx);
+  try {
+    if (
+      pendingAnswerText &&
+      !params.images?.length &&
+      !params.extractedFileImages?.length &&
+      !hasInboundMediaForUnderstanding(params.ctx) &&
+      (await claimPendingAgentQuestionAnswer({
+        sessionKey: acpResolution.sessionKey,
+        text: pendingAnswerText,
+      }))
+    ) {
+      recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
+      const counts = params.dispatcher.getQueuedCounts();
+      params.recordProcessed("completed", { reason: "acp_question_answer" });
+      params.markIdle("message_completed");
+      return { queuedFinal: false, counts };
+    }
+  } catch (error) {
+    if (!(error instanceof QuestionAnswerUnconfirmedError)) {
+      throw error;
+    }
+    // Throwing would make the reply hook fall through and execute the input again.
+    // Record uncertainty without starting another turn or bypassing delivery policy.
+    params.recordProcessed("error", {
+      reason: "acp_question_answer_unconfirmed",
+      error: error.message,
+    });
+    // Delivery failure cannot relinquish custody of possibly committed input.
+    const queuedNotice = await delivery
+      .deliver("final", { text: error.message, isError: true })
+      .catch((deliveryError: unknown) => {
+        logVerbose(
+          `dispatch-acp: uncertain question notice delivery failed: ${formatErrorMessage(deliveryError)}`,
+        );
+        return false;
+      });
+    params.markIdle("message_error");
+    const counts = params.dispatcher.getQueuedCounts();
+    delivery.applyRoutedCounts(counts);
+    return { queuedFinal: queuedNotice, counts };
+  }
   const deliverDeferredTextFallback = async (): Promise<boolean> => {
     if (!shouldDeferVisibleTextForTts || delivery.hasDeliveredAnswerFinalToUser()) {
       return false;

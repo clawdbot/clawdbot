@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { mobileVersionPath, readMobileVersionManifest } from "./mobile-version.ts";
-import { parseReleaseVersion } from "./release-version.mjs";
+import { parsePinnedReleaseVersion, parseReleaseVersion } from "./release-version.mjs";
 
 const IOS_CHANGELOG_FILE = "apps/ios/CHANGELOG.md";
 export const MAX_IOS_APP_STORE_REVISION = 9;
@@ -20,14 +20,6 @@ type ResolvedIosVersion = {
 };
 
 type SyncIosVersioningMode = "check" | "write";
-
-function parsePinnedReleaseVersion(rawVersion: string): string | null {
-  const parsed = parseReleaseVersion(rawVersion.trim());
-  if (!parsed || parsed.version !== parsed.baseVersion) {
-    return null;
-  }
-  return parsed.baseVersion;
-}
 
 export function normalizePinnedIosVersion(rawVersion: string): string {
   const trimmed = rawVersion.trim();

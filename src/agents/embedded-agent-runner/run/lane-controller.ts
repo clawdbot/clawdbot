@@ -11,6 +11,7 @@ import {
   getAgentRunContext,
   retainQueuedAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
+import { isBackgroundWorkLane } from "../../../process/background-work.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -204,6 +205,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     withEmbeddedRunLaneTimeout(
       {
         ...opts,
+        abortSignal,
         taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
         taskTimeoutSubscribe: (onDeadline) => {
           notifyLaneTaskDeadline = onDeadline;
@@ -256,7 +258,9 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     options.getParams().replyOperation?.markWaitingForGlobalLane();
     const globalOpts: CommandQueueEnqueueOptions = {
       ...opts,
-      priority: sessionLanePolicy.priority,
+      priority: isBackgroundWorkLane(options.globalLane)
+        ? "background"
+        : sessionLanePolicy.priority,
       onQueued: noteCapacityWait,
     };
     const taskWithCurrentLifecycle = async () => {
@@ -354,6 +358,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
     const sessionOpts: CommandQueueEnqueueOptions = {
       ...opts,
+      abortSignal,
       priority: sessionLanePolicy.priority,
       onQueued: noteCapacityWait,
     };

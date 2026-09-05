@@ -4,6 +4,10 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
@@ -59,11 +63,18 @@ async function expectLobsterOnInviteLedge(sidebar: Locator) {
     .toEqual({ bottomOverlap: 3, isAboveInvite: true });
 }
 
-async function captureUiProof(page: Page, fileName: string) {
+async function captureUiProof(page: Page, fileName: string, surface = page.locator(".shell")) {
   if (!captureUiProofEnabled) {
     return;
   }
   await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
+  if (page.video()) {
+    await writeFile(
+      path.join(suite.artifactDir, "sidebar-customization", fileName),
+      await takeControlUiViewportScreenshot(page, surface, [surface]),
+    );
+    return;
+  }
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
@@ -76,10 +87,10 @@ async function captureSettingsSidebarProof(sidebar: Locator, fileName: string) {
     return;
   }
   await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
-  await sidebar.screenshot({
-    animations: "disabled",
-    path: path.join(path.join(suite.artifactDir, "sidebar-customization"), fileName),
-  });
+  await writeFile(
+    path.join(suite.artifactDir, "sidebar-customization", fileName),
+    await takeControlUiElementScreenshot(sidebar.page(), sidebar, [sidebar.locator("input")]),
+  );
 }
 
 async function holdUiProof(page: Page, durationMs = 600) {
@@ -250,7 +261,9 @@ suite.define(() => {
       const pinnedItems = sidebar.locator(
         '.sidebar-zone-entry[data-sidebar-entry^="route:"] > .nav-item',
       );
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Dashboards", "Automations", "Plugins"]);
       // Desktop renders no topbar row: the sidebar owns navigation.
       await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
       const shellNav = page.locator(".shell-nav");
@@ -316,7 +329,7 @@ suite.define(() => {
             .getAttribute("aria-current"),
         )
         .toBe("page");
-      await captureUiProof(page, "01a-settings-takeover.png");
+      await captureUiProof(page, "01a-settings-takeover.png", settingsSidebar);
       await captureSettingsSidebarProof(settingsSidebar, "01a-settings-search-initial.png");
       await holdUiProof(page);
       const settingsLinks = settingsSidebar.locator(".settings-sidebar__item");
@@ -546,16 +559,16 @@ suite.define(() => {
       await expect
         .poll(() => menu.getByRole("menuitemcheckbox", { name: "OpenClaw" }).count())
         .toBe(0);
-      await captureUiProof(page, "02-customize-menu.png");
+      await captureUiProof(page, "02-customize-menu.png", menu.locator('[part="menu"]'));
 
       await tasksItem.click();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Automations", "Plugins", "Tasks"]);
+        .toEqual(["Dashboards", "Automations", "Plugins", "Tasks"]);
       await page.reload();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Automations", "Plugins", "Tasks"]);
+        .toEqual(["Dashboards", "Automations", "Plugins", "Tasks"]);
       // The More menu is transient: closed after reload, unpinned routes inside.
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
       await moreButton.click();
@@ -567,11 +580,17 @@ suite.define(() => {
       await expect
         .poll(() => trimmedTextContents(moreMenu.getByRole("menuitem")))
         .not.toContain("Tasks");
-      await captureUiProof(page, "03-persisted-customization.png");
+      await captureUiProof(
+        page,
+        "03-persisted-customization.png",
+        moreMenu.locator('[part="menu"]'),
+      );
 
       await editPersistedPinnedItems.click();
       await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
-      await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
+      await expect
+        .poll(() => trimmedTextContents(pinnedItems))
+        .toEqual(["Dashboards", "Automations", "Plugins"]);
 
       // The sidebar header search button is the command palette entry point.
       const searchButton = page.locator(".sidebar-brand__search");

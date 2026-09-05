@@ -9,6 +9,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -20,6 +21,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 /**
  * Reconnect recovery scenarios: after a gateway disconnect, the next health event
@@ -27,6 +30,7 @@ import org.junit.Test
  * (`inFlightRun`), matching the reconnect snapshot contract the TUI consumes.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerReconnectRestoreTest {
   private val json = chatControllerTestJson
   private val ChatController.messageTexts: List<String?>
@@ -56,6 +60,15 @@ class ChatControllerReconnectRestoreTest {
   ): ChatController {
     gateway.respondWith("chat.history", history)
     return loadController(gateway)
+  }
+
+  private suspend fun TestScope.awaitStartedRun(
+    controller: ChatController,
+    runId: String,
+  ) {
+    controller.outboxItems.first { items -> items.any { it.id == runId && it.status == ChatOutboxStatus.Accepted } }
+    controller.selectedActiveRunPresentation.first { it.runId == runId }
+    runCurrent()
   }
 
   private fun TestScope.recoverSeqGap(controller: ChatController) {
@@ -1274,6 +1287,7 @@ class ChatControllerReconnectRestoreTest {
 
       assertTrue(controller.sendMessageAwaitAcceptance("survive reconnect", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, runId)
       controller.onDisconnected("Reconnecting…")
       gateway.respondWith(
         "chat.history",
@@ -1402,6 +1416,7 @@ class ChatControllerReconnectRestoreTest {
 
       assertTrue(controller.sendMessageAwaitAcceptance("survive gap", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, runId)
       gateway.respondWith(
         "chat.history",
         history(emptyList(), inFlightRun = runId to "working"),
@@ -1423,6 +1438,7 @@ class ChatControllerReconnectRestoreTest {
 
       assertTrue(controller.sendMessageAwaitAcceptance("survive refresh", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, runId)
       gateway.respondWith(
         "chat.history",
         history(emptyList(), inFlightRun = runId to "working"),
@@ -1476,6 +1492,7 @@ class ChatControllerReconnectRestoreTest {
 
       assertTrue(controller.sendMessageAwaitAcceptance("finished during gap", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, runId)
       gateway.respondWith("chat.history", history(emptyList()))
       recoverSeqGap(controller)
 
@@ -1508,6 +1525,7 @@ class ChatControllerReconnectRestoreTest {
 
       assertTrue(controller.sendMessageAwaitAcceptance("await reply", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, runId)
       val persistedUser = ReplayHistoryMessage("user", "await reply", 1_000, idempotencyKey = "$runId:user")
       gateway.respondWith("chat.history", history(listOf(persistedUser)))
       recoverSeqGap(controller)
@@ -1534,6 +1552,7 @@ class ChatControllerReconnectRestoreTest {
 
       assertTrue(controller.sendMessageAwaitAcceptance("late reply", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, runId)
       val persistedUser = ReplayHistoryMessage("user", "late reply", 1_000, idempotencyKey = "$runId:user")
       var historyCall = 0
       gateway.respond("chat.history") {
@@ -1658,6 +1677,7 @@ class ChatControllerReconnectRestoreTest {
 
       assertTrue(controller.sendMessageAwaitAcceptance("recover error", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, runId)
       var historyCall = 0
       gateway.respond("chat.history") {
         historyCall += 1
@@ -1712,12 +1732,14 @@ class ChatControllerReconnectRestoreTest {
 
       assertTrue(controller.sendMessageAwaitAcceptance("slow first", "off", emptyList()))
       val firstRunId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, firstRunId)
       advanceTimeBy(120_000)
       runCurrent()
       assertEquals("Timed out waiting for a reply; try again or refresh.", controller.errorText.value)
 
       assertTrue(controller.sendMessageAwaitAcceptance("newer work", "off", emptyList()))
       val secondRunId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, secondRunId)
       controller.handleGatewayEvent(
         "chat",
         chatDeltaPayload("main", secondRunId, 1, "new", "new reply"),
@@ -1843,6 +1865,7 @@ class ChatControllerReconnectRestoreTest {
       val controller = loadController(gateway)
       assertTrue(controller.sendMessageAwaitAcceptance("ordered loading", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, runId)
 
       val recoveryStarted = CompletableDeferred<Unit>()
       val releaseRecovery = CompletableDeferred<String>()

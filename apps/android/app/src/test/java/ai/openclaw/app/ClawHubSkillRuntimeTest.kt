@@ -232,7 +232,8 @@ class ClawHubSkillRuntimeTest {
           assertEquals("Installed registry-slug.", runtime.clawHubSkillSearchState.value.messageText)
           assertNull(runtime.clawHubSkillSearchState.value.errorText)
           assertTrue(
-            runtime.skillsState.value.summary.skills
+            checkNotNull(runtime.skillsState.value.summary)
+              .skills
               .isEmpty(),
           )
           assertEquals(1, installCalls.get())

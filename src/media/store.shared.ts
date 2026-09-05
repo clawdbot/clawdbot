@@ -4,6 +4,15 @@ import { formatByteSize } from "@openclaw/normalization-core";
 // directory is the trust boundary. Temp and final writes must use one mode.
 export const MEDIA_FILE_MODE = 0o644;
 
+export function formatMediaSize(bytes: number): string {
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "mega",
+    separator: "",
+    fractionDigits: (value) => (Number.isInteger(value) ? 0 : 2),
+  });
+}
+
 /** Stable error categories for unsafe or failed source-file ingestion. */
 type SaveMediaSourceErrorCode =
   | "invalid-path"
@@ -23,12 +32,7 @@ export class SaveMediaSourceError extends Error {
   }
 
   static tooLarge(maxBytes: number, options?: ErrorOptions): SaveMediaSourceError {
-    const limit = formatByteSize(maxBytes, {
-      style: "legacy-binary",
-      maxUnit: "mega",
-      separator: "",
-      fractionDigits: (value) => (Number.isInteger(value) ? 0 : 2),
-    });
+    const limit = formatMediaSize(maxBytes);
     return new SaveMediaSourceError("too-large", `Media exceeds ${limit} limit`, options);
   }
 }

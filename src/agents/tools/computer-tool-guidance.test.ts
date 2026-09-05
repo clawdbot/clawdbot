@@ -59,7 +59,7 @@ describe("computer tool guidance", () => {
       }),
     );
     expect(windowBackground).toContain(
-      "elementRef from the latest observation > window pixels from the latest window image",
+      "elementRef from the latest observation > window coordinates from the latest observation",
     );
     expect(windowBackground).toContain('deliveryMode:"background"');
     expect(windowBackground).toContain("background_occluded");

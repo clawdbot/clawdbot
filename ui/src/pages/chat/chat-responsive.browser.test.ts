@@ -287,6 +287,7 @@ function readUiCss(): string {
     "ui/src/styles/chat/working-indicator.css",
     "ui/src/styles/chat/question-card.css",
     "ui/src/styles/chat/sidebar.css",
+    "ui/src/styles/chat/side-panel.css",
   ];
   cachedUiCss = files.map((file) => readStyleSheet(file)).join("\n");
   return cachedUiCss;
@@ -327,9 +328,10 @@ function queueMatrixCellHtml(
   const disconnected = runtime === "disconnected";
   const editing = variant === "editing";
   const steerMode = mode === "steer";
-  const badge = steerMode
-    ? `<span class="chat-queue__badge chat-queue__badge--steered">Steer</span>`
-    : "";
+  const badge =
+    steerMode && runtime === "connected-idle" && !editing
+      ? `<span class="chat-queue__badge chat-queue__badge--steered">Steer</span>`
+      : "";
   const state = disconnected ? '<span class="chat-queue__state">Waiting for reconnect</span>' : "";
   const copy = editing
     ? `<textarea class="chat-queue__edit-input">Edit ${mode} message</textarea>`
@@ -1237,125 +1239,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("centers the face switch while the identity trail truncates", async () => {
-    const page = await openBrowserPage(800, 180);
-    try {
-      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
-      const boardCss = readStyleSheet("ui/src/styles/chat/board.css");
-      const settingsControlsCss = readStyleSheet("ui/src/styles/settings-controls.css");
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}\n${settingsControlsCss}\n${splitViewCss}\n${boardCss}</style></head><body>
-          <div class="chat-pane__header chat-pane__header--centered" style="width: 720px;">
-            <div class="chat-pane__header-leading">
-              <div class="chat-pane__crumbs">
-                <span class="chat-pane__session-title">
-                  <span class="chat-pane__session-title-text">A deliberately long session title that must yield to the centered face switch</span>
-                </span>
-              </div>
-            </div>
-            <div class="chat-pane__header-center">
-              <div class="chat-pane__face-switch">
-                <div class="settings-segmented">
-                  <button class="settings-segmented__btn" type="button">Chat</button>
-                  <button class="settings-segmented__btn settings-segmented__btn--active" type="button">Split</button>
-                  <button class="settings-segmented__btn" type="button">Dashboard</button>
-                </div>
-              </div>
-              <wa-dropdown class="chat-pane__sharing-menu">
-                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__sharing-trigger" type="button">S</button>
-              </wa-dropdown>
-            </div>
-            <div class="chat-pane__header-trailing">
-              <div class="chat-pane__actions">
-                <button class="btn btn--ghost btn--icon chat-icon-btn" type="button">A</button>
-                <button class="btn btn--ghost btn--icon chat-icon-btn" type="button">B</button>
-                <button class="btn btn--ghost btn--icon chat-icon-btn" type="button">C</button>
-              </div>
-            </div>
-          </div>
-        </body></html>`,
-      );
-
-      const geometry = await page.locator(".chat-pane__header").evaluate((header) => {
-        const headerElement = header as HTMLElement;
-        const style = getComputedStyle(headerElement);
-        const rect = headerElement.getBoundingClientRect();
-        const faceRect = headerElement
-          .querySelector<HTMLElement>(".chat-pane__face-switch")!
-          .getBoundingClientRect();
-        const title = headerElement.querySelector<HTMLElement>(".chat-pane__session-title-text")!;
-        const contentWidth =
-          headerElement.clientWidth -
-          Number.parseFloat(style.paddingLeft) -
-          Number.parseFloat(style.paddingRight);
-        return {
-          contentCenter: rect.left + Number.parseFloat(style.paddingLeft) + contentWidth / 2,
-          faceCenter: faceRect.left + faceRect.width / 2,
-          titleClientWidth: title.clientWidth,
-          titleScrollWidth: title.scrollWidth,
-        };
-      });
-
-      expect(Math.abs(geometry.faceCenter - geometry.contentCenter)).toBeLessThanOrEqual(0.5);
-      expect(geometry.titleScrollWidth).toBeGreaterThan(geometry.titleClientWidth);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
-  it("keeps a non-manager draft indicator out of the face switch width", async () => {
-    const page = await openBrowserPage(800, 180);
-    try {
-      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
-      const boardCss = readStyleSheet("ui/src/styles/chat/board.css");
-      const settingsControlsCss = readStyleSheet("ui/src/styles/settings-controls.css");
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}\n${settingsControlsCss}\n${splitViewCss}\n${boardCss}</style></head><body>
-          <div class="chat-pane__header chat-pane__header--centered" style="width: 720px;">
-            <div class="chat-pane__header-leading"></div>
-            <div class="chat-pane__header-center">
-              <div class="chat-pane__face-switch">
-                <div class="settings-segmented">
-                  <button class="settings-segmented__btn" type="button">Chat</button>
-                  <button class="settings-segmented__btn settings-segmented__btn--active" type="button">Split</button>
-                  <button class="settings-segmented__btn" type="button">Dashboard</button>
-                </div>
-              </div>
-              <span class="chat-pane__draft-indicator" title="Draft">👻</span>
-            </div>
-            <div class="chat-pane__header-trailing"></div>
-          </div>
-        </body></html>`,
-      );
-
-      const geometry = await page.locator(".chat-pane__header").evaluate((header) => {
-        const headerElement = header as HTMLElement;
-        const style = getComputedStyle(headerElement);
-        const headerRect = headerElement.getBoundingClientRect();
-        const faceRect = headerElement
-          .querySelector<HTMLElement>(".chat-pane__face-switch")!
-          .getBoundingClientRect();
-        const draftStyle = getComputedStyle(
-          headerElement.querySelector<HTMLElement>(".chat-pane__draft-indicator")!,
-        );
-        const contentWidth =
-          headerElement.clientWidth -
-          Number.parseFloat(style.paddingLeft) -
-          Number.parseFloat(style.paddingRight);
-        return {
-          contentCenter: headerRect.left + Number.parseFloat(style.paddingLeft) + contentWidth / 2,
-          draftPosition: draftStyle.position,
-          faceCenter: faceRect.left + faceRect.width / 2,
-        };
-      });
-
-      expect(geometry.draftPosition).toBe("absolute");
-      expect(Math.abs(geometry.faceCenter - geometry.contentCenter)).toBeLessThanOrEqual(0.5);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
   it("keeps a constrained no-face header to one flex gap", async () => {
     const page = await openBrowserPage(360, 180);
     try {
@@ -1410,10 +1293,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     const page = await openBrowserPage(1100, 240);
     try {
       const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
-      const boardCss = readStyleSheet("ui/src/styles/chat/board.css");
-      const settingsControlsCss = readStyleSheet("ui/src/styles/settings-controls.css");
       await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}\n${settingsControlsCss}\n${splitViewCss}\n${boardCss}</style></head><body>
+        `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
           <div class="chat-split-view__cell" style="width: 320px;">
             <div class="chat-pane__header">
               <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle" type="button">N</button>
@@ -1428,20 +1309,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
               <button class="chat-pane__workspace-chip" type="button">
                 ${iconSvg()}<span>openclaw-workspace</span>
               </button>
-              <div class="chat-pane__face-switch chat-pane__face-switch--split">
-                <div class="settings-segmented">
-                  <button class="settings-segmented__btn" type="button">Chat</button>
-                  <button class="settings-segmented__btn settings-segmented__btn--active" type="button">Split</button>
-                  <button class="settings-segmented__btn" type="button">Dashboard</button>
-                </div>
-                <wa-dropdown class="chat-pane__dock-caret">
-                  <button
-                    slot="trigger"
-                    class="btn btn--ghost btn--icon chat-icon-btn chat-pane__dock-caret-trigger"
-                    type="button"
-                  >B</button>
-                </wa-dropdown>
-              </div>
               <wa-dropdown class="chat-pane__sharing-menu">
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__sharing-trigger" type="button">S</button>
               </wa-dropdown>
@@ -1469,7 +1336,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const selectors = [
         "openclaw-session-owner-chip",
         ".chat-side-panel-toggle",
-        ".chat-pane__dock-caret",
         ".chat-pane__sharing-menu",
         ".chat-pane__branches-menu",
         ".chat-pane__gateway-menu",
@@ -2110,39 +1976,45 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   });
 
   it.each([
-    [1200, 800, "desktop", false],
-    [900, 500, "mobile-landscape-900", false],
-    [640, 900, "mobile-responsive-640", false],
-    [320, 568, "mobile-320", false],
-    [375, 812, "mobile-375", false],
-    [430, 932, "mobile-430", false],
-    [1200, 800, "desktop-with-pull-request", true],
-    [375, 812, "mobile-with-pull-request", true],
+    [1200, 800, "desktop", "overlay", false],
+    [900, 500, "mobile-landscape-900", "inline", false],
+    [640, 900, "mobile-responsive-640", "overlay", false],
+    [320, 568, "mobile-320", "overlay", false],
+    [375, 812, "mobile-375", "overlay", false],
+    [430, 932, "mobile-430", "overlay", false],
+    [1200, 800, "desktop-with-pull-request", "overlay", true],
+    [375, 812, "mobile-with-pull-request", "overlay", true],
   ] as const)(
-    "keeps floating notices clear of mobile chrome without shifting the %sx%s (%s) transcript layout",
-    async (width, height, label, withPullRequest) => {
+    "keeps floating notices below menus and clear of mobile chrome without shifting the %sx%s (%s) transcript layout",
+    async (width, height, label, menuPlacement, withPullRequest) => {
       const page = await openBrowserPage(width, height);
       try {
         await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body style="margin:0;height:100vh;overflow:hidden">
           <div class="shell shell--chat ${label.startsWith("mobile") ? "shell--mobile-nav shell--merged-chat-chrome" : ""}">
             <main class="content content--chat" style="padding:0">
-              <section class="card chat">
-                <div class="chat-main">
-                  <div class="chat-main__conversation-column">
-                    <header class="chat-pane__header">Session</header>
-                    <div class="chat-topbar-notices"></div>
-                    <div class="chat-main__conversation">
-                      <div class="chat-thread" role="log"><div class="chat-thread-inner">Transcript</div></div>
-                      <div class="chat-gutter-stack"><div class="task-suggestions">Task suggestion</div></div>
-                      ${withPullRequest ? '<div class="chat-prs"><article class="chat-pr" data-state="open"><a class="chat-pr__link" href="https://github.com/example/repo/pull/42">PR #42</a></article></div>' : ""}
-                      <div class="agent-chat__composer-shell">
-                        <div class="agent-chat__composer-overlay"></div>
-                        <div class="agent-chat__input">Composer</div>
-                      </div>
-                    </div>
-                  </div>
+              <div class="sidebar-region">
+                <div class="sidebar-region__header">
+                  <header class="chat-pane__header">Session</header>
                 </div>
-              </section>
+                  <div class="sidebar-region__primary" data-region="main">
+                    <section class="card chat">
+                      <div class="chat-main">
+                        <div class="chat-main__conversation-column">
+                          <div class="chat-topbar-notices"></div>
+                          <div class="chat-main__conversation">
+                            <div class="chat-thread" role="log"><div class="chat-thread-inner">Transcript</div></div>
+                            <div class="chat-gutter-stack"><div class="task-suggestions">Task suggestion</div></div>
+                            ${withPullRequest ? '<div class="chat-prs"><article class="chat-pr" data-state="open"><a class="chat-pr__link" href="https://github.com/example/repo/pull/42">PR #42</a></article></div>' : ""}
+                            <div class="agent-chat__composer-shell">
+                              <div class="agent-chat__composer-overlay"></div>
+                              <div class="agent-chat__input">Composer</div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+              </div>
             </main>
             <openclaw-toast-host data-toast-placement="shell">
               <div class="app-toast">Connection notice</div>
@@ -2233,12 +2105,101 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         } else {
           expect(
             overlayTops.find((overlay) => overlay.selector === ".chat-topbar-notices")?.top,
-          ).toBeCloseTo(8, 0);
+          ).toBeCloseTo(header.y + header.height + 8, 0);
           expect(overlayTops.find((overlay) => overlay.selector === ".app-toast")?.top).toBeCloseTo(
             20,
             0,
           );
         }
+
+        await page.locator(".agent-chat__input").evaluate((node) => {
+          node.insertAdjacentHTML(
+            "afterbegin",
+            `<div class="slash-menu mention-menu" role="listbox" aria-label="Mention a person">
+              <div class="slash-menu__scroll">
+                <div class="slash-menu-group">
+                  <div class="slash-menu-group__label">Mention a person</div>
+                  <div class="slash-menu-item slash-menu-item--active" role="option" aria-selected="true">
+                    <span class="slash-menu-icon" aria-hidden="true">B</span>
+                    <span class="slash-menu-copy">
+                      <span class="slash-menu-name">Bob</span>
+                      <span class="slash-menu-desc">Online</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>`,
+          );
+          const option = node.querySelector<HTMLElement>('[role="option"]')!;
+          option.addEventListener("click", () => {
+            option.dataset.selected = "true";
+          });
+        });
+        await waitForLayoutSettled(page, ".slash-menu, .chat-error");
+        expect(await geometry()).toEqual(after);
+        const option = page.getByRole("option");
+        const optionBounds = await getBoundingBox(page, ".slash-menu-item");
+        const noticeBounds = await getBoundingBox(page, ".chat-error");
+        expect(
+          await page.locator(".slash-menu").evaluate((node) => getComputedStyle(node).position),
+        ).toBe(menuPlacement === "inline" ? "sticky" : "absolute");
+        let optionPoint: { x: number; y: number };
+        if (menuPlacement === "inline") {
+          // Short landscape keeps the menu inside the input; notices remain above it.
+          const inputBounds = await getBoundingBox(page, ".agent-chat__input");
+          expect(rectsOverlap(optionBounds, noticeBounds)).toBe(false);
+          expect(noticeBounds.y + noticeBounds.height).toBeLessThanOrEqual(optionBounds.y);
+          expect(optionBounds.y).toBeGreaterThanOrEqual(inputBounds.y);
+          expect(optionBounds.y + optionBounds.height).toBeLessThanOrEqual(
+            inputBounds.y + inputBounds.height,
+          );
+          optionPoint = {
+            x: optionBounds.x + optionBounds.width / 2,
+            y: optionBounds.y + optionBounds.height / 2,
+          };
+        } else {
+          expect(rectsOverlap(optionBounds, noticeBounds)).toBe(true);
+          optionPoint = {
+            x:
+              (Math.max(optionBounds.x, noticeBounds.x) +
+                Math.min(
+                  optionBounds.x + optionBounds.width,
+                  noticeBounds.x + noticeBounds.width,
+                )) /
+              2,
+            y:
+              (Math.max(optionBounds.y, noticeBounds.y) +
+                Math.min(
+                  optionBounds.y + optionBounds.height,
+                  noticeBounds.y + noticeBounds.height,
+                )) /
+              2,
+          };
+        }
+        expect(
+          await option.evaluate((node, point) => {
+            const hit = document.elementFromPoint(point.x, point.y);
+            return node.contains(hit) ? "option" : hit?.className;
+          }, optionPoint),
+        ).toBe("option");
+        await page.mouse.click(optionPoint.x, optionPoint.y);
+        expect(await option.getAttribute("data-selected")).toBe("true");
+        await page.locator(".slash-menu").evaluate((node) => node.remove());
+        const noticePoint =
+          menuPlacement === "inline"
+            ? {
+                x: noticeBounds.x + noticeBounds.width / 2,
+                y: noticeBounds.y + noticeBounds.height / 2,
+              }
+            : optionPoint;
+        expect(
+          await page
+            .locator(".chat-error")
+            .evaluate(
+              (node, point) => node.contains(document.elementFromPoint(point.x, point.y)),
+              noticePoint,
+            ),
+        ).toBe(true);
         const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
         if (artifactDir) {
           await mkdir(artifactDir, { recursive: true });
@@ -4286,63 +4247,49 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     },
   );
 
-  it("keeps newly opened sidebar columns transparent while panel owners retain their surface", async () => {
-    const page = await openBrowserPage(1_000, 700);
-    try {
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div class="sidebar-region" style="--panel: rgb(12, 34, 56)">
-            <main class="sidebar-region__primary">Primary chat</main>
-          </div>
-        </body></html>`,
-      );
-
-      const backgrounds = await page.evaluate(() => {
-        const column = document.createElement("section");
-        column.className = "sidebar-column";
-        column.innerHTML = '<div class="sidebar-panel">Owned panel surface</div>';
-        document.querySelector(".sidebar-region")?.append(column);
-        return {
-          column: getComputedStyle(column).backgroundColor,
-          panel: getComputedStyle(column.firstElementChild!).backgroundColor,
-        };
-      });
-
-      expect(backgrounds.column).toBe("rgba(0, 0, 0, 0)");
-      expect(backgrounds.panel).toBe("rgb(12, 34, 56)");
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
-  it("stacks the single side panel below the conversation at the pane breakpoint", async () => {
-    const page = await openBrowserPage(900, 700);
-    try {
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div style="width: 620px; height: 600px; display: flex;">
-            <div class="sidebar-region sidebar-region--narrow">
-              <main class="sidebar-region__primary">Primary chat</main>
-              <section class="sidebar-column side-panel side-panel--narrow">
-                <div class="rail-header side-panel__header">Details</div>
-                <div class="side-panel__body">Active detail panel</div>
+  it.each([
+    { dock: "narrow", width: 620, height: 600 },
+    { dock: "bottom", width: 900, height: 300 },
+    { dock: "bottom", width: 900, height: 1000 },
+  ])(
+    "keeps both stacked panels usable at $width×$height ($dock)",
+    async ({ dock, width, height }) => {
+      const page = await openBrowserPage(1000, 1100);
+      try {
+        await page.setContent(
+          `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div style="width: ${width}px; height: ${height}px; display: flex;">
+            <div class="sidebar-region sidebar-region--${dock} sidebar-region--open" style="--side-panel-height: 360px">
+              <main class="sidebar-region__primary" data-region="main">Primary chat</main>
+              <section class="side-panel">
+                <div class="rail-header side-panel__header" data-region-header="side">Details</div>
+                <div class="side-panel__body">
+                  <div class="side-panel__panel" data-region="side">Active detail panel</div>
+                </div>
               </section>
             </div>
           </div>
         </body></html>`,
-      );
+        );
 
-      await expectNoHorizontalOverflow(page);
-      const primary = await getRect(page, ".sidebar-region__primary");
-      const sidebar = await getRect(page, ".side-panel--narrow");
-      expect(sidebar.top).toBeGreaterThanOrEqual(primary.bottom - 1);
-      expect(Math.abs(sidebar.width - primary.width)).toBeLessThanOrEqual(1);
-      expect(sidebar.width).toBeGreaterThanOrEqual(618);
-      expect(await page.locator(".side-panel").count()).toBe(1);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
+        await expectNoHorizontalOverflow(page);
+        const primary = await getRect(page, ".sidebar-region__primary");
+        const sidebar = await getRect(page, '[data-region="side"]');
+        expect(sidebar.top).toBeGreaterThanOrEqual(primary.bottom - 1);
+        expect(Math.abs(sidebar.width - primary.width)).toBeLessThanOrEqual(1);
+        expect(sidebar.width).toBeGreaterThanOrEqual(width - 2);
+        expect(primary.height).toBeGreaterThan(80);
+        expect(sidebar.height).toBeGreaterThan(80);
+        expect(sidebar.bottom - primary.top).toBe(height);
+        if (dock === "bottom" && height === 1000) {
+          expect(sidebar.height).toBe(360);
+        }
+        expect(await page.locator(".side-panel").count()).toBe(1);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
 
   it("keeps crowded task sections independently scrollable in the side rail", async () => {
     const page = await openBrowserPage(1000, 700);
@@ -5195,6 +5142,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         ];
       });
       expect(Math.max(...closedRowCenters) - Math.min(...closedRowCenters)).toBeLessThan(0.5);
+      await page.locator("#failed-outcome-probe").evaluate(finishElementAnimations);
       const outcomeColors = await page.evaluate(() => ({
         danger: getComputedStyle(document.querySelector("#danger-color-probe")!).color,
         failed: getComputedStyle(document.querySelector("#failed-outcome-probe")!).color,

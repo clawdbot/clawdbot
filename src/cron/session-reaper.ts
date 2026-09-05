@@ -12,6 +12,7 @@ import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isCompetingSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
 import { buildPendingGeneratedMediaSessionKeySet } from "../tasks/task-status-access.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import type { Logger } from "./service/state.js";
@@ -148,6 +149,14 @@ export async function sweepCronRunSessions(params: {
         if (pendingMediaSessionKeys.has(sessionKey)) {
           continue;
         }
+      }
+      // Skip known-busy rows so one active generation cannot abort idle sibling cleanup.
+      // The shared deletion guard still closes the race between selection and commit.
+      if (
+        entry.sessionId &&
+        isCompetingSessionWorkAdmissionActive(storePath, [sessionKey, entry.sessionId])
+      ) {
+        continue;
       }
       removals.push({
         sessionKey,

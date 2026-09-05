@@ -293,6 +293,7 @@ const qaFlowStepSchema = z.object({
   name: z.string().trim().min(1),
   actions: z.array(qaFlowActionSchema).min(1),
   detailsExpr: z.string().trim().min(1).optional(),
+  resultExpr: z.string().trim().min(1).optional(),
 });
 
 const qaFlowSchema = z.object({

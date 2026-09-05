@@ -249,6 +249,9 @@ const sharedRecipe: ConfigStep[] = [
   },
 ];
 
+const connectionOnlySharedIntents = new Set(["gateway"]);
+const connectionOnlyScenarios = new Set(["mobile-pairing-reconnect", "watchos-direct-node"]);
+
 export function resolveUpgradeSurvivorConfigSteps(
   scenario = "base",
   configuredUpdateChannel = process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL,
@@ -259,22 +262,31 @@ export function resolveUpgradeSurvivorConfigSteps(
   if (updateChannel !== "stable" && updateChannel !== "beta") {
     throw new Error(`invalid upgrade survivor update channel: ${updateChannel}`);
   }
-  const sharedSteps = sharedRecipe.slice(0, -1).map((step) => {
-    if (scenario !== "recovery-cleanup" || step.id !== "agents") {
-      return step;
-    }
-    const agentsJson = step.argv[3];
-    if (agentsJson === undefined) {
-      throw new Error(`config recipe step ${step.id} is missing its JSON value`);
-    }
-    // Extend the canonical roster before the baseline adapter chooses entries or legacy list.
-    // A second agents.list write bypasses that version contract and can lose ownership defaults.
-    const agents = JSON.parse(agentsJson);
-    agents.entries["recovery-clean"] = { workspace: "~/workspace/recovery-clean" };
-    agents.entries["recovery-protected"] = { workspace: "~/workspace/recovery-protected" };
-    const argv = [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)];
-    return Object.assign({}, step, { argv });
-  });
+  const sharedSteps = sharedRecipe
+    .slice(0, -1)
+    .filter(
+      (step) =>
+        !connectionOnlyScenarios.has(scenario) || connectionOnlySharedIntents.has(step.intent),
+    )
+    .map((step) => {
+      if (scenario === "mobile-pairing-reconnect" && step.id === "gateway") {
+        return configSetJsonFile("gateway", "gateway", "gateway", "gateway-password.json");
+      }
+      if (scenario !== "recovery-cleanup" || step.id !== "agents") {
+        return step;
+      }
+      const agentsJson = step.argv[3];
+      if (agentsJson === undefined) {
+        throw new Error(`config recipe step ${step.id} is missing its JSON value`);
+      }
+      // Extend the canonical roster before the baseline adapter chooses entries or legacy list.
+      // A second agents.list write bypasses that version contract and can lose ownership defaults.
+      const agents = JSON.parse(agentsJson);
+      agents.entries["recovery-clean"] = { workspace: "~/workspace/recovery-clean" };
+      agents.entries["recovery-protected"] = { workspace: "~/workspace/recovery-protected" };
+      const argv = [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)];
+      return Object.assign({}, step, { argv });
+    });
   return [
     {
       id: "update-channel",
@@ -453,7 +465,7 @@ function applyRecipe() {
   const summaryPath = option("--summary");
   const baselineVersion = option("--baseline-version", null);
   const scenario = selectedScenario();
-  const scenarioSteps = resolveScenarioConfigSteps(scenario);
+  const recipeSteps = resolveUpgradeSurvivorConfigSteps(scenario);
   const summary: {
     source: string;
     recipe: string;
@@ -467,29 +479,21 @@ function applyRecipe() {
     recipe: "upgrade-survivor-v1",
     baselineVersion,
     scenario,
-    acceptedIntents: [
-      "update",
-      "gateway",
-      "models",
-      "agents",
-      "skills",
-      "plugins",
-      "discord-channel",
-      "telegram-channel",
-      "whatsapp-channel",
-      ...scenarioSteps.map((step) => step.intent),
-    ],
+    acceptedIntents: [],
     skippedIntents: [],
     steps: [],
   };
 
-  for (const step of resolveUpgradeSurvivorConfigSteps(scenario)) {
+  for (const step of recipeSteps) {
     const adaptedStep = adaptStepForBaseline(step, baselineVersion, summary);
     if (!adaptedStep) {
       continue;
     }
     const outcome = runUpgradeSurvivorOpenClawStep(adaptedStep);
     summary.steps.push(outcome);
+    if (outcome.ok && !summary.acceptedIntents.includes(adaptedStep.intent)) {
+      summary.acceptedIntents.push(adaptedStep.intent);
+    }
     writeJson(summaryPath, summary);
     if (!outcome.ok) {
       const detail = outcome.errorCode ?? outcome.signal ?? outcome.status ?? "unknown";

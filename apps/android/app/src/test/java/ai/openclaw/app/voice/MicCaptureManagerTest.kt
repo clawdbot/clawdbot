@@ -343,13 +343,12 @@ class MicCaptureManagerTest {
         )
 
       manager.submitTranscribedMessage("gateway A only")
-      assertEquals(listOf("gateway A only"), manager.queuedMessages.value)
+      assertEquals("1 queued · waiting for gateway", manager.statusText.value)
 
       manager.onGatewayScopeChanging()
       manager.onGatewayConnectionChanged(true)
       runCurrent()
 
-      assertEquals(emptyList<String>(), manager.queuedMessages.value)
       assertEquals(emptyList<String>(), sentMessages)
       assertEquals(emptyList<VoiceConversationEntry>(), manager.conversation.value)
     }

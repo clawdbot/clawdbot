@@ -857,6 +857,8 @@ export async function cleanupSessionBeforeMutation(params: {
     registry: getActivePluginRegistry(),
     reason: params.reason === "session-reset" ? "reset" : "delete",
     sessionKey: params.target.canonicalKey ?? params.key,
+    // Unscoped keys can exist in several agent stores; this lifecycle owns only its target.
+    sessionStoreTargets: [params.target],
     shouldCleanup: () => {
       params.assertCurrent?.();
       return true;
@@ -1425,9 +1427,14 @@ export async function performGatewaySessionReset(params: {
       await triggerInternalHook(hookEvent);
       params.assertCurrent?.();
       params.assertAuthorizedInstance?.();
-      // Cleanup below is destructive. Once it starts, finish rotating the same
-      // session even if gateway ownership changes; otherwise runtime state can be
-      // reset while the persisted session still points at the old conversation.
+      // Destructive cleanup adopts only this existing generation. Finish its durable
+      // transition after caller closure; missing-row creation still needs live authority.
+      const assertCompletionAuthorized = hadExistingEntry
+        ? undefined
+        : () => {
+            params.assertCurrent?.();
+            params.assertAuthorizedInstance?.();
+          };
       const runtimeCleanupError = await ensureSessionRuntimeCleanup({
         cfg,
         key: params.key,
@@ -1555,7 +1562,7 @@ export async function performGatewaySessionReset(params: {
       }
 
       let createdNewEntry = false;
-      params.assertAuthorizedInstance?.();
+      assertCompletionAuthorized?.();
       const boundaryEntry = loadSessionEntry(
         params.key,
         requestedAgentId ? { agentId: requestedAgentId } : undefined,
@@ -1569,9 +1576,12 @@ export async function performGatewaySessionReset(params: {
       let creationAuthorizationError: ReturnType<typeof errorShape> | undefined;
       let fastModeSelectionError: ReturnType<typeof missingScopeErrorShape> | undefined;
       const lifecyclePromise = resetSessionEntryLifecycle({
+        commitGuard: assertCompletionAuthorized,
         archivePreviousTranscript: false,
         agentId: target.agentId,
-        resetBoundary: boundaryEntry ? { context: "clear", reason: params.reason } : undefined,
+        resetBoundary: boundaryEntry
+          ? { context: "clear", reason: params.reason, cwd: workspaceDir }
+          : undefined,
         storePath,
         target: {
           canonicalKey: target.canonicalKey,
@@ -1584,7 +1594,7 @@ export async function performGatewaySessionReset(params: {
           ],
         },
         buildNextEntry: ({ currentEntry, primaryKey }) => {
-          params.assertAuthorizedInstance?.();
+          assertCompletionAuthorized?.();
           if (!currentEntry) {
             creationAuthorizationError = authorizeGatewaySessionCreation({
               cfg,
@@ -1610,11 +1620,7 @@ export async function performGatewaySessionReset(params: {
             params.assertCurrent?.();
             throw new Error(`Session ${params.key} changed before reset boundary commit.`);
           }
-          if (
-            currentEntry &&
-            !isResetLifecycleCurrent() &&
-            currentEntry.lifecycleRevision !== resetLifecycleRevision
-          ) {
+          if (currentEntry && currentEntry.lifecycleRevision !== resetLifecycleRevision) {
             // A newer owner already replaced or removed the session while cleanup
             // targeted the old lifecycle. Preserve that newer state instead of resetting it.
             resetSkipped = true;

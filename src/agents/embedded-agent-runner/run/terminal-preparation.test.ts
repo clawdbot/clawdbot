@@ -204,6 +204,38 @@ describe("prepareEmbeddedRunTerminal", () => {
     expect(markedMedia.every((payload) => !payload.text)).toBe(true);
   });
 
+  it.each([
+    { assistantTexts: ["Earlier", "  Latest 😀  ", "\t\r\n"], expected: "Latest 😀" },
+    { assistantTexts: ["Earlier", "\ufeff\u2003Latest\u00a0", "\u2028"], expected: "Latest" },
+    { assistantTexts: ["Earlier", " \u200b "], expected: "\u200b" },
+    { assistantTexts: ["  First line \n second line  "], expected: "First line \n second line" },
+    { assistantTexts: ["Earlier", " \ud800text\udc00 "], expected: "\ud800text\udc00" },
+    { assistantTexts: ["", " \t\r\n", "\ufeff\u2003"], expected: undefined },
+    { assistantTexts: [], expected: undefined },
+  ])(
+    "selects final fallback text without changing its source %#",
+    async ({ assistantTexts, expected }) => {
+      const original = [...assistantTexts];
+      const prepared = await prepareAttempt({
+        attempt: attemptResult({
+          assistantTexts,
+          messagesSnapshot: [],
+          lastAssistant: undefined,
+          currentAttemptAssistant: undefined,
+          currentAttemptCompletedAssistant: undefined,
+        }),
+        terminalState: {
+          outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+          signalOwnedInterruption: false,
+        },
+      });
+
+      expect(prepared.finalAssistantVisibleText).toBe(expected);
+      expect(prepared.finalAssistantRawText).toBe(expected);
+      expect(assistantTexts).toEqual(original);
+    },
+  );
+
   it.each(["error", "aborted"] as const)(
     "does not use %s assistant text as final terminal text",
     async (stopReason) => {
@@ -248,60 +280,85 @@ describe("prepareEmbeddedRunTerminal", () => {
     },
   );
 
-  it("uses the current completed assistant instead of stale session evidence", async () => {
-    const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
-    const finalText = "The requested update is complete.";
-    const staleAssistant = {
-      ...assistantMessage("toolUse"),
-      content: [{ type: "toolCall" as const, id: "tool_1", name: "update_plan", arguments: {} }],
-    };
-    const currentAssistant = {
-      ...assistantMessage("stop"),
-      content: [{ type: "text" as const, text: finalText }],
-      usage: {
-        ...assistantMessage("stop").usage,
-        input: 200,
-        output: 20,
-        totalTokens: 220,
-      },
-    };
-    const prepared = prepareEmbeddedRunTerminal({
-      runParams: {
-        admittedRunContext: createTestAdmittedRunContext("run-current"),
-        sessionId: "session-current",
-        runId: "run-current",
-        workspaceDir: "/tmp/openclaw-test",
-        prompt: "hi",
-        trigger: "user",
-        timeoutMs: 60_000,
-      },
-      attempt: attemptResult({
-        assistantTexts: ["Analysis...", finalText],
-        toolMetas: [{ toolName: "update_plan" }],
-        lastAssistant: staleAssistant,
-        currentAttemptAssistant: currentAssistant,
-        currentAttemptCompletedAssistant: currentAssistant,
-      }),
-      currentAttemptCompletedAssistant: currentAssistant,
-      provider: "openai",
-      model: "gpt-5.4",
-      activeErrorContext: { provider: "openai", model: "gpt-5.4" },
-      authProfileStore: { version: 1, profiles: {} },
-      sessionIdUsed: "session-current",
-      outerContextTokenMeta: {},
-      usageAccumulator: createUsageAccumulator(),
-      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-      resolvedToolResultFormat: "markdown",
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
-    });
+  it.each([true, false])(
+    "uses current-attempt attribution instead of stale session evidence (completed: %s)",
+    async (completed) => {
+      const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
+      const finalText = "The requested update is complete.";
+      const nativeSelection = { provider: "native-provider", model: "native-model" };
+      const staleAssistant = {
+        ...assistantMessage("toolUse"),
+        content: [{ type: "toolCall" as const, id: "tool_1", name: "update_plan", arguments: {} }],
+      };
+      const currentAssistant = {
+        ...assistantMessage("stop"),
+        ...nativeSelection,
+        content: [{ type: "text" as const, text: finalText }],
+        usage: {
+          ...assistantMessage("stop").usage,
+          input: 200,
+          output: 20,
+          totalTokens: 220,
+        },
+      };
+      const completedAssistant = completed ? currentAssistant : undefined;
+      const prepared = prepareEmbeddedRunTerminal({
+        runParams: {
+          admittedRunContext: createTestAdmittedRunContext("run-current"),
+          sessionId: "session-current",
+          runId: "run-current",
+          workspaceDir: "/tmp/openclaw-test",
+          prompt: "hi",
+          trigger: "user",
+          timeoutMs: 60_000,
+        },
+        attempt: attemptResult({
+          assistantTexts: ["Analysis...", finalText],
+          toolMetas: [{ toolName: "update_plan" }],
+          lastAssistant: staleAssistant,
+          currentAttemptAssistant: currentAssistant,
+          currentAttemptCompletedAssistant: completedAssistant,
+          runtimeModelSelection: nativeSelection,
+        }),
+        currentAttemptCompletedAssistant: completedAssistant,
+        provider: "openai",
+        model: "gpt-5.4",
+        activeErrorContext: { provider: "openai", model: "gpt-5.4" },
+        authProfileStore: { version: 1, profiles: {} },
+        sessionIdUsed: "session-current",
+        outerContextTokenMeta: {},
+        usageAccumulator: createUsageAccumulator(),
+        contextRecoveryState: createEmbeddedRunContextRecoveryState(),
+        resolvedToolResultFormat: "markdown",
+        terminalState: {
+          outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+          signalOwnedInterruption: false,
+        },
+      });
 
-    expect(prepared.finalAssistantVisibleText).toBe(finalText);
-    expect(prepared.finalAssistantRawText).toBe(finalText);
-    expect(prepared.agentMeta.lastCallUsage).toMatchObject({ input: 200, output: 20, total: 220 });
-  });
+      expect(prepared.finalAssistantVisibleText).toBe(finalText);
+      expect(prepared.finalAssistantRawText).toBe(finalText);
+      expect(prepared.agentMeta).toMatchObject({
+        ...nativeSelection,
+        runtimeModelSelection: nativeSelection,
+      });
+      expect(payloadMocks.buildEmbeddedRunPayloads).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lastAssistant: completedAssistant,
+          currentAssistant: completedAssistant ?? null,
+        }),
+      );
+      if (completed) {
+        expect(prepared.agentMeta.lastCallUsage).toMatchObject({
+          input: 200,
+          output: 20,
+          total: 220,
+        });
+      } else {
+        expect(prepared.agentMeta.lastCallUsage).toBeUndefined();
+      }
+    },
+  );
 
   it("projects a Code Mode cron tool failure into terminal metadata", async () => {
     const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
@@ -750,6 +807,16 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     expect(prepared.agentMeta.terminalReceipt).not.toHaveProperty("terminalDisposition");
     expect(prepared.agentMeta.model).toBe("cost-model");
     expect(prepared.reportedModelRef.model).toBe("cost-model");
+  });
+
+  it("records producer source delivery without an extracted messaging target", async () => {
+    const prepared = await prepareStats({
+      attempt: {
+        sourceReplyDelivered: true,
+        messagingToolSentTargets: [],
+      },
+    });
+    expect(prepared.agentMeta.terminalReceipt?.sourceReplyDelivered).toBe(true);
   });
 
   it("marks a provider-only response route as rerouted", async () => {

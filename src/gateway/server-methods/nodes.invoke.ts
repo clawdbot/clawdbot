@@ -580,8 +580,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               context,
               client,
               approvalAuthority: forwardedParams.approvalAuthority,
-            }) === undefined &&
-            resolveDispatchAuthorization(context.getRuntimeConfig()).ok,
+            }) === undefined,
           onDispatchReady: (invokeId) => {
             nodeCommandDispatched = true;
             nodeInvokeStream?.onDispatchReady(invokeId);

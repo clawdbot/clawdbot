@@ -468,10 +468,7 @@ class MainViewModel private constructor(
     }
   }
 
-  internal fun resumeNodeServiceForConnection() {
-    if (!prefs.onboardingCompleted.value) return
-    NodeForegroundService.resume(context = nodeApp, startNow = true)
-  }
+  internal fun resumeNodeServiceForConnection(): () -> Boolean = NodeForegroundService.resume(context = nodeApp, startNow = prefs.onboardingCompleted.value)
 
   /**
    * Adapts a runtime StateFlow to a stable ViewModel StateFlow before runtime startup.
@@ -549,8 +546,8 @@ class MainViewModel private constructor(
   val cronRunHistoryState: StateFlow<GatewayCronRunHistoryState> = runtimeState(initial = GatewayCronRunHistoryState.Idle) { it.cronRunHistoryState }
   val cronActionState: StateFlow<GatewayCronActionState> = runtimeState(initial = GatewayCronActionState.Idle) { it.cronActionState }
   val pendingCronRunJobIds: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.pendingCronRunJobIds }
-  internal val usageState = runtimeState(initial = GatewaySummaryState(GatewayUsageSummary(updatedAtMs = null, providers = emptyList()))) { it.usageState }
-  internal val skillsState = runtimeState(initial = GatewaySummaryState(GatewaySkillsSummary(skills = emptyList()))) { it.skillsState }
+  internal val usageState = runtimeState(initial = GatewaySummaryState<GatewayUsageSummary>()) { it.usageState }
+  internal val skillsState = runtimeState(initial = GatewaySummaryState<GatewaySkillsSummary>()) { it.skillsState }
   val clawHubSkillMethodsAvailable: StateFlow<Boolean> =
     runtimeState(initial = false) { it.clawHubSkillMethodsAvailable }
   val skillMutationKeys: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.skillMutationKeys }
@@ -573,9 +570,9 @@ class MainViewModel private constructor(
   val operatorScopes: StateFlow<List<String>> = runtimeState(initial = emptyList()) { it.operatorScopes }
   val devicePairingMutation: StateFlow<GatewayDevicePairingMutation?> =
     runtimeState(initial = null) { it.devicePairingMutation }
-  internal val channelsState = runtimeState(initial = GatewaySummaryState(GatewayChannelsSummary(channels = emptyList()))) { it.channelsState }
-  internal val dreamingState = runtimeState(initial = GatewaySummaryState(GatewayDreamingSummary())) { it.dreamingState }
-  internal val healthLogsState = runtimeState(initial = GatewaySummaryState(GatewayHealthLogsSummary())) { it.healthLogsState }
+  internal val channelsState = runtimeState(initial = GatewaySummaryState<GatewayChannelsSummary>()) { it.channelsState }
+  internal val dreamingState = runtimeState(initial = GatewaySummaryState<GatewayDreamingSummary>()) { it.dreamingState }
+  internal val healthLogsState = runtimeState(initial = GatewaySummaryState<GatewayHealthLogsSummary>()) { it.healthLogsState }
   val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtimeState(initial = null) { it.pendingGatewayTrust }
   val gatewayAccentArgb: StateFlow<Long?> = runtimeState(initial = null) { it.gatewayAccentArgb }
   val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
@@ -801,7 +798,7 @@ class MainViewModel private constructor(
   }
 
   internal fun saveGatewayConfigAndConnect(plan: GatewayConnectPlan) {
-    resumeNodeServiceForConnection()
+    val processIntent = resumeNodeServiceForConnection()
     // Gateway pairing touches encrypted prefs, identity files, and sockets; keep
     // the whole sequence off the Compose thread so retries cannot trigger ANRs.
     launchGatewayConfigOperation { isCurrent ->
@@ -851,6 +848,7 @@ class MainViewModel private constructor(
       )
 
       val runtime = ensureRuntime()
+      val connectionIsCurrent = { isCurrent() && processIntent() }
       if (replacesSavedAuth) {
         runtime.connectSwitchingGateway(
           endpoint,
@@ -859,9 +857,10 @@ class MainViewModel private constructor(
             bootstrapToken = config.bootstrapToken.ifEmpty { null },
             password = config.password.ifEmpty { null },
           ),
+          isCurrent = connectionIsCurrent,
         )
       } else {
-        runtime.connectSwitchingGateway(endpoint)
+        runtime.connectSwitchingGateway(endpoint, isCurrent = connectionIsCurrent)
       }
     }
   }
@@ -1030,9 +1029,8 @@ class MainViewModel private constructor(
   }
 
   internal fun openConversationNotification(target: ConversationNotificationTarget) {
-    resumeNodeServiceForConnection()
-    viewModelScope.launch(Dispatchers.Default) {
-      if (ensureRuntime().openConversationNotificationTarget(target)) {
+    launchGatewayConnectionOperation { runtime, isCurrent ->
+      if (runtime.openConversationNotificationTarget(target, isCurrent) && isCurrent()) {
         _requestedHomeDestination.value = HomeDestination.Chat
       }
     }
@@ -1274,10 +1272,7 @@ class MainViewModel private constructor(
   }
 
   fun refreshGatewayConnection() {
-    resumeNodeServiceForConnection()
-    viewModelScope.launch(Dispatchers.Default) {
-      ensureRuntime().refreshGatewayConnection()
-    }
+    launchGatewayConnectionOperation { runtime, isCurrent -> runtime.refreshGatewayConnection(isCurrent) }
   }
 
   fun startGatewayDiscovery() {
@@ -1285,10 +1280,7 @@ class MainViewModel private constructor(
   }
 
   fun connect(endpoint: GatewayEndpoint) {
-    resumeNodeServiceForConnection()
-    viewModelScope.launch(Dispatchers.Default) {
-      ensureRuntime().connectSwitchingGateway(endpoint)
-    }
+    launchGatewayConnectionOperation { runtime, isCurrent -> runtime.connectSwitchingGateway(endpoint, isCurrent = isCurrent) }
   }
 
   fun connect(
@@ -1297,22 +1289,21 @@ class MainViewModel private constructor(
     bootstrapToken: String?,
     password: String?,
   ) {
-    resumeNodeServiceForConnection()
-    viewModelScope.launch(Dispatchers.Default) {
-      ensureRuntime().connectSwitchingGateway(
+    launchGatewayConnectionOperation { runtime, isCurrent ->
+      runtime.connectSwitchingGateway(
         endpoint,
         NodeRuntime.GatewayConnectAuth(
           token = token,
           bootstrapToken = bootstrapToken,
           password = password,
         ),
+        isCurrent = isCurrent,
       )
     }
   }
 
   fun switchToGateway(stableId: String) {
-    resumeNodeServiceForConnection()
-    launchGatewayConfigOperation { ensureRuntime().switchToGateway(stableId) }
+    launchGatewayConnectionOperation { runtime, isCurrent -> runtime.switchToGateway(stableId, isCurrent) }
   }
 
   fun setGatewayConnectionEnabled(
@@ -1323,12 +1314,21 @@ class MainViewModel private constructor(
   }
 
   fun forgetGateway(stableId: String) {
-    launchGatewayConfigOperation { ensureRuntime().forgetGateway(stableId) }
+    launchGatewayConfigOperation { isCurrent ->
+      ensureRuntime().forgetGateway(stableId, isCurrent)
+    }
   }
 
   fun disconnect() {
+    gatewayConfigOperationSeq.incrementAndGet()
     NodeForegroundService.stop(nodeApp)
-    launchGatewayConfigOperation { runtimeRef.value?.disconnect() }
+  }
+
+  private fun launchGatewayConnectionOperation(action: suspend (NodeRuntime, () -> Boolean) -> Unit) {
+    val processIntent = resumeNodeServiceForConnection()
+    launchGatewayConfigOperation { isCurrent ->
+      action(ensureRuntime()) { isCurrent() && processIntent() }
+    }
   }
 
   private fun launchGatewayConfigOperation(action: suspend (isCurrent: () -> Boolean) -> Unit) {

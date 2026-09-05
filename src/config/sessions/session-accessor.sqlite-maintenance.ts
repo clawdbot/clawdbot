@@ -2,6 +2,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -316,7 +317,7 @@ async function readSessionTranscriptJsonlBytes(
       );
     }
     for (const row of opened.value) {
-      bytesBySessionId.set(row.session_id, Number(row.jsonl_bytes));
+      bytesBySessionId.set(row.session_id, sqliteNumber(row.jsonl_bytes));
     }
   }
   return bytesBySessionId;

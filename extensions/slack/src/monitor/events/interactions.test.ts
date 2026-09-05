@@ -2703,7 +2703,7 @@ describe("registerSlackInteractionEvents", () => {
           elements: [
             {
               type: "mrkdwn",
-              text: ":white_check_mark: *Canary\\_\\*\\`\\~&lt;&amp;&gt;* selected by <@U556>",
+              text: ":white_check_mark: *Canary_*`~&lt;&amp;&gt;* selected by <@U556>",
             },
           ],
         },

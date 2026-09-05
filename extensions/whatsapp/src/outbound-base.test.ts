@@ -578,6 +578,30 @@ describe("createWhatsAppOutboundBase", () => {
     );
   });
 
+  it("returns a real platform identity for routed error payloads", async () => {
+    const sendMessageWhatsApp = vi.fn(async () => ({
+      messageId: "msg-error-1",
+      toJid: "15551234567@s.whatsapp.net",
+    }));
+    const outbound = createWhatsAppOutboundBase({
+      sendMessageWhatsApp,
+      sendPollWhatsApp: vi.fn(),
+      shouldLogVerbose: () => false,
+      resolveTarget: ({ to }) => ({ ok: true as const, to: to ?? "" }),
+    });
+
+    const result = await outbound.sendPayload!({
+      cfg: {} as never,
+      to: "whatsapp:+15551234567",
+      text: "",
+      payload: { text: "⚠️ the run ended without an answer", isError: true },
+      deps: { sendWhatsApp: sendMessageWhatsApp },
+    });
+
+    expect(sendMessageWhatsApp).toHaveBeenCalledTimes(1);
+    expect(result.messageId).toBe("msg-error-1");
+  });
+
   it("normalizes mediaUrls before payload delivery", async () => {
     const sendMessageWhatsApp = vi.fn(async () => ({
       messageId: "msg-1",

@@ -286,6 +286,7 @@ async function prepareSimpleCompletionModelCore(
         readOnly: true,
         allowKeychainPrompt: false,
         config: params.cfg,
+        profileId: params.profileId,
       })
     : undefined;
   try {
@@ -647,6 +648,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
 }
 
 export async function completeWithPreparedSimpleCompletionModel(params: {
+  assertCurrent?: () => void;
   model: Model;
   auth: ResolvedProviderAuth;
   context: Parameters<typeof completeSimple>[1];
@@ -676,7 +678,12 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
   if (strictReasoningTags) {
     reasoningTagTextPolicy.markStrict(completionOptions);
   }
-  return await completeSimple(completionModel, params.context, completionOptions);
+  return await completeSimple(
+    completionModel,
+    params.context,
+    completionOptions,
+    params.assertCurrent,
+  );
 }
 
 function normalizeSimpleCompletionReasoning(

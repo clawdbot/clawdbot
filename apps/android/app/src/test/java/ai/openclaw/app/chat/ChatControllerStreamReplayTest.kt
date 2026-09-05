@@ -16,15 +16,27 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 /**
  * Deterministic streaming replay scenarios: a ScriptedGateway replays scripted
  * chat.event/chat.history sequences into ChatController under virtual time.
  */
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerStreamReplayTest {
   private val json = Json { ignoreUnknownKeys = true }
 
-  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = this, json = json, requestGateway = gateway::request)
+  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = this, commandOutbox = this.createChatCommandOutbox(), cacheScope = { ChatCacheScope("gateway-test", 1L) }, json = json, requestGateway = gateway::request)
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  private fun TestScope.loadController(gateway: ScriptedGateway): ChatController {
+    gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+    return newController(gateway).also {
+      it.load("main")
+      runCurrent()
+    }
+  }
 
   private fun transcript(controller: ChatController): List<Pair<String, String?>> =
     controller.messages.value.map { message ->
@@ -46,8 +58,7 @@ class ChatControllerStreamReplayTest {
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.handleGatewayEvent("health", null)
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("Hello there", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
@@ -106,8 +117,7 @@ class ChatControllerStreamReplayTest {
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.handleGatewayEvent("health", null)
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("dedupe me", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
@@ -132,12 +142,13 @@ class ChatControllerStreamReplayTest {
       controller.handleGatewayEvent("chat", terminal)
       advanceUntilIdle()
       val idsAfterFirstTerminal = controller.messages.value.map { it.id }
+      val historyCallsAfterFirstTerminal = gateway.callCount("chat.history")
 
       // Once ownership resolves, redelivered terminal events are ignored.
       controller.handleGatewayEvent("chat", terminal)
       advanceUntilIdle()
 
-      assertEquals(1, gateway.callCount("chat.history"))
+      assertEquals(historyCallsAfterFirstTerminal, gateway.callCount("chat.history"))
       assertEquals(
         listOf("user" to "dedupe me", "assistant" to "Only once."),
         transcript(controller),
@@ -153,8 +164,7 @@ class ChatControllerStreamReplayTest {
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.handleGatewayEvent("health", null)
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("never answered", "off", emptyList()))
       assertEquals(1, controller.pendingRunCount.value)
@@ -217,8 +227,7 @@ class ChatControllerStreamReplayTest {
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.handleGatewayEvent("health", null)
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("first", "off", emptyList()))
       val firstRunId = requireNotNull(gateway.lastRunId)
@@ -273,8 +282,7 @@ class ChatControllerStreamReplayTest {
       }
     }
     gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
-    val controller = newController(gateway)
-    controller.handleGatewayEvent("health", null)
+    val controller = loadController(gateway)
 
     assertTrue(controller.sendMessageAwaitAcceptance("failed send", "off", emptyList()))
     val runId = if (rekey) "canonical-run" else requireNotNull(gateway.lastRunId)
@@ -326,8 +334,7 @@ class ChatControllerStreamReplayTest {
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.handleGatewayEvent("health", null)
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("no output", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
@@ -357,8 +364,7 @@ class ChatControllerStreamReplayTest {
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.handleGatewayEvent("health", null)
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("survive reconnect", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
@@ -426,8 +432,7 @@ class ChatControllerStreamReplayTest {
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.handleGatewayEvent("health", null)
+      val controller = loadController(gateway)
       assertTrue(controller.sendMessageAwaitAcceptance("edit the file", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
 
@@ -816,8 +821,7 @@ class ChatControllerStreamReplayTest {
 
       val gateway = ScriptedGateway(json)
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.handleGatewayEvent("health", null)
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("render markdown shapes", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)

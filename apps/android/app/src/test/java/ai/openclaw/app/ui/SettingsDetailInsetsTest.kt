@@ -53,6 +53,7 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isEnabled
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -906,7 +907,14 @@ class SettingsDetailInsetsTest {
 
     fun awaitReply(text: String) {
       composeRule.waitUntil(timeoutMillis = 5_000) {
-        runtime.systemAgentChatState.value.let { !it.sending && it.messages.lastOrNull()?.text == text }
+        val completed = runtime.systemAgentChatState.value.let { !it.sending && it.messages.lastOrNull()?.text == text }
+        // Publication can precede downstream collection; observe the real composer before geometry.
+        // Frozen-clock callers deliberately inspect publication before advancing their next frame.
+        if (!completed || !composeRule.mainClock.autoAdvance) return@waitUntil completed
+        composeRule
+          .onAllNodes(SemanticsMatcher.keyIsDefined(SemanticsProperties.EditableText) and isEnabled(), useUnmergedTree = true)
+          .fetchSemanticsNodes()
+          .isNotEmpty()
       }
       composeRule.waitForIdle()
     }

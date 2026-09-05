@@ -319,7 +319,7 @@ describe("pending session placement recovery state", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("captures creating recovery without sharing mutable payloads", () => {
+  it("captures named creating recovery without sharing mutable payloads", () => {
     const pending = new PendingSessionPlacementRecoveryState();
     expect(
       pending.stageCreate({
@@ -329,7 +329,13 @@ describe("pending session placement recovery state", () => {
         attachments: [{ type: "image" }],
         gatewayUrl: "ws://gateway.example",
         recoveryScope: "principal-a",
-        createParams: { agentId: "cloud", message: "", worktree: true },
+        createParams: {
+          agentId: "cloud",
+          message: "",
+          displayName: "Repair naming",
+          worktreeName: "my-explicit-branch",
+          worktree: true,
+        },
       }),
     ).not.toBeNull();
 
@@ -337,7 +343,11 @@ describe("pending session placement recovery state", () => {
     expect(captured).toMatchObject({
       phase: "creating",
       message: "run remotely",
-      createParams: { key: pending.sessionKey },
+      createParams: {
+        key: pending.sessionKey,
+        displayName: "Repair naming",
+        worktreeName: "my-explicit-branch",
+      },
     });
     expect(captured?.attachments).not.toBe(pending.attachments);
     expect(captured?.createParams).not.toBe(pending.createParams);

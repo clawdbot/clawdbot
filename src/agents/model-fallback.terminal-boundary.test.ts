@@ -3,8 +3,9 @@ import { GatewayDrainingError } from "../process/gateway-work-admission.js";
 import { createCliOutputFailoverError } from "./cli-runner/output-error.js";
 import {
   FailoverError,
-  findCliMaxTurnsError,
+  findCliTerminalStopError,
   findCliTimeoutError,
+  recordModelFallbackStop,
   resolveModelFallbackError,
 } from "./failover-error.js";
 import { AgentHarnessPreflightError, recordAgentHarnessPreflightOwner } from "./harness/errors.js";
@@ -37,6 +38,25 @@ beforeEach(() => {
 function maxTurns() {
   return new FailoverError("recorded terminal stop", { reason: "unknown", code: "cli_max_turns" });
 }
+
+const terminalStops = [
+  { name: "max turns", make: maxTurns },
+  {
+    name: "CLI turn stopped",
+    make: () =>
+      new FailoverError("recorded turn stop", { reason: "unknown", code: "cli_turn_stopped" }),
+  },
+  {
+    name: "failed owned cleanup",
+    make: () => {
+      const error = Object.freeze(
+        new FailoverError("provider auth failure", { reason: "auth", status: 401 }),
+      );
+      recordModelFallbackStop(error);
+      return error;
+    },
+  },
+];
 
 const fallbackOptions = {
   cfg: undefined,
@@ -84,8 +104,13 @@ const wrappers = [
   },
 ];
 
-it.each(wrappers)("does not replay a terminal $name failure", async ({ wrap }) => {
-  const error = wrap(maxTurns());
+it.each(
+  wrappers.flatMap((wrapper) =>
+    terminalStops.map((stop) => ({ ...wrapper, stop: stop.name, make: stop.make })),
+  ),
+)("does not replay $stop through a $name wrapper", async ({ wrap, make }) => {
+  const error = wrap(make());
+  expect(resolveModelFallbackError(error)).toEqual({ kind: "terminal", error });
   const run = vi.fn().mockRejectedValue(error);
   const onError = vi.fn();
   await expect(runWithModelFallback({ ...fallbackOptions, run, onError })).rejects.toBe(error);
@@ -198,25 +223,28 @@ it.each(["throw", "reject"] as const)(
   },
 );
 
-it("does not replay a terminal failure returned by result classification", async () => {
-  const error = new AggregateError([maxTurns()], "wrapper");
-  const run = vi.fn().mockResolvedValue("partial result");
-  const onError = vi.fn();
-  await expect(
-    runWithModelFallback({
-      ...fallbackOptions,
-      run,
-      onError,
-      classifyResult: () => ({ error }),
-    }),
-  ).rejects.toBe(error);
-  expect(run).toHaveBeenCalledTimes(1);
-  expect(onError).not.toHaveBeenCalled();
-  expect(providerHook).not.toHaveBeenCalled();
-});
+it.each(terminalStops)(
+  "does not replay $name returned by result classification",
+  async ({ make }) => {
+    const error = new AggregateError([make()], "wrapper");
+    const run = vi.fn().mockResolvedValue("partial result");
+    const onError = vi.fn();
+    await expect(
+      runWithModelFallback({
+        ...fallbackOptions,
+        run,
+        onError,
+        classifyResult: () => ({ error }),
+      }),
+    ).rejects.toBe(error);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(providerHook).not.toHaveBeenCalled();
+  },
+);
 
-it("stops image fallback at the same terminal boundary", async () => {
-  const error = new AggregateError([maxTurns()], "wrapper");
+it.each(terminalStops)("stops image fallback after $name", async ({ make }) => {
+  const error = new AggregateError([make()], "wrapper");
   const run = vi.fn().mockRejectedValue(error);
   await expect(
     runWithImageModelFallback({
@@ -293,15 +321,15 @@ it("still classifies a genuine provider failure through its hook", async () => {
   expect(providerHook).toHaveBeenCalledTimes(1);
 });
 
-it("preserves coordination precedence and suspension discard for mixed failures", () => {
-  const error = new AggregateError([maxTurns(), new GatewayDrainingError()], "wrapper");
+it.each(terminalStops)("preserves coordination precedence over $name", ({ make }) => {
+  const error = new AggregateError([make(), new GatewayDrainingError()], "wrapper");
   expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
   expect(shouldDiscardDeferredSessionSuspension({ error })).toBe(true);
   expect(providerHook).not.toHaveBeenCalled();
 });
 
 describe.each([
-  { name: "max turns", find: findCliMaxTurnsError, make: maxTurns },
+  { name: "max turns", find: findCliTerminalStopError, make: maxTurns },
   {
     name: "CLI timeout",
     find: findCliTimeoutError,

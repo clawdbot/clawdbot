@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   appendTranscriptMessage,
   bindSessionPendingInputSources,
@@ -9,12 +11,128 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  clearUserProfileAuthLink,
+  listUserProfileAuthLinks,
+  readUserModelAuthProfile,
+} from "../../state/user-model-accounts.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import { connectChatMetadataAccount } from "./chat-metadata-runtime.test-support.js";
+import { identifiedClient } from "./sessions-read-cache.test-support.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+
+function createPersonalMetadataFixture() {
+  const owner = ensureProfileForEmail("metadata-owner@example.test");
+  const authProfileId = connectChatMetadataAccount(owner.id);
+  const client: NonNullable<GatewayRequestHandlerOptions["client"]> & { connId: string } = {
+    connId: "metadata-owner-connection",
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
+      role: "operator",
+      scopes: ["operator.read"],
+    },
+    authenticatedUserProfile: {
+      profileId: owner.id,
+      displayName: owner.displayName,
+      hasAvatar: false,
+      updatedAt: owner.updatedAt,
+    },
+  };
+  const config = {
+    gateway: {
+      roles: {
+        default: "reader",
+        definitions: {
+          reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "none" } },
+        },
+      },
+    },
+  } satisfies OpenClawConfig;
+  const clients = new Set([client]);
+  const metadata = { models: [], swarmEnabled: false };
+  const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(async () => metadata);
+  const context = createDirectChatContext({
+    getRuntimeConfig: () => config,
+    readChatMetadata,
+    getClientConnIds: (filter) =>
+      new Set(
+        [...clients]
+          .filter((current) => !filter || filter(current))
+          .map((current) => current.connId),
+      ),
+  });
+  const request = async (
+    params: Record<string, unknown>,
+    overrides: Partial<Pick<GatewayRequestHandlerOptions, "client" | "signal">> = {},
+  ) => {
+    const respond = vi.fn<RespondFn>();
+    await expectDefined(
+      chatHistoryHandlers["chat.metadata"],
+      "metadata handler",
+    )({
+      params,
+      context,
+      client,
+      respond,
+      req: { type: "req", id: "draft-preview", method: "chat.metadata" },
+      isWebchatConnect: () => false,
+      ...overrides,
+    });
+    return respond;
+  };
+  return { owner, authProfileId, client, clients, config, metadata, readChatMetadata, request };
+}
 
 describe("chat history model selection defaults", () => {
+  it("keeps a stored literal global conversation separate from main in per-sender scope", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = {
+        session: { scope: "per-sender" },
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      } satisfies OpenClawConfig;
+      await state.writeConfig(cfg);
+      for (const agentId of ["ops", "research"]) {
+        await upsertSessionEntryCore(
+          { agentId, sessionKey: "global" },
+          { sessionId: `global-${agentId}`, updatedAt: 1 },
+        );
+      }
+      await upsertSessionEntryCore(
+        { agentId: "research", sessionKey: "agent:research:main" },
+        { sessionId: "main-research", updatedAt: 1 },
+      );
+      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const client = identifiedClient("literal-global-operator");
+      client.connect.scopes = ["operator.admin"];
+      for (const [sessionKey, sessionId] of [
+        ["global", "global-research"],
+        ["agent:research:main", "main-research"],
+      ]) {
+        const respond = vi.fn<RespondFn>();
+        await expectDefined(
+          chatHistoryHandlers["chat.history"],
+          "history handler",
+        )({
+          params: { sessionKey, agentId: "research" },
+          context,
+          req: { type: "req", id: "literal-global", method: "chat.history" },
+          client,
+          isWebchatConnect: () => false,
+          respond,
+        });
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ sessionKey, sessionId }),
+        );
+      }
+    });
+  });
+
   it.each(["chat.history", "chat.startup"] as const)(
     "%s projects the non-primary agent's resolved selection target",
     async (method) => {
@@ -357,6 +475,132 @@ describe("chat history exact-entry snapshots", () => {
 });
 
 describe("chat metadata ownership", () => {
+  it("previews a retained personal account with read scope without changing its cleared default", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
+      const { owner, authProfileId, metadata, readChatMetadata, request } =
+        createPersonalMetadataFixture();
+      clearUserProfileAuthLink({ profileId: owner.id, provider: "openai" });
+      const before = readUserModelAuthProfile(authProfileId);
+
+      const respond = await request({ agentId: "main", authProfileId });
+
+      expect(respond).toHaveBeenCalledWith(true, metadata);
+      expect(readChatMetadata).toHaveBeenCalledWith({
+        agentId: "main",
+        requesterProfileId: owner.id,
+        draftAccountSelection: expect.objectContaining({
+          owner: owner.id,
+          authProfileId,
+          assertCurrent: expect.any(Function),
+        }),
+      });
+      expect(listUserProfileAuthLinks(owner.id)).toEqual([]);
+      expect(readUserModelAuthProfile(authProfileId)).toEqual(before);
+    });
+  });
+
+  it.each([
+    "foreign admin",
+    "unidentified admin",
+    "anonymous",
+    "synthetic owner",
+    "forged locator",
+  ] as const)(
+    "rejects a personal draft preview from %s before projecting credentials",
+    async (caller) => {
+      await withOpenClawTestState({ layout: "state-only" }, async () => {
+        const { owner, client, authProfileId, readChatMetadata, request } =
+          createPersonalMetadataFixture();
+        client.connect.scopes = ["operator.admin"];
+        let requestedProfile = authProfileId;
+        if (caller === "foreign admin") {
+          const other = ensureProfileForEmail("metadata-other@example.test");
+          client.authenticatedUserProfile = {
+            profileId: other.id,
+            displayName: other.displayName,
+            hasAvatar: false,
+            updatedAt: other.updatedAt,
+          };
+        } else if (caller === "unidentified admin") {
+          delete client.authenticatedUserProfile;
+        } else if (caller === "synthetic owner") {
+          client.internal = { syntheticClient: true };
+        } else if (caller === "forged locator") {
+          requestedProfile = `personal:${owner.id}:${randomUUID()}`;
+        }
+
+        const respond = await request(
+          { agentId: "main", authProfileId: requestedProfile },
+          caller === "anonymous" ? { client: null } : {},
+        );
+
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "FORBIDDEN" }),
+        );
+        expect(readChatMetadata).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it("rejects combining a personal draft preview with a persisted session selector", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
+      const { authProfileId, readChatMetadata, request } = createPersonalMetadataFixture();
+      const respond = await request({
+        agentId: "main",
+        sessionKey: "agent:main:existing",
+        authProfileId,
+      });
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "INVALID_REQUEST" }),
+      );
+      expect(readChatMetadata).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(["disconnect", "role loss", "abort"] as const)(
+    "rejects a personal draft preview after %s during the metadata read",
+    async (loss) => {
+      await withOpenClawTestState({ layout: "state-only" }, async () => {
+        const { client, clients, authProfileId, config, metadata, readChatMetadata, request } =
+          createPersonalMetadataFixture();
+        const entered = createDeferred();
+        const release = createDeferred();
+        const abort = new AbortController();
+        readChatMetadata.mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          return metadata;
+        });
+        const pending = request({ agentId: "main", authProfileId }, { signal: abort.signal });
+        try {
+          await Promise.race([entered.promise, pending]);
+          expect(readChatMetadata).toHaveBeenCalledOnce();
+          if (loss === "disconnect") {
+            clients.delete(client);
+          } else if (loss === "role loss") {
+            config.gateway.roles.definitions.reader.scopes = [];
+          } else {
+            abort.abort();
+          }
+        } finally {
+          release.resolve();
+          await pending;
+        }
+        const respond = await pending;
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "FORBIDDEN" }),
+        );
+      });
+    },
+  );
+
   it("reads the persisted session profile without contaminating neutral agent metadata", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:locked";
@@ -390,6 +634,7 @@ describe("chat metadata ownership", () => {
         [
           {
             agentId: "main",
+            sessionKey,
             sessionEntry: expect.objectContaining({
               authProfileOverride: "test:locked",
               authProfileOverrideSource: "user",

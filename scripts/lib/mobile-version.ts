@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { parseReleaseVersion } from "./release-version.mjs";
+import { parsePinnedReleaseVersion } from "./release-version.mjs";
 
 const MOBILE_VERSION_FILE = "apps/mobile/version.json";
 
@@ -9,14 +9,13 @@ export type MobileVersionManifest = {
 };
 
 export function normalizeMobileVersion(rawVersion: string): string {
-  const trimmed = rawVersion.trim();
-  const parsed = parseReleaseVersion(trimmed);
-  if (!parsed || parsed.version !== parsed.baseVersion) {
+  const version = parsePinnedReleaseVersion(rawVersion);
+  if (!version) {
     throw new Error(
       `Invalid mobile gateway version '${rawVersion}'. Expected a stable release version like 2026.8.1.`,
     );
   }
-  return parsed.baseVersion;
+  return version;
 }
 
 export function mobileVersionPath(rootDir = path.resolve(".")): string {

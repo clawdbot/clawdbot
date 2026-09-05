@@ -219,6 +219,11 @@ data class GatewayHelloSummary(
   val capabilities: Set<String>? = null,
 )
 
+internal data class GatewaySessionRouting(
+  val mainSessionKey: String?,
+  val mainKey: String?,
+)
+
 data class GatewayUpdateAvailableSummary(
   val currentVersion: String?,
   val latestVersion: String?,
@@ -383,7 +388,8 @@ class GatewaySession(
 
   @Volatile private var pluginSurfaceUrls: Map<String, String> = emptyMap()
 
-  @Volatile private var mainSessionKey: String? = null
+  @Volatile internal var sessionRouting: GatewaySessionRouting? = null
+    private set
 
   private class DesiredConnection(
     val endpoint: GatewayEndpoint,
@@ -478,7 +484,7 @@ class GatewaySession(
           synchronized(notificationLock) {
             if (desired == null) {
               pluginSurfaceUrls = emptyMap()
-              mainSessionKey = null
+              sessionRouting = null
               onDisconnected("Offline")
             }
           }
@@ -631,8 +637,9 @@ class GatewaySession(
     expectedEndpointStableId: String?,
     event: String,
     payloadJson: String?,
+    logFailure: Boolean = true,
   ): Boolean =
-    sendNodeEventWithOutcomeForEndpoint(expectedEndpointStableId, event, payloadJson) ==
+    sendNodeEventWithOutcomeForEndpoint(expectedEndpointStableId, event, payloadJson, logFailure) ==
       NodeEventSendOutcome.COMPLETED
 
   internal suspend fun sendNodeEventWithOutcome(
@@ -644,6 +651,7 @@ class GatewaySession(
     expectedEndpointStableId: String?,
     event: String,
     payloadJson: String?,
+    logFailure: Boolean = true,
   ): NodeEventSendOutcome {
     val conn = readyConnection(expectedEndpointStableId) ?: return NodeEventSendOutcome.DISCONNECTED
     return try {
@@ -659,7 +667,7 @@ class GatewaySession(
       // Voice/audio ownership takeover must cancel before a stale node event dispatches.
       throw err
     } catch (err: Throwable) {
-      Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
+      if (logFailure) Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
       NodeEventSendOutcome.FAILED
     }
   }
@@ -927,7 +935,7 @@ class GatewaySession(
 
   private data class ConnectedGateway(
     val pluginSurfaceUrls: Map<String, String>,
-    val mainSessionKey: String?,
+    val sessionRouting: GatewaySessionRouting,
     val hello: GatewayHelloSummary,
   )
 
@@ -999,7 +1007,9 @@ class GatewaySession(
           tls = target.tls,
           customHeadersProvider = customHeadersProvider,
         )
-      socket = client.newWebSocket(request, listener)
+      // OkHttp can invoke onOpen before newWebSocket returns. Publish under the
+      // send lock so the handshake cannot observe a not-yet-installed socket.
+      writeLock.withLock { socket = client.newWebSocket(request, listener) }
       return connectDeferred.await()
     }
 
@@ -1188,8 +1198,8 @@ class GatewaySession(
       writeLock.withLock {
         currentCoroutineContext().ensureActive()
         withEnqueue {
-          if (socket?.send(jsonString) != true) {
-            // OkHttp returning false means this frame never entered its outgoing queue.
+          if (state.get() == ConnectionState.CLOSED || socket?.send(jsonString) != true) {
+            // Closing during the lock wait, like an OkHttp false return, means no frame was queued.
             throw GatewayRequestNotEnqueued("gateway send failed")
           }
         }
@@ -1530,7 +1540,7 @@ class GatewaySession(
       val nextMainSessionKey = sessionDefaults?.get("mainSessionKey").asStringOrNull()
       return ConnectedGateway(
         pluginSurfaceUrls = nextPluginSurfaceUrls,
-        mainSessionKey = nextMainSessionKey,
+        sessionRouting = GatewaySessionRouting(nextMainSessionKey, sessionDefaults?.get("mainKey").asStringOrNull()),
         hello =
           GatewayHelloSummary(
             serverName = serverName,
@@ -1949,7 +1959,7 @@ class GatewaySession(
             if (currentConnection !== conn || desired !== target || job?.isActive != true || !conn.markReady()) return@withContext
             // Ready metadata precedes callbacks; retries requested by a callback remain queued.
             pluginSurfaceUrls = connected.pluginSurfaceUrls
-            mainSessionKey = connected.mainSessionKey
+            sessionRouting = connected.sessionRouting
             drainReconnectSignals()
             onConnected(connected.hello)
           }
@@ -1966,7 +1976,7 @@ class GatewaySession(
           if (currentConnection === conn) {
             currentConnection = null
             pluginSurfaceUrls = emptyMap()
-            mainSessionKey = null
+            sessionRouting = null
           }
         }
       }

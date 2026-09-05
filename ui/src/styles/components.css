@@ -1038,6 +1038,10 @@ openclaw-session-progress-hovercard-provider {
   background: var(--ok);
 }
 
+.person-activity-card__status--offline > span {
+  background: var(--muted);
+}
+
 .person-activity-card__facts {
   display: grid;
   gap: 12px;
@@ -1209,291 +1213,6 @@ openclaw-session-progress-hovercard-provider {
   .person-activity-card a {
     min-height: 44px;
     align-items: center;
-  }
-}
-
-.github-link-hovercard {
-  position: fixed;
-  inset: auto;
-  margin: 0;
-  z-index: 1990;
-  width: min(440px, calc(100vw - 24px));
-  min-height: 112px;
-  padding: 16px;
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--card) 96%, var(--bg) 4%);
-  box-shadow: var(--overlay-shadow);
-  color: var(--text);
-  font-family: var(--font-body);
-  /* Interactive by design: hover intent and text selection both need the card to
-     receive pointer events (see github-link-hovercard.runtime.ts). */
-  pointer-events: auto;
-  opacity: 0;
-  transform: translateY(-5px) scale(0.99);
-  transform-origin: bottom left;
-  transition:
-    opacity var(--duration-normal) var(--ease-out),
-    transform var(--duration-normal) var(--ease-out);
-}
-
-.github-link-hovercard[data-side="bottom"] {
-  transform: translateY(5px) scale(0.99);
-  transform-origin: top left;
-}
-
-.github-link-hovercard[data-open="true"] {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-}
-
-.github-link-hovercard__header,
-.github-link-hovercard__footer {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.github-link-hovercard__header {
-  gap: 9px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.github-link-hovercard__state {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 9px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, currentColor 12%, transparent);
-  font-weight: 600;
-}
-
-.github-link-hovercard__state[data-tone="open"] {
-  color: var(--ok);
-}
-
-.github-link-hovercard__state[data-tone="danger"] {
-  color: var(--danger);
-}
-
-.github-link-hovercard__state[data-tone="purple"] {
-  color: var(--pr-merged);
-}
-
-.github-link-hovercard__state-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent);
-}
-
-/* The repo reference and author are links too, but the title owns the card's
-   only underline; the rest stay text until hovered or focused. */
-.github-link-hovercard__repo {
-  min-width: 0;
-  color: inherit;
-  overflow: hidden;
-  text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.github-link-hovercard__repo:hover,
-.github-link-hovercard__repo:focus-visible,
-.github-link-hovercard__author:hover,
-.github-link-hovercard__author:focus-visible {
-  color: var(--text-strong);
-  text-decoration: none;
-}
-
-.github-link-hovercard__time {
-  flex: 0 0 auto;
-  margin-left: auto;
-  white-space: nowrap;
-}
-
-.github-link-hovercard__title {
-  display: block;
-  margin: 15px 0 17px;
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-lg);
-  font-weight: 650;
-  letter-spacing: -0.012em;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-  text-decoration: none;
-}
-
-.github-link-hovercard__title:hover,
-.github-link-hovercard__title:focus-visible {
-  text-decoration: underline;
-}
-
-.github-link-hovercard__footer {
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.github-link-hovercard__author,
-.github-link-hovercard__metrics {
-  display: inline-flex;
-  align-items: center;
-}
-
-.github-link-hovercard__coauthors {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  margin-left: 6px;
-}
-
-/* Overlap reads as one group; the ring keeps faces separable against the card. */
-.github-link-hovercard__coauthors .github-link-hovercard__avatar {
-  width: 21px;
-  height: 21px;
-  box-shadow: 0 0 0 2px var(--surface-1);
-}
-
-.github-link-hovercard__coauthors .github-link-hovercard__avatar + .github-link-hovercard__avatar {
-  margin-left: -7px;
-}
-
-.github-link-hovercard__coauthors-more {
-  margin-left: 5px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.github-link-hovercard__author {
-  min-width: 0;
-  gap: 8px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-md);
-  overflow: hidden;
-  text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.github-link-hovercard__avatar {
-  width: 25px;
-  height: 25px;
-  flex: 0 0 auto;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 82%, transparent);
-  border-radius: 50%;
-  background: var(--bg-muted);
-  object-fit: cover;
-}
-
-.github-link-hovercard__metrics {
-  flex: 0 0 auto;
-  gap: 6px;
-}
-
-.github-link-hovercard__metrics--diff .github-link-hovercard__metric {
-  padding: 0;
-  background: none;
-}
-
-.github-link-hovercard__metric {
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg-muted) 82%, transparent);
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.github-link-hovercard__metric--additions {
-  color: var(--ok);
-}
-
-.github-link-hovercard__metric--deletions {
-  color: var(--danger);
-}
-
-.github-link-hovercard__unavailable {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 80px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.github-link-hovercard__skeleton .skeleton {
-  display: block;
-  height: 14px;
-  border-radius: var(--radius-sm);
-}
-
-.github-link-hovercard__skeleton .github-link-hovercard__placeholder--badge {
-  width: 60px;
-  height: 25px;
-  flex-shrink: 0;
-  border-radius: var(--radius-full);
-}
-
-.github-link-hovercard__placeholder--repo {
-  width: 45%;
-}
-
-.github-link-hovercard__placeholder--time {
-  width: 14%;
-  margin-left: auto;
-}
-
-.github-link-hovercard__skeleton .github-link-hovercard__placeholder--title {
-  width: 90%;
-  height: 20px;
-}
-
-.github-link-hovercard__placeholder--author {
-  width: 35%;
-}
-
-.github-link-hovercard__skeleton .github-link-hovercard__placeholder--metrics {
-  width: 38%;
-  height: 25px;
-}
-
-@media (max-width: 560px) {
-  .github-link-hovercard {
-    padding: 14px;
-  }
-
-  .github-link-hovercard__header {
-    flex-wrap: wrap;
-  }
-
-  .github-link-hovercard__time {
-    margin-left: 0;
-  }
-
-  .github-link-hovercard__title {
-    margin: 13px 0 15px;
-  }
-
-  .github-link-hovercard__footer {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .github-link-hovercard__metrics--diff {
-    align-self: flex-end;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .github-link-hovercard {
-    transition: none;
   }
 }
 
@@ -2442,7 +2161,6 @@ openclaw-chat-session-rail {
 }
 
 :root[data-theme-mode="light"] .code-block,
-:root[data-theme-mode="light"] .list-item,
 :root[data-theme-mode="light"] .chip {
   background: var(--bg);
 }
@@ -2678,69 +2396,8 @@ openclaw-chat-session-rail {
   container-type: inline-size;
 }
 
-.list-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(200px, 260px);
-  gap: 16px;
-  align-items: start;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 12px;
-  background: var(--card);
-  transition: border-color var(--duration-fast) ease;
-}
-
-.list-item-clickable {
-  text-decoration: none;
-}
-
-.list-item-clickable:hover {
-  border-color: var(--border-strong);
-}
-
-.list-main {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
 .list-title {
   font-weight: 500;
-}
-
-.list-sub {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.list-meta {
-  text-align: right;
-  color: var(--muted);
-  font-size: 12px;
-  display: grid;
-  gap: 4px;
-  min-width: 200px;
-}
-
-.list-meta .btn {
-  padding: 6px 10px;
-}
-
-.list-meta .field input,
-.list-meta .field textarea,
-.list-meta .field select {
-  width: 100%;
-}
-
-@container (max-width: 560px) {
-  .list-item {
-    grid-template-columns: 1fr;
-  }
-
-  .list-meta {
-    min-width: 0;
-    text-align: left;
-  }
 }
 
 /* ===========================================
@@ -3044,116 +2701,6 @@ td.data-table-key-col {
 .data-table-pagination__controls button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-}
-
-/* ===========================================
-   Log Stream
-   =========================================== */
-
-.log-stream {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--card);
-  max-height: calc(100vh - 280px);
-  min-height: 200px;
-  overflow: auto;
-  container-type: inline-size;
-}
-
-.log-row {
-  display: grid;
-  grid-template-columns: 90px 70px minmax(140px, 200px) minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12px;
-  transition: background var(--duration-fast) ease;
-}
-
-.log-row:hover {
-  background: var(--bg-hover);
-}
-
-.log-row:last-child {
-  border-bottom: none;
-}
-
-.log-time {
-  color: var(--muted);
-  font-family: var(--mono);
-}
-
-.log-level {
-  font-size: 12px; /* was 11px */
-  font-weight: 500;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 2px 6px;
-  width: fit-content;
-}
-
-.log-level.trace,
-.log-level.debug {
-  color: var(--muted);
-}
-
-.log-level.info {
-  color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 30%, transparent);
-}
-
-.log-level.warn {
-  color: var(--warn);
-  border-color: var(--warn-subtle);
-}
-
-.log-level.error,
-.log-level.fatal {
-  color: var(--danger);
-  border-color: var(--danger-subtle);
-}
-
-.log-chip.trace,
-.log-chip.debug {
-  color: var(--muted);
-}
-
-.log-chip.info {
-  color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 30%, transparent);
-}
-
-.log-chip.warn {
-  color: var(--warn);
-  border-color: var(--warn-subtle);
-}
-
-.log-chip.error,
-.log-chip.fatal {
-  color: var(--danger);
-  border-color: var(--danger-subtle);
-}
-
-.log-subsystem {
-  color: var(--muted);
-  font-family: var(--mono);
-}
-
-.log-message {
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: var(--mono);
-}
-
-@container (max-width: 620px) {
-  .log-row {
-    grid-template-columns: 70px 60px minmax(0, 1fr);
-  }
-
-  .log-subsystem {
-    display: none;
-  }
 }
 
 /* ===========================================
@@ -3726,7 +3273,7 @@ td.data-table-key-col {
 }
 
 :root[data-theme-mode="light"] .agent-select__trigger {
-  background: white;
+  background: var(--bg-elevated);
 }
 
 .agent-select__trigger:focus-visible {
@@ -3810,9 +3357,17 @@ td.data-table-key-col {
 }
 
 .agent-select__option {
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+
+  padding: 6px 8px;
+  border-radius: var(--menu-item-radius);
   color: var(--text);
   font: inherit;
   font-size: 13px;
+}
+
+.agent-select__option[data-selected] {
+  background: var(--menu-selected);
 }
 
 .agent-select__separator {
@@ -6079,4 +5634,20 @@ td.data-table-key-col {
 .person-activity-avatar-link {
   display: block;
   line-height: 0;
+}
+
+/* Hide the idle manager; full workspace replacements retain a host-owned escape. */
+.plugin-ui-recovery {
+  display: none;
+  position: fixed;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 110;
+  box-shadow: var(--shadow-md);
+}
+
+openclaw-plugin-view:not([data-plugin-default-mounted])
+  + openclaw-plugin-manager
+  .plugin-ui-recovery {
+  display: block;
 }

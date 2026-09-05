@@ -160,7 +160,7 @@ export async function retireCodexAppServerSessionGeneration(params: {
     params.mode === "reset"
       ? params.bindingStore.resetSessionGeneration(params.identity)
       : params.bindingStore.retireSessionGeneration(params.identity);
-  const expectedBinding = await params.bindingStore.read(params.identity);
+  const expectedBinding = params.bindingStore.read(params.identity);
   if (!expectedBinding) {
     // Leasing an absent/retired row manufactures state or rejects its fence;
     // callers need the original absent/conflict result for reset reclamation.
@@ -168,7 +168,7 @@ export async function retireCodexAppServerSessionGeneration(params: {
   }
   return await withCodexAppServerThreadMutation(expectedBinding.threadId, () =>
     params.bindingStore.withLease(params.identity, async () => {
-      const binding = await params.bindingStore.read(params.identity);
+      const binding = params.bindingStore.read(params.identity);
       if (!binding || !isSameCodexAppServerThreadOwner(binding, expectedBinding)) {
         return "conflict";
       }

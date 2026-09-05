@@ -156,6 +156,8 @@ if (approvalPath) {
         "GET",
       ]),
     );
+    // Apps may attach after npm and GitHub publication complete. Keep the exact
+    // approval binding valid for a successful parent without requiring it to wait.
     validateReleasePublishParentRun({
       identity,
       releasePublishFullRef: expectedWorkflowFullRef,

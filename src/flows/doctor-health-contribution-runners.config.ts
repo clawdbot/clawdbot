@@ -75,9 +75,16 @@ export async function runWriteConfigHealth(
       resolveLegacyParentVersionOverride(ctx).lastTouchedVersionOverride;
     const { restoreDoctorConfigEnvRefs } =
       await import("../commands/doctor/shared/config-flow-steps.js");
+    const { assertShippedPluginInstallConfigImportCurrent } =
+      await import("../commands/doctor/shared/plugin-registry-migration.js");
     try {
       await transformConfigFile({
         transform: (_current, { snapshot }, { envSnapshotForRestore }) => {
+          // Revalidate the copied source under the config lock; never import after plugin repair.
+          assertShippedPluginInstallConfigImportCurrent(
+            snapshot,
+            ctx.configResult.pluginInstallConfigImport,
+          );
           const nextConfig = restoreDoctorConfigEnvRefs(ctx.cfg, snapshot, envSnapshotForRestore);
           return { nextConfig };
         },

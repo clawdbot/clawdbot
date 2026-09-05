@@ -16,6 +16,7 @@ import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key
 import { assertCodexThreadStartResponse } from "./protocol-validators.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 import {
+  bindProductionHarnessHostCapabilitiesForTest,
   createCodexRuntimePlanFixture,
   createNativeRunParams,
   runCodexAppServerAttempt,
@@ -520,12 +521,6 @@ describe.skipIf(process.platform === "win32")(
           const createClient = vi.spyOn(sharedClients, "createIsolatedCodexAppServerClient");
           const startClient = vi.spyOn(CodexAppServerClient, "start");
           const resolveHandoff = vi.spyOn(authBridge, "resolveCodexAppServerPreparedAuthHandoff");
-          const resolveHostProfile = vi.spyOn(
-            authBridge,
-            "resolveCodexAppServerAuthProfileIdForAgent",
-          );
-          const resolveHostStore = vi.spyOn(authBridge, "resolveCodexAppServerAuthProfileStore");
-          const applyHostAuth = vi.spyOn(authBridge, "applyCodexAppServerAuthProfile");
           const { hostCapabilities: _hostCapabilities, ...attempt } = params;
           fixture.setPhase("summary");
           await expect(
@@ -540,9 +535,6 @@ describe.skipIf(process.platform === "win32")(
           expect(createClient).not.toHaveBeenCalled();
           expect(startClient).not.toHaveBeenCalled();
           expect(resolveHandoff).not.toHaveBeenCalled();
-          expect(resolveHostProfile).not.toHaveBeenCalled();
-          expect(resolveHostStore).not.toHaveBeenCalled();
-          expect(applyHostAuth).not.toHaveBeenCalled();
           expect(nativeRequests).not.toHaveBeenCalled();
           expect(requests).toHaveLength(0);
           expect(context).toEqual({ source: "unavailable" });
@@ -655,11 +647,16 @@ describe.skipIf(process.platform === "win32")(
           }
           fixture.setPhase("action");
           params.runId = "run-settled-action";
+          const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+          cleanups.push(async () => closeHost());
           const settledAttempt = await runCodexAppServerAttempt(params, runOptions);
           expect(settledAttempt.terminal).toEqual({ kind: "ok" });
           const context = settledAttempt.settledTurnFinalizationContext;
           expect(context).toBeInstanceOf(settledContext.CodexSettledTurnContext);
           expect(Object.isFrozen(context)).toBe(true);
+          expect(() => params.hostCapabilities.assertActive()).not.toThrow();
+          closeHost();
+          expect(() => params.hostCapabilities.assertActive()).toThrow();
           const sourceKey = scenario.homeScope === "user" ? NATIVE_KEY : HOST_KEY;
           expect(
             fixture.requests.map(({ body, account }) => ({ model: body.model, account })),

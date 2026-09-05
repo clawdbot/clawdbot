@@ -2,10 +2,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { GatewayService } from "../../daemon/service.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
@@ -24,6 +27,12 @@ import {
   shouldPrepareUpdatedInstallRestart,
 } from "./update-command-service.js";
 import { testing as updateCommandServiceTesting } from "./update-command-service.test-support.js";
+
+const tempDirs = createTempDirTracker();
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  tempDirs.cleanup();
+});
 
 describe("resolveGatewayInstallEntrypoint", () => {
   it("prefers dist/index.js over dist/entry.js when both exist", async () => {
@@ -765,59 +774,93 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
 });
 
 describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
-  it("does not report recovered update health until the gateway passes the post-recovery wait", async () => {
-    const service = {} as never;
-    const unhealthy = {
-      runtime: { status: "stopped" },
-      portUsage: { port: 18790, status: "free", listeners: [], hints: [] },
-      healthy: false,
-      staleGatewayPids: [],
-      waitOutcome: "stopped-free",
-    } as never;
-    const healthy = {
-      runtime: { status: "running", pid: 4242 },
-      portUsage: { port: 18790, status: "busy", listeners: [{ pid: 4242 }], hints: [] },
-      healthy: true,
-      staleGatewayPids: [],
-      gatewayVersion: "2026.5.3",
-      waitOutcome: "healthy",
-    } as never;
-    const recoverLaunchAgent = vi.fn(async () => ({
-      attempted: true as const,
-      recovered: true as const,
-      message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
-    }));
-    const waitForHealthy = vi.fn(async () => healthy);
+  it.each(["recovered", "failed", "not attempted"] as const)(
+    "records only attempted native repair before rechecking update health (%s)",
+    async (outcome) => {
+      const env = {
+        OPENCLAW_STATE_DIR: tempDirs.make("update-native-repair-"),
+        OPENCLAW_PROFILE: "stomme",
+        OPENCLAW_PORT: "18790",
+      };
+      const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+      const service = {} as never;
+      const unhealthy = {
+        runtime: { status: "stopped" },
+        portUsage: { port: 18790, status: "free", listeners: [], hints: [] },
+        healthy: false,
+        staleGatewayPids: [],
+        waitOutcome: "stopped-free",
+      } as never;
+      const healthy = {
+        runtime: { status: "running", pid: 4242 },
+        portUsage: { port: 18790, status: "busy", listeners: [{ pid: 4242 }], hints: [] },
+        healthy: true,
+        staleGatewayPids: [],
+        gatewayVersion: "2026.5.3",
+        waitOutcome: "healthy",
+      } as never;
+      const message =
+        "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.";
+      const recovery =
+        outcome === "recovered"
+          ? ({ attempted: true, recovered: true, message } as const)
+          : outcome === "failed"
+            ? ({ attempted: true, recovered: false, detail: "Bootstrap failed." } as const)
+            : ({ attempted: false, recovered: false } as const);
+      const recoverLaunchAgent = vi.fn(async () => recovery);
+      const waitForHealthy = vi.fn(async () => {
+        expect(getUpdateRun(runId, { env })?.repair).toMatchObject([{ status: "succeeded" }]);
+        return healthy;
+      });
+      const startedAtMs = Date.now();
 
-    await expect(
-      updateCommandServiceTesting.recoverLaunchAgentAndRecheckGatewayHealth({
-        health: unhealthy,
-        service,
-        port: 18790,
-        expectedVersion: "2026.5.3",
-        expectedBuildId: "new-build",
-        env: { OPENCLAW_PROFILE: "stomme", OPENCLAW_PORT: "18790" },
-        deps: { recoverLaunchAgent, waitForHealthy },
-      }),
-    ).resolves.toEqual({
-      health: healthy,
-      launchAgentRecovery: {
-        attempted: true,
-        recovered: true,
-        message:
-          "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
-      },
-    });
+      await expect(
+        updateCommandServiceTesting.recoverLaunchAgentAndRecheckGatewayHealth({
+          updateRun: { runId, env },
+          health: unhealthy,
+          service,
+          port: 18790,
+          expectedVersion: "2026.5.3",
+          expectedBuildId: "new-build",
+          env,
+          deps: { recoverLaunchAgent, waitForHealthy },
+        }),
+      ).resolves.toEqual({
+        health: outcome === "recovered" ? healthy : unhealthy,
+        launchAgentRecovery: recovery,
+      });
 
-    expect(waitForHealthy).toHaveBeenCalledWith({
-      service,
-      port: 18790,
-      expectedVersion: "2026.5.3",
-      expectedBuildId: "new-build",
-      env: { OPENCLAW_PROFILE: "stomme", OPENCLAW_PORT: "18790" },
-      supervisorKeepsAlive: true,
-    });
-  });
+      if (outcome === "recovered") {
+        expect(waitForHealthy).toHaveBeenCalledWith({
+          service,
+          port: 18790,
+          expectedVersion: "2026.5.3",
+          expectedBuildId: "new-build",
+          env,
+          supervisorKeepsAlive: true,
+          settle: { probes: 12 },
+        });
+      } else {
+        expect(waitForHealthy).not.toHaveBeenCalled();
+      }
+      const repair = getUpdateRun(runId, { env })?.repair;
+      if (outcome === "not attempted") {
+        expect(repair).toEqual([]);
+      } else {
+        expect(repair).toEqual([
+          {
+            attempt: 1,
+            status: outcome === "recovered" ? "succeeded" : "failed",
+            startedAtMs: expect.any(Number),
+            endedAtMs: expect.any(Number),
+            summary: outcome === "recovered" ? message : "Bootstrap failed.",
+          },
+        ]);
+        expect(repair?.[0]?.startedAtMs).toBeGreaterThanOrEqual(startedAtMs);
+        expect(repair?.[0]?.endedAtMs).toBeGreaterThanOrEqual(repair?.[0]?.startedAtMs ?? Infinity);
+      }
+    },
+  );
 
   it("keeps the update unhealthy when LaunchAgent repair succeeds but health does not recover", async () => {
     const service = {} as never;
