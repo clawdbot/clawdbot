@@ -100,13 +100,13 @@ it("keeps channel catalog workspace and load-path scopes after Gateway publicati
     scopes.map(({ expected: _expected, ...scope }) =>
       listChannelCatalogEntries({ ...scope, env })
         .map((entry) => entry.pluginId)
-        .sort(),
+        .toSorted(),
     );
   expect(withPluginCache(createPluginCache(), read)).toEqual(
     scopes.map(({ expected }) => expected),
   );
   const snapshot = resolveConfigWidePluginMetadataSnapshot({ config, env });
-  expect(snapshot.plugins.map((plugin) => plugin.id).sort()).toEqual([
+  expect(snapshot.plugins.map((plugin) => plugin.id).toSorted()).toEqual([
     "alpha-channel",
     "beta-channel",
     "extra-channel",
