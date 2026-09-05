@@ -41,17 +41,17 @@ function managedImageResourceKey(source: string): string {
   return `${source.replace(/\/full$/u, "/thumbnail")}::::`;
 }
 
-function installManagedImageUrls(): string {
+function installManagedImageUrls(prefix = `managed-image-${crypto.randomUUID()}`): string {
   const NativeUrl = URL;
-  const blobUrl = `blob:managed-image-${crypto.randomUUID()}`;
+  let blobIndex = 0;
   vi.stubGlobal(
     "URL",
     class extends NativeUrl {
-      static override createObjectURL = vi.fn(() => blobUrl);
+      static override createObjectURL = vi.fn(() => `blob:${prefix}-${blobIndex++}`);
       static override revokeObjectURL = vi.fn();
     },
   );
-  return blobUrl;
+  return `blob:${prefix}-0`;
 }
 
 function imageResponse() {
@@ -78,6 +78,43 @@ function renderManagedImage(
 function observeSubscriber(subscriber: () => void): () => void {
   subscribers.add(subscriber);
   return subscriber;
+}
+
+function createManagedImagePane(
+  source: string,
+  options: Omit<ImageRenderOptions, "onRequestUpdate"> = {},
+  artifactId?: string,
+) {
+  const container = document.createElement("div");
+  const rerender = observeSubscriber(() =>
+    renderManagedImage(container, source, { ...options, onRequestUpdate: rerender }, artifactId),
+  );
+  return { container, rerender };
+}
+
+function ticketResponse(mediaTicket: string, expiresInMs = 90_000) {
+  return Response.json({
+    available: true,
+    mediaTicket,
+    mediaTicketExpiresAt: new Date(Date.now() + expiresInMs).toISOString(),
+  });
+}
+
+function createAvailabilityPane(source: string, authToken: string) {
+  let latest: ReturnType<typeof resolveAssistantAttachmentAvailability> | undefined;
+  const rerender = observeSubscriber(() => {
+    latest = resolveAssistantAttachmentAvailability(source, {
+      resourceBasePath: "/openclaw",
+      authToken,
+      onRequestUpdate: rerender,
+    });
+  });
+  return {
+    rerender,
+    get latest() {
+      return latest;
+    },
+  };
 }
 
 describe("chat media resource lifecycle", () => {
@@ -126,7 +163,6 @@ describe("chat media resource lifecycle", () => {
           sessionKey,
           agentId: "main",
           authToken: "image-test-token",
-          localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate,
         }),
         container,
@@ -221,10 +257,7 @@ describe("chat media resource lifecycle", () => {
       .mockResolvedValueOnce(imageResponse());
     vi.stubGlobal("fetch", fetchMock);
 
-    const container = document.createElement("div");
-    const rerender = observeSubscriber(() =>
-      renderManagedImage(container, source, { onRequestUpdate: rerender }),
-    );
+    const { container, rerender } = createManagedImagePane(source);
 
     rerender();
     await vi.advanceTimersByTimeAsync(0);
@@ -283,10 +316,7 @@ describe("chat media resource lifecycle", () => {
     const fetchMock = vi.fn(async () => ({ ok: false }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const container = document.createElement("div");
-    const rerender = observeSubscriber(() =>
-      renderManagedImage(container, source, { onRequestUpdate: rerender }),
-    );
+    const { container, rerender } = createManagedImagePane(source);
 
     rerender();
     await vi.advanceTimersByTimeAsync(0);
@@ -324,16 +354,7 @@ describe("chat media resource lifecycle", () => {
   });
 
   it("releases replaced managed images while keeping one pane callback stable", async () => {
-    const NativeUrl = URL;
-    let blobIndex = 0;
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class extends NativeUrl {
-        static override createObjectURL = vi.fn(() => `blob:replaced-managed-image-${blobIndex++}`);
-        static override revokeObjectURL = revokeObjectURL;
-      },
-    );
+    installManagedImageUrls("replaced-managed-image");
     const fetchMock = vi.fn(async () => imageResponse());
     vi.stubGlobal("fetch", fetchMock);
 
@@ -358,7 +379,7 @@ describe("chat media resource lifecycle", () => {
     expect(fetchMock).toHaveBeenCalledTimes(65);
     expect(resources.filter((resource) => isChatMediaResourceCurrent(resource))).toHaveLength(1);
     expect(resources.at(-1)).toSatisfy(isChatMediaResourceCurrent);
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:replaced-managed-image-0");
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:replaced-managed-image-0");
   });
 
   it("keeps simultaneous managed images until their individual render parts disappear", async () => {
@@ -373,7 +394,6 @@ describe("chat media resource lifecycle", () => {
     const rerender = observeSubscriber(() => {
       const images = sources.map((source) => ({
         url: source,
-        displayUrl: source,
         alt: "Managed image",
       }));
       render(renderMessageImages(images, { onRequestUpdate: rerender }), container);
@@ -411,7 +431,7 @@ describe("chat media resource lifecycle", () => {
 
     const container = document.createElement("div");
     const source = managedImageSource();
-    const image = { url: source, displayUrl: source, alt: "Managed image" };
+    const image = { url: source, alt: "Managed image" };
     const renderImageRow = vi.fn(() => renderMessageImages([image], { onRequestUpdate: rerender }));
     let root!: ReturnType<typeof render>;
     const rerender = observeSubscriber(() => {
@@ -450,7 +470,7 @@ describe("chat media resource lifecycle", () => {
     let source = managedImageSource();
     let root!: ReturnType<typeof render>;
     const rerender = observeSubscriber(() => {
-      const image = { url: source, displayUrl: source, alt: "Managed image" };
+      const image = { url: source, alt: "Managed image" };
       root = render(
         html`${guard([source], () => renderMessageImages([image], { onRequestUpdate: rerender }))}`,
         container,
@@ -476,16 +496,7 @@ describe("chat media resource lifecycle", () => {
   });
 
   it("evicts settled subscriber-free resources with their managed image blobs", async () => {
-    const NativeUrl = URL;
-    let blobIndex = 0;
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal(
-      "URL",
-      class extends NativeUrl {
-        static override createObjectURL = vi.fn(() => `blob:bounded-managed-image-${blobIndex++}`);
-        static override revokeObjectURL = revokeObjectURL;
-      },
-    );
+    installManagedImageUrls("bounded-managed-image");
     const fetchMock = vi.fn(async () => imageResponse());
     vi.stubGlobal("fetch", fetchMock);
 
@@ -513,7 +524,7 @@ describe("chat media resource lifecycle", () => {
     expect(readManagedImageBlobUrl(managedImageResourceKey(latestSource))).toBe(
       "blob:bounded-managed-image-64",
     );
-    expect(revokeObjectURL).toHaveBeenCalledWith("blob:bounded-managed-image-0");
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:bounded-managed-image-0");
 
     renderManagedImage(document.createElement("div"), latestSource);
     await vi.advanceTimersByTimeAsync(0);
@@ -536,14 +547,8 @@ describe("chat media resource lifecycle", () => {
       .mockResolvedValueOnce(imageResponse());
     vi.stubGlobal("fetch", fetchMock);
 
-    const first = document.createElement("div");
-    const second = document.createElement("div");
-    const rerenderFirst = observeSubscriber(() =>
-      renderManagedImage(first, source, { onRequestUpdate: rerenderFirst }),
-    );
-    const rerenderSecond = observeSubscriber(() =>
-      renderManagedImage(second, source, { onRequestUpdate: rerenderSecond }),
-    );
+    const { container: first, rerender: rerenderFirst } = createManagedImagePane(source);
+    const { container: second, rerender: rerenderSecond } = createManagedImagePane(source);
 
     rerenderFirst();
     rerenderSecond();
@@ -565,98 +570,61 @@ describe("chat media resource lifecycle", () => {
     const source = `/tmp/openclaw/${crypto.randomUUID()}.png`;
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          available: true,
-          mediaTicket: "ticket-before-refresh",
-          mediaTicketExpiresAt: new Date(Date.now() + 31_000).toISOString(),
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          available: true,
-          mediaTicket: "ticket-after-refresh",
-          mediaTicketExpiresAt: new Date(Date.now() + 90_000).toISOString(),
-        }),
-      });
+      .mockImplementationOnce(async () => ticketResponse("ticket-before-refresh", 31_000))
+      .mockImplementationOnce(async () => ticketResponse("ticket-after-refresh"));
     vi.stubGlobal("fetch", fetchMock);
 
-    let firstTicket: string | undefined;
-    let secondTicket: string | undefined;
-    const rerenderFirst = observeSubscriber(() => {
-      const availability = resolveAssistantAttachmentAvailability(
-        source,
-        "/openclaw",
-        "split-pane-token",
-        rerenderFirst,
-      );
-      firstTicket = availability.status === "available" ? availability.mediaTicket : undefined;
-    });
-    const rerenderSecond = observeSubscriber(() => {
-      const availability = resolveAssistantAttachmentAvailability(
-        source,
-        "/openclaw",
-        "split-pane-token",
-        rerenderSecond,
-      );
-      secondTicket = availability.status === "available" ? availability.mediaTicket : undefined;
-    });
+    const first = createAvailabilityPane(source, "split-pane-token");
+    const second = createAvailabilityPane(source, "split-pane-token");
 
-    rerenderFirst();
-    rerenderSecond();
+    first.rerender();
+    second.rerender();
     await vi.advanceTimersByTimeAsync(0);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(firstTicket).toBe("ticket-before-refresh");
-    expect(secondTicket).toBe("ticket-before-refresh");
+    for (const pane of [first, second]) {
+      expect(pane.latest).toMatchObject({
+        status: "available",
+        mediaTicket: "ticket-before-refresh",
+      });
+    }
 
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(firstTicket).toBe("ticket-after-refresh");
-    expect(secondTicket).toBe("ticket-after-refresh");
+    for (const pane of [first, second]) {
+      expect(pane.latest).toMatchObject({
+        status: "available",
+        mediaTicket: "ticket-after-refresh",
+      });
+    }
   });
 
   it("stops polling after a definitive ticket refresh rejection and one unavailable retry", async () => {
     const source = `/tmp/openclaw/${crypto.randomUUID()}.mp3`;
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          available: true,
-          mediaTicket: "ticket-before-definitive-rejection",
-          mediaTicketExpiresAt: new Date(Date.now() + 31_000).toISOString(),
-        }),
-      })
+      .mockImplementationOnce(async () =>
+        ticketResponse("ticket-before-definitive-rejection", 31_000),
+      )
       .mockResolvedValue({
         ok: true,
         json: async () => ({ available: false, reason: "Attachment removed" }),
       });
     vi.stubGlobal("fetch", fetchMock);
 
-    let latest: ReturnType<typeof resolveAssistantAttachmentAvailability> | undefined;
-    const rerender = observeSubscriber(() => {
-      latest = resolveAssistantAttachmentAvailability(
-        source,
-        "/openclaw",
-        "definitive-rejection-token",
-        rerender,
-      );
-    });
+    const pane = createAvailabilityPane(source, "definitive-rejection-token");
 
-    rerender();
+    pane.rerender();
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(latest?.status).toBe("unavailable");
+    expect(pane.latest?.status).toBe("unavailable");
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
     await vi.advanceTimersByTimeAsync(5_000);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(latest?.status).toBe("unavailable");
+    expect(pane.latest?.status).toBe("unavailable");
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -664,14 +632,9 @@ describe("chat media resource lifecycle", () => {
     const source = `/tmp/openclaw/${crypto.randomUUID()}.mp3`;
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          available: true,
-          mediaTicket: "ticket-before-transient-failures",
-          mediaTicketExpiresAt: new Date(Date.now() + 60_000).toISOString(),
-        }),
-      })
+      .mockImplementationOnce(async () =>
+        ticketResponse("ticket-before-transient-failures", 60_000),
+      )
       .mockRejectedValueOnce(new Error("refresh unavailable 1"))
       .mockRejectedValueOnce(new Error("refresh unavailable 2"))
       .mockRejectedValueOnce(new Error("refresh unavailable 3"))
@@ -681,30 +644,22 @@ describe("chat media resource lifecycle", () => {
       });
     vi.stubGlobal("fetch", fetchMock);
 
-    let latest: ReturnType<typeof resolveAssistantAttachmentAvailability> | undefined;
-    const rerender = observeSubscriber(() => {
-      latest = resolveAssistantAttachmentAvailability(
-        source,
-        "/openclaw",
-        "transient-refresh-token",
-        rerender,
-      );
-    });
+    const pane = createAvailabilityPane(source, "transient-refresh-token");
 
-    rerender();
+    pane.rerender();
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(latest?.status).toBe("available");
+    expect(pane.latest?.status).toBe("available");
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(latest?.status).toBe("available");
+    expect(pane.latest?.status).toBe("available");
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(latest?.status).toBe("unavailable");
+    expect(pane.latest?.status).toBe("unavailable");
     expect(fetchMock).toHaveBeenCalledTimes(4);
 
     await vi.advanceTimersByTimeAsync(5_000);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(fetchMock).toHaveBeenCalledTimes(5);
-    expect(latest?.status).toBe("unavailable");
+    expect(pane.latest?.status).toBe("unavailable");
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -713,36 +668,21 @@ describe("chat media resource lifecycle", () => {
     const expiredAt = new Date(Date.now() + 31_000);
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          available: true,
-          mediaTicket: "ticket-that-will-expire",
-          mediaTicketExpiresAt: expiredAt.toISOString(),
-        }),
-      })
+      .mockResolvedValueOnce(ticketResponse("ticket-that-will-expire", 31_000))
       .mockImplementationOnce(async () => {
         vi.setSystemTime(new Date(expiredAt.getTime() + 1));
         throw new Error("refresh completed after ticket expiry");
       });
     vi.stubGlobal("fetch", fetchMock);
 
-    let latest: ReturnType<typeof resolveAssistantAttachmentAvailability> | undefined;
-    const rerender = observeSubscriber(() => {
-      latest = resolveAssistantAttachmentAvailability(
-        source,
-        "/openclaw",
-        "expired-refresh-token",
-        rerender,
-      );
-    });
+    const pane = createAvailabilityPane(source, "expired-refresh-token");
 
-    rerender();
+    pane.rerender();
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(latest?.status).toBe("unavailable");
+    expect(pane.latest?.status).toBe("unavailable");
   });
 
   it("shares the one bounded assistant attachment retry across split panes", async () => {
@@ -753,47 +693,23 @@ describe("chat media resource lifecycle", () => {
         ok: true,
         json: async () => ({ available: false }),
       })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          available: true,
-          mediaTicket: "ticket-after-retry",
-          mediaTicketExpiresAt: new Date(Date.now() + 90_000).toISOString(),
-        }),
-      });
+      .mockImplementationOnce(async () => ticketResponse("ticket-after-retry"));
     vi.stubGlobal("fetch", fetchMock);
 
-    let firstTicket: string | undefined;
-    let secondTicket: string | undefined;
-    const rerenderFirst = observeSubscriber(() => {
-      const availability = resolveAssistantAttachmentAvailability(
-        source,
-        "/openclaw",
-        "split-pane-token",
-        rerenderFirst,
-      );
-      firstTicket = availability.status === "available" ? availability.mediaTicket : undefined;
-    });
-    const rerenderSecond = observeSubscriber(() => {
-      const availability = resolveAssistantAttachmentAvailability(
-        source,
-        "/openclaw",
-        "split-pane-token",
-        rerenderSecond,
-      );
-      secondTicket = availability.status === "available" ? availability.mediaTicket : undefined;
-    });
+    const first = createAvailabilityPane(source, "split-pane-token");
+    const second = createAvailabilityPane(source, "split-pane-token");
 
-    rerenderFirst();
-    rerenderSecond();
+    first.rerender();
+    second.rerender();
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(5_000);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(firstTicket).toBe("ticket-after-retry");
-    expect(secondTicket).toBe("ticket-after-retry");
+    for (const pane of [first, second]) {
+      expect(pane.latest).toMatchObject({ status: "available", mediaTicket: "ticket-after-retry" });
+    }
   });
 
   it("aborts pending media and clears its retry when the last pane disconnects", async () => {
@@ -812,10 +728,7 @@ describe("chat media resource lifecycle", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const container = document.createElement("div");
-    const rerender = observeSubscriber(() =>
-      renderManagedImage(container, source, { onRequestUpdate: rerender }),
-    );
+    const { rerender } = createManagedImagePane(source);
 
     rerender();
     await vi.advanceTimersByTimeAsync(0);
@@ -843,14 +756,8 @@ describe("chat media resource lifecycle", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const first = document.createElement("div");
-    const second = document.createElement("div");
-    const rerenderFirst = observeSubscriber(() =>
-      renderManagedImage(first, source, { onRequestUpdate: rerenderFirst }),
-    );
-    const rerenderSecond = observeSubscriber(() =>
-      renderManagedImage(second, source, { onRequestUpdate: rerenderSecond }),
-    );
+    const { rerender: rerenderFirst } = createManagedImagePane(source);
+    const { rerender: rerenderSecond } = createManagedImagePane(source);
 
     rerenderFirst();
     rerenderSecond();
@@ -886,15 +793,12 @@ describe("chat media resource lifecycle", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const container = document.createElement("div");
-    let authToken = "old-token";
-    const rerender = observeSubscriber(() =>
-      renderManagedImage(container, source, { authToken, onRequestUpdate: rerender }),
-    );
+    const options = { authToken: "old-token" };
+    const { container, rerender } = createManagedImagePane(source, options);
 
     rerender();
     await vi.advanceTimersByTimeAsync(0);
-    authToken = "new-token";
+    options.authToken = "new-token";
     rerender();
     await vi.advanceTimersByTimeAsync(0);
 
@@ -917,18 +821,10 @@ describe("chat media resource lifecycle", () => {
       .mockResolvedValueOnce(imageResponse());
     vi.stubGlobal("fetch", fetchMock);
 
-    const container = document.createElement("div");
-    const rerender = observeSubscriber(() =>
-      renderManagedImage(
-        container,
-        source,
-        {
-          authToken: "must-never-be-forwarded",
-          onRequestUpdate: rerender,
-          resolveArtifactDownload,
-        },
-        artifactId,
-      ),
+    const { container, rerender } = createManagedImagePane(
+      source,
+      { authToken: "must-never-be-forwarded", resolveArtifactDownload },
+      artifactId,
     );
 
     rerender();
