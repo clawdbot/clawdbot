@@ -67,6 +67,7 @@ suite.define(() => {
           .getByText("⬆️ OpenClaw update in progress: staging.", { exact: true })
           .waitFor();
         await runView.getByText("Downloading the update package.", { exact: false }).waitFor();
+        expect(await runView.locator('[data-step="repairing"]').count()).toBe(0);
         await page.screenshot({ path: path.join(proofDir, "02-staging.png") });
 
         const advance = async (phase: UpdateRunPhase, detail: string) => {
@@ -75,7 +76,9 @@ suite.define(() => {
             phase,
             updatedAtMs: run.updatedAtMs + 1000,
             steps: [
-              ...run.steps.map((step) => ({ ...step, status: "completed" as const })),
+              ...run.steps
+                .filter((step) => step.step !== phase)
+                .map((step) => Object.assign({}, step, { status: "completed" as const })),
               { step: phase, status: "in_progress", detail },
             ],
           };
@@ -104,7 +107,7 @@ suite.define(() => {
           updatedAtMs: run.updatedAtMs + 1000,
           after: { version: "2.0.0" },
           steps: [
-            ...run.steps.map((step) => ({ ...step, status: "completed" as const })),
+            ...run.steps.map((step) => Object.assign({}, step, { status: "completed" as const })),
             {
               step: "verifying",
               status: "in_progress",
@@ -122,7 +125,15 @@ suite.define(() => {
           (await gateway.waitForRequest("update.runs.get", { after: readsBeforeReconnect })).params,
         ).toEqual({ runId: run.runId });
         await runView.getByText("Checking channels and inference.", { exact: false }).waitFor();
+        expect(await runView.locator('[data-step="repairing"]').count()).toBe(0);
         await page.screenshot({ path: path.join(proofDir, "04-verifying.png") });
+
+        await advance("repairing", "Repairing the installed candidate after verification failed.");
+        expect(await runView.locator('[data-step="repairing"]').getAttribute("data-status")).toBe(
+          "in_progress",
+        );
+        await page.screenshot({ path: path.join(proofDir, "04-repairing.png") });
+        await advance("verifying", "Verifying the repaired candidate.");
 
         const finishedAtMs = run.updatedAtMs + 1000;
         run = {
@@ -133,7 +144,7 @@ suite.define(() => {
           finishedAtMs,
           confirmedAtMs: finishedAtMs,
           downtimeMs: 1000,
-          steps: run.steps.map((step) => ({ ...step, status: "completed" })),
+          steps: run.steps.map((step) => Object.assign({}, step, { status: "completed" as const })),
           verification: {
             ...run.verification,
             versionMatch: true,
@@ -155,7 +166,7 @@ suite.define(() => {
         await runView.getByText("Gateway downtime: 1s.", { exact: false }).waitFor();
         expect(await runView.locator('[data-oracle][data-state="pass"]').count()).toBe(5);
         expect(await runView.locator('[data-step="repairing"]').getAttribute("data-status")).toBe(
-          "skipped",
+          "completed",
         );
         await page.screenshot({ path: path.join(proofDir, "05-after-success.png") });
         expect(await gateway.getRequests("update.run")).toHaveLength(1);

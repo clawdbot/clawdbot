@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it } from "vitest";
-import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
+import type { UpdateRunPhase, UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import { projectUpdateRun } from "../app/update-run-projection.ts";
 import { createUpdateRunFixture as run } from "../test-helpers/update-run.ts";
 import "./update-run-view.ts";
@@ -42,7 +42,6 @@ describe("update run projection", () => {
       ["requested", "completed"],
       ["staging", "completed"],
       ["validating", "failed"],
-      ["repairing", "skipped"],
       ["activating", "skipped"],
       ["restarting", "skipped"],
       ["verifying", "skipped"],
@@ -54,6 +53,38 @@ describe("update run projection", () => {
     expect(view.details).toBe("Build failed before activation.");
     expect(view.oracles.every((oracle) => oracle.state === "warn")).toBe(true);
   });
+
+  it.each<UpdateRunPhase>(["requested", "staging", "validating", "verifying", "finished"])(
+    "hides unused repair during %s",
+    (phase) => {
+      const view = projectUpdateRun(
+        run({ phase, status: phase === "finished" ? "succeeded" : "running" }),
+      );
+      expect(view.phases.some(({ step }) => step === "repairing")).toBe(false);
+    },
+  );
+
+  it.each(["in_progress", "completed", "failed", "skipped"] as const)(
+    "preserves a recorded %s repair after activation",
+    (status) => {
+      const view = projectUpdateRun(
+        run({
+          phase: status === "in_progress" ? "repairing" : "finished",
+          status:
+            status === "in_progress" ? "running" : status === "completed" ? "succeeded" : "failed",
+          steps: [
+            { step: "activating", status: "completed" },
+            { step: "restarting", status: "completed" },
+            { step: "verifying", status: "failed" },
+            { step: "repairing", status, startedAtMs: 10 },
+          ],
+        }),
+      );
+      expect(view.phases.find(({ step }) => step === "repairing")?.status).toBe(status);
+      expect(view.phases.find(({ step }) => step === "activating")?.status).toBe("completed");
+      expect(view.phases.find(({ step }) => step === "verifying")?.status).toBe("failed");
+    },
+  );
 
   it("never reports unknown verification as passed and preserves every oracle outcome", () => {
     expect(projectUpdateRun(run()).oracles.every((oracle) => oracle.state === "pending")).toBe(
@@ -147,9 +178,7 @@ describe("update run view", () => {
       "service running; version verified; channels ready; inference passed",
     );
     expect(element.querySelectorAll('[data-state="pass"]')).toHaveLength(5);
-    expect(element.querySelector('[data-step="repairing"]')?.getAttribute("data-status")).toBe(
-      "skipped",
-    );
+    expect(element.querySelector('[data-step="repairing"]')).toBeNull();
   });
 
   it("shows failure details and report text without interpreting diagnostic markup", async () => {

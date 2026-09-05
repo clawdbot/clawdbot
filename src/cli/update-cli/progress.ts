@@ -1,9 +1,10 @@
 // Update command presentation helpers: spinner lifecycle, failure hints, and result summaries.
 import { spinner } from "@clack/prompts";
+import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import { UPDATE_RUN_PHASES, type UpdateRunPhase } from "../../infra/update-run-record.js";
+import type { UpdateRunPhase } from "../../infra/update-run-record.js";
 import {
   renderUpdateRunReport,
   updateRunReportInputFromResult,

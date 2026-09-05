@@ -1,9 +1,6 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  UPDATE_RUN_PHASES,
-  type UpdateRunRecord,
-  type UpdateRunStep,
-} from "../../../src/infra/update-run-record.ts";
+import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import type { UpdateRunRecord, UpdateRunStep } from "../../../src/infra/update-run-record.ts";
 import { renderUpdateRunReport } from "../../../src/infra/update-run-report.ts";
 import { t } from "../i18n/index.ts";
 
@@ -13,8 +10,11 @@ export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
   const terminal = run.status !== "running";
   const report = renderUpdateRunReport(run);
   const currentIndex = UPDATE_RUN_PHASES.indexOf(run.phase);
-  const phases = UPDATE_RUN_PHASES.map((phase, index) => {
+  const phases = UPDATE_RUN_PHASES.flatMap((phase, index) => {
     const recorded = run.steps.find((step) => step.step === phase);
+    if (phase === "repairing" && !recorded && phase !== run.phase) {
+      return [];
+    }
     let status: UpdateRunStep["status"] = recorded?.status ?? "pending";
     if (!recorded) {
       if (phase === "finished" && terminal) {
@@ -31,7 +31,7 @@ export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
         status = "skipped";
       }
     }
-    return { step: phase, status, label: t(`updates.run.phase.${phase}`) };
+    return [{ step: phase, status, label: t(`updates.run.phase.${phase}`) }];
   });
   // Notice receipts share the bounded ledger but are delivery bookkeeping, not update work.
   const steps = run.steps.filter(

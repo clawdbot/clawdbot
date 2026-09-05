@@ -513,14 +513,10 @@ export function renderApplicationShell(host: ShellViewHost) {
                     ${icons.search}
                   </button>
                 </openclaw-tooltip>
-                ${
-                  navCollapsed
-                    ? renderCollapsedAssistantToggles({
-                        homeAvailable: homePanelAvailable,
-                        custodianAvailable: custodianPanelAvailable,
-                      })
-                    : nothing
-                }
+                ${renderCollapsedAssistantToggles({
+                  homeAvailable: homePanelAvailable,
+                  custodianAvailable: custodianPanelAvailable,
+                })}
               </div>
             `
           : nothing

@@ -1,7 +1,8 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
-import { getUpdateRun, type UpdateRunRecord } from "../../infra/update-run-ledger.js";
+import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";

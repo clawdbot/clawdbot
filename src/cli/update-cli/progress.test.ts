@@ -52,6 +52,7 @@ describe("update progress", () => {
     } else {
       Reflect.deleteProperty(process.stdout, "isTTY");
     }
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -81,6 +82,7 @@ describe("update progress", () => {
   });
 
   it("follows restart verification after step progress stops and flushes before the final report", async () => {
+    vi.useFakeTimers();
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     presentation = createUpdateProgress(true, context);
     presentation.stop();
