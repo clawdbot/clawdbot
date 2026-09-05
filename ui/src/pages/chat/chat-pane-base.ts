@@ -34,7 +34,7 @@ import type {
 } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import type { GitHubPublicationBinding } from "../../lib/sessions/session-github-publication.ts";
+import type { GitHubPublicationBinding } from "../../lib/sessions/session-capability.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";

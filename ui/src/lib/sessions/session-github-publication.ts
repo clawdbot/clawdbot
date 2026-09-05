@@ -1,16 +1,14 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
-import {
-  GitHubPublicationController,
-  type GitHubPublicationPresentationBinding,
-} from "./github-publication-controller.ts";
+import { GitHubPublicationController } from "./github-publication-controller.ts";
 import {
   readSessionChangedEvent,
   reconcileSessionChanged,
   reconcileSessionHistory,
 } from "./reconcile.ts";
 import type {
+  GitHubPublicationBinding,
   SessionCapability,
   SessionConnectionOwner,
   SessionGateway,
@@ -18,10 +16,6 @@ import type {
 import { isUiGlobalSessionKey, resolveUiConversationIdentity } from "./session-key.ts";
 
 const MAX_RETAINED_PUBLICATIONS = 32;
-
-export type GitHubPublicationBinding = GitHubPublicationPresentationBinding & {
-  matches: (row: GatewaySessionRow) => boolean;
-};
 
 type Host = {
   connection: SessionConnectionOwner;

@@ -7,8 +7,7 @@ import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createTestSessionCapability } from "./session-capability.test-support.ts";
-import type { SessionGateway } from "./session-capability.ts";
-import type { GitHubPublicationBinding } from "./session-github-publication.ts";
+import type { GitHubPublicationBinding, SessionGateway } from "./session-capability.ts";
 
 function sessionsResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
   return {
