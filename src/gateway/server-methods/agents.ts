@@ -1184,12 +1184,14 @@ export const agentsHandlers: GatewayRequestHandlers = {
         // A journaled path is trash-eligible only while registry ownership still points at the
         // deleted agent; recovery must not consume a path claimed by a surviving agent.
         const agentDirRegistryPath = normalizeAgentDirRegistryPath(deleteResult.agentDir);
-        const purgeFailed = await purgeAgentSessionStoreEntries(lockedConfig, agentId);
+        const purgeFailed = await purgeAgentSessionStoreEntries(lockedConfig, agentId, {
+          runDatabaseCleanup: deletion.runDatabaseCleanup,
+        });
 
         const removed: AgentDeleteRemovedPath[] = [];
         const failed: AgentDeleteFailedPath[] = [];
 
-        if (deleteFiles) {
+        if (deleteFiles && !purgeFailed) {
           const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
             readAgentDeleteDatabaseRegistry(),
             agentId,
@@ -1416,7 +1418,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
             unregisterResolvedAgentDir({ agentId, agentDir: agentDirRegistryPath });
           }
         }
-        if (failed.length === 0) {
+        if (failed.length === 0 && !purgeFailed) {
           unregisterResolvedAgentDir({ agentId, agentDir: agentDirRegistryPath });
           if (deleteFiles) {
             unregisterAgentDeleteDatabases(agentId, databasePlan?.registrationPaths ?? []);

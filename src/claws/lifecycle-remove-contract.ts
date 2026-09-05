@@ -1,5 +1,6 @@
 import type { unsetConfiguredMcpServer } from "../agents/mcp-config-mutation.js";
 import type { listConfiguredMcpServers } from "../config/mcp-config.js";
+import type { purgeAgentSessionStoreEntries } from "../config/sessions/cleanup-service.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { ClawCronGateway } from "./cron.js";
@@ -50,7 +51,7 @@ export type ClawRemovePlan = {
   blockers: Array<{ code: string; message: string }>;
 };
 
-export type RemovedCronJob = {
+type RemovedCronJob = {
   manifestId: string;
   schedulerJobId?: string;
   action: "removed" | "error";
@@ -73,7 +74,9 @@ export type ClawRemovePlanOptions = OpenClawStateDatabaseOptions & {
 
 export type ClawRemoveApplyOptions = ClawRemovePlanOptions & {
   commitConfig?: ConfigCommit;
-  purgeSessions?: (config: OpenClawConfig, agentId: string) => Promise<void>;
+  purgeSessions?: (
+    ...args: Parameters<typeof purgeAgentSessionStoreEntries>
+  ) => Promise<boolean | void>;
   trashPath?: ClawTrashPath;
   consentPlanIntegrity?: string;
   unsetMcpServer?: typeof unsetConfiguredMcpServer;

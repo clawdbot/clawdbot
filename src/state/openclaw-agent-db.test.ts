@@ -996,7 +996,7 @@ describe("openclaw agent database", () => {
 
     expect(() =>
       runOpenClawStateWriteTransaction(
-        (database) => assertAgentDeletionPathFence(database.db, fence),
+        (database) => assertAgentDeletionPathFence(database, fence),
         { env },
       ),
     ).toThrow("deletion journal changed");

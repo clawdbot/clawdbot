@@ -431,6 +431,11 @@ still open, stop the command or restart the Gateway holding it before retrying.
 Removing scheduled jobs still requires a running Gateway. A database-lease
 refusal leaves the agent config, execution approvals, and creation history unchanged.
 
+If session cleanup or transcript archive export fails after the agent is removed
+from config, removal reports `partial` with `session_cleanup_failed` and retains
+its cleanup record. Correct the reported error, preview removal again, and retry
+to finish cleanup before recreating the agent.
+
 To remove unchanged Claw-introduced references that have no other current
 owner, include `--remove-unused` in both preview and apply. To select exact
 referenced resources instead, repeat `--remove-referenced`:

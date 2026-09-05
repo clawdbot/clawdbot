@@ -1,15 +1,18 @@
 // Implements agent deletion with gateway delegation and local cleanup fallback.
 import type { AgentsDeleteResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import {
+  isPathOwnedBySurvivingAgent,
+  prepareAgentDeleteDatabases,
+  readAgentDeleteDatabaseRegistry,
+  resolveSurvivingDatabaseFilePaths,
+} from "../agents/agent-delete-databases.js";
+import {
   findOverlappingWorkspaceAgentIds,
   formatSharedAuthStoreOwnerDeleteError,
   isInheritedAuthStoreOwner,
   isSharedAuthStoreOwner,
 } from "../agents/agent-delete-safety.js";
-import {
-  isPathOwnedByAnotherRegisteredAgent,
-  normalizeAgentDirRegistryPath,
-} from "../agents/agent-dir-registry.js";
+import { normalizeAgentDirRegistryPath } from "../agents/agent-dir-registry.js";
 import {
   beginAgentDeletion,
   claimCompletedAgentDeletion,
@@ -50,14 +53,10 @@ import {
 } from "../gateway/call.js";
 import { withAgentExecApprovalsRemoved } from "../infra/exec-approvals.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
+import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
-import {
-  listOpenClawRegisteredAgentDatabases,
-  unregisterOpenClawAgentDatabases,
-} from "../state/openclaw-agent-db-registry.js";
+import { unregisterOpenClawAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { createQuietRuntime } from "./agents.command-shared.js";
@@ -283,13 +282,13 @@ export async function agentsDeleteCommand(
   }
 
   const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
-  const workspaceRetained = workspaceSharedWith.length > 0;
 
   const deleteFiles = existingJournal?.deleteFiles ?? true;
   const deletion = beginAgentDeletion(
     existingJournal ?? { agentId, agentDir, workspaceDir, sessionsDir, deleteFiles },
   );
   try {
+    prepareAgentDeleteDatabases(cfg, agentId, agentDir);
     const commitRoster = async () =>
       await withAgentExecApprovalsRemoved(agentId, async () => {
         if (configured) {
@@ -321,7 +320,20 @@ export async function agentsDeleteCommand(
   }
 
   // Purge session store entries for this agent so orphaned sessions cannot be targeted (#65524).
-  const purgeFailed = await purgeAgentSessionStoreEntries(cfg, agentId);
+  const purgeFailed = await purgeAgentSessionStoreEntries(cfg, agentId, {
+    runDatabaseCleanup: deletion.runDatabaseCleanup,
+  });
+  // Directory ownership is process-local; resolve survivors before the destructive recheck.
+  for (const survivingAgentId of listAgentIds(result.config)) {
+    resolveAgentDir(result.config, survivingAgentId);
+  }
+  const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
+    readAgentDeleteDatabaseRegistry(),
+    agentId,
+  );
+  const sharedWithSurvivor = (pathname: string) =>
+    isPathOwnedBySurvivingAgent(result.config, agentId, pathname, survivingDatabaseFilePaths);
+  const workspaceRetained = sharedWithSurvivor(workspaceDir);
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   // Only trash the workspace if no other agent can depend on that path (#70890).
@@ -337,11 +349,11 @@ export async function agentsDeleteCommand(
     }
     return outcome;
   };
-  if (deleteFiles && workspaceRetained) {
+  if (deleteFiles && !purgeFailed && workspaceRetained) {
     quietRuntime.log(
-      `Skipped workspace removal (shared with other agents: ${workspaceSharedWith.join(", ")}): ${workspaceDir}`,
+      `Skipped workspace removal (shared with other agents${workspaceSharedWith.length ? `: ${workspaceSharedWith.join(", ")}` : ""}): ${workspaceDir}`,
     );
-  } else if (deleteFiles) {
+  } else if (deleteFiles && !purgeFailed) {
     const legacyPlan = prepareLegacyWorkspaceStateReset(workspaceDir);
     const statePlan = prepareWorkspaceStateDeletion(workspaceDir);
     const workspaceResult = await removePath(workspaceDir);
@@ -357,30 +369,17 @@ export async function agentsDeleteCommand(
       }
     }
   }
-  if (deleteFiles) {
-    // Directory ownership is process-local; prepare every survivor before filtering journal paths,
-    // or a deleted agent's database nested beneath a survivor's agentDir could be trashed.
-    for (const survivingAgentId of listAgentIds(result.config)) {
-      resolveAgentDir(result.config, survivingAgentId);
-    }
+  if (deleteFiles && !purgeFailed) {
     const canonicalAgentDir = normalizeAgentDirRegistryPath(agentDir);
-    const survivingDatabasePaths = new Set(
-      listOpenClawRegisteredAgentDatabases()
-        .filter((entry) => normalizeAgentId(entry.agentId) !== agentId)
-        .flatMap((entry) => resolveSqliteDatabaseFilePaths(entry.path))
-        .map((pathname) => normalizeAgentDirRegistryPath(pathname)),
-    );
     const databasePaths = deletion.entry.databasePaths.filter((pathname) => {
       const canonicalPath = normalizeAgentDirRegistryPath(pathname);
-      return (
-        !isPathInside(canonicalAgentDir, canonicalPath) &&
-        !survivingDatabasePaths.has(canonicalPath) &&
-        !isPathOwnedByAnotherRegisteredAgent({ agentId, pathname }) &&
-        findOverlappingWorkspaceAgentIds(result.config, agentId, canonicalPath).length === 0
-      );
+      return !isPathInside(canonicalAgentDir, canonicalPath) && !sharedWithSurvivor(pathname);
     });
-    await removePath(agentDir);
-    await removePath(sessionsDir);
+    for (const directory of [agentDir, sessionsDir]) {
+      if (!sharedWithSurvivor(directory)) {
+        await removePath(directory);
+      }
+    }
     for (const databasePath of databasePaths) {
       await removePath(databasePath);
     }
@@ -388,7 +387,7 @@ export async function agentsDeleteCommand(
   if (workspaceCleanupError) {
     throw workspaceCleanupError;
   }
-  if (failed.length === 0) {
+  if (failed.length === 0 && !purgeFailed) {
     if (deleteFiles) {
       // Keep registry ownership until every cleanup target is terminal. A crash before journal
       // completion leaves this idempotent deregistration reachable on the next delete attempt.

@@ -42,6 +42,9 @@ const mocks = vi.hoisted(() => ({
   beginAgentDeletionCommit: vi.fn(),
   beginAgentDeletionRollback: vi.fn(),
   beginAgentDeletionFinish: vi.fn(),
+  runAgentDatabaseCleanup: vi.fn(
+    async (_target: unknown, run: () => Promise<unknown>) => await run(),
+  ),
   claimCompletedAgentDeletion: vi.fn(() => true),
   readAgentDeletionJournal: vi.fn(() => undefined as Record<string, unknown> | undefined),
   resolveOpenClawAgentSqlitePath: vi.fn(
@@ -245,6 +248,7 @@ vi.mock("../../agents/agent-lifecycle-registry.js", () => ({
     },
     finish: mocks.beginAgentDeletionFinish,
     rollback: mocks.beginAgentDeletionRollback,
+    runDatabaseCleanup: mocks.runAgentDatabaseCleanup,
   }),
   claimCompletedAgentDeletion: mocks.claimCompletedAgentDeletion,
   isAgentDeletionBlocked: () => false,
@@ -2856,13 +2860,20 @@ describe("agents.delete", () => {
     expect(mocks.movePathToTrash).toHaveBeenCalled();
   });
 
-  it("reports a session purge failure without failing committed deletion", async () => {
+  it("reports failed session cleanup and retains its journal and files for retry", async () => {
     mocks.purgeAgentSessionStoreEntries.mockResolvedValueOnce(true);
     const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
 
     await promise;
 
     expectRespondOk(respond, { ok: true, purgeFailed: true });
+    expect(mocks.purgeAgentSessionStoreEntries).toHaveBeenCalledWith(
+      expect.anything(),
+      "test-agent",
+      { runDatabaseCleanup: mocks.runAgentDatabaseCleanup },
+    );
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+    expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
   });
 
   it("sweeps WAL sidecars recreated between deletion preparation and cleanup", async () => {

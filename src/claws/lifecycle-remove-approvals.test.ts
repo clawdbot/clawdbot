@@ -1,22 +1,31 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { stat } from "node:fs/promises";
-import { join } from "node:path";
+import { rmSync, writeFileSync } from "node:fs";
+import { rm, stat } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAgent } from "../agents/agent-create.js";
 import { beginAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntryReadOnly,
+} from "../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { withTempHomeConfig, writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { readAgentProvenance } from "../state/agent-provenance.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabases,
+  closeOpenClawAgentDatabaseByPath,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -111,6 +120,129 @@ function startHeldDatabase(agentId = "worker", pathname = "") {
 }
 
 describe("Claw exec approvals removal", () => {
+  it.each([false, true])("purges a retained session database (cold: %s)", async (cold) => {
+    const addPlan = await buildApprovalFixture();
+    await withTempHomeConfig({}, async ({ home }) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", join(home, ".openclaw"));
+      let config: OpenClawConfig = {};
+      await applyClawAddPlan(addPlan, {
+        consentPlanIntegrity: addPlan.planIntegrity,
+        commitConfig: async (transform) => {
+          config = transform(config);
+        },
+      });
+      const target = openOpenClawAgentDatabase({ agentId: "worker" });
+      config = {
+        ...config,
+        agents: {
+          ...config.agents,
+          entries: { ...config.agents?.entries, kept: { workspace: dirname(target.path) } },
+        },
+      };
+      await writeOpenClawConfig(home, config);
+      const workerScope = { agentId: "worker", sessionKey: "agent:worker:main" };
+      const keptScope = { agentId: "kept", sessionKey: "agent:kept:main" };
+      replaceSessionEntrySync(workerScope, { sessionId: "worker-session", updatedAt: 1 });
+      replaceSessionEntrySync(keptScope, { sessionId: "kept-session", updatedAt: 1 });
+      if (cold) {
+        closeOpenClawAgentDatabaseByPath(target.path);
+      }
+      const plan = await buildClawRemovePlan("worker");
+      const trashPath = vi.fn(async () => true);
+      await expect(
+        applyClawRemovePlan(plan, {
+          consentPlanIntegrity: plan.planIntegrity,
+          trashPath,
+        }),
+      ).resolves.toMatchObject({ status: "complete", agentRemoved: true });
+      expect(loadSessionEntryReadOnly(workerScope)).toBeUndefined();
+      expect(loadSessionEntryReadOnly(keptScope)?.sessionId).toBe("kept-session");
+      expect(target.db.isOpen).toBe(false);
+      expect(trashPath).not.toHaveBeenCalledWith(dirname(target.path), expect.anything());
+      expect(readAgentDeletionJournal("worker")?.cleanupCompleted).toBe(true);
+    });
+  });
+
+  it("retains an archive publication failure and completes its real session cleanup on retry", async () => {
+    const addPlan = await buildApprovalFixture();
+    await withTempHomeConfig({}, async ({ home }) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", join(home, ".openclaw"));
+      let config: OpenClawConfig = {};
+      await applyClawAddPlan(addPlan, {
+        consentPlanIntegrity: addPlan.planIntegrity,
+        commitConfig: async (transform) => {
+          config = transform(config);
+        },
+      });
+      const target = openOpenClawAgentDatabase({ agentId: "worker" });
+      config = {
+        ...config,
+        agents: {
+          ...config.agents,
+          entries: { ...config.agents?.entries, kept: { workspace: dirname(target.path) } },
+        },
+      };
+      await writeOpenClawConfig(home, config);
+      const scope = {
+        agentId: "worker",
+        sessionKey: "agent:worker:main",
+        sessionId: "worker-session",
+      };
+      replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      await appendTranscriptMessage(scope, {
+        message: { role: "user", content: "retained archive fixture" },
+      });
+      const sessionsDir = join(dirname(dirname(target.path)), "sessions");
+      let obstructed = false;
+      const unsubscribe = onSessionIdentityMutation((mutation) => {
+        if (mutation.kind === "delete" && mutation.previous.sessionId === scope.sessionId) {
+          // Obstruct file publication only after the real archive row and deletion commit.
+          rmSync(sessionsDir, { force: true, recursive: true });
+          writeFileSync(sessionsDir, "archive directory obstruction");
+          obstructed = true;
+        }
+      });
+      const plan = await buildClawRemovePlan("worker");
+      const trashPath = vi.fn(async () => true);
+      try {
+        await expect(
+          applyClawRemovePlan(plan, {
+            trashPath,
+            consentPlanIntegrity: plan.planIntegrity,
+          }),
+        ).resolves.toMatchObject({ status: "partial", error: { code: "session_cleanup_failed" } });
+      } finally {
+        unsubscribe();
+      }
+      expect(obstructed).toBe(true);
+      expect(trashPath).not.toHaveBeenCalled();
+      expect(readAgentDeletionJournal("worker")?.cleanupCompleted).toBe(false);
+      expect(readAgentProvenance("worker")).toBeDefined();
+      const readArchives = () =>
+        withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            database.db.prepare("SELECT published_at FROM session_transcript_archives").all(),
+          { agentId: "worker" },
+        );
+      expect(readArchives()).toMatchObject({ found: true, value: [{ published_at: null }] });
+      expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
+      await rm(sessionsDir);
+      const retry = await buildClawRemovePlan("worker");
+      await expect(
+        applyClawRemovePlan(retry, {
+          trashPath,
+          consentPlanIntegrity: retry.planIntegrity,
+        }),
+      ).resolves.toMatchObject({ status: "complete" });
+      expect(readAgentDeletionJournal("worker")?.cleanupCompleted).toBe(true);
+      expect(readAgentProvenance("worker")).toBeUndefined();
+      expect(readArchives()).toMatchObject({
+        found: true,
+        value: [{ published_at: expect.any(Number) }],
+      });
+    });
+  });
+
   it("preserves config, approvals, and files until another process closes its database", async () => {
     const addPlan = await buildApprovalFixture(true);
     await withTempHomeConfig({}, async ({ home }) => {
@@ -172,6 +304,28 @@ describe("Claw exec approvals removal", () => {
         expect(unsetMcpServer).not.toHaveBeenCalled();
         expect(readClawMcpServerRefs("worker")).toHaveLength(1);
         expect(readAgentDeletionJournal("worker")).toBeUndefined();
+        const agentDir = join(home, ".openclaw", "agents", "worker", "agent");
+        const deletion = beginAgentDeletion({
+          agentId: "worker",
+          agentDir,
+          workspaceDir: join(home, "workspace-worker"),
+          sessionsDir: join(home, ".openclaw", "agents", "worker", "sessions"),
+        });
+        const cleanup = vi.fn(async () => undefined);
+        try {
+          await expect(
+            deletion.runDatabaseCleanup(
+              {
+                agentId: "worker",
+                path: join(agentDir, "openclaw-agent.sqlite"),
+              },
+              cleanup,
+            ),
+          ).rejects.toThrow("database is still open in another process");
+          expect(cleanup).not.toHaveBeenCalled();
+        } finally {
+          deletion.rollback();
+        }
         await child.close();
         const retry = await buildClawRemovePlan("worker", { config });
         await expect(
@@ -183,6 +337,35 @@ describe("Claw exec approvals removal", () => {
         expect(trashPath).toHaveBeenCalled();
         expect(unsetMcpServer).toHaveBeenCalledOnce();
         expect(readAgentProvenance("worker")).toBeUndefined();
+      } finally {
+        await child.dispose();
+      }
+    });
+  });
+
+  it("refuses a cleanup capability while a foreign process holds a database beneath its paths", async () => {
+    await withTempHomeConfig({}, async ({ home }) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", join(home, ".openclaw"));
+      const agentDir = join(home, ".openclaw", "agents", "worker", "agent");
+      const target = { agentId: "kept", path: join(agentDir, "shared.sqlite") };
+      const child = startHeldDatabase(target.agentId, target.path);
+      try {
+        await child.ready;
+        const deletion = beginAgentDeletion({
+          agentId: "worker",
+          agentDir,
+          workspaceDir: join(home, "workspace-worker"),
+          sessionsDir: join(home, ".openclaw", "agents", "worker", "sessions"),
+        });
+        const cleanup = vi.fn(async () => openOpenClawAgentDatabase(target));
+        await expect(deletion.runDatabaseCleanup(target, cleanup)).rejects.toThrow(
+          "agent worker deletion owns",
+        );
+        expect(cleanup).not.toHaveBeenCalled();
+        await child.close();
+        const database = await deletion.runDatabaseCleanup(target, cleanup);
+        expect(database.db.isOpen).toBe(false);
+        deletion.rollback();
       } finally {
         await child.dispose();
       }

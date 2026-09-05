@@ -174,6 +174,7 @@ async function commitClawAgentConfigRemoval(
 
 type CommittedClawAgentRemoval = ClawAgentConfigRemovalResult & {
   completeDeletion: (database: OpenClawStateDatabase) => void;
+  runDatabaseCleanup: ReturnType<typeof beginAgentDeletion>["runDatabaseCleanup"];
 };
 
 export async function withClawAgentConfigRemoval<T>(
@@ -216,6 +217,7 @@ export async function withClawAgentConfigRemoval<T>(
       committed = true;
       return {
         ...result,
+        runDatabaseCleanup: deletion.runDatabaseCleanup,
         completeDeletion: (database: OpenClawStateDatabase) => {
           if (
             !completeAgentDeletionJournalInDatabase(

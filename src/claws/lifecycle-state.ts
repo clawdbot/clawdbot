@@ -25,7 +25,6 @@ import {
   releaseClawRemoveRows,
   removeClawWorkspaceFile,
   workspaceContainsUntrackedEntries,
-  type RemovedWorkspaceFile,
 } from "./lifecycle-delete-support.js";
 import { removeClawMcpServers } from "./lifecycle-mcp-removal.js";
 import {
@@ -36,7 +35,6 @@ import {
   type ClawRemoveResult,
   type ClawRemovePlan,
   type ClawRemovePlanAction,
-  type RemovedCronJob,
 } from "./lifecycle-remove-contract.js";
 import { readClawStatus } from "./lifecycle-status.js";
 import { clawMcpRemovalSelector, planClawMcpServerRemoval } from "./mcp.js";
@@ -491,30 +489,33 @@ export async function applyClawRemovePlan(
         new ClawRemoveError("agent_modified", "Agent config changed during remove."),
     },
     async (commitRemoval) => {
+      const result: ClawRemoveResult = {
+        schemaVersion: CLAW_REMOVE_RESULT_SCHEMA_VERSION,
+        stability: CLAW_OUTPUT_STABILITY,
+        dryRun: false,
+        status: "partial",
+        agentId,
+        agentRemoved: false,
+        workspaceFiles: [],
+        packages: [],
+        mcpServers: [],
+        cronJobs: [],
+        packageRefsReleased: 0,
+      };
+      const partial = (code: string, message: string): ClawRemoveResult => {
+        updateClawInstallRecordStatus(agentId, "partial", options);
+        return { ...result, error: { code, message } };
+      };
       const mcpRemoval = await removeClawMcpServers({
         agentId,
         servers: record.mcpServers,
         options,
       });
-      const mcpServers = mcpRemoval.mcpServers;
+      result.mcpServers = mcpRemoval.mcpServers;
       if (mcpRemoval.error) {
-        updateClawInstallRecordStatus(agentId, "partial", options);
-        return {
-          schemaVersion: CLAW_REMOVE_RESULT_SCHEMA_VERSION,
-          stability: CLAW_OUTPUT_STABILITY,
-          dryRun: false,
-          status: "partial",
-          agentId,
-          agentRemoved: false,
-          workspaceFiles: [],
-          packages: [],
-          mcpServers,
-          cronJobs: [],
-          packageRefsReleased: 0,
-          error: { code: "mcp_cleanup_failed", message: mcpRemoval.error },
-        };
+        return partial("mcp_cleanup_failed", mcpRemoval.error);
       }
-      const cronJobs: RemovedCronJob[] = [];
+      const cronJobs = result.cronJobs;
       for (const cron of record.cronJobs) {
         if (cron.status !== "removed" && (!cron.schedulerJobId || cron.status !== "complete")) {
           throw new ClawRemoveError(
@@ -567,34 +568,30 @@ export async function applyClawRemovePlan(
             action: "error",
             message,
           });
-          updateClawInstallRecordStatus(agentId, "partial", options);
-          return {
-            schemaVersion: CLAW_REMOVE_RESULT_SCHEMA_VERSION,
-            stability: CLAW_OUTPUT_STABILITY,
-            dryRun: false,
-            status: "partial",
-            agentId,
-            agentRemoved: false,
-            workspaceFiles: [],
-            packages: [],
-            mcpServers,
-            cronJobs,
-            packageRefsReleased: 0,
-            error: { code: "cron_cleanup_failed", message },
-          };
+          return partial("cron_cleanup_failed", message);
         }
       }
       const configRemoval = await commitRemoval();
-      const { agentRemoved, cleanupTargets, configBeforeDelete } = configRemoval;
+      const { cleanupTargets, configBeforeDelete } = configRemoval;
+      result.agentRemoved = configRemoval.agentRemoved;
       const committedNextConfig = configRemoval.nextConfig;
       const completeDeletion = configRemoval.completeDeletion;
       if (!options.commitConfig || options.purgeSessions) {
         const purgeSessions =
           options.purgeSessions ??
           (await import("../config/sessions/cleanup-service.js")).purgeAgentSessionStoreEntries;
-        await purgeSessions(configBeforeDelete, agentId);
+        const purgeFailed = await purgeSessions(configBeforeDelete, agentId, {
+          env: options.env,
+          runDatabaseCleanup: configRemoval.runDatabaseCleanup,
+        });
+        if (purgeFailed) {
+          return partial(
+            "session_cleanup_failed",
+            "Session cleanup failed; correct the reported error and retry Claw removal.",
+          );
+        }
       }
-      const packages = await applyClawPackageRemovals(
+      result.packages = await applyClawPackageRemovals(
         packageDecisions.toSorted(
           (left, right) =>
             Number(left.packageRef.relationship === "referenced") -
@@ -605,28 +602,11 @@ export async function applyClawRemovePlan(
           deps: options.packageDeps,
         },
       );
-      const packageErrors = packages.filter((pkg) => pkg.action === "error");
+      const packageErrors = result.packages.filter((pkg) => pkg.action === "error");
       if (packageErrors.length > 0) {
-        updateClawInstallRecordStatus(agentId, "partial", options);
-        return {
-          schemaVersion: CLAW_REMOVE_RESULT_SCHEMA_VERSION,
-          stability: CLAW_OUTPUT_STABILITY,
-          dryRun: false,
-          status: "partial",
-          agentId,
-          agentRemoved,
-          workspaceFiles: [],
-          packages,
-          mcpServers,
-          cronJobs,
-          packageRefsReleased: 0,
-          error: {
-            code: "package_cleanup_failed",
-            message: packageErrors.map((pkg) => pkg.reason).join("; "),
-          },
-        };
+        return partial("package_cleanup_failed", packageErrors.map((pkg) => pkg.reason).join("; "));
       }
-      const workspaceFiles: RemovedWorkspaceFile[] = [];
+      const workspaceFiles = result.workspaceFiles;
       for (const file of record.workspaceFiles) {
         workspaceFiles.push(await removeClawWorkspaceFile(file));
       }
@@ -663,17 +643,9 @@ export async function applyClawRemovePlan(
       }
       releaseClawRemoveRows(agentId, workspaceFiles, complete, completeDeletion, options);
       return {
-        schemaVersion: CLAW_REMOVE_RESULT_SCHEMA_VERSION,
-        stability: CLAW_OUTPUT_STABILITY,
-        dryRun: false,
+        ...result,
         status: complete ? "complete" : "partial",
-        agentId,
-        agentRemoved,
         ...(bootstrap ? { bootstrap } : {}),
-        workspaceFiles,
-        packages,
-        mcpServers,
-        cronJobs,
         packageRefsReleased: complete ? record.packages.length : 0,
         ...(complete
           ? {}
