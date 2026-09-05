@@ -2115,6 +2115,36 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.telemetry.toolAutoDeliveryMediaUrls).toEqual([]);
   });
 
+  it.each([
+    { name: "dir_fetch", trustedLocalMedia: true, expected: ["/tmp/plugin-file.txt"] },
+    { name: "browser", trustedLocalMedia: false, expected: [] },
+  ])(
+    "applies concrete plugin metadata to local media from $name",
+    async ({ name, trustedLocalMedia, expected }) => {
+      const tool = createOwnerBackedContractTool({
+        pluginId: "file-transfer",
+        name,
+        result: mediaResult("/tmp/plugin-file.txt"),
+        trustedLocalMedia,
+      });
+      const bridge = createCodexDynamicToolBridge({
+        tools: [tool],
+        signal: new AbortController().signal,
+      });
+
+      await bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: name,
+        arguments: {},
+      });
+
+      expect(bridge.telemetry.toolMediaUrls).toEqual(expected);
+    },
+  );
+
   it("records messaging tool side effects while returning concise text to app-server", async () => {
     const toolResult = {
       content: [{ type: "text", text: "Sent." }],

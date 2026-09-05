@@ -129,6 +129,7 @@ function createInput(options?: { activationError?: Error }) {
     clientToolDefs: [],
     replaySafeToolNames: new Set(["read"]),
     replaySafeTools: new Set(allCustomTools),
+    trustedLocalMediaToolNames: new Set(["read"]),
   };
   let onDeliveredSourceReply: (() => void) | undefined;
 

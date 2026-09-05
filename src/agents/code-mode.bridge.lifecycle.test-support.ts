@@ -78,6 +78,7 @@ export function createSubscribedCodeModeHarness(params: {
     sandboxSessionKey: sessionKey,
     builtinToolNames: new Set(),
     replaySafeToolNames: new Set(),
+    trustedLocalMediaToolNames: new Set(),
   });
   const context = {
     config,

@@ -188,6 +188,7 @@ describe("subscribeEmbeddedAgentSession lifecycle billing errors", () => {
           onBlockReply: undefined,
           onBlockReplyFlush: undefined,
           sandboxSessionKey: sessionKey,
+          trustedLocalMediaToolNames: new Set(),
           builtinToolNames: new Set(),
           replaySafeToolNames: new Set(),
         });

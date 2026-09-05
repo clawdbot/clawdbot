@@ -44,6 +44,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       replaySafeTools,
       codeModeExecToolNames,
       sideEffectToolOwners,
+      trustedLocalMediaToolNames,
       setActiveSessionSystemPrompt,
       settingsManager,
     },
@@ -231,6 +232,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     replaySafeToolNames,
     codeModeExecToolNames,
     sideEffectToolOwners,
+    trustedLocalMediaToolNames,
     diagnosticOwner,
     trajectoryRecorder: sessionRuntime.trajectoryRecorder,
   });

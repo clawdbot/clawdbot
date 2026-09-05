@@ -125,6 +125,7 @@ export function prepareEmbeddedAttemptStream(input: {
   replaySafeToolNames: ReadonlySet<string>;
   codeModeExecToolNames?: ReadonlySet<string>;
   sideEffectToolOwners?: ReadonlyMap<string, string>;
+  trustedLocalMediaToolNames: ReadonlySet<string>;
   diagnosticOwner: DiagnosticEmbeddedRunOwner;
   trajectoryRecorder?: Parameters<
     typeof createEmbeddedAttemptDeferredLifecycleOwner
@@ -372,6 +373,7 @@ export function prepareEmbeddedAttemptStream(input: {
     replaySafeToolNames: input.replaySafeToolNames,
     ...(input.codeModeExecToolNames ? { codeModeExecToolNames: input.codeModeExecToolNames } : {}),
     ...(input.sideEffectToolOwners ? { sideEffectToolOwners: input.sideEffectToolOwners } : {}),
+    trustedLocalMediaToolNames: input.trustedLocalMediaToolNames,
     internalEvents: attempt.internalEvents,
   });
   toolMetasForTerminal = subscription.toolMetas;

@@ -87,6 +87,7 @@ function prepareCatalogExecutor(
     markExternalAbort?: () => void;
     toolProgressDetail?: "explain" | "raw";
     onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
+    trustedLocalMediaToolNames?: ReadonlySet<string>;
   },
 ) {
   const runAbortController = options?.runAbortController ?? new AbortController();
@@ -137,6 +138,7 @@ function prepareCatalogExecutor(
     sandboxSessionKey: options?.sandboxSessionKey ?? "agent:main:main",
     builtinToolNames: new Set(),
     replaySafeToolNames: new Set(),
+    trustedLocalMediaToolNames: options?.trustedLocalMediaToolNames ?? new Set(),
   });
 }
 
@@ -180,6 +182,16 @@ describe("prepareEmbeddedAttemptStream", () => {
       isCompacting: vi.fn(() => false),
     });
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
+  });
+
+  it("passes exact run-local media trust to the subscription", () => {
+    const trustedLocalMediaToolNames = new Set(["plugin_media"]);
+
+    prepareCatalogExecutor([], { trustedLocalMediaToolNames });
+
+    expect(mocks.subscribe).toHaveBeenCalledWith(
+      expect.objectContaining({ trustedLocalMediaToolNames }),
+    );
   });
 
   it.each([
@@ -448,6 +460,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       sandboxSessionKey: "agent:main:main",
       builtinToolNames: new Set(),
       replaySafeToolNames: new Set(),
+      trustedLocalMediaToolNames: new Set(),
     });
     const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {
       onBeforeTerminalDelivery?: (event: unknown) => Promise<unknown>;
@@ -533,6 +546,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       sandboxSessionKey: "agent:main:main",
       builtinToolNames: new Set(),
       replaySafeToolNames: new Set(),
+      trustedLocalMediaToolNames: new Set(),
     });
     const queued = prepared.queueHandle.queueMessage("new user input");
     const subscriptionInput = mocks.subscribe.mock.calls.at(-1)?.[0] as {

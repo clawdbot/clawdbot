@@ -208,6 +208,45 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     ).toEqual([["exec"], []]);
   });
 
+  it("collects exact local-media trust from core policy and plugin metadata", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const trustedPluginTool = createStubTool("plugin_media");
+    const untrustedPluginTool = createStubTool("browser");
+    setPluginToolMeta(trustedPluginTool as never, {
+      pluginId: "trusted-plugin",
+      optional: false,
+      trustedLocalMedia: true,
+    });
+    setPluginToolMeta(untrustedPluginTool as never, {
+      pluginId: "untrusted-plugin",
+      optional: false,
+    });
+    const uncompactedEffectiveTools = [
+      createStubTool("read"),
+      createStubTool("sessions_yield"),
+      trustedPluginTool,
+      untrustedPluginTool,
+    ];
+
+    const result = prepare({
+      codeModeControlsEnabledForRun: false,
+      attemptConfig: CATALOGS_DISABLED_CONFIG,
+      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+      catalogRef,
+      uncompactedEffectiveTools,
+      clientTools: [clientTool("client_probe")],
+    });
+
+    const trustedLocalMediaToolNames = result.trustedLocalMediaToolNames;
+    expect(trustedLocalMediaToolNames).toEqual(new Set(["read", "plugin_media"]));
+
+    uncompactedEffectiveTools.splice(0, uncompactedEffectiveTools.length, untrustedPluginTool);
+    result.refreshTools();
+
+    expect(result.trustedLocalMediaToolNames).toBe(trustedLocalMediaToolNames);
+    expect(result.trustedLocalMediaToolNames).toEqual(new Set());
+  });
+
   it.each([CODE_MODE_CONFIG, CATALOGS_DISABLED_CONFIG])(
     "hides client tools when the attempt engages code mode",
     (config) => {
