@@ -340,7 +340,7 @@ export function createMarkdownParser(): MarkdownItParser {
     }
   });
 
-  markdownParser.core.ruler.after("linkify", "file-links", (state) => {
+  markdownParser.core.ruler.after("linkify-cjk-trim", "file-links", (state) => {
     const env = state.env as Partial<MarkdownRenderEnv> | undefined;
     if (env?.fileLinks !== true) {
       return;

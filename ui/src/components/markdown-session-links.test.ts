@@ -6,8 +6,44 @@ import {
   navigateMarkdownSession,
   type SessionLinkTarget,
 } from "./markdown-session-links.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { SessionLinkTitler } from "./session-link-titling.ts";
 
 describe("markdown session links", () => {
+  it.each(["", "?view=full#latest"])(
+    "resolves the cleaned session after title refresh with URL suffix %j",
+    async (suffix) => {
+      const sessionKey = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
+      const pathname = "/chat/main/d0effac9";
+      const href = `${location.origin}${pathname}${suffix}`;
+      const host = document.createElement("div");
+      host.innerHTML = toSanitizedMarkdownHtml(`${href}重新解读`, { sessionLinks: true });
+      const anchor = host.querySelector<HTMLAnchorElement>("a")!;
+      const titler = new SessionLinkTitler(host);
+      titler.context = {
+        basePath: "",
+        sessions: {
+          state: {
+            result: {
+              sessions: [{ key: sessionKey, agentId: "main", displayName: "Research" }],
+            },
+          },
+        },
+        agents: { state: {} },
+        gateway: { snapshot: {} },
+      } as unknown as ApplicationContext;
+
+      await titler.decorate(anchor);
+      titler.refresh();
+
+      expect(anchor.dataset.sessionKey).toBe(sessionKey);
+      expect(anchor.textContent).toBe("Research");
+      expect(anchor.dataset.sessionHref).toBe(href);
+      expect(anchor.getAttribute("href")).toBe(`${pathname}${suffix}`);
+      expect(anchor.nextSibling?.textContent).toBe("重新解读");
+    },
+  );
+
   it("navigates through the canonical chat session route", () => {
     const navigate = vi.fn();
     const context = {

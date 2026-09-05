@@ -55,7 +55,8 @@ export function parseMarkdownSessionUrl(raw: string, basePath?: string, mainKey?
 }
 
 export function installMarkdownSessionLinks(markdownParser: MarkdownIt, scanPattern: RegExp): void {
-  markdownParser.core.ruler.after("linkify", "session-links", (state) => {
+  // Capture cleaned hrefs before file decoration can claim session-shaped paths.
+  markdownParser.core.ruler.before("file-links", "session-links", (state) => {
     if (state.env?.sessionLinks !== true) {
       return;
     }

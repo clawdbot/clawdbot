@@ -606,6 +606,22 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(fragment.querySelector("a a")).toBeNull();
     });
 
+    it.each(["", "?view=full#latest"])(
+      "captures the cleaned session URL with suffix %j before trailing CJK prose",
+      (suffix) => {
+        const href = `${location.origin}/chat/main/d0effac9${suffix}`;
+        const fragment = htmlFragment(
+          toSanitizedMarkdownHtml(`${href}重新解读`, { sessionLinks: true, fileLinks: true }),
+        );
+        const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
+        expect(link.getAttribute("href")).toBe(href);
+        expect(link.dataset.sessionHref).toBe(href);
+        expect(link.textContent).toBe(href);
+        expect(link.nextSibling?.nodeType).toBe(Node.TEXT_NODE);
+        expect(link.nextSibling?.textContent).toBe("重新解读");
+      },
+    );
+
     it.each([
       "https://elsewhere.example/chat/roboclaw/d0effac9",
       "[External session](https://elsewhere.example/chat/roboclaw/d0effac9)",
