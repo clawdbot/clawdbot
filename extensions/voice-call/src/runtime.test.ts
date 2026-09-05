@@ -736,7 +736,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
     ]);
     const endCallTool = requireRecord(tools[0], "end-call tool");
     expect(endCallTool.description).toContain("final words");
-    expect(endCallTool.description).toContain("no further reply");
+    expect(endCallTool.description).toContain("finishes playing");
+    expect(endCallTool.description).toContain("no new reply");
     expect(requireRecord(endCallTool.parameters, "end-call parameters")).toEqual({
       type: "object",
       properties: {},

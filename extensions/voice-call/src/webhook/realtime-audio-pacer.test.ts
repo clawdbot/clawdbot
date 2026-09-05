@@ -123,6 +123,70 @@ describe("RealtimeAudioPacer", () => {
     expect(sent.slice(-2)).toEqual(["mark:audio-1", "mark:audio-2"]);
   });
 
+  it("drains through an exact terminal mark and fences later output", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+    const sent: string[] = [];
+    const pacer = new RealtimeAudioPacer({
+      serializer: createCompactSerializer(),
+      send: (message) => {
+        sent.push(message);
+        return true;
+      },
+    });
+
+    expect(pacer.sendAudio(createSequencedAudio(10))).toBe(true);
+    const completion = pacer.beginTerminalDrain("end-call-1");
+    expect(pacer.sendAudio(createSequencedAudio(1))).toBe(false);
+    pacer.sendMark("audio-late");
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(sent.slice(-1)).toEqual(["mark:end-call-1"]);
+    expect(sent.filter((message) => !message.startsWith("mark:"))).toHaveLength(10);
+    pacer.acknowledgeMark("audio-1");
+    await expect(Promise.race([completion, Promise.resolve("pending")])).resolves.toBe("pending");
+
+    pacer.acknowledgeMark("end-call-1");
+    await expect(completion).resolves.toBe("played");
+    expect(pacer.sendAudio(createSequencedAudio(1))).toBe(false);
+  });
+
+  it("times out a transmitted terminal mark", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+    const pacer = new RealtimeAudioPacer({
+      serializer: createCompactSerializer(),
+      send: () => true,
+    });
+
+    const completion = pacer.beginTerminalDrain("end-call-timeout");
+    await vi.advanceTimersByTimeAsync(1_999);
+    await expect(Promise.race([completion, Promise.resolve("pending")])).resolves.toBe("pending");
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(completion).resolves.toBe("timed-out");
+  });
+
+  it("interrupts a terminal drain on clear and can resume after a failed hangup", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+    const sent: string[] = [];
+    const pacer = new RealtimeAudioPacer({
+      serializer: createCompactSerializer(),
+      send: (message) => {
+        sent.push(message);
+        return true;
+      },
+    });
+
+    const completion = pacer.beginTerminalDrain("end-call-cleared");
+    pacer.clearAudio();
+    await expect(completion).resolves.toBe("interrupted");
+    pacer.acknowledgeMark("end-call-cleared");
+    expect(pacer.sendAudio(createSequencedAudio(1))).toBe(false);
+
+    pacer.resumeAfterTerminalDrain();
+    expect(pacer.sendAudio(createSequencedAudio(1))).toBe(true);
+    expect(sent).toEqual(["mark:end-call-cleared", "clear", Buffer.alloc(160).toString("base64")]);
+  });
+
   it("clears queued audio immediately (Twilio shape)", async () => {
     vi.useFakeTimers();
     const sent: unknown[] = [];
@@ -154,10 +218,12 @@ describe("RealtimeAudioPacer", () => {
     });
 
     pacer.sendAudio(createSequencedAudio(20));
+    const completion = pacer.beginTerminalDrain("end-call-close");
     pacer.close();
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(sent).toHaveLength(8);
+    await expect(completion).resolves.toBe("interrupted");
     expect(pacer.hasPendingAudio()).toBe(false);
   });
 

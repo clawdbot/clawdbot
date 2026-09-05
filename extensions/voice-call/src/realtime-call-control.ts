@@ -13,7 +13,7 @@ const REALTIME_VOICE_END_CALL_TOOL: RealtimeVoiceTool = {
   type: "function",
   name: REALTIME_VOICE_END_CALL_TOOL_NAME,
   description:
-    "End the current phone call immediately. Speak any final words to the caller before invoking this tool because the call ends as soon as it is invoked and no further reply will be spoken.",
+    "End the current phone call after already-generated speech finishes playing. Speak any final words to the caller before invoking this tool because no new reply will be generated afterward.",
   parameters: {
     type: "object",
     properties: {},
