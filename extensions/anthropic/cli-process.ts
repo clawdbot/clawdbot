@@ -9,7 +9,10 @@ import {
 } from "openclaw/plugin-sdk/process-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
-type ClaudeCliSpawnOptions = Pick<CliBackendExecuteContext, "command" | "args" | "cwd" | "env"> & {
+type ClaudeCliSpawnOptions = Pick<
+  CliBackendExecuteContext,
+  "command" | "argv0" | "args" | "cwd" | "env"
+> & {
   signal?: AbortSignal;
 };
 
@@ -27,6 +30,7 @@ function spawnClaudeCliProcess(
   const stdio: ["pipe", "pipe", "pipe", ...SpawnStdioEntry[]] = ["pipe", "pipe", "pipe"];
   using secretDelivery = prepareSecretInputStdio(stdio, secretInput);
   const child = spawn(options.command, options.args, {
+    argv0: options.argv0,
     cwd: options.cwd,
     detached: process.platform !== "win32",
     env: options.env,

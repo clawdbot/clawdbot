@@ -7,8 +7,10 @@ import type {
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionHandle,
   CliBackendPreparedExecution,
+  CliBackendToolPermissionResult,
 } from "openclaw/plugin-sdk/cli-backend";
 import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
@@ -256,13 +258,8 @@ describe("Claude native stdio boundary", () => {
 
   it("denies an awaited hook decision when its admitted authority is revoked", async () => {
     let active = true;
-    let signalApprovalStarted: () => void = () => {};
-    const approvalStarted = new Promise<void>((resolve) => {
-      signalApprovalStarted = resolve;
-    });
-    let resolveApproval:
-      | ((value: { behavior: "allow"; updatedInput: Record<string, unknown> }) => void)
-      | undefined;
+    const approvalStarted = createDeferred<void>();
+    const approval = createDeferred<CliBackendToolPermissionResult>();
     const context = await createContext("revoked-approval", {
       liveSession: createLiveSession(),
       assertCurrent: () => {
@@ -270,16 +267,15 @@ describe("Claude native stdio boundary", () => {
           throw new Error("Synthetic owner revoked.");
         }
       },
-      requestToolPermission: () =>
-        new Promise((resolve) => {
-          resolveApproval = resolve;
-          signalApprovalStarted();
-        }),
+      requestToolPermission: () => {
+        approvalStarted.resolve();
+        return approval.promise;
+      },
     });
     const running = collect(context);
-    await approvalStarted;
+    await approvalStarted.promise;
     active = false;
-    resolveApproval?.({ behavior: "allow", updatedInput: { file_path: "approved.txt" } });
+    approval.resolve({ behavior: "allow", updatedInput: { file_path: "approved.txt" } });
     const detail = resultDetail(await running);
     expect(detail.hookDecision).toMatchObject({
       hookSpecificOutput: { permissionDecision: "deny" },
@@ -329,6 +325,14 @@ describe("Claude native stdio boundary", () => {
     const context = await createContext("mcp-hook", { liveSession: createLiveSession() });
     const detail = resultDetail(await collect(context));
     expect(detail.hookDecision).toEqual({ continue: true });
+    expect(context.requestToolPermission).not.toHaveBeenCalled();
+  });
+
+  it("declines unsupported MCP elicitation without interrupting the native turn", async () => {
+    const context = await createContext("mcp-elicitation", { liveSession: createLiveSession() });
+    const detail = resultDetail(await collect(context));
+    expect(detail.elicitation).toEqual({ action: "decline" });
+    expect(context.requestUserInput).not.toHaveBeenCalled();
     expect(context.requestToolPermission).not.toHaveBeenCalled();
   });
 
@@ -535,16 +539,11 @@ describe("Claude native stdio boundary", () => {
   });
 
   it("fences a permission decision from the completed turn after the next turn starts", async () => {
-    let resolveApproval:
-      | ((value: { behavior: "allow"; updatedInput: Record<string, unknown> }) => void)
-      | undefined;
+    const approval = createDeferred<CliBackendToolPermissionResult>();
     const context = await createContext("late-approval", {
       liveSession: createLiveSession(),
       requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(
-        () =>
-          new Promise<{ behavior: "allow"; updatedInput: Record<string, unknown> }>((resolve) => {
-            resolveApproval = resolve;
-          }),
+        () => approval.promise,
       ),
     });
     await collect(context);
@@ -557,7 +556,7 @@ describe("Claude native stdio boundary", () => {
     })) {
       records.push(record);
       if (record.subtype === "fixture_second_turn") {
-        resolveApproval?.({ behavior: "allow", updatedInput: { command: "echo late" } });
+        approval.resolve({ behavior: "allow", updatedInput: { command: "echo late" } });
       }
     }
 

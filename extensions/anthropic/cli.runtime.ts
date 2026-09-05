@@ -310,6 +310,10 @@ export async function* executeClaudeCli(
         },
         onMessage: (message) => acceptMessage(session, message),
         onRequest: async (request, signal) => {
+          // No interactive MCP elicitation handler is registered; preserve its declined outcome.
+          if (request.subtype === "elicitation") {
+            return () => ({ action: "decline" });
+          }
           const admittedTurn = activeTurn(session);
           const response = await handleRequest(session, request, signal);
           // The transport invokes this synchronously at its final write, after all awaits.

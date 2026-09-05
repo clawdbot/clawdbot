@@ -88,6 +88,11 @@ for await (const line of createInterface({ input: process.stdin })) {
       send({ type: "system", subtype: "fixture_waiting", pid: process.pid });
       continue;
     }
+    if (scenario === "mcp-elicitation") {
+      request("elicitation", { subtype: "elicitation", mcp_server_name: "fixture",
+        message: "Choose a fixture option", requested_schema: { type: "object" } });
+      continue;
+    }
     if (scenario === "input-lifecycle") {
       if (turn > 1) {
         pendingInputUuid = message.uuid;
@@ -175,7 +180,9 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (message.type === "control_response") {
     assert.equal(message.response.subtype, "success");
     const { request_id: id, response } = message.response;
-    if (id.startsWith("prior-")) {
+    if (id === "elicitation") {
+      result({ elicitation: response });
+    } else if (id.startsWith("prior-")) {
       priorResponses[id] = response;
       if (Object.keys(priorResponses).length === 3) {
         send({ type: "command_lifecycle", state: "started", command_uuid: pendingInputUuid });

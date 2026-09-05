@@ -5,6 +5,7 @@ import type { PreparedCliRunContext } from "./types.js";
 export function buildCliLiveSessionFingerprint(params: {
   context: PreparedCliRunContext;
   argv: readonly string[];
+  argv0?: string;
   env: Readonly<Record<string, string>>;
 }): string {
   const context = params.context;
@@ -70,6 +71,7 @@ export function buildCliLiveSessionFingerprint(params: {
   return sha256Hex(
     JSON.stringify({
       argv,
+      argv0: params.argv0,
       workspaceDirHash: sha256Hex(context.workspaceDir),
       cwdHash: context.cwdHash ?? sha256Hex(context.cwd ?? context.workspaceDir),
       provider: context.params.provider,
