@@ -260,7 +260,10 @@ describe("provider local service", () => {
 
   it("resolves process configuration for root and exact legacy baseURL endpoints", async () => {
     const port = await getFreePort();
-    const healthUrl = `http://127.0.0.1:${port}/v1/models`;
+    const providerId = "gpu-spark";
+    const rootBaseUrl = `http://127.0.0.1:${port}`;
+    const healthUrl = `${rootBaseUrl}/v1/models`;
+    const serverScript = `const http=require("http");http.createServer((req,res)=>{res.writeHead(200);res.end("ok");}).listen(${port},"127.0.0.1");`;
     const acquire = createConfiguredProviderLocalServiceAcquirer(
       () =>
         ({
@@ -272,10 +275,7 @@ describe("provider local service", () => {
                 models: [],
                 localService: {
                   command: process.execPath,
-                  args: [
-                    "-e",
-                    `const http=require("http");http.createServer((req,res)=>{res.writeHead(200);res.end("ok");}).listen(${port},"127.0.0.1");`,
-                  ],
+                  args: ["-e", serverScript],
                   healthUrl,
                   readyTimeoutMs: 5_000,
                   idleStopMs: 1,
@@ -288,21 +288,16 @@ describe("provider local service", () => {
 
     const rootLease = await withSpawnReadyHealthProbe(() =>
       acquire({
-        providerId: "gpu-spark",
-        baseUrl: `http://127.0.0.1:${port}`,
+        providerId,
+        baseUrl: rootBaseUrl,
         service: { command: "caller-controlled" },
       } as Parameters<typeof acquire>[0]),
     );
-    const configuredLease = await acquire({
-      providerId: "gpu-spark",
-      baseUrl: `http://127.0.0.1:${port}/V1`,
-    });
+    const configuredLease = await acquire({ providerId, baseUrl: `${rootBaseUrl}/V1` });
 
-    expect(rootLease).toBeDefined();
-    expect(configuredLease).toBeDefined();
+    expect(rootLease && configuredLease).toBeDefined();
     expect((await fetch(healthUrl)).ok).toBe(true);
-    rootLease?.release();
-    configuredLease?.release();
+    [rootLease, configuredLease].forEach((lease) => lease?.release());
     await waitForProbeFailure(healthUrl);
   });
 
