@@ -382,13 +382,158 @@ import Testing
         }
     }
 
+    @MainActor @Test(arguments: [false, true])
+    func `authorization change waits for forced reset ownership before restoring registration`(
+        supersedingHandoff: Bool) async throws
+    {
+        let isolation = GatewayRegistryTestIsolation()
+        defer { isolation.restore() }
+        try await withUserDefaults(["location.enabledMode": "whileUsing", "gateway.autoconnect": false]) {
+            let replacementHost = "replacement.gateway.invalid"
+            let replacementID = "manual|\(replacementHost)|443"
+            let supersedingHost = "superseding.gateway.invalid"
+            let supersedingID = "manual|\(supersedingHost)|443"
+            GatewayTLSStore.saveFingerprint("replacement-fingerprint", stableID: replacementID)
+            GatewayTLSStore.saveFingerprint("superseding-fingerprint", stableID: supersedingID)
+            defer {
+                GatewayTLSStore.clearFingerprint(stableID: replacementID)
+                GatewayTLSStore.clearFingerprint(stableID: supersedingID)
+            }
+            let resetFinished = AsyncStream<Void>.makeStream()
+            let resetRelease = AsyncStream<Void>.makeStream()
+            let supersedingResetRelease = AsyncStream<Void>.makeStream()
+            defer {
+                resetRelease.continuation.finish()
+                supersedingResetRelease.continuation.finish()
+                resetFinished.continuation.finish()
+            }
+            let locationService = MockLocationService(authorizationStatus: .denied)
+            let appModel = NodeAppModel(locationService: locationService)
+            defer { appModel.disconnectGateway() }
+            var resetCount = 0
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                forceReconnectReset: { appModel in
+                    await appModel.resetGatewaySessionsForForcedReconnect()
+                    resetCount += 1
+                    let release = resetCount == 1 ? resetRelease.stream : supersedingResetRelease.stream
+                    resetFinished.continuation.yield()
+                    for await _ in release {
+                        return
+                    }
+                })
+            let currentID = "manual|127.0.0.1|1"
+            let options = await controller.makeConnectOptions(
+                stableID: currentID,
+                deviceAuthGatewayID: currentID,
+                allowStoredDeviceAuth: false)
+            let config = try GatewayConnectConfig(
+                url: #require(URL(string: "ws://127.0.0.1:1")),
+                stableID: currentID,
+                tls: nil,
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                nodeOptions: options)
+            appModel.applyGatewayConnectConfig(config)
+            var finishedIterator = resetFinished.stream.makeAsyncIterator()
+            await controller.connectManual(host: replacementHost, port: 443, useTLS: true, forceReconnect: true)
+            _ = await finishedIterator.next()
+
+            locationService.simulateAuthorizationChange(.authorizedWhenInUse)
+            // Hold the handoff beyond the registration deadline: a grant must not recover its stopped loops.
+            #expect(await Self.waitForLocationRegistration(true, appModel: appModel) == false)
+            #expect(!appModel._test_hasGatewayLoopTasks().node)
+            #expect(!appModel._test_hasGatewayLoopTasks().operator)
+
+            if supersedingHandoff {
+                await controller.connectManual(host: supersedingHost, port: 443, useTLS: true, forceReconnect: true)
+                resetRelease.continuation.yield()
+                resetRelease.continuation.finish()
+                _ = await finishedIterator.next()
+                // Completing the captured handoff must not bypass the replacement's reset ownership.
+                #expect(await Self.waitForLocationRegistration(true, appModel: appModel) == false)
+                #expect(!appModel._test_hasGatewayLoopTasks().node)
+                #expect(!appModel._test_hasGatewayLoopTasks().operator)
+            }
+
+            let cancellation = controller.cancelPendingConnectionAttempts()
+            resetRelease.continuation.yield()
+            resetRelease.continuation.finish()
+            supersedingResetRelease.continuation.yield()
+            supersedingResetRelease.continuation.finish()
+            #expect(await Self.waitForLocationRegistration(true, appModel: appModel))
+            #expect(appModel.activeGatewayConnectConfig?.stableID == currentID)
+            #expect(appModel.activeGatewayConnectConfig?.url == config.url)
+            #expect(appModel.activeGatewayConnectConfig?.nodeOptions.deviceAuthGatewayID == currentID)
+            #expect(appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == false)
+            #expect(appModel._test_hasGatewayLoopTasks().node)
+            controller.releaseAutoConnectSuppression(after: cancellation)
+            appModel.disconnectGateway()
+            await appModel.waitForGatewaySessionResetIfNeeded()
+            withExtendedLifetime(controller) {}
+        }
+    }
+
+    @MainActor @Test func `connect generation reconciles authorization when the route remains unchanged`() async throws {
+        let isolation = GatewayRegistryTestIsolation()
+        defer { isolation.restore() }
+        try await withUserDefaults(["location.enabledMode": "whileUsing", "gateway.autoconnect": false]) {
+            let locationService = MockLocationService(authorizationStatus: .denied)
+            let appModel = NodeAppModel(locationService: locationService)
+            defer { appModel.disconnectGateway() }
+            let stableID = "manual|127.0.0.1|1"
+            var sourceController: GatewayConnectionController? = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false)
+            weak var sourceLifetime = sourceController
+            let options = try await #require(sourceController).makeConnectOptions(
+                stableID: stableID,
+                deviceAuthGatewayID: stableID,
+                allowStoredDeviceAuth: false)
+            sourceController = nil
+            #expect(sourceLifetime == nil)
+            let config = try GatewayConnectConfig(
+                url: #require(URL(string: "ws://127.0.0.1:1")),
+                stableID: stableID,
+                tls: nil,
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                nodeOptions: options)
+            // Model a grant whose previous refresh was invalidated: neither its callback nor a route change remains.
+            locationService.simulateAuthorizationChange(.authorizedWhenInUse)
+            appModel.applyGatewayConnectConfig(config)
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            #expect(appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: config) == true)
+
+            let generation = appModel.beginGatewayConnectAttempt()
+            #expect(await Self.waitForLocationRegistration(true, appModel: appModel))
+            let refreshed = try #require(appModel.activeGatewayConnectConfig)
+            #expect(refreshed.stableID == config.stableID)
+            #expect(refreshed.url == config.url)
+            #expect(refreshed.tls == nil)
+            #expect(refreshed.token == config.token)
+            #expect(refreshed.bootstrapToken == config.bootstrapToken)
+            #expect(refreshed.password == config.password)
+            #expect(refreshed.nodeOptions.deviceAuthGatewayID == stableID)
+            #expect(refreshed.nodeOptions.allowStoredDeviceAuth == false)
+            #expect(appModel.gatewayConnectGeneration == generation)
+            appModel.disconnectGateway()
+            await appModel.waitForGatewaySessionResetIfNeeded()
+            withExtendedLifetime(controller) {}
+        }
+    }
+
     @MainActor
     private static func waitForLocationRegistration(_ granted: Bool, appModel: NodeAppModel) async -> Bool {
         let deadline = ContinuousClock.now.advanced(by: .seconds(3))
         while appModel.activeGatewayConnectConfig?.nodeOptions.permissions["location"] != granted,
               ContinuousClock.now < deadline
         {
-            await Task.yield()
+            // Yield alone need not let lower-priority permission sampling make progress.
+            try? await Task.sleep(for: .milliseconds(10))
         }
         return appModel.activeGatewayConnectConfig?.nodeOptions.permissions["location"] == granted
     }
@@ -414,7 +559,7 @@ import Testing
 }
 
 @MainActor
-private final class MockLocationService: LocationServicing, @unchecked Sendable {
+final class MockLocationService: LocationServicing, @unchecked Sendable {
     private var status: CLAuthorizationStatus
     private var accuracy: CLAccuracyAuthorization
     private var authorizationChangeHandler: (@MainActor @Sendable (LocationAuthorizationSnapshot) -> Void)?
