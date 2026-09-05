@@ -422,7 +422,7 @@ suite.define(() => {
         expect(withoutElapsedLabels(await mainTranscript.textContent())).toBe(mainTranscriptBefore);
         await focusChatSidePanel(page);
         await expect
-          .poll(() => page.locator(".side-panel__expand").getAttribute("aria-pressed"))
+          .poll(() => page.locator(".chat-panel-focus").getAttribute("aria-pressed"))
           .toBe("true");
         const expandedWidths = await detailPanel.evaluate((taskPanel) => {
           const panel = taskPanel.closest<HTMLElement>(".side-panel__panel");
@@ -441,7 +441,7 @@ suite.define(() => {
         );
         await page.getByRole("button", { name: "Restore split", exact: true }).click();
         await expect
-          .poll(() => page.locator(".side-panel__expand").getAttribute("aria-pressed"))
+          .poll(() => page.locator(".chat-panel-focus").getAttribute("aria-pressed"))
           .toBe("false");
         await restoreChatAsMain(page);
 
