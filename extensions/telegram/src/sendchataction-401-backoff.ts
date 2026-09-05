@@ -89,6 +89,22 @@ function is401Error(error: unknown): boolean {
   return normalizeLowercaseStringOrEmpty(message).includes("unauthorized");
 }
 
+/**
+ * Extracts a key fragment that distinguishes concurrent forum topics within
+ * the same supergroup (#138763). `threadParams` carries `message_thread_id`
+ * only for forum-topic typing actions; non-forum actions produce no fragment so
+ * they keep coalescing per chat+action as before.
+ */
+function resolveChatActionThreadKeyFragment(
+  threadParams: TelegramSendChatActionParams | undefined,
+): string {
+  if (!threadParams || typeof threadParams !== "object") {
+    return "";
+  }
+  const threadId = (threadParams as { message_thread_id?: unknown }).message_thread_id;
+  return typeof threadId === "number" ? `:${threadId}` : "";
+}
+
 function isTransientSendChatActionError(error: unknown): boolean {
   return (
     isTelegramRateLimitError(error) ||
@@ -158,7 +174,8 @@ export function createTelegramSendChatActionHandler({
       );
     }
 
-    const key = minIntervalMs > 0 ? `${String(chatId)}:${action}` : undefined;
+    const threadKeyFragment = resolveChatActionThreadKeyFragment(threadParams);
+    const key = minIntervalMs > 0 ? `${String(chatId)}:${action}${threadKeyFragment}` : undefined;
     if (key) {
       const blockedUntil = blockedUntilByKey.get(key);
       if (blockedUntil !== undefined && attemptedAt < blockedUntil) {
