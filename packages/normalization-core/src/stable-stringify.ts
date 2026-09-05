@@ -1,7 +1,7 @@
 /**
  * Stable stringify helper.
  * Serializes arbitrary values with deterministic key ordering and explicit
- * handling for errors, binary data, bigint, non-finite numbers, and cycles.
+ * handling for dates, errors, binary data, collections, bigint, non-finite numbers, and cycles.
  */
 
 type StableStringNormalizer = (value: string) => string;
@@ -53,6 +53,14 @@ function stringifyObjectValue(
   stack: WeakSet<object>,
   normalizeString: StableStringNormalizer,
 ): string {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime())
+      ? "null"
+      : JSON.stringify(normalizeString(value.toISOString()));
+  }
+  if (value instanceof RegExp) {
+    return JSON.stringify(normalizeString(value.toString()));
+  }
   if (value instanceof Error) {
     return stringifyStableValue(
       {
@@ -80,6 +88,32 @@ function stringifyObjectValue(
       serializedEntries.push(stringifyStableValue(entry, stack, normalizeString));
     }
     return `[${serializedEntries.join(",")}]`;
+  }
+  if (value instanceof Set) {
+    const serializedEntries: string[] = [];
+    for (const entry of value) {
+      serializedEntries.push(stringifyStableValue(entry, stack, normalizeString));
+    }
+    serializedEntries.sort(compareStableStrings);
+    return `[${serializedEntries.join(",")}]`;
+  }
+  if (value instanceof Map) {
+    const entries: Array<{ keySerialized: string; valueSerialized: string }> = [];
+    for (const [k, v] of value.entries()) {
+      entries.push({
+        keySerialized: stringifyStableValue(k, stack, normalizeString),
+        valueSerialized: stringifyStableValue(v, stack, normalizeString),
+      });
+    }
+    entries.sort(
+      (left, right) =>
+        compareStableStrings(left.keySerialized, right.keySerialized) ||
+        compareStableStrings(left.valueSerialized, right.valueSerialized),
+    );
+    const serializedPairs = entries.map(
+      ({ keySerialized, valueSerialized }) => `[${keySerialized},${valueSerialized}]`,
+    );
+    return `[${serializedPairs.join(",")}]`;
   }
   const record = value as Record<string, unknown>;
   if (normalizeString === preserveString) {

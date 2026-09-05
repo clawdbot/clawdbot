@@ -69,6 +69,32 @@ describe("stableStringify", () => {
     expect(stableStringify(malformed, sanitizeSurrogates)).toBe('{"b":1,"ba":2}');
   });
 
+  it("serializes Date instances to ISO 8601 strings and handles Invalid Date", () => {
+    const validDate = new Date("2026-01-01T00:00:00.000Z");
+    const invalidDate = new Date(Number.NaN);
+    expect(stableStringify(validDate)).toBe('"2026-01-01T00:00:00.000Z"');
+    expect(stableStringify(invalidDate)).toBe("null");
+    expect(stableStringify({ date: validDate })).toBe('{"date":"2026-01-01T00:00:00.000Z"}');
+    expect(stableStringify({ date: invalidDate })).toBe('{"date":null}');
+  });
+
+  it("serializes RegExp, Set, and Map collections deterministically", () => {
+    expect(stableStringify(/abc/gi)).toBe('"/abc/gi"');
+
+    const set1 = new Set([3, 1, 2]);
+    const set2 = new Set([1, 2, 3]);
+    expect(stableStringify(set1)).toBe("[1,2,3]");
+    expect(stableStringify(set1)).toBe(stableStringify(set2));
+
+    const map = new Map<unknown, unknown>([
+      [1, "number-one"],
+      ["1", "string-one"],
+      ["z", 2],
+      ["a", 1],
+    ]);
+    expect(stableStringify(map)).toBe('[["1","string-one"],["a",1],["z",2],[1,"number-one"]]');
+  });
+
   it("serializes cache-trace edge types deterministically", () => {
     const error = new Error("boom");
     error.stack = "Error: boom\n    at test";
@@ -76,6 +102,7 @@ describe("stableStringify", () => {
     expect(
       stableStringify({
         bytes: new Uint8Array([1, 2, 3]),
+        date: new Date("2026-01-01T00:00:00.000Z"),
         error,
         finite: 1,
         infinity: Infinity,
@@ -85,7 +112,7 @@ describe("stableStringify", () => {
         undef: undefined,
       }),
     ).toBe(
-      '{"bytes":{"data":"AQID","type":"Uint8Array"},"error":{"message":"boom","name":"Error","stack":"Error: boom\\n    at test"},"finite":1,"infinity":"Infinity","nan":"NaN","nil":null,"token":"123","undef":undefined}',
+      '{"bytes":{"data":"AQID","type":"Uint8Array"},"date":"2026-01-01T00:00:00.000Z","error":{"message":"boom","name":"Error","stack":"Error: boom\\n    at test"},"finite":1,"infinity":"Infinity","nan":"NaN","nil":null,"token":"123","undef":undefined}',
     );
   });
 });
