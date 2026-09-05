@@ -468,8 +468,8 @@ async function loadRestartSentinelStartupTask(params: {
         reason: payload.stats?.reason ?? null,
       });
       if (updateRunId) {
-        // A lost updater must leave a terminal outcome after the existing
-        // verification deadline; first-terminal-wins preserves a completed CLI result.
+        // Expiry bounds notice delivery, not CLI verification. Only Gateway-owned
+        // runs finish here; first-terminal-wins preserves completed CLI results.
         const expiredRun = await finalizeRestartUpdateRun(payload, true);
         if (expiredRun) {
           noticeMessage = renderUpdateRunReport(expiredRun).markdown;

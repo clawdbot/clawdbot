@@ -934,7 +934,11 @@ describe("scheduleRestartSentinelWake", () => {
           status: "skipped",
           ts: 123,
           sessionKey: "agent:main:main",
-          stats: { runId: record.runId, reason: "restart-health-pending" },
+          stats: {
+            runId: record.runId,
+            handoffId: "managed-update-handoff",
+            reason: "restart-health-pending",
+          },
         },
       });
 
