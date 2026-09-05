@@ -56,4 +56,23 @@ describe("tool meta formatting", () => {
       expect(out).toBe("🛠️ elevated · `cd ~/dir && gemini 2>&1`");
     });
   });
+
+  it("still groups path-shaped metadata by directory", () => {
+    expect(formatToolAggregate("fs", ["/tmp/dir/a.txt", "/tmp/dir/b.txt"])).toBe(
+      "🧩 Fs: /tmp/dir/{a.txt, b.txt}",
+    );
+    expect(formatToolAggregate("fs", ["/only"])).toBe("🧩 Fs: /only");
+  });
+
+  it("stays responsive on path-shaped metadata that ends in a tab", () => {
+    // `(\/[^\s]+)+` split the tail ambiguously and backtracked exponentially
+    // once the value ended in whitespace the earlier checks do not reject.
+    const meta = `/${"!/".repeat(30)}\t`;
+    const started = process.hrtime.bigint();
+    const out = formatToolAggregate("fs", [meta]);
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+    expect(out).toContain(meta);
+    expect(elapsedMs).toBeLessThan(1_000);
+  });
 });

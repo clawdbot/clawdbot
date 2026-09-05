@@ -135,7 +135,11 @@ function isPathLike(value: string): boolean {
   if (value.includes("&&") || value.includes("||")) {
     return false;
   }
-  return /^~?(\/[^\s]+)+$/.test(value);
+  // One `[^\s]+` already spans the whole tail, `/` included, so the repeated
+  // group `(\/[^\s]+)+` only added an ambiguous split of the same language and
+  // backtracked exponentially on a path-shaped value ending in a tab or newline
+  // (the checks above reject only a plain space).
+  return /^~?\/[^\s]+$/.test(value);
 }
 
 function maybeWrapMarkdown(value: string, markdown?: boolean): string {
