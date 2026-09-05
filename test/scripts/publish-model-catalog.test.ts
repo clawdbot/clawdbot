@@ -2,7 +2,10 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { RemoteModelCatalogBundle } from "@openclaw/model-catalog-core";
+import {
+  parseRemoteModelCatalogBundle,
+  type RemoteModelCatalogBundle,
+} from "@openclaw/model-catalog-core";
 import {
   LITELLM_PRICING_URL,
   OPENROUTER_MODELS_URL,
@@ -1354,6 +1357,14 @@ describe("publish model catalog", () => {
       "shared response",
       "metadata without pricing",
       "dry run",
+      "blank model id",
+      "blank model id without pricing",
+      "blank model id dry run without pricing",
+      "colliding model id",
+      "colliding model id without pricing",
+      "colliding model id dry run without pricing",
+      "trimmed model id",
+      "trimmed model id without pricing",
     ].map((scenario) => ({
       source: "models.dev",
       scenario,
@@ -1373,6 +1384,13 @@ describe("publish model catalog", () => {
     tempDirs.push(root);
     const out = path.join(root, "catalog.json");
     const preload = path.join(root, "offline.mjs");
+    const discoveredIds = scenario.startsWith("blank model id")
+      ? [" "]
+      : scenario.startsWith("colliding model id")
+        ? ["fixture-discovered-model", " fixture-discovered-model "]
+        : scenario.startsWith("trimmed model id")
+          ? [" fixture-discovered-model "]
+          : ["fixture-discovered-model"];
     fs.writeFileSync(out, "previous published catalog\n");
     fs.writeFileSync(
       preload,
@@ -1390,7 +1408,7 @@ for (const manifest of manifests) {
     openCode[id] = { id, models: Object.fromEntries(models.map((model) => [model.id, { id: model.id, cost: { input: 1, output: 2 } }])) };
   }
 }
-openCode.anthropic.models["fixture-discovered-model"] = { id: "fixture-discovered-model", tool_call: true, modalities: { input: ["text"], output: ["text"] }, limit: { context: 128000, output: 32000 } };
+Object.assign(openCode.anthropic.models, ${JSON.stringify(Object.fromEntries(discoveredIds.map((id) => [id, modelsDevModel(id)])))});
 let metadataFetched = false;
 globalThis.fetch = async (url) => {
   if (url === ${JSON.stringify(OPENCODE_PRICING_URL)}) {
@@ -1436,26 +1454,39 @@ globalThis.fetch = async (url) => {
         preload,
         "scripts/publish-model-catalog.mts",
         ...(scenario.endsWith("without pricing") ? [] : ["--pricing"]),
-        ...(scenario === "dry run" ? ["--dry-run"] : []),
+        ...(scenario.includes("dry run") ? ["--dry-run"] : []),
         "--out",
         out,
       ],
       { cwd: process.cwd(), encoding: "utf8" },
     );
-    if (["shared response", "metadata without pricing", "dry run"].includes(scenario)) {
+    if (
+      ["shared response", "metadata without pricing", "dry run"].includes(scenario) ||
+      scenario.startsWith("trimmed model id")
+    ) {
       expect(result.status, result.stderr).toBe(0);
       if (scenario === "dry run") {
         expect(result.stdout).toContain("dry-run schemaVersion=1");
         expect(fs.readFileSync(out, "utf8")).toBe("previous published catalog\n");
       } else {
-        expect(JSON.parse(fs.readFileSync(out, "utf8")).providers.anthropic.models).toEqual(
+        const published = JSON.parse(fs.readFileSync(out, "utf8"));
+        parseRemoteModelCatalogBundle(published);
+        expect(published.providers.anthropic.models).toEqual(
           expect.arrayContaining([expect.objectContaining({ id: "fixture-discovered-model" })]),
         );
       }
       return;
     }
     expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain(source === "models.dev" ? "models.dev" : `${source} pricing`);
+    expect(result.stderr).toContain(
+      scenario.startsWith("blank model id")
+        ? "Too small"
+        : scenario.startsWith("colliding model id")
+          ? "duplicate model id"
+          : source === "models.dev"
+            ? "models.dev"
+            : `${source} pricing`,
+    );
     expect(result.stderr.trim().split("\n").at(-1)).toBe("[publish-model-catalog] FAILED (exit 1)");
     expect(fs.readFileSync(out, "utf8")).toBe("previous published catalog\n");
   });

@@ -725,7 +725,6 @@ export async function enrichModelCatalogPricing(options: {
   manifests: ModelCatalogManifestInput[];
   fetchImpl?: typeof fetch;
   loadSource?: ModelCatalogSourceLoader;
-  validateBundle?: BundleValidator;
 }): Promise<{ modelsEnriched: number; pricingEntries: number }> {
   const policies = readPricingPolicies(options.manifests);
   const sources = await fetchPricingSources(
@@ -807,10 +806,6 @@ export async function enrichModelCatalogPricing(options: {
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, pricing]) => [key, compactPricing(pricing)]),
   );
-  const validateBundle = options.validateBundle ?? (await loadClientBundleValidator());
-  const validated = validateBundle(options.bundle);
-  options.bundle.providers = validated.providers;
-  options.bundle.pricing = validated.pricing;
   return { modelsEnriched: enriched, pricingEntries: hosted.size };
 }
 
@@ -865,12 +860,16 @@ async function runPublishModelCatalog(
   const generatedAt = (options.now ?? Date.now)();
   const sourceCommit = options.sourceCommit ?? resolveSourceCommit(rootDir);
   const manifests = readModelCatalogManifests({ rootDir });
-  const bundle = await assembleModelCatalogBundle({ manifests, generatedAt, sourceCommit });
+  let bundle = await assembleModelCatalogBundle({ manifests, generatedAt, sourceCommit });
   const loadSource = createModelCatalogSourceLoader(options.fetchImpl);
   const hydrationResult = await hydrateModelCatalogFromModelsDev({ bundle, manifests, loadSource });
   const pricingResult = args.pricing
     ? await enrichModelCatalogPricing({ bundle, manifests, loadSource })
     : { modelsEnriched: 0, pricingEntries: 0 };
+  // Validate after all enrichment so metadata-only and dry-run output obey the
+  // same client contract as priced catalogs.
+  const validateBundle = await loadClientBundleValidator();
+  bundle = validateBundle(bundle);
   const summary = summarizeModelCatalogBundle(bundle);
   const serialized = serializeModelCatalogBundle(bundle);
   const bundleBytes = Buffer.byteLength(serialized);
