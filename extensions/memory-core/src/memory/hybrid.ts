@@ -92,6 +92,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
   textWeight: number;
   isNonTextMediaPath?: (path: string) => boolean;
   workspaceDir?: string;
+  sessionSourceMtimes?: ReadonlyMap<string, number | undefined>;
   /** MMR configuration for diversity-aware re-ranking */
   mmr?: Partial<MMRConfig>;
   /** Temporal decay configuration for recency-aware scoring */
@@ -254,6 +255,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     results: merged,
     temporalDecay: temporalDecayConfig,
     workspaceDir: params.workspaceDir,
+    sessionSourceMtimes: params.sessionSourceMtimes,
     nowMs: params.nowMs,
   });
   const rankable = applyProjectRanking(

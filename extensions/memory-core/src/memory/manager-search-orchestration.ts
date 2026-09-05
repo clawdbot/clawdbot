@@ -1,4 +1,3 @@
-// Memory Core plugin module owns public search orchestration.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
@@ -279,11 +278,11 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
       );
 
-      // FTS-only mode: no embedding provider available
-      if (embeddingBootstrapKeywordOnly || !this.provider) {
+      // Reply-path lexical recall skips query embedding and the semantic provider lease.
+      if (embeddingBootstrapKeywordOnly || !this.provider || opts?.lexicalOnly) {
         this.assertRequiredProviderAvailable("search");
         if (!this.fts.enabled || !this.fts.available) {
-          log.warn("memory search: no provider and FTS unavailable");
+          log.warn("memory search: keyword-only search has no available FTS index");
           return [];
         }
 
@@ -336,17 +335,6 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       const releaseSemanticProvider = this.acquireProviderUse(semanticProvider);
       try {
         keywordResults = await loadKeywordResults();
-        // lexicalOnly is a reply-path contract: no query embedding, no vector
-        // search, no network. Callers accept keyword-only recall quality.
-        if (opts?.lexicalOnly) {
-          return await this.finalizeKeywordOnlyResults({
-            results: keywordResults,
-            temporalDecay: hybrid.temporalDecay,
-            maxResults,
-            minScore,
-            activeProjectKeys: opts?.activeProjectKeys,
-          });
-        }
         try {
           queryVec = await this.embedQueryWithRetry(
             cleaned,
@@ -449,9 +437,12 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           results: vectorResults,
           temporalDecay: hybrid.temporalDecay,
           workspaceDir: this.workspaceDir,
+          sessionSourceMtimes: this.loadSessionSourceMtimes(vectorResults),
         });
+        // Decay and importance can reverse the order returned by vector retrieval.
         return applyProjectRanking(applyImportanceMultiplier(decayed), opts?.activeProjectKeys)
           .filter((entry) => entry.score >= minScore)
+          .toSorted((left, right) => right.score - left.score)
           .slice(0, maxResults);
       }
 
@@ -571,6 +562,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       temporalDecay: params.temporalDecay,
       activeProjectKeys: params.activeProjectKeys,
       workspaceDir: this.workspaceDir,
+      sessionSourceMtimes: this.loadSessionSourceMtimes([...params.vector, ...params.keyword]),
     });
   }
 }
