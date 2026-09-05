@@ -23,8 +23,8 @@ vi.mock("../../commands/auth-choice-options.js", () => ({
   formatAuthChoiceChoicesForCli: () => "token|oauth|openai-api-key",
 }));
 
-vi.mock("../../plugins/provider-auth-choices.js", () => ({
-  resolveProviderOnboardAuthFlags: () => [
+vi.mock("../../commands/onboard-core-auth-flags.js", () => ({
+  CORE_ONBOARD_AUTH_FLAGS: [
     {
       cliOption: "--mistral-api-key <key>",
       description: "Mistral API key",
@@ -32,9 +32,14 @@ vi.mock("../../plugins/provider-auth-choices.js", () => ({
     },
     {
       cliOption: "--openai-api-key <key>",
-      description: "OpenAI API key",
+      description: "OpenAI API key (core fallback)",
       optionKey: "openaiApiKey",
     },
+  ] as Array<{ cliOption: string; description: string; optionKey: string }>,
+}));
+
+vi.mock("../../plugins/provider-auth-choices.js", () => ({
+  resolveProviderOnboardAuthFlags: () => [
     {
       cliOption: "--openai-api-key <key>",
       description: "OpenAI API key",
