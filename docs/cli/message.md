@@ -243,6 +243,10 @@ openclaw message broadcast --targets <target...> [--channel all] [--message <tex
 Sends one payload to multiple targets. `--targets` takes a space-separated
 list. Use `--channel all` to target every configured provider.
 
+If any target fails, is suppressed, or only partially delivers, the broadcast
+exits nonzero. Text output identifies failed targets; JSON reports `ok: false`
+and retains every target's result, including failures returned by channel plugins.
+
 ## Related
 
 - [CLI reference](/cli)
