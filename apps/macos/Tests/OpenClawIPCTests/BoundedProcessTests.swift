@@ -55,6 +55,17 @@ struct BoundedProcessTests {
         #expect(String(data: result.output, encoding: .utf8) == "firstsecondthird")
     }
 
+    @Test func `discards credential-bearing stderr without consuming the output budget`() async throws {
+        let result = try await BoundedProcess.run(
+            path: "/bin/sh",
+            arguments: ["-c", "head -c 131072 /dev/zero >&2; printf application-token"],
+            standardError: .discarded,
+            timeout: 5)
+
+        #expect(result.terminationStatus == 0)
+        #expect(String(data: result.output, encoding: .utf8) == "application-token")
+    }
+
     @Test func `captures parallel instant exits`() async throws {
         let results = try await withThrowingTaskGroup(of: Int32.self) { group in
             for _ in 0..<32 {

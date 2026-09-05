@@ -335,6 +335,17 @@ describe("command queue", () => {
     );
   });
 
+  it("does not report capacity waiting for an entry synchronously cleared during enqueue", async () => {
+    const lane = "reentrant-clear";
+    setCommandLaneConcurrency(lane, 0);
+    diagnosticMocks.logLaneEnqueue.mockImplementationOnce(() => clearCommandLane(lane));
+    const onQueued = vi.fn();
+    await expect(
+      enqueueCommandInLane(lane, async () => undefined, { onQueued }),
+    ).rejects.toBeInstanceOf(CommandLaneClearedError);
+    expect(onQueued).not.toHaveBeenCalled();
+  });
+
   it("reports queueAhead after priority insertion", async () => {
     vi.useFakeTimers();
     try {

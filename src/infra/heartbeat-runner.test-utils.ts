@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
+import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
+import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
+import type { MsgContext } from "../auto-reply/templating.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import {
   listSessionEntriesCore,
@@ -39,6 +42,29 @@ function createHeartbeatReplySpy(): HeartbeatReplySpy {
   const replySpy: HeartbeatReplySpy = vi.fn<HeartbeatReplyFn>();
   replySpy.mockResolvedValue({ text: "ok" });
   return replySpy;
+}
+
+/** Set the invocation's execution receipt without replacing its admission state. */
+export function setHeartbeatAgentTurnStatus(
+  options: object | undefined,
+  status: "ok" | "failed" | "superseded" | "cancelled",
+) {
+  const runState = resolveReplyOperationRunState(options);
+  if (!runState) {
+    throw new Error("Expected heartbeat reply operation run state");
+  }
+  runState.agentTurn = status === "superseded" ? "cancelled" : status;
+  if (status === "superseded") {
+    const operation = createReplyOperation({
+      sessionKey: "heartbeat-test-superseded",
+      sessionId: "heartbeat-test-superseded",
+      turnKind: "heartbeat",
+      resetTriggered: false,
+    });
+    operation.supersede();
+    operation.complete();
+    runState.agentTurnOwner = operation;
+  }
 }
 
 /** Seed one system heartbeat monitor and its private scratch in the test state DB. */
@@ -186,3 +212,28 @@ export function setupTelegramHeartbeatPluginRuntimeForTests() {
     ]),
   );
 }
+
+export type HeartbeatReplyContext = Pick<
+  MsgContext,
+  "InternalTurnSource" | "SessionKey" | "MessageThreadId" | "Body"
+>;
+
+export const mockCallAt = (
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  index: number,
+  label: string,
+): readonly unknown[] => {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+};
+
+export const getFirstReplyContext = (replySpy: ReturnType<typeof vi.fn>): HeartbeatReplyContext => {
+  const [ctx] = mockCallAt(replySpy, 0, "heartbeat reply");
+  if (!ctx || typeof ctx !== "object") {
+    throw new Error("expected heartbeat reply context");
+  }
+  return ctx as HeartbeatReplyContext;
+};

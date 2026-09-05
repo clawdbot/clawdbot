@@ -5,12 +5,23 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  type OpenClawAgentDatabaseOptions,
+} from "../../state/openclaw-agent-db-contract.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import {
+  hasSqliteSessionOwnerColumns,
+  projectSqliteSessionOwner,
+} from "./session-accessor.sqlite-owner-projection.js";
+import { sessionEntryMetadataJson } from "./session-accessor.sqlite-status.js";
 import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import {
@@ -22,9 +33,16 @@ import type { SessionEntry } from "./types.js";
 const SESSION_CANONICAL_KEY_REPAIR_COMMAND = "openclaw doctor --fix";
 type CanonicalSessionDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "session_key_contract" | "session_nodes" | "session_windows"
+  "schema_meta" | "session_key_contract" | "session_nodes" | "session_windows"
 >;
 const validatedDatabases = new WeakSet<DatabaseSync>();
+
+type CanonicalSessionMetadata = {
+  entries: Map<string, SessionEntry>;
+  keys: string[];
+};
+
+export type ValidatedSessionMetadata = CanonicalSessionMetadata & { dataVersion: number };
 
 class SessionCanonicalKeyMigrationRequiredError extends Error {
   readonly code = "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED";
@@ -120,6 +138,7 @@ export function scanCanonicalSqliteSessionEntries(
   database: { agentId: string; db: DatabaseSync },
   visit?: (summary: { entry: SessionEntry; sessionKey: string }) => void,
   mainKey?: string,
+  metadata?: CanonicalSessionMetadata,
 ): number {
   // This connection validates once. External direct-SQLite edits surface at the next
   // process start, not the next topology change; doctor owns live repair.
@@ -142,15 +161,28 @@ export function scanCanonicalSqliteSessionEntries(
       .select([
         "session_nodes.session_key",
         "session_nodes.current_session_id",
-        "session_nodes.entry_json",
         "session_nodes.entry_valid",
         "session_nodes.fork_source_session_key",
         "session_nodes.parent_session_key",
         "session_nodes.spawned_by",
         "retained_window.session_id as retained_window_id",
       ])
+      // Key validation needs metadata; Doctor visitors still own complete saved entries.
+      .select(visit ? "session_nodes.entry_json" : sessionEntryMetadataJson)
+      .$if(Boolean(metadata), (query) => query.select("session_nodes.updated_at"))
+      .$if(Boolean(metadata) && hasSqliteSessionOwnerColumns(database.db), (query) =>
+        query.select([
+          "session_nodes.owner_actor_type",
+          "session_nodes.owner_actor_id",
+          "session_nodes.owner_assigned_by_type",
+          "session_nodes.owner_assigned_by_id",
+          "session_nodes.owner_assigned_at",
+        ]),
+      )
       .orderBy("session_nodes.session_key"),
   )) {
+    // Retained windows have no entry, but their keys remain part of a listing snapshot.
+    metadata?.keys.push(row.session_key);
     if (
       row.entry_json === "{}" &&
       row.entry_valid === -1 &&
@@ -158,12 +190,13 @@ export function scanCanonicalSqliteSessionEntries(
     ) {
       continue;
     }
-    if (row.entry_valid !== 1) {
-      throw canonicalSessionKeyMigrationRequiredError(
-        `invalid persisted session row requires repair for ${row.session_key}`,
-      );
-    }
-    const record = parseSqliteSessionEntryRecord(row);
+    const record =
+      row.entry_valid === 1
+        ? parseSqliteSessionEntryRecord({
+            entry_json: row.entry_json,
+            current_session_id: row.current_session_id,
+          })
+        : null;
     if (!record) {
       throw canonicalSessionKeyMigrationRequiredError(
         `invalid persisted session row requires repair for ${row.session_key}`,
@@ -218,6 +251,12 @@ export function scanCanonicalSqliteSessionEntries(
         );
       }
     }
+    if (metadata && record.updatedAt === row.updated_at) {
+      // List decoding also checks the row timestamp and strips SQL-fallback prompt payloads;
+      // neither rule belongs to canonical validation or Doctor's complete-entry visitor.
+      const { skillsSnapshot: _skills, systemPromptReport: _report, ...listEntry } = entry;
+      metadata.entries.set(row.session_key, projectSqliteSessionOwner(listEntry, row));
+    }
     visit?.({ entry, sessionKey: row.session_key });
     count += 1;
   }
@@ -228,10 +267,16 @@ export function scanCanonicalSqliteSessionEntries(
 export function assertCanonicalSqliteSessionKeysCurrent(
   database: { agentId: string; db: DatabaseSync },
   mainKey?: string,
-): void {
-  if (!validatedDatabases.has(database.db)) {
-    scanCanonicalSqliteSessionEntries(database, undefined, mainKey);
+  collectMetadata = false,
+): ValidatedSessionMetadata | undefined {
+  if (validatedDatabases.has(database.db)) {
+    return undefined;
   }
+  const metadata: ValidatedSessionMetadata | undefined = collectMetadata
+    ? { dataVersion: readSqliteDataVersion(database.db), entries: new Map(), keys: [] }
+    : undefined;
+  scanCanonicalSqliteSessionEntries(database, undefined, mainKey, metadata);
+  return metadata;
 }
 
 export function setCanonicalSqliteSessionMainKey(
@@ -260,4 +305,29 @@ export function setCanonicalSqliteSessionMainKey(
       ),
   );
   validatedDatabases.delete(database.db);
+}
+
+/** Checks the startup contract without joining the writable database lifecycle. */
+export function isCanonicalSqliteSessionMainKeyCurrent(
+  options: OpenClawAgentDatabaseOptions,
+  mainKey: string | undefined,
+): boolean {
+  const canonicalMainKey = normalizeMainKey(mainKey);
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    const db = getNodeSqliteKysely<CanonicalSessionDatabase>(database.db);
+    const schema = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db.selectFrom("schema_meta").select("schema_version").where("meta_key", "=", "primary"),
+    );
+    if (schema?.schema_version !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+      return false;
+    }
+    return (
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        db.selectFrom("session_key_contract").select("main_key").where("id", "=", 1),
+      )?.main_key === canonicalMainKey
+    );
+  }, options);
+  return result.found && result.value;
 }

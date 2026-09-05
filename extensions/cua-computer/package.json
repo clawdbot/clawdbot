@@ -1,11 +1,11 @@
 {
   "name": "@openclaw/cua-computer",
-  "version": "2026.8.1",
+  "version": "2026.9.1",
   "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts",
   "type": "module",
   "dependencies": {
-    "@trycua/cua-driver": "0.19.3",
-    "rastermill": "0.3.1",
+    "@trycua/cua-driver": "0.22.0",
+    "rastermill": "0.3.2",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -13,30 +13,30 @@
   },
   "cuaDriverArtifacts": {
     "darwin-universal-binary": {
-      "archiveSha256": "733e28a3782ac8d325f8fce8b5d97486c1054af755b40dfd086151b34c79377e"
+      "archiveSha256": "202eb9dd2185d64fc0599079671f50efe2bf71b300a85644cf26d627bb7355e6"
     },
     "linux-arm64-gnu": {
       "files": {
-        "cua_driver_node_runtime.node": "8347edcfd0a6e842d2e76bd90f465b228f36bf402c0e59da90bfac3fe6004d58",
-        "libcua_driver_sdk.so": "7263f8980f91585d5a02e0001042b619322bfc5cc56ca9fb626ae56fcccceb2a"
+        "cua_driver_node_runtime.node": "7809af56923f667576f4477c67ca8a6e98852243e6994678d50af7981e707c22",
+        "libcua_driver_sdk.so": "b27193e7a81ef0751b57b678ee7c1f52ba9d7f086dbbf4750ebf046d2cfeafe9"
       }
     },
     "linux-x64-gnu": {
       "files": {
-        "cua_driver_node_runtime.node": "52b70432d2eb167e69632246a38d895c9e7aa61618a31638d393ad6838117293",
-        "libcua_driver_sdk.so": "31c142f5c67443a1fa933160bfa20d93b9914220fb9a47f2884d38df20ab0671"
+        "cua_driver_node_runtime.node": "2da7ed7c3b7737be3b24e2cfc38dda93ad33328a87e7914e11329858be6783a3",
+        "libcua_driver_sdk.so": "ac18e8f55b77aac69c245057e850716cde52d18e87aa05114357f2e6c54d5e6c"
       }
     },
     "win32-arm64-msvc": {
       "files": {
-        "cua_driver_node_runtime.node": "fe025669d1614b1ac9a82d1b6a331acd15b44caef81e5bda6a0b02e1d9a4b71f",
-        "cua_driver_sdk.dll": "f1f25699dbdcc05169230b8286800b69a10407abb20effd5b767629fe725f21b"
+        "cua_driver_node_runtime.node": "86a8c108c07bd5d0e94e736debf2534d38566499551b1ea4fb5a465bd8c888b9",
+        "cua_driver_sdk.dll": "f1bc6618d0b8d4f953d4d006535e5b778f4e2c5dd2f0cf8f22504eee2eded139"
       }
     },
     "win32-x64-msvc": {
       "files": {
-        "cua_driver_node_runtime.node": "fa9231bfa0c3c9d6deb8ed32d29dd0ef96921b51ea6864c963fd36c99b716b1c",
-        "cua_driver_sdk.dll": "d7e67baef87fac1a315d86113eeb485fbf8e03e5906797f0bf79d24a990fa38b"
+        "cua_driver_node_runtime.node": "d11a9b78cb3e35c8c037eae38d635bf2ddbdf744e90c37f8acaf66856b214524",
+        "cua_driver_sdk.dll": "9d7db571cef8f8e375b88ce036c70618129e10b84e5a73cb8ef3852a3492ff35"
       }
     }
   },

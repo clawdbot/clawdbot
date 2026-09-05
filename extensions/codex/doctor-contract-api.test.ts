@@ -192,10 +192,80 @@ describe("codex doctor contract", () => {
     ).toBe(false);
   });
 
-  it("reports the retired on-failure app-server approval policy", () => {
+  it("reports retired app-server approval policies", () => {
     expect(legacyConfigRules[2]?.match({ approvalPolicy: "on-failure" })).toBe(true);
+    expect(legacyConfigRules[2]?.match({ approvalPolicy: "untrusted" })).toBe(true);
     expect(legacyConfigRules[2]?.match({ approvalPolicy: "on-request" })).toBe(false);
   });
+
+  it.each([
+    { legacy: { turnCompletionIdleTimeoutMs: 123_456 }, defaults: { timeoutSeconds: 42 } },
+    { legacy: { turnAssistantCompletionIdleTimeoutMs: 234_567 }, defaults: { timeoutSeconds: 0 } },
+    { legacy: { postToolRawAssistantCompletionIdleTimeoutMs: 345_678 }, defaults: undefined },
+    {
+      legacy: {
+        turnCompletionIdleTimeoutMs: null,
+        turnAssistantCompletionIdleTimeoutMs: 0,
+        postToolRawAssistantCompletionIdleTimeoutMs: "private-retired-value",
+      },
+      defaults: { timeoutSeconds: 0 },
+    },
+  ])(
+    "reports and removes retired turn idle settings $legacy without changing the run budget",
+    ({ legacy, defaults }) => {
+      const appServer = {
+        requestTimeoutMs: 120_000,
+        mode: "guardian",
+        headers: { "X-Test": "kept" },
+      };
+      const original = {
+        agents: { defaults },
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                codexDynamicToolsLoading: "direct",
+                appServer: { ...appServer, ...legacy },
+              },
+            },
+            unrelated: { enabled: false },
+          },
+        },
+      };
+      const before = structuredClone(original);
+      const rule = legacyConfigRules.find((candidate) =>
+        candidate.match(original.plugins.entries.codex.config.appServer),
+      );
+      expect(rule?.path).toEqual(["plugins", "entries", "codex", "config", "appServer"]);
+      expect(rule?.message).toContain("openclaw doctor --fix");
+
+      const result = normalizeCompatibilityConfig({ cfg: original });
+
+      expect(result.config).toEqual({
+        ...original,
+        plugins: {
+          ...original.plugins,
+          entries: {
+            ...original.plugins.entries,
+            codex: { enabled: true, config: { codexDynamicToolsLoading: "direct", appServer } },
+          },
+        },
+      });
+      expect(result.changes).toEqual(
+        Object.keys(legacy).map(
+          (key) =>
+            `Removed retired plugins.entries.codex.config.appServer.${key}; native Codex owns provider liveness and turn completion. agents.defaults.timeoutSeconds was not changed.`,
+        ),
+      );
+      expect(original).toEqual(before);
+      expect(rule?.match(appServer)).toBe(false);
+      expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
+        config: result.config,
+        changes: [],
+      });
+    },
+  );
 
   it("removes the retired dynamic tools profile without dropping other Codex config", () => {
     const original = {
@@ -1373,7 +1443,7 @@ describe("codex doctor contract", () => {
     const result = normalizeCompatibilityConfig({ cfg: original });
 
     expect(result.changes).toEqual([
-      'Renamed plugins.entries.codex.config.appServer.approvalPolicy="on-failure" to "on-request".',
+      'Renamed retired plugins.entries.codex.config.appServer.approvalPolicy to "on-request".',
     ]);
     expect(result.config.plugins?.entries?.codex?.config).toEqual({
       appServer: {
@@ -1382,6 +1452,37 @@ describe("codex doctor contract", () => {
       },
     });
     expect(original.plugins.entries.codex.config.appServer.approvalPolicy).toBe("on-failure");
+  });
+
+  it("renames the retired app-server untrusted approval policy", () => {
+    const original = {
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: {
+              appServer: {
+                approvalPolicy: "untrusted",
+                sandbox: "workspace-write",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const result = normalizeCompatibilityConfig({ cfg: original });
+
+    expect(result.changes).toEqual([
+      'Renamed retired plugins.entries.codex.config.appServer.approvalPolicy to "on-request".',
+    ]);
+    expect(result.config.plugins?.entries?.codex?.config).toEqual({
+      appServer: {
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+      },
+    });
+    expect(original.plugins.entries.codex.config.appServer.approvalPolicy).toBe("untrusted");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

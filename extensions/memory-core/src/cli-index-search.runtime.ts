@@ -1,11 +1,16 @@
 import path from "node:path";
 import { resolveMemorySearchStaleness } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  resolveMemoryDreamingConfig,
+  resolveMemoryDreamingWorkspaces,
+  resolveMemoryDeepDreamingConfig,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import {
   buildCliMemorySearchSessionKey,
   formatAuditCounts,
   formatExtraPaths,
   formatMemoryIndexOutcome,
+  resolveMemoryAgent,
   resolveMemoryPluginConfig,
   scanMemoryManagerSources,
   withMemoryCommand,
@@ -13,6 +18,7 @@ import {
 import {
   defaultRuntime,
   formatErrorMessage,
+  getRuntimeConfig,
   setVerbose,
   shortenHomeInString,
   shortenHomePath,
@@ -21,11 +27,12 @@ import {
 } from "./cli.host.runtime.js";
 import type {
   MemoryCommandOptions,
+  MemoryForgetCommandOptions,
   MemoryPromoteCommandOptions,
   MemoryPromoteExplainOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
-import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import { forgetMemoryEntries } from "./memory-forget.js";
 import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import {
@@ -203,6 +210,7 @@ export async function runMemorySearch(
     agent: opts.agent,
     diagnosticsToStderr: Boolean(opts.json),
     purpose: "cli",
+    inspectSources: true,
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
       const memoryPluginConfig = resolveMemoryPluginConfig(cfg);
@@ -210,7 +218,7 @@ export async function runMemorySearch(
         pluginConfig: memoryPluginConfig,
         cfg,
       }).enabled;
-      const dreaming = resolveShortTermPromotionDreamingConfig({
+      const dreaming = resolveMemoryDeepDreamingConfig({
         pluginConfig: memoryPluginConfig,
         cfg,
       });
@@ -265,6 +273,82 @@ export async function runMemorySearch(
     },
   });
 }
+
+export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
+  if (!opts.session?.length && !opts.hookSource?.length && !opts.participant?.length) {
+    defaultRuntime.error(
+      "Memory forget requires --session <id-or-key>, --hook-source <source>, or --participant <actor-id>.",
+    );
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const cfg = getRuntimeConfig({ skipPluginValidation: true });
+    const agentId = resolveMemoryAgent(cfg, opts.agent);
+    const report = await forgetMemoryEntries({
+      cfg,
+      agentId,
+      sessionIds: opts.session,
+      hookSources: opts.hookSource,
+      participants: opts.participant,
+      since: opts.since,
+      dryRun: Boolean(opts.dryRun),
+    });
+    if (opts.json) {
+      defaultRuntime.writeJson(report);
+      return;
+    }
+    const lines = [
+      `${heading(report.dryRun ? "Memory Deletion Preview" : "Memory Deletion")} ${muted(`(${agentId})`)}`,
+      `${muted("Source sessions:")} ${report.sessionIds.length}`,
+      `${muted("Source transcripts retained:")} ${report.sessionIds.length}`,
+      `${muted("Deleted entries:")} ${report.entryKeys.length}`,
+      `${muted("Mixed-lineage entries deleted whole:")} ${report.mixedLineageEntryKeys.length}`,
+      `${muted("Entries without targetable provenance:")} ${report.untargetableEntryKeys.length}`,
+      `${muted("Curated writes retained:")} ${report.curatedWrites.length}`,
+      `${muted("Memory artifacts:")} ${report.artifacts.memoryFiles} files, ${report.artifacts.memoryEntries} entries, ${report.artifacts.memoryLines} quoted lines`,
+      `${muted("Session corpus:")} ${report.artifacts.sessionCorpusFiles} files, ${report.artifacts.sessionCorpusLines} lines`,
+      `${muted("Index artifacts:")} ${report.artifacts.indexChunks} chunks, ${report.artifacts.indexSources} sources, ${report.artifacts.ftsRows} full-text rows, ${report.artifacts.vectorRows} vector rows, ${report.artifacts.embeddingCacheRows} cached embeddings`,
+      `${muted("Plugin state:")} ${report.artifacts.shortTermEntries} short-term entries, ${report.artifacts.seenHashScopes} seen-hash scopes, ${report.artifacts.backups} backups`,
+      `${muted("Origin rows:")} ${report.artifacts.originRows}`,
+    ];
+    if (report.sessionIds.length > 0) {
+      lines.push(`${muted("Session IDs:")} ${report.sessionIds.join(", ")}`);
+    }
+    for (const session of report.sessionResolutions) {
+      lines.push(`${muted("Session resolution:")} ${session.sessionId} (${session.source})`);
+    }
+    for (const match of report.participantMatches) {
+      lines.push(
+        `${muted("Raw participant selector:")} ${match.actorId}: ${match.identities.map((identity) => JSON.stringify(identity)).join(", ") || "no live match"}. Matches select whole sessions across identity namespaces.`,
+      );
+    }
+    if (report.mixedLineageEntryKeys.length > 0) {
+      lines.push(
+        `${muted("Mixed-lineage entry keys:")} ${report.mixedLineageEntryKeys.join(", ")}`,
+      );
+    }
+    if (report.untargetableEntryKeys.length > 0) {
+      lines.push(`${muted("Untargetable entry keys:")} ${report.untargetableEntryKeys.join(", ")}`);
+    }
+    for (const curatedWrite of report.curatedWrites) {
+      lines.push(
+        `${muted("Curated write retained:")} ${curatedWrite.relativePath} (${new Date(curatedWrite.observedAt).toISOString()})`,
+      );
+    }
+    for (const refusal of report.refusals) {
+      lines.push(warn(`Refused: ${refusal}`));
+    }
+    if (report.dryRun) {
+      lines.push(muted("Dry run: no memory files, index rows, or plugin state were changed."));
+    }
+    defaultRuntime.log(lines.join("\n"));
+  } catch (error) {
+    defaultRuntime.error(`Memory forget failed: ${formatErrorMessage(error)}`);
+    process.exitCode = 1;
+  }
+}
+
 function matchesPromotionSelector(
   candidate: {
     key: string;
@@ -297,7 +381,7 @@ export async function runMemoryPromote(
     run: async ({ manager, cfg, agentId }) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
-      const dreaming = resolveShortTermPromotionDreamingConfig({
+      const dreaming = resolveMemoryDeepDreamingConfig({
         pluginConfig: resolveMemoryPluginConfig(cfg),
         cfg,
       });
@@ -330,6 +414,10 @@ export async function runMemoryPromote(
       if (opts.apply) {
         try {
           applyResult = await applyShortTermPromotions({
+            agentId,
+            workspaceAgentIds: resolveMemoryDreamingWorkspaces(cfg).find(
+              (workspace) => path.resolve(workspace.workspaceDir) === path.resolve(workspaceDir),
+            )?.agentIds,
             workspaceDir,
             candidates,
             limit: opts.limit,
@@ -471,7 +559,7 @@ export async function runMemoryPromoteExplain(
     run: async ({ manager, cfg, agentId }) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
-      const dreaming = resolveShortTermPromotionDreamingConfig({
+      const dreaming = resolveMemoryDeepDreamingConfig({
         pluginConfig: resolveMemoryPluginConfig(cfg),
         cfg,
       });

@@ -1,26 +1,18 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 // Setup command registration: system-agent chat for configured systems, onboarding otherwise.
-import { Option, type Command } from "commander";
+import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
-import type {
-  GatewayAuthChoice,
-  GatewayBind,
-  NodeManagerChoice,
-  ResetScope,
-  TailscaleMode,
-} from "../../commands/onboard-types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions, listExplicitOptionFlagsExcept } from "../command-options.js";
 import { isUnconfiguredConfigSource } from "../fresh-install-config.js";
-import { parseGatewayPortOption } from "../gateway-port-option.js";
 import {
-  pickOnboardAuthOptionValues,
   registerOnboardAuthOptions,
-  resolveInstallDaemonFlag,
-  validateOnboardAuthOptionValues,
+  registerOnboardGatewayOptions,
+  registerOnboardRemoteOptions,
+  registerOnboardRuntimeOptions,
+  resolveOnboardCommandOptions,
 } from "./register.onboard.js";
 
 const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
@@ -99,8 +91,9 @@ async function runOnboardingEntry(
   if (options.baseline) {
     const unsupportedOptions = listExplicitOptionFlagsExcept(commandRuntime, BASELINE_OPTION_NAMES);
     if (unsupportedOptions.length > 0) {
-      runtime.error(`--baseline cannot be combined with: ${unsupportedOptions.join(", ")}.`);
-      runtime.exit(1);
+      const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
+      const message = `--baseline cannot be combined with: ${unsupportedOptions.join(", ")}.`;
+      rejectOnboardingOption({ json: options.json === true }, runtime, message);
       return;
     }
     const { setupCommand } = await import("../../commands/setup.js");
@@ -110,53 +103,12 @@ async function runOnboardingEntry(
     );
     return;
   }
-  if (!validateOnboardAuthOptionValues(options, runtime)) {
+  const onboardingOptions = await resolveOnboardCommandOptions(options, commandRuntime, runtime);
+  if (!onboardingOptions) {
     return;
   }
-  const installDaemon = resolveInstallDaemonFlag(commandRuntime);
-  const gatewayPort = parseGatewayPortOption(options.gatewayPort, "--gateway-port");
   const { setupWizardCommand } = await import("../../commands/onboard.js");
-  await setupWizardCommand(
-    {
-      workspace: readStringValue(options.workspace),
-      agentName: readStringValue(options.agentName),
-      nonInteractive: Boolean(options.nonInteractive),
-      acceptRisk: Boolean(options.acceptRisk),
-      classic: Boolean(options.classic),
-      tui: Boolean(options.tui),
-      flow: options.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
-      mode: options.mode as "local" | "remote" | undefined,
-      ...pickOnboardAuthOptionValues(options),
-      reset: Boolean(options.reset),
-      resetScope: options.resetScope as ResetScope | undefined,
-      gatewayPort,
-      gatewayBind: options.gatewayBind as GatewayBind | undefined,
-      gatewayAuth: options.gatewayAuth as GatewayAuthChoice | undefined,
-      gatewayToken: readStringValue(options.gatewayToken),
-      gatewayTokenRefEnv: readStringValue(options.gatewayTokenRefEnv),
-      gatewayPassword: readStringValue(options.gatewayPassword),
-      tailscale: options.tailscale as TailscaleMode | undefined,
-      installDaemon,
-      daemonRuntime: options.daemonRuntime as GatewayDaemonRuntime | undefined,
-      skipChannels: Boolean(options.skipChannels),
-      skipSkills: Boolean(options.skipSkills),
-      skipBootstrap: Boolean(options.skipBootstrap),
-      skipSearch: Boolean(options.skipSearch),
-      skipHealth: Boolean(options.skipHealth),
-      skipUi: Boolean(options.skipUi),
-      suppressGatewayTokenOutput: Boolean(options.suppressGatewayTokenOutput),
-      skipHooks: Boolean(options.skipHooks),
-      nodeManager: options.nodeManager as NodeManagerChoice | undefined,
-      importFrom: readStringValue(options.importFrom),
-      importSource: readStringValue(options.importSource),
-      importSecrets: Boolean(options.importSecrets),
-      remoteUrl: readStringValue(options.remoteUrl),
-      remoteToken: readStringValue(options.remoteToken),
-      remotePassword: readStringValue(options.remotePassword),
-      json: Boolean(options.json),
-    },
-    runtime,
-  );
+  await setupWizardCommand(onboardingOptions, runtime);
 }
 
 function addSystemAgentOptions(command: Command): Command {
@@ -211,39 +163,9 @@ export function registerSetupCommand(program: Command): void {
     .option("--mode <mode>", "Onboard mode: local|remote");
 
   registerOnboardAuthOptions(command);
-
-  command
-    .option("--gateway-port <port>", "Gateway port")
-    .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
-    .option("--gateway-auth <mode>", "Gateway auth: token|password")
-    .option("--gateway-token <token>", "Gateway token (token auth)")
-    .option(
-      "--gateway-token-ref-env <name>",
-      "Gateway token SecretRef env var name (token auth; e.g. OPENCLAW_GATEWAY_TOKEN)",
-    )
-    .option("--gateway-password <password>", "Gateway password (password auth)")
-    .option("--tailscale <mode>", "Tailscale: off|serve|funnel")
-    .addOption(new Option("--tailscale-reset-on-exit").hideHelp())
-    .addOption(new Option("--no-tailscale-reset-on-exit").hideHelp())
-    .option("--install-daemon", "Install gateway service")
-    .option("--no-install-daemon", "Skip gateway service install")
-    .option("--skip-daemon", "Skip gateway service install")
-    .option("--daemon-runtime <runtime>", "Daemon runtime: node")
-    .option("--skip-channels", "Skip channel setup")
-    .option("--skip-skills", "Skip skills setup")
-    .option("--skip-bootstrap", "Skip creating default agent workspace files")
-    .option("--skip-search", "Skip search provider setup")
-    .option("--skip-health", "Skip health check")
-    .option("--skip-ui", "Skip Control UI/TUI launch")
-    .option("--suppress-gateway-token-output", "Disable the guided Control UI handoff")
-    .option("--skip-hooks", "Accepted for onboard compatibility; hooks setup is skipped")
-    .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
-    .option("--import-from <provider>", "Migration provider to run during onboarding")
-    .option("--import-source <path>", "Source agent home for --import-from")
-    .option("--import-secrets", "Import supported secrets during onboarding migration", false)
-    .option("--remote-url <url>", "Remote Gateway WebSocket URL")
-    .option("--remote-token <token>", "Remote Gateway token (optional)")
-    .option("--remote-password <password>", "Remote Gateway password (optional)");
+  registerOnboardGatewayOptions(command);
+  registerOnboardRuntimeOptions(command, "setup");
+  registerOnboardRemoteOptions(command);
 
   addSystemAgentOptions(command).action(async (rawOptions, commandRuntime: Command) => {
     const { defaultRuntime } = await import("../../runtime.js");

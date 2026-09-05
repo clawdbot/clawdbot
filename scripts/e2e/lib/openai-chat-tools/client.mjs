@@ -1,4 +1,5 @@
 // Gateway client for OpenAI chat tools E2E scenarios.
+import { cancelResponseReaderSoon } from "../../../lib/bounded-response.mjs";
 import { readPositiveIntEnv, readTcpPortEnv } from "../env-limits.mjs";
 
 const portText = process.env.PORT;
@@ -19,12 +20,6 @@ if (!Number.isFinite(maxBodyBytes) || maxBodyBytes <= 0) {
   throw new Error(`invalid OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES: ${maxBodyBytes}`);
 }
 
-function cancelReaderSoon(reader) {
-  void Promise.resolve()
-    .then(() => reader.cancel())
-    .catch(() => undefined);
-}
-
 async function readResponseChunk(reader, timeoutPromise, markCanceled) {
   const readPromise = reader.read();
   if (!timeoutPromise) {
@@ -35,7 +30,7 @@ async function readResponseChunk(reader, timeoutPromise, markCanceled) {
   const timeoutReadPromise = timeoutPromise.catch((error) => {
     if (waitingForRead) {
       markCanceled();
-      cancelReaderSoon(reader);
+      cancelResponseReaderSoon(reader);
     }
     throw error;
   });

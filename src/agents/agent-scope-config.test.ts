@@ -214,6 +214,20 @@ describe("agent roster resolution", () => {
     expect(resolveAgentOperationAgentId(cfg)).toBe("ops");
   });
 
+  it("prefers a per-agent toolProgressDetail over the roster default", () => {
+    const defaults = { toolProgressDetail: "explain" as const };
+    const entries = { main: { toolProgressDetail: "raw" as const } };
+
+    expect(resolveAgentConfig({ agents: { defaults, entries } }, "main")?.toolProgressDetail).toBe(
+      "raw",
+    );
+    expect(resolveAgentConfig({ agents: { entries } }, "main")?.toolProgressDetail).toBe("raw");
+    expect(
+      resolveAgentConfig({ agents: { defaults, entries: { main: {} } } }, "main")
+        ?.toolProgressDetail,
+    ).toBe("explain");
+  });
+
   it("resolves defaults only for the rosterless implicit main agent", () => {
     const defaults = { fastModeDefault: "auto" as const };
 

@@ -16,7 +16,6 @@ import {
   failDeliveryBeforePlatformSend,
   failPendingDelivery,
   loadPendingDelivery,
-  loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
@@ -24,7 +23,11 @@ import {
   reserveDeliveryAttempt,
   type QueuedDelivery,
 } from "./delivery-queue-storage.js";
-import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
+import {
+  loadPendingDeliveries,
+  installDeliveryQueueTmpDirHooks,
+  readQueuedEntry,
+} from "./delivery-queue.test-helpers.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 describe("delivery-queue storage", () => {
@@ -512,9 +515,9 @@ describe("delivery-queue storage", () => {
           availableAt: originalExpiry,
         });
         await expect(renewDeliveryPlatformSendLease(id, stateDir, claimId)).resolves.toBe(
-          Date.now() + 30_000,
+          Date.now() + 60_000,
         );
-        expect(readQueuedEntry(stateDir, id).availableAt).toBe(Date.now() + 30_000);
+        expect(readQueuedEntry(stateDir, id).availableAt).toBe(Date.now() + 60_000);
       } finally {
         vi.useRealTimers();
       }
@@ -760,6 +763,16 @@ describe("delivery-queue storage", () => {
         ),
       ).resolves.toEqual({ status: "not_pending" });
       expect(readStatus(id)).toBeUndefined();
+      await expect(
+        failPendingDelivery(
+          {
+            id,
+            entry: { ...entry, id: "unused-after-owner-removal" },
+            expectedPlatformSendAttemptId: "stale-claim",
+          },
+          tmpDir(),
+        ),
+      ).resolves.toEqual({ status: "not_pending" });
     });
   });
 

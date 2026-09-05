@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { NODE_WORKER_BUNDLE_INSTALL_COMMAND } from "../../infra/node-commands.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
@@ -44,6 +45,53 @@ function nodeProof(nodeId: string, bundlePrewarm?: 1): NodeWorkerSupervisorNodeP
 }
 
 describe("Gateway node worker bundle installer", () => {
+  it("cancels held node discovery before granting or invoking installation", async () => {
+    const discovered = createDeferredCore<NodeWorkerSupervisorNodeProof[]>();
+    const controller = new AbortController();
+    const transfer = createNodeWorkerBundleTransferService();
+    const grant = vi.spyOn(transfer, "prepare");
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => ({
+      ok: true,
+      payload: artifact,
+    }));
+    const listCurrentNodes = vi.fn(() => discovered.promise);
+    const ensure = createGatewayNodeWorkerBundleInstaller({
+      gatewayNamespace: "gateway-test",
+      getTransport: () => ({
+        hasCurrentRunner: () => false,
+        listCurrentNodes,
+        isCurrent: (candidate) => candidate === node,
+        invoke,
+      }),
+      transfer,
+    });
+    let settled = false;
+    const pending = ensure({
+      deviceId: node.nodeId,
+      artifact,
+      prewarm: true,
+      signal: controller.signal,
+    })
+      .catch((error: unknown) => error)
+      .finally(() => {
+        settled = true;
+      });
+    try {
+      expect(listCurrentNodes).toHaveBeenCalledOnce();
+      controller.abort(new DOMException("Stop node discovery", "AbortError"));
+      await vi.waitFor(() => expect(settled).toBe(true));
+      expect(grant).not.toHaveBeenCalled();
+      expect(invoke).not.toHaveBeenCalled();
+    } finally {
+      discovered.resolve([node]);
+      await pending;
+      grant.mockRestore();
+      transfer.closeAll();
+    }
+    expect(await pending).toMatchObject({ name: "AbortError" });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("binds install dispatch to the current node proof and exact receipt", async () => {
     const transfer = createNodeWorkerBundleTransferService({
       generateToken: () => "A".repeat(43),
@@ -65,13 +113,14 @@ describe("Gateway node worker bundle installer", () => {
     const ensure = createGatewayNodeWorkerBundleInstaller({
       gatewayNamespace: "gateway-test",
       getTransport: () => transport,
-      prepareBundle: async () => artifact,
       transfer,
     });
 
-    await expect(ensure({ deviceId: node.nodeId })).resolves.toMatchObject({
-      bundleHash: artifact.bundleHash,
-    });
+    await expect(ensure({ deviceId: node.nodeId, artifact, prewarm: true })).resolves.toMatchObject(
+      {
+        bundleHash: artifact.bundleHash,
+      },
+    );
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({
         node,
@@ -106,11 +155,12 @@ describe("Gateway node worker bundle installer", () => {
     const ensure = createGatewayNodeWorkerBundleInstaller({
       gatewayNamespace: "gateway-test",
       getTransport: () => transport,
-      prepareBundle: async () => artifact,
       transfer,
     });
 
-    await expect(ensure({ deviceId: node.nodeId })).rejects.toThrow("mismatched build receipt");
+    await expect(ensure({ deviceId: node.nodeId, artifact, prewarm: true })).rejects.toThrow(
+      "mismatched build receipt",
+    );
   });
 
   it("negotiates prewarming independently across a mixed node fleet", async () => {
@@ -132,14 +182,17 @@ describe("Gateway node worker bundle installer", () => {
     const ensure = createGatewayNodeWorkerBundleInstaller({
       gatewayNamespace: "gateway-test",
       getTransport: () => transport,
-      prepareBundle: async () => artifact,
       transfer,
     });
 
-    await expect(ensure({ deviceId: advertising.nodeId })).resolves.toMatchObject({
+    await expect(
+      ensure({ deviceId: advertising.nodeId, artifact, prewarm: true }),
+    ).resolves.toMatchObject({
       bundleHash: artifact.bundleHash,
     });
-    await expect(ensure({ deviceId: legacy.nodeId })).resolves.toMatchObject({
+    await expect(
+      ensure({ deviceId: legacy.nodeId, artifact, prewarm: true }),
+    ).resolves.toMatchObject({
       bundleHash: artifact.bundleHash,
     });
 

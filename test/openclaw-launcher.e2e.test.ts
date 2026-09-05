@@ -414,7 +414,7 @@ describe("openclaw launcher", () => {
     expect(result.stdout).toBe(`PRECOMPUTED ${params.command} help\n`);
   });
 
-  it.each(["doctor", "gateway", "models", "plugins", "sessions", "tasks"])(
+  it.each(["config", "doctor", "gateway", "models", "plugins", "sessions", "tasks"])(
     "uses precomputed %s help before loading the runtime entry",
     async (command) => {
       const fixtureRoot = await makeLauncherFixture(fixtureRoots);
@@ -454,7 +454,7 @@ describe("openclaw launcher", () => {
 
     const result = spawnSync(
       process.execPath,
-      [path.join(fixtureRoot, "openclaw.mjs"), "--profile", "work", "--no-color", "models", "-h"],
+      [path.join(fixtureRoot, "openclaw.mjs"), "--log-level", "warn", "--no-color", "models", "-h"],
       {
         cwd: fixtureRoot,
         env: launcherEnv(),
@@ -464,6 +464,43 @@ describe("openclaw launcher", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("PRECOMPUTED models help\n");
+  });
+
+  it.each(
+    [
+      ["--profile", "work", "nodes", "--help"],
+      ["--profile=work", "nodes", "--help"],
+      ["--dev", "nodes", "--help"],
+      ["--profile", "default", "models", "--help"],
+      ["--profile=", "models", "--help"],
+      ["--profile", "bad profile", "models", "--help"],
+      ["--dev", "--profile", "work", "models", "--help"],
+      ["--profile", "work", "--dev", "models", "--help"],
+    ].map((args) => ({ args, invocation: args.join(" ") })),
+  )("passes profile selection to the runtime before cached help: $invocation", async ({ args }) => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({
+        nodesHelpText: "PRECOMPUTED nodes help\n",
+        subcommandHelpText: { models: "PRECOMPUTED models help\n" },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n",
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), ...args], {
+      cwd: fixtureRoot,
+      env: launcherEnv(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(JSON.stringify(args));
   });
 
   it("defers precomputed subcommand help to the runtime entry when container env is set", async () => {
@@ -496,6 +533,16 @@ describe("openclaw launcher", () => {
 
   it.each([
     {
+      name: "container env with root --help",
+      args: ["--help"],
+      env: { OPENCLAW_CONTAINER: "demo" },
+    },
+    {
+      name: "container env with root -h",
+      args: ["-h"],
+      env: { OPENCLAW_CONTAINER: "demo" },
+    },
+    {
       name: "container env",
       args: ["browser", "--help"],
       env: { OPENCLAW_CONTAINER: "demo" },
@@ -514,7 +561,10 @@ describe("openclaw launcher", () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await fs.writeFile(
       path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
-      JSON.stringify({ browserHelpText: "PRECOMPUTED browser help\n" }),
+      JSON.stringify({
+        rootHelpText: "PRECOMPUTED root help\n",
+        browserHelpText: "PRECOMPUTED browser help\n",
+      }),
       "utf8",
     );
     await fs.writeFile(
@@ -626,6 +676,38 @@ describe("openclaw launcher", () => {
     const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
       cwd: fixtureRoot,
       env: launcherEnv({ OPENCLAW_HOME: openclawHome }),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+    expect(result.stdout).not.toContain("PRECOMPUTED");
+  });
+
+  it("keeps literal $ patterns in HOME when expanding a tilde OPENCLAW_HOME", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const home = path.join(fixtureRoot, "home$&d");
+    const configDir = path.join(home, "oc", ".openclaw");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ rootHelpText: "PRECOMPUTED memory help\n" }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(configDir, "openclaw.json"),
+      JSON.stringify({ plugins: { slots: { memory: "memory-lancedb" } } }),
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
+      cwd: fixtureRoot,
+      env: launcherEnv({ HOME: home, OPENCLAW_HOME: "~/oc" }),
       encoding: "utf8",
     });
 
@@ -778,6 +860,60 @@ describe("openclaw launcher", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32").each([true, false])(
+    "preserves foreground Gmail shutdown grace with compile cache (source=%s)",
+    async (sourceCheckout) => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      if (sourceCheckout) {
+        await addGitMarker(fixtureRoot);
+      }
+      const readyPath = path.join(fixtureRoot, "gmail-ready.json");
+      const stoppedPath = path.join(fixtureRoot, "gmail-stopped.txt");
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          `process.on("SIGTERM", () => setTimeout(() => { writeFileSync(${JSON.stringify(stoppedPath)}, "stopped"); process.exit(0); }, 3025));`,
+          `writeFileSync(${JSON.stringify(readyPath)}, JSON.stringify({ pid: process.pid }));`,
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      );
+      const launcher = spawn(
+        process.execPath,
+        [
+          path.join(fixtureRoot, "openclaw.mjs"),
+          "webhooks",
+          "--profile",
+          "fixture",
+          "gmail",
+          "run",
+        ],
+        {
+          cwd: fixtureRoot,
+          env: launcherEnv({ NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-cache") }),
+          stdio: "ignore",
+        },
+      );
+      let ownerPid: number | undefined;
+      try {
+        ownerPid = (await waitForJsonFile<{ pid: number }>(readyPath, 5000)).pid;
+        launcher.kill("SIGTERM");
+        await expect(waitForProcessExit(launcher, "foreground Gmail", 5000)).resolves.toEqual({
+          code: 0,
+          signal: null,
+        });
+        await expect(fs.readFile(stoppedPath, "utf8")).resolves.toBe("stopped");
+        expect(isProcessAlive(ownerPid)).toBe(false);
+      } finally {
+        for (const pid of [ownerPid, launcher.pid]) {
+          if (isProcessAlive(pid)) {
+            process.kill(pid!, "SIGKILL");
+          }
+        }
+      }
+    },
+  );
+
   it.runIf(process.platform !== "win32").each([
     { signal: "SIGINT" as const, exitCode: 130 },
     { signal: "SIGTERM" as const, exitCode: 143 },
@@ -898,6 +1034,33 @@ describe("openclaw launcher", () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout).toBe("cache:disabled;respawn:1");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "preserves a packaged pnpm project path through compile-cache respawn",
+    async () => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await fs.writeFile(path.join(fixtureRoot, "package.json"), '{"version":"2026.8.1"}\n');
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        'process.stdout.write(process.argv[1] ?? "");\n',
+        "utf8",
+      );
+      const globalRoot = makeTempDir(fixtureRoots, "openclaw-pnpm-global-");
+      const packageRoot = path.join(globalRoot, "v11", "active", "node_modules", "openclaw");
+      await fs.mkdir(path.dirname(packageRoot), { recursive: true });
+      await fs.symlink(fixtureRoot, packageRoot, "dir");
+      const launcher = path.join(packageRoot, "openclaw.mjs");
+
+      const result = spawnSync(process.execPath, [launcher], {
+        cwd: globalRoot,
+        env: launcherEnv({ NODE_COMPILE_CACHE: path.join(globalRoot, ".node-compile-cache") }),
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(launcher);
     },
   );
 

@@ -175,9 +175,18 @@ describe("subagent registry scoped reads", () => {
       runId: "run-parent",
       childSessionKey: parent,
       requesterSessionKey: root,
+      requesterAgentId: "main",
       controllerSessionKey: controller,
       createdAt: now - 3_000,
       execution: { status: "running", startedAt: now - 2_900 },
+    });
+    const foreignActive = createRun({
+      runId: "run-foreign-active",
+      childSessionKey: "agent:research:subagent:foreign",
+      requesterSessionKey: root,
+      requesterAgentId: "research",
+      createdAt: now - 2_500,
+      execution: { status: "running", startedAt: now - 2_400 },
     });
     const pendingRun = createRun({
       runId: "run-pending",
@@ -203,9 +212,15 @@ describe("subagent registry scoped reads", () => {
       execution: { status: "terminal", startedAt: now - 1_500, endedAt: now - 1_100 },
     });
     const snapshot = new Map(
-      [oldActive, freshTerminal, parentRun, pendingRun, settledRun, suspendedRun].map(
-        (run) => [run.runId, run] as const,
-      ),
+      [
+        oldActive,
+        freshTerminal,
+        parentRun,
+        foreignActive,
+        pendingRun,
+        settledRun,
+        suspendedRun,
+      ].map((run) => [run.runId, run] as const),
     );
     const childSnapshot = new Map(
       [oldActive, freshTerminal].map((run) => [run.runId, run] as const),
@@ -245,6 +260,11 @@ describe("subagent registry scoped reads", () => {
         name: "active descendants from full snapshot",
         actual: mod.countActiveDescendantRuns(root),
         expected: countActiveDescendantRunsFromRuns(snapshot, root),
+      },
+      {
+        name: "active descendants from requester agent scope",
+        actual: mod.countActiveDescendantRuns(root, "main"),
+        expected: countActiveDescendantRunsFromRuns(snapshot, root, "main"),
       },
       {
         name: "pending descendants from full snapshot",
@@ -314,5 +334,7 @@ describe("subagent registry scoped reads", () => {
     for (const testCase of cases) {
       expect(testCase.actual, testCase.name).toEqual(testCase.expected);
     }
+    expect(mod.countActiveDescendantRuns(root)).toBe(2);
+    expect(mod.countActiveDescendantRuns(root, "main")).toBe(1);
   });
 });

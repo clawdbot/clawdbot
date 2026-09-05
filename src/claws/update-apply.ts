@@ -37,6 +37,7 @@ import {
   type ClawSourceIdentity,
 } from "./types.js";
 import { buildClawUpdatePlan, type ClawUpdateAction, type ClawUpdatePlan } from "./update-plan.js";
+import { collectClawRollbackFailures } from "./update-rollback.js";
 import {
   applyClawWorkspaceUpdate,
   ClawWorkspaceUpdateError,
@@ -374,17 +375,11 @@ export async function applyClawUpdatePlan(
   try {
     packageExecution = await applyPackageActions(remainingPackageActions);
   } catch (error) {
-    const rollbackFailures: string[] = [];
-    try {
-      await mcpExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`MCP rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
-    try {
-      await workspaceExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`workspace rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
+    // Keep method lookup and receiver binding inside each step.
+    const rollbackFailures = await collectClawRollbackFailures([
+      ["MCP rollback failed", () => mcpExecution.rollback()],
+      ["workspace rollback failed", () => workspaceExecution.rollback()],
+    ]);
     if (error instanceof ClawPackageUpdateError && error.partial) {
       rollbackFailures.unshift("package artifact rollback is unavailable");
     }
@@ -461,27 +456,12 @@ export async function applyClawUpdatePlan(
         return { ...config, agents: { ...config.agents, entries: nextEntries } };
       });
     } catch (error) {
-      const rollbackFailures: string[] = [];
-      try {
-        await rollbackAgent();
-      } catch (rollbackError) {
-        rollbackFailures.push(`agent rollback failed: ${coerceErrorMessage(rollbackError)}`);
-      }
-      try {
-        await packageExecution.rollback();
-      } catch (rollbackError) {
-        rollbackFailures.push(`package rollback incomplete: ${coerceErrorMessage(rollbackError)}`);
-      }
-      try {
-        await mcpExecution.rollback();
-      } catch (rollbackError) {
-        rollbackFailures.push(`MCP rollback failed: ${coerceErrorMessage(rollbackError)}`);
-      }
-      try {
-        await workspaceExecution.rollback();
-      } catch (rollbackError) {
-        rollbackFailures.push(`workspace rollback failed: ${coerceErrorMessage(rollbackError)}`);
-      }
+      const rollbackFailures = await collectClawRollbackFailures([
+        ["agent rollback failed", () => rollbackAgent()],
+        ["package rollback incomplete", () => packageExecution.rollback()],
+        ["MCP rollback failed", () => mcpExecution.rollback()],
+        ["workspace rollback failed", () => workspaceExecution.rollback()],
+      ]);
       if (rollbackFailures.length > 0) {
         throw partialMutation(`${coerceErrorMessage(error)}; ${rollbackFailures.join("; ")}`);
       }
@@ -517,27 +497,12 @@ export async function applyClawUpdatePlan(
       }
       throw partialMutation(`${error.message}; cron gateway mutation outcome is uncertain`);
     }
-    const rollbackFailures: string[] = [];
-    try {
-      await rollbackAgent();
-    } catch (rollbackError) {
-      rollbackFailures.push(`agent rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
-    try {
-      await packageExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`package rollback incomplete: ${coerceErrorMessage(rollbackError)}`);
-    }
-    try {
-      await mcpExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`MCP rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
-    try {
-      await workspaceExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`workspace rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
+    const rollbackFailures = await collectClawRollbackFailures([
+      ["agent rollback failed", () => rollbackAgent()],
+      ["package rollback incomplete", () => packageExecution.rollback()],
+      ["MCP rollback failed", () => mcpExecution.rollback()],
+      ["workspace rollback failed", () => workspaceExecution.rollback()],
+    ]);
     if (rollbackFailures.length > 0) {
       throw partialMutation(`${coerceErrorMessage(error)}; ${rollbackFailures.join("; ")}`);
     }
@@ -556,32 +521,13 @@ export async function applyClawUpdatePlan(
       expectedClaw: fresh.currentClaw,
     });
   } catch (error) {
-    const rollbackFailures: string[] = [];
-    try {
-      await rollbackAgent();
-    } catch (rollbackError) {
-      rollbackFailures.push(`agent rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
-    try {
-      await packageExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`package rollback incomplete: ${coerceErrorMessage(rollbackError)}`);
-    }
-    try {
-      await cronExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`cron rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
-    try {
-      await mcpExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`MCP rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
-    try {
-      await workspaceExecution.rollback();
-    } catch (rollbackError) {
-      rollbackFailures.push(`workspace rollback failed: ${coerceErrorMessage(rollbackError)}`);
-    }
+    const rollbackFailures = await collectClawRollbackFailures([
+      ["agent rollback failed", () => rollbackAgent()],
+      ["package rollback incomplete", () => packageExecution.rollback()],
+      ["cron rollback failed", () => cronExecution.rollback()],
+      ["MCP rollback failed", () => mcpExecution.rollback()],
+      ["workspace rollback failed", () => workspaceExecution.rollback()],
+    ]);
     if (rollbackFailures.length > 0) {
       throw partialMutation(`${coerceErrorMessage(error)}; ${rollbackFailures.join("; ")}`);
     }

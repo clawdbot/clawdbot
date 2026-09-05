@@ -17,7 +17,11 @@ import {
 } from "./sqlite.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { ApiKeyCredential } from "./types.js";
-import { persistAuthProfileBatch, upsertAuthProfileWithLockOrThrow } from "./upsert-with-lock.js";
+import {
+  persistAuthProfileBatch,
+  upsertAuthProfileAfterLoginWithLockOrThrow,
+  upsertAuthProfileWithLockOrThrow,
+} from "./upsert-with-lock.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -170,6 +174,134 @@ describe("auth profile batch persistence", () => {
     });
   });
 
+  it("replaces one completed login and resets only its existing failure state", async () => {
+    await withAgentDir(async (agentDir) => {
+      const targetId = "openai:target";
+      const siblingId = "openai:sibling";
+      const targetLastUsed = Date.now() - 10_000;
+      const targetLastFailureAt = Date.now() - 5_000;
+      const targetLastProbeAt = Date.now() - 2_000;
+      const siblingBlockedUntil = Date.now() + 120_000;
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            [targetId]: apiKey("sk-stale"),
+            [siblingId]: apiKey("sk-sibling"),
+          },
+          order: { openai: [siblingId, targetId] },
+          lastGood: { openai: siblingId },
+          usageStats: {
+            [targetId]: {
+              errorCount: 4,
+              failureCounts: { auth_permanent: 4 },
+              blockedUntil: Date.now() + 60_000,
+              blockedReason: "subscription_limit",
+              blockedSource: "wham",
+              blockedModel: "gpt-5.6",
+              blockedScope: "model",
+              cooldownUntil: Date.now() + 60_000,
+              cooldownReason: "auth_permanent",
+              cooldownModel: "gpt-5.6",
+              disabledUntil: Date.now() + 60_000,
+              disabledReason: "auth_permanent",
+              lastUsed: targetLastUsed,
+              lastFailureAt: targetLastFailureAt,
+              lastProbeAt: targetLastProbeAt,
+            },
+            [siblingId]: {
+              errorCount: 2,
+              blockedUntil: siblingBlockedUntil,
+              blockedReason: "subscription_limit",
+            },
+          },
+        },
+        agentDir,
+      );
+
+      await upsertAuthProfileAfterLoginWithLockOrThrow({
+        agentDir,
+        profileId: targetId,
+        credential: apiKey("sk-fresh"),
+      });
+
+      expect(loadPersistedAuthProfileStore(agentDir)).toEqual({
+        version: 1,
+        profiles: {
+          [targetId]: apiKey("sk-fresh"),
+          [siblingId]: apiKey("sk-sibling"),
+        },
+        order: { openai: [siblingId, targetId] },
+        lastGood: { openai: siblingId },
+        usageStats: {
+          [targetId]: {
+            errorCount: 0,
+            lastUsed: targetLastUsed,
+            lastFailureAt: targetLastFailureAt,
+            lastProbeAt: targetLastProbeAt,
+          },
+          [siblingId]: {
+            errorCount: 2,
+            blockedUntil: siblingBlockedUntil,
+            blockedReason: "subscription_limit",
+          },
+        },
+      });
+    });
+  });
+
+  it("rolls the completed-login credential and state back together on write failure", async () => {
+    await withAgentDir(async (agentDir) => {
+      const profileId = "openai:existing";
+      const disabledUntil = Date.now() + 60_000;
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: { [profileId]: apiKey("sk-stale") },
+          usageStats: {
+            [profileId]: {
+              errorCount: 3,
+              disabledUntil,
+              disabledReason: "auth_permanent",
+            },
+          },
+        },
+        agentDir,
+      );
+      const database = openOpenClawAgentDatabase({
+        agentId: "work",
+        path: resolveAuthProfileDatabasePath(agentDir),
+      });
+      database.db.exec(`
+        CREATE TRIGGER reject_completed_login_state
+        BEFORE UPDATE ON auth_profile_state
+        BEGIN
+          SELECT RAISE(ABORT, 'injected completed login state failure');
+        END;
+      `);
+
+      await expect(
+        upsertAuthProfileAfterLoginWithLockOrThrow({
+          agentDir,
+          profileId,
+          credential: apiKey("sk-fresh"),
+        }),
+      ).rejects.toThrow("injected completed login state failure");
+
+      expect(loadPersistedAuthProfileStore(agentDir)).toEqual({
+        version: 1,
+        profiles: { [profileId]: apiKey("sk-stale") },
+        usageStats: {
+          [profileId]: {
+            errorCount: 3,
+            disabledUntil,
+            disabledReason: "auth_permanent",
+          },
+        },
+      });
+    });
+  });
+
   it("reports the migration remediation instead of lock-contention retry advice", async () => {
     await withAgentDir(async (agentDir) => {
       // Credentials still living in the retired JSON store: the write can never
@@ -190,6 +322,29 @@ describe("auth profile batch persistence", () => {
 
       expect(String(failure)).toContain("requires legacy credential migration");
       expect(String(failure)).toContain("openclaw doctor --fix");
+      expect(String(failure)).not.toContain("lock may be busy");
+    });
+  });
+
+  it("reports a schema write failure instead of lock-contention retry advice", async () => {
+    await withAgentDir(async (agentDir) => {
+      await upsertAuthProfileWithLockOrThrow({
+        agentDir,
+        profileId: "openai:existing",
+        credential: apiKey("sk-existing"),
+      });
+      openOpenClawAgentDatabase({
+        agentId: "work",
+        path: resolveAuthProfileDatabasePath(agentDir),
+      }).db.exec("ALTER TABLE auth_profile_store DROP COLUMN updated_at");
+
+      const failure = await upsertAuthProfileWithLockOrThrow({
+        agentDir,
+        profileId: "openai:new",
+        credential: apiKey("sk-new"),
+      }).catch((error: unknown) => error);
+
+      expect(String(failure)).toContain("no column named updated_at");
       expect(String(failure)).not.toContain("lock may be busy");
     });
   });

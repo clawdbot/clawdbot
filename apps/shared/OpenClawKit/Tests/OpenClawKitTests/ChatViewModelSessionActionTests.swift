@@ -331,6 +331,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         expectedSessionID: String?,
         label _: String??,
         category _: String??,
+        color _: String?? = nil,
         pinned _: Bool?,
         archived _: Bool?,
         unread _: Bool?) async throws

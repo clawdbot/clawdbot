@@ -3,88 +3,95 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { ResolvedSubagentController } from "../../../agents/subagents/registry/subagent-control.js";
 import { buildSubagentRunReadIndex } from "../../../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../../../agents/subagents/registry/subagent-registry.types.js";
-import { resolveStoredSubagentCapabilities } from "../../../agents/subagents/spawn/subagent-capabilities.js";
+import { buildSubagentRunView } from "../../../agents/subagents/registry/subagent-run-view.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../../agents/tools/sessions-helpers.js";
-import { callGateway } from "../../../gateway/call.js";
-import { parseAgentSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
-import { looksLikeSessionId } from "../../../sessions/session-id.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../../command-turn-context.js";
 import { commandReply } from "../command-gates.js";
 import { extractSubagentMessageText, type ChatMessage } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
-import {
-  formatRunLabel,
-  resolveSubagentTargetFromRuns,
-  type SubagentTargetResolution,
-} from "../subagents-utils.js";
+import { formatRunLabel } from "../subagents-utils.js";
 
 export type { ChatMessage } from "../commands-subagents-text.js";
 
-const COMMAND = "/subagents";
-const COMMAND_FOCUS = "/focus";
-const COMMAND_UNFOCUS = "/unfocus";
-const COMMAND_AGENTS = "/agents";
-const ACTIONS = new Set(["list", "log", "info", "help"]);
-
 export const RECENT_WINDOW_MINUTES = 30;
-
-type SubagentsAction = "list" | "log" | "info" | "focus" | "unfocus" | "agents" | "help";
 
 type SubagentsCommandParams = Parameters<CommandHandler>[0];
 
 export type SubagentsCommandContext = {
   params: SubagentsCommandParams;
-  handledPrefix: string;
   requesterKey: string;
   runs: SubagentRunRecord[];
   restTokens: string[];
 };
 
-function stopWithUnknownTargetError(error?: string): CommandHandlerResult {
-  return commandReply(`⚠️ ${error ?? "Unknown subagent."}`);
-}
-
-function resolveSubagentTarget(
-  runs: SubagentRunRecord[],
-  token: string | undefined,
-): SubagentTargetResolution {
-  const readIndex = buildSubagentRunReadIndex();
-  return resolveSubagentTargetFromRuns({
-    runs,
-    token,
-    recentWindowMinutes: RECENT_WINDOW_MINUTES,
-    label: (entry) => formatRunLabel(entry),
-    aliases: (entry) => (entry.taskName ? [entry.taskName] : []),
-    isActive: (entry) =>
-      !entry.execution.endedAt ||
-      Math.max(0, readIndex.countPendingDescendantRuns(entry.childSessionKey)) > 0,
-    errors: {
-      missingTarget: "Missing subagent id.",
-      invalidIndex: (value) => `Invalid subagent index: ${value}`,
-      unknownSession: (value) => `Unknown subagent session: ${value}`,
-      ambiguousLabel: (value) => `Ambiguous subagent label: ${value}`,
-      ambiguousLabelPrefix: (value) => `Ambiguous subagent label prefix: ${value}`,
-      ambiguousRunIdPrefix: (value) => `Ambiguous run id prefix: ${value}`,
-      unknownTarget: (value) => `Unknown subagent id: ${value}`,
-    },
-  });
-}
-
 export function resolveSubagentEntryForToken(
   runs: SubagentRunRecord[],
   token: string | undefined,
 ): { entry: SubagentRunRecord } | { reply: CommandHandlerResult } {
-  const resolved = resolveSubagentTarget(runs, token);
-  if (!resolved.entry) {
-    return { reply: stopWithUnknownTargetError(resolved.error) };
+  const fail = (message: string) => ({ reply: commandReply(`⚠️ ${message}`) });
+  const trimmed = normalizeOptionalString(token);
+  if (!trimmed) {
+    return fail("Missing subagent id.");
   }
-  return { entry: resolved.entry };
+  const readIndex = buildSubagentRunReadIndex();
+  const { latest, active, recent } = buildSubagentRunView({
+    runs,
+    recentMinutes: RECENT_WINDOW_MINUTES,
+    countPendingDescendantRuns: (sessionKey) => readIndex.countPendingDescendantRuns(sessionKey),
+  });
+  if (trimmed === "last") {
+    const entry = latest[0];
+    return entry ? { entry } : fail("Unknown subagent.");
+  }
+  const numericOrder = [...active, ...recent];
+  if (/^\d+$/.test(trimmed)) {
+    const entry = numericOrder[Number.parseInt(trimmed, 10) - 1];
+    return entry ? { entry } : fail(`Invalid subagent index: ${trimmed}`);
+  }
+  if (trimmed.includes(":")) {
+    const entry = latest.find((run) => run.childSessionKey === trimmed);
+    return entry ? { entry } : fail(`Unknown subagent session: ${trimmed}`);
+  }
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  const match = (entries: SubagentRunRecord[], ambiguity: string) => {
+    if (entries.length > 1) {
+      return fail(`${ambiguity}: ${trimmed}`);
+    }
+    const entry = entries[0];
+    return entry ? { entry } : undefined;
+  };
+  return (
+    match(
+      numericOrder.filter((entry) => normalizeLowercaseStringOrEmpty(entry.taskName) === lowered),
+      "Ambiguous subagent label",
+    ) ??
+    match(
+      latest.filter((entry) => normalizeLowercaseStringOrEmpty(formatRunLabel(entry)) === lowered),
+      "Ambiguous subagent label",
+    ) ??
+    match(
+      numericOrder.filter((entry) =>
+        normalizeLowercaseStringOrEmpty(entry.taskName).startsWith(lowered),
+      ),
+      "Ambiguous subagent label prefix",
+    ) ??
+    match(
+      latest.filter((entry) =>
+        normalizeLowercaseStringOrEmpty(formatRunLabel(entry)).startsWith(lowered),
+      ),
+      "Ambiguous subagent label prefix",
+    ) ??
+    match(
+      latest.filter((entry) => entry.runId.startsWith(trimmed)),
+      "Ambiguous run id prefix",
+    ) ??
+    fail(`Unknown subagent id: ${trimmed}`)
+  );
 }
 
 export function resolveRequesterSessionKey(
@@ -105,128 +112,6 @@ export function resolveRequesterSessionKey(
   return resolveInternalSessionKey({ key: raw, alias, mainKey });
 }
 
-export function resolveCommandSubagentController(
-  params: SubagentsCommandParams,
-  requesterKey: string,
-): ResolvedSubagentController {
-  if (!isSubagentSessionKey(requesterKey)) {
-    return {
-      controllerSessionKey: requesterKey,
-      callerSessionKey: requesterKey,
-      callerIsSubagent: false,
-      controlScope: "children",
-    };
-  }
-  const capabilities = resolveStoredSubagentCapabilities(requesterKey, {
-    cfg: params.cfg,
-  });
-  return {
-    controllerSessionKey: requesterKey,
-    callerSessionKey: requesterKey,
-    callerIsSubagent: true,
-    controlScope: capabilities.controlScope,
-  };
-}
-
-export function resolveHandledPrefix(normalized: string): string | null {
-  return normalized.startsWith(COMMAND)
-    ? COMMAND
-    : normalized.startsWith(COMMAND_FOCUS)
-      ? COMMAND_FOCUS
-      : normalized.startsWith(COMMAND_UNFOCUS)
-        ? COMMAND_UNFOCUS
-        : normalized.startsWith(COMMAND_AGENTS)
-          ? COMMAND_AGENTS
-          : null;
-}
-
-export function resolveSubagentsAction(params: {
-  handledPrefix: string;
-  restTokens: string[];
-}): SubagentsAction | null {
-  if (params.handledPrefix === COMMAND) {
-    const [actionRaw] = params.restTokens;
-    const action = (normalizeLowercaseStringOrEmpty(actionRaw) || "list") as SubagentsAction;
-    if (!ACTIONS.has(action)) {
-      return null;
-    }
-    params.restTokens.splice(0, 1);
-    return action;
-  }
-  if (params.handledPrefix === COMMAND_FOCUS) {
-    return "focus";
-  }
-  if (params.handledPrefix === COMMAND_UNFOCUS) {
-    return "unfocus";
-  }
-  if (params.handledPrefix === COMMAND_AGENTS) {
-    return "agents";
-  }
-  return null;
-}
-
-type FocusTargetResolution = {
-  targetKind: "subagent" | "acp";
-  targetSessionKey: string;
-  agentId: string;
-  label?: string;
-};
-
-export async function resolveFocusTargetSession(params: {
-  runs: SubagentRunRecord[];
-  token: string;
-  requesterKey?: string;
-}): Promise<FocusTargetResolution | null> {
-  const subagentMatch = resolveSubagentTarget(params.runs, params.token);
-  if (subagentMatch.entry) {
-    const key = subagentMatch.entry.childSessionKey;
-    const parsed = parseAgentSessionKey(key);
-    return {
-      targetKind: "subagent",
-      targetSessionKey: key,
-      agentId: parsed?.agentId ?? "main",
-      label: formatRunLabel(subagentMatch.entry),
-    };
-  }
-
-  const token = params.token.trim();
-  if (!token) {
-    return null;
-  }
-
-  const attempts: Array<Record<string, string>> = [];
-  const requesterKey = normalizeOptionalString(params.requesterKey);
-  const spawnedBy = requesterKey && isSubagentSessionKey(requesterKey) ? requesterKey : undefined;
-  attempts.push({ key: token });
-  if (looksLikeSessionId(token)) {
-    attempts.push({ sessionId: token });
-  }
-  attempts.push({ label: token });
-
-  for (const attempt of attempts) {
-    try {
-      const resolved = await callGateway({
-        method: "sessions.resolve",
-        params: spawnedBy ? { ...attempt, spawnedBy } : attempt,
-      });
-      const key = normalizeOptionalString(resolved?.key) ?? "";
-      if (!key) {
-        continue;
-      }
-      const parsed = parseAgentSessionKey(key);
-      return {
-        targetKind: key.includes(":subagent:") ? "subagent" : "acp",
-        targetSessionKey: key,
-        agentId: parsed?.agentId ?? "main",
-        label: token,
-      };
-    } catch {
-      // Try the next resolution strategy.
-    }
-  }
-  return null;
-}
-
 export function buildSubagentsHelp() {
   return [
     "Subagents",
@@ -234,8 +119,7 @@ export function buildSubagentsHelp() {
     "- /subagents list",
     "- /subagents log <id|#> [limit] [tools]",
     "- /subagents info <id|#>",
-    "- /focus <subagent-label|session-key|session-id|session-label>",
-    "- /unfocus",
+    "- /session unbind",
     "- /agents",
     "- /session idle <duration|off>",
     "- /session max-age <duration|off>",

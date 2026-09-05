@@ -31,7 +31,7 @@ function requireIdentity(value: unknown): WorkerSshIdentity {
 
 /** Routes dynamic identities to their provider owner and configured refs to the generic resolver. */
 export async function resolveWorkerSshIdentity(params: {
-  provider: WorkerProvider<"internal">;
+  provider: WorkerProvider;
   leaseId: string;
   profile: WorkerProfile;
   keyRef: SecretRef;

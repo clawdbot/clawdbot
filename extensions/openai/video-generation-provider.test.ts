@@ -635,13 +635,15 @@ describe("openai video generation provider", () => {
       });
 
     const provider = buildOpenAIVideoGenerationProvider();
+    const input = Buffer.from("!png-bytes?").subarray(1, -1);
     await provider.generateVideo({
       provider: "openai",
       model: "sora-2",
       prompt: "Animate this frame",
       cfg: {},
-      inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+      inputImages: [{ buffer: input, mimeType: "image/png" }],
     });
+    input.fill(0);
 
     const createRequest = postMultipartRequest();
     expect(createRequest.url).toBe("https://api.openai.com/v1/videos");
@@ -924,13 +926,15 @@ describe("openai video generation provider", () => {
       });
 
     const provider = buildOpenAIVideoGenerationProvider();
+    const input = Buffer.from("!mp4-bytes?").subarray(1, -1);
     await provider.generateVideo({
       provider: "openai",
       model: "sora-2",
       prompt: "Remix this clip",
       cfg: {},
-      inputVideos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+      inputVideos: [{ buffer: input, mimeType: "video/mp4" }],
     });
+    input.fill(0);
 
     expect(postJsonRequestMock).not.toHaveBeenCalled();
     const createRequest = postMultipartRequest();
@@ -940,6 +944,9 @@ describe("openai video generation provider", () => {
     expect(form.get("prompt")).toBe("Remix this clip");
     expect(form.get("model")).toBeNull();
     expect(form.get("video")).toBeInstanceOf(File);
+    expect(Buffer.from(await (form.get("video") as File).arrayBuffer())).toEqual(
+      Buffer.from("mp4-bytes"),
+    );
     expect(form.get("input_reference")).toBeNull();
     expect(createRequest.timeoutMs).toBe(120000);
     expect(createRequest.fetchFn).toBe(fetch);

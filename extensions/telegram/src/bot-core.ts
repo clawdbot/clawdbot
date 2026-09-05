@@ -52,7 +52,11 @@ import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
-import { setTelegramCallbackQueryAnswerPromise } from "./callback-query-answer-state.js";
+import {
+  setTelegramCallbackQueryAnswerPromise,
+  startTelegramCallbackQueryAnswer,
+  takeTelegramCallbackQueryAdmissionAnswer,
+} from "./callback-query-answer-state.js";
 import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
 import {
   asTelegramClientFetch,
@@ -233,14 +237,15 @@ export function createTelegramBotCore(
     }
   });
 
-  // Answer callback queries immediately before sequentialize queues them behind
-  // agent turns for the same chat/topic. Telegram has a ~15s server-side timeout
-  // for answerCallbackQuery; if an agent turn is already processing, sequentialize
-  // delays the answer beyond that window and the user sees a stuck loading spinner.
+  // Durable transports start the answer after spool commit; classic polling and
+  // restart replay start it here. Both paths precede same-lane sequentialization
+  // so callback acknowledgements cannot wait for earlier handlers.
   bot.use(async (ctx, next) => {
     const callback = ctx.callbackQuery;
     if (callback) {
-      const answerPromise = bot.api.answerCallbackQuery(callback.id);
+      const answerPromise =
+        takeTelegramCallbackQueryAdmissionAnswer(bot, callback.id) ??
+        startTelegramCallbackQueryAnswer(bot, callback.id, false);
       setTelegramCallbackQueryAnswerPromise(ctx, answerPromise);
       void answerPromise.catch(() => {});
     }

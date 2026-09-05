@@ -1,5 +1,5 @@
 import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
 
 type VitestWorkerMarkers = {
   tinypoolState?: unknown;
@@ -98,8 +98,14 @@ export async function runCliWithExitFinalization(params: {
   try {
     await params.run();
   } catch (error) {
-    await params.onError(error);
-    requestExitAfterOneShotOutput(runtime, resolveProcessExitCode(1));
+    if (error instanceof ExitError) {
+      if (!requestExitAfterOneShotOutput(runtime, error.code)) {
+        throw error;
+      }
+    } else {
+      await params.onError(error);
+      requestExitAfterOneShotOutput(runtime, resolveProcessExitCode(1));
+    }
   } finally {
     requestExitAfterSystemCaCliCompletion(runtime, {
       env: params.env,
@@ -110,14 +116,22 @@ export async function runCliWithExitFinalization(params: {
   }
 }
 
+/** Unwind an already-reported CLI outcome before shared cleanup and output draining. */
+export function exitCliAfterOutput(runtime: RuntimeEnv, exitCode: number): never {
+  if (runtime !== defaultRuntime) {
+    runtime.exit(exitCode);
+  }
+  throw new ExitError(exitCode);
+}
+
 export function requestExitAfterOneShotOutput(
   runtime: RuntimeEnv = defaultRuntime,
-  exitCode = 0,
+  exitCode?: number,
 ): boolean {
   if (runtime !== defaultRuntime) {
     return false;
   }
-  requestedExitCode = exitCode;
+  requestedExitCode = exitCode ?? "process";
   return true;
 }
 

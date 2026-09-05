@@ -5,21 +5,21 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 
 const counters = vi.hoisted(() => ({
-  manifestRegistryPreparations: 0,
+  installedIndexPreparations: 0,
 }));
 
-vi.mock("../../plugins/plugin-registry-contributions.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../plugins/plugin-registry-contributions.js")>();
+vi.mock("../../plugins/installed-plugin-index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/installed-plugin-index.js")>();
   return {
     ...actual,
-    loadPluginManifestRegistryForPluginRegistry: (
-      ...args: Parameters<typeof actual.loadPluginManifestRegistryForPluginRegistry>
+    loadInstalledPluginIndexWithDiscovery: (
+      ...args: Parameters<typeof actual.loadInstalledPluginIndexWithDiscovery>
     ) => {
-      counters.manifestRegistryPreparations += 1;
-      return actual.loadPluginManifestRegistryForPluginRegistry(...args);
+      counters.installedIndexPreparations += 1;
+      return actual.loadInstalledPluginIndexWithDiscovery(...args);
     },
   };
 });
@@ -36,10 +36,10 @@ function configFor(channelIds: readonly string[]): OpenClawConfig {
 }
 
 async function runStatusChannels(channelIds: readonly string[]) {
-  counters.manifestRegistryPreparations = 0;
+  counters.installedIndexPreparations = 0;
   const table = await buildChannelsTable(configFor(channelIds));
   return {
-    preparations: counters.manifestRegistryPreparations,
+    preparations: counters.installedIndexPreparations,
     table,
   };
 }
@@ -65,14 +65,22 @@ afterAll(() => {
 });
 
 it("keeps status-all manifest preparation constant as missing repair rows increase", async () => {
-  await runStatusChannels([]);
-  const one = await runStatusChannels(OWNERLESS_CHANNEL_IDS.slice(0, 1));
-  const four = await runStatusChannels(OWNERLESS_CHANNEL_IDS);
+  const runColdAndWarm = (channelIds: readonly string[]) =>
+    withPluginCache(createPluginCache(), async () => ({
+      cold: await runStatusChannels(channelIds),
+      warm: await runStatusChannels(channelIds),
+    }));
+  const one = await runColdAndWarm(OWNERLESS_CHANNEL_IDS.slice(0, 1));
+  const four = await runColdAndWarm(OWNERLESS_CHANNEL_IDS);
 
-  expect(four.table.rows.map((row) => row.id)).toEqual(
-    expect.arrayContaining([...OWNERLESS_CHANNEL_IDS]),
-  );
-  expect({ oneRow: one.preparations, fourRows: four.preparations }).toStrictEqual({
+  for (const result of [four.cold, four.warm]) {
+    expect(result.table.rows.map((row) => row.id)).toEqual(
+      expect.arrayContaining([...OWNERLESS_CHANNEL_IDS]),
+    );
+  }
+  expect(one.cold.preparations).toBeGreaterThan(0);
+  expect(four.cold.preparations).toBe(one.cold.preparations);
+  expect({ oneRow: one.warm.preparations, fourRows: four.warm.preparations }).toStrictEqual({
     oneRow: 0,
     fourRows: 0,
   });

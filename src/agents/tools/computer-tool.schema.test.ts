@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createComputerTool, readActionEnum } from "./computer-tool.test-helpers.js";
+import { createComputerTool, readActionEnum, v2Descriptor } from "./computer-tool.test-helpers.js";
 
 describe("createComputerTool schema", () => {
   it("keeps an undeclared node on the exact v1 action list", () => {
@@ -20,6 +20,20 @@ describe("createComputerTool schema", () => {
       "hold_key",
       "wait",
     ]);
+  });
+
+  it.each([
+    ["an existing wait", ["screenshot", "wait"]],
+    ["no screenshot", ["list_windows"]],
+  ] as const)("preserves the effective action list with %s", (_name, actions) => {
+    const tool = createComputerTool({
+      transport: {
+        computerUse: v2Descriptor([...actions]),
+        resolveNode: async () => ({ nodeId: "session-desktop" }),
+        invoke: async () => undefined,
+      },
+    });
+    expect(readActionEnum(tool)).toEqual(actions);
   });
 
   it("keeps model input free of native provider fields", () => {

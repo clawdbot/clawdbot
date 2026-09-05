@@ -1,7 +1,5 @@
 // Xai provider module implements model/runtime integration.
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import type {
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
@@ -30,6 +28,8 @@ async function resolveXaiSpeechSynthesisRequest(
 ) {
   const config = readXaiSpeechProviderConfig(req.providerConfig);
   const overrides = readXaiSpeechOverrides(req.providerOverrides);
+  const { resolveGeneratedMediaMaxBytes } =
+    await import("openclaw/plugin-sdk/media-generation-runtime");
   return {
     text: req.text,
     apiKey: await resolveXaiAudioApiKey(config.apiKey, req.cfg),
@@ -101,6 +101,7 @@ async function resolveOptionalXaiAudioApiKey(
   if (!cfg) {
     return undefined;
   }
+  const { resolveApiKeyForProvider } = await import("openclaw/plugin-sdk/provider-auth-runtime");
   const auth = await resolveApiKeyForProvider({ provider: "xai", cfg });
   return normalizeOptionalString(auth?.apiKey);
 }

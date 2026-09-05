@@ -1,8 +1,6 @@
 /** CLI commands for listing, inspecting, and cancelling TaskFlow records. */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe, truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
-import { truncateToVisibleWidth, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -11,39 +9,34 @@ import { formatCliJsonFailure } from "../cli/failure-output.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { truncateUtf16WithEllipsis as truncate } from "../shared/text-truncate.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
 import {
+  isTerminalTaskFlow,
   TASK_FLOW_STATUSES,
   type TaskFlowRecord,
-  type TaskFlowStatus,
 } from "../tasks/task-flow-registry.types.js";
 import {
   getTaskFlowById,
   listTaskFlowRecords,
   resolveTaskFlowForLookupToken,
 } from "../tasks/task-flow-runtime-internal.js";
-import { isTerminalFlowStatus } from "../tasks/task-registry-common.js";
-import { formatTaskStatusDetail } from "../tasks/task-status.js";
+import {
+  formatTaskStatus,
+  formatTaskStatusDetail,
+  isTaskStatusIssue,
+} from "../tasks/task-status.js";
+import { formatTaskStatusCell, TASK_STATUS_CELL_WIDTH } from "./task-status-cell.js";
+import { formatTextCell } from "./text-format.js";
 
 const ID_PAD = 10;
-const STATUS_PAD = 10;
 const MODE_PAD = 14;
 const REV_PAD = 6;
 const CTRL_PAD = 20;
 
 function formatFlowLookupMiss(lookup: string): string {
   return `TaskFlow not found: ${sanitizeTerminalText(lookup)}. Run ${formatCliCommand("openclaw tasks flow list")} to see recent flow ids.`;
-}
-
-function truncate(value: string, maxChars: number) {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  if (maxChars <= 1) {
-    return truncateUtf16Safe(value, maxChars);
-  }
-  return truncateWithMarker(value, maxChars, { marker: "…", reserve: 1, trimEnd: false });
 }
 
 function safeFlowDisplayText(value: string | undefined, maxChars?: number): string {
@@ -54,12 +47,6 @@ function safeFlowDisplayText(value: string | undefined, maxChars?: number): stri
   return typeof maxChars === "number" ? truncate(sanitized, maxChars) : sanitized;
 }
 
-function formatFlowTableCell(value: string | undefined, width: number): string {
-  const text = safeFlowDisplayText(value);
-  const fitted = visibleWidth(text) > width ? `${truncateToVisibleWidth(text, width - 1)}…` : text;
-  return `${fitted}${" ".repeat(width - visibleWidth(fitted))}`;
-}
-
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {
   return safeFlowDisplayText(normalizeOptionalString(value), maxChars);
 }
@@ -68,31 +55,11 @@ function formatFlowTimestamp(value: number | undefined | null): string {
   return timestampMsToIsoString(value) ?? "n/a";
 }
 
-function formatFlowStatusCell(status: TaskFlowStatus, rich: boolean) {
-  const padded = status.padEnd(STATUS_PAD);
-  if (!rich) {
-    return padded;
-  }
-  if (status === "succeeded") {
-    return theme.success(padded);
-  }
-  if (status === "failed" || status === "lost") {
-    return theme.error(padded);
-  }
-  if (status === "running") {
-    return theme.accentBright(padded);
-  }
-  if (status === "blocked") {
-    return theme.warn(padded);
-  }
-  return theme.muted(padded);
-}
-
 function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
   const header = [
     "TaskFlow".padEnd(ID_PAD),
     "Mode".padEnd(MODE_PAD),
-    "Status".padEnd(STATUS_PAD),
+    "Status".padEnd(TASK_STATUS_CELL_WIDTH),
     "Rev".padEnd(REV_PAD),
     "Controller".padEnd(CTRL_PAD),
     "Tasks".padEnd(14),
@@ -106,9 +73,9 @@ function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
       [
         shortToken(flow.flowId).padEnd(ID_PAD),
         flow.syncMode.padEnd(MODE_PAD),
-        formatFlowStatusCell(flow.status, rich),
+        formatTaskStatusCell(flow.status, rich),
         String(flow.revision).padEnd(REV_PAD),
-        formatFlowTableCell(flow.controllerId, CTRL_PAD),
+        formatTextCell(safeFlowDisplayText(flow.controllerId), CTRL_PAD),
         counts.padEnd(14),
         safeFlowDisplayText(flow.goal, 80),
       ].join(" "),
@@ -118,14 +85,17 @@ function formatFlowRows(flows: TaskFlowRecord[], rich: boolean) {
 }
 
 function formatFlowListSummary(flows: TaskFlowRecord[]) {
-  const active = flows.filter(
-    (flow) => flow.status === "queued" || flow.status === "running",
-  ).length;
-  const blocked = flows.filter((flow) => flow.status === "blocked").length;
-  const cancelRequested = flows.filter(
-    (flow) => flow.cancelRequestedAt != null && !isTerminalFlowStatus(flow.status),
-  ).length;
-  return `${active} active · ${blocked} blocked · ${cancelRequested} cancel-requested · ${flows.length} total`;
+  const counts = { active: 0, waiting: 0, blocked: 0, issues: 0, cancelRequested: 0 };
+  for (const flow of flows) {
+    counts.active += Number(flow.status === "queued" || flow.status === "running");
+    counts.waiting += Number(flow.status === "waiting");
+    counts.blocked += Number(flow.status === "blocked");
+    counts.issues += Number(flow.status === "failed" || flow.status === "lost");
+    counts.cancelRequested += Number(flow.cancelRequestedAt != null && !isTerminalTaskFlow(flow));
+  }
+  const waiting = counts.waiting ? ` · ${counts.waiting} waiting` : "";
+  const issues = counts.issues ? ` · ${counts.issues} issues` : "";
+  return `${counts.active} active${waiting} · ${counts.blocked} blocked${issues} · ${counts.cancelRequested} cancel-requested · ${flows.length} total`;
 }
 
 function summarizeWait(flow: TaskFlowRecord): string {
@@ -248,7 +218,7 @@ export async function flowsShowCommand(
     `createdAt: ${formatFlowTimestamp(flow.createdAt)}`,
     `updatedAt: ${formatFlowTimestamp(flow.updatedAt)}`,
     `endedAt: ${formatFlowTimestamp(flow.endedAt)}`,
-    `tasks: ${taskSummary.total} total · ${taskSummary.active} active · ${taskSummary.failures} issues`,
+    `tasks: ${taskSummary.total} total · ${taskSummary.active} active · ${tasks.filter(isTaskStatusIssue).length} issues`,
   ];
   for (const line of lines) {
     runtime.log(sanitizeTerminalText(line));
@@ -264,7 +234,7 @@ export async function flowsShowCommand(
     const safeDetail = detail ? ` · ${safeFlowDisplayText(detail)}` : "";
     runtime.log(
       sanitizeTerminalText(
-        `- ${task.taskId} ${task.status} ${safeFlowDisplayText(task.runId)} ${safeLabel}${safeDetail}`,
+        `- ${task.taskId} ${formatTaskStatus(task)} ${safeFlowDisplayText(task.runId)} ${safeLabel}${safeDetail}`,
       ),
     );
   }

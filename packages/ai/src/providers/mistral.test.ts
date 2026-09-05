@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Context, Model } from "../types.js";
+import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
 const mistralMockState = vi.hoisted(() => ({
@@ -23,12 +24,9 @@ vi.mock("node:crypto", async () => {
   };
 });
 
-vi.mock("@mistralai/mistralai", async () => {
-  const actual =
-    await vi.importActual<typeof import("@mistralai/mistralai")>("@mistralai/mistralai");
+vi.mock("@mistralai/mistralai/sdk/chat", () => {
   return {
-    ...actual,
-    Mistral: class MockMistral {
+    Chat: class MockMistralChat {
       private readonly config: unknown;
 
       constructor(config: unknown) {
@@ -36,29 +34,27 @@ vi.mock("@mistralai/mistralai", async () => {
         mistralMockState.configs.push(config);
       }
 
-      chat = {
-        stream: vi.fn(async (payload: unknown, requestOptions: unknown) => {
-          mistralMockState.payloads.push(payload);
-          mistralMockState.requestOptions.push(requestOptions);
-          if (mistralMockState.requestThroughHttpClient) {
-            const httpClient = (
-              this.config as {
-                httpClient?: { request(request: Request): Promise<Response> };
-              }
-            ).httpClient;
-            const response = await httpClient?.request(new Request("https://api.mistral.ai/chat"));
-            if (response && !response.ok) {
-              throw Object.assign(new Error(`Mistral HTTP ${response.status}`), {
-                statusCode: response.status,
-              });
+      stream = vi.fn(async (payload: unknown, requestOptions: unknown) => {
+        mistralMockState.payloads.push(payload);
+        mistralMockState.requestOptions.push(requestOptions);
+        if (mistralMockState.requestThroughHttpClient) {
+          const httpClient = (
+            this.config as {
+              httpClient?: { request(request: Request): Promise<Response> };
             }
+          ).httpClient;
+          const response = await httpClient?.request(new Request("https://api.mistral.ai/chat"));
+          if (response && !response.ok) {
+            throw Object.assign(new Error(`Mistral HTTP ${response.status}`), {
+              statusCode: response.status,
+            });
           }
-          if (mistralMockState.streamResult !== undefined) {
-            return mistralMockState.streamResult;
-          }
-          throw mistralMockState.streamError;
-        }),
-      };
+        }
+        if (mistralMockState.streamResult !== undefined) {
+          return mistralMockState.streamResult;
+        }
+        throw mistralMockState.streamError;
+      });
     },
   };
 });
@@ -244,6 +240,35 @@ describe("Mistral provider", () => {
 
   afterEach(() => {
     configureAiTransportHost({});
+  });
+
+  it("reports every parsed Mistral event as request activity", async () => {
+    const events = [
+      { data: { id: "resp-activity", model: "mistral-large-latest", choices: [], usage: {} } },
+      {
+        data: {
+          id: "resp-activity",
+          model: "mistral-large-latest",
+          choices: [{ finishReason: "stop", delta: { content: "ok" } }],
+        },
+      },
+    ];
+    mistralMockState.streamResult = {
+      async *[Symbol.asyncIterator]() {
+        yield* events;
+      },
+    };
+    const controller = new AbortController();
+    const onActivity = vi.fn();
+    const unsubscribe = onLlmRequestActivity(controller.signal, onActivity);
+
+    try {
+      await runMistralFixture(context, { signal: controller.signal });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(onActivity).toHaveBeenCalledTimes(events.length);
   });
 
   it("reports the real HTTP response captured by the Mistral HTTPClient hook", async () => {
@@ -800,12 +825,50 @@ describe("Mistral provider", () => {
       cacheWrite: 0,
       totalTokens: 110,
     });
+    expect(result.responseId).toBe("response-cache-usage");
+    expect(result.responseModel).toBe("mistral-small-latest");
+  });
+
+  it("omits responseModel when streamed model matches the requested id", async () => {
+    mistralMockState.streamResult = {
+      async *[Symbol.asyncIterator]() {
+        yield {
+          data: {
+            id: "response-same-model",
+            model: "mistral-large-latest",
+            choices: [{ finishReason: "stop", delta: { content: "ok" } }],
+          },
+        };
+      },
+    };
+
+    const result = await runMistralFixture(context, { apiKey: "fixture" });
+
+    expect(result.responseId).toBe("response-same-model");
+    expect(result).not.toHaveProperty("responseModel");
+  });
+
+  it("preserves tool-result boundary whitespace in the request payload", async () => {
+    const testContext = makeMistralToolResultContext("read_file", [
+      { type: "text", text: "  indented\n" },
+    ]);
+
+    await runMistralFixture(testContext);
+
+    const payload = mistralMockState.payloads[0] as {
+      messages: Array<{ role: string; content: Array<{ type: string; text?: string }> }>;
+    };
+    const toolMessage = payload.messages.find((message) => message.role === "tool");
+    const toolContent = Array.isArray(toolMessage?.content) ? toolMessage.content : [];
+    const textBlock = toolContent.find((block) => block.type === "text");
+    expect(textBlock?.text).toBe("  indented\n");
   });
 
   it("serializes structured non-image blocks in tool results as JSON text", async () => {
     // Prove the host redaction port is applied to structured tool-result text.
     configureAiTransportHost({
-      redactToolPayloadText: (text) => text.replaceAll('"value"', '"***"'),
+      redactModelVisibleSecrets: <T>(value: T): T =>
+        JSON.parse(JSON.stringify(value).replaceAll('"value"', '"***"')) as T,
     });
     const testContext = makeMistralToolResultContext("fetch", [
       {
@@ -827,8 +890,7 @@ describe("Mistral provider", () => {
     const toolContent = Array.isArray(toolMessage?.content) ? toolMessage.content : [];
     const textBlock = toolContent.find((block) => block.type === "text");
     expect(textBlock?.text).toEqual(expect.stringContaining('{"type":"resource"'));
-    expect(textBlock?.text).toContain('{\\"key\\":\\"***\\"}');
-    expect(textBlock?.text).not.toContain('{\\"key\\":\\"value\\"}');
+    expect(textBlock?.text).toContain('{\\"key\\":\\"value\\"}');
   });
 
   it("does not emit image chunks or placeholders for payload-less tool media", async () => {

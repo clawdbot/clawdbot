@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { inheritSessionCreationPolicy } from "../../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
@@ -136,6 +137,7 @@ type ResolvedSubagentChildPlan = {
   incognito: boolean;
   childSessionKey: string;
   childRuntimeSandboxed: boolean;
+  creationPolicy: ReturnType<typeof inheritSessionCreationPolicy>;
   targetAgentDir: string;
   modelPlan: Extract<ReturnType<typeof resolveSubagentModelAndThinkingPlan>, { status: "ok" }>;
   launchAuthorization?: SubagentLaunchAuthorization;
@@ -201,15 +203,23 @@ export async function resolveSubagentChildPlan(params: {
   const requesterRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.requesterInternalKey,
+    agentId: params.requesterAgentId,
   });
-  const childRuntime = resolveSandboxRuntimeStatus({
-    cfg: params.cfg,
-    sessionKey: childSessionKey,
-  });
+  const creationPolicy = inheritSessionCreationPolicy(
+    {
+      sandbox: requesterRuntime.sandboxRequired ? "required" : undefined,
+      createdActor: requesterRuntime.createdActor,
+    },
+    { type: "agent", id: params.requesterAgentId },
+  );
+  // A fresh child has no stored row yet; admission must include its inherited isolation.
+  const childRuntimeSandboxed =
+    creationPolicy.sandbox === "required" ||
+    resolveSandboxRuntimeStatus({ cfg: params.cfg, sessionKey: childSessionKey }).sandboxed;
   const sandboxError = resolveSpawnSandboxError({
     backend: "subagent",
     requesterSandboxed: requesterRuntime.sandboxed,
-    childSandboxed: childRuntime.sandboxed,
+    childSandboxed: childRuntimeSandboxed,
     sandbox: params.sandboxMode,
   });
   if (sandboxError) {
@@ -218,7 +228,7 @@ export async function resolveSubagentChildPlan(params: {
   const spawnedWorkspaceCwd = spawnedWorkspaceDir
     ? resolveUserPath(spawnedWorkspaceDir)
     : undefined;
-  if (childRuntime.sandboxed && spawnedCwd && spawnedCwd !== spawnedWorkspaceCwd) {
+  if (childRuntimeSandboxed && spawnedCwd && spawnedCwd !== spawnedWorkspaceCwd) {
     return {
       ok: false,
       result: {
@@ -231,11 +241,15 @@ export async function resolveSubagentChildPlan(params: {
   const targetAgentDir = resolveAgentDir(params.cfg, params.targetAgentId);
   const requesterAgentConfig = resolveAgentConfig(params.cfg, params.requesterAgentId);
   const targetAgentConfig = resolveAgentConfig(params.cfg, params.targetAgentId);
-  const callerThinkingRaw = readRequesterThinkingLevel({
-    cfg: params.cfg,
-    requesterInternalKey: params.requesterInternalKey,
-    requesterAgentId: params.requesterAgentId,
-  });
+  // The active turn owns inherited effort; saved preferences may already describe
+  // a later turn and cannot represent one-shot overrides.
+  const callerThinkingRaw =
+    params.ctx.requesterThinkingLevel ??
+    readRequesterThinkingLevel({
+      cfg: params.cfg,
+      requesterInternalKey: params.requesterInternalKey,
+      requesterAgentId: params.requesterAgentId,
+    });
   const inheritedFastMode =
     params.swarmEnabled && params.request.fastMode === undefined
       ? readRequesterFastMode({
@@ -302,7 +316,8 @@ export async function resolveSubagentChildPlan(params: {
       childSessionOrigin,
       incognito,
       childSessionKey,
-      childRuntimeSandboxed: childRuntime.sandboxed,
+      childRuntimeSandboxed,
+      creationPolicy,
       targetAgentDir,
       modelPlan,
       launchAuthorization,

@@ -39,7 +39,7 @@ describe("conversation resolution", () => {
     setActivePluginRegistry(createTestRegistry());
   });
 
-  it("uses the runtime command resolver, plugin default account, and placement hint", () => {
+  it("uses the runtime command resolver and plugin default account", () => {
     registerChannelPlugin({
       ...createChannelTestPluginBase({
         id: "discord",
@@ -48,10 +48,6 @@ describe("conversation resolution", () => {
           defaultAccountId: () => "work",
         },
       }),
-      conversationBindings: {
-        supportsCurrentConversationBinding: true,
-        defaultTopLevelPlacement: "child",
-      },
       bindings: {
         ...createBindingProviderDefaults(),
         resolveCommandConversation: ({ originatingTo }) => {
@@ -68,46 +64,9 @@ describe("conversation resolution", () => {
         originatingTo: "discord:channel:123",
       }),
     ).toEqual({
-      canonical: {
-        channel: "discord",
-        accountId: "work",
-        conversationId: "channel:123",
-      },
-      placementHint: "child",
-      source: "command-provider",
-    });
-  });
-
-  it("can skip placement hints for callers that do not consume them", () => {
-    registerChannelPlugin({
-      ...createChannelTestPluginBase({
-        id: "discord",
-        label: "Discord",
-      }),
-      conversationBindings: {
-        supportsCurrentConversationBinding: true,
-        defaultTopLevelPlacement: "child",
-      },
-      bindings: {
-        ...createBindingProviderDefaults(),
-        resolveCommandConversation: () => ({ conversationId: "channel:123" }),
-      },
-    });
-
-    expect(
-      resolveCommandConversationResolution({
-        cfg: testConfig,
-        channel: "discord",
-        originatingTo: "discord:channel:123",
-        includePlacementHint: false,
-      }),
-    ).toEqual({
-      canonical: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:123",
-      },
-      source: "command-provider",
+      channel: "discord",
+      accountId: "work",
+      conversationId: "channel:123",
     });
   });
 
@@ -129,7 +88,7 @@ describe("conversation resolution", () => {
         channel: "line",
         accountId: "default",
         originatingTo: "line:user:U1234567890abcdef1234567890abcdef",
-      })?.canonical,
+      }),
     ).toEqual({
       channel: "line",
       accountId: "default",
@@ -137,6 +96,49 @@ describe("conversation resolution", () => {
       parentConversationId: "user:U1234567890abcdef1234567890abcdef",
     });
   });
+
+  it.each(["command", "threading"] as const)(
+    "normalizes conversation ids returned by the %s resolver",
+    (resolver) => {
+      const conversation = {
+        conversationId: "  user:U1234567890abcdef1234567890abcdef  ",
+        parentConversationId: "  room:R1234567890abcdef1234567890abcd  ",
+      };
+      registerChannelPlugin({
+        ...createChannelTestPluginBase({ id: "line", label: "LINE" }),
+        ...(resolver === "command"
+          ? {
+              bindings: {
+                ...createBindingProviderDefaults(),
+                resolveCommandConversation: () => conversation,
+              },
+            }
+          : {
+              threading: {
+                resolveFocusedBinding: () => ({
+                  ...conversation,
+                  placement: "current" as const,
+                  labelNoun: "conversation",
+                }),
+              },
+            }),
+      });
+
+      expect(
+        resolveCommandConversationResolution({
+          cfg: testConfig,
+          channel: "line",
+          accountId: " default ",
+          originatingTo: "ignored",
+        }),
+      ).toEqual({
+        channel: "line",
+        accountId: "default",
+        conversationId: "user:U1234567890abcdef1234567890abcdef",
+        parentConversationId: "room:R1234567890abcdef1234567890abcd",
+      });
+    },
+  );
 
   it("falls back from command context to channel-prefixed parent plus explicit thread", () => {
     registerChannelPlugin({
@@ -152,14 +154,11 @@ describe("conversation resolution", () => {
         threadId: "child-thread",
       }),
     ).toEqual({
-      canonical: {
-        channel: "test-chat",
-        accountId: "default",
-        conversationId: "child-thread",
-        parentConversationId: "parent-room",
-      },
+      channel: "test-chat",
+      accountId: "default",
+      conversationId: "child-thread",
+      parentConversationId: "parent-room",
       threadId: "child-thread",
-      source: "command-fallback",
     });
   });
 
@@ -177,7 +176,7 @@ describe("conversation resolution", () => {
         channel: "telegram",
         accountId: "default",
         originatingTo: "-1001234567890:topic:77",
-      })?.canonical,
+      }),
     ).toEqual({
       channel: "telegram",
       accountId: "default",
@@ -199,7 +198,7 @@ describe("conversation resolution", () => {
         channel: "telegram",
         accountId: "default",
         originatingTo: "group:-1001234567890:topic:77",
-      })?.canonical,
+      }),
     ).toEqual({
       channel: "telegram",
       accountId: "default",
@@ -222,7 +221,7 @@ describe("conversation resolution", () => {
         channel: "telegram",
         accountId: "default",
         originatingTo: "tg:group:-1001234567890:topic:77",
-      })?.canonical,
+      }),
     ).toEqual({
       channel: "telegram",
       accountId: "default",
@@ -276,7 +275,7 @@ describe("conversation resolution", () => {
           channel,
           accountId: "default",
           originatingTo,
-        })?.canonical,
+        }),
       ).toEqual({
         channel,
         accountId: "default",
@@ -299,24 +298,17 @@ describe("conversation resolution", () => {
         threadId: 42.9,
       }),
     ).toEqual({
-      canonical: {
-        channel: "test-chat",
-        accountId: "default",
-        conversationId: "42",
-        parentConversationId: "parent-room",
-      },
+      channel: "test-chat",
+      accountId: "default",
+      conversationId: "42",
+      parentConversationId: "parent-room",
       threadId: "42",
-      source: "command-fallback",
     });
   });
 
   it("uses the runtime inbound resolver and preserves provider canonical ids", () => {
     registerChannelPlugin({
       ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
-      conversationBindings: {
-        supportsCurrentConversationBinding: true,
-        defaultTopLevelPlacement: "child",
-      },
       messaging: {
         resolveInboundConversation: ({ conversationId, to }) => {
           const source = (conversationId ?? to ?? "").trim();
@@ -334,23 +326,15 @@ describe("conversation resolution", () => {
         to: "discord:channel:123",
       }),
     ).toEqual({
-      canonical: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:123",
-      },
-      placementHint: "child",
-      source: "inbound-provider",
+      channel: "discord",
+      accountId: "default",
+      conversationId: "channel:123",
     });
   });
 
   it("keeps Matrix room casing when the channel resolver returns a child thread", () => {
     registerChannelPlugin({
       ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
-      conversationBindings: {
-        supportsCurrentConversationBinding: true,
-        defaultTopLevelPlacement: "child",
-      },
       messaging: {
         resolveInboundConversation: ({ threadId, to }) => {
           const parent = to?.trim().replace(/^(?:matrix:)?(?:channel:|room:)/iu, "");
@@ -367,12 +351,13 @@ describe("conversation resolution", () => {
         channel: "matrix",
         to: "room:!Room:Example.org",
         threadId: "$thread-root",
-      })?.canonical,
+      }),
     ).toEqual({
       channel: "matrix",
       accountId: "default",
       conversationId: "$thread-root",
       parentConversationId: "!Room:Example.org",
+      threadId: "$thread-root",
     });
   });
 
@@ -407,14 +392,11 @@ describe("conversation resolution", () => {
         threadId: "child-thread",
       }),
     ).toEqual({
-      canonical: {
-        channel: "test-chat",
-        accountId: "default",
-        conversationId: "child-thread",
-        parentConversationId: "parent-room",
-      },
+      channel: "test-chat",
+      accountId: "default",
+      conversationId: "child-thread",
+      parentConversationId: "parent-room",
       threadId: "child-thread",
-      source: "inbound-fallback",
     });
   });
 
@@ -432,14 +414,11 @@ describe("conversation resolution", () => {
         threadId: 42.9,
       }),
     ).toEqual({
-      canonical: {
-        channel: "test-chat",
-        accountId: "default",
-        conversationId: "42",
-        parentConversationId: "parent-room",
-      },
+      channel: "test-chat",
+      accountId: "default",
+      conversationId: "42",
+      parentConversationId: "parent-room",
       threadId: "42",
-      source: "inbound-fallback",
     });
   });
 

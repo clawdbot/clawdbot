@@ -62,11 +62,11 @@ async function withFlowRegistryTempDir<T>(run: () => Promise<T>): Promise<T> {
   return await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-task-flow-registry-" },
     async () => {
-      resetTaskFlowRegistryForTests();
+      resetTaskFlowRegistryForTests({ persist: false });
       try {
         return await run();
       } finally {
-        resetTaskFlowRegistryForTests();
+        resetTaskFlowRegistryForTests({ persist: false });
       }
     },
   );
@@ -79,7 +79,7 @@ describe("task-flow-registry", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    resetTaskFlowRegistryForTests();
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("creates managed flows and updates them through revision-checked helpers", async () => {

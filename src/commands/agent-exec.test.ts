@@ -4,15 +4,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Readable } from "node:stream";
 import { promisify } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-error.js";
-import {
-  ensureAuthProfileStore,
-  findPersistedAuthProfileCredential,
-  loadAuthProfileStoreForRuntime,
-  resolvePersistedAuthProfileOwnerAgentDir,
-} from "../agents/auth-profiles.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
+import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import { enqueueExecutionIdentityContextAtAdmission } from "../audit/execution-identity-admission.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -22,12 +19,12 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
-  agentExecCommand,
   buildExecRunConfig,
-  classifyAgentExecResult,
   resolveAgentExecPrompt,
   resolveExecBaseConfig,
-} from "./agent-exec.js";
+} from "./agent-exec-input.js";
+import { classifyAgentExecResult } from "./agent-exec-result.js";
+import { agentExecCommand } from "./agent-exec.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const externalTempDirs: string[] = [];
@@ -253,13 +250,18 @@ describe("agent exec command composition", () => {
   it("maps structured thrown timeouts to exit code 2", async () => {
     const { runtime } = createRuntime();
     const timeout = Object.assign(new Error("deadline elapsed"), { name: "TimeoutError" });
-
-    const result = await agentExecCommand("inspect", { json: true }, runtime, {
-      runAgent: vi.fn(async () => {
-        throw timeout;
-      }),
+    const runAgent = vi.fn(async () => {
+      throw timeout;
     });
 
+    const result = await agentExecCommand("inspect", { timeout: "1", json: true }, runtime, {
+      runAgent,
+    });
+
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ timeout: "1" }),
+      expect.any(Object),
+    );
     expect(result).toMatchObject({
       exitCode: 2,
       envelope: { status: "timeout", error: { kind: "timeout" } },
@@ -495,28 +497,67 @@ describe("agent exec command composition", () => {
     await expect(fs.stat(retainedRunStateDir)).resolves.toBeDefined();
   });
 
-  it("applies explicit Code Mode and lean local-model controls to the isolated config", async () => {
-    const { runtime } = createRuntime();
-    let observedConfig: unknown;
-
-    const result = await agentExecCommand(
-      "inspect",
-      { codeMode: "code", localModelLean: true },
-      runtime,
-      {
-        runAgent: vi.fn(async () => {
-          observedConfig = getRuntimeConfigSnapshot();
-          return successResult();
-        }),
-      },
-    );
-
-    expect(result.exitCode).toBe(0);
-    expect(observedConfig).toMatchObject({
-      agents: { defaults: { experimental: { localModelLean: true } } },
-      tools: { codeMode: true },
-    });
-  });
+  it.each([
+    { mode: "direct", configured: true, capability: "preferred", enabled: false },
+    { mode: "code", configured: false, capability: "capable", enabled: true },
+    { mode: "auto", configured: false, capability: "preferred", enabled: true },
+    { mode: "auto", configured: true, capability: "capable", enabled: false },
+  ] as const)(
+    "honors --code-mode $mode over model settings ($capability)",
+    async ({ mode, configured, capability, enabled }) => {
+      const { runtime } = createRuntime();
+      const codeMode = { enabled: configured, maxOutputBytes: 4096 };
+      setRuntimeConfigSnapshot({
+        agents: {
+          defaults: {
+            systemAgent: { agentId: "main" },
+            models: { "test/model-a": { codeMode: configured } },
+          },
+          entries: {
+            main: { models: { "test/model-a": { codeMode: configured } } },
+          },
+        },
+        tools: { codeMode, toolSearch: false },
+      });
+      let visibleTools: string[] | undefined;
+      try {
+        const result = await agentExecCommand(
+          "inspect",
+          { codeMode: mode, model: "test/model-a", localModelLean: true },
+          runtime,
+          {
+            runAgent: vi.fn(async (invocation) => {
+              const config = expectDefined(getRuntimeConfigSnapshot(), "isolated run config");
+              expect(config.tools?.codeMode).toEqual(codeMode);
+              expect(config.agents?.defaults?.experimental?.localModelLean).toBe(true);
+              const surface = createAgentHarnessToolSurfaceRuntimeCore({
+                config,
+                agentId: "main",
+                modelProvider: "test",
+                modelId: "model-a",
+                model: { compat: { codeMode: capability } },
+                codeModeOverride: invocation.codeModeOverride as boolean | "auto" | undefined,
+                modelToolsEnabled: true,
+                executeTool: async () => ({ content: [], details: {} }),
+              });
+              try {
+                visibleTools = surface
+                  .compactTools([createStubTool("read")])
+                  .tools.map((tool) => tool.name);
+              } finally {
+                surface.cleanup();
+              }
+              return successResult();
+            }),
+          },
+        );
+        expect(result.exitCode).toBe(0);
+        expect(visibleTools).toEqual(enabled ? ["exec", "wait"] : ["read"]);
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
 
   it("rejects invalid programmatic Code Mode values", async () => {
     const { runtime } = createRuntime();
@@ -532,6 +573,46 @@ describe("agent exec command composition", () => {
         error: { kind: "exception", message: "--code-mode must be one of direct, auto, code." },
       },
     });
+  });
+
+  it.each([
+    { kind: "exception", status: "error", exitCode: 1, thrown: true },
+    { kind: "timeout", status: "timeout", exitCode: 2, thrown: true },
+    { kind: "context_overflow", status: "error", exitCode: 1, thrown: false },
+  ] as const)("preserves $kind when temporary-state cleanup also fails", async (failure) => {
+    const { runtime, log, error } = createRuntime();
+    let observedStateDir = "";
+    vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("cleanup denied"));
+
+    const result = await agentExecCommand("inspect", { json: true }, runtime, {
+      runAgent: async () => {
+        observedStateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+        if (failure.thrown) {
+          throw Object.assign(new Error("original run failure"), {
+            name: failure.kind === "timeout" ? "TimeoutError" : "Error",
+          });
+        }
+        return {
+          ...successResult("partial answer"),
+          meta: { durationMs: 25, error: { kind: failure.kind, message: "original run failure" } },
+        };
+      },
+    });
+    externalTempDirs.push(observedStateDir);
+
+    expect(result).toMatchObject({
+      exitCode: failure.exitCode,
+      envelope: {
+        status: failure.status,
+        final: failure.thrown ? "" : "partial answer",
+        payloads: failure.thrown ? [] : [{ text: "partial answer" }],
+        error: { kind: failure.kind, message: "original run failure" },
+      },
+    });
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual(result.envelope);
+    expect(error).toHaveBeenCalledWith("original run failure");
+    expect(error).toHaveBeenCalledWith("Agent exec cleanup failed: cleanup denied");
   });
 
   it("classifies cleanup failures before emitting the JSON envelope", async () => {
@@ -563,15 +644,15 @@ describe("agent exec command composition", () => {
     });
   });
 
-  it("threads --cwd to both workspace and tool cwd", async () => {
+  it("threads --cwd and --timeout to the agent", async () => {
     const root = tempDirs.make("openclaw-agent-exec-cwd-");
     const { runtime } = createRuntime();
     const runAgent = vi.fn(async () => successResult());
 
-    await agentExecCommand("inspect", { cwd: root }, runtime, { runAgent });
+    await agentExecCommand("inspect", { cwd: root, timeout: "7" }, runtime, { runAgent });
 
     expect(runAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: root, cwd: root }),
+      expect.objectContaining({ workspaceDir: root, cwd: root, timeout: "7" }),
       expect.any(Object),
     );
   });
@@ -726,196 +807,6 @@ describe("agent exec command composition", () => {
     // never receive a serialized copy of it.
     await expect(fs.readdir(stateDir)).resolves.toEqual(["keep.txt"]);
   });
-
-  it("skips external Codex CLI credentials under --auth-env-only", async () => {
-    const codexHome = tempDirs.make("openclaw-agent-exec-codex-home-");
-    await fs.writeFile(
-      path.join(codexHome, "auth.json"),
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: { access_token: "test-access", refresh_token: "test-refresh" },
-      }),
-      "utf8",
-    );
-    const previousCodexHome = process.env.CODEX_HOME;
-    const previousOpenAiApiKey = process.env.OPENAI_API_KEY;
-    const previousDatabaseUrl = process.env.DATABASE_URL;
-    process.env.CODEX_HOME = codexHome;
-    process.env.OPENAI_API_KEY = "test-openai-key";
-    process.env.DATABASE_URL = "postgres://test.invalid/database";
-    const { runtime } = createRuntime();
-    let profileIds: string[] = [];
-    let runtimeProfileIds: string[] = [];
-    let hostExecApiKey: string | undefined;
-    let hostExecDatabaseUrl: string | undefined;
-    try {
-      const { withHostExecInheritedEnvOmitted } = await import("../infra/host-env-security.js");
-      await withHostExecInheritedEnvOmitted(["DATABASE_URL"], () =>
-        agentExecCommand("inspect", { authEnvOnly: true }, runtime, {
-          runAgent: vi.fn(async () => {
-            profileIds = Object.keys(
-              ensureAuthProfileStore(undefined, {
-                allowKeychainPrompt: false,
-                externalCliProviderIds: ["openai"],
-              }).profiles,
-            );
-            runtimeProfileIds = Object.keys(
-              loadAuthProfileStoreForRuntime(undefined, {
-                allowKeychainPrompt: false,
-                externalCliProviderIds: ["openai"],
-              }).profiles,
-            );
-            const { sanitizeHostExecEnv } = await import("../infra/host-env-security.js");
-            const hostExecEnv = sanitizeHostExecEnv({ baseEnv: process.env });
-            hostExecApiKey = hostExecEnv.OPENAI_API_KEY;
-            hostExecDatabaseUrl = hostExecEnv.DATABASE_URL;
-            return successResult();
-          }),
-        }),
-      );
-    } finally {
-      if (previousCodexHome === undefined) {
-        delete process.env.CODEX_HOME;
-      } else {
-        process.env.CODEX_HOME = previousCodexHome;
-      }
-      if (previousOpenAiApiKey === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previousOpenAiApiKey;
-      }
-      if (previousDatabaseUrl === undefined) {
-        delete process.env.DATABASE_URL;
-      } else {
-        process.env.DATABASE_URL = previousDatabaseUrl;
-      }
-    }
-
-    expect(profileIds).toEqual([]);
-    expect(runtimeProfileIds).toEqual([]);
-    expect(hostExecApiKey).toBeUndefined();
-    expect(hostExecDatabaseUrl).toBeUndefined();
-  });
-
-  it("reads stored credentials from the configured agent directory", async () => {
-    const stateDir = tempDirs.make("openclaw-agent-exec-cfg-auth-");
-    const customAgentDir = path.join(stateDir, "custom-home");
-    await fs.mkdir(customAgentDir, { recursive: true });
-    const seedPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(
-      seedPath,
-      JSON.stringify({
-        agents: { entries: { main: { agentDir: customAgentDir } } },
-      }),
-      "utf8",
-    );
-    const { saveAuthProfileStore } = await import("../agents/auth-profiles.js");
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: { "openai:stored": { type: "api_key", provider: "openai", key: "test-key" } },
-      },
-      customAgentDir,
-    );
-    const { runtime } = createRuntime();
-    let scopedProfileIds: string[] = [];
-
-    await agentExecCommand("inspect", { config: seedPath }, runtime, {
-      runAgent: vi.fn(async () => {
-        scopedProfileIds = Object.keys(loadAuthProfileStoreForRuntime()?.profiles ?? {});
-        return successResult();
-      }),
-    });
-
-    // The run config strips agentDir to keep run state ephemeral, but credential
-    // ownership must still follow the operator's configured directory.
-    expect(scopedProfileIds).toContain("openai:stored");
-  });
-
-  it("blocks direct persisted credential reads under --auth-env-only", async () => {
-    const normalStateDir = tempDirs.make("openclaw-agent-exec-hidden-auth-");
-    const normalAgentDir = path.join(normalStateDir, "agents", "main", "agent");
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = normalStateDir;
-    const { saveAuthProfileStore } = await import("../agents/auth-profiles.js");
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openai:stored": { type: "api_key", provider: "openai", key: "test-key" },
-        },
-      },
-      normalAgentDir,
-    );
-    const { runtime } = createRuntime();
-    let persistedCredential: unknown;
-    let ownerAgentDir: string | undefined;
-    try {
-      await agentExecCommand("inspect", { authEnvOnly: true }, runtime, {
-        runAgent: vi.fn(async () => {
-          persistedCredential = findPersistedAuthProfileCredential({
-            agentDir: normalAgentDir,
-            profileId: "openai:stored",
-          });
-          ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
-            agentDir: normalAgentDir,
-            profileId: "openai:stored",
-          });
-          return successResult();
-        }),
-      });
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
-
-    expect(persistedCredential).toBeUndefined();
-    expect(ownerAgentDir).toBeUndefined();
-  });
-
-  it("uses the normal stored auth profile when auth-env-only is disabled", async () => {
-    const normalStateDir = tempDirs.make("openclaw-agent-exec-normal-state-");
-    const normalAgentDir = path.join(normalStateDir, "agents", "main", "agent");
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = normalStateDir;
-    const { saveAuthProfileStore } = await import("../agents/auth-profiles.js");
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "openai:stored": { type: "api_key", provider: "openai", key: "test-key" },
-        },
-      },
-      normalAgentDir,
-    );
-    const { runtime } = createRuntime();
-    let profileIds: string[] = [];
-    try {
-      await agentExecCommand("inspect", { authEnvOnly: false }, runtime, {
-        runAgent: vi.fn(async () => {
-          expect(process.env.OPENCLAW_STATE_DIR).not.toBe(normalStateDir);
-          profileIds = Object.keys(
-            ensureAuthProfileStore(undefined, {
-              allowKeychainPrompt: false,
-              syncExternalCli: false,
-            }).profiles,
-          );
-          return successResult();
-        }),
-      });
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-    }
-
-    expect(profileIds).toContain("openai:stored");
-  });
 });
 
 describe("agent exec run config layering", () => {
@@ -1035,14 +926,14 @@ describe("agent exec run config layering", () => {
     expect(runtime?.type === "acp" ? runtime.acp?.agent : undefined).toBe("codex");
   });
 
-  it("lets explicit flags outrank the resolved config", () => {
+  it("keeps Code Mode limits while enabling the lean local-model flag", () => {
     const config = buildExecRunConfig({
-      base: { tools: { codeMode: { enabled: true } } },
+      base: { tools: { codeMode: { enabled: true, maxOutputBytes: 4096 } } },
       cwd: "/run/here",
-      opts: { codeMode: "direct", localModelLean: true },
+      opts: { localModelLean: true },
     });
 
-    expect(config.tools?.codeMode).toBe(false);
+    expect(config.tools?.codeMode).toEqual({ enabled: true, maxOutputBytes: 4096 });
     expect(config.agents?.defaults?.experimental?.localModelLean).toBe(true);
   });
 });

@@ -6,7 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -14,6 +14,7 @@ import {
 } from "../../../infra/diagnostic-events.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { registerDiagnosticTracePropagationBridge } from "../../../infra/diagnostic-trace-propagation.js";
+import { flushDiagnosticsTimeline } from "../../../infra/diagnostics-timeline.js";
 import {
   resetDiagnosticRunActivityForTest,
   startDiagnosticRunActivityTracking,
@@ -26,7 +27,7 @@ import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtur
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 
 async function collectModelCallEvents(run: () => Promise<void>): Promise<DiagnosticEventPayload[]> {
   // Diagnostics are emitted asynchronously; collect only public model-call
@@ -93,6 +94,7 @@ async function collectProviderTimelineEvents(run: () => Promise<void>) {
     },
     run,
   );
+  flushDiagnosticsTimeline();
   return readFileSync(timelinePath, "utf8")
     .trim()
     .split("\n")
@@ -110,6 +112,8 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
   });
 
   afterEach(() => {
+    flushDiagnosticsTimeline();
+    tempDirs.cleanup();
     resetDiagnosticEventsForTest();
     resetGlobalHookRunner();
     resetDiagnosticRunActivityForTest();
@@ -117,61 +121,67 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
     vi.useRealTimers();
   });
 
-  it("emits one successful provider timeline event for result and iterator completion", async () => {
-    let now = Date.parse("2026-07-09T18:30:00.000Z");
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    async function* stream() {
-      yield { type: "text", text: "ok" };
-    }
-    const originalStream = stream() as unknown as AsyncIterable<unknown> & {
-      result: () => Promise<string>;
-    };
-    originalStream.result = async () => {
-      now += 125;
-      return "kept";
-    };
-    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
-      (() => originalStream) as unknown as StreamFn,
-      {
+  it.each(["stop", "error"])(
+    "emits one %s provider timeline event for result and iterator completion",
+    async (stopReason) => {
+      let now = Date.parse("2026-07-09T18:30:00.000Z");
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const assistant = { role: "assistant", stopReason, errorMessage: "request timed out" };
+      async function* stream() {
+        yield stopReason === "error"
+          ? { type: "error", error: assistant }
+          : { type: "done", message: assistant };
+      }
+      const originalStream = stream() as unknown as AsyncIterable<unknown> & {
+        result: () => Promise<typeof assistant>;
+      };
+      originalStream.result = async () => {
+        now += 125;
+        return assistant;
+      };
+      const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+        (() => originalStream) as unknown as StreamFn,
+        {
+          runId: "run-timeline-success",
+          provider: "openai",
+          model: "gpt-5.5",
+          api: "openai-responses",
+          transport: "http",
+          trace: createDiagnosticTraceContext(),
+          nextCallId: () => "call-timeline-success",
+        },
+      );
+
+      const events = await collectProviderTimelineEvents(async () => {
+        const returned = wrapped(
+          {} as never,
+          {} as never,
+          {} as never,
+        ) as unknown as typeof originalStream;
+        await returned.result();
+        await drain(returned);
+      });
+
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        type: "provider.request",
+        name: "provider.request",
+        timestamp: "2026-07-09T18:30:00.000Z",
         runId: "run-timeline-success",
+        spanId: "call-timeline-success",
+        durationMs: 125,
         provider: "openai",
-        model: "gpt-5.5",
-        api: "openai-responses",
-        transport: "http",
-        trace: createDiagnosticTraceContext(),
-        nextCallId: () => "call-timeline-success",
-      },
-    );
-
-    const events = await collectProviderTimelineEvents(async () => {
-      const returned = wrapped(
-        {} as never,
-        {} as never,
-        {} as never,
-      ) as unknown as typeof originalStream;
-      await returned.result();
-      await drain(returned);
-    });
-
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      type: "provider.request",
-      name: "provider.request",
-      timestamp: "2026-07-09T18:30:00.000Z",
-      runId: "run-timeline-success",
-      spanId: "call-timeline-success",
-      durationMs: 125,
-      provider: "openai",
-      operation: "openai-responses",
-      ok: true,
-      attributes: {
-        model: "gpt-5.5",
-        api: "openai-responses",
-        transport: "http",
-      },
-    });
-    expect(events[0]?.status).toBeUndefined();
-  });
+        operation: "openai-responses",
+        ok: stopReason === "stop",
+        attributes: {
+          model: "gpt-5.5",
+          api: "openai-responses",
+          transport: "http",
+        },
+      });
+      expect(events[0]?.status).toBeUndefined();
+    },
+  );
 
   it("records legacy response status without inferring provider acceptance", async () => {
     const originalOnResponse = vi.fn(async () => undefined);
@@ -526,86 +536,96 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents lifecycle", () => {
     expectNumberField(memory, "arrayBuffersBytes");
   });
 
-  it("fires frozen sanitized model-call plugin hooks", async () => {
-    const started = vi.fn();
-    const ended = vi.fn();
-    const { registry } = createHookRunnerWithRegistry([
-      { hookName: "model_call_started", handler: started },
-      { hookName: "model_call_ended", handler: ended },
-    ]);
-    initializeGlobalHookRunner(registry);
-    const secretChunk = "secret response with Bearer sk-test-secret-value";
+  it.each(["stop", "error"])(
+    "fires frozen sanitized model-call plugin hooks for %s",
+    async (stopReason) => {
+      const started = vi.fn();
+      const ended = vi.fn();
+      const { registry } = createHookRunnerWithRegistry([
+        { hookName: "model_call_started", handler: started },
+        { hookName: "model_call_ended", handler: ended },
+      ]);
+      initializeGlobalHookRunner(registry);
+      const secretChunk = "secret response with Bearer sk-test-secret-value";
 
-    async function* stream() {
-      yield { type: "text", text: secretChunk };
-    }
-    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
-      (() => stream()) as unknown as StreamFn,
-      {
-        runId: "run-1",
-        sessionKey: "session-key",
-        sessionId: "session-id",
-        provider: "openai",
-        model: "gpt-5.4",
-        api: "openai-responses",
-        transport: "http",
-        contextTokenBudget: 150_000,
-        contextWindowSource: "modelsConfig",
-        contextWindowReferenceTokens: 200_000,
-        trace: createDiagnosticTraceContext(),
-        nextCallId: () => "call-hook",
-      },
-    );
+      async function* stream() {
+        yield { type: "text", text: secretChunk };
+        if (stopReason === "error") {
+          yield {
+            type: "error",
+            error: { role: "assistant", stopReason, errorMessage: secretChunk },
+          };
+        }
+      }
+      const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+        (() => stream()) as unknown as StreamFn,
+        {
+          runId: "run-1",
+          sessionKey: "session-key",
+          sessionId: "session-id",
+          provider: "openai",
+          model: "gpt-5.4",
+          api: "openai-responses",
+          transport: "http",
+          contextTokenBudget: 150_000,
+          contextWindowSource: "modelsConfig",
+          contextWindowReferenceTokens: 200_000,
+          trace: createDiagnosticTraceContext(),
+          nextCallId: () => "call-hook",
+        },
+      );
 
-    const events = await collectModelCallEvents(async () => {
-      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
-    });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+      const events = await collectModelCallEvents(async () => {
+        await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
-    expect(events.map((event) => event.type)).toEqual([
-      "model.call.started",
-      "model.call.completed",
-    ]);
-    const startedEvent = requireMockRecordArg(started, 0, 0, "started hook event");
-    expect(startedEvent.runId).toBe("run-1");
-    expect(startedEvent.callId).toBe("call-hook");
-    expect(startedEvent.sessionKey).toBe("session-key");
-    expect(startedEvent.sessionId).toBe("session-id");
-    expect(startedEvent.provider).toBe("openai");
-    expect(startedEvent.model).toBe("gpt-5.4");
-    expect(startedEvent.api).toBe("openai-responses");
-    expect(startedEvent.transport).toBe("http");
-    expect(startedEvent.contextTokenBudget).toBe(150_000);
-    expect(startedEvent.contextWindowSource).toBe("modelsConfig");
-    expect(startedEvent.contextWindowReferenceTokens).toBe(200_000);
-    const startedCtx = requireMockRecordArg(started, 0, 1, "started hook context");
-    expect(startedCtx.runId).toBe("run-1");
-    expect(startedCtx.sessionKey).toBe("session-key");
-    expect(startedCtx.sessionId).toBe("session-id");
-    expect(startedCtx.modelProviderId).toBe("openai");
-    expect(startedCtx.modelId).toBe("gpt-5.4");
-    expect(startedCtx.contextTokenBudget).toBe(150_000);
-    expect(startedCtx.contextWindowSource).toBe("modelsConfig");
-    expect(startedCtx.contextWindowReferenceTokens).toBe(200_000);
-    const endedEvent = requireMockRecordArg(ended, 0, 0, "ended hook event");
-    expect(endedEvent.runId).toBe("run-1");
-    expect(endedEvent.callId).toBe("call-hook");
-    expect(endedEvent.outcome).toBe("completed");
-    expect(endedEvent.contextTokenBudget).toBe(150_000);
-    expect(endedEvent.contextWindowSource).toBe("modelsConfig");
-    expect(endedEvent.contextWindowReferenceTokens).toBe(200_000);
-    expectNumberField(endedEvent, "durationMs");
-    expectNumberField(endedEvent, "responseStreamBytes");
-    expectNumberField(endedEvent, "timeToFirstByteMs");
-    const endedCtx = requireMockRecordArg(ended, 0, 1, "ended hook context");
-    expect(endedCtx.runId).toBe("run-1");
-    expect(Object.isFrozen(startedEvent)).toBe(true);
-    expect(Object.isFrozen(startedCtx)).toBe(true);
-    expect(Object.isFrozen(startedCtx.trace)).toBe(true);
-    expect(JSON.stringify([started.mock.calls, ended.mock.calls])).not.toContain(secretChunk);
-  });
+      expect(events.map((event) => event.type)).toEqual([
+        "model.call.started",
+        stopReason === "error" ? "model.call.error" : "model.call.completed",
+      ]);
+      const startedEvent = requireMockRecordArg(started, 0, 0, "started hook event");
+      expect(startedEvent.runId).toBe("run-1");
+      expect(startedEvent.callId).toBe("call-hook");
+      expect(startedEvent.sessionKey).toBe("session-key");
+      expect(startedEvent.sessionId).toBe("session-id");
+      expect(startedEvent.provider).toBe("openai");
+      expect(startedEvent.model).toBe("gpt-5.4");
+      expect(startedEvent.api).toBe("openai-responses");
+      expect(startedEvent.transport).toBe("http");
+      expect(startedEvent.contextTokenBudget).toBe(150_000);
+      expect(startedEvent.contextWindowSource).toBe("modelsConfig");
+      expect(startedEvent.contextWindowReferenceTokens).toBe(200_000);
+      const startedCtx = requireMockRecordArg(started, 0, 1, "started hook context");
+      expect(startedCtx.runId).toBe("run-1");
+      expect(startedCtx.sessionKey).toBe("session-key");
+      expect(startedCtx.sessionId).toBe("session-id");
+      expect(startedCtx.modelProviderId).toBe("openai");
+      expect(startedCtx.modelId).toBe("gpt-5.4");
+      expect(startedCtx.contextTokenBudget).toBe(150_000);
+      expect(startedCtx.contextWindowSource).toBe("modelsConfig");
+      expect(startedCtx.contextWindowReferenceTokens).toBe(200_000);
+      const endedEvent = requireMockRecordArg(ended, 0, 0, "ended hook event");
+      expect(endedEvent.runId).toBe("run-1");
+      expect(endedEvent.callId).toBe("call-hook");
+      expect(endedEvent.outcome).toBe(stopReason === "error" ? "error" : "completed");
+      expect(ended).toHaveBeenCalledOnce();
+      expect(endedEvent.contextTokenBudget).toBe(150_000);
+      expect(endedEvent.contextWindowSource).toBe("modelsConfig");
+      expect(endedEvent.contextWindowReferenceTokens).toBe(200_000);
+      expectNumberField(endedEvent, "durationMs");
+      expectNumberField(endedEvent, "responseStreamBytes");
+      expectNumberField(endedEvent, "timeToFirstByteMs");
+      const endedCtx = requireMockRecordArg(ended, 0, 1, "ended hook context");
+      expect(endedCtx.runId).toBe("run-1");
+      expect(Object.isFrozen(startedEvent)).toBe(true);
+      expect(Object.isFrozen(startedCtx)).toBe(true);
+      expect(Object.isFrozen(startedCtx.trace)).toBe(true);
+      expect(JSON.stringify([started.mock.calls, ended.mock.calls])).not.toContain(secretChunk);
+    },
+  );
 
   it("keeps core model-call diagnostics while suppressing finalization plugin hooks", async () => {
     const started = vi.fn();

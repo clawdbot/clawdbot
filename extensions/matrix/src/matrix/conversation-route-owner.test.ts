@@ -76,6 +76,53 @@ describe("resolveMatrixConversationRouteOwner", () => {
     ).toEqual({ kind: "agent", agentId: "finance" });
   });
 
+  it.each([
+    {
+      targetSessionKey: "global",
+      metadata: { agentId: "finance" },
+      expected: { kind: "agent", agentId: "finance" },
+    },
+    {
+      targetSessionKey: "plugin-thread-1",
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "demo-plugin",
+        pluginRoot: "/tmp/demo-plugin",
+      },
+      expected: { kind: "plugin", pluginId: "demo-plugin", fallbackAgentId: "main" },
+    },
+  ])(
+    "reports the recorded owner for $targetSessionKey",
+    ({ targetSessionKey, metadata, expected }) => {
+      registerSessionBindingAdapter({
+        ...adapter,
+        resolveByConversation: (conversation) => ({
+          bindingId: "binding-room",
+          targetSessionKey,
+          targetKind: "session",
+          conversation,
+          status: "active",
+          boundAt: 1,
+          metadata,
+        }),
+      });
+
+      expect(
+        resolveMatrixConversationRouteOwner({
+          cfg: {
+            agents: {
+              ownership: "explicit",
+              entries: { main: { default: true }, finance: {} },
+            },
+            bindings: [{ agentId: "main", match: { channel: "matrix", accountId: "default" } }],
+          },
+          accountId: "default",
+          conversation: { kind: "channel", peerId: "!room:example.org" },
+        }),
+      ).toEqual(expected);
+    },
+  );
+
   it("reports temporary binding-store unavailability", () => {
     unregisterSessionBindingAdapter({ channel: "matrix", accountId: "default", adapter });
 

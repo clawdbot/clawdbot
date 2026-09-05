@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildControlUiSessionPath } from "./index.js";
-import { parseControlUiSessionPath, type ControlUiSessionPathTarget } from "./parse.js";
+import {
+  matchControlUiCatalogSharePath,
+  parseControlUiSessionPath,
+  type ControlUiSessionPathTarget,
+} from "./parse.js";
 
 type ParseCase = {
   name: string;
@@ -151,6 +155,15 @@ describe("parseControlUiSessionPath", () => {
         { namespace: "chat", kind: "main", agentId: "research" },
       ],
       [
+        { namespace: "dashboard", sessionKey: "agent:research:global", basePath: "/control" },
+        {
+          namespace: "dashboard",
+          kind: "literal",
+          agentId: "research",
+          sessionKey: "agent:research:global",
+        },
+      ],
+      [
         { namespace: "chat", sessionKey: "agent:main:telegram:group:12345" },
         {
           namespace: "chat",
@@ -187,6 +200,7 @@ describe("parseControlUiSessionPath", () => {
 
   it.each([
     ["agent:main:main", "/chat/main", "main"],
+    ["agent:research:global", "/chat/research/~key/global", "literal"],
     ["agent:main:standup", "/chat/main/standup", "literal"],
     ["agent:main:sessions", "/chat/main/~key/sessions", "literal"],
     ["agent:main:12345678", "/chat/main/~key/12345678", "literal"],
@@ -282,4 +296,60 @@ describe("parseControlUiSessionPath", () => {
 
     expect(parseControlUiSessionPath(new URL(url).pathname, "/control")).toEqual(expected);
   });
+});
+
+describe("matchControlUiCatalogSharePath", () => {
+  it.each([
+    ["/beam/0123456789ab", undefined, "0123456789ab"],
+    ["/beam/fix-upload-flow-0123456789ab", undefined, "0123456789ab"],
+    ["/beam/old-title-0123456789ab", undefined, "0123456789ab"],
+    [
+      "/openclaw/beam/fix-upload-flow-0123456789abcdef0123456789abcdef",
+      "/openclaw",
+      "0123456789abcdef0123456789abcdef",
+    ],
+    [
+      "/openclaw/beam/0123456789abcdef0123456789abcdef",
+      "/openclaw",
+      "0123456789abcdef0123456789abcdef",
+    ],
+  ] as const)("parses %s", (pathname, basePath, shortId) => {
+    expect(matchControlUiCatalogSharePath({ pathname, basePath })).toEqual({
+      routeSegment: "beam",
+      shortId,
+    });
+  });
+
+  it.each(["/beam/0123456789AB", "/beam/0123456789abcdef0123456789abcdef0", "/beam/nothexvaluezz"])(
+    "parses the route owner before descriptor validation for %s",
+    (pathname) => {
+      expect(matchControlUiCatalogSharePath({ pathname })).toEqual({
+        routeSegment: "beam",
+        shortId: pathname.slice("/beam/".length),
+      });
+    },
+  );
+
+  it.each([
+    "/chat/0123456789ab",
+    "/focus/0123456789ab",
+    "/plugin/0123456789ab",
+    "/settings/0123456789ab",
+    "/ui/chat",
+    "/ui/config",
+    "/concepts/agent-workspace",
+    "/control/avatar/main",
+    "/beam/0123456789a",
+    "/beam/not-hex-value",
+    "/beam/0123456789ab/extra",
+  ])("rejects ordinary, resource, and implausible share paths for %s", (pathname) => {
+    expect(matchControlUiCatalogSharePath({ pathname })).toBeNull();
+  });
+
+  it.each(["/other/0123456789ab", "/beam/0123456789ab", "/wrong/openclaw/beam/0123456789ab"])(
+    "ignores unrelated or outside-base path %s",
+    (pathname) => {
+      expect(matchControlUiCatalogSharePath({ pathname, basePath: "/openclaw" })).toBeNull();
+    },
+  );
 });

@@ -17,9 +17,10 @@ OpenClaw iOS is the officially released iPhone app. It connects to an OpenClaw G
 ## Exact Xcode Manual Deploy Flow
 
 1. Prereqs:
-   - Xcode 26.x
+   - Xcode 26.x or newer with the iOS and watchOS SDKs
    - `pnpm`
    - `xcodegen`
+   - The pinned [Watch Rust toolchain](#watch-companion-build-requirements)
    - Apple Development signing set up in Xcode
 2. From repo root:
 
@@ -43,6 +44,34 @@ Generate without opening Xcode:
 pnpm ios:gen
 ```
 
+### Watch companion build requirements
+
+The normal `OpenClaw` iPhone scheme embeds the Watch app, so even an iPhone-only
+build compiles the native Watch WebRTC library. Install the official
+[rustup toolchain manager](https://rustup.rs/), then install the pinned compiler
+and standard-library sources:
+
+```bash
+rustup toolchain install nightly-2026-08-31 --profile minimal --component rust-src
+```
+
+`apps/shared/OpenClawWatchRTC/build.sh` uses that exact toolchain with
+`cargo --locked` and `-Z build-std`; it never installs a toolchain or changes the
+global default. Select Xcode through its command-line-tool setting or
+`DEVELOPER_DIR`. The Watch device and simulator slices were verified with the
+watchOS 27 SDK; the app's deployment target remains watchOS 11. See the
+[native Watch module README](../shared/OpenClawWatchRTC/README.md) for supported
+architectures, build output locations, and dependency notices.
+
+Run `OpenClawWatchTests` through the `OpenClawWatchApp` scheme for configuration,
+call lifecycle, and native codec coverage. These tests and signed simulator
+builds do not prove a real Watch microphone/speaker route, background audio,
+wrist-down behavior, Wi-Fi/cellular handoff, or multi-hour battery endurance.
+A native macOS provider roundtrip is interoperability evidence, not Watch
+hardware proof. Validate those behaviors separately through a physical Watch's
+normal **Enable Standalone Voice → Talk on Watch → Start** flow; see
+[Watch setup and limits](https://docs.openclaw.ai/platforms/ios#standalone-voice).
+
 ## App Store Release Flow
 
 Prereqs:
@@ -50,7 +79,8 @@ Prereqs:
 - Xcode 26.x
 - `pnpm`
 - `xcodegen`
-- `fastlane`
+- The pinned [Watch Rust toolchain](#watch-companion-build-requirements)
+- Ruby 3.4.10 and Bundler 2.6.9 (`fastlane` is installed from `apps/ios/Gemfile.lock`)
 - Apple account signed into Xcode for the canonical OpenClaw team (`FWJYW4S8P8`)
 - Fastlane Apple Developer Portal session for the canonical OpenClaw team when creating bundle IDs or enabling services
 - Release-owner access to the encrypted signing repo password (`MATCH_PASSWORD`)
@@ -71,14 +101,14 @@ Release behavior:
 - App Review submission is manual in App Store Connect. The release lane uploads a build, public metadata, and the App Review PDF attachment, but it does not submit for review or upload the App Store Connect `Notes` field.
 - Before submitting a HealthKit-enabled build, the release owner must update the public privacy policy and App Store Connect privacy details for the Health & Fitness aggregates shared with the user's configured AI provider.
 - The release flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
-- Release uploads derive the gateway, App Store revision, and build from the canonical repository version plus live App Store Connect state.
+- Release uploads derive the gateway from `apps/mobile/version.json` and the App Store revision/build from live App Store Connect state.
 - `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source.
 - The gateway version must use CalVer like `2026.7.2`.
 - Gateway `2026.7.2`, App Store revision `1` becomes:
   - `CFBundleShortVersionString = 2026.7.21`
   - `CFBundleVersion = next App Store Connect build number for 2026.7.21`
 - Each App Store version has its own build sequence beginning at `1`.
-- Local defaults and release planning derive the gateway from root `package.json`; App Store Connect versions and build uploads determine the release revision and build.
+- Local defaults and release planning derive the gateway from `apps/mobile/version.json`; App Store Connect versions and build uploads determine the release revision and build.
 - See `apps/ios/VERSIONING.md` for the full workflow.
 
 Relay behavior for App Store builds:
@@ -120,14 +150,15 @@ pnpm ios:release:archive -- --version 2026.7.2 --revision 1
 This command is for local archive validation only. It is not a fallback upload
 path after `pnpm ios:release:upload` fails.
 
-Inspect and cut the deterministic release plan:
+Prepare and finalize the shared mobile release:
 
 ```bash
-pnpm ios:release:plan -- --json
-pnpm ios:release:cut
+node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
+pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
+node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 ```
 
-Review and commit the changelog cut, then archive and upload to App Store Connect:
+Review all five cutter outputs, commit every changed output, then archive and upload to App Store Connect:
 
 ```bash
 pnpm ios:release:upload
@@ -144,7 +175,7 @@ Use this when a clone is missing local iOS release setup and you want the shorte
 
 ```bash
 cd apps/ios
-fastlane ios auth_check
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios auth_check
 ```
 
 2. If auth is missing, bootstrap it once on this Mac:
@@ -168,14 +199,15 @@ This should create `apps/ios/fastlane/.env` with non-secret App Store Connect va
 
    Use `pnpm ios:release:signing:setup` for the initial portal setup, then `MATCH_PASSWORD=... pnpm ios:release:signing:sync:push` to publish encrypted Fastlane match assets to the shared private repo.
 
-4. Inspect the plan and cut the exact encoded-version changelog section:
+4. Prepare the shared release, capture the plan, and finalize all five release artifacts:
 
 ```bash
-pnpm ios:release:plan -- --json
-pnpm ios:release:cut
+node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
+pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
+node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 ```
 
-5. Review and commit `apps/ios/CHANGELOG.md`, then upload:
+5. Review all five cutter outputs, commit every changed output, then upload:
 
 ```bash
 pnpm ios:release:upload
@@ -207,9 +239,9 @@ pnpm ios:release:upload
 
 ## iOS Versioning Workflow
 
-- Release gateway version: canonical root version, with an optional checked `--version` override
+- Release gateway version: `apps/mobile/version.json`, with an optional checked `--version` override
 - App Store revision and build: deterministic App Store Connect plan
-- Local default version: root `package.json`
+- Local default version: `apps/mobile/version.json`
 - iOS-only changelog: `apps/ios/CHANGELOG.md`
 - Generated local artifacts:
   - `apps/ios/build/Version.xcconfig`
@@ -220,8 +252,9 @@ pnpm ios:release:upload
 ```bash
 pnpm ios:version
 pnpm ios:version:check
-pnpm ios:release:plan -- --json
-pnpm ios:release:cut
+node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
+pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
+node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 pnpm ios:filelist:gen
 ```
 
@@ -229,18 +262,18 @@ Recommended flow:
 
 ### App Store Connect iteration on an existing train
 
-1. Run `pnpm ios:release:plan -- --json`; the editable revision is selected automatically.
-2. Run `pnpm ios:release:cut` when new `## Unreleased` notes need to join that revision.
-3. Review and commit `apps/ios/CHANGELOG.md`.
+1. Run the shared mobile cutter `--prepare` phase for the selected gateway.
+2. Capture `pnpm ios:release:plan -- --json`, then run the cutter `--finalize` phase.
+3. Review all five cutter outputs and commit every changed output.
 4. Run `pnpm ios:release:upload`.
 5. Failed, processing, and complete Apple-visible uploads all advance the next numeric build.
 
 ### Starting the next App Store revision
 
-1. Confirm the target gateway version in root `package.json`.
+1. Select the target gateway version for `apps/mobile/version.json`.
 2. Add release notes under `## Unreleased`.
-3. Run `pnpm ios:release:plan -- --json`; released history determines the next revision.
-4. Run `pnpm ios:release:cut`, review and commit the changelog, then run `pnpm ios:release:upload`.
+3. Run the shared cutter `--prepare` phase and capture the live iOS plan; released history determines the next revision.
+4. Run the cutter `--finalize` phase, review all five outputs, commit every changed output, then run `pnpm ios:release:upload`.
 5. Keep rerunning the planner-driven upload until the release candidate is ready.
 
 See `apps/ios/VERSIONING.md` for the detailed spec.
@@ -297,8 +330,10 @@ gateway can only send pushes for iOS devices that paired with that gateway.
 - Pairing via QR or setup code flow (`/pair qr` or `/pair`, then `/pair approve` in Telegram).
 - Gateway connection via discovery or manual host/port with TLS fingerprint trust prompt.
 - One Chat surface for text, realtime voice, dictation, and voice notes through the operator gateway session.
+- Two distinct Watch voice paths: iPhone-relayed **Talk to Claw**, and opt-in **Talk on Watch** with native UDP media and Gateway-owned agent/tool control. Physical-Watch voice and endurance validation remain separate from simulator coverage.
 - iOS node commands in foreground: camera snap/clip, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
 - Authenticated background `node.presence.alive` beacons that update gateway last-seen metadata when the app moves between foreground and background, without treating suspended sockets as connected.
+- Connected nodes publish CPU count and memory immediately and every 60 seconds through `node.host.stats`, supplying the Control UI Devices meters. iOS reports neither load averages nor disk capacity (Apple's required-reason API policy does not allow sending disk-space values off-device). Reporting stops when the node route disconnects or changes, and iOS suspension can pause updates.
 - Share extension deep-link forwarding into the connected gateway session.
 
 ## Computer Use Relationship

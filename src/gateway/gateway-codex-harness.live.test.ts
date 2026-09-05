@@ -1,13 +1,27 @@
 // Codex harness live gateway tests exercise real CLI backend sessions, cron probes, media probes, and command surfaces.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer } from "node:net";
-import os from "node:os";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { bundledPluginFileAt } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
-import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  EventFrame,
+  SessionsCatalogListResult,
+  TasksListResult,
+  ToolsInvokeResult,
+} from "../../packages/gateway-protocol/src/index.js";
+import {
+  createCodexHarnessLiveInstance,
+  createCodexHarnessEventCapture,
+  readCodexNativeUsageSnapshots,
+  CODEX_HARNESS_CONTEXT_EVENT_PREFIXES,
+  type CapturedAgentEvent,
+  type CodexNativeUsageSnapshot,
+} from "../../test/helpers/gateway-codex-harness.js";
 import {
   renderBitmapTextPngBase64,
   renderSolidColorPngBase64,
@@ -19,11 +33,11 @@ import {
 } from "../../test/helpers/openai-long-context-live.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ContextEngine } from "../context-engine/types.js";
+import type { AgentEventPayload } from "../infra/agent-events.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { pluginStateEntriesInKeyRange } from "../plugin-state/plugin-state-store.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
-import { setTestEnvValue } from "../test-utils/env.js";
-import type { CallGatewayOptions } from "./call.js";
 import type { GatewayClient } from "./client.js";
 import {
   connectTestGatewayClient,
@@ -50,7 +64,6 @@ import {
   runOpenClawCliJson,
   type CronListJob,
 } from "./live-agent-probes.js";
-import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
 
 const LIVE = isLiveTestEnabled();
 const CODEX_HARNESS_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS);
@@ -174,6 +187,11 @@ const describeDisabled = LIVE && !CODEX_HARNESS_LIVE ? describe : describe.skip;
 const CODEX_HARNESS_TIMEOUT_MS = CODEX_HARNESS_RESTART_STRESS ? 3_600_000 : 900_000;
 const DEFAULT_CODEX_MODEL = "openai/gpt-5.6-luna";
 const GATEWAY_CONNECT_TIMEOUT_MS = 60_000;
+// Request-local tool observation requires a negotiated capability, even for admin clients.
+const CODEX_HARNESS_CLIENT_CAPS = [
+  GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+  ...(CODEX_HARNESS_MULTI_SESSION_PROBE ? [GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS] : []),
+];
 const CODEX_HARNESS_REASONING_EFFORTS = [
   "minimal",
   "low",
@@ -193,26 +211,9 @@ const CODEX_HARNESS_SUPPORTED_EFFORTS = new Map<string, readonly string[]>([
   ["gpt-5.2", ["low", "medium", "high", "xhigh"]],
 ]);
 
-type CapturedAgentEvent = {
-  stream: string;
-  data?: Record<string, unknown>;
-  sessionKey?: string;
-  ts?: number;
-};
-
 type CodexHarnessAttemptUsage = Partial<
   Record<"cacheRead" | "cacheWrite" | "input" | "output" | "total", number>
 >;
-
-type CodexNativeUsageSnapshot = {
-  activeContextTokens: number;
-  cachedInputTokens?: number;
-  cacheWriteInputTokens?: number;
-  inputTokens?: number;
-  modelContextWindow: number;
-  outputTokens?: number;
-  promptTokens: number;
-};
 
 type CodexHarnessAgentResult = {
   compactionCount: number;
@@ -224,6 +225,8 @@ type CodexHarnessAgentResult = {
   usage?: CodexHarnessAttemptUsage;
 };
 
+const CODEX_REDUCED_CONTEXT_AUTO_COMPACT_LIMIT = 4_000;
+const CODEX_REDUCED_CONTEXT_PRESSURE_CHARS = 90_000;
 const CODEX_FULL_CONTEXT_AUTO_COMPACT_LIMIT = 700_000;
 const CODEX_FULL_CONTEXT_EFFECTIVE_WINDOW = 875_900;
 const CODEX_FULL_CONTEXT_STANDARD_WINDOW = 272_000;
@@ -276,11 +279,11 @@ function resolveCodexHarnessThinkingLevel(raw: string | undefined): CodexHarness
   return normalized as CodexHarnessThinkingLevel;
 }
 
-function resolveCodexHarnessExpectedRequestEffort(modelId: string): string | null {
+function resolveCodexHarnessExpectedAppServerEffort(modelId: string): string | null {
   const configured = process.env.OPENCLAW_LIVE_CODEX_HARNESS_EXPECTED_EFFORT;
   if (configured?.trim()) {
     const expected = resolveCodexHarnessThinkingLevel(configured);
-    return expected === "off" ? null : expected === "ultra" ? "max" : expected;
+    return expected === "off" ? null : expected;
   }
   const supported = CODEX_HARNESS_SUPPORTED_EFFORTS.get(modelId);
   if (!supported) {
@@ -289,8 +292,8 @@ function resolveCodexHarnessExpectedRequestEffort(modelId: string): string | nul
   if (CODEX_HARNESS_THINKING === "off") {
     return null;
   }
-  // Codex preserves Ultra in config but intentionally sends Max to the model.
-  // Compare the request-facing lifecycle event to that wire contract.
+  // The lifecycle event records turn/start effort before Codex maps Ultra to Max
+  // for its downstream model request; Ultra still controls native collaboration.
   const candidates =
     CODEX_HARNESS_THINKING === "ultra"
       ? supported
@@ -305,7 +308,7 @@ function resolveCodexHarnessExpectedRequestEffort(modelId: string): string | nul
     ) ??
     candidates.at(-1) ??
     null;
-  return configuredEffort === "ultra" ? "max" : configuredEffort;
+  return configuredEffort;
 }
 
 function logCodexLiveStep(step: string, details?: Record<string, unknown>): void {
@@ -314,45 +317,6 @@ function logCodexLiveStep(step: string, details?: Record<string, unknown>): void
   }
   const suffix = details && Object.keys(details).length > 0 ? ` ${JSON.stringify(details)}` : "";
   console.error(`[gateway-codex-live] ${step}${suffix}`);
-}
-
-function readCodexNativeUsageSnapshots(
-  events: readonly CapturedAgentEvent[],
-): CodexNativeUsageSnapshot[] {
-  return events.flatMap((event) => {
-    if (event.stream !== "codex_app_server.usage") {
-      return [];
-    }
-    const activeContextTokens = event.data?.activeContextTokens;
-    const modelContextWindow = event.data?.modelContextWindow;
-    const promptTokens = event.data?.promptTokens;
-    if (
-      typeof activeContextTokens !== "number" ||
-      typeof modelContextWindow !== "number" ||
-      typeof promptTokens !== "number"
-    ) {
-      return [];
-    }
-    const optionalNumber = (key: string): number | undefined => {
-      const value = event.data?.[key];
-      return typeof value === "number" ? value : undefined;
-    };
-    const cachedInputTokens = optionalNumber("cachedInputTokens");
-    const cacheWriteInputTokens = optionalNumber("cacheWriteInputTokens");
-    const inputTokens = optionalNumber("inputTokens");
-    const outputTokens = optionalNumber("outputTokens");
-    return [
-      {
-        activeContextTokens,
-        modelContextWindow,
-        promptTokens,
-        ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
-        ...(cacheWriteInputTokens !== undefined ? { cacheWriteInputTokens } : {}),
-        ...(inputTokens !== undefined ? { inputTokens } : {}),
-        ...(outputTokens !== undefined ? { outputTokens } : {}),
-      },
-    ];
-  });
 }
 
 function readCompletedCodexCompactionStats(events: readonly CapturedAgentEvent[]): {
@@ -422,12 +386,22 @@ function isCodexAccountTokenError(error: unknown): boolean {
   return error instanceof Error && error.message.includes("Failed to extract accountId from token");
 }
 
+// Subscribe only to frames from the actual Gateway process; source-local event
+// buses would observe a different runtime than bundled plugin completion delivery.
+const gatewayAgentEventListeners = new Set<(event: AgentEventPayload) => void>();
+
+function onGatewayAgentEvent(listener: (event: AgentEventPayload) => void): () => void {
+  gatewayAgentEventListeners.add(listener);
+  return () => {
+    gatewayAgentEventListeners.delete(listener);
+  };
+}
+
 async function subscribeCodexLiveDebugEvents(sessionKey: string): Promise<() => void> {
   if (!CODEX_HARNESS_DEBUG) {
     return () => undefined;
   }
-  const { onAgentEvent } = await import("../infra/agent-events.js");
-  return onAgentEvent((event) => {
+  return onGatewayAgentEvent((event) => {
     if (event.sessionKey && event.sessionKey !== sessionKey) {
       return;
     }
@@ -439,33 +413,7 @@ async function subscribeCodexLiveDebugEvents(sessionKey: string): Promise<() => 
   });
 }
 
-function snapshotEnv(): LiveEnvSnapshot {
-  return snapshotLiveEnv(["OPENCLAW_ALLOW_SLOW_REPLY_TESTS"]);
-}
-
-function restoreEnv(snapshot: LiveEnvSnapshot): void {
-  restoreLiveEnv(snapshot);
-}
-
-async function getFreeGatewayPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  const port = typeof address === "object" && address ? address.port : 0;
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  if (port <= 0) {
-    throw new Error("failed to allocate gateway port");
-  }
-  return port;
-}
-
-async function createLiveWorkspace(tempDir: string): Promise<string> {
-  const workspace = path.join(tempDir, "workspace");
+async function createLiveWorkspace(workspace: string): Promise<void> {
   await fs.mkdir(workspace, { recursive: true });
   await fs.writeFile(
     path.join(workspace, "AGENTS.md"),
@@ -476,32 +424,6 @@ async function createLiveWorkspace(tempDir: string): Promise<string> {
       "Do not add commentary when asked for an exact response.",
     ].join("\n"),
   );
-  return workspace;
-}
-
-async function removeLiveTempDir(dir: string): Promise<void> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      await fs.rm(dir, { recursive: true, force: true });
-      return;
-    } catch (error) {
-      lastError = error;
-      const code = (error as { code?: unknown } | null)?.code;
-      if (code !== "EBUSY" && code !== "ENOTEMPTY" && code !== "EPERM" && code !== "EACCES") {
-        throw error;
-      }
-      await delay(100);
-    }
-  }
-  if (process.platform === "win32") {
-    logCodexLiveStep("temp-cleanup-deferred", {
-      dir,
-      error: lastError instanceof Error ? lastError.message : String(lastError),
-    });
-    return;
-  }
-  await fs.rm(dir, { recursive: true, force: true });
 }
 
 function parseModelKey(modelKey: string): { provider: string; modelId: string } {
@@ -539,8 +461,8 @@ function buildCodexCompactionAppServerArgs(mode: CodexCompactionStressMode): str
       : mode.kind === "reduced"
         ? [
             "model_auto_compact_token_limit_scope=body_after_prefix",
-            // One truncated 300 KB tool result is only a few thousand tokens.
-            "model_auto_compact_token_limit=4000",
+            // Raw nested CodeMode output is not necessarily emitted to model context.
+            `model_auto_compact_token_limit=${CODEX_REDUCED_CONTEXT_AUTO_COMPACT_LIMIT}`,
             "tool_output_token_limit=10000",
           ]
         : undefined;
@@ -550,6 +472,7 @@ function buildCodexCompactionAppServerArgs(mode: CodexCompactionStressMode): str
 async function assertCodexHarnessSessionSelection(params: {
   client: GatewayClient;
   modelKey: string;
+  preserveNativeTurnSettings?: boolean;
   sessionKey: string;
 }): Promise<void> {
   const expected = parseModelKey(params.modelKey);
@@ -570,7 +493,9 @@ async function assertCodexHarnessSessionSelection(params: {
   expect(row?.modelProvider).toBe(expected.provider);
   expect(row?.model).toBe(expected.modelId);
   expect(row?.agentRuntime?.id).toBe("codex");
-  expect(row?.thinkingLevel).toBe(CODEX_HARNESS_THINKING);
+  expect(row?.thinkingLevel).toBe(
+    params.preserveNativeTurnSettings ? undefined : CODEX_HARNESS_THINKING,
+  );
 }
 
 async function readCodexHarnessSessionId(params: {
@@ -648,6 +573,7 @@ async function writeLiveGatewayConfig(params: {
   codexAppServerMode?: "guardian" | "yolo";
   codeModeOnly?: boolean;
   compactionMode: CodexCompactionStressMode;
+  nativeSupervision?: { command: string };
   loopDetectionPreToolUseRelay?: boolean;
   configPath: string;
   modelKey: string;
@@ -662,6 +588,8 @@ async function writeLiveGatewayConfig(params: {
       mode: "local",
       port: params.port,
       auth: { mode: "token", token: params.token },
+      controlUi: { enabled: false },
+      ...(CODEX_HARNESS_SUBAGENT_PROBE ? { tools: { allow: ["sessions_spawn"] } } : {}),
     },
     plugins: {
       allow: ["codex"],
@@ -669,7 +597,11 @@ async function writeLiveGatewayConfig(params: {
         codex: {
           enabled: true,
           config: {
+            ...(params.nativeSupervision ? { supervision: { enabled: true } } : {}),
             appServer: {
+              ...(params.nativeSupervision
+                ? { command: params.nativeSupervision.command, homeScope: "user" as const }
+                : {}),
               mode: params.codexAppServerMode ?? "yolo",
               ...(params.codexApprovalPolicy ? { approvalPolicy: params.codexApprovalPolicy } : {}),
               ...(params.codexApprovalsReviewer
@@ -709,7 +641,6 @@ async function writeLiveGatewayConfig(params: {
       },
       entries: {
         dev: {
-          default: true,
           workspace: params.workspace,
           thinkingDefault: CODEX_HARNESS_THINKING,
           model: { primary: params.modelKey },
@@ -747,30 +678,12 @@ async function requestAgentTextWithEvents(params: {
   sessionKey: string;
 }): Promise<CodexHarnessAgentResult> {
   const { extractPayloadText } = await import("./test-helpers.agent-results.js");
-  const { onAgentEvent } = await import("../infra/agent-events.js");
-  const events: CapturedAgentEvent[] = [];
-  const eventPrefixes = params.eventPrefixes ?? [params.eventPrefix ?? "codex_app_server.guardian"];
-  let requestStartedAt = 0;
-  let firstAssistantMs: number | undefined;
-  const unsubscribe = onAgentEvent((event) => {
-    if (!params.includeAllSessions && event.sessionKey && event.sessionKey !== params.sessionKey) {
-      return;
-    }
-    if (event.stream === "assistant" && requestStartedAt > 0 && firstAssistantMs === undefined) {
-      firstAssistantMs = Math.max(0, event.ts - requestStartedAt);
-    }
-    if (!eventPrefixes.some((prefix) => event.stream.startsWith(prefix))) {
-      return;
-    }
-    events.push({
-      stream: event.stream,
-      sessionKey: event.sessionKey,
-      data: event.data,
-      ts: event.ts,
-    });
-  });
+  const capture = createCodexHarnessEventCapture(params);
+  const { events } = capture;
+  const unsubscribe = onGatewayAgentEvent(capture.onAgentEvent);
   try {
-    requestStartedAt = Date.now();
+    const requestStartedAt = Date.now();
+    capture.start(requestStartedAt);
     const payload = await params.client.request(
       "agent",
       {
@@ -801,7 +714,9 @@ async function requestAgentTextWithEvents(params: {
       events,
       compactionCount: Math.max(0, result?.meta?.agentMeta?.compactionCount ?? 0),
       elapsedMs: Date.now() - requestStartedAt,
-      ...(firstAssistantMs !== undefined ? { firstAssistantMs } : {}),
+      ...(capture.firstAssistantMs !== undefined
+        ? { firstAssistantMs: capture.firstAssistantMs }
+        : {}),
       ...(result?.meta?.stopReason ? { stopReason: result.meta.stopReason } : {}),
       ...(result?.meta?.agentMeta?.usage ? { usage: result.meta.agentMeta.usage } : {}),
     };
@@ -814,6 +729,7 @@ async function requestAgentText(params: {
   client: GatewayClient;
   expectedReply: string;
   message: string;
+  preserveNativeTurnSettings?: boolean;
   sessionKey: string;
 }): Promise<string> {
   const { text, events } = await requestAgentTextWithEvents({
@@ -823,12 +739,17 @@ async function requestAgentText(params: {
     sessionKey: params.sessionKey,
   });
   expect(text).toContain(params.expectedReply);
-  recordCodexAttemptIdentity({ events, sessionKey: params.sessionKey });
+  recordCodexAttemptIdentity({
+    events,
+    preserveNativeTurnSettings: params.preserveNativeTurnSettings,
+    sessionKey: params.sessionKey,
+  });
   return text;
 }
 
 function recordCodexAttemptIdentity(params: {
   events: CapturedAgentEvent[];
+  preserveNativeTurnSettings?: boolean;
   sessionKey: string;
 }): void {
   const { events } = params;
@@ -846,7 +767,9 @@ function recordCodexAttemptIdentity(params: {
   expect(turnStarting?.data).toMatchObject({ model: expectedModel });
   const actualEffort = turnStarting?.data?.effort;
   const actualCollaborationEffort = turnStarting?.data?.collaborationEffort;
-  const expectedEffort = resolveCodexHarnessExpectedRequestEffort(expectedModel);
+  const expectedEffort = params.preserveNativeTurnSettings
+    ? null
+    : resolveCodexHarnessExpectedAppServerEffort(expectedModel);
   expect(actualEffort ?? null).toBe(expectedEffort);
   expect(actualCollaborationEffort ?? null).toBe(actualEffort ?? null);
   if (CODEX_HARNESS_FULL_CONTEXT) {
@@ -1205,7 +1128,7 @@ async function verifyCodexFullContextStress(params: {
     const marker = `OPENCLAW-CODEX-FULL-${turn}-${randomBytes(6).toString("hex").toUpperCase()}`;
     const result = await requestAgentTextWithEvents({
       client: params.client,
-      eventPrefixes: ["codex_app_server.", "compaction"],
+      eventPrefixes: CODEX_HARNESS_CONTEXT_EVENT_PREFIXES,
       sessionKey: params.sessionKey,
       message: [
         buildCodexHarnessDenseContext({ marker, chars: CODEX_HARNESS_LARGE_OUTPUT_BYTES }),
@@ -1259,7 +1182,7 @@ async function verifyCodexFullContextStress(params: {
   const triggerToken = "CODEX-FULL-CONTEXT-TRIGGER-OK";
   const triggerResult = await requestAgentTextWithEvents({
     client: params.client,
-    eventPrefixes: ["codex_app_server.", "compaction"],
+    eventPrefixes: CODEX_HARNESS_CONTEXT_EVENT_PREFIXES,
     sessionKey: params.sessionKey,
     message: `Reply exactly ${triggerToken} and nothing else.`,
   });
@@ -1390,6 +1313,20 @@ async function verifyCodexCompactionStress(params: {
   let completedCompactions = 0;
   let reportedCompactions = 0;
   let startedCompactions = 0;
+  const observeTurn = (label: string, result: CodexHarnessAgentResult) => {
+    recordCodexAttemptIdentity({ events: result.events, sessionKey: params.sessionKey });
+    logCodexHarnessTurnMeasurement(label, result);
+    const compaction = readCompletedCodexCompactionStats(result.events);
+    completedCompactions += compaction.count;
+    startedCompactions += compaction.startedCount;
+    reportedCompactions += result.compactionCount;
+    const usage = readCodexNativeUsageSnapshots(result.events).at(-1);
+    if (!usage || usage.promptTokens <= 0) {
+      throw new Error(`${label} emitted no final native prompt usage`);
+    }
+    return { usage, compaction };
+  };
+  let previousUsage: CodexNativeUsageSnapshot | undefined;
   for (let turn = 1; turn <= CODEX_HARNESS_COMPACTION_STRESS_TURNS; turn += 1) {
     const acknowledgement = `CODEX-LARGE-OUTPUT-${turn}-OK`;
     const commandMarker = `OPENCLAW-CODEX-LARGE-OUTPUT-${turn}-${randomBytes(6).toString("hex").toUpperCase()}`;
@@ -1406,17 +1343,12 @@ async function verifyCodexCompactionStress(params: {
     ].join("\n");
     const result = await requestAgentTextWithEvents({
       client: params.client,
-      eventPrefixes: ["codex_app_server.", "compaction", "tool"],
+      eventPrefixes: [...CODEX_HARNESS_CONTEXT_EVENT_PREFIXES, "tool"],
       sessionKey: params.sessionKey,
       message,
     });
     expect(result.text).toContain(acknowledgement);
-    recordCodexAttemptIdentity({ events: result.events, sessionKey: params.sessionKey });
-    logCodexHarnessTurnMeasurement(`reduced-stress-${turn}`, result);
-    const turnCompaction = readCompletedCodexCompactionStats(result.events);
-    completedCompactions += turnCompaction.count;
-    startedCompactions += turnCompaction.startedCount;
-    reportedCompactions += result.compactionCount;
+    previousUsage = observeTurn(`reduced-output-${turn}`, result).usage;
     const history: { messages?: unknown[] } = await params.client.request("chat.history", {
       sessionKey: params.sessionKey,
       limit: 100,
@@ -1430,6 +1362,69 @@ async function verifyCodexCompactionStress(params: {
     });
   }
 
+  // Native output above proves command execution, not CodeMode's outer emission.
+  // Direct input supplies bounded pressure after this wave's warm/cold-resume prefix.
+  let measuredPressureCycles = 0;
+  for (let cycle = 1; cycle <= 2; cycle += 1) {
+    if (!previousUsage) {
+      throw new Error("reduced pressure probe has no preceding native usage");
+    }
+    const denseToken = `CODEX-PRESSURE-${cycle}-OK`;
+    const dense = await requestAgentTextWithEvents({
+      client: params.client,
+      eventPrefixes: CODEX_HARNESS_CONTEXT_EVENT_PREFIXES,
+      sessionKey: params.sessionKey,
+      message: [
+        buildCodexHarnessDenseContext({
+          marker: `PRESSURE-${randomBytes(6).toString("hex").toUpperCase()}`,
+          chars: CODEX_REDUCED_CONTEXT_PRESSURE_CHARS,
+        }),
+        `Do not use tools. Reply exactly ${denseToken} and nothing else.`,
+      ].join("\n\n"),
+    });
+    expect(dense.text.trim()).toBe(denseToken);
+    const pressure = observeTurn(`reduced-pressure-${cycle}`, dense);
+    // A final answer can cross the limit without another sampling opportunity.
+    const triggerToken = `CODEX-PRESSURE-TRIGGER-${cycle}-OK`;
+    const trigger = await requestAgentTextWithEvents({
+      client: params.client,
+      eventPrefixes: CODEX_HARNESS_CONTEXT_EVENT_PREFIXES,
+      sessionKey: params.sessionKey,
+      message: `Do not use tools. Reply exactly ${triggerToken} and nothing else.`,
+    });
+    expect(trigger.text.trim()).toBe(triggerToken);
+    const after = observeTurn(`reduced-trigger-${cycle}`, trigger);
+    const promptGrowth = pressure.usage.promptTokens - previousUsage.promptTokens;
+    // Compaction changes the prefix. Never compare usage across that boundary;
+    // the second fixed pair supplies a fresh interval if the first compacted early.
+    if (pressure.compaction.count === 0) {
+      expect(
+        promptGrowth,
+        "dense input did not create measured prompt pressure",
+      ).toBeGreaterThanOrEqual(CODEX_REDUCED_CONTEXT_AUTO_COMPACT_LIMIT);
+      expect(
+        after.compaction.count,
+        "small trigger did not compact measured pressure",
+      ).toBeGreaterThan(0);
+      // Native compact retains real user messages; total prompt size need not shrink.
+      measuredPressureCycles += 1;
+    }
+    logCodexLiveStep("reduced-pressure-cycle", {
+      cycle,
+      inputChars: CODEX_REDUCED_CONTEXT_PRESSURE_CHARS,
+      beforePromptTokens: previousUsage.promptTokens,
+      densePromptTokens: pressure.usage.promptTokens,
+      afterPromptTokens: after.usage.promptTokens,
+      denseCompactions: pressure.compaction.count,
+      triggerCompactions: after.compaction.count,
+      measured: pressure.compaction.count === 0,
+    });
+    previousUsage = after.usage;
+  }
+  expect(
+    measuredPressureCycles,
+    "wave omitted measured pressure-to-compaction proof",
+  ).toBeGreaterThan(0);
   expect(completedCompactions, "expected at least one native automatic compaction").toBeGreaterThan(
     0,
   );
@@ -1513,9 +1508,8 @@ async function verifyCodexImageProbe(params: {
 }): Promise<void> {
   const runId = randomUUID();
   const expectedToken = `CODEX-IMAGE-${runId.slice(0, 6).toUpperCase()}`;
-  const { onAgentEvent } = await import("../infra/agent-events.js");
   const events: CapturedAgentEvent[] = [];
-  const unsubscribe = onAgentEvent((event) => {
+  const unsubscribe = onGatewayAgentEvent((event) => {
     if (
       !event.stream.startsWith("codex_app_server.") ||
       (event.sessionKey && event.sessionKey !== params.sessionKey)
@@ -1845,8 +1839,7 @@ async function verifyCodexSubagentProbe(params: {
   const runId = randomUUID();
   const expectedToken = `CODEX-SUBAGENT-${runId.slice(0, 6).toUpperCase()}`;
   const events: CapturedAgentEvent[] = [];
-  const { onAgentEvent } = await import("../infra/agent-events.js");
-  const unsubscribe = onAgentEvent((event) => {
+  const unsubscribe = onGatewayAgentEvent((event) => {
     if (!event.stream.startsWith("codex_app_server.")) {
       return;
     }
@@ -1857,49 +1850,6 @@ async function verifyCodexSubagentProbe(params: {
     });
   });
   try {
-    const { testing: subagentSpawnTesting, spawnSubagentDirect } =
-      await import("../agents/subagents/spawn/subagent-spawn.test-support.js");
-    const noOpContextEngine: ContextEngine = {
-      info: { id: "codex-harness-subagent-smoke", name: "Codex harness subagent smoke" },
-      ingest: async () => ({ ingested: false }),
-      assemble: async () => ({ messages: [], estimatedTokens: 0 }),
-      compact: async () => ({ ok: true, compacted: false }),
-    };
-    const gatewayTrace: Array<{
-      durationMs: number;
-      error?: string;
-      method: string;
-      status: "error" | "ok";
-      timeoutMs?: number | null;
-    }> = [];
-    subagentSpawnTesting.setDepsForTest({
-      resolveContextEngine: async () => noOpContextEngine,
-      callGateway: async <T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> => {
-        const startedAt = Date.now();
-        try {
-          const result = await params.client.request(opts.method, opts.params, {
-            expectFinal: opts.method === "agent" ? false : opts.expectFinal,
-            timeoutMs: opts.timeoutMs,
-          });
-          gatewayTrace.push({
-            durationMs: Date.now() - startedAt,
-            method: opts.method,
-            status: "ok",
-            timeoutMs: opts.timeoutMs,
-          });
-          return result as T;
-        } catch (err) {
-          gatewayTrace.push({
-            durationMs: Date.now() - startedAt,
-            error: err instanceof Error ? err.message : String(err),
-            method: opts.method,
-            status: "error",
-            timeoutMs: opts.timeoutMs,
-          });
-          throw err;
-        }
-      },
-    });
     const probeReplies = [
       expectedToken,
       ...Array.from(
@@ -1909,34 +1859,46 @@ async function verifyCodexSubagentProbe(params: {
     ];
     const probes = probeReplies.map((expectedReply, index) => ({ expectedReply, index }));
     const spawnResults = await Promise.all(
-      probes.map(async (probe) => ({
-        expectedReply: probe.expectedReply,
-        index: probe.index,
-        result: await spawnSubagentDirect(
+      probes.map(async (probe) => {
+        const invoked = await params.client.request<ToolsInvokeResult>(
+          "tools.invoke",
           {
-            task: `Reply exactly ${probe.expectedReply} and nothing else.`,
-            agentId: "dev",
-            thinking: CODEX_HARNESS_THINKING,
-            mode: "run",
-            cleanup: "keep",
-            context: "isolated",
-            lightContext: true,
-            expectsCompletionMessage: false,
-            runTimeoutSeconds: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
+            name: "sessions_spawn",
+            sessionKey: params.sessionKey,
+            args: {
+              task: `Reply exactly ${probe.expectedReply} and nothing else.`,
+              agentId: "dev",
+              thinking: CODEX_HARNESS_THINKING,
+              mode: "run",
+              cleanup: "keep",
+              context: "isolated",
+              lightContext: true,
+              expectsCompletionMessage: false,
+              runTimeoutSeconds: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
+            },
           },
-          {
-            agentSessionKey: params.sessionKey,
-          },
-        ),
-      })),
+          { timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS },
+        );
+        expect(invoked.ok, JSON.stringify(invoked)).toBe(true);
+        const result = asOptionalRecord(asOptionalRecord(invoked.output)?.details);
+        if (!result) {
+          throw new Error(`sessions_spawn returned no result: ${JSON.stringify(invoked)}`);
+        }
+        return { expectedReply: probe.expectedReply, index: probe.index, result };
+      }),
     );
     for (const probe of spawnResults) {
       if (probe.result.status !== "accepted") {
         throw new Error(
-          `Codex subagent ${probe.index + 1} spawn failed: ${JSON.stringify(probe.result)} trace=${JSON.stringify(gatewayTrace)}`,
+          `Codex subagent ${probe.index + 1} spawn failed: ${JSON.stringify(probe.result)}`,
         );
       }
-      if (!probe.result.childSessionKey?.includes(":subagent:") || !probe.result.runId) {
+      if (
+        typeof probe.result.childSessionKey !== "string" ||
+        !probe.result.childSessionKey.includes(":subagent:") ||
+        typeof probe.result.runId !== "string" ||
+        !probe.result.runId
+      ) {
         throw new Error(
           `subagent spawn did not return child/run identities: ${JSON.stringify(probe.result)}`,
         );
@@ -1980,21 +1942,19 @@ async function verifyCodexSubagentProbe(params: {
       uniqueThreads: new Set(threadIds).size,
     });
   } finally {
-    const { testing: subagentSpawnTesting } =
-      await import("../agents/subagents/spawn/subagent-spawn.test-support.js");
-    subagentSpawnTesting.setDepsForTest();
     unsubscribe();
   }
 }
 
 async function verifyCodexNativeSubagentBridgeProbe(params: {
+  stateEnv: NodeJS.ProcessEnv;
   client: GatewayClient;
+  events: EventFrame[];
   sessionKey: string;
 }): Promise<void> {
   const runId = randomUUID();
   const childToken = `CODEX-NATIVE-CHILD-${runId.slice(0, 6).toUpperCase()}`;
   const parentToken = `CODEX-NATIVE-PARENT-${runId.slice(0, 6).toUpperCase()}`;
-  const { listTaskRecords } = await import("../tasks/runtime-internal.js");
   const { text, events } = await requestAgentTextWithEvents({
     // Native Codex waiting pauses this parent turn; task delivery resumes it separately.
     acceptYieldedTimeout: true,
@@ -2015,12 +1975,12 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
     events.some((event) => event.stream === "codex_app_server.lifecycle"),
     `expected Codex lifecycle events; events=${JSON.stringify(events)}`,
   ).toBe(true);
-  let codexNativeTasks = listCodexNativeTasks();
+  let codexNativeTasks = await listCodexNativeTasks();
   let deliveredTask = findDeliveredCodexNativeTask(codexNativeTasks);
   const deadline = Date.now() + CODEX_HARNESS_REQUEST_TIMEOUT_MS;
   while (!deliveredTask && Date.now() < deadline) {
     await delay(1_000);
-    codexNativeTasks = listCodexNativeTasks();
+    codexNativeTasks = await listCodexNativeTasks();
     deliveredTask = findDeliveredCodexNativeTask(codexNativeTasks);
   }
   expect(
@@ -2030,83 +1990,389 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
     )}; events=${JSON.stringify(events)}; tasks=${JSON.stringify(codexNativeTasks)}`,
   ).toBeDefined();
 
-  function listCodexNativeTasks() {
-    return listTaskRecords().filter(
-      (entry) => entry.runtime === "subagent" && entry.taskKind === "codex-native",
+  const parentControlledChild = events.some(
+    (event) => event.stream === "codex_app_server.item" && event.data?.type === "subAgentActivity",
+  );
+  if (parentControlledChild) {
+    // Native task IDs record the child thread at creation; model output is not
+    // authoritative enough to select the thread for this ownership probe.
+    const childThreadId = deliveredTask?.sourceId?.match(/^codex-thread:(.+)$/)?.[1];
+    expect(childThreadId).toBeTypeOf("string");
+    const sessionId = await readCodexHarnessSessionId(params);
+    const readBinding = () => {
+      const row = pluginStateEntriesInKeyRange({
+        env: params.stateEnv,
+        pluginId: "codex",
+        namespace: "app-server-thread-bindings",
+        keyStartInclusive: "session-key:dev:",
+        keyEndExclusive: "session-key:dev;",
+        limit: 100,
+      }).find((entry) => asOptionalRecord(entry.value)?.sessionId === sessionId);
+      // Lease acquisition refreshes the KV write timestamp even when binding content is unchanged.
+      return row ? { key: row.key, value: row.value } : undefined;
+    };
+    const bindingBefore = readBinding();
+    expect(bindingBefore).toBeDefined();
+    const threadIdBefore = asOptionalRecord(
+      asOptionalRecord(bindingBefore?.value)?.binding,
+    )?.threadId;
+    expect(threadIdBefore).toBeTypeOf("string");
+    expect(threadIdBefore).not.toBe(childThreadId);
+    await requestCodexCommandText({
+      ...params,
+      command: `/codex resume ${childThreadId}`,
+      expectedText: "controlled by its parent",
+    });
+    expect(readBinding()).toEqual(bindingBefore);
+    await requestAgentText({
+      client: params.client,
+      sessionKey: params.sessionKey,
+      message: "Reply exactly PARENT-STILL-ATTACHED and nothing else.",
+      expectedReply: "PARENT-STILL-ATTACHED",
+    });
+    expect(readBinding()?.key).toBe(bindingBefore?.key);
+    expect(asOptionalRecord(asOptionalRecord(readBinding()?.value)?.binding)?.threadId).toBe(
+      threadIdBefore,
     );
+    logCodexLiveStep("native-subagent-direct-input:rejected", { childThreadId });
+  } else {
+    logCodexLiveStep("native-subagent-direct-input:legacy-not-applicable");
   }
 
-  function findDeliveredCodexNativeTask(tasks: ReturnType<typeof listCodexNativeTasks>) {
+  async function listCodexNativeTasks() {
+    const { tasks, nextCursor } = await params.client.request<TasksListResult>("tasks.list", {
+      sessionKey: params.sessionKey,
+      limit: 500,
+    });
+    expect(nextCursor, "isolated native probe must fit in one task page").toBeUndefined();
+    return tasks.filter((entry) => entry.runtime === "subagent" && entry.kind === "codex-native");
+  }
+
+  function findDeliveredCodexNativeTask(tasks: Awaited<ReturnType<typeof listCodexNativeTasks>>) {
     return tasks.find(
       (entry) =>
-        entry.status === "succeeded" &&
+        entry.status === "completed" &&
         entry.deliveryStatus === "delivered" &&
         entry.terminalSummary?.includes(childToken),
     );
   }
 }
 
+async function verifyCodexSessionDeletion(params: {
+  stateEnv: NodeJS.ProcessEnv;
+  client: GatewayClient;
+  events: EventFrame[];
+  modelKey: string;
+  sessionKey: string;
+}): Promise<void> {
+  const { client, events, modelKey, sessionKey } = params;
+  const threadId = observedCodexThreadIds.get(sessionKey);
+  expect(threadId).toBeTypeOf("string");
+  const sessionId = await readCodexHarnessSessionId({ client, sessionKey });
+  const readBindings = () =>
+    pluginStateEntriesInKeyRange({
+      env: params.stateEnv,
+      pluginId: "codex",
+      namespace: "app-server-thread-bindings",
+      keyStartInclusive: "session-key:dev:",
+      keyEndExclusive: "session-key:dev;",
+      limit: 100,
+    });
+  const before = readBindings().find((row) => asOptionalRecord(row.value)?.sessionId === sessionId);
+  expect(before).toBeDefined();
+  const siblingKey = `${sessionKey}:deletion-sibling`;
+  const selectModel = async (key: string) =>
+    requestCodexCommandText({
+      client,
+      events,
+      sessionKey: key,
+      command: `/model ${modelKey} --runtime codex`,
+      expectedText: "Runtime set to codex",
+    });
+  await selectModel(siblingKey);
+  await requestAgentText({
+    client,
+    sessionKey: siblingKey,
+    expectedReply: "SIBLING-READY",
+    message: "Reply with exactly SIBLING-READY and nothing else.",
+  });
+  const siblingThreadId = observedCodexThreadIds.get(siblingKey);
+  const siblingSessionId = await readCodexHarnessSessionId({ client, sessionKey: siblingKey });
+  const siblingBinding = readBindings().find(
+    (row) => asOptionalRecord(row.value)?.sessionId === siblingSessionId,
+  );
+  expect(siblingBinding).toBeDefined();
+
+  // A competing attachment must reject before displacing either native owner.
+  await requestCodexCommandText({
+    client,
+    events,
+    sessionKey,
+    command: `/codex resume ${siblingThreadId}`,
+    expectedText: "owned by another OpenClaw session or conversation",
+  });
+  expect(readBindings().find((row) => row.key === before?.key)).toEqual(before);
+  expect(readBindings().find((row) => row.key === siblingBinding?.key)).toEqual(siblingBinding);
+
+  const deletion = await client.request<{ deleted: boolean }>("sessions.delete", {
+    key: sessionKey,
+  });
+  expect(deletion.deleted).toBe(true);
+  expect(readBindings().some((row) => row.key === before?.key)).toBe(false);
+  expect(readBindings().find((row) => row.key === siblingBinding?.key)).toEqual(siblingBinding);
+  await requestAgentText({
+    client,
+    sessionKey: siblingKey,
+    expectedReply: "SIBLING-ALIVE",
+    message: "Reply with exactly SIBLING-ALIVE and nothing else.",
+  });
+  expect(observedCodexThreadIds.get(siblingKey)).toBe(siblingThreadId);
+
+  // Session deletion releases OpenClaw ownership, not the native Codex history.
+  // Attach that existing thread to a new session and complete a real turn.
+  await selectModel(sessionKey);
+  const attached = await requestCodexCommandText({
+    client,
+    events,
+    sessionKey,
+    command: `/codex resume ${threadId}`,
+    expectedText: "Attached this OpenClaw session",
+  });
+  expect(attached).toContain(threadId);
+  expect(await readCodexHarnessSessionId({ client, sessionKey })).not.toBe(sessionId);
+  await requestAgentText({
+    client,
+    sessionKey,
+    expectedReply: "DELETED-THREAD-RESUMED",
+    message: "Reply with exactly DELETED-THREAD-RESUMED and nothing else.",
+  });
+  expect(observedCodexThreadIds.get(sessionKey)).toBe(threadId);
+  logCodexLiveStep("session-deletion", {
+    competingResumeRejected: true,
+    removedBinding: true,
+    siblingContinued: true,
+    nativeHistoryResumed: true,
+  });
+}
+
 describeLive("gateway live (Codex harness)", () => {
+  it.skipIf(CODEX_HARNESS_AUTH_MODE !== "api-key")(
+    "forks a supervised canonical message and continues its cold descendant on the native model",
+    async () => {
+      const modelKey = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL;
+      const { modelId } = parseModelKey(modelKey);
+      const codexPackagePath = bundledPluginFileAt(
+        path.resolve(import.meta.dirname, "../.."),
+        "codex",
+        "package.json",
+      );
+      const codexPackage = asOptionalRecord(
+        JSON.parse(await fs.readFile(codexPackagePath, "utf8")),
+      );
+      const nativeVersion = asOptionalRecord(codexPackage?.dependencies)?.["@openai/codex"];
+      if (typeof nativeVersion !== "string") {
+        throw new Error("Codex plugin dependency pin is missing");
+      }
+      // Native seeding and supervised turns must use the same pinned plugin dependency.
+      const codexCommand = createRequire(codexPackagePath).resolve("@openai/codex/bin/codex.js");
+      const nativeCommand = [process.execPath, codexCommand];
+      const token = `test-${randomUUID()}`;
+      const instance = await createCodexHarnessLiveInstance(token, "api-key");
+      const codexHome = instance.state.path("canonical-codex-home");
+      const nativeHome = instance.state.path("canonical-native-user");
+      const workspace = instance.state.workspaceDir;
+      let client: GatewayClient | undefined;
+      const onEvent = (event: EventFrame) => {
+        if (event.event === "agent") {
+          for (const listener of gatewayAgentEventListeners) {
+            listener(event.payload as AgentEventPayload);
+          }
+        }
+      };
+      try {
+        instance.state.applyEnv();
+        await createLiveWorkspace(workspace);
+        await Promise.all([codexHome, nativeHome].map((dir) => fs.mkdir(dir, { recursive: true })));
+        instance.env.CODEX_HOME = codexHome;
+        instance.env.HOME = nativeHome;
+        instance.env.USERPROFILE = nativeHome;
+        delete instance.env.CODEX_API_KEY;
+        const nativeEnv = { ...instance.env, HOME: nativeHome, USERPROFILE: nativeHome };
+        const nativeOptions = {
+          baseEnv: nativeEnv,
+          cwd: workspace,
+          timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
+          maxOutputBytes: 1024 * 1024,
+          killProcessTree: true,
+        };
+        const version = await runCommandWithTimeout([...nativeCommand, "--version"], nativeOptions);
+        expect(version.code).toBe(0);
+        expect(version.stdout.trim()).toBe(`codex-cli ${nativeVersion}`);
+        await fs.writeFile(
+          path.join(codexHome, "config.toml"),
+          [
+            `model = ${JSON.stringify(modelId)}`,
+            'model_provider = "openai"',
+            `model_reasoning_effort = ${JSON.stringify(CODEX_HARNESS_THINKING)}`,
+            'approval_policy = "never"',
+            'sandbox_mode = "danger-full-access"',
+          ].join("\n") + "\n",
+        );
+        const apiKey = process.env.OPENAI_API_KEY?.trim();
+        expect(apiKey, "canonical native proof requires the live API-key owner").toBeTruthy();
+        // Login owns the isolated native credential file; cleanup removes the entire test home.
+        const login = await runCommandWithTimeout([...nativeCommand, "login", "--with-api-key"], {
+          ...nativeOptions,
+          input: apiKey + "\n",
+        });
+        expect(login.code).toBe(0);
+        const seeded = await runCommandWithTimeout(
+          [
+            ...nativeCommand,
+            "debug",
+            "app-server",
+            "send-message-v2",
+            "Reply exactly CODEX-NATIVE-ROOT.",
+          ],
+          nativeOptions,
+        );
+        expect(seeded.code).toBe(0);
+        expect(seeded.stdout).toContain("< turn/completed notification: Completed");
+        expect(seeded.stdout).toContain(`model: "${modelId}"`);
+        expect(seeded.stdout).toContain('model_provider: "openai"');
+        await writeLiveGatewayConfig({
+          configPath: instance.configPath,
+          modelKey,
+          port: instance.port,
+          token,
+          workspace,
+          compactionMode: { kind: "off" },
+          nativeSupervision: { command: codexCommand },
+        });
+        const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
+          displayName: "vitest-codex-canonical-live",
+        });
+        const connect = async () => {
+          await instance.startGateway();
+          return await connectTestGatewayClient({
+            url: instance.url,
+            token,
+            deviceIdentity,
+            timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
+            requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
+            clientDisplayName: "vitest-codex-canonical-live",
+            caps: CODEX_HARNESS_CLIENT_CAPS,
+            onEvent,
+          });
+        };
+        client = await connect();
+        const catalog = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+          catalogId: "codex",
+          agentId: "dev",
+        });
+        const sources = catalog.catalogs.flatMap((entry) =>
+          entry.hosts.flatMap((host) => host.sessions.map((session) => ({ host, session }))),
+        );
+        expect(sources).toHaveLength(1);
+        const { host, session } = sources[0]!;
+        expect(session.modelProvider).toBe("openai");
+        const source = await client.request<{ sessionKey: string }>("sessions.catalog.continue", {
+          catalogId: "codex",
+          hostId: host.hostId,
+          threadId: session.threadId,
+          sourceHomeId: session.sourceHomeId,
+          agentId: "dev",
+        });
+        await requestAgentText({
+          client,
+          sessionKey: source.sessionKey,
+          message: "Reply exactly CODEX-CANONICAL-SOURCE.",
+          expectedReply: "CODEX-CANONICAL-SOURCE",
+          preserveNativeTurnSettings: true,
+        });
+        let sourceKey = source.sessionKey;
+        let sourceThreadId = observedCodexThreadIds.get(sourceKey);
+        expect(sourceThreadId).not.toBe(session.threadId);
+        for (const phase of ["warm", "cold"] as const) {
+          if (phase === "cold") {
+            await client.stopAndWait();
+            await instance.stopGateway();
+            client = await connect();
+          }
+          await assertCodexHarnessSessionSelection({ client, modelKey, sessionKey: sourceKey });
+          const history = await client.request<{
+            messages: Array<{ role?: string; __openclaw?: { id?: string } }>;
+          }>("chat.history", { sessionKey: sourceKey, limit: 20 });
+          const entryId = history.messages.findLast((message) => message.role === "user")?.[
+            "__openclaw"
+          ]?.id;
+          expect(entryId).toBeTypeOf("string");
+          const child = await client.request<{ sessionKey: string; editorText?: string }>(
+            "sessions.fork",
+            {
+              sessionKey: sourceKey,
+              entryId,
+            },
+          );
+          expect(child.sessionKey).not.toBe(sourceKey);
+          expect(child.editorText).toBeTruthy();
+          await assertCodexHarnessSessionSelection({
+            client,
+            modelKey,
+            preserveNativeTurnSettings: true,
+            sessionKey: child.sessionKey,
+          });
+          await requestAgentText({
+            client,
+            sessionKey: child.sessionKey,
+            message: `Reply exactly CODEX-CANONICAL-${phase.toUpperCase()}.`,
+            expectedReply: `CODEX-CANONICAL-${phase.toUpperCase()}`,
+            preserveNativeTurnSettings: true,
+          });
+          await assertCodexHarnessSessionSelection({
+            client,
+            modelKey,
+            sessionKey: child.sessionKey,
+          });
+          const childThreadId = observedCodexThreadIds.get(child.sessionKey);
+          expect(childThreadId).not.toBe(sourceThreadId);
+          expect(observedCodexThreadActions.get(child.sessionKey)).toBe("resumed");
+          await assertCodexHarnessTranscriptModelIdentity({
+            client,
+            modelKey,
+            sessionKey: child.sessionKey,
+          });
+          logCodexLiveStep("canonical-message-fork", {
+            phase,
+            nativeVersion,
+            modelKey,
+            continued: true,
+          });
+          sourceKey = child.sessionKey;
+          sourceThreadId = childThreadId;
+        }
+      } catch (error) {
+        console.error(instance.logs());
+        throw error;
+      } finally {
+        gatewayAgentEventListeners.clear();
+        try {
+          await client?.stopAndWait();
+        } finally {
+          await instance.cleanup();
+        }
+      }
+    },
+    CODEX_HARNESS_TIMEOUT_MS,
+  );
+
   it(
     "runs gateway agent turns through the plugin-owned Codex app-server harness",
     async () => {
       const modelKey = process.env.OPENCLAW_LIVE_CODEX_HARNESS_MODEL ?? DEFAULT_CODEX_MODEL;
-      const { clearRuntimeConfigSnapshot } = await import("../config/config.js");
-      const { startGatewayServer } = await import("./server.js");
-
-      const previousEnv = snapshotEnv();
-      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-codex-harness-"));
-      const stateDir = path.join(tempDir, "state");
-      const workspace = await createLiveWorkspace(tempDir);
-      const configPath = path.join(tempDir, "openclaw.json");
       const token = `test-${randomUUID()}`;
-      const port = await getFreeGatewayPort();
-
-      clearRuntimeConfigSnapshot();
-      process.env.OPENCLAW_AGENT_RUNTIME = "codex";
-      // Keep the runtime fixed on the plugin-owned Codex app-server harness.
-      // CI can opt into API-key auth to avoid stale OAuth refresh secrets,
-      // while local maintainer runs can continue exercising staged ~/.codex auth.
-      // Only the Codex-auth path should force-clear OpenAI overrides; API-key
-      // mode may intentionally point at a custom endpoint.
-      if (CODEX_HARNESS_AUTH_MODE !== "api-key") {
-        delete process.env.OPENAI_BASE_URL;
-        delete process.env.OPENAI_API_KEY;
-      } else if (!process.env.OPENAI_BASE_URL?.trim()) {
-        delete process.env.OPENAI_BASE_URL;
-      }
-      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-      // This live lane exercises the full config-loaded runtime inside Vitest's
-      // fast-test envelope, so config-override completeness checks do not apply.
-      setTestEnvValue("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
-      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-      process.env.OPENCLAW_SKIP_CHANNELS = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-
-      await fs.mkdir(stateDir, { recursive: true });
-      await writeLiveGatewayConfig({
-        configPath,
-        modelKey,
-        port,
-        token,
-        workspace,
-        codexAppServerMode:
-          CODEX_HARNESS_GUARDIAN_PROBE || CODEX_HARNESS_MULTI_SESSION_PROBE ? "guardian" : "yolo",
-        ...(CODEX_HARNESS_MULTI_SESSION_PROBE
-          ? { codexApprovalPolicy: "untrusted", codexApprovalsReviewer: "user" }
-          : {}),
-        codeModeOnly: CODEX_HARNESS_CODE_MODE_ONLY,
-        compactionMode: CODEX_HARNESS_COMPACTION_MODE,
-        ...(CODEX_HARNESS_DISABLE_LOOP_RELAY ? { loopDetectionPreToolUseRelay: false } : {}),
-      });
-      const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
-        displayName: "vitest-codex-harness-live",
-      });
-      let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+      const instance = await createCodexHarnessLiveInstance(token, CODEX_HARNESS_AUTH_MODE);
+      const { configPath, port } = instance;
       let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;
       const gatewayEvents: EventFrame[] = [];
       const resolvedGuardianPluginApprovalIds = new Set<string>();
@@ -2145,17 +2411,43 @@ describeLive("gateway live (Codex harness)", () => {
             });
           });
       };
-      logCodexLiveStep("config-written", { configPath, modelKey, port });
+      const captureGatewayEvent = (event: EventFrame): void => {
+        gatewayEvents.push(event);
+        maybeResolveGuardianPluginApproval(event);
+        if (event.event === "agent") {
+          for (const listener of gatewayAgentEventListeners) {
+            listener(event.payload as AgentEventPayload);
+          }
+        }
+      };
       observedCodexThreadIds.clear();
       observedCodexClientIds.clear();
       observedCodexThreadActions.clear();
 
       try {
-        server = await startGatewayServer(port, {
-          bind: "loopback",
-          auth: { mode: "token", token },
-          controlUiEnabled: false,
+        instance.state.applyEnv();
+        const workspace = instance.state.workspaceDir;
+        await createLiveWorkspace(workspace);
+        await writeLiveGatewayConfig({
+          configPath,
+          modelKey,
+          port,
+          token,
+          workspace,
+          codexAppServerMode:
+            CODEX_HARNESS_GUARDIAN_PROBE || CODEX_HARNESS_MULTI_SESSION_PROBE ? "guardian" : "yolo",
+          ...(CODEX_HARNESS_MULTI_SESSION_PROBE
+            ? { codexApprovalPolicy: "untrusted", codexApprovalsReviewer: "user" }
+            : {}),
+          codeModeOnly: CODEX_HARNESS_CODE_MODE_ONLY,
+          compactionMode: CODEX_HARNESS_COMPACTION_MODE,
+          ...(CODEX_HARNESS_DISABLE_LOOP_RELAY ? { loopDetectionPreToolUseRelay: false } : {}),
         });
+        const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
+          displayName: "vitest-codex-harness-live",
+        });
+        logCodexLiveStep("config-written", { configPath, modelKey, port });
+        await instance.startGateway();
         client = await connectTestGatewayClient({
           url: `ws://127.0.0.1:${port}`,
           token,
@@ -2163,14 +2455,8 @@ describeLive("gateway live (Codex harness)", () => {
           timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
           requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
           clientDisplayName: "vitest-codex-harness-live",
-          // Approval events require an explicit renderer capability even for admin clients.
-          ...(CODEX_HARNESS_MULTI_SESSION_PROBE
-            ? { caps: [GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS] }
-            : {}),
-          onEvent: (event) => {
-            gatewayEvents.push(event);
-            maybeResolveGuardianPluginApproval(event);
-          },
+          caps: CODEX_HARNESS_CLIENT_CAPS,
+          onEvent: captureGatewayEvent,
         });
         activeApprovalClient = client;
         logCodexLiveStep("client-connected");
@@ -2216,7 +2502,12 @@ describeLive("gateway live (Codex harness)", () => {
               logCodexLiveStep("subagent-probe:start", { sessionKey });
               await verifyCodexSubagentProbe({ client: activeClient, sessionKey });
               logCodexLiveStep("native-subagent-bridge-probe:start", { sessionKey });
-              await verifyCodexNativeSubagentBridgeProbe({ client: activeClient, sessionKey });
+              await verifyCodexNativeSubagentBridgeProbe({
+                stateEnv: instance.env,
+                client: activeClient,
+                events: gatewayEvents,
+                sessionKey,
+              });
               logCodexLiveStep("subagent-probe:done");
               if (CODEX_HARNESS_SUBAGENT_ONLY) {
                 return;
@@ -2470,16 +2761,9 @@ describeLive("gateway live (Codex harness)", () => {
             activeApprovalClient = undefined;
             await client?.stopAndWait();
             client = undefined;
-            await server?.close();
-            server = undefined;
-            clearRuntimeConfigSnapshot();
+            await instance.stopGateway();
             gatewayEvents.length = 0;
-
-            server = await startGatewayServer(port, {
-              bind: "loopback",
-              auth: { mode: "token", token },
-              controlUiEnabled: false,
-            });
+            await instance.startGateway();
             client = await connectTestGatewayClient({
               url: `ws://127.0.0.1:${port}`,
               token,
@@ -2487,10 +2771,8 @@ describeLive("gateway live (Codex harness)", () => {
               timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
               requestTimeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
               clientDisplayName: `vitest-codex-resume-stress-${restart}`,
-              onEvent: (event) => {
-                gatewayEvents.push(event);
-                maybeResolveGuardianPluginApproval(event);
-              },
+              caps: CODEX_HARNESS_CLIENT_CAPS,
+              onEvent: captureGatewayEvent,
             });
             activeApprovalClient = client;
             await assertCodexHarnessSessionSelection({
@@ -2563,21 +2845,23 @@ describeLive("gateway live (Codex harness)", () => {
             );
           }
         }
+        await verifyCodexSessionDeletion({
+          stateEnv: instance.env,
+          client,
+          events: gatewayEvents,
+          modelKey,
+          sessionKey: "agent:dev:live-codex-harness",
+        });
+      } catch (error) {
+        console.error(instance.logs());
+        throw error;
       } finally {
+        activeApprovalClient = undefined;
+        gatewayAgentEventListeners.clear();
         try {
-          clearRuntimeConfigSnapshot();
-          try {
-            await client?.stopAndWait();
-          } finally {
-            await server?.close();
-          }
-          const { resetTaskFlowRegistryForTests, resetTaskRegistryForTests } =
-            await import("../tasks/task-runtime.test-helpers.js");
-          resetTaskRegistryForTests({ persist: false });
-          resetTaskFlowRegistryForTests({ persist: false });
+          await client?.stopAndWait();
         } finally {
-          restoreEnv(previousEnv);
-          await removeLiveTempDir(tempDir);
+          await instance.cleanup();
         }
       }
     },

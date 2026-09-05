@@ -5,7 +5,6 @@ import type { MattermostChannel } from "./client.js";
 import { resolveMattermostTrustedChatKind } from "./monitor-auth.js";
 import { resolveMattermostThreadSessionContext } from "./monitor-context.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
-import { createMattermostReplyDeliveryBarrier } from "./reply-delivery.js";
 import { logTypingFailure } from "./runtime-api.js";
 
 type MattermostEventPlanParams = {
@@ -101,46 +100,39 @@ export async function buildMattermostEventPlan(
         OriginatingChannel: "mattermost" as const,
         OriginatingTo: to,
       }),
-    createReplyPlan: () => {
-      const deliveryBarrier = createMattermostReplyDeliveryBarrier({
-        isDirect: kind === "direct",
-        dmRetryOptions: monitor.account.config.dmChannelRetry,
-      });
-      return {
-        textLimit: monitor.core.channel.text.resolveTextChunkLimit(
-          monitor.cfg,
-          "mattermost",
-          monitor.account.accountId,
-          { fallbackLimit: monitor.account.textChunkLimit ?? 4000 },
-        ),
-        tableMode: monitor.core.channel.text.resolveMarkdownTableMode({
-          cfg: monitor.cfg,
-          channel: "mattermost",
-          accountId: monitor.account.accountId,
-        }),
-        deliveryBarrier,
-        replyPipeline: {
-          typing: {
-            start: () =>
-              monitor.resources.sendTypingIndicator(params.channelId, thread.effectiveReplyToId),
-            onStartError: (error: unknown) => {
-              logTypingFailure({
-                log: monitor.logDebugMessage,
-                channel: "mattermost",
-                target: params.channelId,
-                error,
-              });
-            },
+    createReplyPlan: () => ({
+      textLimit: monitor.core.channel.text.resolveTextChunkLimit(
+        monitor.cfg,
+        "mattermost",
+        monitor.account.accountId,
+        { fallbackLimit: monitor.account.textChunkLimit ?? 4000 },
+      ),
+      tableMode: monitor.core.channel.text.resolveMarkdownTableMode({
+        cfg: monitor.cfg,
+        channel: "mattermost",
+        accountId: monitor.account.accountId,
+      }),
+      replyPipeline: {
+        typing: {
+          start: () =>
+            monitor.resources.sendTypingIndicator(params.channelId, thread.effectiveReplyToId),
+          onStartError: (error: unknown) => {
+            logTypingFailure({
+              log: monitor.logDebugMessage,
+              channel: "mattermost",
+              target: params.channelId,
+              error,
+            });
           },
         },
-        replyOptions: {
-          disableBlockStreaming:
-            typeof monitor.account.blockStreaming === "boolean"
-              ? !monitor.account.blockStreaming
-              : undefined,
-        },
-      };
-    },
+      },
+      replyOptions: {
+        disableBlockStreaming:
+          typeof monitor.account.blockStreaming === "boolean"
+            ? !monitor.account.blockStreaming
+            : undefined,
+      },
+    }),
   };
 }
 

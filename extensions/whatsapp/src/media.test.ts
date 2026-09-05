@@ -42,10 +42,6 @@ async function createLargeTestJpeg(): Promise<{ buffer: Buffer; file: string }> 
   return { buffer: largeJpegBuffer, file: largeJpegFile };
 }
 
-function cloneStatWithDev<T extends { dev: number | bigint }>(stat: T, dev: number | bigint): T {
-  return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, { dev }) as T;
-}
-
 async function expectLocalMediaAccessCode(promise: Promise<unknown>, code: string) {
   try {
     await promise;
@@ -159,15 +155,9 @@ describe("web media loading", () => {
   });
 
   it("includes URL + status in fetch errors", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-      ok: false,
-      body: true,
-      text: async () => "Not Found",
-      headers: { get: () => null },
-      status: 404,
-      statusText: "Not Found",
-      url: "https://example.com/missing.jpg",
-    } as unknown as Response);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("Not Found", { status: 404, statusText: "Not Found" }));
 
     await expect(loadWebMedia("https://example.com/missing.jpg", 1024 * 1024)).rejects.toThrow(
       /Failed to fetch media from https:\/\/example\.com\/missing\.jpg.*HTTP 404/i,
@@ -201,15 +191,11 @@ describe("web media loading", () => {
   });
 
   it("respects maxBytes for raw URL fetches", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-      ok: true,
-      body: true,
-      arrayBuffer: async () => Buffer.alloc(2048).buffer,
-      headers: {
-        get: (name: string) => (name === "content-type" ? "image/png" : null),
-      },
-      status: 200,
-    } as unknown as Response);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array(2048), { headers: { "content-type": "image/png" } }),
+      );
 
     await expect(loadWebMediaRaw("https://example.com/too-big.png", 1024)).rejects.toThrow(
       /exceeds maxBytes 1024/i,
@@ -232,24 +218,14 @@ describe("web media loading", () => {
 
   it("uses content-disposition filename when available", async () => {
     const pdfBytes = Buffer.from("%PDF-1.4");
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-      ok: true,
-      body: true,
-      arrayBuffer: async () =>
-        pdfBytes.buffer.slice(pdfBytes.byteOffset, pdfBytes.byteOffset + pdfBytes.byteLength),
-      headers: {
-        get: (name: string) => {
-          if (name === "content-disposition") {
-            return 'attachment; filename="report.pdf"';
-          }
-          if (name === "content-type") {
-            return "application/pdf";
-          }
-          return null;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(Uint8Array.from(pdfBytes), {
+        headers: {
+          "content-disposition": 'attachment; filename="report.pdf"',
+          "content-type": "application/pdf",
         },
-      },
-      status: 200,
-    } as unknown as Response);
+      }),
+    );
 
     const result = await loadWebMedia("https://example.com/download?id=1", 1024 * 1024);
 
@@ -265,16 +241,9 @@ describe("web media loading", () => {
       0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x01, 0x44, 0x00, 0x3b,
     ]);
 
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-      ok: true,
-      body: true,
-      arrayBuffer: async () =>
-        gifBytes.buffer.slice(gifBytes.byteOffset, gifBytes.byteOffset + gifBytes.byteLength),
-      headers: {
-        get: (name: string) => (name === "content-type" ? "image/gif" : null),
-      },
-      status: 200,
-    } as unknown as Response);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(gifBytes, { headers: { "content-type": "image/gif" } }));
 
     const result = await loadWebMedia("https://example.com/animation.gif", 1024 * 1024);
 
@@ -334,27 +303,45 @@ describe("local media root guard", () => {
     }
   });
 
-  it("accepts win32 dev=0 stat mismatch for local file loads", async () => {
-    const actualLstat = await fs.lstat(tinyPngFile);
-    const actualStat = await fs.stat(tinyPngFile);
-    const zeroDev = typeof actualLstat.dev === "bigint" ? 0n : 0;
-    // Resolve before mocking platform: under `win32` the helper returns the
-    // os.tmpdir() fallback rather than the POSIX `/tmp/openclaw` root that
-    // actually holds `tinyPngFile` on this Linux test runner (#60713).
+  it.each([
+    { name: "loads local media after a transient unknown Windows identity", persistent: false },
+    { name: "rejects local media when Windows identity remains unknown", persistent: true },
+  ])("$name", async ({ persistent }) => {
+    const file = await fs.realpath(tinyPngFile);
+    const actualLstat = fs.lstat;
+    // Keep the fixture's real root before the Windows platform mock changes temp-path resolution.
     const realTmpRoot = resolvePreferredOpenClawTmpDir();
+    let unknownInspections = 0;
 
     await withMockedWindowsPlatform(async () => {
-      const lstatSpy = vi
-        .spyOn(fs, "lstat")
-        .mockResolvedValue(cloneStatWithDev(actualLstat, zeroDev));
-      const statSpy = vi.spyOn(fs, "stat").mockResolvedValue(cloneStatWithDev(actualStat, zeroDev));
+      const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        const stat = await actualLstat(...args);
+        if (
+          args[0] === file &&
+          typeof stat.dev === "bigint" &&
+          (persistent || unknownInspections === 0)
+        ) {
+          stat.dev = 0n;
+          unknownInspections++;
+        }
+        return stat;
+      });
 
-      await withRestoredMocks([lstatSpy, statSpy], async () => {
-        const result = await loadWebMedia(tinyPngFile, 1024 * 1024, {
+      await withRestoredMocks([lstatSpy], async () => {
+        const loaded = loadWebMedia(file, {
+          maxBytes: 1024 * 1024,
           localRoots: [realTmpRoot],
+          optimizeImages: false,
         });
-        expect(result.kind).toBe("image");
-        expect(result.buffer.length).toBeGreaterThan(0);
+        if (persistent) {
+          await expectLocalMediaAccessCode(loaded, "path-not-allowed");
+          expect(unknownInspections).toBeGreaterThan(0);
+        } else {
+          const result = await loaded;
+          expect(result.kind).toBe("image");
+          expect(result.buffer).toEqual(tinyPngBuffer);
+          expect(unknownInspections).toBe(1);
+        }
       });
     });
   });

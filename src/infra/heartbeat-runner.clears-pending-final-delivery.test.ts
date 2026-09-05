@@ -1,6 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
+import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import {
+  buildRecoverablePendingFinalDeliveryText,
+  normalizePendingFinalRecoveryPayloads,
+} from "../auto-reply/reply/pending-final-delivery.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -9,278 +18,313 @@ import {
   seedMainSessionStore,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+import { resetSystemEventsForTest } from "./system-events.js";
 
 installHeartbeatRunnerTestRuntime();
 
-type StoredEntry = Record<string, unknown> | undefined;
-
-describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery is satisfied", () => {
+describe("heartbeat pending-final delivery ownership", () => {
   const TELEGRAM_GROUP = "-1001234567890";
 
-  function createHeartbeatConfig(storePath: string): OpenClawConfig {
+  afterEach(() => {
+    resetHeartbeatEventsForTest();
+    resetSystemEventsForTest();
+  });
+
+  function createHeartbeatConfig(storePath: string, isolatedSession = false): OpenClawConfig {
     return {
-      agents: {
-        defaults: {
-          heartbeat: { every: "5m", target: "telegram" },
-        },
-      },
+      agents: { defaults: { heartbeat: { every: "5m", target: "telegram", isolatedSession } } },
+      messages: { visibleReplies: "automatic" },
       channels: {
-        telegram: {
-          token: "test-token",
-          allowFrom: ["*"],
-          heartbeat: { showOk: false },
-        },
+        telegram: { token: "test-token", allowFrom: ["*"], heartbeat: { showOk: false } },
       },
       session: { store: storePath },
-    } as unknown as OpenClawConfig;
+    } as OpenClawConfig;
   }
 
   function heartbeatDeps(
     sendTelegram: ReturnType<typeof vi.fn>,
     replySpy: HeartbeatReplySpy,
-    now?: number,
+    now: number,
   ): HeartbeatDeps {
     return {
       telegram: sendTelegram as unknown,
       getQueueSize: () => 0,
-      // A fixed clock lets a test seed pending delivery creation relative to
-      // the run's startedAt, which is what the ownership guard compares against.
-      nowMs: () => now ?? Date.now(),
+      nowMs: () => now,
       getReplyFromConfig: replySpy,
-    } satisfies HeartbeatDeps;
+    };
   }
 
-  async function patchEntry(
+  function readEntry(storePath: string, sessionKey: string) {
+    return readSessionStoreForTest<SessionEntry>(storePath)[sessionKey];
+  }
+
+  // Model completion produces one intent and a prepared delivery per payload.
+  // Let the real transport and finalizer settle it; the test never clears it.
+  async function prepareFinal(
     storePath: string,
     sessionKey: string,
-    patch: Record<string, unknown>,
-  ): Promise<void> {
-    await patchSessionEntryCore({ storePath, sessionKey }, () => patch, { preserveActivity: true });
+    payload: ReplyPayload,
+    options: { siblingState?: "prepared" | "unknown" } = {},
+  ) {
+    const entry = loadSessionEntry({ storePath, sessionKey });
+    if (!entry) {
+      throw new Error("Expected heartbeat execution session");
+    }
+    const intentId = "heartbeat-intent";
+    const deliveryId = "heartbeat-delivery";
+    const recoveryText = buildRecoverablePendingFinalDeliveryText(
+      normalizePendingFinalRecoveryPayloads([payload]),
+    );
+    const stripped = stripHeartbeatToken(recoveryText ?? "", {
+      mode: "heartbeat",
+      maxAckChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+    });
+    const pendingText = stripped.shouldSkip ? "" : stripped.text;
+    await patchSessionEntryCore(
+      { storePath, sessionKey },
+      () => ({
+        pendingFinalDelivery: {
+          ...(pendingText
+            ? { kind: "replayable" as const, text: pendingText }
+            : { kind: "transport-only" as const }),
+          createdAt: Date.now(),
+          intentId,
+          deliveries: [
+            ...(options.siblingState
+              ? [{ id: "other-delivery", state: options.siblingState }]
+              : []),
+            { id: deliveryId, state: "prepared" },
+          ],
+        },
+      }),
+      { preserveActivity: true },
+    );
+    return setReplyPayloadMetadata(payload, {
+      pendingFinalDeliveryCompletion: {
+        deliveryId,
+        intentId,
+        sessionId: entry.sessionId,
+        sessionKey,
+        storePath,
+      },
+    });
   }
 
-  async function readEntry(storePath: string, sessionKey: string): Promise<StoredEntry> {
-    return readSessionStoreForTest<Record<string, unknown>>(storePath)[sessionKey];
+  async function seedSession(storePath: string, cfg: OpenClawConfig, updatedAt: number) {
+    return seedMainSessionStore(storePath, cfg, {
+      lastChannel: "telegram",
+      lastProvider: "telegram",
+      lastTo: TELEGRAM_GROUP,
+      updatedAt,
+    });
   }
 
-  function expectPendingFinalDeliveryCleared(entry: StoredEntry): void {
-    expect(entry?.pendingFinalDelivery).toBeUndefined();
-  }
+  it.each([false, true])(
+    "clears the delivered execution intent with isolatedSession=%s",
+    async (isolatedSession) => {
+      await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+        const cfg = createHeartbeatConfig(storePath, isolatedSession);
+        const now = Date.now();
+        const previousUpdatedAt = now - 60_000;
+        const sessionKey = await seedSession(storePath, cfg, previousUpdatedAt);
+        const replyText = "Heartbeat update: everything is green.";
+        const unrelatedFinal = {
+          kind: "replayable" as const,
+          text: "User final awaiting confirmation",
+          createdAt: now,
+          intentId: "base-user-intent",
+          deliveries: [{ id: "base-user-delivery", state: "unknown" as const }],
+        };
+        let executionKey = "";
+        replySpy.mockImplementation(async (ctx) => {
+          executionKey = ctx.SessionKey!;
+          if (isolatedSession) {
+            await patchSessionEntryCore(
+              { storePath, sessionKey },
+              () => ({
+                pendingFinalDelivery: unrelatedFinal,
+              }),
+              { preserveActivity: true },
+            );
+          }
+          return prepareFinal(storePath, executionKey, { text: replyText });
+        });
+        const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
-  it("nulls every pendingFinalDelivery* field after delivering substantive heartbeat content", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig(storePath);
-      const NOW = Date.now();
+        const result = await runHeartbeatOnce({
+          cfg,
+          deps: heartbeatDeps(sendTelegram, replySpy, now),
+        });
 
-      // Seed a stuck pendingFinalDelivery this run owns: createdAt at run start
-      // marks it as produced by this heartbeat (the case the original fix
-      // targets). pendingFinalDeliveryText is a heartbeat-ack token so the
-      // pendingFinalDelivery defer gate does not bail before the send.
-      const sessionKey = await seedMainSessionStore(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: TELEGRAM_GROUP,
-        updatedAt: NOW,
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: "HEARTBEAT_OK",
-          createdAt: NOW,
-          context: { channel: "telegram", to: "target" },
-          intentId: "intent-send-success",
-        },
+        expect(result.status).toBe("ran");
+        expect(sendTelegram).toHaveBeenCalledOnce();
+        expect(sendTelegram.mock.calls[0]?.[1]).toBe(replyText);
+        expect(executionKey === sessionKey).toBe(!isolatedSession);
+        expect(readEntry(storePath, executionKey)?.pendingFinalDelivery).toBeUndefined();
+        expect(readEntry(storePath, sessionKey)).toMatchObject({
+          lastHeartbeatText: replyText,
+          lastHeartbeatSentAt: now,
+        });
+        if (isolatedSession) {
+          expect(readEntry(storePath, sessionKey)).toMatchObject({
+            updatedAt: previousUpdatedAt,
+            pendingFinalDelivery: unrelatedFinal,
+          });
+        }
       });
+    },
+  );
 
-      // Substantive reply text forces the post-success store write path
-      // (heartbeat-runner.ts:~2120, `if (visibleSendSucceeded && !shouldSkipMain ...)`).
-      const replyText = "Heartbeat update: everything is green.";
-      replySpy.mockResolvedValue({ text: replyText });
-      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+  it.each([
+    { name: "heartbeat ack", payload: () => ({ text: "HEARTBEAT_OK" }), sends: 0 },
+    {
+      name: "quiet tool response",
+      payload: () =>
+        createHeartbeatToolResponsePayload({
+          outcome: "no_change",
+          notify: false,
+          summary: "Nothing needs attention.",
+        }),
+      sends: 0,
+    },
+    {
+      name: "visible tool response",
+      payload: () =>
+        createHeartbeatToolResponsePayload({
+          outcome: "needs_attention",
+          notify: true,
+          summary: "Build blocked.",
+          notificationText: "Build needs credentials.",
+        }),
+      sends: 1,
+    },
+  ])("settles the selected $name intent", async ({ payload, sends }) => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatConfig(storePath, true);
+      const now = Date.now();
+      const previousUpdatedAt = now - 60_000;
+      const sessionKey = await seedSession(storePath, cfg, previousUpdatedAt);
+      let executionKey = "";
+      replySpy.mockImplementation(async (ctx) => {
+        executionKey = ctx.SessionKey!;
+        return prepareFinal(storePath, executionKey, payload());
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
 
       const result = await runHeartbeatOnce({
         cfg,
-        deps: heartbeatDeps(sendTelegram, replySpy, NOW),
+        deps: heartbeatDeps(sendTelegram, replySpy, now),
       });
 
       expect(result.status).toBe("ran");
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-
-      const entry = await readEntry(storePath, sessionKey);
-      expect(entry?.lastHeartbeatText).toBe(replyText);
-      expect(typeof entry?.lastHeartbeatSentAt).toBe("number");
-      expectPendingFinalDeliveryCleared(entry);
+      expect(sendTelegram).toHaveBeenCalledTimes(sends);
+      if (sends) {
+        expect(sendTelegram.mock.calls[0]?.[1]).toBe("Build needs credentials.");
+      }
+      expect(readEntry(storePath, executionKey)?.pendingFinalDelivery).toBeUndefined();
+      expect(readEntry(storePath, sessionKey)?.updatedAt).toBe(previousUpdatedAt);
+      if (!sends) {
+        expect(readEntry(storePath, executionKey)?.updatedAt).toBe(now);
+      }
     });
   });
 
-  it("clears pendingFinalDelivery* on a duplicate skip even when responsePrefix diverges the stored text", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      // The send-success clear never runs here: the run reproduces a payload we
-      // already delivered, so the duplicate-suppression branch
-      // (heartbeat-runner.ts:~1944) returns before any send.
-      //
-      // agent-runner stores pendingFinalDeliveryText as the token-stripped body
-      // WITHOUT the responsePrefix (agent-runner.ts:~2490), while
-      // normalizeHeartbeatReply re-adds the prefix to the delivered text
-      // (heartbeat-runner.ts:~838). So the stored pending text legitimately
-      // differs from lastHeartbeatText for the same payload, and the clear must
-      // not depend on a byte-equal text match or prefixed agents stay stuck.
-      const cfg = {
-        ...createHeartbeatConfig(storePath),
-        channels: {
-          ...createHeartbeatConfig(storePath).channels,
-          telegram: {
-            ...createHeartbeatConfig(storePath).channels?.telegram,
-            responsePrefix: "🤖",
-          },
-        },
-      } as unknown as OpenClawConfig;
+  it.each([undefined, "prepared", "unknown"] as const)(
+    "suppresses only the selected duplicate with sibling=%s despite a response prefix",
+    async (siblingState) => {
+      await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+        const cfg = createHeartbeatConfig(storePath);
+        cfg.channels!.telegram!.responsePrefix = "🤖";
+        const now = Date.now();
+        const previousUpdatedAt = now - 60_000;
+        const body = "Heartbeat update: everything is green.";
+        const deliveredText = `🤖 ${body}`;
+        const sessionKey = await seedSession(storePath, cfg, previousUpdatedAt);
+        await patchSessionEntryCore(
+          { storePath, sessionKey },
+          () => ({
+            lastHeartbeatText: deliveredText,
+            lastHeartbeatSentAt: previousUpdatedAt,
+          }),
+          { preserveActivity: true },
+        );
+        replySpy.mockImplementation(async (ctx) =>
+          prepareFinal(storePath, ctx.SessionKey!, { text: body }, { siblingState }),
+        );
+        const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
 
-      const body = "Heartbeat update: everything is green.";
-      const deliveredText = `🤖 ${body}`;
-      const NOW = Date.now();
-      // updatedAt is well past the 30s defer window so the pendingFinalDelivery
-      // gate does not bail before the duplicate branch (the pending text is
-      // substantive, not a heartbeat ack).
-      const staleAt = NOW - 60_000;
+        const result = await runHeartbeatOnce({
+          cfg,
+          deps: heartbeatDeps(sendTelegram, replySpy, now),
+        });
 
-      const sessionKey = await seedMainSessionStore(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: TELEGRAM_GROUP,
-        updatedAt: staleAt,
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: body, // prefix-less; diverges from deliveredText
-          createdAt: NOW,
-          context: { channel: "telegram", to: "target" },
-          intentId: "intent-duplicate-skip",
-        },
+        expect(result.status).toBe("ran");
+        expect(sendTelegram).not.toHaveBeenCalled();
+        const entry = readEntry(storePath, sessionKey);
+        expect(entry).toMatchObject({
+          lastHeartbeatText: deliveredText,
+          lastHeartbeatSentAt: previousUpdatedAt,
+          updatedAt: previousUpdatedAt,
+        });
+        if (siblingState) {
+          expect(entry?.pendingFinalDelivery?.deliveries).toEqual([
+            { id: "other-delivery", state: siblingState },
+            { id: "heartbeat-delivery", state: "suppressed" },
+          ]);
+        } else {
+          expect(entry?.pendingFinalDelivery).toBeUndefined();
+        }
       });
-      await patchEntry(storePath, sessionKey, {
-        // lastHeartbeat* proves the same payload already went out within 24h,
-        // which is what makes this run a duplicate and the pending clear safe.
-        lastHeartbeatText: deliveredText,
-        lastHeartbeatSentAt: staleAt,
+    },
+  );
+
+  it.each(["send", "duplicate"] as const)(
+    "preserves an unowned pending final during %s even when its timestamp matches this run",
+    async (outcome) => {
+      await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+        const cfg = createHeartbeatConfig(storePath);
+        const now = Date.now();
+        const previousUpdatedAt = now - 60_000;
+        const sessionKey = await seedSession(storePath, cfg, previousUpdatedAt);
+        const body = "Recurring heartbeat status line.";
+        const pendingFinalDelivery = {
+          kind: "replayable" as const,
+          text: "A different final still awaiting delivery",
+          createdAt: now,
+          intentId: "unowned-intent",
+          deliveries: [{ id: "unowned-delivery", state: "unknown" as const }],
+        };
+        replySpy.mockImplementation(async () => {
+          await patchSessionEntryCore({ storePath, sessionKey }, () => ({ pendingFinalDelivery }), {
+            preserveActivity: true,
+          });
+          return { text: body };
+        });
+        if (outcome === "duplicate") {
+          await patchSessionEntryCore(
+            { storePath, sessionKey },
+            () => ({
+              lastHeartbeatText: body,
+              lastHeartbeatSentAt: previousUpdatedAt,
+            }),
+            { preserveActivity: true },
+          );
+        }
+        const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+        const result = await runHeartbeatOnce({
+          cfg,
+          deps: heartbeatDeps(sendTelegram, replySpy, now),
+        });
+
+        expect(result.status).toBe("ran");
+        expect(sendTelegram).toHaveBeenCalledTimes(outcome === "send" ? 1 : 0);
+        expect(readEntry(storePath, sessionKey)).toMatchObject({
+          pendingFinalDelivery,
+          lastHeartbeatText: body,
+          updatedAt: previousUpdatedAt,
+        });
       });
-
-      // Reply is the prefix-less body; normalizeHeartbeatReply re-adds "🤖 ", so
-      // normalized.text === deliveredText === lastHeartbeatText → duplicate skip.
-      replySpy.mockResolvedValue({ text: body });
-      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
-
-      const result = await runHeartbeatOnce({
-        cfg,
-        deps: heartbeatDeps(sendTelegram, replySpy, NOW),
-      });
-
-      // status "ran" (not "skipped") proves the run reached the duplicate branch
-      // rather than bailing at the pendingFinalDelivery gate.
-      expect(result.status).toBe("ran");
-      // Duplicate payload: nothing is sent this run.
-      expect(sendTelegram).not.toHaveBeenCalled();
-
-      const entry = await readEntry(storePath, sessionKey);
-      // lastHeartbeat* stays intact; only the satisfied pending state clears.
-      expect(entry?.lastHeartbeatText).toBe(deliveredText);
-      expectPendingFinalDeliveryCleared(entry);
-    });
-  });
-
-  it("preserves an older unsatisfied pendingFinalDelivery the heartbeat send did not create", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig(storePath);
-      const NOW = Date.now();
-      // An older user-facing final that failed delivery and still owns its own
-      // get-reply redelivery recovery path. It predates this run (createdAt <
-      // startedAt) and a message_tool_only/response-tool heartbeat would not
-      // refresh it, so the send-success clear must NOT retire it.
-      const olderCreatedAt = NOW - 60_000;
-      const olderText = "Older final the user never received";
-      const sessionKey = await seedMainSessionStore(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: TELEGRAM_GROUP,
-        // Stale so the substantive-pending defer gate does not bail this run.
-        updatedAt: NOW - 60_000,
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: olderText,
-          createdAt: olderCreatedAt,
-          context: { channel: "telegram", to: "older-chat" },
-          intentId: "intent-older-unsatisfied",
-        },
-      });
-
-      // A fresh, different heartbeat payload that gets delivered this run.
-      const replyText = "Fresh heartbeat content unrelated to the older final.";
-      replySpy.mockResolvedValue({ text: replyText });
-      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
-
-      const result = await runHeartbeatOnce({
-        cfg,
-        deps: heartbeatDeps(sendTelegram, replySpy, NOW),
-      });
-
-      expect(result.status).toBe("ran");
-      expect(sendTelegram).toHaveBeenCalledTimes(1);
-
-      const entry = await readEntry(storePath, sessionKey);
-      // Send-success records the dedupe markers for the delivered payload...
-      expect(entry?.lastHeartbeatText).toBe(replyText);
-      // ...but the older, unowned pending-final survives for its own recovery.
-      expect(entry?.pendingFinalDelivery).toMatchObject({
-        kind: "replayable",
-        text: olderText,
-        createdAt: olderCreatedAt,
-        intentId: "intent-older-unsatisfied",
-      });
-    });
-  });
-
-  it("preserves an older unowned pendingFinalDelivery on a duplicate skip", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
-      const cfg = createHeartbeatConfig(storePath);
-      const NOW = Date.now();
-      const body = "Recurring heartbeat status line.";
-      const olderCreatedAt = NOW - 60_000;
-      const olderText = "A different older final still awaiting delivery";
-      const sessionKey = await seedMainSessionStore(storePath, cfg, {
-        lastChannel: "telegram",
-        lastProvider: "telegram",
-        lastTo: TELEGRAM_GROUP,
-        updatedAt: NOW - 60_000,
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: olderText,
-          createdAt: olderCreatedAt,
-          context: { channel: "telegram", to: "older-chat" },
-          intentId: "intent-older-dupe",
-        },
-      });
-      await patchEntry(storePath, sessionKey, {
-        // Same payload already delivered within 24h -> this run is a duplicate skip.
-        lastHeartbeatText: body,
-        lastHeartbeatSentAt: NOW - 60_000,
-      });
-
-      replySpy.mockResolvedValue({ text: body });
-      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
-
-      const result = await runHeartbeatOnce({
-        cfg,
-        deps: heartbeatDeps(sendTelegram, replySpy, NOW),
-      });
-
-      expect(result.status).toBe("ran");
-      // Duplicate payload: nothing is sent this run.
-      expect(sendTelegram).not.toHaveBeenCalled();
-
-      const entry = await readEntry(storePath, sessionKey);
-      // The duplicate-skip clear must not retire the older, unowned pending-final.
-      expect(entry?.pendingFinalDelivery).toMatchObject({
-        kind: "replayable",
-        text: olderText,
-        createdAt: olderCreatedAt,
-        intentId: "intent-older-dupe",
-      });
-    });
-  });
+    },
+  );
 });

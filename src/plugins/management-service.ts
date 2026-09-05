@@ -1,80 +1,62 @@
-// Structured plugin catalog and lifecycle operations shared by Gateway-facing surfaces.
-import path from "node:path";
-import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+// Reads plugin inventory and inspection metadata without loading install orchestration.
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { collectChangedPaths } from "../config/config-change-paths.js";
-import {
-  assertConfigWriteAllowedInCurrentMode,
-  readConfigFileSnapshotForWrite,
-  replaceConfigFile,
-} from "../config/config.js";
+import type {
+  PluginInspectSource,
+  PluginsInspectResult,
+} from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import { resolveIsNixMode } from "../config/paths.js";
-import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/install-source-utils.js";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { installBundledPluginSource } from "./bundled-install.js";
-import type { BundledPluginSource } from "./bundled-sources.js";
-import { CLAWHUB_INSTALL_ERROR_CODE } from "./clawhub-error-codes.js";
+import { resolvePendingPluginCapabilityReview } from "./capability-consent.js";
 import {
-  buildClawHubPluginInstallRecordFields,
-  type ClawHubPluginInstallRecordFields,
-} from "./clawhub-install-records.js";
-import { installPluginFromClawHub } from "./clawhub.js";
+  buildPluginCapabilitySummary,
+  computeDeclaredSurfaceHash,
+  formatPluginCapabilityConsentRequired,
+  resolveAcceptedSurfaceCurrent,
+  resolvePluginInstallRecordIntegrity,
+  resolvePluginInstallRecordTrust,
+  resolvePluginPackageDeclaredSurface,
+} from "./capability-summary.js";
 import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
-import { enableExplicitlySelectedPluginInConfig } from "./enable.js";
-import { installPluginFromGitSpec } from "./git-install.js";
-import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
+import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import {
-  resolveInstallConfigMutationPreflights,
-  selectInstallMutationWriteOptions,
-  persistPluginInstall,
-  type ConfigSnapshotForInstallPersist,
-} from "./install-persistence.js";
-import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
-import type { InstallSafetyOverrides } from "./install-security-scan.js";
-import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
-import type { PluginInstallLogger } from "./install-types.js";
+  createInstalledPluginEnabledPredicate,
+  isInstalledPluginEnabled,
+} from "./installed-plugin-index.js";
+import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
-  installPluginFromNpmPackArchive,
-  installPluginFromNpmSpec,
-  installPluginFromPath,
-} from "./install.js";
-import {
-  loadInstalledPluginIndexInstallRecords,
-  removePluginInstallRecordFromRecords,
-  withPluginInstallRecords,
-  withoutPluginInstallRecords,
-} from "./installed-plugin-index-records.js";
-import { resolveInstalledPluginPackageOwnership } from "./installed-plugin-package-ownership.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
+  type ManagedPluginCatalogEntry,
+  type ManagedPluginCatalog,
+  type OfficialCatalogResult,
+  getManagedPluginCache,
+  withManagedPluginCache,
+  prepareCatalogEntry,
+  prepareCatalogEntries,
+  loadOfficialCatalog,
+  normalizeKinds,
+  normalizeCatalogMetadata,
+  normalizeFeaturedAt,
+  derivePluginCategory,
+  firstPluginError,
+  compareCatalogEntries,
+  resolveInstalledPluginPresentation,
+  resolveInstalledHostedOfficialEntry,
+  resolveOfficialEntryById,
+} from "./management-catalog.js";
+import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import {
-  resolveTrustedOfficialClawHubPackageName,
-  resolveTrustedSourceLinkedOfficialClawHubSpec,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
-} from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalPluginCatalogEntries,
-  loadConfiguredHostedOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalPluginId,
-  resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLabel,
-  type HostedOfficialExternalPluginCatalogLoadResult,
-  type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
-import { createConfigScopedPromiseLoader } from "./plugin-cache-primitives.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
+import { createPluginCache, getProcessPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot,
@@ -82,585 +64,60 @@ import {
 } from "./plugin-metadata-snapshot.js";
 import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
 import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
-import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
-import { applySlotSelectionForPlugin } from "./slot-selection.js";
-import { setPluginEnabledInConfig } from "./toggle-config.js";
-import { collectClawPluginUninstallWarnings } from "./uninstall-claw-references.js";
-import { isUninstallPathInsideOrEqual } from "./uninstall-config.js";
 import {
-  prepareConfigForPendingPluginDirectoryRemovalSet,
-  recordPluginPackageUninstallPlan,
-} from "./uninstall-package-plan.js";
-import {
-  applyPluginUninstallDirectoryRemoval,
-  formatUninstallActionLabels,
-  planPluginUninstall,
-  pluginUninstallTargetExists,
-} from "./uninstall.js";
+  buildPluginDependencyStatus,
+  projectPluginDependencyHealth,
+} from "./status-dependencies-core.js";
 
-type ManagedPluginCatalogEntry = {
-  id: string;
-  name: string;
-  packageName?: string;
-  description?: string;
-  version?: string;
-  kind?: string[];
-  origin?: string;
-  installed: boolean;
-  enabled: boolean;
-  state: "enabled" | "disabled" | "not-installed" | "error";
-  featured?: boolean;
-  featuredAt?: number;
-  order?: number;
-  hasIcon?: boolean;
-  install?: { source: "clawhub"; packageName: string } | { source: "official"; pluginId: string };
-  error?: string;
-  category?: string;
-  removable?: boolean;
-};
+export type ManagedPluginInspection = PluginsInspectResult;
 
-type ManagedPluginCatalog = {
-  plugins: ManagedPluginCatalogEntry[];
-  diagnostics: unknown[];
-  mutationAllowed: boolean;
-};
-
-type ManagedPluginInstallRequest =
-  | {
-      source: "clawhub";
-      packageName: string;
-      version?: string;
-      acknowledgeClawHubRisk?: boolean;
-      acknowledgeInstallPolicyWarning?: true;
-    }
-  | { source: "official"; pluginId: string; acknowledgeInstallPolicyWarning?: true };
-
-export type ManagedPluginSourceInstallRequest =
-  | {
-      source: "local";
-      path: string;
-      recordSource: "archive" | "path";
-      mode: "install" | "update";
-      link?: boolean;
-      successMessage?: string;
-    }
-  | {
-      source: "npm-pack";
-      archivePath: string;
-      mode: "install" | "update";
-    }
-  | { source: "git"; spec: string; mode: "install" | "update" }
-  | {
-      source: "clawhub";
-      spec: string;
-      mode?: "install" | "update";
-      expectedPluginId?: string;
-      expectedIntegrity?: string;
-      acknowledgeClawHubRisk?: boolean;
-      onClawHubRisk?: NonNullable<Parameters<typeof installPluginFromClawHub>[0]["onClawHubRisk"]>;
-    }
-  | {
-      source: "bundled";
-      rawSpec: string;
-      bundledSource: BundledPluginSource;
-      warning?: string;
-    }
-  | {
-      source: "official";
-      spec: string;
-      pluginId: string;
-      expectedIntegrity?: string;
-      mode: "install" | "update";
-      pin?: boolean;
-    }
-  | {
-      source: "npm";
-      spec: string;
-      mode: "install" | "update";
-      pin?: boolean;
-      expectedPluginId?: string;
-      expectedIntegrity?: string;
-      trustedSourceLinkedOfficialInstall?: boolean;
-      allowBundledFallback?: boolean;
-    };
-
-type ManagedPluginSourceInstallResult =
-  | {
-      ok: true;
-      pluginId: string;
-      config: OpenClawConfig;
-      warnings?: string[];
-      targetDir?: string;
-      version?: string;
-      npmResolution?: NpmSpecResolution;
-      clawhub?: ClawHubPluginInstallRecordFields;
-    }
-  | {
-      ok: false;
-      error: string;
-      code?: string;
-      version?: string;
-      warning?: string;
-      installPolicyWarning?: InstallPolicyWarningDetails;
-    };
-
-type SourceInstallerResult =
-  | {
-      ok: false;
-      error: string;
-      code?: string;
-      version?: string;
-      warning?: string;
-      installPolicyWarning?: InstallPolicyWarningDetails;
-    }
-  | {
-      ok: true;
-      pluginId: string;
-      targetDir: string;
-      version?: string;
-      npmResolution?: NpmSpecResolution;
-    };
-
-export class ManagedPluginLifecycleError extends Error {
-  readonly kind: "invalid-request" | "unavailable";
-  readonly code?: string;
-  readonly version?: string;
-  readonly warning?: string;
-  readonly installPolicyWarning?: InstallPolicyWarningDetails;
-
-  constructor(
-    message: string,
-    details?: {
-      kind?: "invalid-request" | "unavailable";
-      code?: string;
-      version?: string;
-      warning?: string;
-      installPolicyWarning?: InstallPolicyWarningDetails;
-      cause?: unknown;
-    },
-  ) {
-    super(message, details?.cause !== undefined ? { cause: details.cause } : undefined);
-    this.name = "ManagedPluginLifecycleError";
-    this.kind = details?.kind ?? "invalid-request";
-    this.code = details?.code;
-    this.version = details?.version;
-    this.warning = details?.warning;
-    this.installPolicyWarning = details?.installPolicyWarning;
-  }
-}
-
-type OfficialCatalogResult = Pick<HostedOfficialExternalPluginCatalogLoadResult, "entries"> & {
-  error?: string;
-  hostedFeaturedAuthoritative?: boolean;
-};
-
-const officialCatalogLoader = createConfigScopedPromiseLoader(() =>
-  loadConfiguredHostedOfficialExternalPluginCatalogEntries(),
-);
-
-/** Clear the process-stable hosted catalog snapshot after an explicit owner reload. */
-export function clearManagedPluginOfficialCatalogCache(): void {
-  officialCatalogLoader.clear();
-}
-
-function resolveCatalogManifestIcon(manifest: unknown): string | undefined {
-  if (!manifest || typeof manifest !== "object") {
-    return undefined;
-  }
-  return normalizeOptionalString((manifest as { icon?: unknown }).icon);
-}
-
-function resolveCatalogEntryIcon(entry: OfficialExternalPluginCatalogEntry | undefined) {
-  return (
-    normalizeOptionalString(entry?.icon) ??
-    resolveCatalogManifestIcon(getOfficialExternalPluginCatalogManifest(entry ?? {}))
-  );
-}
-
-function mergeCatalogMetadata(
-  hosted: OfficialExternalPluginCatalogEntry,
-  bundled: OfficialExternalPluginCatalogEntry,
-  options: { hostedFeaturedAuthoritative: boolean },
-): OfficialExternalPluginCatalogEntry {
-  const hostedManifest = getOfficialExternalPluginCatalogManifest(hosted);
-  const bundledManifest = getOfficialExternalPluginCatalogManifest(bundled);
-  const bundledCatalog = bundledManifest?.catalog;
-  const bundledPlugin = bundledManifest?.plugin;
-  const bundledIcon = resolveCatalogManifestIcon(bundledManifest);
-  const bundledName = normalizeOptionalString(bundled.name);
-  const bundledDescription = normalizeOptionalString(bundled.description);
-  const bundledKind = normalizeOptionalString(bundled.kind);
-  const bundledSource = normalizeOptionalString(bundled.source);
-  const hostedFeatured = typeof hosted.featured === "boolean" ? hosted.featured : false;
-  const mergedCatalog =
-    bundledCatalog ||
-    hostedManifest?.catalog ||
-    (options.hostedFeaturedAuthoritative && hostedFeatured)
-      ? {
-          ...hostedManifest?.catalog,
-          ...bundledCatalog,
-          ...(options.hostedFeaturedAuthoritative ? { featured: hostedFeatured } : {}),
-        }
-      : undefined;
-  if (!mergedCatalog && !bundledPlugin) {
-    return hosted;
-  }
-  return {
-    ...hosted,
-    ...(!normalizeOptionalString(hosted.name) && bundledName ? { name: bundledName } : {}),
-    ...(!normalizeOptionalString(hosted.description) && bundledDescription
-      ? { description: bundledDescription }
-      : {}),
-    ...(!normalizeOptionalString(hosted.kind) && bundledKind ? { kind: bundledKind } : {}),
-    ...(!normalizeOptionalString(hosted.source) && bundledSource ? { source: bundledSource } : {}),
-    [MANIFEST_KEY]: {
-      ...hostedManifest,
-      ...(bundledPlugin ? { plugin: { ...hostedManifest?.plugin, ...bundledPlugin } } : {}),
-      ...(mergedCatalog ? { catalog: mergedCatalog } : {}),
-      ...(!resolveCatalogManifestIcon(hostedManifest) && bundledIcon ? { icon: bundledIcon } : {}),
-    },
-  };
-}
-
-type CatalogPackageSourceIdentity = {
-  source: "clawhub" | "npm";
-  packageName: string;
-};
-
-function resolveCatalogPackageSourceIdentities(
-  entry: OfficialExternalPluginCatalogEntry,
-): CatalogPackageSourceIdentity[] {
-  const install = resolveOfficialExternalPluginInstall(entry);
-  const clawhubPackage = install?.clawhubSpec
-    ? parseClawHubPluginSpec(install.clawhubSpec)?.name
-    : undefined;
-  const npmPackage = install?.npmSpec ? parseRegistryNpmSpec(install.npmSpec)?.name : undefined;
-  return [
-    ...(clawhubPackage ? [{ source: "clawhub" as const, packageName: clawhubPackage }] : []),
-    ...(npmPackage ? [{ source: "npm" as const, packageName: npmPackage }] : []),
-  ];
-}
-
-function matchesBundledCatalogIdentity(params: {
-  hosted: OfficialExternalPluginCatalogEntry;
-  bundled: OfficialExternalPluginCatalogEntry;
-}): boolean {
-  const hostedSources = resolveCatalogPackageSourceIdentities(params.hosted);
-  const bundledSources = resolveCatalogPackageSourceIdentities(params.bundled);
-  return hostedSources.some((hosted) =>
-    bundledSources.some(
-      (bundled) => bundled.source === hosted.source && bundled.packageName === hosted.packageName,
-    ),
-  );
-}
-
-/**
- * Overlay local runtime identity and ordering after an exact package/source match.
- * Hosted curation wins; bundled Featured state survives only in fallback mode.
- */
-function overlayBundledOfficialPluginCatalogMetadata(
-  entries: readonly OfficialExternalPluginCatalogEntry[],
-  bundledEntries: readonly OfficialExternalPluginCatalogEntry[] = listOfficialExternalPluginCatalogEntries(),
-  options: { hostedFeaturedAuthoritative: boolean } = {
-    hostedFeaturedAuthoritative: false,
-  },
-): OfficialExternalPluginCatalogEntry[] {
-  return entries.map((entry) => {
-    const matches = bundledEntries.filter((bundled) =>
-      matchesBundledCatalogIdentity({ hosted: entry, bundled }),
-    );
-    const bundled = matches.length === 1 ? matches[0] : undefined;
-    if (bundled) {
-      return mergeCatalogMetadata(entry, bundled, options);
-    }
-    if (!options.hostedFeaturedAuthoritative) {
-      return entry;
-    }
-    const hostedManifest = getOfficialExternalPluginCatalogManifest(entry);
-    if (entry.featured !== true && !hostedManifest?.catalog) {
-      return entry;
-    }
-    return {
-      ...entry,
-      [MANIFEST_KEY]: {
-        ...hostedManifest,
-        catalog: {
-          ...hostedManifest?.catalog,
-          featured: entry.featured === true,
-        },
-      },
-    };
-  });
-}
-
-async function loadOfficialCatalog(): Promise<OfficialCatalogResult> {
-  const result = await officialCatalogLoader.load();
-  const hostedFeaturedAuthoritative =
-    result.source === "hosted" || result.source === "hosted-snapshot";
-  return {
-    entries: overlayBundledOfficialPluginCatalogMetadata(result.entries, undefined, {
-      hostedFeaturedAuthoritative,
-    }),
-    hostedFeaturedAuthoritative,
-    ...("error" in result ? { error: result.error } : {}),
-  };
-}
-
-function normalizeKinds(kind: string | readonly string[] | undefined): string[] | undefined {
-  const values = (typeof kind === "string" ? [kind] : (kind ?? []))
-    .map((value) => value.trim())
-    .filter(Boolean);
-  return values.length > 0 ? [...new Set(values)] : undefined;
-}
-
-function normalizeCatalogMetadata(
-  value: unknown,
-): { featured?: boolean; order?: number } | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  const featured = typeof record.featured === "boolean" ? record.featured : undefined;
-  const order =
-    typeof record.order === "number" && Number.isFinite(record.order) ? record.order : undefined;
-  return featured === undefined && order === undefined
-    ? undefined
-    : {
-        ...(featured !== undefined ? { featured } : {}),
-        ...(order !== undefined ? { order } : {}),
+function resolveManagedPluginDiagnostics(
+  snapshot: PluginMetadataSnapshot,
+  config: OpenClawConfig,
+): PluginDiagnostic[] {
+  const dependencies = getManagedPluginCache().dependencyStatus;
+  const isEnabled = createInstalledPluginEnabledPredicate(snapshot.index.plugins, config);
+  const { diagnostics } = projectPluginDependencyHealth({
+    plugins: snapshot.index.plugins.map((record) => {
+      const manifest = snapshot.byPluginId.get(record.pluginId);
+      const enabled = isEnabled(record.pluginId);
+      if (manifest && !dependencies.has(manifest) && tracksPluginDependencyStatus(record)) {
+        dependencies.set(
+          manifest,
+          buildPluginDependencyStatus({
+            rootDir: record.rootDir,
+            dependencies: manifest.packageDependencies,
+            optionalDependencies: manifest.packageOptionalDependencies,
+          }),
+        );
+      }
+      return {
+        id: record.pluginId,
+        source: manifest?.source ?? record.source ?? record.manifestPath,
+        enabled,
+        status: enabled ? ("loaded" as const) : ("disabled" as const),
+        dependencyStatus: manifest ? dependencies.get(manifest) : undefined,
       };
+    }),
+    diagnostics: [...snapshot.diagnostics],
+  });
+  return diagnostics;
 }
 
-function normalizeFeaturedAt(value: unknown): number | undefined {
-  return asSafeIntegerInRange(value, { min: 0 });
-}
+export type ManagedPluginIconSource = { kind: "file"; path: string; rootPath: string };
 
-function resolveCatalogInstallAction(params: {
-  entry: OfficialExternalPluginCatalogEntry;
+function resolvePluginIconSource(params: {
+  metadata: PluginMetadataSnapshot;
   pluginId: string;
-}): ManagedPluginCatalogEntry["install"] {
-  const install = resolveOfficialExternalPluginInstall(params.entry);
-  const clawhub = install?.clawhubSpec ? parseClawHubPluginSpec(install.clawhubSpec) : undefined;
-  if (clawhub && !clawhub.version) {
-    return { source: "clawhub", packageName: clawhub.name };
-  }
-  return install ? { source: "official", pluginId: params.pluginId } : undefined;
-}
-
-/** Coarse manifest-derived grouping so catalog UIs can shelve a large inventory. */
-function derivePluginCategory(manifest: PluginManifestRecord | undefined): string | undefined {
-  if (!manifest) {
-    return undefined;
-  }
-  if (manifest.channels.length > 0 || Object.keys(manifest.channelConfigs ?? {}).length > 0) {
-    return "channel";
-  }
-  const mediaProvider =
-    Object.keys(manifest.imageGenerationProviderMetadata ?? {}).length > 0 ||
-    Object.keys(manifest.videoGenerationProviderMetadata ?? {}).length > 0 ||
-    Object.keys(manifest.musicGenerationProviderMetadata ?? {}).length > 0 ||
-    Object.keys(manifest.mediaUnderstandingProviderMetadata ?? {}).length > 0;
-  if (
-    manifest.providers.length > 0 ||
-    manifest.providerEndpoints?.length ||
-    manifest.modelCatalog ||
-    mediaProvider
-  ) {
-    return "provider";
-  }
-  const kinds = normalizeKinds(manifest.kind);
-  if (kinds?.includes("memory")) {
-    return "memory";
-  }
-  if (kinds?.includes("context-engine")) {
-    return "context-engine";
-  }
-  if (
-    manifest.contracts?.tools?.length ||
-    Object.keys(manifest.toolMetadata ?? {}).length > 0 ||
-    manifest.skills.length > 0
-  ) {
-    return "tool";
+}): ManagedPluginIconSource | undefined {
+  const normalizedPluginId = params.metadata.normalizePluginId(params.pluginId);
+  const manifest = params.metadata.byPluginId.get(normalizedPluginId);
+  const localIconPath = normalizeOptionalString(manifest?.iconPath);
+  if (localIconPath && manifest) {
+    return { kind: "file", path: localIconPath, rootPath: manifest.rootDir };
   }
   return undefined;
 }
-
-function firstPluginError(
-  diagnostics: readonly PluginDiagnostic[],
-  pluginId: string,
-): string | undefined {
-  return diagnostics.find(
-    (diagnostic) => diagnostic.level === "error" && diagnostic.pluginId === pluginId,
-  )?.message;
-}
-
-function compareCatalogEntries(
-  left: ManagedPluginCatalogEntry,
-  right: ManagedPluginCatalogEntry,
-): number {
-  const featured = Number(Boolean(right.featured)) - Number(Boolean(left.featured));
-  if (featured !== 0) {
-    return featured;
-  }
-  if (left.featured && right.featured) {
-    const leftFeaturedAt = left.featuredAt;
-    const rightFeaturedAt = right.featuredAt;
-    if (leftFeaturedAt !== undefined || rightFeaturedAt !== undefined) {
-      if (leftFeaturedAt === undefined) {
-        return 1;
-      }
-      if (rightFeaturedAt === undefined) {
-        return -1;
-      }
-      if (leftFeaturedAt !== rightFeaturedAt) {
-        return rightFeaturedAt - leftFeaturedAt;
-      }
-    }
-  }
-  const order = (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER);
-  return order !== 0 ? order : left.name.localeCompare(right.name);
-}
-
-function resolveInstalledOfficialCatalogEntry(params: {
-  entries: readonly OfficialExternalPluginCatalogEntry[];
-  packageName?: string;
-  source: CatalogPackageSourceIdentity["source"];
-}): OfficialExternalPluginCatalogEntry | undefined {
-  if (!params.packageName) {
-    return undefined;
-  }
-  const matches = params.entries.filter((entry) =>
-    resolveCatalogPackageSourceIdentities(entry).some(
-      (identity) =>
-        identity.source === params.source && identity.packageName === params.packageName,
-    ),
-  );
-  return matches.length === 1 ? matches[0] : undefined;
-}
-
-function resolveOfficialCatalogIconUrl(
-  entries: readonly OfficialExternalPluginCatalogEntry[],
-  pluginId: string,
-): string | undefined {
-  const entry = entries.find(
-    (candidate) => resolveOfficialExternalPluginId(candidate) === pluginId,
-  );
-  return resolveCatalogEntryIcon(entry);
-}
-
-type PluginIndexRecord = PluginMetadataSnapshot["index"]["plugins"][number];
-
-function resolveInstalledHostedOfficialEntry(params: {
-  record: PluginIndexRecord;
-  installOwner?: string;
-  installRecord?: PluginInstallRecord;
-  officialEntries: readonly OfficialExternalPluginCatalogEntry[];
-  bundledOfficialEntries: readonly OfficialExternalPluginCatalogEntry[];
-}): {
-  entry?: OfficialExternalPluginCatalogEntry;
-  hasPublishedIdentity: boolean;
-} {
-  const identityPluginId = params.installOwner ?? params.record.pluginId;
-  const trustedOfficialClawHubSpec = params.installRecord
-    ? resolveTrustedSourceLinkedOfficialClawHubSpec({
-        pluginId: identityPluginId,
-        record: params.installRecord,
-      })
-    : undefined;
-  const trustedOfficialNpmSpec = params.installRecord
-    ? resolveTrustedSourceLinkedOfficialNpmSpec({
-        pluginId: identityPluginId,
-        record: params.installRecord,
-      })
-    : undefined;
-  const sourceLinkedOfficialClawHubPackage = trustedOfficialClawHubSpec
-    ? parseClawHubPluginSpec(trustedOfficialClawHubSpec)?.name
-    : undefined;
-  const currentOfficialClawHubPackage = params.installRecord
-    ? resolveTrustedOfficialClawHubPackageName(params.installRecord)
-    : undefined;
-  const trustedOfficialNpmPackage = trustedOfficialNpmSpec
-    ? parseRegistryNpmSpec(trustedOfficialNpmSpec)?.name
-    : undefined;
-  const bundledPublishedEntry =
-    params.record.origin === "bundled"
-      ? resolveInstalledOfficialCatalogEntry({
-          entries: params.bundledOfficialEntries,
-          packageName: params.record.packageName,
-          source: "npm",
-        })
-      : undefined;
-  const installedOfficialIdentity = sourceLinkedOfficialClawHubPackage
-    ? { source: "clawhub" as const, packageName: sourceLinkedOfficialClawHubPackage }
-    : trustedOfficialNpmPackage
-      ? { source: "npm" as const, packageName: trustedOfficialNpmPackage }
-      : currentOfficialClawHubPackage &&
-          (!params.record.packageName ||
-            params.record.packageName === currentOfficialClawHubPackage)
-        ? { source: "clawhub" as const, packageName: currentOfficialClawHubPackage }
-        : bundledPublishedEntry && params.record.packageName
-          ? { source: "npm" as const, packageName: params.record.packageName }
-          : undefined;
-  const hasInstalledOfficialProvenance = Boolean(
-    installedOfficialIdentity &&
-    (!params.record.packageName ||
-      params.record.packageName === installedOfficialIdentity.packageName),
-  );
-  const bundledOfficialEntry =
-    bundledPublishedEntry ??
-    resolveInstalledOfficialCatalogEntry({
-      entries: params.bundledOfficialEntries,
-      packageName: hasInstalledOfficialProvenance
-        ? installedOfficialIdentity?.packageName
-        : undefined,
-      source: installedOfficialIdentity?.source ?? "clawhub",
-    });
-  const hostedPackageName =
-    installedOfficialIdentity?.source === "npm"
-      ? (bundledOfficialEntry
-          ? resolveCatalogPackageSourceIdentities(bundledOfficialEntry)
-          : []
-        ).find((identity) => identity.source === "clawhub")?.packageName
-      : installedOfficialIdentity?.packageName;
-  return {
-    entry: resolveInstalledOfficialCatalogEntry({
-      entries: params.officialEntries,
-      packageName: hasInstalledOfficialProvenance ? hostedPackageName : undefined,
-      source: "clawhub",
-    }),
-    hasPublishedIdentity: Boolean(hasInstalledOfficialProvenance && hostedPackageName),
-  };
-}
-
-function resolvePluginIconUrlFromCatalogFacts(params: {
-  metadata: PluginMetadataSnapshot;
-  officialEntries: readonly OfficialExternalPluginCatalogEntry[];
-  bundledOfficialEntries?: readonly OfficialExternalPluginCatalogEntry[];
-  pluginId: string;
-}): string | undefined {
-  const normalizedPluginId = params.metadata.normalizePluginId(params.pluginId);
-  const record = params.metadata.index.plugins.find(
-    (candidate) => params.metadata.normalizePluginId(candidate.pluginId) === normalizedPluginId,
-  );
-  const localIcon = normalizeOptionalString(
-    params.metadata.byPluginId.get(normalizedPluginId)?.icon,
-  );
-  if (!record) {
-    return resolveOfficialCatalogIconUrl(params.officialEntries, normalizedPluginId);
-  }
-  const ownership = resolveInstalledPluginPackageOwnership(params.metadata.index, record.pluginId);
-  const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
-  const { entry: officialEntry } = resolveInstalledHostedOfficialEntry({
-    record,
-    ...(installOwner ? { installOwner } : {}),
-    installRecord: installOwner ? params.metadata.index.installRecords[installOwner] : undefined,
-    officialEntries: params.officialEntries,
-    bundledOfficialEntries:
-      params.bundledOfficialEntries ?? listOfficialExternalPluginCatalogEntries(),
-  });
-  return resolveCatalogEntryIcon(officialEntry) ?? localIcon;
-}
-
 function resolveManagedPluginMetadataParams(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
   const workspace = resolvePluginControlPlaneWorkspace({ config, env });
   return {
@@ -670,25 +127,53 @@ function resolveManagedPluginMetadataParams(config: OpenClawConfig, env: NodeJS.
   };
 }
 
-/** Resolve the current manifest/catalog icon URL without accepting a caller-provided URL. */
-export async function resolveManagedPluginIconUrl(params: {
-  config: OpenClawConfig;
-  pluginId: string;
-  env?: NodeJS.ProcessEnv;
-  officialCatalog?: OfficialCatalogResult;
-}): Promise<string | undefined> {
-  const env = params.env ?? process.env;
-  const metadata = resolvePluginMetadataSnapshot(
-    resolveManagedPluginMetadataParams(params.config, env),
-  );
-  const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
-  return resolvePluginIconUrlFromCatalogFacts({
-    metadata,
-    officialEntries: officialCatalog.entries,
-    bundledOfficialEntries: listOfficialExternalPluginCatalogEntries(),
-    pluginId: params.pluginId,
-  });
+function resolveManagedPluginMetadata(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  const boot = getProcessGatewayPluginMetadataSnapshot();
+  const candidate = getProcessPluginCache().desiredMetadata;
+  return candidate && candidate.boot === boot
+    ? candidate.snapshot
+    : resolvePluginMetadataSnapshot(resolveManagedPluginMetadataParams(config, env));
 }
+
+export function loadFreshManagedPluginMetadata(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  // Gateway actions must cover every workspace shown in its management inventory.
+  return getProcessGatewayPluginMetadataSnapshot()
+    ? resolveConfigWidePluginMetadataSnapshot({ config, env, allowCurrent: false })
+    : loadPluginMetadataSnapshot({
+        ...resolveManagedPluginMetadataParams(config, env),
+        allowCurrent: false,
+      });
+}
+
+/** Publish desired install state for management without replacing the Gateway's boot facts. */
+export function refreshManagedPluginMetadata(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): PluginMetadataSnapshot {
+  const env = params.env ?? process.env;
+  const boot = getProcessGatewayPluginMetadataSnapshot();
+  // Install writes may have replaced package bytes already seen by the operation.
+  // Publish only a completely prepared generation; retained readers keep their original facts.
+  const cache = createPluginCache();
+  const snapshot = withPluginCache(cache, () => loadFreshManagedPluginMetadata(params.config, env));
+  if (boot) {
+    getProcessPluginCache().desiredMetadata = { boot, cache, snapshot };
+  }
+  return snapshot;
+}
+
+/** Resolve the current package-local icon without accepting caller-provided input. */
+export const resolveManagedPluginIconSource = withManagedPluginCache(
+  async (params: {
+    config: OpenClawConfig;
+    pluginId: string;
+    env?: NodeJS.ProcessEnv;
+  }): Promise<ManagedPluginIconSource | undefined> => {
+    const env = params.env ?? process.env;
+    const metadata = resolveManagedPluginMetadata(params.config, env);
+    return resolvePluginIconSource({ metadata, pluginId: params.pluginId });
+  },
+);
 
 function normalizeManagedCatalogIconUrl(value: unknown): string | undefined {
   const normalized = normalizeOptionalString(value);
@@ -731,1033 +216,367 @@ export function resolveManagedSetupCatalogIconUrl(params: {
 }
 
 /** Build cold installed state merged with the hosted official catalog and bundled curation. */
-export async function listManagedPlugins(params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  officialCatalog?: OfficialCatalogResult;
-}): Promise<ManagedPluginCatalog> {
-  const env = params.env ?? process.env;
-  const workspace = resolvePluginControlPlaneWorkspace({ config: params.config, env });
-  const metadata = resolvePluginMetadataSnapshot({
-    config: params.config,
-    env,
-    ...(workspace.workspaceDir !== undefined ? { workspaceDir: workspace.workspaceDir } : {}),
-  });
-  const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
-  const bundledOfficialEntries = listOfficialExternalPluginCatalogEntries();
-  const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
-    const manifest = metadata.byPluginId.get(record.pluginId);
-    const localCatalog = normalizeCatalogMetadata(manifest?.catalog);
-    const ownership = resolveInstalledPluginPackageOwnership(metadata.index, record.pluginId);
-    const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
-    const installRecord = installOwner ? metadata.index.installRecords[installOwner] : undefined;
-    const { entry: officialEntry, hasPublishedIdentity } = resolveInstalledHostedOfficialEntry({
-      record,
-      ...(installOwner ? { installOwner } : {}),
-      installRecord,
-      officialEntries: officialCatalog.entries,
-      bundledOfficialEntries,
-    });
-    const hasHostedOfficialIdentity = hasPublishedIdentity;
-    const officialCatalogMetadata = officialEntry
-      ? normalizeCatalogMetadata(getOfficialExternalPluginCatalogManifest(officialEntry)?.catalog)
-      : undefined;
-    // Published plugin curation follows the live feed even after install, including
-    // omission. Private bundled plugins without an exact package/source match stay local.
-    const catalog =
-      hasHostedOfficialIdentity && officialCatalog.hostedFeaturedAuthoritative
-        ? {
-            ...localCatalog,
-            ...officialCatalogMetadata,
-            featured: officialEntry?.featured === true,
-          }
-        : officialCatalogMetadata
-          ? { ...localCatalog, ...officialCatalogMetadata }
-          : localCatalog;
-    const error = firstPluginError(metadata.diagnostics, record.pluginId);
-    const kind = normalizeKinds(manifest?.kind);
-    const category = derivePluginCategory(manifest);
-    // Only externally installed plugins (tracked install record, non-bundled) can be removed.
-    const removable = record.origin !== "bundled" && Boolean(installOwner);
-    // Prefer human labels over package specifiers: the registry backfills a
-    // missing manifest name with the npm package name, which is an install
-    // spec rather than a display name.
-    const manifestName =
-      manifest?.name && manifest.name !== record.packageName ? manifest.name : undefined;
-    const localName = manifestName ?? manifest?.channelCatalogMeta?.label ?? record.pluginId;
-    const localDescription =
-      manifest?.description ?? manifest?.channelCatalogMeta?.blurb ?? manifest?.packageDescription;
-    const hostedListingAuthoritative =
-      hasHostedOfficialIdentity && officialCatalog.hostedFeaturedAuthoritative;
-    const featuredAt =
-      hostedListingAuthoritative && catalog?.featured === true
-        ? normalizeFeaturedAt(officialEntry?.featuredAt)
-        : undefined;
-    const name =
-      (hostedListingAuthoritative ? normalizeOptionalString(officialEntry?.title) : undefined) ??
-      localName;
-    const description =
-      (hostedListingAuthoritative
-        ? normalizeOptionalString(officialEntry?.description)
-        : undefined) ?? localDescription;
-    return {
-      id: record.pluginId,
-      name,
-      ...(record.packageName ? { packageName: record.packageName } : {}),
-      ...(description ? { description } : {}),
-      ...(record.packageVersion || manifest?.version
-        ? { version: record.packageVersion ?? manifest?.version }
-        : {}),
-      ...(kind ? { kind } : {}),
-      ...(record.origin ? { origin: record.origin } : {}),
-      installed: true,
-      enabled: record.enabled,
-      state: error ? "error" : record.enabled ? "enabled" : "disabled",
-      ...(catalog?.featured !== undefined ? { featured: catalog.featured } : {}),
-      ...(featuredAt !== undefined ? { featuredAt } : {}),
-      ...(catalog?.order !== undefined ? { order: catalog.order } : {}),
-      ...(resolvePluginIconUrlFromCatalogFacts({
-        metadata,
-        officialEntries: officialCatalog.entries,
-        bundledOfficialEntries,
-        pluginId: record.pluginId,
-      })
-        ? { hasIcon: true }
-        : {}),
-      ...(error ? { error } : {}),
-      ...(category ? { category } : {}),
-      removable,
-    };
-  });
-  const installedIds = new Set(plugins.map((plugin) => plugin.id));
-  const installedPackageNames = new Set(
-    plugins.flatMap((plugin) => (plugin.packageName ? [plugin.packageName] : [])),
-  );
-  // Hosted rows without a declared runtime id fall back to their package name,
-  // so id matching alone would keep them visible after a successful install.
-  const entryPackageInstalled = (entry: OfficialExternalPluginCatalogEntry) =>
-    resolveCatalogPackageSourceIdentities(entry).some((identity) =>
-      installedPackageNames.has(identity.packageName),
+export const listManagedPlugins = withManagedPluginCache(
+  async (params: {
+    config: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    officialCatalog?: OfficialCatalogResult;
+    metadata?: PluginMetadataSnapshot;
+  }): Promise<ManagedPluginCatalog> => {
+    const env = params.env ?? process.env;
+    const workspace = resolvePluginControlPlaneWorkspace({ config: params.config, env });
+    const metadata = params.metadata ?? resolveManagedPluginMetadata(params.config, env);
+    const pluginDiagnostics = resolveManagedPluginDiagnostics(metadata, params.config);
+    const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
+    // Prepare the merged entry once; display names never add install identities.
+    const officialEntries = prepareCatalogEntries(officialCatalog.entries);
+    const bundledOfficialEntries = prepareCatalogEntries(
+      listOfficialExternalPluginCatalogEntries(),
     );
-  for (const entry of officialCatalog.entries) {
-    const pluginId = resolveOfficialExternalPluginId(entry);
-    const manifest = getOfficialExternalPluginCatalogManifest(entry);
-    const manifestCatalog = normalizeCatalogMetadata(manifest?.catalog);
-    const catalog =
-      manifestCatalog || typeof entry.featured === "boolean"
-        ? {
-            ...manifestCatalog,
-            ...(manifestCatalog?.featured === undefined && typeof entry.featured === "boolean"
-              ? { featured: entry.featured }
-              : {}),
-          }
+    const installedIconsById = new Map<string, ManagedPluginIconSource | undefined>();
+    const installedClawHubPackages = new Set<string>();
+    const capabilityConsentDiagnostics: PluginDiagnostic[] = [];
+    // Hosted loading can yield; prepare this phase from the current config.
+    const isEnabled = createInstalledPluginEnabledPredicate(
+      metadata.index.plugins,
+      params.config,
+      env,
+    );
+    const ownershipResolver = createInstalledPluginOwnershipResolver(metadata.index);
+    const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
+      const enabled = isEnabled(record.pluginId);
+      const manifest = metadata.byPluginId.get(record.pluginId);
+      const localCatalog = normalizeCatalogMetadata(manifest?.catalog);
+      const ownership = ownershipResolver.resolvePackage(record.pluginId);
+      const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
+      const installRecord = installOwner ? metadata.index.installRecords[installOwner] : undefined;
+      if (
+        enabled &&
+        record.origin !== "bundled" &&
+        !manifest?.trustedOfficialInstall &&
+        ownership.ok &&
+        installRecord
+      ) {
+        const declared = resolvePluginPackageDeclaredSurface(ownership.value, metadata.byPluginId);
+        if (!declared || !resolveAcceptedSurfaceCurrent(installRecord, declared)) {
+          capabilityConsentDiagnostics.push({
+            level: "warn",
+            pluginId: record.pluginId,
+            message: formatPluginCapabilityConsentRequired(record.pluginId),
+          });
+        }
+      }
+      const { entry: officialEntry, clawhubPackage } = resolveInstalledHostedOfficialEntry({
+        record,
+        ...(installOwner ? { installOwner } : {}),
+        installRecord,
+        officialEntries,
+        bundledOfficialEntries,
+      });
+      // A declared counterpart suppresses the same ClawHub package, not an npm namesake.
+      if (clawhubPackage) {
+        installedClawHubPackages.add(clawhubPackage);
+      }
+      const officialCatalogMetadata = officialEntry
+        ? normalizeCatalogMetadata(getOfficialExternalPluginCatalogManifest(officialEntry)?.catalog)
         : undefined;
-    if (!pluginId || !catalog || installedIds.has(pluginId) || entryPackageInstalled(entry)) {
-      continue;
+      // Published plugin curation follows the live feed even after install, including
+      // omission. Private bundled plugins without an exact package/source match stay local.
+      const catalog =
+        clawhubPackage && officialCatalog.hostedFeaturedAuthoritative
+          ? {
+              ...localCatalog,
+              ...officialCatalogMetadata,
+              featured: officialEntry?.featured === true,
+            }
+          : officialCatalogMetadata
+            ? { ...localCatalog, ...officialCatalogMetadata }
+            : localCatalog;
+      const error = firstPluginError(pluginDiagnostics, record.pluginId);
+      const kind = normalizeKinds(manifest?.kind);
+      const category = derivePluginCategory(manifest);
+      // Only externally installed plugins (tracked install record, non-bundled) can be removed.
+      const removable = record.origin !== "bundled" && Boolean(installOwner);
+      const hostedListingAuthoritative =
+        Boolean(clawhubPackage) && officialCatalog.hostedFeaturedAuthoritative === true;
+      const featuredAt =
+        hostedListingAuthoritative && catalog?.featured === true
+          ? normalizeFeaturedAt(officialEntry?.featuredAt)
+          : undefined;
+      const presentation = resolveInstalledPluginPresentation({
+        record,
+        manifest,
+        officialEntry,
+        hostedListingAuthoritative,
+      });
+      const plugin: ManagedPluginCatalogEntry = {
+        id: record.pluginId,
+        name: presentation.name,
+        installed: true,
+        enabled,
+        state: error ? "error" : enabled ? "enabled" : "disabled",
+        removable,
+      };
+      if (record.packageName) {
+        plugin.packageName = record.packageName;
+      }
+      if (presentation.description) {
+        plugin.description = presentation.description;
+      }
+      if (presentation.version) {
+        plugin.version = presentation.version;
+      }
+      if (kind) {
+        plugin.kind = kind;
+      }
+      if (record.origin) {
+        plugin.origin = record.origin;
+      }
+      if (catalog?.featured !== undefined) {
+        plugin.featured = catalog.featured;
+      }
+      if (featuredAt !== undefined) {
+        plugin.featuredAt = featuredAt;
+      }
+      if (catalog?.order !== undefined) {
+        plugin.order = catalog.order;
+      }
+      const normalizedPluginId = metadata.normalizePluginId(record.pluginId);
+      // Icon lookup uses the first normalized record, even when that record has no icon.
+      if (!installedIconsById.has(normalizedPluginId)) {
+        installedIconsById.set(
+          normalizedPluginId,
+          resolvePluginIconSource({ metadata, pluginId: record.pluginId }),
+        );
+      }
+      if (installedIconsById.get(normalizedPluginId)) {
+        plugin.hasIcon = true;
+      }
+      if (error) {
+        plugin.error = error;
+      }
+      if (category) {
+        plugin.category = category;
+      }
+      return plugin;
+    });
+    const installedIds = new Set(plugins.map((plugin) => plugin.id));
+    const installedPackageNames = new Set(
+      plugins.flatMap((plugin) => (plugin.packageName ? [plugin.packageName] : [])),
+    );
+    // Hosted rows without a declared runtime id fall back to their package name,
+    // so id matching alone would keep them visible after a successful install.
+    for (const facts of officialEntries()) {
+      const { entry, clawhub, npmPackage } = facts;
+      const pluginId = resolveOfficialExternalPluginId(entry);
+      const manifest = getOfficialExternalPluginCatalogManifest(entry);
+      const manifestCatalog = normalizeCatalogMetadata(manifest?.catalog);
+      const catalog =
+        manifestCatalog || typeof entry.featured === "boolean"
+          ? {
+              ...manifestCatalog,
+              ...(manifestCatalog?.featured === undefined && typeof entry.featured === "boolean"
+                ? { featured: entry.featured }
+                : {}),
+            }
+          : undefined;
+      if (
+        !pluginId ||
+        !catalog ||
+        installedIds.has(pluginId) ||
+        (clawhub &&
+          (installedPackageNames.has(clawhub.name) ||
+            installedClawHubPackages.has(clawhub.name))) ||
+        (npmPackage && installedPackageNames.has(npmPackage))
+      ) {
+        continue;
+      }
+      const kind = normalizeKinds(entry.kind);
+      const install: ManagedPluginCatalogEntry["install"] =
+        facts.selectedSource?.source === "clawhub" && clawhub && !clawhub.version
+          ? { source: "clawhub", packageName: clawhub.name }
+          : facts.install
+            ? { source: "official", pluginId }
+            : undefined;
+      const packageName = npmPackage ?? clawhub?.name;
+      const description = normalizeOptionalString(entry.description);
+      const version = normalizeOptionalString(entry.version);
+      const featuredAt =
+        catalog.featured === true ? normalizeFeaturedAt(entry.featuredAt) : undefined;
+      plugins.push({
+        id: pluginId,
+        name: resolveOfficialExternalPluginLabel(entry),
+        ...(packageName ? { packageName } : {}),
+        ...(description ? { description } : {}),
+        ...(version ? { version } : {}),
+        ...(kind ? { kind } : {}),
+        origin: "official",
+        installed: false,
+        enabled: false,
+        state: "not-installed",
+        ...(catalog.featured !== undefined ? { featured: catalog.featured } : {}),
+        ...(featuredAt !== undefined ? { featuredAt } : {}),
+        ...(catalog.order !== undefined ? { order: catalog.order } : {}),
+        ...(install ? { install } : {}),
+      });
     }
-    const kind = normalizeKinds(entry.kind);
-    const install = resolveCatalogInstallAction({ entry, pluginId });
-    const clawhubPackageName = resolveCatalogPackageSourceIdentities(entry).find(
-      (identity) => identity.source === "clawhub",
-    )?.packageName;
+    const diagnostics: unknown[] = getProcessGatewayPluginMetadataSnapshot()
+      ? [...pluginDiagnostics, ...capabilityConsentDiagnostics]
+      : appendPluginControlPlaneWorkspaceDiagnostic(
+          [...pluginDiagnostics, ...capabilityConsentDiagnostics],
+          workspace,
+        );
+    if (officialCatalog.error) {
+      diagnostics.push({
+        level: "warn",
+        message: `Official plugin catalog fallback: ${officialCatalog.error}`,
+      });
+    }
+    return {
+      plugins: plugins.toSorted(compareCatalogEntries),
+      diagnostics,
+      mutationAllowed: !resolveIsNixMode(env),
+    };
+  },
+);
+
+/** Inspect one plugin's manifest, operator grants, and recorded install provenance. */
+export const inspectManagedPlugin = withManagedPluginCache(
+  async (params: {
+    config: OpenClawConfig;
+    pluginId: string;
+    env?: NodeJS.ProcessEnv;
+  }): Promise<ManagedPluginInspection> => {
+    const env = params.env ?? process.env;
+    const metadata = resolveManagedPluginMetadata(params.config, env);
+    const pluginId = metadata.normalizePluginId(params.pluginId);
+    const record = metadata.index.plugins.find((candidate) => candidate.pluginId === pluginId);
+    const enabled = isInstalledPluginEnabled(metadata.index, pluginId, params.config);
+    const pendingReview = resolvePendingPluginCapabilityReview(pluginId);
+    if (pendingReview) {
+      return {
+        ok: true,
+        plugin: {
+          id: pluginId,
+          name: pendingReview.name,
+          ...(pendingReview.version ? { version: pendingReview.version } : {}),
+          ...(record?.origin ? { origin: record.origin } : {}),
+          installed: Boolean(record),
+          enabled,
+        },
+        declared: pendingReview.declared,
+        grants: pendingReview.grants,
+        reviewToken: pendingReview.reviewToken,
+        ...(pendingReview.source ? { source: pendingReview.source } : {}),
+        ...(pendingReview.trust ? { trust: pendingReview.trust } : {}),
+      };
+    }
+    const officialCatalog = await loadOfficialCatalog();
+
+    if (record) {
+      const manifest = metadata.byPluginId.get(pluginId);
+      const ownership = createInstalledPluginOwnershipResolver(metadata.index, env).resolvePackage(
+        pluginId,
+      );
+      const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
+      const installRecord = installOwner ? metadata.index.installRecords[installOwner] : undefined;
+      const { entry: officialEntry, clawhubPackage } = resolveInstalledHostedOfficialEntry({
+        record,
+        ...(installOwner ? { installOwner } : {}),
+        installRecord,
+        officialEntries: prepareCatalogEntries(officialCatalog.entries),
+        bundledOfficialEntries: prepareCatalogEntries(listOfficialExternalPluginCatalogEntries()),
+      });
+      const spec = installRecord?.resolvedSpec ?? installRecord?.spec;
+      const packageName = installRecord?.clawhubPackage ?? record.packageName;
+      const source: PluginInspectSource | undefined = installRecord
+        ? {
+            kind: installRecord.source,
+            ...(spec ? { spec: redactSensitiveUrlLikeString(spec) } : {}),
+            ...(packageName ? { packageName } : {}),
+            ...resolvePluginInstallRecordIntegrity(installRecord),
+          }
+        : record.origin === "bundled"
+          ? { kind: "bundled" }
+          : undefined;
+      const trust = resolvePluginInstallRecordTrust(installRecord);
+      const summary = buildPluginCapabilitySummary({
+        manifest: manifest ?? {},
+        origin: record.origin,
+        entryConfig: params.config.plugins?.entries?.[pluginId],
+      });
+      const declared = ownership.ok
+        ? resolvePluginPackageDeclaredSurface(ownership.value, metadata.byPluginId)
+        : summary.declared;
+      if (!declared) {
+        throw new ManagedPluginLifecycleError(
+          `Plugin package "${installOwner}" has incomplete manifest metadata.`,
+        );
+      }
+      return {
+        ok: true,
+        plugin: {
+          id: pluginId,
+          ...resolveInstalledPluginPresentation({
+            record,
+            manifest,
+            officialEntry,
+            hostedListingAuthoritative:
+              Boolean(clawhubPackage) && officialCatalog.hostedFeaturedAuthoritative === true,
+          }),
+          origin: record.origin,
+          installed: true,
+          enabled,
+        },
+        ...(source ? { source } : {}),
+        ...summary,
+        declared,
+        reviewToken: computeDeclaredSurfaceHash(declared),
+        ...(trust ? { trust } : {}),
+      };
+    }
+
+    const entry = resolveOfficialEntryById(officialCatalog.entries, pluginId);
+    if (!entry) {
+      throw new ManagedPluginLifecycleError(`Plugin "${pluginId}" not found.`, {
+        kind: "invalid-request",
+      });
+    }
+    const manifest = getOfficialExternalPluginCatalogManifest(entry);
+    const { selectedSource, clawhub, npmPackage } = prepareCatalogEntry(entry);
+    const packageName = npmPackage ?? clawhub?.name;
+    const spec = selectedSource?.spec;
     const description = normalizeOptionalString(entry.description);
     const version = normalizeOptionalString(entry.version);
-    const featuredAt =
-      catalog.featured === true ? normalizeFeaturedAt(entry.featuredAt) : undefined;
-    plugins.push({
-      id: pluginId,
-      name: resolveOfficialExternalPluginLabel(entry),
-      ...(clawhubPackageName ? { packageName: clawhubPackageName } : {}),
-      ...(description ? { description } : {}),
-      ...(version ? { version } : {}),
-      ...(kind ? { kind } : {}),
+    const summary = buildPluginCapabilitySummary({
+      manifest: manifest ?? {},
       origin: "official",
-      installed: false,
-      enabled: false,
-      state: "not-installed",
-      ...(catalog.featured !== undefined ? { featured: catalog.featured } : {}),
-      ...(featuredAt !== undefined ? { featuredAt } : {}),
-      ...(catalog.order !== undefined ? { order: catalog.order } : {}),
-      ...(resolveCatalogEntryIcon(entry) ? { hasIcon: true } : {}),
-      ...(install ? { install } : {}),
-    });
-  }
-  const diagnostics: unknown[] = appendPluginControlPlaneWorkspaceDiagnostic(
-    metadata.diagnostics,
-    workspace,
-  );
-  if (officialCatalog.error) {
-    diagnostics.push({
-      level: "warn",
-      message: `Official plugin catalog fallback: ${officialCatalog.error}`,
-    });
-  }
-  return {
-    plugins: plugins.toSorted(compareCatalogEntries),
-    diagnostics,
-    mutationAllowed: !resolveIsNixMode(env),
-  };
-}
-
-function assertValidConfigSnapshot(
-  prepared: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>,
-): ConfigSnapshotForInstallPersist {
-  const { snapshot, writeOptions } = prepared;
-  if (!snapshot.valid) {
-    throw new ManagedPluginLifecycleError(
-      "Config invalid; run `openclaw doctor --fix` before managing plugins.",
-    );
-  }
-  const mutationWriteOptions = selectInstallMutationWriteOptions(writeOptions);
-  const { pluginMutation } = resolveInstallConfigMutationPreflights({
-    parsed: (snapshot.parsed ?? {}) as Record<string, unknown>,
-    snapshotPath: snapshot.path,
-    writeOptions: mutationWriteOptions,
-  });
-  if (pluginMutation.mode === "blocked") {
-    throw new ManagedPluginLifecycleError(pluginMutation.reason);
-  }
-  return {
-    config: snapshot.sourceConfig,
-    baseHash: snapshot.hash,
-    writeOptions: mutationWriteOptions,
-  };
-}
-
-async function readPluginMutationSnapshot(
-  env: NodeJS.ProcessEnv,
-): Promise<ConfigSnapshotForInstallPersist> {
-  try {
-    assertConfigWriteAllowedInCurrentMode({ env });
-  } catch (error) {
-    throw new ManagedPluginLifecycleError(formatErrorMessage(error), { cause: error });
-  }
-  return assertValidConfigSnapshot(await readConfigFileSnapshotForWrite());
-}
-
-function createSilentRuntime(): RuntimeEnv {
-  return {
-    log: () => undefined,
-    error: () => undefined,
-    exit: (code) => {
-      throw new ManagedPluginLifecycleError(`plugin lifecycle exited with code ${code}`);
-    },
-  };
-}
-
-function createInstallLogger(warnings: string[]) {
-  return {
-    info: () => undefined,
-    warn: (message: string) => warnings.push(message),
-  };
-}
-
-function resolveOfficialEntryById(
-  entries: readonly OfficialExternalPluginCatalogEntry[],
-  pluginId: string,
-): OfficialExternalPluginCatalogEntry | undefined {
-  return entries.find((entry) => resolveOfficialExternalPluginId(entry) === pluginId);
-}
-
-/** Explicitly declared runtime id, ignoring the entry-id fallback used for display. */
-function resolveDeclaredOfficialPluginId(
-  entry: OfficialExternalPluginCatalogEntry,
-): string | undefined {
-  const manifest = getOfficialExternalPluginCatalogManifest(entry);
-  return (
-    normalizeOptionalString(manifest?.plugin?.id) ??
-    normalizeOptionalString(manifest?.channel?.id) ??
-    normalizeOptionalString(manifest?.providers?.[0]?.id)
-  );
-}
-
-function resolveOfficialEntryByClawHubPackage(
-  entries: readonly OfficialExternalPluginCatalogEntry[],
-  packageName: string,
-): OfficialExternalPluginCatalogEntry | undefined {
-  // Bundled identities remain the local trust anchor when a hosted feed omits
-  // its ClawHub candidate; hosted install/version metadata is never copied back.
-  return [...listOfficialExternalPluginCatalogEntries(), ...entries].find((entry) => {
-    const install = resolveOfficialExternalPluginInstall(entry);
-    return parseClawHubPluginSpec(install?.clawhubSpec ?? "")?.name === packageName;
-  });
-}
-
-function resolveHostedOfficialEntryByClawHubPackage(
-  entries: readonly OfficialExternalPluginCatalogEntry[],
-  packageName: string,
-): OfficialExternalPluginCatalogEntry | undefined {
-  return entries.find((entry) => {
-    const install = resolveOfficialExternalPluginInstall(entry);
-    return parseClawHubPluginSpec(install?.clawhubSpec ?? "")?.name === packageName;
-  });
-}
-
-function buildClawHubSpec(packageName: string, version?: string): string {
-  const parsed = parseClawHubPluginSpec(`clawhub:${packageName}`);
-  if (!parsed || parsed.version) {
-    throw new ManagedPluginLifecycleError(`invalid ClawHub package name: ${packageName}`);
-  }
-  return `clawhub:${packageName}${version ? `@${version}` : ""}`;
-}
-
-function throwInstallFailure(result: {
-  error: string;
-  code?: string;
-  version?: string;
-  warning?: string;
-  installPolicyWarning?: InstallPolicyWarningDetails;
-}): never {
-  const unavailable =
-    !result.code ||
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_UNAVAILABLE ||
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_DOWNLOAD_UNAVAILABLE ||
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE;
-  throw new ManagedPluginLifecycleError(result.error, {
-    kind: unavailable ? "unavailable" : "invalid-request",
-    code: result.code,
-    version: result.version,
-    warning: result.warning,
-    installPolicyWarning: result.installPolicyWarning,
-    cause: result,
-  });
-}
-
-function installRecordOwnsTarget(
-  record: PluginInstallRecord | undefined,
-  targetDir: string,
-): boolean {
-  return Boolean(
-    record?.installPath && path.resolve(record.installPath) === path.resolve(targetDir),
-  );
-}
-
-async function cleanupFailedManagedPluginInstall(params: {
-  env: NodeJS.ProcessEnv;
-  pluginId: string;
-  install: PluginInstallRecord;
-  targetDir: string;
-  extensionsDir: string;
-}): Promise<string[]> {
-  let installRecords: Record<string, PluginInstallRecord>;
-  try {
-    installRecords = await loadInstalledPluginIndexInstallRecords({ env: params.env });
-  } catch (error) {
-    return [
-      `Could not verify whether the failed plugin install was committed; retained ${params.targetDir}: ${formatErrorMessage(error)}`,
-    ];
-  }
-  if (installRecordOwnsTarget(installRecords[params.pluginId], params.targetDir)) {
-    return [
-      `Plugin install persistence reported an error after ${params.targetDir} was recorded; retained the managed target.`,
-    ];
-  }
-
-  const plan = planPluginUninstall(
-    recordPluginPackageUninstallPlan(
-      {
-        config: {
-          plugins: { installs: { [params.pluginId]: params.install } },
-        },
-        pluginId: params.pluginId,
-        deleteFiles: true,
-        extensionsDir: params.extensionsDir,
-      },
-      { runtimePluginIds: [] },
-    ),
-  );
-  if (!plan.ok) {
-    return [`Could not plan cleanup for failed plugin install: ${plan.error}`];
-  }
-  if (!plan.directoryRemoval) {
-    return [
-      `Could not resolve a managed cleanup target for failed plugin install ${params.pluginId}.`,
-    ];
-  }
-  const plannedTarget = path.resolve(plan.directoryRemoval.target);
-  const installedTarget = path.resolve(params.targetDir);
-  const removesIsolatedNpmProject =
-    plan.directoryRemoval.cleanup?.kind === "npm" &&
-    plannedTarget === path.resolve(plan.directoryRemoval.cleanup.npmRoot) &&
-    isUninstallPathInsideOrEqual(plannedTarget, installedTarget);
-  if (plannedTarget !== installedTarget && !removesIsolatedNpmProject) {
-    return [
-      `Refused cleanup for failed plugin install ${params.pluginId}: planned target does not match the newly installed target.`,
-    ];
-  }
-  try {
-    const cleanup = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
-    return cleanup.warnings;
-  } catch (error) {
-    return [
-      `Failed to remove the newly installed target after plugin persistence failed: ${formatErrorMessage(error)}`,
-    ];
-  }
-}
-
-function throwPersistenceFailureWithCleanupWarnings(error: unknown, warnings: string[]): never {
-  if (warnings.length === 0) {
-    throw error;
-  }
-  const cleanupWarning = [...new Set(warnings)].join("\n");
-  if (error instanceof ManagedPluginLifecycleError) {
-    throw new ManagedPluginLifecycleError(error.message, {
-      kind: error.kind,
-      code: error.code,
-      version: error.version,
-      warning: [error.warning, cleanupWarning].filter(Boolean).join("\n"),
-      installPolicyWarning: error.installPolicyWarning,
-      cause: error,
-    });
-  }
-  throw new ManagedPluginLifecycleError(formatErrorMessage(error), {
-    kind: "unavailable",
-    warning: cleanupWarning,
-    cause: error,
-  });
-}
-
-async function persistManagedSourceInstall(params: {
-  env: NodeJS.ProcessEnv;
-  snapshot: ConfigSnapshotForInstallPersist;
-  pluginId: string;
-  install: PluginInstallRecord;
-  targetDir: string;
-  extensionsDir: string;
-  invalidateRuntimeCache?: boolean;
-  runtime?: RuntimeEnv;
-  successMessage?: string;
-  cleanupOnPersistenceFailure?: boolean;
-}): Promise<{ config: OpenClawConfig; warnings: string[] }> {
-  const warnings: string[] = [];
-  const persist = () =>
-    persistPluginInstall({
-      snapshot: params.snapshot,
-      pluginId: params.pluginId,
-      install: params.install,
-      invalidateRuntimeCache: params.invalidateRuntimeCache,
-      runtime: params.runtime,
-      persistenceLogger: { warn: (message) => warnings.push(message) },
-      ...(params.successMessage ? { successMessage: params.successMessage } : {}),
-    });
-  if (!params.cleanupOnPersistenceFailure) {
-    return { config: await persist(), warnings };
-  }
-  try {
-    return { config: await persist(), warnings };
-  } catch (error) {
-    const cleanupWarnings = await cleanupFailedManagedPluginInstall(params);
-    return throwPersistenceFailureWithCleanupWarnings(error, cleanupWarnings);
-  }
-}
-
-/** Execute one resolved plugin source through the shared install-and-persist pipeline. */
-export async function installManagedPluginSource(params: {
-  request: ManagedPluginSourceInstallRequest;
-  snapshot: ConfigSnapshotForInstallPersist;
-  env?: NodeJS.ProcessEnv;
-  logger?: PluginInstallLogger & { terminalLinks?: boolean };
-  safetyOverrides?: InstallSafetyOverrides;
-  runtime?: RuntimeEnv;
-  invalidateRuntimeCache?: boolean;
-  cleanupOnPersistenceFailure?: boolean;
-}): Promise<ManagedPluginSourceInstallResult> {
-  const { request } = params;
-  const env = params.env ?? process.env;
-  const extensionsDir = resolveDefaultPluginExtensionsDir(env);
-  if (request.source === "bundled") {
-    const result = await installBundledPluginSource({
-      snapshot: params.snapshot,
-      rawSpec: request.rawSpec,
-      bundledSource: request.bundledSource,
-      warning: request.warning,
-      invalidateRuntimeCache: params.invalidateRuntimeCache,
-      runtime: params.runtime,
+      entryConfig: params.config.plugins?.entries?.[pluginId],
     });
     return {
       ok: true,
-      ...result,
-      config: params.snapshot.config,
-    };
-  }
-
-  const common = {
-    ...params.safetyOverrides,
-    config: params.snapshot.config,
-    extensionsDir,
-    logger: params.logger,
-  };
-  const complete = async <T extends SourceInstallerResult>(
-    installResult: Promise<T>,
-    completed: {
-      install: (result: Extract<T, { ok: true }>) => PluginInstallRecord;
-      expectedPluginId?: string;
-      targetDir?: string;
-      snapshot?: ConfigSnapshotForInstallPersist;
-      successMessage?: string;
-    },
-  ): Promise<ManagedPluginSourceInstallResult> => {
-    const result = await installResult;
-    if (!result.ok) {
-      return result;
-    }
-    const installed = result as Extract<T, { ok: true }> & {
-      pluginId: string;
-      targetDir: string;
-    };
-    if (completed.expectedPluginId && installed.pluginId !== completed.expectedPluginId) {
-      return {
-        ok: false as const,
-        error: `official catalog plugin id mismatch: expected ${completed.expectedPluginId}, got ${installed.pluginId}`,
-      };
-    }
-    const targetDir = completed.targetDir ?? installed.targetDir;
-    // Links point at operator-owned source directories. Every published managed
-    // payload defaults to compensation, but link persistence never deletes source.
-    const cleanupOnPersistenceFailure =
-      request.source === "local" && request.link
-        ? false
-        : (params.cleanupOnPersistenceFailure ?? true);
-    const persisted = await persistManagedSourceInstall({
-      ...params,
-      cleanupOnPersistenceFailure,
-      env,
-      snapshot: completed.snapshot ?? params.snapshot,
-      pluginId: installed.pluginId,
-      install: completed.install(installed),
-      targetDir,
-      extensionsDir,
-      successMessage: completed.successMessage,
-    });
-    return {
-      ...installed,
-      config: persisted.config,
-      ...(persisted.warnings.length > 0 ? { warnings: [...new Set(persisted.warnings)] } : {}),
-    };
-  };
-
-  if (request.source === "local") {
-    const installPath = request.link ? request.path : undefined;
-    const linkedSnapshot = request.link
-      ? {
-          ...params.snapshot,
-          config: {
-            ...params.snapshot.config,
-            plugins: {
-              ...params.snapshot.config.plugins,
-              load: {
-                ...params.snapshot.config.plugins?.load,
-                paths: uniqueStrings([
-                  ...(params.snapshot.config.plugins?.load?.paths ?? []),
-                  request.path,
-                ]),
-              },
-            },
-          },
-        }
-      : params.snapshot;
-    return await complete(
-      installPluginFromPath({
-        ...common,
-        path: request.path,
-        mode: request.mode,
-        ...(request.link ? { dryRun: true, allowSourceTypeScriptEntries: true } : {}),
-      }),
-      {
-        snapshot: linkedSnapshot,
-        targetDir: installPath,
-        successMessage: request.successMessage,
-        install: (result) => ({
-          source: request.recordSource,
-          sourcePath: request.path,
-          installPath: installPath ?? result.targetDir,
-          version: result.version,
-        }),
+      plugin: {
+        id: pluginId,
+        name: resolveOfficialExternalPluginLabel(entry),
+        ...(version ? { version } : {}),
+        ...(description ? { description } : {}),
+        origin: "official",
+        installed: false,
+        enabled: false,
       },
-    );
-  }
-
-  if (request.source === "npm-pack") {
-    return await complete(
-      installPluginFromNpmPackArchive({
-        ...common,
-        archivePath: request.archivePath,
-        mode: request.mode,
-      }),
-      {
-        install: (result) => ({
-          source: "npm",
-          spec: result.npmResolution?.resolvedSpec ?? result.manifestName ?? result.pluginId,
-          sourcePath: request.archivePath,
-          installPath: result.targetDir,
-          ...(result.version ? { version: result.version } : {}),
-          ...buildNpmResolutionFields(result.npmResolution),
-          artifactKind: "npm-pack",
-          artifactFormat: "tgz",
-          ...(result.npmResolution?.integrity
-            ? { npmIntegrity: result.npmResolution.integrity }
-            : {}),
-          ...(result.npmResolution?.shasum ? { npmShasum: result.npmResolution.shasum } : {}),
-          ...(result.npmTarballName ? { npmTarballName: result.npmTarballName } : {}),
-        }),
+      source: {
+        kind: "official-catalog",
+        ...(spec ? { spec: redactSensitiveUrlLikeString(spec) } : {}),
+        ...(packageName ? { packageName } : {}),
+        ...(selectedSource?.expectedIntegrity
+          ? {
+              integrity: selectedSource.expectedIntegrity,
+              integrityKind: selectedSource.source === "clawhub" ? "sha256" : "ssri",
+            }
+          : {}),
       },
-    );
-  }
-
-  if (request.source === "git") {
-    return await complete(
-      installPluginFromGitSpec({ ...common, spec: request.spec, mode: request.mode }),
-      {
-        install: (result) => ({
-          source: "git",
-          spec: request.spec,
-          installPath: result.targetDir,
-          version: result.version,
-          resolvedAt: result.git.resolvedAt,
-          gitUrl: result.git.url,
-          gitRef: result.git.ref,
-          gitCommit: result.git.commit,
-        }),
-      },
-    );
-  }
-
-  if (request.source === "clawhub") {
-    return await complete(
-      installPluginFromClawHub({
-        ...common,
-        spec: request.spec,
-        mode: request.mode,
-        ...(request.expectedPluginId ? { expectedPluginId: request.expectedPluginId } : {}),
-        ...(request.expectedIntegrity ? { expectedIntegrity: request.expectedIntegrity } : {}),
-        ...(request.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-        ...(request.onClawHubRisk ? { onClawHubRisk: request.onClawHubRisk } : {}),
-      }),
-      {
-        expectedPluginId: request.expectedPluginId,
-        install: (result) => ({
-          ...buildClawHubPluginInstallRecordFields(result.clawhub),
-          spec: request.spec,
-          installPath: result.targetDir,
-        }),
-      },
-    );
-  }
-
-  const expectedPluginId =
-    request.source === "official" ? request.pluginId : request.expectedPluginId;
-  return await complete(
-    installPluginFromNpmSpec({
-      ...common,
-      spec: request.spec,
-      mode: request.mode,
-      ...(request.source === "official" || request.trustedSourceLinkedOfficialInstall
-        ? { trustedSourceLinkedOfficialInstall: true }
-        : {}),
-      ...(expectedPluginId ? { expectedPluginId } : {}),
-      ...(request.expectedIntegrity ? { expectedIntegrity: request.expectedIntegrity } : {}),
-    }),
-    {
-      expectedPluginId,
-      install: (result) => ({
-        source: "npm",
-        spec: request.pin ? (result.npmResolution?.resolvedSpec ?? request.spec) : request.spec,
-        installPath: result.targetDir,
-        ...(result.version ? { version: result.version } : {}),
-        ...buildNpmResolutionFields(result.npmResolution),
-      }),
-    },
-  );
-}
-
-function resolveManagedClawHubInstallRequest(params: {
-  request: Extract<ManagedPluginInstallRequest, { source: "clawhub" }>;
-  officialEntries: readonly OfficialExternalPluginCatalogEntry[];
-  expectedIntegrity?: string;
-}): Extract<ManagedPluginSourceInstallRequest, { source: "clawhub" }> {
-  const packageName = params.request.packageName.trim();
-  const official = resolveOfficialEntryByClawHubPackage(params.officialEntries, packageName);
-  // Pin the runtime id only when the catalog entry declares one; the entry-id
-  // fallback is just the package name and would reject legitimate installs.
-  const expectedPluginId = official ? resolveDeclaredOfficialPluginId(official) : undefined;
-  const hostedOfficial = resolveHostedOfficialEntryByClawHubPackage(
-    params.officialEntries,
-    packageName,
-  );
-  const hostedInstall = hostedOfficial
-    ? resolveOfficialExternalPluginInstall(hostedOfficial)
-    : undefined;
-  const hostedClawHub = parseClawHubPluginSpec(hostedInstall?.clawhubSpec ?? "");
-  const requestMatchesHostedCandidate =
-    !params.request.version || params.request.version === hostedClawHub?.version;
-  const version =
-    params.request.version ?? (requestMatchesHostedCandidate ? hostedClawHub?.version : undefined);
-  const expectedIntegrity =
-    params.expectedIntegrity ??
-    (requestMatchesHostedCandidate ? hostedInstall?.expectedIntegrity : undefined);
-  return {
-    source: "clawhub",
-    spec: buildClawHubSpec(packageName, version),
-    ...(expectedPluginId ? { expectedPluginId } : {}),
-    ...(expectedIntegrity ? { expectedIntegrity } : {}),
-    ...(params.request.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-  };
-}
-
-function resolveManagedOfficialInstallRequest(params: {
-  request: Extract<ManagedPluginInstallRequest, { source: "official" }>;
-  officialEntries: readonly OfficialExternalPluginCatalogEntry[];
-}): ManagedPluginSourceInstallRequest {
-  const entry = resolveOfficialEntryById(params.officialEntries, params.request.pluginId);
-  if (!entry) {
-    throw new ManagedPluginLifecycleError(
-      `unknown official plugin catalog entry: ${params.request.pluginId}`,
-    );
-  }
-  const pluginId = resolveOfficialExternalPluginId(entry);
-  const install = resolveOfficialExternalPluginInstall(entry);
-  if (!pluginId || !install) {
-    throw new ManagedPluginLifecycleError(
-      `official plugin catalog entry is not installable: ${params.request.pluginId}`,
-    );
-  }
-  const clawhub = install.clawhubSpec ? parseClawHubPluginSpec(install.clawhubSpec) : undefined;
-  if (clawhub) {
-    return resolveManagedClawHubInstallRequest({
-      request: {
-        source: "clawhub",
-        packageName: clawhub.name,
-        ...(clawhub.version ? { version: clawhub.version } : {}),
-      },
-      officialEntries: params.officialEntries,
-      ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
-    });
-  }
-  if (!install.npmSpec) {
-    throw new ManagedPluginLifecycleError(
-      `official plugin catalog entry has no supported install source: ${params.request.pluginId}`,
-    );
-  }
-  return {
-    source: "official",
-    spec: install.npmSpec,
-    pluginId,
-    mode: "install",
-    ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
-  };
-}
-
-/** Install a ClawHub or curated official plugin through the canonical install pipeline. */
-export async function installManagedPlugin(params: {
-  request: ManagedPluginInstallRequest;
-  env?: NodeJS.ProcessEnv;
-}): Promise<{ plugin: ManagedPluginCatalogEntry; warnings?: string[] }> {
-  const env = params.env ?? process.env;
-  return await withPluginLifecycleLease({ env }, async () => {
-    const snapshot = await readPluginMutationSnapshot(env);
-    const officialCatalog = await loadOfficialCatalog();
-    const warnings: string[] = [];
-    const installLogger = createInstallLogger(warnings);
-    const request =
-      params.request.source === "clawhub"
-        ? resolveManagedClawHubInstallRequest({
-            request: params.request,
-            officialEntries: officialCatalog.entries,
-          })
-        : resolveManagedOfficialInstallRequest({
-            request: params.request,
-            officialEntries: officialCatalog.entries,
-          });
-    const installed = await installManagedPluginSource({
-      request,
-      snapshot,
-      env,
-      logger: installLogger,
-      ...(params.request.acknowledgeInstallPolicyWarning
-        ? {
-            safetyOverrides: {
-              onInstallPolicyWarning: async () => ({ status: "approved" as const }),
-            },
-          }
-        : {}),
-      cleanupOnPersistenceFailure: true,
-      invalidateRuntimeCache: false,
-      runtime: createSilentRuntime(),
-    });
-    if (!installed.ok) {
-      return throwInstallFailure(installed);
-    }
-    warnings.push(...(installed.warnings ?? []));
-    const workspace = resolvePluginControlPlaneWorkspace({ config: installed.config, env });
-    if (workspace.diagnostic) {
-      warnings.push(workspace.diagnostic.message);
-    }
-    const catalog = await listManagedPlugins({
-      config: installed.config,
-      env,
-      officialCatalog,
-    });
-    const installedMetadata = resolvePluginMetadataSnapshot(
-      resolveManagedPluginMetadataParams(installed.config, env),
-    );
-    const installedOwnership = resolveInstalledPluginPackageOwnership(
-      installedMetadata.index,
-      installed.pluginId,
-      env,
-    );
-    if (!installedOwnership.ok) {
-      throw new ManagedPluginLifecycleError(installedOwnership.error);
-    }
-    const installedPluginIds = installedOwnership.value.pluginIds;
-    const representativePluginId = installedPluginIds[0]!;
-    const plugin = catalog.plugins.find((entry) => entry.id === representativePluginId);
-    if (!plugin) {
-      throw new ManagedPluginLifecycleError(
-        `installed plugin missing from refreshed registry: ${installed.pluginId}`,
-      );
-    }
-    return {
-      plugin,
-      ...(installedPluginIds.length > 1 || warnings.length > 0
-        ? {
-            warnings: [
-              ...(installedPluginIds.length > 1
-                ? [
-                    `Installed package "${installed.pluginId}" with plugin entries: ${installedPluginIds.join(", ")}.`,
-                  ]
-                : []),
-              ...new Set(warnings),
-            ],
-          }
-        : {}),
+      ...summary,
+      reviewToken: computeDeclaredSurfaceHash(summary.declared),
     };
-  });
-}
-
-/** Persist desired plugin policy while preserving allow/deny, slot, include, and hash guards. */
-export async function setManagedPluginEnabled(params: {
-  pluginId: string;
-  enabled: boolean;
-  env?: NodeJS.ProcessEnv;
-}): Promise<{
-  plugin: ManagedPluginCatalogEntry;
-  changedPaths: string[];
-  warnings?: string[];
-}> {
-  const env = params.env ?? process.env;
-  return await withPluginLifecycleLease({ env }, async () => {
-    const snapshot = await readPluginMutationSnapshot(env);
-    const metadata = loadPluginMetadataSnapshot(
-      resolveManagedPluginMetadataParams(snapshot.config, env),
-    );
-    const pluginId = metadata.normalizePluginId(params.pluginId.trim());
-    if (!metadata.index.plugins.some((plugin) => plugin.pluginId === pluginId)) {
-      throw new ManagedPluginLifecycleError(`plugin not installed: ${params.pluginId}`);
-    }
-    let next = snapshot.config;
-    const warnings: string[] = [];
-    let policyPluginId = pluginId;
-    if (params.enabled) {
-      // The admin-scoped enable RPC is an explicit trust action. Preserve the
-      // existing inventory while admitting only the selected installed plugin.
-      if ((next.plugins?.allow?.length ?? 0) > 0) {
-        next = ensurePluginAllowlisted(next, pluginId);
-      }
-      const enableResult = enableExplicitlySelectedPluginInConfig(next, pluginId, {
-        updateChannelConfig: false,
-      });
-      if (!enableResult.enabled) {
-        throw new ManagedPluginLifecycleError(
-          `plugin "${pluginId}" could not be enabled (${enableResult.reason ?? "unknown reason"})`,
-        );
-      }
-      next = enableResult.config;
-      policyPluginId = enableResult.pluginId;
-      const slotResult = applySlotSelectionForPlugin(next, pluginId);
-      next = slotResult.config;
-      warnings.push(...slotResult.warnings);
-    } else {
-      next = setPluginEnabledInConfig(next, pluginId, false, { updateChannelConfig: false });
-    }
-    const changedPaths = new Set<string>();
-    collectChangedPaths(snapshot.config, next, "", changedPaths);
-    await replaceConfigFile({
-      nextConfig: next,
-      baseHash: snapshot.baseHash,
-      writeOptions: snapshot.writeOptions,
-    });
-    await refreshPluginRegistryAfterConfigMutation({
-      config: next,
-      env,
-      reason: "policy-changed",
-      invalidateRuntimeCache: false,
-      policyPluginIds: [policyPluginId],
-      logger: { warn: (message) => warnings.push(message) },
-    });
-    const catalog = await listManagedPlugins({ config: next, env });
-    const plugin = catalog.plugins.find((entry) => entry.id === pluginId);
-    if (!plugin) {
-      throw new ManagedPluginLifecycleError(
-        `updated plugin missing from refreshed registry: ${pluginId}`,
-      );
-    }
-    return {
-      plugin,
-      changedPaths: [...changedPaths].filter(Boolean).toSorted(),
-      ...(warnings.length > 0 ? { warnings } : {}),
-    };
-  });
-}
-
-/** Remove an installed plugin: config references, install record, and managed files. */
-export async function uninstallManagedPlugin(params: {
-  pluginId: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<{ pluginId: string; removed: string[]; warnings?: string[] }> {
-  const env = params.env ?? process.env;
-  return await withPluginLifecycleLease({ env }, async () => {
-    const snapshot = await readPluginMutationSnapshot(env);
-    const installRecords = await loadInstalledPluginIndexInstallRecords({ env });
-    // Mirror the CLI uninstall flow: plan against config carrying install records
-    // so managed npm/git directories resolve, then persist the stripped config.
-    const configWithRecords = withPluginInstallRecords(snapshot.config, installRecords);
-    const metadata = loadPluginMetadataSnapshot(
-      resolveManagedPluginMetadataParams(configWithRecords, env),
-    );
-    const pluginId = metadata.normalizePluginId(params.pluginId.trim());
-    const record = metadata.index.plugins.find((plugin) => plugin.pluginId === pluginId);
-    if (record?.origin === "bundled") {
-      throw new ManagedPluginLifecycleError(
-        `bundled plugin cannot be uninstalled: ${pluginId}; disable it instead`,
-      );
-    }
-    if (!record && !Object.hasOwn(installRecords, pluginId)) {
-      throw new ManagedPluginLifecycleError(`Plugin not found: ${pluginId}`);
-    }
-    const ownership = resolveInstalledPluginPackageOwnership(metadata.index, pluginId, env);
-    if (!ownership.ok) {
-      throw new ManagedPluginLifecycleError(ownership.error);
-    }
-    const { installOwner, pluginIds: ownedPluginIds } = ownership.value;
-    const ownedManifests = ownedPluginIds.flatMap((entryId) => {
-      const manifest = metadata.byPluginId.get(entryId);
-      return manifest ? [manifest] : [];
-    });
-    const channelIds =
-      ownedManifests.length > 0
-        ? uniqueStrings(ownedManifests.flatMap((manifest) => manifest.channels))
-        : undefined;
-    const extensionsDir = resolveDefaultPluginExtensionsDir(env);
-    const initialPlan = planPluginUninstall(
-      recordPluginPackageUninstallPlan(
-        {
-          config: configWithRecords,
-          pluginId: installOwner,
-          ...(channelIds !== undefined ? { channelIds } : {}),
-          deleteFiles: true,
-          extensionsDir,
-        },
-        {
-          runtimePluginIds: ownedPluginIds,
-          runtimeLoadPaths: ownedPluginIds.flatMap(
-            (entryId) => metadata.byPluginId.get(entryId)?.source ?? [],
-          ),
-        },
-      ),
-    );
-    if (!initialPlan.ok) {
-      throw new ManagedPluginLifecycleError(initialPlan.error);
-    }
-    let plan = initialPlan;
-    let finalSnapshot = snapshot;
-    let directoryResult = { directoryRemoved: false, warnings: [] as string[] };
-    if (plan.directoryRemoval) {
-      const disabledConfig = prepareConfigForPendingPluginDirectoryRemovalSet(
-        snapshot.config,
-        ownedPluginIds,
-      );
-      await replaceConfigFile({
-        nextConfig: disabledConfig,
-        baseHash: snapshot.baseHash,
-        writeOptions: {
-          ...snapshot.writeOptions,
-          afterWrite: { mode: "auto" },
-        },
-      });
-      directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
-      if (pluginUninstallTargetExists(plan.directoryRemoval.target)) {
-        throw new ManagedPluginLifecycleError(
-          `Failed to remove plugin directory ${plan.directoryRemoval.target}; the plugin remains disabled and tracked so uninstall can be retried.`,
-          { kind: "unavailable" },
-        );
-      }
-      finalSnapshot = await readPluginMutationSnapshot(env);
-      const refreshedConfigWithRecords = withPluginInstallRecords(
-        finalSnapshot.config,
-        installRecords,
-      );
-      const refreshedPlan = planPluginUninstall(
-        recordPluginPackageUninstallPlan(
-          {
-            config: refreshedConfigWithRecords,
-            pluginId: installOwner,
-            ...(channelIds !== undefined ? { channelIds } : {}),
-            deleteFiles: true,
-            extensionsDir,
-          },
-          {
-            runtimePluginIds: ownedPluginIds,
-            runtimeLoadPaths: ownedPluginIds.flatMap(
-              (entryId) => metadata.byPluginId.get(entryId)?.source ?? [],
-            ),
-          },
-        ),
-      );
-      if (!refreshedPlan.ok) {
-        throw new ManagedPluginLifecycleError(refreshedPlan.error);
-      }
-      plan = refreshedPlan;
-    }
-    const nextConfig = withoutPluginInstallRecords(plan.config);
-    const nextInstallRecords = removePluginInstallRecordFromRecords(installRecords, installOwner);
-    await commitPluginInstallRecordsWithConfig({
-      previousInstallRecords: installRecords,
-      nextInstallRecords,
-      nextConfig,
-      baseHash: finalSnapshot.baseHash,
-      writeOptions: finalSnapshot.writeOptions,
-    });
-    const warnings = [
-      ...collectClawPluginUninstallWarnings({
-        pluginId: installOwner,
-        installRecord: installRecords[installOwner],
-        env,
-      }),
-      ...(pluginId !== installOwner || ownedPluginIds.length > 1
-        ? [
-            `Uninstalled package "${installOwner}" and all owned plugin entries: ${ownedPluginIds.join(", ")}.`,
-          ]
-        : []),
-      ...directoryResult.warnings,
-    ];
-    await refreshPluginRegistryAfterConfigMutation({
-      config: nextConfig,
-      env,
-      reason: "source-changed",
-      installRecords: nextInstallRecords,
-      invalidateRuntimeCache: false,
-      logger: { warn: (message) => warnings.push(message) },
-    });
-    const removed = formatUninstallActionLabels({
-      ...plan.actions,
-      directory: directoryResult.directoryRemoved,
-    });
-    return {
-      pluginId: installOwner,
-      removed,
-      ...(warnings.length > 0 ? { warnings: [...new Set(warnings)] } : {}),
-    };
-  });
-}
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+  },
+);

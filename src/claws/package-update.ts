@@ -15,6 +15,7 @@ import {
 } from "./provenance.js";
 import type { ClawAddPlan, ClawManifest, ClawPackage } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
+import { collectClawRollbackFailures } from "./update-rollback.js";
 
 type PackageInstallerDeps = NonNullable<
   NonNullable<Parameters<typeof installClawPackages>[1]>["deps"]
@@ -74,14 +75,7 @@ export async function applyClawPackageUpdate(
   const appliedIds: string[] = [];
 
   const rollback = async () => {
-    const failures: string[] = [];
-    for (const revert of undo.toReversed()) {
-      try {
-        await revert();
-      } catch (error) {
-        failures.push(coerceErrorMessage(error));
-      }
-    }
+    const failures = await collectClawRollbackFailures(undo.toReversed());
     if (externalMutations.length > 0) {
       failures.push(`package artifacts may have been retained: ${externalMutations.join(", ")}`);
     }

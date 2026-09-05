@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { copyCoreTtsAttemptResultProvenance } from "../../tools/tts-tool-result-provenance.js";
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
 import type { ToolSummaryTrace } from "../types.js";
 import type { runEmbeddedAttemptWithBackend } from "./backend.js";
@@ -29,7 +30,7 @@ export function normalizeEmbeddedRunAttemptResult(
     raw.runtimeContinuationStarted === true
       ? { hadPotentialSideEffects: true, replaySafe: false }
       : undefined;
-  return {
+  return copyCoreTtsAttemptResultProvenance(attempt, {
     ...attempt,
     assistantTexts: raw.assistantTexts ?? [],
     toolMetas: raw.toolMetas ?? [],
@@ -49,7 +50,7 @@ export function normalizeEmbeddedRunAttemptResult(
       raw.replayMetadata ?? { hadPotentialSideEffects: true, replaySafe: false },
     currentAttemptReplayMetadata:
       runtimeContinuationReplayMetadata ?? raw.currentAttemptReplayMetadata ?? undefined,
-  };
+  });
 }
 
 export function hasCompletedModelProgressForIdleBreaker(

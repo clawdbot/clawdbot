@@ -340,14 +340,15 @@ describe("agent session resolution", () => {
       expect(resolution.sessionEntry?.endedAt).toBe(registryUpdatedAt - 100);
       expect(resolution.sessionEntry?.runtimeMs).toBe(900);
 
-      if (!resolution.sessionKey || !resolution.sessionStore) {
-        throw new Error("expected resolved explicit session store");
+      if (!resolution.sessionKey || !resolution.sessionEntry) {
+        throw new Error("expected resolved explicit session entry");
       }
+      const sessionStore = { [resolution.sessionKey]: resolution.sessionEntry };
       const resolvedTranscript = await resolveSessionTranscriptFile({
         sessionId: resolution.sessionId,
         sessionKey: resolution.sessionKey,
         sessionEntry: resolution.sessionEntry,
-        sessionStore: resolution.sessionStore,
+        sessionStore,
         storePath: resolution.storePath,
         agentId: "main",
       });
@@ -357,7 +358,7 @@ describe("agent session resolution", () => {
           sessionId: resolution.sessionId,
           sessionKey: resolution.sessionKey,
           sessionEntry: undefined,
-          sessionStore: resolution.sessionStore,
+          sessionStore,
           storePath: resolution.storePath,
           agentId: "main",
         }),

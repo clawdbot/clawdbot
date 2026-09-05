@@ -1,12 +1,34 @@
 // Stores active runtime plugin registry state and activation metadata.
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { resolveCompatibleRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
+import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
+import type { PluginLoadOptions } from "./loader-types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
-import { getActivePluginRegistry, getActivePluginRegistryWorkspaceDir } from "./runtime.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryKey,
+  getActivePluginRegistryWorkspaceDir,
+} from "./runtime.js";
 
 export function getActiveRuntimePluginRegistry(): PluginRegistry | null {
   return getActivePluginRegistry();
+}
+
+/** Return the exact active registry without triggering a fresh load on cache miss. */
+export function resolveCompatibleRuntimePluginRegistry(
+  options?: PluginLoadOptions,
+): PluginRegistry | undefined {
+  const activeRegistry = getActivePluginRegistry() ?? undefined;
+  if (!activeRegistry || options === undefined) {
+    return activeRegistry;
+  }
+  const activeCacheKey = getActivePluginRegistryKey();
+  if (!activeCacheKey) {
+    return undefined;
+  }
+  return resolvePluginLoadCacheContext(options).cacheKey === activeCacheKey
+    ? activeRegistry
+    : undefined;
 }
 
 function isRuntimePluginRecordLoaded(plugin: PluginRecord): boolean {
@@ -39,45 +61,43 @@ export function registryContainsRuntimePluginIds(
   if (pluginIds === undefined) {
     return true;
   }
-  const present = new Set<string>();
-  const loaded = new Set<string>();
-  const pluginStatusById = new Map<string, string | undefined>();
-  const pluginRuntimeLoadedById = new Map<string, boolean>();
-  for (const plugin of registry.plugins ?? []) {
-    present.add(plugin.id);
-    pluginStatusById.set(plugin.id, plugin.status);
-    pluginRuntimeLoadedById.set(plugin.id, isRuntimePluginRecordLoaded(plugin));
-    // Deferred manifest records are metadata-only until their runtime module is
-    // imported. Reusing them here would skip the scoped load that registers the
-    // requested harness/provider/tool capabilities.
+  if (pluginIds.length === 0 && registry.plugins.length > 0) {
+    return false;
+  }
+  const missing = new Set(pluginIds);
+  for (const plugin of registry.plugins) {
     if (plugin.status === undefined || isRuntimePluginRecordLoaded(plugin)) {
-      loaded.add(plugin.id);
+      missing.delete(plugin.id);
     }
   }
+  if (pluginIds.length > 0 && missing.size === 0) {
+    return true;
+  }
+  // Loader records decide runtime availability. Direct SDK registrations can
+  // lack a record, but must never revive a disabled, failed, or deferred owner.
+  if (registry.plugins.some((plugin) => missing.has(plugin.id))) {
+    return false;
+  }
   for (const [key, value] of Object.entries(registry)) {
-    if (key === "diagnostics" || key === "channelSetups") {
-      continue;
-    }
-    if (!Array.isArray(value)) {
+    if (key === "diagnostics" || key === "channelSetups" || !Array.isArray(value)) {
       continue;
     }
     for (const entry of value) {
       if (entry && typeof entry === "object" && "pluginId" in entry) {
         const pluginId = entry.pluginId;
         if (typeof pluginId === "string" && pluginId.length > 0) {
-          present.add(pluginId);
-          const status = pluginStatusById.get(pluginId);
-          if (status === undefined || pluginRuntimeLoadedById.get(pluginId) === true) {
-            loaded.add(pluginId);
+          if (pluginIds.length === 0) {
+            return false;
+          }
+          missing.delete(pluginId);
+          if (missing.size === 0) {
+            return true;
           }
         }
       }
     }
   }
-  if (pluginIds.length === 0) {
-    return present.size === 0;
-  }
-  return pluginIds.every((pluginId) => loaded.has(pluginId));
+  return pluginIds.length === 0;
 }
 
 export function registryMatchesManifestPluginIds(
@@ -114,12 +134,10 @@ export function getLoadedRuntimePluginRegistry(
   const requiredPluginIds = normalizeRequiredPluginIds(
     params.requiredPluginIds ?? params.loadOptions?.onlyPluginIds,
   );
-  if (params.loadOptions && requiredPluginIds?.length !== 0) {
-    const compatible = resolveCompatibleRuntimePluginRegistry(params.loadOptions);
-    if (!compatible || !registryContainsRuntimePluginIds(compatible, requiredPluginIds)) {
-      return undefined;
-    }
-    return compatible;
+  if (params.loadOptions && requiredPluginIds === undefined) {
+    // Explicit scopes below are bounded by workspace and loaded owners. Only
+    // unscoped requests need the full load identity to prove compatible reuse.
+    return resolveCompatibleRuntimePluginRegistry(params.loadOptions);
   }
 
   const activeWorkspaceDir = getActivePluginRegistryWorkspaceDir();

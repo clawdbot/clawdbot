@@ -145,8 +145,14 @@ Two deterministic ranking passes are enabled by default for hybrid search.
 
 Old notes gradually lose ranking weight so recent information surfaces first.
 With the default 30-day half-life, a note from last month scores at 50% of its
-original weight. `MEMORY.md` and other non-dated files under `memory/` are
-evergreen and never decayed; only dated `memory/YYYY-MM-DD.md` files decay.
+original weight. `MEMORY.md`, `USER.md`, and undated files under `memory/`
+remain evergreen. Dated `YYYY-MM-DD.md` and `YYYY-MM-DD-<slug>.md` files decay
+at any depth, including session-memory notes and nested dreaming reports.
+
+Session transcript hits use the source activity timestamp captured during
+indexing. Retained transcript archives use their indexed file modification
+time. Individual message timestamps remain provenance metadata and do not
+determine the source's recency weight.
 
 ### MMR (diversity)
 
@@ -165,7 +171,7 @@ run the hybrid MMR pass.
 
 ## Multimodal memory
 
-With `gemini-embedding-2-preview`, you can index images and audio alongside
+With `gemini-embedding-2`, you can index images and audio alongside
 Markdown. This only applies to files under `memory.search.extraPaths`; default
 memory roots (`MEMORY.md`, `memory/*.md`) stay Markdown-only. Search queries
 remain text, but they match against visual and audio content. See
@@ -182,13 +188,22 @@ Optionally index session transcripts so `memory_search` can recall earlier
 conversations. This is opt-in: set `experimental.sessionMemory: true` and add
 `"sessions"` to `sources` (default `sources` is `["memory"]`).
 
-Session hits obey `tools.sessions.visibility`: the default `"tree"` exposes the
-current session and sessions it spawned. When the caller is the canonical main
-session, `tree` covers every same-agent session. With `session.dmScope: "main"`,
-a multi-user DM setup shares that main session and its recall scope. Use a
-per-peer `dmScope` for DM isolation, or set visibility to `"self"` for strict
-current-session recall. Non-main callers still need `"agent"` visibility for
-unrelated same-agent sessions.
+Use `corpus: "memory"` to search only memory notes. Results containing no session
+transcripts do not load session history or perform session-visibility lookups.
+
+Session hits obey `tools.sessions.visibility`, which defaults to `"all"`.
+`memory_search` still searches the selected agent's indexed corpus; use
+[`sessions_search`](/concepts/session-search) for transcript search across agents
+on the Gateway. Visible transcripts can include other users' conversations.
+Cross-agent session access is on by default and governed by
+`tools.agentToAgent`; set `enabled: false` to block ordinary cross-agent access
+(requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all`) or use `allow`
+to restrict agent pairs. A per-peer `session.dmScope`
+separates DM context but does not restrict transcript access through session
+tools. Choose explicit `"agent"` for same-agent recall, `"tree"` for current plus
+spawned scope (with an agent-wide exception for main), or `"self"` for strict
+current-session recall. Sandbox spawned-only clamps and
+incognito exclusions still apply.
 
 ## Troubleshooting
 

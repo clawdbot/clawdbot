@@ -1,12 +1,7 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { isBuiltin } from "node:module";
 import path from "node:path";
 
 const WORKER_DEPLOY_BUILD_PLUGIN_NAME = "openclaw:worker-deploy";
-export const WORKER_DEPLOY_CLOSURE_PLUGIN_NAME = "openclaw:worker-deploy-closure";
-export const WORKER_DEPLOY_CLOSURE_ATTESTATION_VERSION = 1;
-export const WORKER_DEPLOY_CLOSURE_ATTESTATION_SUFFIX = ".closure.json";
 export const WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID = `${path.resolve("src/worker/worker-deploy-runtime.ts")}?optional-native`;
 
 const PLAYWRIGHT_PACKAGE_INIT = `    packageRoot = import_path9.default.join(__dirname, "..");
@@ -14,8 +9,13 @@ const PLAYWRIGHT_PACKAGE_INIT = `    packageRoot = import_path9.default.join(__d
     binPath = import_path9.default.join(packageRoot, "bin");`;
 const PLAYWRIGHT_BROWSER_REGISTRY_INIT =
   '    registry = new Registry(require(import_path20.default.join(packageRoot, "browsers.json")));';
-const WORKER_BROWSER_RUNTIME_COMPOSITION = `import { createAttachedBrowserToolRuntime } from "../../extensions/browser/runtime-api.js";
-export default { createAttachedBrowserToolRuntime };`;
+// Keep Browser and Playwright initialization behind the admitted Browser factory.
+const WORKER_BROWSER_RUNTIME_COMPOSITION = `export default {
+  async createAttachedBrowserToolRuntime(params) {
+    const { createAttachedBrowserToolRuntime } = await import("../../extensions/browser/runtime-api.js");
+    return createAttachedBrowserToolRuntime(params);
+  }
+};`;
 const WORKER_PLAYWRIGHT_RUNTIME = `import * as playwrightCore from "playwright-core";
 import { getUserAgent } from "playwright-core/lib/coreBundle";
 export function getPlaywrightCore() { return playwrightCore; }
@@ -27,95 +27,12 @@ const UNDICI_REQUIRE_BOOTSTRAP = [
 ] as const;
 const WORKER_UNDICI_IMPORT = 'import * as bundledUndici from "undici";';
 
-export type WorkerDeployClosureAttestation = {
-  version: typeof WORKER_DEPLOY_CLOSURE_ATTESTATION_VERSION;
-  artifact: string;
-  sha256: string;
-  runtimeImports: string[];
-};
-
-export function hashWorkerDeployArtifactSource(source: string): string {
-  return createHash("sha256").update(source).digest("hex");
-}
-
-export function createWorkerDeployClosureAttestation(
-  artifactName: string,
-  source: string,
-  runtimeImports: string[],
-): WorkerDeployClosureAttestation {
-  return {
-    version: WORKER_DEPLOY_CLOSURE_ATTESTATION_VERSION,
-    artifact: artifactName,
-    sha256: hashWorkerDeployArtifactSource(source),
-    runtimeImports: [...new Set(runtimeImports)].toSorted((left, right) =>
-      left.localeCompare(right),
-    ),
-  };
-}
-
-/** Records final bundle closure so the post-build guard does not need to reparse large artifacts. */
-export function createWorkerDeployClosurePlugin() {
-  return {
-    name: WORKER_DEPLOY_CLOSURE_PLUGIN_NAME,
-    generateBundle(
-      this: {
-        emitFile(file: { type: "asset"; fileName: string; source: string }): string;
-        error(message: string): never;
-      },
-      _options: unknown,
-      bundle: Record<string, unknown>,
-    ) {
-      const chunkFileNames = new Set(
-        Object.values(bundle).flatMap((value) => {
-          const output = value as { type?: unknown; fileName?: unknown };
-          return output.type === "chunk" && typeof output.fileName === "string"
-            ? [output.fileName]
-            : [];
-        }),
-      );
-      for (const value of Object.values(bundle)) {
-        const output = value as {
-          type?: unknown;
-          fileName?: unknown;
-          code?: unknown;
-          imports?: unknown;
-          dynamicImports?: unknown;
-        };
-        if (
-          output.type !== "chunk" ||
-          typeof output.fileName !== "string" ||
-          typeof output.code !== "string"
-        ) {
-          continue;
-        }
-        const runtimeImports = [
-          ...(Array.isArray(output.imports) ? output.imports : []),
-          ...(Array.isArray(output.dynamicImports) ? output.dynamicImports : []),
-        ].filter(
-          (specifier): specifier is string =>
-            typeof specifier === "string" && !chunkFileNames.has(specifier),
-        );
-        const invalidImport = runtimeImports.find(
-          (specifier) => !specifier.startsWith("node:") && !isBuiltin(specifier),
-        );
-        if (invalidImport) {
-          this.error(
-            `Worker deploy artifact ${output.fileName} retains runtime import "${invalidImport}" instead of bundling it.`,
-          );
-        }
-        const attestation = createWorkerDeployClosureAttestation(
-          path.basename(output.fileName),
-          output.code,
-          runtimeImports,
-        );
-        this.emitFile({
-          type: "asset",
-          fileName: `${output.fileName}${WORKER_DEPLOY_CLOSURE_ATTESTATION_SUFFIX}`,
-          source: `${JSON.stringify(attestation)}\n`,
-        });
-      }
-    },
-  };
+export function resolveWorkerDeployGeneratorInputs(rootDir = process.cwd()) {
+  const playwrightRoot = fs.realpathSync(path.resolve(rootDir, "node_modules/playwright-core"));
+  return [
+    path.join(playwrightRoot, "package.json"),
+    path.join(playwrightRoot, "browsers.json"),
+  ] as const;
 }
 
 /** Composes bundled-plugin runtime and removes dependency package reads from the worker build. */
@@ -131,12 +48,12 @@ export function createWorkerDeployBuildPlugin(rootDir = process.cwd()) {
   const undiciDispatcherOptionsPath = fs.realpathSync(
     path.resolve("src/infra/net/undici-dispatcher-options.ts"),
   );
-  const packageJson = JSON.parse(
-    fs.readFileSync(path.join(playwrightRoot, "package.json"), "utf8"),
-  ) as { name: string; version: string };
-  const browsersJson = JSON.parse(
-    fs.readFileSync(path.join(playwrightRoot, "browsers.json"), "utf8"),
-  ) as unknown;
+  const [packageJsonPath, browsersJsonPath] = resolveWorkerDeployGeneratorInputs(rootDir);
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+    name: string;
+    version: string;
+  };
+  const browsersJson = JSON.parse(fs.readFileSync(browsersJsonPath, "utf8")) as unknown;
   const replacement = `    packageRoot = __dirname;
     packageJSON = ${JSON.stringify({ name: packageJson.name, version: packageJson.version })};
     binPath = packageRoot;`;

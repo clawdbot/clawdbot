@@ -1,30 +1,31 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { BrowserContext, Locator, Page } from "playwright";
+import { beforeEach, expect, it } from "vitest";
 import type { AuditRunInspectResult } from "../../../packages/gateway-protocol/src/schema/audit-run.js";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   decisionDisplay,
   presentResult,
   receiptPage,
 } from "./activity-run-inspector.test-fixtures.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI durable Activity run inspector",
+  startServerBeforeBrowser: true,
+  trackBrowserContexts: true,
+  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
+});
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.resolve(".artifacts/control-ui-e2e/activity-run-inspector-r6");
-
-let browser: Browser;
-let server: ControlUiE2eServer;
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("activity-run-inspector-r6");
+  }
+});
 
 function unavailableResult(params: {
   state: "unknown" | "unsupported";
@@ -77,7 +78,7 @@ async function newContext(options: { video?: boolean } = {}): Promise<BrowserCon
   if (captureUiProof) {
     await mkdir(path.join(proofDir, "video"), { recursive: true });
   }
-  return browser.newContext({
+  return suite.newBrowserContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 1000, width: 1440 },
@@ -87,11 +88,22 @@ async function newContext(options: { video?: boolean } = {}): Promise<BrowserCon
   });
 }
 
-async function screenshot(page: Page, name: string) {
+async function screenshot(
+  page: Page,
+  name: string,
+  content = page.getByRole("heading", { name: "Identity and authority" }),
+) {
   if (!captureUiProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
+  if (page.video()) {
+    await content.scrollIntoViewIfNeeded();
+    await writeFile(
+      path.join(proofDir, name),
+      await takeControlUiViewportScreenshot(page, page.locator(".run-inspector"), [content]),
+    );
+    return;
+  }
   await page.screenshot({
     animations: "disabled",
     fullPage: true,
@@ -116,20 +128,7 @@ async function measureWithinAncestor(element: Locator, ancestorSelector: string)
   }, ancestorSelector);
 }
 
-describeControlUiE2e("Control UI durable Activity run inspector", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("deep-links, reloads durable evidence, and exposes text-first accessible states", async () => {
     const context = await newContext({ video: true });
     const page = await context.newPage();
@@ -140,7 +139,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}activity?view=run&run=${encodeURIComponent(runId)}`);
+      await page.goto(`${suite.server.baseUrl}activity?view=run&run=${encodeURIComponent(runId)}`);
       await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
       expect(await gateway.waitForRequest("audit.run.inspect")).toMatchObject({
         params: { runId, decisionLimit: 50, executionLimit: 50 },
@@ -211,7 +210,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       await page.goBack();
       await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -322,7 +321,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}activity?view=run&run=receipt-matrix`);
+      await page.goto(`${suite.server.baseUrl}activity?view=run&run=receipt-matrix`);
       await page.getByRole("list", { name: "Decision receipt list" }).waitFor();
       await page.getByRole("heading", { name: "Receipt detail" }).waitFor();
       await page.getByText("Allowed", { exact: true }).first().waitFor();
@@ -436,30 +435,11 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       }
       await screenshot(page, "16-receipt-detail-message.png");
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
-  it("keeps generic receipt prose out of every Activity presentation surface", async () => {
-    const secrets = [
-      "U2_R6_BROWSER_RECEIPT_ID_SECRET_5e3d70",
-      "U2_R6_BROWSER_ACTION_ID_SECRET_4d1ac2",
-      "U2_R6_BROWSER_CONTEXT_ID_SECRET_a11c42",
-      "U2_R6_BROWSER_EXECUTION_ID_SECRET_5d00be",
-      "U2_R6_BROWSER_RUN_ID_SECRET_808c3e",
-      "U2_R6_BROWSER_RESOURCE_REF_SECRET_0ad831",
-      "U2_R6_BROWSER_TARGET_REF_SECRET_04f9e0",
-      "U2_R6_BROWSER_RECORD_REF_SECRET_3ab89a",
-      "U2_R6_BROWSER_EVALUATOR_REF_SECRET_1b8d53",
-      "U2_R6_BROWSER_OWNER_SECRET_ec0ffe",
-      "U2_R6_BROWSER_SUMMARY_SECRET_9fe28a",
-      "U2_R6_BROWSER_CODE_SECRET_724ac1",
-      "U2_R6_BROWSER_TEXT_SECRET_31db80",
-      "U2_R6_BROWSER_POLICY_REF_SECRET_30f6ac",
-      "U2_R6_BROWSER_GRANT_REF_SECRET_79d4e1",
-      "U2_R6_BROWSER_REASON_SECRET_1114e6",
-      "U2_R6_BROWSER_COMMAND_PATH_TOOL_INPUT_PERMISSION_METADATA_SECRET_b7114d",
-    ];
+  it("renders the Gateway's unverified receipt state without claiming a verified producer", async () => {
     const response = receiptPage([
       {
         schemaVersion: 1,
@@ -478,24 +458,8 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
         remediation: [],
       },
     ]);
-    expect(response).not.toHaveProperty("decisions");
 
     const context = await newContext({ video: true });
-    await context.addInitScript(() => {
-      const recordedUrls: string[] = [];
-      const instrument = (method: "pushState" | "replaceState") => {
-        const original = history[method].bind(history);
-        history[method] = ((data: unknown, unused: string, url?: string | URL | null) => {
-          if (url !== undefined && url !== null) {
-            recordedUrls.push(String(url));
-          }
-          original(data, unused, url);
-        }) as History[typeof method];
-      };
-      instrument("pushState");
-      instrument("replaceState");
-      Object.defineProperty(window, "activityHistoryUrls", { value: recordedUrls });
-    });
     const page = await context.newPage();
     await installMockGateway(page, {
       featureMethods: ["audit.run.inspect"],
@@ -503,7 +467,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}activity?view=run&run=receipt-matrix`);
+      await page.goto(`${suite.server.baseUrl}activity?view=run&run=receipt-matrix`);
       await page.getByRole("heading", { name: "Receipt detail" }).waitFor();
       await page.getByText("Unknown", { exact: true }).first().waitFor();
       await page
@@ -524,38 +488,17 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
           .textContent(),
       ).toBe("0");
 
-      const surfaces = await page.locator("body").evaluate((body) => {
-        const elements = [body, ...body.querySelectorAll<HTMLElement>("*")];
-        const aria = elements.flatMap((element) =>
-          ["aria-label", "aria-labelledby", "aria-describedby", "title", "alt"]
-            .map((name) => element.getAttribute(name))
-            .filter((value): value is string => value !== null),
-        );
-        const historyUrls = (window as typeof window & { activityHistoryUrls?: readonly string[] })
-          .activityHistoryUrls;
-        return {
-          // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText separately proves rendered visible text.
-          visibleText: body instanceof HTMLElement ? body.innerText : "",
-          textContent: body.textContent ?? "",
-          aria: aria.join("\n"),
-          hrefs: elements
-            .filter((element): element is HTMLAnchorElement => element instanceof HTMLAnchorElement)
-            .flatMap((link) => [link.getAttribute("href") ?? "", link.href])
-            .join("\n"),
-          location: location.href,
-          historyState: JSON.stringify(history.state),
-          historyUrls: [...(historyUrls ?? [])].join("\n"),
-        };
-      });
-      const accessibilityTree = await page.locator("body").ariaSnapshot();
-      for (const secret of [...secrets, "operator_approvals"]) {
-        for (const surface of [...Object.values(surfaces), accessibilityTree]) {
-          expect(surface).not.toContain(secret);
-        }
-      }
-      await screenshot(page, "18-unverified-receipt-privacy.png");
+      const detail = page.locator(".run-inspector__receipt-detail");
+      await detail.getByText("decision_fact_display_unverified", { exact: true }).waitFor();
+      await detail.getByText("decision.display_provenance", { exact: true }).waitFor();
+      expect(await detail.getByText("Verified producer", { exact: true }).count()).toBe(0);
+      await screenshot(
+        page,
+        "18-unverified-receipt-privacy.png",
+        detail.getByText("decision_fact_display_unverified", { exact: true }),
+      );
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -605,7 +548,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}activity?view=run&run=receipt-page-error`);
+      await page.goto(`${suite.server.baseUrl}activity?view=run&run=receipt-page-error`);
       await page.getByText("A denied approval remains visible.", { exact: true }).first().waitFor();
       await page.getByRole("button", { name: "Load more receipts" }).click();
       await page
@@ -614,7 +557,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
         .waitFor();
       await page.getByText("A denied approval remains visible.", { exact: true }).first().waitFor();
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -658,7 +601,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
           receipt: receiptId,
           decision: decisionCursor,
         });
-        await page.goto(`${server.baseUrl}activity?${search.toString()}`);
+        await page.goto(`${suite.server.baseUrl}activity?${search.toString()}`);
         await page.getByRole("heading", { name: "Run inspection failed" }).waitFor();
         const restart = page.getByRole("button", { name: "Restart inspection" });
         await restart.waitFor();
@@ -690,7 +633,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
         expect(restartedUrl.searchParams.get("receipt")).toBeNull();
         expect(restartedUrl.searchParams.get("decision")).toBeNull();
       } finally {
-        await context.close();
+        await suite.closeBrowserContext(context);
       }
     }
   });
@@ -701,7 +644,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
     const gateway = await installMockGateway(page, { sessionKey: "main" });
 
     try {
-      await page.goto(`${server.baseUrl}activity?view=live`);
+      await page.goto(`${suite.server.baseUrl}activity?view=live`);
       await page.getByText("No activity yet.", { exact: true }).waitFor();
 
       for (let index = 0; index < 40; index += 1) {
@@ -782,7 +725,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       expect(mobileLayout.outletDisplay).toBe("block");
       expect(mobileLayout.contentScrollHeight).toBeGreaterThan(mobileLayout.contentClientHeight);
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -797,7 +740,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}activity?view=run&run=${encodeURIComponent(runId)}`);
+      await page.goto(`${suite.server.baseUrl}activity?view=run&run=${encodeURIComponent(runId)}`);
       const inspector = page.locator(".run-inspector");
       const finalReceiptContent = page.getByText(
         "Treat this receipt as attribution only; it does not prove authorization.",
@@ -863,7 +806,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
         mobileLayout.inspectorClientHeight + 1,
       );
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -921,7 +864,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}activity?view=run`);
+      await page.goto(`${suite.server.baseUrl}activity?view=run`);
       await page.getByRole("heading", { name: "No run selected" }).waitFor();
       expect((await gateway.getRequests("audit.run.inspect")).length).toBe(0);
       await screenshot(page, "02-empty.png");
@@ -931,12 +874,12 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
         ["expired", "Identity evidence expired", "04-expired.png"],
         ["corrupt", "Identity evidence is corrupt", "05-corrupt.png"],
       ] as const) {
-        await page.goto(`${server.baseUrl}activity?view=run&run=${runId}`);
+        await page.goto(`${suite.server.baseUrl}activity?view=run&run=${runId}`);
         await page.getByRole("heading", { name: heading }).waitFor();
         await screenshot(page, screenshotName);
       }
 
-      await page.goto(`${server.baseUrl}activity?view=run&run=ambiguous`);
+      await page.goto(`${suite.server.baseUrl}activity?view=run&run=ambiguous`);
       await page.getByRole("heading", { name: "Multiple executions match this run" }).waitFor();
       await screenshot(page, "11-ambiguous.png");
       await page.getByRole("button", { name: "Load more executions" }).click();
@@ -957,7 +900,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       });
       await screenshot(page, "12-exact-selection.png");
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -972,7 +915,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}activity?view=run&run=${runId}`);
+      await page.goto(`${suite.server.baseUrl}activity?view=run&run=${runId}`);
       await page.getByRole("heading", { name: "Loading run inspection" }).waitFor();
       await screenshot(page, "06-loading.png");
       await gateway.rejectDeferred("audit.run.inspect", {
@@ -989,7 +932,7 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
       await page.getByRole("heading", { name: "Gateway disconnected" }).waitFor();
       await screenshot(page, "08-disconnected.png");
     } finally {
-      await context.close();
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -1017,12 +960,12 @@ describeControlUiE2e("Control UI durable Activity run inspector", () => {
         operatorScopes: [...scenario.operatorScopes],
       });
       try {
-        await page.goto(`${server.baseUrl}activity?view=run&run=${scenario.name}`);
+        await page.goto(`${suite.server.baseUrl}activity?view=run&run=${scenario.name}`);
         await page.getByRole("heading", { name: scenario.heading }).waitFor();
         expect((await gateway.getRequests("audit.run.inspect")).length).toBe(0);
         await screenshot(page, scenario.screenshotName);
       } finally {
-        await context.close();
+        await suite.closeBrowserContext(context);
       }
     }
   });

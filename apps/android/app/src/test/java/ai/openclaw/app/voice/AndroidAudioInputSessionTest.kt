@@ -5,10 +5,14 @@ import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.os.Looper
+import kotlinx.coroutines.CancellationException
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -36,9 +40,72 @@ class AndroidAudioInputSessionTest {
 
   @After
   fun tearDown() {
+    RouteQueryAudioManager.onQuery = {}
     shadowAudioManager.setInputDevices(emptyList())
     shadowAudioManager.setAvailableCommunicationDevices(emptyList())
     audioManager.clearCommunicationDevice()
+  }
+
+  @Test
+  fun communicationCaptureKeepsClientFormatAndUsesSpeakerWithoutAssumingAec() {
+    val speaker = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(speaker))
+    AndroidAudioInputSession.open(context, 24_000, 4_800, communication = true).use { input ->
+      input.startRecording()
+      val recorder = ReflectionHelpers.getField<AudioRecord>(input, "audioRecord")
+      assertEquals(24_000, recorder.sampleRate)
+      assertEquals(MediaRecorder.AudioSource.VOICE_COMMUNICATION, recorder.audioSource)
+      assertEquals(speaker, audioManager.communicationDevice)
+      assertFalse(input.canCaptureDuringPlayback)
+    }
+    assertNull(audioManager.communicationDevice)
+    assertEquals(AudioManager.MODE_NORMAL, audioManager.mode)
+  }
+
+  @Test
+  fun communicationCaptureKeepsLineAndHdmiOutputsInsteadOfForcingTheSpeaker() {
+    val sinkTypes = listOf(AudioDeviceInfo.TYPE_LINE_ANALOG, AudioDeviceInfo.TYPE_AUX_LINE, AudioDeviceInfo.TYPE_HDMI)
+    val selectedTypes =
+      sinkTypes.map { type ->
+        val speaker = audioDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER)
+        val external = audioDevice(type)
+        shadowAudioManager.setAvailableCommunicationDevices(listOf(speaker, external))
+        AndroidAudioInputSession
+          .open(context, 24_000, 4_800, communication = true)
+          .use {
+            audioManager.communicationDevice?.type
+          }.also { assertNull(audioManager.communicationDevice) }
+      }
+    assertEquals(sinkTypes, selectedTypes)
+  }
+
+  @Test
+  fun cancelledOpenerCannotDisplaceTheActiveRoute() {
+    val headset = audioDevice(AudioDeviceInfo.TYPE_BLE_HEADSET)
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(headset))
+    for (communication in listOf(false, true)) {
+      AndroidAudioInputSession.open(context, 24_000, 4_800, communication = communication).use {
+        assertThrows(CancellationException::class.java) {
+          AndroidAudioInputSession.open(context, 24_000, 4_800, communication = communication, isCurrent = { false })
+        }
+        assertEquals(headset, audioManager.communicationDevice)
+      }
+      assertNull(audioManager.communicationDevice)
+    }
+  }
+
+  @Test
+  @Config(shadows = [RouteQueryAudioManager::class])
+  fun cancelledReplacementBeforeRouteAcquisitionDoesNotPreventTheOldOwnerCleanup() {
+    val headset = audioDevice(AudioDeviceInfo.TYPE_BLE_HEADSET)
+    shadowAudioManager.setAvailableCommunicationDevices(listOf(headset))
+    val old = AndroidAudioInputSession.open(context, 24_000, 4_800)
+    var current = true
+    RouteQueryAudioManager.onQuery = { current = false }
+    val replacement = AndroidAudioInputSession.open(context, 24_000, 4_800, isCurrent = { current })
+    replacement.close()
+    old.close()
+    assertNull(audioManager.communicationDevice)
   }
 
   @Test
@@ -243,4 +310,14 @@ class AndroidAudioInputSessionTest {
     ReflectionHelpers.setField(handle, "mId", nextDeviceId++)
     return device
   }
+}
+
+@org.robolectric.annotation.Implements(AudioManager::class)
+class RouteQueryAudioManager : ShadowAudioManager() {
+  companion object {
+    var onQuery: () -> Unit = {}
+  }
+
+  @org.robolectric.annotation.Implementation(minSdk = 31)
+  override fun getAvailableCommunicationDevices(): MutableList<AudioDeviceInfo> = super.getAvailableCommunicationDevices().also { onQuery() }
 }

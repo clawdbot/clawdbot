@@ -15,11 +15,25 @@ on:
         required: false
         default: ""
         type: string
+      target_context_ref:
+        description: Canonical release context for an exact-SHA frozen-target validation
+        required: false
+        default: ""
+        type: string
       full_release_validation:
         description: Enable release-only Docker prerelease lanes from Full Release Validation
         required: false
         default: false
         type: boolean
+      phase:
+        description: Plugin prerelease phase to run
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - independent
+          - candidate
       node_test_exclude_patterns_json:
         description: Full Release Validation-only exact plugin test paths omitted for a frozen target
         required: false
@@ -40,19 +54,50 @@ permissions:
   contents: read
 
 concurrency:
-  group: plugin-prerelease-${{ inputs.target_ref }}-${{ github.sha }}
+  group: plugin-prerelease-${{ inputs.target_ref }}-${{ github.sha }}-${{ inputs.phase }}
   cancel-in-progress: ${{ inputs.target_ref == 'main' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  resolve_target:
+    name: Resolve target ref
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      checkout_revision: ${{ steps.resolve.outputs.sha }}
+    steps:
+      # Candidate planning executes repository code; admission must own a separate runner.
+      - name: Checkout trusted ref resolver
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: workflow
+          sparse-checkout: scripts/github/resolve-openclaw-ref.sh
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Resolve target SHA
+        id: resolve
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          OPENCLAW_REF_REMOTE: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          bash workflow/scripts/github/resolve-openclaw-ref.sh \
+            --ref "$TARGET_REF" \
+            --expected-sha "$EXPECTED_SHA" \
+            --github-output "$GITHUB_OUTPUT"
+
   preflight:
     name: Build plugin prerelease plan
+    needs: [resolve_target]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     outputs:
-      checkout_revision: ${{ steps.manifest.outputs.checkout_revision }}
       run_plugin_prerelease_suite: ${{ steps.manifest.outputs.run_plugin_prerelease_suite }}
       run_plugin_prerelease_static: ${{ steps.manifest.outputs.run_plugin_prerelease_static }}
       plugin_prerelease_static_matrix: ${{ steps.manifest.outputs.plugin_prerelease_static_matrix }}
@@ -61,9 +106,57 @@ jobs:
       node_test_exclude_patterns_json: ${{ steps.node_test_exclusions.outputs.patterns_json }}
       run_plugin_prerelease_extensions: ${{ steps.manifest.outputs.run_plugin_prerelease_extensions }}
       plugin_prerelease_extension_matrix: ${{ steps.manifest.outputs.plugin_prerelease_extension_matrix }}
+      run_plugin_prerelease_inspector: ${{ steps.manifest.outputs.run_plugin_prerelease_inspector }}
       run_plugin_prerelease_docker: ${{ steps.manifest.outputs.run_plugin_prerelease_docker }}
       plugin_prerelease_docker_lanes: ${{ steps.manifest.outputs.plugin_prerelease_docker_lanes }}
     steps:
+      - name: Validate phase inputs
+        env:
+          CANDIDATE_ARTIFACT_JSON: ${{ inputs.candidate_artifact_json }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
+          PHASE: ${{ inputs.phase }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$PHASE" in
+            all|independent) exit 0 ;;
+            candidate) ;;
+            *)
+              echo "phase must be one of: all, independent, candidate" >&2
+              exit 1
+              ;;
+          esac
+          if [[ "$FULL_RELEASE_VALIDATION" != "true" ]]; then
+            echo "phase=candidate requires full_release_validation=true." >&2
+            exit 1
+          fi
+          if ! jq -e \
+            --arg sha "$EXPECTED_SHA" \
+            'def digits: tostring | test("^[1-9][0-9]*$");
+             def hex40: type == "string" and test("^[a-f0-9]{40}$");
+             def hex64: type == "string" and test("^[a-f0-9]{64}$");
+             (.packageArtifactName | type == "string" and length > 0) and
+             (.packageArtifactId | digits) and
+             (.packageArtifactDigest | hex64) and
+             (.packageArtifactRunId | digits) and
+             (.packageArtifactRunAttempt | digits) and
+             (.packageFileName | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]*\\.tgz$")) and
+             (.packageSourceSha | hex40) and
+             ($sha == "" or .packageSourceSha == $sha) and
+             (.packageSha256 | hex64) and
+             (.packageVersion | type == "string" and length > 0) and
+             (.imageArtifactName | type == "string" and length > 0) and
+             (.imageArtifactId | digits) and
+             (.imageArtifactDigest | hex64) and
+             (.imageArtifactRunId | digits) and
+             (.imageArtifactRunAttempt | digits) and
+             (.imageArchiveSha256 | hex64)' \
+            <<< "$CANDIDATE_ARTIFACT_JSON" >/dev/null; then
+            echo "phase=candidate requires the complete immutable package and Docker image artifact tuple." >&2
+            exit 1
+          fi
+
       - name: Validate frozen-target Node exclusions
         id: node_test_exclusions
         env:
@@ -126,16 +219,16 @@ jobs:
           EOF
 
       - name: Checkout target
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.target_ref }}
+          ref: ${{ needs.resolve_target.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
           submodules: false
 
       - name: Setup manifest TypeScript runtime
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.x"
 
@@ -151,26 +244,17 @@ jobs:
       - name: Build plugin prerelease manifest
         id: manifest
         env:
-          EXPECTED_SHA: ${{ inputs.expected_sha }}
           FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
+          PHASE: ${{ inputs.phase }}
         run: |
           node --import tsx --input-type=module <<'EOF'
-          import { appendFileSync, existsSync } from "node:fs";
-          import { execFileSync } from "node:child_process";
+          import { appendFileSync, existsSync, globSync } from "node:fs";
+          import path from "node:path";
 
           const createMatrix = (include) => ({ include });
           const outputPath = process.env.GITHUB_OUTPUT;
-          const checkoutRevision = execFileSync("git", ["rev-parse", "HEAD"], {
-            encoding: "utf8",
-          }).trim();
-          const expectedSha = (process.env.EXPECTED_SHA ?? "").trim();
           const fullReleaseValidation = process.env.FULL_RELEASE_VALIDATION === "true";
-          if (expectedSha && expectedSha !== checkoutRevision) {
-            console.error(
-              `target_ref resolved to ${checkoutRevision}, expected ${expectedSha}`,
-            );
-            process.exit(1);
-          }
+          const phase = process.env.PHASE ?? "all";
 
           let pluginPrereleasePlan = { staticChecks: [], dockerLanes: [] };
           let extensionShards = [];
@@ -210,14 +294,32 @@ jobs:
           }
 
           try {
-            const { createExtensionTestShards, DEFAULT_EXTENSION_TEST_SHARD_COUNT } = await import(
-              targetPlanPath("extension-test-plan")
-            );
-            extensionShards = createExtensionTestShards({
-              shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
-            }).map((shard) => ({
+            const planner = await import(targetPlanPath("extension-test-plan"));
+            const allExtensionShards = planner.createExtensionTestShards({
+              shardCount: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+            });
+            const hasJobSplitter = typeof planner.splitExtensionTestJobTargets === "function";
+            const telegramPlanGroup = hasJobSplitter
+              ? allExtensionShards
+                  .find((shard) => shard.extensionIds.includes("telegram"))
+                  ?.planGroups.find((group) => group.extensionIds.includes("telegram"))
+              : null;
+            const genericExtensionIds = hasJobSplitter
+              ? allExtensionShards
+                  .flatMap((shard) => shard.extensionIds)
+                  .filter((extensionId) => extensionId !== "telegram")
+              : [];
+            const batchShards = (
+              hasJobSplitter
+                ? planner.createExtensionTestShards({
+                    extensionIds: genericExtensionIds,
+                    shardCount: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+                  })
+                : allExtensionShards
+            ).map((shard) => ({
               check_name: shard.checkName,
               extensions_csv: shard.extensionIds.join(","),
+              vitest_config: "",
               vitest_max_workers: shard.extensionIds.some((extensionId) =>
                 extensionId.startsWith("memory-"),
               )
@@ -225,12 +327,50 @@ jobs:
                 : 1,
               runner: shard.extensionIds.some((extensionId) => extensionId.startsWith("memory-"))
                 ? "blacksmith-16vcpu-ubuntu-2404"
-                : [0, 1, 2, 3].includes(shard.index)
-                  ? "blacksmith-8vcpu-ubuntu-2404"
-                  : "blacksmith-4vcpu-ubuntu-2404",
+                  : [0, 1, 2, 3].includes(shard.index)
+                    ? "blacksmith-8vcpu-ubuntu-2404"
+                    : "blacksmith-4vcpu-ubuntu-2404",
               shard_index: shard.index + 1,
               task: "extensions-batch",
             }));
+            const telegramVitestConfig = telegramPlanGroup
+              ? (await import(`./${telegramPlanGroup.config}`)).default
+              : null;
+            const telegramTestConfig = telegramVitestConfig?.test ?? {};
+            const telegramTestDir = telegramTestConfig.dir ?? process.cwd();
+            const telegramTestExclude = (telegramTestConfig.exclude ?? []).map((pattern) =>
+              path.isAbsolute(pattern)
+                ? path.relative(telegramTestDir, pattern).replaceAll("\\", "/")
+                : pattern,
+            );
+            const telegramTestFiles = telegramPlanGroup
+              ? globSync(telegramTestConfig.include ?? [], {
+                  cwd: telegramTestDir,
+                  exclude: telegramTestExclude,
+                })
+                  .map((file) =>
+                    path
+                      .relative(process.cwd(), path.resolve(telegramTestDir, file))
+                      .replaceAll("\\", "/"),
+                  )
+                  .sort()
+              : [];
+            const telegramJobTargets = telegramPlanGroup
+              ? planner.splitExtensionTestJobTargets(telegramPlanGroup.config, telegramTestFiles)
+              : [];
+            const telegramShards = telegramPlanGroup
+              ? telegramJobTargets.map((includePatterns, index) => ({
+                  check_name: `checks-node-extensions-telegram-shard-${index + 1}`,
+                  extensions_csv: "telegram",
+                  includePatterns,
+                  vitest_config: telegramPlanGroup.config,
+                  vitest_max_workers: 1,
+                  runner: "blacksmith-8vcpu-ubuntu-2404",
+                  shard_index: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT + index + 1,
+                  task: "extension-file-shard",
+                }))
+              : [];
+            extensionShards = [...batchShards, ...telegramShards];
           } catch (error) {
             const errorCode =
               error && typeof error === "object" && "code" in error ? error.code : "";
@@ -288,14 +428,16 @@ jobs:
             task: check.check,
           }));
           const dockerLanes = pluginPrereleasePlan.dockerLanes;
-          const runStatic = staticChecks.length > 0;
-          const runNode = nodeShards.length > 0;
-          const runExtensions = extensionShards.length > 0;
-          const runDocker = fullReleaseValidation && dockerLanes.length > 0;
-          const runSuite = runStatic || runNode || runExtensions || runDocker;
+          const runIndependent = phase !== "candidate";
+          const runCandidate = phase !== "independent";
+          const runStatic = runIndependent && staticChecks.length > 0;
+          const runNode = runIndependent && nodeShards.length > 0;
+          const runExtensions = runIndependent && extensionShards.length > 0;
+          const runInspector = runIndependent && (runStatic || runNode || runExtensions);
+          const runDocker = runCandidate && fullReleaseValidation && dockerLanes.length > 0;
+          const runSuite = runStatic || runNode || runExtensions || runInspector || runDocker;
 
           const manifest = {
-            checkout_revision: checkoutRevision,
             run_plugin_prerelease_suite: runSuite,
             run_plugin_prerelease_static: runStatic,
             plugin_prerelease_static_matrix: createMatrix(staticChecks),
@@ -303,6 +445,7 @@ jobs:
             plugin_prerelease_node_matrix: createMatrix(nodeShards),
             run_plugin_prerelease_extensions: runExtensions,
             plugin_prerelease_extension_matrix: createMatrix(extensionShards),
+            run_plugin_prerelease_inspector: runInspector,
             run_plugin_prerelease_docker: runDocker,
             plugin_prerelease_docker_lanes: dockerLanes.join(" "),
           };
@@ -316,11 +459,158 @@ jobs:
           }
           EOF
 
+  plugin-npm-security-plan:
+    permissions:
+      contents: read
+    name: Plan plugin npm security artifacts
+    needs: [resolve_target]
+    if: inputs.phase != 'candidate'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      packages_json: ${{ steps.plan.outputs.packages_json }}
+    steps:
+      - name: Checkout trusted scanner tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup trusted scanner TypeScript runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24.x"
+
+      - name: Setup trusted scanner pnpm
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: restore
+          node-version: "24.x"
+
+      - name: Install trusted scanner dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
+      - name: Checkout candidate as inert data
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ needs.resolve_target.outputs.checkout_revision }}
+          path: .release-candidate
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Build trusted plugin package plan
+        id: plan
+        run: |
+          node --import tsx scripts/plugin-npm-security-prepare.mts plan \
+            --candidate-root .release-candidate \
+            --github-output "$GITHUB_OUTPUT"
+
+  plugin-npm-security-scan:
+    permissions:
+      contents: read
+    name: plugin-npm-security-scan
+    needs: [resolve_target, plugin-npm-security-plan]
+    if: ${{ !cancelled() && always() && needs.resolve_target.result == 'success' && needs.plugin-npm-security-plan.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout trusted scanner tooling
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup trusted scanner TypeScript runtime
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24.x"
+
+      - name: Setup trusted scanner pnpm
+        uses: ./.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: restore
+          node-version: "24.x"
+
+      - name: Install trusted scanner dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
+      - name: Checkout candidate as inert package input
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ needs.resolve_target.outputs.checkout_revision }}
+          path: .release-candidate
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Pack supplemental inert plugin inputs
+        env:
+          CANDIDATE_SHA: ${{ needs.resolve_target.outputs.checkout_revision }}
+          EXPECTED_PACKAGES_JSON: ${{ needs.plugin-npm-security-plan.outputs.packages_json }}
+          TOOLING_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_root="$RUNNER_TEMP/plugin-npm-security-packages"
+          mkdir -p "$artifact_root"
+          while IFS=$'\t' read -r extension_id package_dir package_name; do
+            output_dir="$artifact_root/plugin-npm-security-package-${CANDIDATE_SHA}-${extension_id}"
+            if ! node --import tsx scripts/plugin-npm-security-prepare.mts prepare \
+                --candidate-root .release-candidate \
+                --candidate-sha "$CANDIDATE_SHA" \
+                --extension-id "$extension_id" \
+                --output-dir "$output_dir" \
+                --package-dir "$package_dir" \
+                --package-name "$package_name" \
+                --tooling-sha "$TOOLING_SHA"; then
+              printf 'Package preparation failed for %s\n' "$package_name" >&2
+            fi
+          done < <(jq -r '.[] | [.extensionId, .packageDir, .packageName] | @tsv' <<< "$EXPECTED_PACKAGES_JSON")
+
+      - name: Scan supplemental inert plugin inputs
+        env:
+          CANDIDATE_SHA: ${{ needs.resolve_target.outputs.checkout_revision }}
+          EXPECTED_PACKAGES_JSON: ${{ needs.plugin-npm-security-plan.outputs.packages_json }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          TOOLING_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/plugin-npm-security-scan.json"
+          mkdir -p "$RUNNER_TEMP/plugin-npm-security-packages"
+          status=0
+          node scripts/plugin-npm-security-scan-runner.mjs \
+            --artifact-root "$RUNNER_TEMP/plugin-npm-security-packages" \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --expected-packages-json "$EXPECTED_PACKAGES_JSON" \
+            --target-context-ref "$TARGET_CONTEXT_REF" \
+            --tooling-sha "$TOOLING_SHA" \
+            --report "$report" || status=$?
+          exit "$status"
+
+      - name: Upload plugin npm security scan report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: plugin-npm-security-scan
+          path: ${{ runner.temp }}/plugin-npm-security-scan.json
+          if-no-files-found: error
+
   plugin-prerelease-static-shard:
     permissions:
       contents: read
-    name: ${{ matrix.check_name }}
-    needs: [preflight]
+    # Job-level skips happen before matrix expansion; retain a unique owner name.
+    name: ${{ matrix.check_name || 'plugin-prerelease-static-shard' }}
+    needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_static == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 45
@@ -329,9 +619,9 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_static_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          ref: ${{ needs.resolve_target.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
@@ -356,8 +646,8 @@ jobs:
   plugin-prerelease-node-shard:
     permissions:
       contents: read
-    name: ${{ matrix.check_name }}
-    needs: [preflight]
+    name: ${{ matrix.check_name || 'plugin-prerelease-node-shard' }}
+    needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_node == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (matrix.runner || 'ubuntu-24.04') }}
     timeout-minutes: 60
@@ -366,39 +656,13 @@ jobs:
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_node_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          ref: ${{ needs.resolve_target.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
           submodules: false
-
-      - name: Checkout trusted npm security inventory
-        if: inputs.full_release_validation
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ github.sha }}
-          path: .plugin-prerelease-trusted
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          sparse-checkout: src/plugins/npm-install-security-scan.release.test.ts
-          sparse-checkout-cone-mode: false
-          submodules: false
-
-      - name: Install trusted npm security inventory
-        if: inputs.full_release_validation
-        shell: bash
-        run: |
-          set -euo pipefail
-          trusted_checkout=.plugin-prerelease-trusted
-          trap 'rm -rf -- "$trusted_checkout"' EXIT
-          install -m 0644 \
-            "$trusted_checkout/src/plugins/npm-install-security-scan.release.test.ts" \
-            src/plugins/npm-install-security-scan.release.test.ts
-          rm -rf -- "$trusted_checkout"
-          trap - EXIT
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -466,19 +730,20 @@ jobs:
   plugin-prerelease-extension-shard:
     permissions:
       contents: read
-    name: ${{ matrix.check_name }}
-    needs: [preflight]
+    name: ${{ matrix.check_name || 'plugin-prerelease-extension-shard' }}
+    needs: [resolve_target, preflight]
     if: needs.preflight.outputs.run_plugin_prerelease_extensions == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || matrix.runner }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          ref: ${{ needs.resolve_target.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
@@ -496,22 +761,54 @@ jobs:
           OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
           OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers }}
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
-        run: pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" -- --retry=1 --exclude extensions/codex/src/app-server/run-attempt.test.ts
+          OPENCLAW_EXTENSION_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
+          OPENCLAW_EXTENSION_TASK: ${{ matrix.task }}
+          OPENCLAW_EXTENSION_VITEST_CONFIG: ${{ matrix.vitest_config }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$OPENCLAW_EXTENSION_TASK" in
+            extensions-batch)
+              pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" -- --retry=1 --exclude extensions/codex/src/app-server/run-attempt.test.ts
+              ;;
+            extension-file-shard)
+              include_file="${RUNNER_TEMP}/telegram-test-include-${GITHUB_JOB}.json"
+              trap 'rm -f -- "$include_file"' EXIT
+              INCLUDE_FILE="$include_file" node --input-type=module <<'EOF'
+              import { writeFileSync } from "node:fs";
+
+              const patterns = JSON.parse(process.env.OPENCLAW_EXTENSION_INCLUDE_PATTERNS_JSON);
+              if (!Array.isArray(patterns) || patterns.length === 0) {
+                throw new Error("Invalid Telegram extension file shard");
+              }
+              writeFileSync(process.env.INCLUDE_FILE, JSON.stringify(patterns), "utf8");
+          EOF
+              OPENCLAW_TEST_PROJECTS_PARALLEL=2 \
+                OPENCLAW_VITEST_INCLUDE_FILE="$include_file" \
+                pnpm test -- "$OPENCLAW_EXTENSION_VITEST_CONFIG"
+              trap - EXIT
+              rm -f -- "$include_file"
+              ;;
+            *)
+              echo "Unknown extension test task: $OPENCLAW_EXTENSION_TASK" >&2
+              exit 1
+              ;;
+          esac
 
   plugin-prerelease-inspector:
     permissions:
       contents: read
     name: plugin-prerelease-inspector
-    needs: [preflight]
-    if: needs.preflight.outputs.run_plugin_prerelease_suite == 'true'
+    needs: [resolve_target, preflight]
+    if: needs.preflight.outputs.run_plugin_prerelease_inspector == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          ref: ${{ needs.resolve_target.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
@@ -525,7 +822,7 @@ jobs:
 
       - name: Run plugin inspector advisory sweep
         env:
-          OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.10"
+          OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.21"
           OPENCLAW_PLUGIN_INSPECTOR_ROOT: .artifacts/plugin-inspector
         shell: bash
         run: |
@@ -680,7 +977,7 @@ jobs:
 
   plugin-prerelease-docker-suite:
     name: plugin-prerelease-docker-suite
-    needs: [preflight]
+    needs: [resolve_target, preflight]
     if: ${{ inputs.full_release_validation && needs.preflight.outputs.run_plugin_prerelease_docker == 'true' }}
     permissions:
       actions: read
@@ -689,7 +986,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
-      ref: ${{ needs.preflight.outputs.checkout_revision }}
+      ref: ${{ needs.resolve_target.outputs.checkout_revision }}
       include_repo_e2e: false
       include_release_path_suites: false
       include_openwebui: false
@@ -729,6 +1026,7 @@ jobs:
     name: plugin-prerelease-suite
     needs:
       - preflight
+      - plugin-npm-security-scan
       - plugin-prerelease-static-shard
       - plugin-prerelease-node-shard
       - plugin-prerelease-extension-shard
@@ -744,6 +1042,8 @@ jobs:
           RUN_NODE: ${{ needs.preflight.outputs.run_plugin_prerelease_node }}
           RUN_EXTENSIONS: ${{ needs.preflight.outputs.run_plugin_prerelease_extensions }}
           RUN_DOCKER: ${{ needs.preflight.outputs.run_plugin_prerelease_docker }}
+          RUN_NPM_SECURITY: ${{ inputs.phase != 'candidate' && 'true' || 'false' }}
+          SECURITY_RESULT: ${{ needs.plugin-npm-security-scan.result }}
           STATIC_RESULT: ${{ needs.plugin-prerelease-static-shard.result }}
           NODE_RESULT: ${{ needs.plugin-prerelease-node-shard.result }}
           EXTENSIONS_RESULT: ${{ needs.plugin-prerelease-extension-shard.result }}
@@ -766,6 +1066,7 @@ jobs:
             fi
           }
 
+          check_required "plugin-npm-security-scan" "$RUN_NPM_SECURITY" "$SECURITY_RESULT"
           check_required "plugin-prerelease-static" "$RUN_STATIC" "$STATIC_RESULT"
           check_required "plugin-prerelease-node" "$RUN_NODE" "$NODE_RESULT"
           check_required "plugin-prerelease-extensions" "$RUN_EXTENSIONS" "$EXTENSIONS_RESULT"

@@ -4,87 +4,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import type { PluginCatalogItem, PluginListResult } from "../../lib/plugins/index.ts";
+import { createInspectResult } from "./plugins-page.test-support.ts";
 import { CONNECTOR_SUGGESTIONS } from "./presentation.ts";
+import { createPlugin, createProps, createResult, mount } from "./view.test-support.ts";
 import { pluginRowKey, renderPlugins } from "./view.ts";
-
-type PluginsViewProps = Parameters<typeof renderPlugins>[0];
-
-function createPlugin(overrides: Partial<PluginCatalogItem> = {}): PluginCatalogItem {
-  return {
-    id: "workboard",
-    name: "Workboard",
-    description: "Agent work queue and session handoff.",
-    version: "1.0.0",
-    kind: ["productivity"],
-    origin: "bundled",
-    installed: true,
-    enabled: false,
-    state: "disabled",
-    featured: true,
-    order: 10,
-    category: "tool",
-    removable: false,
-    ...overrides,
-  };
-}
-
-function createResult(plugins: PluginCatalogItem[]): PluginListResult {
-  return { plugins, diagnostics: [], mutationAllowed: true };
-}
-
-function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProps {
-  return {
-    connected: true,
-    loading: false,
-    result: createResult([createPlugin()]),
-    error: null,
-    activeTab: "installed",
-    query: "",
-    installedFilter: "all",
-    searchResults: null,
-    searchLoading: false,
-    searchError: null,
-    busy: {},
-    messages: {},
-    pendingRemoval: {},
-    detailPluginId: null,
-    iconUrls: {},
-    canMutate: true,
-    mutationBlockedReason: null,
-    pageNotice: null,
-    mcpSettingsHref: "/settings/mcp",
-    mcpServers: [],
-    mcpMessage: null,
-    mcpBusy: false,
-    mcpFormOpen: false,
-    onQueryChange: () => undefined,
-    onFilterChange: () => undefined,
-    onRefresh: () => undefined,
-    onIconError: () => undefined,
-    onShowDetails: () => undefined,
-    onSetEnabled: () => undefined,
-    onInstall: () => undefined,
-    onDismissMessage: () => undefined,
-    onRequestUninstall: () => undefined,
-    onCancelUninstall: () => undefined,
-    onUninstall: () => undefined,
-    onAddConnector: () => undefined,
-    onSearchClawHub: () => undefined,
-    onMcpToggle: () => undefined,
-    onMcpRemove: () => undefined,
-    onMcpFormToggle: () => undefined,
-    onMcpAdd: () => undefined,
-    ...overrides,
-  };
-}
-
-function mount(props: PluginsViewProps): HTMLDivElement {
-  const container = document.createElement("div");
-  document.body.append(container);
-  render(renderPlugins(props), container);
-  return container;
-}
 
 function normalizedText(element: Element | null): string {
   return element?.textContent?.replace(/\s+/gu, " ").trim() ?? "";
@@ -276,7 +199,7 @@ describe("renderPlugins", () => {
 
   it("offers enable and remove through direct row actions", () => {
     const onSetEnabled = vi.fn();
-    const onRequestUninstall = vi.fn();
+    const onUninstall = vi.fn();
     const removableKey = pluginRowKey("community-thing");
     const plugins = [
       createPlugin(),
@@ -289,48 +212,18 @@ describe("renderPlugins", () => {
       }),
     ];
     const container = mount(
-      createProps({ result: createResult(plugins), onSetEnabled, onRequestUninstall }),
+      createProps({ result: createResult(plugins), onSetEnabled, onUninstall }),
     );
     const row = container.querySelector<HTMLElement>('[data-plugin-id="community-thing"]')!;
     actionButton(row, "Enable")?.click();
     expect(onSetEnabled).toHaveBeenCalledWith("community-thing", true, removableKey);
     actionButton(row, "Remove Community Thing")?.click();
-    expect(onRequestUninstall).toHaveBeenCalledWith(removableKey);
+    expect(onUninstall).toHaveBeenCalledWith("community-thing", removableKey);
 
     // Bundled plugins cannot be removed; the row still offers enable/disable.
     const bundledRow = container.querySelector<HTMLElement>('[data-plugin-id="workboard"]')!;
     expect(actionButton(bundledRow, "Remove")).toBeNull();
     expect(actionButton(bundledRow, "Enable")).not.toBeNull();
-  });
-
-  it("confirms removal before uninstalling", () => {
-    const onUninstall = vi.fn();
-    const onCancelUninstall = vi.fn();
-    const rowKey = pluginRowKey("community-thing");
-    const plugins = [
-      createPlugin({
-        id: "community-thing",
-        name: "Community Thing",
-        origin: "global",
-        removable: true,
-        featured: false,
-      }),
-    ];
-    const container = mount(
-      createProps({
-        result: createResult(plugins),
-        pendingRemoval: { [rowKey]: true },
-        onUninstall,
-        onCancelUninstall,
-      }),
-    );
-
-    const confirm = container.querySelector<HTMLElement>(".plugins-remove-confirm");
-    expect(normalizedText(confirm)).toContain("Remove this plugin package and all of its entries?");
-    confirm?.querySelector<HTMLButtonElement>(".btn.danger")?.click();
-    expect(onUninstall).toHaveBeenCalledWith("community-thing", rowKey);
-    confirm?.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
-    expect(onCancelUninstall).toHaveBeenCalledWith(rowKey);
   });
 
   it("opens the detail overlay from a row and renders actions and metadata", () => {
@@ -366,6 +259,50 @@ describe("renderPlugins", () => {
     expect(onSetEnabled).toHaveBeenCalledWith("workboard", true, pluginRowKey("workboard"));
     detail.querySelector<HTMLButtonElement>(".plugins-detail__close")?.click();
     expect(onShowDetails).toHaveBeenCalledWith(null);
+  });
+
+  it("keeps declared capabilities and effective grants visible in installed plugin details", () => {
+    const inspection = createInspectResult({
+      declared: {
+        ...createInspectResult().declared,
+        tools: ["workboard_create"],
+      },
+    });
+    const container = mount(
+      createProps({ detailPluginId: "workboard", detailInspection: inspection }),
+    );
+
+    const details = container.querySelector(".plugins-detail__capabilities");
+    expect(normalizedText(details)).toContain("Declared capabilities");
+    expect(normalizedText(details)).toContain("workboard_create");
+    expect(normalizedText(details)).toContain("Prompt injection Allowed (default)");
+    expect(normalizedText(details)).toContain("Conversation access Off (default)");
+  });
+
+  it("shows the inspection loading state in installed plugin details", () => {
+    const container = mount(createProps({ detailPluginId: "workboard" }));
+
+    expect(normalizedText(container.querySelector(".plugins-detail__capabilities"))).toContain(
+      "Loading capability details…",
+    );
+  });
+
+  it("shows an inspection error and retries from installed plugin details", () => {
+    const onShowDetails = vi.fn();
+    const container = mount(
+      createProps({
+        detailPluginId: "workboard",
+        detailInspectionError: "Inspection unavailable",
+        onShowDetails,
+      }),
+    );
+
+    const details = container.querySelector(".plugins-detail__capabilities");
+    expect(normalizedText(details?.querySelector('[role="alert"]') ?? null)).toContain(
+      "Inspection unavailable",
+    );
+    details?.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+    expect(onShowDetails).toHaveBeenCalledWith("workboard");
   });
 
   it("lists MCP servers with direct toggle and remove plus the add form", () => {
@@ -588,41 +525,7 @@ describe("renderPlugins", () => {
     );
   });
 
-  it("keeps discovery available while disabling all read-only mutations", () => {
-    const onInstall = vi.fn();
-    const onSetEnabled = vi.fn();
-    const available = createPlugin({
-      id: "lobster",
-      name: "Lobster",
-      installed: false,
-      enabled: false,
-      state: "not-installed",
-      install: { source: "official", pluginId: "lobster" },
-    });
-    const container = mount(
-      createProps({
-        activeTab: "discover",
-        result: createResult([createPlugin(), available]),
-        canMutate: false,
-        mutationBlockedReason: "Browsing only. Plugin changes require operator.admin access.",
-        onInstall,
-        onSetEnabled,
-      }),
-    );
-
-    expect(container.querySelector(".plugins-readonly")?.textContent).toContain("operator.admin");
-    expect(
-      container.querySelector<HTMLButtonElement>('[aria-label="Install Lobster"]')?.disabled,
-    ).toBe(true);
-    const workboardRow = container.querySelector<HTMLElement>('[data-plugin-id="workboard"]')!;
-    const enableItem = actionButton(workboardRow, "Enable");
-    expect(enableItem?.disabled).toBe(true);
-    enableItem?.click();
-    expect(onInstall).not.toHaveBeenCalled();
-    expect(onSetEnabled).not.toHaveBeenCalled();
-  });
-
-  it("renders row-local risk acknowledgement and busy state", () => {
+  it("renders a row-local ClawHub install error without a risk retry action", () => {
     const packageName = "@openclaw/calendar-plus";
     const key = clawHubKey(packageName);
     const onInstall = vi.fn();
@@ -647,7 +550,6 @@ describe("renderPlugins", () => {
           [key]: {
             kind: "error",
             text: "Review required.",
-            acknowledge: { packageName, version: "2.0.0" },
           },
         },
         onInstall,
@@ -657,19 +559,11 @@ describe("renderPlugins", () => {
     const row = container.querySelector<HTMLElement>(`[data-package-name="${packageName}"]`);
     expect(row?.getAttribute("aria-busy")).toBe("false");
     expect(row?.querySelector('[role="alert"]')?.textContent).toContain("Review required.");
-    row?.querySelector<HTMLButtonElement>(".plugins-row-message button")?.click();
-    expect(onInstall).toHaveBeenCalledWith(
-      {
-        source: "clawhub",
-        packageName,
-        version: "2.0.0",
-        acknowledgeClawHubRisk: true,
-      },
-      key,
-    );
+    expect(row?.querySelector(".plugins-row-message button")).toBeNull();
+    expect(onInstall).not.toHaveBeenCalled();
   });
 
-  it("renders install policy findings with cancel and acknowledged retry actions", () => {
+  it("renders install policy findings with cancel and acknowledged retry actions", async () => {
     const plugin = createPlugin({
       id: "kitchen-sink",
       name: "OpenClaw Kitchen Sink",
@@ -683,50 +577,49 @@ describe("renderPlugins", () => {
     const onDismissMessage = vi.fn();
     const onShowDetails = vi.fn();
     const request = { source: "official" as const, pluginId: "kitchen-sink" };
-    const container = mount(
-      createProps({
-        activeTab: "discover",
-        result: createResult([plugin]),
-        messages: {
-          [key]: {
-            kind: "warning",
-            text: "ClawScan found issues to review.",
-            installPolicyWarning: {
-              request,
-              details: {
-                installPolicyCode: "install_policy_warning_acknowledgement_required",
-                targetName: "openclaw-kitchen-sink-fixture",
-                targetType: "plugin",
-                requestMode: "install",
-                reason: "ClawScan found issues to review.",
-                findings: [
-                  {
-                    ruleId: "informational-finding",
-                    severity: "info",
-                    message: "The package declares a network integration.",
-                  },
-                  {
-                    ruleId: "semgrep-finding",
-                    severity: "warn",
-                    message: "Semgrep found a risky command.",
-                    file: "index.ts",
-                    line: 12,
-                  },
-                  {
-                    ruleId: "critical-finding",
-                    severity: "critical",
-                    message: "The package executes an untrusted binary.",
-                  },
-                ],
-              },
+    const props = createProps({
+      activeTab: "discover",
+      result: createResult([plugin]),
+      messages: {
+        [key]: {
+          kind: "warning",
+          text: "ClawScan found issues to review.",
+          installPolicyWarning: {
+            request,
+            details: {
+              installPolicyCode: "install_policy_warning_acknowledgement_required",
+              targetName: "openclaw-kitchen-sink-fixture",
+              targetType: "plugin",
+              requestMode: "install",
+              reason: "ClawScan found issues to review.",
+              findings: [
+                {
+                  ruleId: "informational-finding",
+                  severity: "info",
+                  message: "The package declares a network integration.",
+                },
+                {
+                  ruleId: "semgrep-finding",
+                  severity: "warn",
+                  message: "Semgrep found a risky command.",
+                  file: "index.ts",
+                  line: 12,
+                },
+                {
+                  ruleId: "critical-finding",
+                  severity: "critical",
+                  message: "The package executes an untrusted binary.",
+                },
+              ],
             },
           },
         },
-        onInstall,
-        onDismissMessage,
-        onShowDetails,
-      }),
-    );
+      },
+      onInstall,
+      onDismissMessage,
+      onShowDetails,
+    });
+    const container = mount(props);
 
     const row = expectDefined(
       container.querySelector<HTMLElement>('[data-plugin-id="kitchen-sink"]'),
@@ -776,6 +669,31 @@ describe("renderPlugins", () => {
       },
       key,
     );
+
+    render(
+      renderPlugins({
+        ...props,
+        canMutate: false,
+        mutationBlockedReason: "Plugin changes require operator.admin access.",
+      }),
+      container,
+    );
+    const blockedInstall = actionButton(
+      expectDefined(container.querySelector('[role="alert"]'), "blocked policy warning"),
+      "Install anyway",
+    );
+    expect(blockedInstall?.disabled).toBe(false);
+    expect(blockedInstall?.getAttribute("aria-disabled")).toBe("true");
+    const tooltip = blockedInstall?.closest("openclaw-tooltip") as
+      | (HTMLElement & { content?: string; updateComplete: Promise<unknown> })
+      | null;
+    await tooltip?.updateComplete;
+    expect(tooltip?.content).toBe("Plugin changes require operator.admin access.");
+    expect(blockedInstall?.getAttribute("aria-describedby")).toBeTruthy();
+    blockedInstall?.focus();
+    expect(document.activeElement).toBe(blockedInstall);
+    blockedInstall?.click();
+    expect(onInstall).toHaveBeenCalledTimes(1);
   });
 
   it("shares one install-policy review across catalog, search, and detail aliases", () => {

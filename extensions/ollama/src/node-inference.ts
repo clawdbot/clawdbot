@@ -11,7 +11,6 @@ import type {
   AnyAgentTool,
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   readProviderJsonResponse,
@@ -31,8 +30,6 @@ import {
   OLLAMA_CHAT_COMMAND,
   OLLAMA_MODELS_COMMAND,
   OLLAMA_NODE_INFERENCE_CAPABILITY,
-  OLLAMA_NODE_INFERENCE_COMMANDS,
-  OLLAMA_NODE_INFERENCE_DEFAULT_PLATFORMS,
   ollamaNodeInferenceToolDefinition,
 } from "./node-inference-contract.js";
 import {
@@ -41,7 +38,7 @@ import {
   enrichOllamaModelsWithContext,
   fetchLoadedOllamaModelNames,
   fetchOllamaModels,
-  isOllamaCloudModel,
+  isOllamaRemoteModel,
   resolveOllamaApiBase,
   throwIfOllamaRequestAborted,
 } from "./provider-models.js";
@@ -159,9 +156,7 @@ async function discoverOllamaNodeModels(
   if (!discovered.reachable) {
     throw new Error(`Ollama is not running at ${apiBase}`);
   }
-  const localModels = discovered.models.filter(
-    (model) => !model.remote_host?.trim() && !isOllamaCloudModel(model.name),
-  );
+  const localModels = discovered.models.filter((model) => !isOllamaRemoteModel(model));
   const loaded = await fetchLoadedOllamaModelNames(apiBase, signal ? { signal } : undefined);
   // Model discovery still works against Ollama versions without /api/ps.
   const loadedNames = new Set(loaded.models);
@@ -240,8 +235,7 @@ async function runOllamaNodeChat(params: {
     ...(params.signal ? { signal: params.signal } : {}),
   });
   const localModel = discovered.models.find(
-    (model) =>
-      model.name === params.model && !model.remote_host?.trim() && !isOllamaCloudModel(model.name),
+    (model) => model.name === params.model && !isOllamaRemoteModel(model),
   );
   const [model] = localModel
     ? await enrichOllamaModelsWithContext(apiBase, [localModel], {
@@ -366,14 +360,6 @@ export function createOllamaNodeHostCommands(options?: {
       },
     },
   ];
-}
-
-export function createOllamaNodeInvokePolicy(): OpenClawPluginNodeInvokePolicy {
-  return {
-    commands: [...OLLAMA_NODE_INFERENCE_COMMANDS],
-    defaultPlatforms: [...OLLAMA_NODE_INFERENCE_DEFAULT_PLATFORMS],
-    handle: async (ctx) => await ctx.invokeNode(),
-  };
 }
 
 function findNode(nodes: NodeSummary[], query: string): NodeSummary {

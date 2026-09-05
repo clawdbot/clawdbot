@@ -9,7 +9,6 @@ type TerminationChild = {
   pid?: number;
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
-  kill(signal?: NodeJS.Signals | number): boolean;
 };
 
 export function createCommandTerminationController(params: {
@@ -17,7 +16,7 @@ export function createCommandTerminationController(params: {
   cancelController: AbortController;
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
-  killProcessTree?: boolean;
+  processTree?: { mode: "graceful" } | { mode: "force" };
   killGraceMs: number;
   isChildExited: () => boolean;
   isCommandSettled: () => boolean;
@@ -27,42 +26,24 @@ export function createCommandTerminationController(params: {
 
   const isDirectChildAlive = () =>
     !params.isChildExited() && params.child.exitCode == null && params.child.signalCode == null;
-  const killDirectChild = () => {
-    if (isDirectChildAlive()) {
-      params.child.kill("SIGKILL");
-    }
-  };
-  const spawnTaskkillOrFallback = (args: string[], onSpawnError: () => void) => {
+  const spawnTaskkill = (args: string[]) => {
     try {
-      const taskkillChild = spawnCommand([getWindowsSystem32ExePath("taskkill.exe"), ...args], {
+      return spawnCommand([getWindowsSystem32ExePath("taskkill.exe"), ...args], {
         baseEnv: params.baseEnv,
         env: params.env,
         forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
         reject: false,
         stdio: "ignore",
         timeout: WINDOWS_TASKKILL_TIMEOUT_MS,
-      });
-      return taskkillChild.then(
-        (result) => {
-          if (result.failed && result.exitCode === undefined) {
-            onSpawnError();
-          }
-          return result;
-        },
-        () => {
-          onSpawnError();
-          return undefined;
-        },
-      );
+      }).catch(() => undefined);
     } catch {
-      onSpawnError();
       return undefined;
     }
   };
   const startWindowsTermination = (childPid: number, graceful: boolean): void => {
     const taskkills: Promise<unknown>[] = [];
     const startTaskkill = (args: string[]) => {
-      const taskkill = spawnTaskkillOrFallback(args, killDirectChild);
+      const taskkill = spawnTaskkill(args);
       if (taskkill) {
         taskkills.push(taskkill);
       }
@@ -80,8 +61,8 @@ export function createCommandTerminationController(params: {
       } else {
         startTaskkill(["/PID", String(childPid), "/T", "/F"]);
       }
-      // taskkill owns the live PID while it enumerates descendants. Abort Execa
-      // only after every started taskkill settles, avoiding a reused-PID race.
+      // Failed helpers still join here before root cancellation; a sibling taskkill
+      // may still be enumerating descendants through that live PID.
       await Promise.allSettled(taskkills);
       if (!params.isCommandSettled()) {
         params.cancelController.abort();
@@ -97,14 +78,17 @@ export function createCommandTerminationController(params: {
       // target an unrelated tree; stronger ownership requires a spawn-time Job Object.
       return false;
     }
-    if (params.killProcessTree && typeof childPid === "number") {
-      processTreeSettleAt ??= Date.now() + params.killGraceMs;
+    if (params.processTree && typeof childPid === "number") {
+      const force = params.processTree.mode === "force";
+      if (!force) {
+        processTreeSettleAt ??= Date.now() + params.killGraceMs;
+      }
       if (process.platform === "win32") {
-        startWindowsTermination(childPid, true);
+        startWindowsTermination(childPid, !force);
         return true;
       }
       terminateProcessTree(childPid, {
-        graceMs: params.killGraceMs,
+        ...(force ? { force: true } : { graceMs: params.killGraceMs }),
         detached: true,
       });
       return false;
@@ -124,7 +108,7 @@ export function createCommandTerminationController(params: {
       await windowsTerminationPromise;
     }
     if (
-      !params.killProcessTree ||
+      params.processTree?.mode !== "graceful" ||
       processTreeSettleAt === undefined ||
       typeof params.child.pid !== "number"
     ) {

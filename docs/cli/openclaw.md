@@ -108,13 +108,39 @@ Starting a guided setup flow also runs immediately: channel setup (`connect tele
 
 `import memory` is copy-only rather than a config write. It detects supported local agent homes, lets you choose the available sources, and copies new memory files into the existing default agent workspace without importing config, credentials, or skills. It requires completed onboarding and reports confirmed imports, nothing-to-import results, provider failures, and failures where some files may already have been copied. No Gateway restart is needed. Use the Control UI's [Import Memory page](/web/control-ui#import-assistant-memory) when you need to target another agent or replace an existing import.
 
-Persistent operations require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, and install plugins.
+In direct OpenClaw chat, persistent operations require conversational approval (or `--yes` for a one-shot command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, and install plugins.
+
+Changes delegated by a regular agent, including requests from messaging channels,
+follow the requesting run's effective [session permission policy](/gateway/permission-modes).
+Full Access applies the exact proposed operation automatically, including when
+Full Access comes from the configured default rather than an explicit session
+mode. Restricted runs still require approval in the OpenClaw operator UI. Replying
+"yes" in the delegated chat cannot authorize a change. When approval is required,
+run `openclaw dashboard` on the Gateway host to review it, or run the change
+directly with `openclaw setup` there. Independent filesystem and sandbox boundaries,
+tool policy, and the operation restrictions below still apply. The host also checks
+that the requesting run and verified inference route remain valid. Interactive
+setup and agent handoffs still require a direct operator session; delegated chat
+cannot start a wizard, even when a model proposes it.
+
+While a human reviews the proposal, the requesting tool stays open. **Allow once**
+applies the exact proposal and returns its application outcome; **Deny** or expiry
+returns a non-applied outcome instead of leaving the agent reporting a pending
+change. Stopping the requesting run cancels its approval. A late approval cannot
+restart a closed run: request the change again from an active run if still needed.
 
 Configured agents can ask OpenClaw to create another agent through their
 `openclaw` tool. The request enters the same typed create-agent operation and
-operator approval flow used by Ask OpenClaw; the approval summary names the
-requesting agent. OpenClaw remains the executor, and approved creation records
-that requesting agent as the new agent's creator.
+host authorization flow; any approval summary names the requesting agent.
+OpenClaw remains the executor, and authorized creation records that requesting
+agent as the new agent's creator.
+
+Delegated creation remains tied to the requesting run. If that run ends or loses
+authority during preparation, OpenClaw stops before starting the next persistent
+write. A write already in progress may finish, and workspace files created earlier
+are not automatically removed. Check `openclaw agents list` before retrying from
+an active run; an agent whose creation already completed is not removed when its
+requesting run ends.
 
 Doctor repairs are unavailable inside OpenClaw because they can rewrite the provider, authentication, or default-agent inference route powering the session. Exit OpenClaw and run `openclaw doctor --fix` in a terminal. Read-only `doctor` remains available inside OpenClaw.
 
@@ -204,6 +230,16 @@ setup workspace ~/Projects/work
 `setup` preserves the verified effective model. It does not configure or
 replace inference.
 
+Delegated setup remains tied to the requesting run through configuration,
+workspace, and session preparation. If that run ends or loses authority,
+OpenClaw stops before starting the next persistent effect. Earlier completed
+effects remain, including an agent whose creation already finished; setup may
+still be incomplete. Check `openclaw agents list` and `status`, then request
+setup again from an active run and approve the new request, or finish directly
+with `openclaw setup` on the Gateway host. If cancellation deferred legacy
+history migration for a newly named agent, the next Gateway startup retries it;
+use `openclaw doctor --fix` on the same state/config to finish it sooner.
+
 If inference is missing or its live check fails, leave OpenClaw and run `openclaw onboard`. Guided onboarding tries the configured model first, then authenticated subscription CLIs, API keys, and remaining supported CLIs; it asks each candidate for a real reply and persists only a passing route. OpenClaw starts immediately after that boundary and can then configure the workspace, Gateway, channels, agents, plugins, and other optional features.
 
 The macOS app skips this ladder entirely when it reaches a configured Gateway
@@ -227,6 +263,9 @@ supervision opt-outs remain untouched during inference setup.
 ## AI conversation
 
 Interactive OpenClaw's free-form conversation runs through the same agent loop as regular OpenClaw agents, restricted to one ring-zero OpenClaw authority tool, `openclaw`, that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so OpenClaw has real multi-turn memory. If the verified inference route later stops working, return to `openclaw onboard` and repair it before continuing.
+
+A failed or timed-out turn ends that setup conversation with a visible error.
+Retrying starts a fresh conversation and live-checks the inference route again.
 
 The host does not parse natural-language requests into operations. Free-form
 messages — including command-looking text and questions such as "why did my

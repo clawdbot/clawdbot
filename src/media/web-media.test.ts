@@ -8,12 +8,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import JSZip from "jszip";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resizeToJpeg } from "./media-services.js";
+import { createImageProcessor, resizeToJpeg } from "./media-services.js";
 import { encodePngRgba, fillPixel } from "./png-encode.js";
 
 let effectiveImageBytesCap: typeof import("./web-media.js").effectiveImageBytesCap;
@@ -276,6 +277,41 @@ describe("loadWebMedia", () => {
     expect(result.buffer.length).toBeGreaterThan(0);
   }
 
+  it.each(["local", "localhost"])(
+    "loads encoded %s file URLs from reply directives",
+    async (host) => {
+      const fileName = "café 100% image.png";
+      const filePath = path.join(fixtureRoot, fileName);
+      await fs.writeFile(filePath, TINY_PNG_BUFFER);
+      const fileUrl = pathToFileURL(filePath).href.replace(
+        /^file:\/\//u,
+        host === "localhost" ? "file://localhost" : "FILE:",
+      );
+      const reply = parseReplyDirectives(`Here is your image.\nMEDIA:${fileUrl}`);
+
+      expect(reply.text).toBe("Here is your image.");
+      expect(reply.mediaUrls).toHaveLength(1);
+      const mediaUrl = expectDefined(reply.mediaUrls?.[0], "parsed file URL attachment");
+      const media = await loadWebMedia(mediaUrl, createLocalWebMediaOptions());
+      expect(media.buffer).toEqual(TINY_PNG_BUFFER);
+      expect(media.fileName).toBe(fileName);
+      expect(media.contentType).toBe("image/png");
+    },
+  );
+
+  it.each([
+    "file://remote.example/share/image.png",
+    "file:///tmp/image%2Fname.png",
+    "file:///tmp/image%5Cname.png",
+    "file:///tmp/image%GG.png",
+  ])("keeps native file URL validation after reply parsing: %s", async (fileUrl) => {
+    const reply = parseReplyDirectives(`MEDIA:${fileUrl}`);
+    const mediaUrl = expectDefined(reply.mediaUrls?.[0], "parsed file URL attachment");
+    await expect(loadWebMedia(mediaUrl, createLocalWebMediaOptions())).rejects.toMatchObject({
+      code: "invalid-file-url",
+    });
+  });
+
   async function loadDocumentWithHostRead(fileName: string, body: Buffer | string) {
     const textFile = path.join(fixtureRoot, fileName);
     await fs.writeFile(textFile, body);
@@ -285,6 +321,19 @@ describe("loadWebMedia", () => {
       readFile: async (filePath) => await fs.readFile(filePath),
       hostReadCapability: true,
     });
+  }
+
+  async function createXlsmMimeFixture() {
+    const zip = new JSZip();
+    zip.file(
+      "[Content_Types].xml",
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/xl/workbook.xml" ContentType="application/vnd.ms-excel.sheet.macroEnabled.main+xml"/></Types>',
+    );
+    zip.file(
+      "xl/workbook.xml",
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"/>',
+    );
+    return await zip.generateAsync({ type: "nodebuffer" });
   }
 
   it.each([
@@ -459,6 +508,61 @@ describe("loadWebMedia", () => {
     ).rejects.toThrow(/dimensions exceed model image limits/i);
   });
 
+  it.each(["local", "remote"] as const)(
+    "preserves the explicit GIF byte cap for optimized %s media",
+    async (source) => {
+      const buffer = createGifHeader(16, 16);
+      const fileName = `explicit-cap-${source}.gif`;
+      const filePath = path.join(fixtureRoot, fileName);
+      if (source === "local") {
+        await fs.writeFile(filePath, buffer);
+      }
+      const mediaUrl = source === "local" ? filePath : `https://example.test/${fileName}`;
+      const sourceOptions =
+        source === "local"
+          ? { localRoots: [fixtureRoot] }
+          : {
+              fetchImpl: vi.fn(
+                async () =>
+                  new Response(Buffer.from(buffer), {
+                    status: 200,
+                    headers: { "content-type": "image/gif" },
+                  }),
+              ),
+              ssrfPolicy: { allowedHostnames: ["example.test"] },
+            };
+
+      await expect(
+        loadWebMedia(mediaUrl, { ...sourceOptions, maxBytes: buffer.length - 1 }),
+      ).rejects.toThrow(/^GIF exceeds /);
+      const result = await loadWebMedia(mediaUrl, {
+        ...sourceOptions,
+        maxBytes: buffer.length,
+      });
+      expect(result.buffer).toEqual(buffer);
+      expect(result.contentType).toBe("image/gif");
+      expect(result.fileName).toBe(fileName);
+    },
+  );
+
+  it("rejects raw image dimensions instead of applying optimized image policy", async () => {
+    const buffer = createLargeColorBlockPng(64);
+    const filePath = path.join(fixtureRoot, "raw-dimensions.png");
+    await fs.writeFile(filePath, buffer);
+    const options = {
+      localRoots: [fixtureRoot],
+      maxBytes: 1024 * 1024,
+      imageCompression: { models: [{ maxSidePx: 32, preferredSidePx: 32 }] },
+    };
+
+    await expect(loadWebMediaRaw(filePath, options)).rejects.toThrow(
+      /dimensions exceed model image limits/i,
+    );
+    const optimized = await loadWebMedia(filePath, options);
+    expect(optimized.contentType).toBe("image/jpeg");
+    expect(readJpegDimensions(optimized.buffer)).toEqual({ width: 32, height: 32 });
+  });
+
   it("renames opaque PNGs converted to JPEG across direct and local image owners", async () => {
     const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
     const sourcePng = createLargeColorBlockPng(64);
@@ -488,6 +592,35 @@ describe("loadWebMedia", () => {
     }
   });
 
+  it("renames transparent WebP images converted to PNG across direct and local image owners", async () => {
+    const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
+    const sourcePng = createLargeTransparentColorBlockPng(64);
+    const sourceWebp = (await createImageProcessor().encode(sourcePng, { format: "webp" })).data;
+    const imageCompression = { models: [{ maxSidePx: 32, preferredSidePx: 32 }] };
+
+    const direct = await optimizeImageBufferForWebMedia({
+      buffer: sourceWebp,
+      contentType: "image/webp",
+      fileName: "portrait.WebP",
+      maxBytes: 1024 * 1024,
+      imageCompression,
+    });
+    const convertedPath = path.join(fixtureRoot, "portrait.WebP");
+    await fs.writeFile(convertedPath, sourceWebp);
+    const loaded = await loadWebMedia(convertedPath, {
+      maxBytes: 1024 * 1024,
+      localRoots: [fixtureRoot],
+      imageCompression,
+    });
+
+    for (const result of [direct, loaded]) {
+      expect(result.kind).toBe("image");
+      expect(result.contentType).toBe("image/png");
+      expect(result.fileName).toBe("portrait.png");
+      expect(readPngDimensions(result.buffer)).toEqual({ width: 32, height: 32 });
+    }
+  });
+
   it("applies model image maxBytes to the effective image cap", async () => {
     await expect(
       loadWebMediaRaw(tinyPngFile, {
@@ -497,7 +630,13 @@ describe("loadWebMedia", () => {
           models: [{ maxBytes: 8 }],
         },
       }),
-    ).rejects.toThrow(/exceeds/i);
+    ).rejects.toThrow("Media exceeds 8B limit");
+  });
+
+  it("reports the configured byte cap when image optimization cannot meet it", async () => {
+    await expect(
+      loadWebMedia(tinyPngFile, { maxBytes: 8, localRoots: [fixtureRoot] }),
+    ).rejects.toThrow(/^Media could not be reduced below 8B \(got /);
   });
 
   it("uses the strictest model image maxBytes across fallback candidates", () => {
@@ -576,31 +715,37 @@ describe("loadWebMedia", () => {
     expect(result.buffer.length).toBeGreaterThan(0);
   });
 
-  it("rejects oversized local media before an unbounded file-handle read", async () => {
-    const maxBytes = 1024 * 1024;
-    const oversizedFile = path.join(fixtureRoot, "oversized.bin");
-    await fs.writeFile(oversizedFile, Buffer.alloc(maxBytes + 1));
-    let unboundedReadCalled = false;
-    __setFsSafeTestHooksForTest({
-      afterOpen: (filePath, handle) => {
-        if (filePath !== oversizedFile) {
-          return;
-        }
-        vi.spyOn(handle, "readFile").mockImplementation(async () => {
-          unboundedReadCalled = true;
-          throw new Error("unbounded read invoked");
-        });
-      },
-    });
+  it.each([
+    { maxBytes: 1024 * 1024, expectedLimit: "1MB" },
+    { maxBytes: 256 * 1024, expectedLimit: "256KB" },
+    { maxBytes: 1.5 * 1024 * 1024, expectedLimit: "1.50MB" },
+  ])(
+    "rejects oversized local media before an unbounded file-handle read ($expectedLimit)",
+    async ({ maxBytes, expectedLimit }) => {
+      const oversizedFile = path.join(fixtureRoot, "oversized.bin");
+      await fs.writeFile(oversizedFile, Buffer.alloc(maxBytes + 1));
+      let unboundedReadCalled = false;
+      __setFsSafeTestHooksForTest({
+        afterOpen: (filePath, handle) => {
+          if (filePath !== oversizedFile) {
+            return;
+          }
+          vi.spyOn(handle, "readFile").mockImplementation(async () => {
+            unboundedReadCalled = true;
+            throw new Error("unbounded read invoked");
+          });
+        },
+      });
 
-    await expect(
-      loadWebMediaRaw(oversizedFile, {
-        maxBytes,
-        localRoots: [fixtureRoot],
-      }),
-    ).rejects.toThrow("Media exceeds 1MB limit");
-    expect(unboundedReadCalled).toBe(false);
-  });
+      await expect(
+        loadWebMediaRaw(oversizedFile, {
+          maxBytes,
+          localRoots: [fixtureRoot],
+        }),
+      ).rejects.toThrow(`Media exceeds ${expectedLimit} limit`);
+      expect(unboundedReadCalled).toBe(false);
+    },
+  );
 
   it.runIf(process.platform !== "win32")(
     "rejects local media when an allowed ancestor symlink retargets before open",
@@ -758,6 +903,51 @@ describe("loadWebMedia", () => {
       }),
       "path-not-allowed",
     );
+  });
+
+  it.each(["report.xlsm", "report.XLSM"])(
+    "allows byte-verified host-read XLSM without changing %s or its bytes",
+    async (fileName) => {
+      const body = await createXlsmMimeFixture();
+      const result = await loadDocumentWithHostRead(fileName, body);
+
+      expect(result.kind).toBe("document");
+      expect(result.contentType).toBe("application/vnd.ms-excel.sheet.macroenabled.12");
+      expect(result.fileName).toBe(fileName);
+      expect(result.buffer).toEqual(body);
+    },
+  );
+
+  it("rejects unverified text named as a host-read XLSM file", async () => {
+    await expectLoadWebMediaErrorCode(
+      loadDocumentWithHostRead("report.xlsm", "not a workbook"),
+      "path-not-allowed",
+    );
+  });
+
+  it("keeps the host-read XLSM root boundary and byte limit", async () => {
+    const body = await createXlsmMimeFixture();
+    const filePath = path.join(fixtureRoot, "bounded.xlsm");
+    await fs.writeFile(filePath, body);
+    const readFile = vi.fn((sourcePath: string) => fs.readFile(sourcePath));
+
+    await expectLoadWebMediaErrorCode(
+      loadWebMedia(filePath, {
+        localRoots: [workspaceDir],
+        readFile,
+        hostReadCapability: true,
+      }),
+      "path-not-allowed",
+    );
+    expect(readFile).not.toHaveBeenCalled();
+    await expect(
+      loadWebMedia(filePath, {
+        maxBytes: body.length - 1,
+        localRoots: [fixtureRoot],
+        readFile,
+        hostReadCapability: true,
+      }),
+    ).rejects.toThrow(/exceeds.*limit/i);
   });
 
   it("allows host-read CSV files", async () => {
@@ -1540,7 +1730,10 @@ describe("loadWebMedia", () => {
       async () =>
         new Response(Buffer.from(original), {
           status: 200,
-          headers: { "content-type": "image/png" },
+          headers: {
+            "content-type": "image/png",
+            "content-length": String(10 * 1024 * 1024),
+          },
         }),
     );
 

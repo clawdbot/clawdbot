@@ -63,7 +63,6 @@ function makeInput(
     attemptedThinking: new Set(["off"]),
     fallbackConfigured: false,
     pluginHarnessOwnsTransport: false,
-    canRestartForLiveSwitch: false,
     authProfileStore: { version: 1, profiles: {} },
     runtimeAuthRetry: false,
     maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
@@ -71,11 +70,10 @@ function makeInput(
     emptyErrorRetries: options.emptyErrorRetries ?? 0,
     overloadProfileRotations: 0,
     overloadProfileRotationLimit: 1,
-    sameModelIdleTimeoutRetries: 0,
     previousRetryFailoverReason: null,
     maybeMarkAuthProfileFailure: vi.fn(async () => {}),
-    maybeRetrySameModelRateLimit: vi.fn(async () => false),
-    maybeBackoffBeforeOverloadFailover: vi.fn(async () => {}),
+    maybeRetryTransient: vi.fn(async () => false),
+    getTransientRetryCount: () => 0,
     advanceAuthProfile: vi.fn(async () => false),
     advanceRateLimitAuthProfile: vi.fn(async () => false),
     traceAttempts: [],
@@ -93,7 +91,6 @@ describe("silent assistant-error retry owner", () => {
     expect(outcome).toMatchObject({
       action: "retry",
       emptyErrorRetries: 1,
-      preserveSameModelRateLimitRetryCount: true,
     });
   });
 

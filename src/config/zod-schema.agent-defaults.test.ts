@@ -27,6 +27,92 @@ function expectSchemaFailurePath(result: SchemaParseResult, expectedPathPrefix: 
 }
 
 describe("agent defaults schema", () => {
+  it("preserves separate run directories through config validation and list projection", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: { workspace: "/agent-workspace", cwd: "/default-repo" },
+        entries: { worker: { cwd: "/agent-repo" } },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error(JSON.stringify(result.issues));
+    }
+    expect(result.config.agents?.defaults).toMatchObject({
+      workspace: "/agent-workspace",
+      cwd: "/default-repo",
+    });
+    expect(result.config.agents?.entries?.worker?.cwd).toBe("/agent-repo");
+    expect(result.config.agents?.list?.[0]?.cwd).toBe("/agent-repo");
+  });
+
+  it.each([true, false])("rejects Code Mode %s without an exact model entry", (codeMode) => {
+    for (const key of ["openai/*", "openrouter/provider/*", "*", "model", "provider/", "/model"]) {
+      const models = { [key]: { codeMode } };
+      expectSchemaFailurePath(AgentDefaultsSchema.safeParse({ models }), `models.${key}.codeMode`);
+      expectSchemaFailurePath(
+        AgentEntrySchema.safeParse({ id: "ops", models }),
+        `models.${key}.codeMode`,
+      );
+    }
+    const models = { "openai/*": { agentRuntime: { id: "openclaw" } } };
+    expect(AgentDefaultsSchema.parse({ models })?.models).toEqual(models);
+    expect(AgentEntrySchema.parse({ id: "ops", models }).models).toEqual(models);
+  });
+
+  it.each([undefined, true, false])(
+    "preserves the optional per-model Code Mode override %s on defaults and agents",
+    (codeMode) => {
+      const entry = {
+        alias: "test",
+        params: { temperature: 0.5 },
+        agentRuntime: { id: "openclaw" },
+        streaming: false,
+        ...(codeMode === undefined ? {} : { codeMode }),
+      };
+      const models = { "example/model": entry };
+
+      expect(AgentDefaultsSchema.parse({ models })?.models).toEqual(models);
+      expect(AgentEntrySchema.parse({ id: "ops", models }).models).toEqual(models);
+    },
+  );
+
+  it.each(["auto", "true", null, { enabled: true }])(
+    "rejects non-boolean per-model Code Mode override %j",
+    (codeMode) => {
+      const models = { "example/model": { codeMode } };
+
+      expectSchemaFailurePath(
+        AgentDefaultsSchema.safeParse({ models }),
+        "models.example/model.codeMode",
+      );
+      expectSchemaFailurePath(
+        AgentEntrySchema.safeParse({ id: "ops", models }),
+        "models.example/model.codeMode",
+      );
+    },
+  );
+
+  it.each([undefined, "session", "agent", "global"] as const)(
+    "preserves the optional model selection scope %s",
+    (modelSelectionScope) => {
+      const input = modelSelectionScope === undefined ? {} : { modelSelectionScope };
+      const defaults = AgentDefaultsSchema.parse(input)!;
+
+      expect(defaults.modelSelectionScope).toBe(modelSelectionScope);
+      expect(Object.hasOwn(defaults, "modelSelectionScope")).toBe(
+        modelSelectionScope !== undefined,
+      );
+    },
+  );
+
+  it("rejects unsupported model selection scopes", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ modelSelectionScope: "default" }),
+      "modelSelectionScope",
+    );
+  });
+
   it("accepts utility models on defaults and agent entries", () => {
     const defaults = AgentDefaultsSchema.parse({ utilityModel: "openai/gpt-5.4-mini" })!;
     const agent = AgentEntrySchema.parse({
@@ -535,6 +621,14 @@ describe("agent defaults schema", () => {
       "tools.codeMode",
     );
   });
+
+  it.each([undefined, {}, { maxConcurrent: 3 }, false, { enabled: false }])(
+    "preserves per-agent Swarm config %j for inherited enablement",
+    (swarm) => {
+      const tools = swarm === undefined ? {} : { swarm };
+      expect(AgentEntrySchema.parse({ id: "ops", tools }).tools?.swarm).toEqual(swarm);
+    },
+  );
 
   it("accepts per-agent tools.swarm config", () => {
     expectSchemaSuccess(

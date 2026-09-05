@@ -1,5 +1,5 @@
 // Telegram plugin module implements status reaction variants behavior.
-import type { ReactionTypeEmoji } from "grammy/types";
+import type { ReactionTypeCustomEmoji, ReactionTypeEmoji } from "grammy/types";
 import { DEFAULT_EMOJIS, type StatusReactionEmojis } from "openclaw/plugin-sdk/channel-feedback";
 import {
   normalizeOptionalString,
@@ -10,10 +10,11 @@ import type { TelegramChatDetails, TelegramGetChat } from "./bot/types.js";
 
 type StatusReactionEmojiKey = keyof Required<StatusReactionEmojis>;
 export type TelegramReactionEmoji = ReactionTypeEmoji["emoji"];
+type TelegramAllowedReaction = ReactionTypeEmoji | ReactionTypeCustomEmoji;
 
 const TELEGRAM_GENERIC_REACTION_FALLBACKS = ["👍", "👀", "🔥"] as const;
 
-const TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST = [
+export const TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST = [
   "❤",
   "👍",
   "👎",
@@ -173,9 +174,9 @@ export function resolveTelegramReactionEmoji(emoji: string): TelegramReactionEmo
   return TELEGRAM_SUPPORTED_REACTION_EMOJIS.get(emoji.trim().replace(/[\uFE0E\uFE0F]/gu, ""));
 }
 
-function extractTelegramAllowedEmojiReactions(
+function extractTelegramAllowedReactions(
   chat: TelegramChatDetails | null | undefined,
-): Set<TelegramReactionEmoji> | null | undefined {
+): TelegramAllowedReaction[] | null | undefined {
   if (!chat) {
     return undefined;
   }
@@ -188,41 +189,46 @@ function extractTelegramAllowedEmojiReactions(
     return null;
   }
   if (!Array.isArray(availableReactions)) {
-    return new Set<TelegramReactionEmoji>();
+    return [];
   }
 
-  const allowed = new Set<TelegramReactionEmoji>();
+  const allowed: TelegramAllowedReaction[] = [];
+  const identifiers = new Set<string>();
   for (const reaction of availableReactions) {
+    if (reaction.type === "custom_emoji") {
+      const identifier = normalizeOptionalString(reaction.custom_emoji_id);
+      if (identifier && !identifiers.has(`custom:${identifier}`)) {
+        identifiers.add(`custom:${identifier}`);
+        allowed.push({ type: "custom_emoji", custom_emoji_id: identifier });
+      }
+      continue;
+    }
     if (reaction.type !== "emoji") {
       continue;
     }
     const emoji = resolveTelegramReactionEmoji(reaction.emoji);
-    if (emoji) {
-      allowed.add(emoji);
+    if (emoji && !identifiers.has(`emoji:${emoji}`)) {
+      identifiers.add(`emoji:${emoji}`);
+      allowed.push({ type: "emoji", emoji });
     }
   }
   return allowed;
 }
 
-export async function resolveTelegramAllowedEmojiReactions(params: {
+export async function resolveTelegramAllowedReactions(params: {
   chat: TelegramChatDetails | null | undefined;
   chatId: string | number;
   getChat?: TelegramGetChat;
-}): Promise<Set<TelegramReactionEmoji> | null> {
-  const fromMessage = extractTelegramAllowedEmojiReactions(params.chat);
+}): Promise<TelegramAllowedReaction[] | null> {
+  const fromMessage = extractTelegramAllowedReactions(params.chat);
   if (fromMessage !== undefined) {
     return fromMessage;
   }
 
   if (params.getChat) {
-    try {
-      const chatInfo = await params.getChat(params.chatId);
-      const fromLookup = extractTelegramAllowedEmojiReactions(chatInfo);
-      if (fromLookup !== undefined) {
-        return fromLookup;
-      }
-    } catch {
-      return null;
+    const fromLookup = extractTelegramAllowedReactions(await params.getChat(params.chatId));
+    if (fromLookup !== undefined) {
+      return fromLookup;
     }
   }
 

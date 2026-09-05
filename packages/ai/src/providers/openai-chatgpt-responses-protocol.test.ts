@@ -15,6 +15,20 @@ const multilineDataLines = JSON.stringify(completedEvent, null, 2)
   .split("\n")
   .map((line) => `data: ${line}`);
 
+async function settleWithin<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} did not settle`)), 250);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 describe("ChatGPT Responses SSE frame boundaries", () => {
   it.each([
     { label: "LF", chunks: [`data: ${serializedCompletedEvent}\n\n`] },
@@ -131,5 +145,31 @@ describe("ChatGPT Responses SSE frame boundaries", () => {
     }
 
     expect(canceled).toBe(true);
+  });
+
+  it("releases the response reader when upstream cancellation remains pending", async () => {
+    let cancelStarted = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${serializedCompletedEvent}\n\n`));
+      },
+      cancel() {
+        cancelStarted = true;
+        return new Promise<void>(() => {});
+      },
+    });
+    const iterator = parseOpenAIChatGptResponsesSse(new Response(body))[Symbol.asyncIterator]();
+
+    await expect(settleWithin(iterator.next(), "first response event")).resolves.toEqual({
+      done: false,
+      value: completedEvent,
+    });
+    await expect(
+      settleWithin(iterator.return(undefined), "terminal iterator cleanup"),
+    ).resolves.toEqual({ done: true, value: undefined });
+    expect(cancelStarted).toBe(true);
+
+    const replacementReader = body.getReader();
+    replacementReader.releaseLock();
   });
 });

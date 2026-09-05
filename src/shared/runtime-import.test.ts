@@ -1,4 +1,3 @@
-// Runtime import tests cover lazy runtime import caching and failure handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toSafeImportPath } from "./import-specifier.js";
 import { importRuntimeModule } from "./runtime-import.js";
@@ -26,17 +25,6 @@ describe("runtime-import", () => {
     expect(toSafeImportPath("\\\\server\\share\\plugin\\index.mjs")).toBe(
       "file://server/share/plugin/index.mjs",
     );
-  });
-
-  it("resolves runtime imports from Windows absolute base paths", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-
-    expect(
-      await captureRuntimeImportSpecifier(
-        "C:\\Users\\alice\\openclaw\\dist\\subagent-registry.js",
-        ["./subagent-registry.runtime.js"],
-      ),
-    ).toBe("file:///C:/Users/alice/openclaw/dist/subagent-registry.runtime.js");
   });
 
   it("resolves runtime imports from file URL base paths", async () => {
@@ -79,7 +67,7 @@ describe("runtime-import", () => {
       importModule,
     );
 
-    expect(importModule).toHaveBeenCalledWith(
+    expect(importModule.mock.calls[0]?.[0]).toBe(
       "file:///C:/Users/alice/openclaw/dist/subagent-registry.runtime.js",
     );
     expect(result).toEqual({

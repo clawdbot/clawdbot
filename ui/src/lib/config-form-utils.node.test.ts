@@ -2,11 +2,36 @@
 import { describe, expect, it } from "vitest";
 import {
   cloneConfigObject,
+  hintForPath,
   removePathValue,
   sanitizeRedactedFormForSubmit,
   serializeConfigForm,
   setPathValue,
 } from "./config-form-utils.ts";
+
+describe("hintForPath", () => {
+  it("does not rescan wildcard hints for each path lookup", () => {
+    let catalogScans = 0;
+    const hints = new Proxy(
+      {
+        "plugins.entries.*.enabled": { label: "Plugin Enabled" },
+      },
+      {
+        ownKeys(target) {
+          catalogScans += 1;
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+
+    expect(hintForPath(["plugins", "entries", "voice-call", "enabled"], hints)?.label).toBe(
+      "Plugin Enabled",
+    );
+    expect(hintForPath(["plugins", "missing"], hints)).toBeUndefined();
+    expect(hintForPath(["channels", "missing"], hints)).toBeUndefined();
+    expect(catalogScans).toBeLessThanOrEqual(1);
+  });
+});
 
 function makeConfigWithProvider(): Record<string, unknown> {
   return {

@@ -252,6 +252,110 @@ describe("createComputerTool v1 execution", () => {
     });
   });
 
+  it("omits an unchanged screenshot while retaining its frame and refreshing node coordinates", async () => {
+    let screenshotCalls = 0;
+    callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
+      if ((body as ComputerActBody).command === COMPUTER_ACT_COMMAND) {
+        return { payload: { ok: true } };
+      }
+      const result = screenshotPayload();
+      result.payload.displayFrameId = `display-frame-${++screenshotCalls}`;
+      return result;
+    });
+    const contextEpoch = { value: 0 };
+    const tool = createVisionComputerTool({ contextEpoch });
+    const first = await tool.execute("shot-1", { action: "screenshot" });
+    const frameId = readFrameId(first);
+
+    const second = await tool.execute("shot-2", { action: "screenshot" });
+
+    expect(second.content).toEqual([
+      {
+        type: "text",
+        text: `screen unchanged since previous frame (frameId ${frameId}); screenshot omitted — keep using this frameId for coordinates`,
+      },
+    ]);
+    expect(second.details).toMatchObject({
+      frameId,
+      screenIndex: 0,
+      refWidth: EFFECTIVE_REF_WIDTH,
+    });
+    expect(contextEpoch).toMatchObject({ frameToolCallId: "shot-1" });
+
+    await expect(executeClick(tool, frameId)).resolves.toBeDefined();
+    expect(readLastComputerActParams()).toMatchObject({ displayFrameId: "display-frame-2" });
+  });
+
+  it("delivers changed screenshot pixels under a new coordinate frame", async () => {
+    const changedPng =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
+    callGatewayToolMock
+      .mockResolvedValueOnce(screenshotPayload())
+      .mockResolvedValueOnce(screenshotPayload(0, changedPng));
+    const tool = createVisionComputerTool({ contextEpoch: { value: 0 } });
+    const firstFrameId = await captureFrame(tool, {}, "shot-1");
+
+    const changed = await tool.execute("shot-2", { action: "screenshot" });
+
+    expect(changed.content).toContainEqual(expect.objectContaining({ type: "image" }));
+    expect(readFrameId(changed)).not.toBe(firstFrameId);
+    await expect(executeClick(tool, firstFrameId)).rejects.toThrow(/frameId does not match/);
+  });
+
+  it("preserves an input action's result when its follow-up screenshot is unchanged", async () => {
+    const tool = createVisionComputerTool({ contextEpoch: { value: 0 } });
+    const frameId = await captureFrame(tool, {}, "shot-1");
+
+    const result = await executeClick(tool, frameId);
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: `{"action":"left_click","ok":true}\nscreen unchanged since previous frame (frameId ${frameId}); screenshot omitted — keep using this frameId for coordinates`,
+      },
+    ]);
+    expect(readFrameId(result)).toBe(frameId);
+  });
+
+  it("preserves wait metadata when its follow-up screenshot is unchanged", async () => {
+    const tool = createVisionComputerTool({ contextEpoch: { value: 0 } });
+    const frameId = await captureFrame(tool, {}, "shot-1");
+
+    const result = await tool.execute("wait", { action: "wait", duration: 0 });
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: `waited 0s\nscreen unchanged since previous frame (frameId ${frameId}); screenshot omitted — keep using this frameId for coordinates`,
+      },
+    ]);
+  });
+
+  it.each([
+    ["another screen", { screenIndex: 1 }],
+    ["another node", { node: "mac-b" }],
+  ])("does not reuse identical screenshot pixels from %s", async (_name, input) => {
+    listNodesMock.mockResolvedValue(twoMacComputerNodes());
+    const tool = createVisionComputerTool({ contextEpoch: { value: 0 } });
+    const firstFrameId = await captureFrame(tool, { node: "mac-a" }, "shot-1");
+
+    const result = await tool.execute("shot-2", { action: "screenshot", ...input });
+
+    expect(result.content).toContainEqual(expect.objectContaining({ type: "image" }));
+    expect(readFrameId(result)).not.toBe(firstFrameId);
+  });
+
+  it("keeps duplicate screenshots when their context presence cannot be tracked", async () => {
+    const tool = createVisionComputerTool();
+
+    const first = await tool.execute("shot-1", { action: "screenshot" });
+    const second = await tool.execute("shot-2", { action: "screenshot" });
+
+    expect(first.content).toContainEqual(expect.objectContaining({ type: "image" }));
+    expect(second.content).toContainEqual(expect.objectContaining({ type: "image" }));
+    expect(readFrameId(second)).not.toBe(readFrameId(first));
+  });
+
   it("derives a stable node idempotency key from the run and tool call", async () => {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const tool = createVisionComputerTool({ idempotencyScope: "run-1" });
@@ -442,10 +546,12 @@ describe("createComputerTool v1 execution", () => {
 
   it("invalidates the old frame when the post-action screenshot fails", async () => {
     mockFirstScreenshotThenFailure();
-    const { tool, frameId } = await createToolWithFrame({}, {}, "call");
+    const contextEpoch = { value: 0 };
+    const { tool, frameId } = await createToolWithFrame({ contextEpoch }, {}, "call");
     await expect(executeClick(tool, frameId, {}, "call")).resolves.toMatchObject({
       details: { action: "left_click" },
     });
+    expect(contextEpoch).toEqual({ value: 0 });
     await expect(executeClick(tool, frameId, { coordinate: [2, 3] }, "call")).rejects.toThrow(
       /no screenshot/i,
     );

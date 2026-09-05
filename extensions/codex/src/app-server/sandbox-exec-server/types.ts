@@ -112,6 +112,7 @@ type OpenClawExecServerLease = {
 export type OpenClawExecServer = OpenClawExecServerLease & {
   backend: NonNullable<SandboxContext["backend"]>;
   fsBridge: NonNullable<SandboxContext["fsBridge"]>;
+  readonly networkIsolated: boolean;
 };
 
 /** One pre-authorized, single-use Codex stdio connection. */

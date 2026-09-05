@@ -3,6 +3,8 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { afterAll, beforeAll } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { insertRegistryWorktree } from "./registry.js";
 import type { ManagedWorktreeOwnerKind, ManagedWorktreeRecord } from "./types.js";
 
@@ -12,9 +14,7 @@ async function git(cwd: string, ...args: string[]): Promise<void> {
   await execFileAsync("git", ["-C", cwd, ...args]);
 }
 
-export async function initializeManagedWorktreeTestRepository(root: string): Promise<string> {
-  const repo = path.join(root, "repo");
-  const remote = path.join(root, "remote.git");
+async function initializeRepository(repo: string): Promise<void> {
   await fs.mkdir(repo, { recursive: true });
   await git(repo, "init", "-b", "main");
   await git(repo, "config", "user.name", "OpenClaw Test");
@@ -22,10 +22,39 @@ export async function initializeManagedWorktreeTestRepository(root: string): Pro
   await fs.writeFile(path.join(repo, "README.md"), "base\n");
   await git(repo, "add", "README.md");
   await git(repo, "commit", "-m", "initial");
+}
+
+async function addRemote(root: string, repo: string): Promise<string> {
+  const remote = path.join(root, "remote.git");
   await git(root, "init", "--bare", remote);
   await git(repo, "remote", "add", "origin", remote);
   await git(repo, "push", "-u", "origin", "main");
   return await fs.realpath(repo);
+}
+
+export async function initializeManagedWorktreeTestRepository(root: string): Promise<string> {
+  const repo = path.join(root, "repo");
+  await initializeRepository(repo);
+  return await addRemote(root, repo);
+}
+
+export function useManagedWorktreeTestRepository(): (root: string) => Promise<string> {
+  const templateDirs = useAutoCleanupTempDirTracker(afterAll);
+  let templateRepo: string;
+  beforeAll(async () => {
+    const templateRoot = templateDirs.make("openclaw-worktree-template-");
+    const repo = path.join(templateRoot, "repo");
+    await initializeRepository(repo);
+    templateRepo = repo;
+  });
+
+  // Only initial history is shared, within this suite. Each case still owns its
+  // Git metadata and real remote; no fetched refs, locks, or state DB are copied.
+  return async (root) => {
+    const repo = path.join(root, "repo");
+    await fs.cp(templateRepo, repo, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
+    return await addRemote(root, repo);
+  };
 }
 
 async function copyProvisionedFiles(params: {

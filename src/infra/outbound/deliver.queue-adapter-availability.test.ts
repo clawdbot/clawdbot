@@ -15,8 +15,9 @@ import {
 } from "./deliver.queue-integration.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue-recovery.js";
-import { enqueueDelivery, loadPendingDeliveries } from "./delivery-queue-storage.js";
+import { enqueueDelivery } from "./delivery-queue-storage.js";
 import {
+  loadPendingDeliveries,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
   setQueuedEntryState,
@@ -204,7 +205,7 @@ describe("queued lazy outbound adapter availability", () => {
     ).rejects.toThrow("provider result was lost");
     expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
       id: deliveryIntentId,
-      recoveryState: "send_attempt_started",
+      recoveryState: "unknown_after_send",
     });
 
     const recoveryDeliver = vi.fn<DeliverFn>(async () => []);

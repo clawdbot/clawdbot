@@ -37,12 +37,12 @@ export async function buildStatusCommandReportLines(params: {
   appendStatusReportSections({
     lines,
     heading: params.heading,
+    width: params.width,
+    renderTable: params.renderTable,
     sections: [
       {
         kind: "table",
         title: "Overview",
-        width: params.width,
-        renderTable: params.renderTable,
         columns: [...statusOverviewTableColumns],
         rows: params.overviewRows,
       },
@@ -95,8 +95,6 @@ export async function buildStatusCommandReportLines(params: {
         : {
             kind: "table",
             title: "Channels",
-            width: params.width,
-            renderTable: params.renderTable,
             columns: [...params.channelsColumns],
             rows: params.channelsRows,
           },
@@ -109,16 +107,12 @@ export async function buildStatusCommandReportLines(params: {
         : {
             kind: "table",
             title: "Sessions",
-            width: params.width,
-            renderTable: params.renderTable,
             columns: [...params.sessionsColumns],
             rows: params.sessionsRows,
           },
       {
         kind: "table",
         title: "System events",
-        width: params.width,
-        renderTable: params.renderTable,
         columns: [{ key: "Event", header: "Event", flex: true, minWidth: 24 }],
         rows: params.systemEventsRows ?? [],
         trailer: params.systemEventsTrailer,
@@ -127,8 +121,6 @@ export async function buildStatusCommandReportLines(params: {
       {
         kind: "table",
         title: "Health",
-        width: params.width,
-        renderTable: params.renderTable,
         columns: [...(params.healthColumns ?? [])],
         rows: params.healthRows ?? [],
         skipIfEmpty: true,

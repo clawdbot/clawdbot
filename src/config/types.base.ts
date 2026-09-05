@@ -190,12 +190,12 @@ export type SessionThreadBindingsConfig = {
   enabled?: boolean;
   /**
    * Inactivity window for thread-bound sessions (hours).
-   * Session auto-unfocuses after this amount of idle time. Set to 0 to disable. Default: 24.
+   * Binding expires after this amount of idle time. Set to 0 to disable. Default: 24.
    */
   idleHours?: number;
   /**
    * Optional hard max age for thread-bound sessions (hours).
-   * Session auto-unfocuses once this age is reached even if active. Set to 0 to disable. Default: 0.
+   * Binding expires once this age is reached even if active. Set to 0 to disable. Default: 0.
    */
   maxAgeHours?: number;
   /**

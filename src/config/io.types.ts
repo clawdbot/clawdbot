@@ -45,6 +45,8 @@ export type ConfigWriteOptions = {
   explicitSetPaths?: readonly (readonly string[])[];
   /** Source-shaped values paired with explicitSetPaths. */
   explicitSetValueSource?: OpenClawConfig;
+  /** Persist roster format without treating every leaf as an explicit value edit. */
+  persistCanonicalAgentRoster?: boolean;
   /** Agent ids that this write intentionally removes from the canonical roster. */
   allowedAgentRosterRemovals?: readonly string[];
   /** Permit explicit local overrides below an ancestor $include without flattening it. */
@@ -71,8 +73,10 @@ export type ConfigWriteOptions = {
   skipPluginValidation?: boolean;
   /** Preserve an older writer version during update handoff writes. */
   lastTouchedVersionOverride?: string;
-  /** Final async authority gate after runtime preflight and before commit. */
+  /** Optional runtime candidate preflight; the runtime writer composes its own preflight. */
   preCommitRuntimePreflight?: (sourceConfig: OpenClawConfig) => Promise<unknown>;
+  /** Revalidate authority at the final root-file publication; requires atomic rename. */
+  beforeCommit?: () => void | Promise<void>;
   /** Snapshot-time hashes for include files that mutation writers may update. */
   includeFileHashesForWrite?: Record<string, string>;
   /** Snapshot-time canonical include targets that writers may update. */

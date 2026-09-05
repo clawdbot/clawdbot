@@ -498,6 +498,28 @@ describe("qa coverage report", () => {
   });
 
   it.each([
+    ["buzz", "channel-canary"],
+    ["telegram", "channel-canary"],
+    ["telegram", "channel-workspace-relative-media"],
+    ["matrix", "channel-workspace-relative-media"],
+  ] as const)("finds the %s transport declared by %s", (channel, scenarioId) => {
+    const match = findQaScenarioMatches(readQaScenarioPack().scenarios, channel).find(
+      (candidate) => candidate.id === scenarioId,
+    );
+
+    expect(match).toMatchObject({ id: scenarioId, channel });
+  });
+
+  it.each([
+    ["active-memory-preprompt-recall", "mock-openai"],
+    ["discord-transcripts-voice-authorization", "live-frontier"],
+  ] as const)("reports the canonical provider mode for %s", (scenarioId, providerMode) => {
+    expect(findQaScenarioMatches(readQaScenarioPack().scenarios, scenarioId)).toContainEqual(
+      expect.objectContaining({ id: scenarioId, requiredProviderMode: providerMode }),
+    );
+  });
+
+  it.each([
     ["Gateway loopback and LAN access", "docker-gateway-network"],
     ["qa-lab", "docker-gateway-network"],
     ["runtime", "clawhub-marketplace-list"],
@@ -567,6 +589,45 @@ describe("qa coverage report", () => {
     expect(report).toContain(
       "- Suite command: `pnpm openclaw qa suite --channel-driver live --channel matrix --scenario dm-per-room-session`",
     );
+  });
+
+  it.each([
+    [
+      "agent-startup-instruction-first-action",
+      "--provider-mode mock-openai --scenario agent-startup-instruction-first-action",
+    ],
+    [
+      "channel-workspace-relative-media",
+      "--channel-driver live --channel matrix --scenario channel-workspace-relative-media",
+    ],
+    ["channel-canary", "--scenario channel-canary"],
+  ] as const)("renders a runnable suite command for %s", (scenarioId, expectedArgs) => {
+    const matches = findQaScenarioMatches(readQaScenarioPack().scenarios, scenarioId);
+    const report = renderQaScenarioMatchesMarkdownReport({ query: scenarioId, matches });
+
+    expect(report).toContain(`- Suite command: \`pnpm openclaw qa suite ${expectedArgs}\``);
+  });
+
+  it("groups commands by compatible provider mode while preserving the live default", () => {
+    const scenarios = readQaScenarioPack().scenarios;
+    const scenarioIds = [
+      "agent-startup-instruction-first-action",
+      "instruction-profile-artifact-followthrough-live",
+      "instruction-followthrough-repo-contract",
+    ];
+    const matches = scenarioIds.flatMap((scenarioId) =>
+      findQaScenarioMatches(scenarios, scenarioId),
+    );
+    const report = renderQaScenarioMatchesMarkdownReport({ query: "provider lanes", matches });
+
+    expect(report).toContain("- Suite commands:");
+    expect(report).toContain(
+      "--provider-mode mock-openai --scenario agent-startup-instruction-first-action",
+    );
+    expect(report).toContain(
+      "--scenario instruction-profile-artifact-followthrough-live --scenario instruction-followthrough-repo-contract",
+    );
+    expect(report).not.toContain("--provider-mode live-frontier");
   });
 
   it("splits flow commands across channel lanes", () => {

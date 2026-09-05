@@ -1,217 +1,24 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import type { DefaultModelSelection, ModelProviderLogoutTarget } from "./data.ts";
-import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
-import type { ModelProvidersRouteData } from "./route.ts";
-import "./model-providers-page.ts";
-
-type ModelProvidersPageTestElement = HTMLElement & {
-  context: ApplicationContext;
-  updateComplete: Promise<boolean>;
-  busy: Record<string, boolean>;
-  data: ModelProvidersData | null;
-  addProvider: () => Promise<void>;
-  addProviderId: string;
-  addProviderKey: string;
-  addProviderOpen: boolean;
-  defaultsDraft: DefaultModelSelection | null;
-  keyDraft: string;
-  keyEditorProvider: string | null;
-  logout: (cardId: string, targets: ModelProviderLogoutTarget[]) => Promise<void>;
-  messages: Record<string, { kind: "success" | "error"; text: string; warning?: string }>;
-  pendingLogoutProvider: string | null;
-  probe: (cardId: string, providers: string[]) => Promise<void>;
-  probeResults: Record<string, ModelsProbeResult>;
-  refresh: (opts: { force: boolean }) => Promise<void>;
-  routeData: ModelProvidersRouteData | undefined;
-  saveDefaultModels: () => Promise<void>;
-  saveKey: (provider: string, configKey: string) => Promise<void>;
-  selectedAgentId: string;
-};
-
-type AgentSelectElement = HTMLElement & {
-  onSelect: (value: string) => void;
-};
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
-function createHarness(initialScopeId: string) {
-  let pendingAuthStatus: Promise<void> | null = null;
-  let releaseAuthStatus: (() => void) | null = null;
-  const deferNextAuthStatus = () => {
-    pendingAuthStatus = new Promise<void>((resolve) => {
-      releaseAuthStatus = resolve;
-    });
-    return () => releaseAuthStatus?.();
-  };
-  const request = vi.fn(async (method: string): Promise<unknown> => {
-    switch (method) {
-      case "models.authStatus": {
-        if (pendingAuthStatus) {
-          const gate = pendingAuthStatus;
-          pendingAuthStatus = null;
-          await gate;
-        }
-        return {
-          ts: 1,
-          providers: [],
-          providerCapabilities: [
-            { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
-          ],
-        };
-      }
-      case "models.list":
-        return { models: [] };
-      case "config.get":
-        return { config: {}, hash: "hash" };
-      case "usage.status":
-        return { updatedAt: 1, providers: [] };
-      case "sessions.usage":
-        return { aggregates: { byProvider: [] } };
-      default:
-        return {};
-    }
-  });
-  const snapshot: ApplicationGatewaySnapshot = {
-    client: { request } as unknown as GatewayBrowserClient,
-    phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  let selectionListener: (() => void) | undefined;
-  const agentSelection = {
-    state: {
-      selectedId: initialScopeId as string | null,
-      scopeId: initialScopeId as string | null,
-    },
-    set: vi.fn(),
-    setScope: vi.fn(),
-    subscribe(listener: () => void) {
-      selectionListener = listener;
-      return () => {
-        selectionListener = undefined;
-      };
-    },
-  };
-  const subscribe = () => () => undefined;
-  const runtimeConfig = {
-    state: {
-      connected: true,
-      configSnapshot: { config: {} },
-      configForm: {
-        agents: { defaults: { thinkingDefault: "low", fastModeDefault: "auto" } },
-      },
-      configLoading: false,
-      configSaving: false,
-      configApplying: false,
-      configNeedsApply: false,
-      configFormMode: "form",
-      configFormDirty: false,
-      configAutoSaveStatus: "idle",
-      lastError: null as string | null,
-    },
-    ensureLoaded: vi.fn(async (): Promise<void> => undefined),
-    patch: vi.fn(async () => true),
-    patchForm: vi.fn(),
-    removeFormValue: vi.fn(),
-    refresh: vi.fn(async () => undefined),
-    save: vi.fn(async () => true),
-    apply: vi.fn(async () => true),
-    discardDraft: vi.fn(async () => undefined),
-    subscribe,
-  };
-  const context = {
-    gateway: { snapshot, subscribe },
-    agents: {
-      state: {
-        agentsList: {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "project",
-          agents: [
-            { id: "main", name: "Main" },
-            { id: "writer", name: "Writer" },
-          ],
-        },
-        agentsLoading: false,
-        agentsError: null as string | null,
-      },
-      ensureList: vi.fn(),
-      refreshList: vi.fn(),
-      subscribe,
-    },
-    agentSelection,
-    runtimeConfig,
-    overlays: {
-      snapshot: { updateRunning: false, updateReconciliationPending: false },
-      subscribe,
-    },
-    navigate: vi.fn(),
-  } as unknown as ApplicationContext;
-  return {
-    agentSelection,
-    context,
-    deferNextAuthStatus,
-    notifySelection: () => selectionListener?.(),
-    request,
-    runtimeConfig,
-    snapshot,
-  };
-}
-
-function publishableGateway(initial: ApplicationGatewaySnapshot) {
-  let current = initial;
-  const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
-  return {
-    gateway: {
-      get snapshot() {
-        return current;
-      },
-      subscribe(listener: (value: ApplicationGatewaySnapshot) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    },
-    publish(next: ApplicationGatewaySnapshot) {
-      current = next;
-      for (const listener of listeners) {
-        listener(next);
-      }
-    },
-  };
-}
-
-function requestCount(request: ReturnType<typeof vi.fn>, method: string): number {
-  return request.mock.calls.filter(([candidate]) => candidate === method).length;
-}
-
-function appendPage(context: ApplicationContext) {
-  const page = document.createElement(
-    "openclaw-model-providers-page",
-  ) as ModelProvidersPageTestElement;
-  page.context = context;
-  document.body.append(page);
-  return page;
-}
+import type { DefaultModelSelection } from "./data.ts";
+import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
+import {
+  appendPage,
+  createEmptyModelProvidersRouteData,
+  createHarness,
+  deferred,
+  publishableGateway,
+  requestCount,
+  type AgentSelectElement,
+  type ModelProvidersPageTestElement,
+} from "./model-providers-page.test-support.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -234,6 +41,7 @@ describe("ModelProvidersPage agent scope", () => {
         "openclaw-model-providers-page",
       ) as ModelProvidersPageTestElement;
       page.context = context;
+      page.routeData = createEmptyModelProvidersRouteData(context);
       if (loadSource === "preload") {
         const routeData = {
           gateway: context.gateway,
@@ -278,6 +86,7 @@ describe("ModelProvidersPage agent scope", () => {
         "openclaw-model-providers-page",
       ) as ModelProvidersPageTestElement;
       page.context = context;
+      page.routeData = createEmptyModelProvidersRouteData(context);
       if (loadSource === "preload") {
         page.routeData = {
           gateway: context.gateway,
@@ -434,7 +243,20 @@ describe("ModelProvidersPage agent scope", () => {
     expect(link?.href).toBe("https://docs.openclaw.ai/concepts/model-providers");
   });
 
-  it("patches thinking and fast mode through the shared config draft", async () => {
+  it("opens model setup from the Configure Models action", async () => {
+    const { context } = createHarness("main");
+    const page = appendPage(context);
+    await page.updateComplete;
+
+    const action = [
+      ...page.querySelectorAll<HTMLButtonElement>(".page-header-actions button"),
+    ].find((button) => button.textContent?.includes("Configure Models"));
+    expect(action?.querySelector("svg")).not.toBeNull();
+    action?.click();
+    expect(context.navigate).toHaveBeenCalledWith("model-setup");
+  });
+
+  it("autosaves model behavior changes", async () => {
     const { context, runtimeConfig } = createHarness("main");
     const page = appendPage(context);
     await waitForFast(() => expect(page.querySelector("#settings-model-behavior")).not.toBeNull());
@@ -443,22 +265,82 @@ describe("ModelProvidersPage agent scope", () => {
     expect(groups).toHaveLength(2);
     groups[0]!.value = "high";
     groups[0]!.dispatchEvent(new Event("change", { bubbles: true }));
-    groups[1]!.value = "off";
-    groups[1]!.dispatchEvent(new Event("change", { bubbles: true }));
-
-    expect(runtimeConfig.patchForm).toHaveBeenNthCalledWith(
-      1,
-      ["agents", "defaults", "thinkingDefault"],
-      "high",
-    );
-    expect(runtimeConfig.patchForm).toHaveBeenNthCalledWith(
-      2,
-      ["agents", "defaults", "fastModeDefault"],
-      false,
-    );
+    await waitForFast(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patchForm).not.toHaveBeenCalled();
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: {
+        agents: {
+          defaults: {
+            fastModeDefault: "auto",
+            thinkingDefault: "high",
+            utilityModel: null,
+          },
+        },
+      },
+      note: "Update defaults from Control UI",
+      replacePaths: ["agents.defaults.model.fallbacks"],
+    });
   });
 
-  it("removes thinking and fast overrides through the shared config draft", async () => {
+  it("preserves trailing fallbacks when replacing the visible fallback", async () => {
+    const { context, runtimeConfig } = createHarness("main");
+    const model = {
+      primary: "openai/gpt-5",
+      fallbacks: ["anthropic/claude-sonnet", "google/gemini-pro"],
+    };
+    Object.assign(runtimeConfig.state.configForm.agents.defaults, { model });
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    page.data = {
+      ...EMPTY_MODEL_PROVIDERS_DATA,
+      config: runtimeConfig.state.configForm,
+      models: [
+        { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },
+        {
+          id: "claude-sonnet",
+          name: "Claude Sonnet",
+          provider: "anthropic",
+          available: true,
+        },
+        { id: "gemini-pro", name: "Gemini Pro", provider: "google", available: true },
+        { id: "grok", name: "Grok", provider: "xai", available: true },
+      ],
+    };
+    page.requestUpdate();
+    await page.updateComplete;
+    runtimeConfig.patch.mockClear();
+
+    const fallback = [
+      ...page.querySelectorAll<HTMLElement & { value: string; updateComplete: Promise<unknown> }>(
+        "wa-select",
+      ),
+    ].find((select) => select.querySelector('[slot="label"]')?.textContent === "Fallback Model");
+    expect(fallback).toBeDefined();
+    fallback!.value = "xai/grok";
+    await fallback!.updateComplete;
+    fallback!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await waitForFast(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5",
+              fallbacks: ["xai/grok", "google/gemini-pro"],
+            },
+            utilityModel: null,
+            thinkingDefault: "low",
+            fastModeDefault: "auto",
+          },
+        },
+      },
+      note: "Update defaults from Control UI",
+      replacePaths: ["agents.defaults.model.fallbacks"],
+    });
+  });
+
+  it("autosaves removal of inherited behavior overrides", async () => {
     const { context, runtimeConfig } = createHarness("main");
     const page = appendPage(context);
     await waitForFast(() => expect(page.querySelector("#settings-model-behavior")).not.toBeNull());
@@ -469,19 +351,20 @@ describe("ModelProvidersPage agent scope", () => {
     expect(groups).toHaveLength(2);
     groups[0]!.value = "";
     groups[0]!.dispatchEvent(new Event("change", { bubbles: true }));
-    groups[1]!.value = "";
-    groups[1]!.dispatchEvent(new Event("change", { bubbles: true }));
-
-    expect(runtimeConfig.removeFormValue).toHaveBeenNthCalledWith(1, [
-      "agents",
-      "defaults",
-      "thinkingDefault",
-    ]);
-    expect(runtimeConfig.removeFormValue).toHaveBeenNthCalledWith(2, [
-      "agents",
-      "defaults",
-      "fastModeDefault",
-    ]);
+    await waitForFast(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: {
+        agents: {
+          defaults: {
+            fastModeDefault: "auto",
+            thinkingDefault: null,
+            utilityModel: null,
+          },
+        },
+      },
+      note: "Update defaults from Control UI",
+      replacePaths: ["agents.defaults.model.fallbacks"],
+    });
   });
 
   it("keeps invalid explicit thinking and fast values resettable", async () => {
@@ -495,24 +378,26 @@ describe("ModelProvidersPage agent scope", () => {
     const behavior = page.querySelector("#settings-model-behavior")!;
     const groups = behavior.querySelectorAll<HTMLElement & { value: string }>("wa-radio-group");
     expect([...groups].map((group) => group.value)).toEqual(["", ""]);
-    const resetButtons = behavior.querySelectorAll<HTMLButtonElement>(
-      'button[aria-label="Reset to default"]',
-    );
-    expect(resetButtons).toHaveLength(2);
-    resetButtons.forEach((button) => button.click());
-
-    expect(runtimeConfig.removeFormValue).toHaveBeenNthCalledWith(1, [
-      "agents",
-      "defaults",
-      "thinkingDefault",
-    ]);
-    expect(runtimeConfig.removeFormValue).toHaveBeenNthCalledWith(2, [
-      "agents",
-      "defaults",
-      "fastModeDefault",
-    ]);
+    const defaults = behavior.querySelectorAll<HTMLElement>('wa-radio[value=""]');
+    expect(defaults).toHaveLength(2);
+    defaults[0]?.click();
+    await waitForFast(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
   });
 
+  it("disables defaults without showing an admin warning when config patches are unavailable", async () => {
+    const { context, runtimeConfig } = createHarness("main");
+    runtimeConfig.canPatch = false;
+    const page = appendPage(context);
+    await waitForFast(() => expect(page.data?.config).toEqual({}));
+    const defaults = page.querySelector(".model-providers__defaults");
+
+    expect(
+      [...(defaults?.querySelectorAll("wa-select, wa-radio-group") ?? [])].every((control) =>
+        control.hasAttribute("disabled"),
+      ),
+    ).toBe(true);
+    expect(page.textContent).not.toContain("operator.admin access");
+  });
   it("keeps a committed provider-key save successful when config refresh fails", async () => {
     const { context, runtimeConfig } = createHarness("main");
     runtimeConfig.refresh.mockImplementationOnce(async () => {
@@ -571,13 +456,13 @@ describe("ModelProvidersPage agent scope", () => {
     };
     page.defaultsDraft = selection;
 
-    await page.saveDefaultModels();
+    await page.saveDefaults();
 
     expect(runtimeConfig.patch).toHaveBeenCalledOnce();
     expect(page.defaultsDraft).toBe(selection);
     expect(page.messages.defaults).toEqual({
       kind: "success",
-      text: "Default models saved.",
+      text: "Defaults saved.",
       warning: "config.get failed after saving default models",
     });
   });
@@ -595,7 +480,7 @@ describe("ModelProvidersPage agent scope", () => {
     };
     page.defaultsDraft = selection;
 
-    const saving = page.saveDefaultModels();
+    const saving = page.saveDefaults();
     await vi.waitFor(() => expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce());
     agentSelection.state.selectedId = "writer";
     agentSelection.state.scopeId = "writer";
@@ -715,6 +600,17 @@ describe("ModelProvidersPage agent scope", () => {
       { provider: "alias", profileIds: ["openai:second"] },
     ]);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    const defaultsDraft: DefaultModelSelection = {
+      primary: "openai/gpt-5",
+      fallbacks: [],
+      utilityModel: null,
+    };
+    page.keyEditorProvider = "openai";
+    page.keyDraft = "synthetic-route-agent-key";
+    page.addProviderOpen = true;
+    page.addProviderId = "anthropic";
+    page.addProviderKey = "synthetic-route-provider-key";
+    page.defaultsDraft = defaultsDraft;
     page.pendingLogoutProvider = "openai";
     page.messages = { openai: { kind: "error", text: "Previous agent failure" } };
     page.probeResults = {
@@ -735,6 +631,12 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.pendingLogoutProvider).toBeNull();
     expect(page.messages).toEqual({});
     expect(page.probeResults).toEqual({});
+    expect(page.keyEditorProvider).toBeNull();
+    expect(page.keyDraft).toBe("");
+    expect(page.addProviderOpen).toBe(false);
+    expect(page.addProviderId).toBe("");
+    expect(page.addProviderKey).toBe("");
+    expect(page.defaultsDraft).toBe(defaultsDraft);
     firstLogout.resolve({});
     await loggingOut;
 
@@ -754,7 +656,25 @@ describe("ModelProvidersPage agent scope", () => {
     );
 
     request.mockClear();
+    const defaultsDraft: DefaultModelSelection = {
+      primary: "openai/gpt-5",
+      fallbacks: [],
+      utilityModel: null,
+    };
     page.busy = { "logout:openai": true };
+    page.keyEditorProvider = "openai";
+    page.keyDraft = "synthetic-selected-agent-key";
+    page.addProviderOpen = true;
+    page.addProviderId = "anthropic";
+    page.addProviderKey = "synthetic-selected-provider-key";
+    page.defaultsDraft = defaultsDraft;
+    notifySelection();
+    expect(page.keyEditorProvider).toBe("openai");
+    expect(page.keyDraft).toBe("synthetic-selected-agent-key");
+    expect(page.addProviderOpen).toBe(true);
+    expect(page.addProviderId).toBe("anthropic");
+    expect(page.addProviderKey).toBe("synthetic-selected-provider-key");
+    expect(page.defaultsDraft).toBe(defaultsDraft);
     agentSelection.state.selectedId = "writer";
     agentSelection.state.scopeId = "writer";
     notifySelection();
@@ -768,6 +688,12 @@ describe("ModelProvidersPage agent scope", () => {
     );
     expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(1);
     expect(page.busy).toEqual({});
+    expect(page.keyEditorProvider).toBeNull();
+    expect(page.keyDraft).toBe("");
+    expect(page.addProviderOpen).toBe(false);
+    expect(page.addProviderId).toBe("");
+    expect(page.addProviderKey).toBe("");
+    expect(page.defaultsDraft).toBe(defaultsDraft);
   });
 
   it("keeps the concrete selected owner after another page widens scope to all agents", async () => {
@@ -815,9 +741,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(context.agents.ensureList).not.toHaveBeenCalled();
     expect(page.textContent).toContain("Agent roster unavailable");
 
-    [...page.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.trim() === "Refresh")
-      ?.click();
+    page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
     expect(context.agents.refreshList).toHaveBeenCalledOnce();
   });
 

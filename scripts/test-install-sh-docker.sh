@@ -118,7 +118,9 @@ const packJsonFile = process.argv[3];
 const raw = readFileSync(packJsonFile, "utf8") || "[]";
 const parsed = JSON.parse(raw);
 const budgetOverride = process.env.OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES;
-const budgetBytes = budgetOverride ? Number(budgetOverride) : 204 * 1024 * 1024;
+// Both bundled fs-safe loader layouts need all native targets (~31 MiB).
+// Include that payload while retaining the previous package-size headroom.
+const budgetBytes = budgetOverride ? Number(budgetOverride) : 235 * 1024 * 1024;
 if (!Number.isFinite(budgetBytes)) {
   throw new Error(
     `OPENCLAW_INSTALL_SMOKE_PACK_UNPACKED_BUDGET_BYTES must be numeric, got ${JSON.stringify(
@@ -268,7 +270,7 @@ SKIP_FRESHNESS="${OPENCLAW_INSTALL_SMOKE_SKIP_FRESHNESS:-0}"
 FRESHNESS_INSTALL_URL="${OPENCLAW_INSTALL_SMOKE_FRESHNESS_INSTALL_URL:-file:///tmp/openclaw-install.sh}"
 # npm min-release-age is days; 10000 keeps the control failure independent of normal release cadence.
 FRESHNESS_MIN_RELEASE_AGE="${OPENCLAW_INSTALL_FRESHNESS_MIN_RELEASE_AGE:-10000}"
-FRESHNESS_NPM_VERSION="${OPENCLAW_INSTALL_FRESHNESS_NPM_VERSION:-11.14.1}"
+FRESHNESS_NPM_VERSION="${OPENCLAW_INSTALL_FRESHNESS_NPM_VERSION:-11.19.0}"
 UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE:-latest}"
 UPDATE_PACKAGE_SPEC="${OPENCLAW_INSTALL_SMOKE_UPDATE_PACKAGE_SPEC:-}"
 UPDATE_DIST_IMAGE="${OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE:-}"

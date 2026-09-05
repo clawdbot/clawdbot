@@ -1,7 +1,8 @@
 // Node daemon tests cover node daemon command runtime behavior and errors.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   runNodeDaemonInstall,
   runNodeDaemonRestart,
@@ -40,7 +41,6 @@ const mocks = vi.hoisted(() => {
       environment: {},
       environmentValueSources: {},
     })),
-    failIfNixDaemonInstallMode: vi.fn(() => false),
     loadNodeHostConfig: vi.fn(),
     isSystemdUserServiceAvailable: vi.fn(async () => true),
     resolveSystemdUserServiceAccount: vi.fn(() => "pi"),
@@ -125,8 +125,16 @@ vi.mock("../daemon-cli/shared.js", async () => {
     }),
     formatRuntimeStatus: (runtime: GatewayServiceRuntime | undefined) => runtime?.status ?? "",
     resolveRuntimeStatusColor: () => "",
-    failIfNixDaemonInstallMode: mocks.failIfNixDaemonInstallMode,
   };
+});
+
+function useLinuxPlatform(): void {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("runNodeDaemonInstall", () => {
@@ -135,7 +143,7 @@ describe("runNodeDaemonInstall", () => {
     mocks.runtime.error.mockClear();
     mocks.runtime.writeJson.mockClear();
     mocks.runtime.exit.mockClear();
-    mocks.failIfNixDaemonInstallMode.mockReset().mockReturnValue(false);
+    vi.stubEnv("OPENCLAW_NIX_MODE", undefined);
     mocks.service.install.mockReset().mockResolvedValue(undefined);
     mocks.service.isLoaded.mockReset().mockResolvedValue(false);
     mocks.buildNodeInstallPlan.mockReset().mockResolvedValue({
@@ -259,7 +267,7 @@ describe("runNodeDaemonInstall", () => {
 
   it.each([
     ["an invalid explicit port", { port: "abc" }, "Invalid --port"],
-    ["an unsupported runtime", { runtime: "deno" }, 'Invalid --runtime (use "node"'],
+    ["an unsupported runtime", { runtime: "deno" }, 'Invalid --runtime (use "node" or "bun"'],
   ])("rejects %s before building an install plan", async (_name, opts, error) => {
     await runNodeDaemonInstall(opts);
 
@@ -268,16 +276,72 @@ describe("runNodeDaemonInstall", () => {
     expect(mocks.service.install).not.toHaveBeenCalled();
   });
 
-  it("does not build or install a service in Nix daemon mode", async () => {
-    mocks.failIfNixDaemonInstallMode.mockReturnValue(true);
+  it("forwards Bun as the explicit node-service runtime", async () => {
+    await runNodeDaemonInstall({ runtime: "bun", force: true });
 
-    await runNodeDaemonInstall({});
+    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ runtime: "bun" }),
+    );
+  });
 
-    expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
-    expect(mocks.service.install).not.toHaveBeenCalled();
+  it.each([false, true])(
+    "rejects Nix installs before config or service inspection (json=%s)",
+    async (json) => {
+      await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
+        await runNodeDaemonInstall({ json, force: true });
+      });
+
+      const message = "Nix mode detected; service install is disabled.";
+      expect(mocks.runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(mocks.loadNodeHostConfig).not.toHaveBeenCalled();
+      expect(mocks.service.isLoaded).not.toHaveBeenCalled();
+      expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
+      expect(mocks.service.install).not.toHaveBeenCalled();
+      expect(mocks.runtime.log).not.toHaveBeenCalled();
+      if (json) {
+        expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ action: "install", ok: false, error: message }),
+        );
+        expect(mocks.runtime.error).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+        expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([
+    {
+      restriction: "external Gateway supervision",
+      env: { OPENCLAW_SUPERVISOR_MODE: "external" },
+    },
+    {
+      restriction: "noncanonical Gateway state",
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-node-custom-state" },
+    },
+  ])("does not apply $restriction to Node installation", async ({ env }) => {
+    mocks.service.isLoaded.mockResolvedValueOnce(false).mockResolvedValue(true);
+
+    await withEnvAsync(env, async () => {
+      await runNodeDaemonInstall({ json: true });
+    });
+
+    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledOnce();
+    expect(mocks.service.install).toHaveBeenCalledOnce();
+    expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        action: "install",
+        ok: true,
+        result: "installed",
+        service: expect.objectContaining({ label: "Node service", loaded: true }),
+      }),
+    );
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
   });
 
   it("warns about disabled systemd lingering after a fresh install (text mode)", async () => {
+    useLinuxPlatform();
     // isLoaded=true so the service-load verification passes and the linger
     // diagnostic runs on the verified-success path.
     mocks.service.isLoaded.mockResolvedValue(true);
@@ -290,6 +354,7 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("checks lingering for the same sudo target user as the systemd service", async () => {
+    useLinuxPlatform();
     mocks.service.isLoaded.mockResolvedValue(true);
     mocks.resolveSystemdUserServiceAccount.mockReturnValue("debian");
     mocks.readSystemdUserLingerStatus.mockResolvedValue({ user: "debian", linger: "no" });
@@ -307,6 +372,7 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("includes the linger warning in JSON warnings after a fresh install", async () => {
+    useLinuxPlatform();
     mocks.service.isLoaded.mockResolvedValue(true);
     await runNodeDaemonInstall({ force: true, json: true });
 
@@ -318,6 +384,7 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("warns about disabled lingering on the already-installed short-circuit path", async () => {
+    useLinuxPlatform();
     mocks.service.isLoaded.mockResolvedValue(true);
     await runNodeDaemonInstall({ force: false });
 
@@ -328,6 +395,7 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("does not warn when systemd lingering is already enabled", async () => {
+    useLinuxPlatform();
     mocks.service.isLoaded.mockResolvedValue(true);
     mocks.readSystemdUserLingerStatus.mockResolvedValue({ user: "pi", linger: "yes" });
     await runNodeDaemonInstall({ force: true });
@@ -336,6 +404,7 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("does not pollute the failure output when service.install throws", async () => {
+    useLinuxPlatform();
     mocks.service.isLoaded.mockResolvedValue(true);
     mocks.service.install.mockRejectedValue(new Error("disk full"));
     await runNodeDaemonInstall({ force: true, json: true });
@@ -354,6 +423,7 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("does not warn when service-load verification fails (regression for #107033 review)", async () => {
+    useLinuxPlatform();
     // install() succeeded but the service is not loaded: the linger diagnostic
     // must NOT run, so a failed verification never tells the operator to fix
     // lingering for a service that was not successfully installed.
@@ -373,6 +443,7 @@ describe("runNodeDaemonInstall", () => {
   });
 
   it("skips the linger check when systemd user services are unavailable", async () => {
+    useLinuxPlatform();
     mocks.service.isLoaded.mockResolvedValue(true);
     mocks.isSystemdUserServiceAvailable.mockResolvedValue(false);
     await runNodeDaemonInstall({ force: true });
@@ -528,6 +599,11 @@ describe("runNodeDaemonStatus", () => {
         OPENCLAW_GATEWAY_TOKEN: "gateway-token",
         OPENCLAW_GATEWAY_PASSWORD: "gateway-password",
       },
+      managedDefinition: {
+        programArguments: ["node", "node-host"],
+        environment: { OPENCLAW_GATEWAY_TOKEN: "managed-base-token" },
+      },
+      managedOverrides: { launcher: "command", environment: { keys: ["OPENCLAW_GATEWAY_TOKEN"] } },
     });
 
     await runNodeDaemonStatus({ json: true });
@@ -542,5 +618,8 @@ describe("runNodeDaemonStatus", () => {
     const payload = JSON.stringify(mocks.runtime.writeJson.mock.calls[0]?.[0]);
     expect(payload).not.toContain("gateway-token");
     expect(payload).not.toContain("gateway-password");
+    expect(payload).not.toContain("managed-base-token");
+    expect(payload).not.toContain("managedDefinition");
+    expect(payload).not.toContain("managedOverrides");
   });
 });

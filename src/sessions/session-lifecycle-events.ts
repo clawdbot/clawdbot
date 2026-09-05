@@ -1,13 +1,16 @@
 /** Session lifecycle event broadcast to observers when a session is created or linked. */
 import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 export type SessionLifecycleEvent = {
   sessionKey: string;
   agentId?: string;
-  reason: string;
   parentSessionKey?: string;
   label?: string;
   displayName?: string;
-};
+} & (
+  | { reason: string; swarmGroupId?: never; kind?: never; text?: never }
+  | { reason: "swarm-note"; swarmGroupId: string; kind: "phase" | "log"; text: string }
+);
 
 export type SessionIdentityMutationTarget = {
   sessionId?: string;
@@ -41,31 +44,28 @@ const SESSION_IDENTITY_MUTATION_STATE = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionIdentityMutationState"),
   () => ({ version: 0 }),
 );
+const SESSION_LIFECYCLE_STATE = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionLifecycleState"),
+  () => ({ version: 0 }),
+);
+
+export function readSessionLifecycleVersion(): number {
+  return SESSION_LIFECYCLE_STATE.version;
+}
 
 /** Registers a session lifecycle listener. */
 export function onSessionLifecycleEvent(listener: SessionLifecycleListener): () => void {
-  SESSION_LIFECYCLE_LISTENERS.add(listener);
-  return () => {
-    SESSION_LIFECYCLE_LISTENERS.delete(listener);
-  };
+  return registerListener(SESSION_LIFECYCLE_LISTENERS, listener);
 }
 
 /** Emits a best-effort session lifecycle event to all listeners. */
 export function emitSessionLifecycleEvent(event: SessionLifecycleEvent): void {
-  for (const listener of SESSION_LIFECYCLE_LISTENERS) {
-    try {
-      listener(event);
-    } catch {
-      // Best-effort, do not propagate listener errors.
-    }
-  }
+  SESSION_LIFECYCLE_STATE.version += 1;
+  notifyListeners(SESSION_LIFECYCLE_LISTENERS, event);
 }
 
 export function onSessionIdentityMutation(listener: SessionIdentityMutationListener): () => void {
-  SESSION_IDENTITY_MUTATION_LISTENERS.add(listener);
-  return () => {
-    SESSION_IDENTITY_MUTATION_LISTENERS.delete(listener);
-  };
+  return registerListener(SESSION_IDENTITY_MUTATION_LISTENERS, listener);
 }
 
 /** Monotonic fence for projections that consume session identities across owner boundaries. */
@@ -75,11 +75,5 @@ export function readSessionIdentityMutationVersion(): number {
 
 export function emitSessionIdentityMutation(mutation: SessionIdentityMutation): void {
   SESSION_IDENTITY_MUTATION_STATE.version += 1;
-  for (const listener of SESSION_IDENTITY_MUTATION_LISTENERS) {
-    try {
-      listener(mutation);
-    } catch {
-      // Session persistence already succeeded; one observer must not block the rest.
-    }
-  }
+  notifyListeners(SESSION_IDENTITY_MUTATION_LISTENERS, mutation);
 }

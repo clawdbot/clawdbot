@@ -1,6 +1,4 @@
 import * as nodes from "./nodes.js";
-import * as nodeInvoke from "./protocol-schemas-node-invoke.js";
-import * as nodePresence from "./protocol-schemas-node-presence.js";
 
 export const NodeProtocolSchemas = {
   NodePairListParams: nodes.NodePairListParamsSchema,
@@ -15,11 +13,17 @@ export const NodeProtocolSchemas = {
   NodeSkillsUpdateParams: nodes.NodeSkillsUpdateParamsSchema,
   NodePendingAckParams: nodes.NodePendingAckParamsSchema,
   NodeDescribeParams: nodes.NodeDescribeParamsSchema,
-  ...nodeInvoke.NodeInvokeProtocolSchemas,
+  NodeInvokeParams: nodes.NodeInvokeParamsSchema,
+  NodeInvokeInputEvent: nodes.NodeInvokeInputEventSchema,
+  NodeInvokeProgressParams: nodes.NodeInvokeProgressParamsSchema,
+  NodeInvokeResultParams: nodes.NodeInvokeResultParamsSchema,
+  NodeInvokeRequestEvent: nodes.NodeInvokeRequestEventSchema,
   NodeEventParams: nodes.NodeEventParamsSchema,
   NodeEventResult: nodes.NodeEventResultSchema,
   NodePresenceAlivePayload: nodes.NodePresenceAlivePayloadSchema,
-  ...nodePresence.NodePresenceProtocolSchemas,
+  NodePresenceAliveReason: nodes.NodePresenceAliveReasonSchema,
+  NodePresenceActivityPayload: nodes.NodePresenceActivityPayloadSchema,
+  NodeHostStatsPayload: nodes.NodeHostStatsPayloadSchema,
   NodePendingDrainParams: nodes.NodePendingDrainParamsSchema,
   NodePendingDrainResult: nodes.NodePendingDrainResultSchema,
   NodePendingEnqueueParams: nodes.NodePendingEnqueueParamsSchema,

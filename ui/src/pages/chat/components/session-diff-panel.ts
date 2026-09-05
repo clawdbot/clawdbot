@@ -7,7 +7,12 @@ import type {
   SessionDiffFile,
   SessionsDiffResult,
 } from "../../../../../packages/gateway-protocol/src/index.js";
+import {
+  localEditorFilePath,
+  observeNativeGateway,
+} from "../../../app/native-editor-locality.runtime.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import { t } from "../../../i18n/index.ts";
 import "../../../components/tooltip.ts";
 import {
@@ -15,13 +20,8 @@ import {
   splitSessionDiffFileText,
   type SessionDiffGapDirection,
 } from "../../../lib/chat/session-diff-gaps.ts";
-import {
-  pairSessionDiffLines,
-  type SessionSplitDiffRow,
-} from "../../../lib/chat/session-diff-split.ts";
 import { parseSessionDiffPatch, type ParsedFilePatch } from "../../../lib/chat/session-diff.ts";
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
@@ -125,10 +125,6 @@ function splitPath(filePath: string): { directory: string; name: string } {
     : { directory: normalized.slice(0, separator), name: normalized.slice(separator + 1) };
 }
 
-function absolutePath(root: string, filePath: string): string {
-  return `${root.replace(/[\\/]+$/, "")}/${filePath.replace(/^[\\/]+/, "")}`;
-}
-
 function shellArgument(value: string): string {
   return /^[A-Za-z0-9_./:@+-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
 }
@@ -154,6 +150,7 @@ function taskResult(result: SessionsDiffResult): SessionDiffTaskResult {
 }
 
 class SessionDiffPanel extends OpenClawLightDomElement {
+  @property({ attribute: false }) execNode: string | null = null;
   @property({ attribute: false }) loader: SessionDiffLoader | null = null;
   @property({ attribute: false }) loadFileText: SessionDiffFileTextLoader | null = null;
   @property({ attribute: false }) openFile: ((path: string) => void) | null = null;
@@ -165,10 +162,16 @@ class SessionDiffPanel extends OpenClawLightDomElement {
   @state() private split = loadPreferences().split;
   @state() private wrap = loadPreferences().wrap;
 
-  private readonly splitCache = new WeakMap<ParsedFilePatch, SessionSplitDiffRow[]>();
   private readonly fileTextCache = new WeakMap<FileView, Promise<string[] | null>>();
   private readonly unavailableFileText = new WeakSet<FileView>();
   private prefetchedDiffResult: SessionsDiffResult | null = null;
+
+  constructor() {
+    super();
+    observeNativeGateway(this, () => {
+      this.menu = null;
+    });
+  }
 
   private readonly diffTask = new Task(this, {
     args: () =>
@@ -195,7 +198,7 @@ class SessionDiffPanel extends OpenClawLightDomElement {
   });
 
   private get loading(): boolean {
-    return this.diffTask.status === TaskStatus.PENDING;
+    return this.loader !== null && this.diffTask.status === TaskStatus.PENDING;
   }
 
   private refresh(): Promise<void> {
@@ -255,9 +258,6 @@ class SessionDiffPanel extends OpenClawLightDomElement {
       case "scope":
         this.scope = action.value;
         return;
-      case "copy-path":
-        void copyToClipboard(action.path);
-        return;
       case "open-file":
         this.openFile?.(action.path);
         return;
@@ -286,21 +286,23 @@ class SessionDiffPanel extends OpenClawLightDomElement {
         </span>
         ${renderDiffStatChips(totalDiffStat(result.files))}
         <span class="session-diff__summary-spacer"></span>
-        ${syncCommand && result.root && result.branch
-          ? html`<button
-              class="btn btn--ghost btn--sm session-diff__toolbar-button"
-              type="button"
-              @click=${(event: Event) =>
-                this.openAnchoredMenu(event, {
-                  kind: "sync",
-                  command: syncCommand,
-                  root: result.root!,
-                  branch: result.branch!,
-                })}
-            >
-              ${t("chat.sessionDiff.sync")} ${icons.chevronDown}
-            </button>`
-          : nothing}
+        ${
+          syncCommand && result.root && result.branch
+            ? html`<button
+                class="btn btn--ghost btn--sm session-diff__toolbar-button"
+                type="button"
+                @click=${(event: Event) =>
+                  this.openAnchoredMenu(event, {
+                    kind: "sync",
+                    command: syncCommand,
+                    root: result.root!,
+                    branch: result.branch!,
+                  })}
+              >
+                ${t("chat.sessionDiff.sync")} ${icons.chevronDown}
+              </button>`
+            : nothing
+        }
         <openclaw-tooltip .content=${t("chat.sessionDiff.viewOptions")}>
           <button
             class="btn btn--ghost btn--icon session-diff__toolbar-icon"
@@ -329,16 +331,6 @@ class SessionDiffPanel extends OpenClawLightDomElement {
         </openclaw-tooltip>
       </div>
     `;
-  }
-
-  private splitRows(parsed: ParsedFilePatch): SessionSplitDiffRow[] {
-    const cached = this.splitCache.get(parsed);
-    if (cached) {
-      return cached;
-    }
-    const rows = pairSessionDiffLines(parsed.lines);
-    this.splitCache.set(parsed, rows);
-    return rows;
   }
 
   private canExpandGaps(view: FileView): boolean {
@@ -416,7 +408,6 @@ class SessionDiffPanel extends OpenClawLightDomElement {
       return;
     }
     parsed.lines = expanded;
-    this.splitCache.delete(parsed);
     this.requestUpdate();
   }
 
@@ -464,12 +455,16 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     }
     const renderGap = (line: DiffLine) => this.renderGap(view, line);
     return html`
-      ${this.split
-        ? renderSessionSplitDiff(this.splitRows(parsed), renderGap)
-        : renderDiffBlock(parsed.lines, "succeeded", renderGap)}
-      ${parsed.truncated
-        ? html`<div class="session-diff__note">${t("chat.sessionDiff.truncatedFile")}</div>`
-        : nothing}
+      ${
+        this.split
+          ? renderSessionSplitDiff(parsed.lines, renderGap, file)
+          : renderDiffBlock(parsed.lines, "succeeded", renderGap, file)
+      }
+      ${
+        parsed.truncated
+          ? html`<div class="session-diff__note">${t("chat.sessionDiff.truncatedFile")}</div>`
+          : nothing
+      }
     `;
   }
 
@@ -477,7 +472,9 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     const { file } = view;
     const collapsed = this.collapsedPaths.has(file.path);
     const { directory, name } = splitPath(file.path);
-    const absPath = result.root ? absolutePath(result.root, file.path) : undefined;
+    const absPath = result.root
+      ? (localEditorFilePath({ root: result.root, path: file.path }, this.execNode) ?? undefined)
+      : undefined;
     const pathTitle = file.oldPath ? `${file.oldPath} → ${file.path}` : file.path;
     return html`
       <section class="session-diff__file" data-status=${file.status}>
@@ -498,17 +495,23 @@ class SessionDiffPanel extends OpenClawLightDomElement {
               >${statusLetter(file)}</span
             >
             <span class="session-diff__path">
-              ${file.oldPath
-                ? html`<span class="session-diff__old-path">${file.oldPath} →</span>`
-                : nothing}
+              ${
+                file.oldPath
+                  ? html`<span class="session-diff__old-path">${file.oldPath} →</span>`
+                  : nothing
+              }
               <span class="session-diff__filename">${name}</span>
-              ${directory
-                ? html`<span class="session-diff__directory">${directory}</span>`
-                : nothing}
+              ${
+                directory
+                  ? html`<span class="session-diff__directory">${directory}</span>`
+                  : nothing
+              }
             </span>
-            ${file.untracked === true
-              ? html`<span class="session-diff__badge">${t("chat.sessionDiff.untracked")}</span>`
-              : nothing}
+            ${
+              file.untracked === true
+                ? html`<span class="session-diff__badge">${t("chat.sessionDiff.untracked")}</span>`
+                : nothing
+            }
             ${renderDiffStatChips(diffStat(file))}
           </button>
           <button
@@ -527,17 +530,19 @@ class SessionDiffPanel extends OpenClawLightDomElement {
             ${icons.moreHorizontal}
           </button>
         </div>
-        ${collapsed
-          ? nothing
-          : html`<div
-              class="session-diff__file-body"
-              style=${`contain-intrinsic-size:auto ${Math.max(
-                80,
-                Math.min(12_000, (view.parsed?.lines.length ?? 2) * 19),
-              )}px`}
-            >
-              ${this.renderFileBody(view)}
-            </div>`}
+        ${
+          collapsed
+            ? nothing
+            : html`<div
+                class="session-diff__file-body"
+                style=${`contain-intrinsic-size:auto ${Math.max(
+                  80,
+                  Math.min(12_000, (view.parsed?.lines.length ?? 2) * 19),
+                )}px`}
+              >
+                ${this.renderFileBody(view)}
+              </div>`
+        }
       </section>
     `;
   }
@@ -574,14 +579,17 @@ class SessionDiffPanel extends OpenClawLightDomElement {
     </button>`;
   }
 
-  private renderBody(): TemplateResult {
+  private renderBody(): TemplateResult | typeof nothing {
     if (this.diffTask.status === TaskStatus.ERROR) {
       const error = this.diffTask.error;
       return html`<div class="callout danger">${formatUiError(error)}</div>`;
     }
+    if (this.loading) {
+      return renderPanelLoadingSkeleton("review", t("chat.sessionDiff.loading"));
+    }
     const value = this.diffTask.value;
     if (!value) {
-      return html`<div class="session-diff__note">${t("chat.sessionDiff.loading")}</div>`;
+      return nothing;
     }
     const { result, views } = value;
     if (result.unavailableReason === "not_git") {
@@ -606,14 +614,18 @@ class SessionDiffPanel extends OpenClawLightDomElement {
         <span>${this.scopeTitle(result)}</span>${icons.chevronDown}
       </button>
       <div class="session-diff__files">
-        ${result.unavailableReason === "unknown_commit"
-          ? html`<div class="session-diff__note">${t("chat.sessionDiff.unknownCommit")}</div>`
-          : result.files.length === 0
-            ? html`<div class="session-diff__note">${t("chat.sessionDiff.empty")}</div>`
-            : views.map((view) => this.renderFile(view, result))}
-        ${result.truncated === true
-          ? html`<div class="session-diff__note">${t("chat.sessionDiff.truncatedResult")}</div>`
-          : nothing}
+        ${
+          result.unavailableReason === "unknown_commit"
+            ? html`<div class="session-diff__note">${t("chat.sessionDiff.unknownCommit")}</div>`
+            : result.files.length === 0
+              ? html`<div class="session-diff__note">${t("chat.sessionDiff.empty")}</div>`
+              : views.map((view) => this.renderFile(view, result))
+        }
+        ${
+          result.truncated === true
+            ? html`<div class="session-diff__note">${t("chat.sessionDiff.truncatedResult")}</div>`
+            : nothing
+        }
       </div>
       ${this.renderFooter(result)}
     `;
@@ -626,18 +638,20 @@ class SessionDiffPanel extends OpenClawLightDomElement {
         aria-busy=${String(this.loading)}
       >
         ${this.renderBody()}
-        ${this.menu
-          ? keyed(
-              this.menu,
-              html`<openclaw-session-diff-menu
-                .menu=${this.menu}
-                .onAction=${(action: SessionDiffMenuAction) => this.handleMenuAction(action)}
-                .onClose=${() => {
-                  this.menu = null;
-                }}
-              ></openclaw-session-diff-menu>`,
-            )
-          : nothing}
+        ${
+          this.menu
+            ? keyed(
+                this.menu,
+                html`<openclaw-session-diff-menu
+                  .menu=${this.menu}
+                  .onAction=${(action: SessionDiffMenuAction) => this.handleMenuAction(action)}
+                  .onClose=${() => {
+                    this.menu = null;
+                  }}
+                ></openclaw-session-diff-menu>`,
+              )
+            : nothing
+        }
       </div>
     `;
   }

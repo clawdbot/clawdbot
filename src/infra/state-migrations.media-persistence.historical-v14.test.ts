@@ -23,7 +23,7 @@ afterEach(() => {
 });
 
 describe("legacy media persistence Doctor migration from historical v14", () => {
-  it("migrates a copy of the exact v2026.7.2-beta.4 schema without losing its session", () => {
+  it("migrates a copy of the exact v2026.7.2-beta.4 schema without losing its session", async () => {
     const historicalSchema = historicalV14AgentSchemaSql();
     expect(createHash("sha256").update(historicalSchema).digest("hex")).toBe(
       "955889668707fbccab70b80b5058af5a1587fd35ae32a80f8605179a68fb5117",
@@ -94,7 +94,7 @@ describe("legacy media persistence Doctor migration from historical v14", () => 
     fs.copyFileSync(pristinePath, databasePath);
     registerOpenClawAgentDatabase({ agentId: "main", env, path: databasePath, schemaVersion: 14 });
 
-    const result = migrateLegacyMediaPersistence({ env });
+    const result = await migrateLegacyMediaPersistence({ env });
     expect(result.warnings).toEqual([]);
     expect(
       listSessionEntriesCore({ agentId: "main", env }).map(({ entry, sessionKey }) => ({

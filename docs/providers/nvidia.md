@@ -64,21 +64,44 @@ openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
 }
 ```
 
-## Featured catalog
+## Live model catalog
 
-When an NVIDIA API key is configured, setup and model-selection paths fetch
-NVIDIA's public featured-model catalog from
-`https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json` and
-cache the result for 24 hours (first 32 entries, imported as free text-input
-rows). New or republished featured models from build.nvidia.com therefore appear
-in setup and model-selection surfaces after the cache refreshes, without waiting
-for an OpenClaw release. A fresh NVIDIA catalog overrides bundled retirement
-metadata. When the live feed is available, its first model is preselected during
-NVIDIA setup.
+When an NVIDIA API key is configured, setup and model-selection paths check
+`https://integrate.api.nvidia.com/v1/models` for available model IDs, cached for
+30 seconds. NVIDIA's public
+`https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json` feed
+provides ranking and token limits, cached for 24 hours. Featured models appear
+first only while the inference inventory still lists them; other available
+bundled chat models follow. A fresh inventory can restore a previously hidden
+model that NVIDIA has republished.
 
-The fetch uses a fixed HTTPS host policy for `assets.ngc.nvidia.com`. If no
-NVIDIA API key is configured, or if the feed is unavailable or malformed,
-OpenClaw falls back to the bundled catalog and bundled default below.
+The inventory also contains embeddings and other non-chat endpoints, without
+capability metadata. OpenClaw therefore offers only exact models with bundled
+chat metadata or valid featured-model metadata; it does not guess capabilities
+from model names. Unknown IDs can still be configured explicitly; listing alone
+does not prove chat compatibility. This is not a complete automatic catalog of
+every NVIDIA model.
+
+Both public fetches use fixed HTTPS hosts and send no credentials. If the
+featured feed fails, available bundled chat models still appear. If the
+inventory is unavailable or malformed, browse and setup retain the bundled
+fallback, while the fresh-live catalog stays empty. A successful empty inventory
+does not restore stale bundled entries. Without NVIDIA auth, browsing uses the
+bundled catalog without fetching.
+
+## Nemotron 3.5 Lightning
+
+[`nvidia/nemotron-3.5-lightning-30b-a3b`](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/build)
+is NVIDIA's smaller 30B total / 3B active reasoning model for agentic work. The
+bundled row records its 1M context and a 16,384-token output budget matching
+NVIDIA's hosted example. Select it with:
+
+```bash
+openclaw models set nvidia/nvidia/nemotron-3.5-lightning-30b-a3b
+```
+
+Lightning is selectable when the live inventory lists it even if it is absent
+from the featured feed. Nemotron 3 Ultra remains the default.
 
 ## Nemotron 3 Ultra
 
@@ -97,24 +120,25 @@ hosted in NVIDIA's catalog when their context, latency, or behavior fits better.
 
 ## Bundled fallback catalog
 
-The selectable bundled rows snapshot NVIDIA's featured-model catalog. Deprecated
+The bundled rows provide known chat metadata and an offline fallback. Deprecated
 compatibility rows keep existing exact model references recognizable but stay
 out of model pickers.
 
-| Model ref                                  | Name                  | Context   | Max output |
-| ------------------------------------------ | --------------------- | --------- | ---------- |
-| `nvidia/nvidia/nemotron-3-ultra-550b-a55b` | Nemotron 3 Ultra 550B | 1,048,576 | 8,192      |
-| `nvidia/nvidia/nemotron-3-super-120b-a12b` | Nemotron 3 Super 120B | 1,000,000 | 8,192      |
-| `nvidia/z-ai/glm-5.2`                      | GLM 5.2               | 202,752   | 8,192      |
-| `nvidia/moonshotai/kimi-k2.6`              | Kimi K2.6             | 262,144   | 65,536     |
-| `nvidia/minimaxai/minimax-m3`              | Minimax M3            | 196,608   | 8,192      |
-| `nvidia/deepseek-ai/deepseek-v4-pro`       | DeepSeek V4 Pro       | 262,144   | 16,384     |
+| Model ref                                      | Name                       | Context   | Max output |
+| ---------------------------------------------- | -------------------------- | --------- | ---------- |
+| `nvidia/nvidia/nemotron-3-ultra-550b-a55b`     | Nemotron 3 Ultra 550B      | 1,048,576 | 8,192      |
+| `nvidia/nvidia/nemotron-3.5-lightning-30b-a3b` | Nemotron 3.5 Lightning 30B | 1,048,576 | 16,384     |
+| `nvidia/nvidia/nemotron-3-super-120b-a12b`     | Nemotron 3 Super 120B      | 1,000,000 | 8,192      |
+| `nvidia/z-ai/glm-5.2`                          | GLM 5.2                    | 202,752   | 8,192      |
+| `nvidia/moonshotai/kimi-k2.6`                  | Kimi K2.6                  | 262,144   | 65,536     |
+| `nvidia/minimaxai/minimax-m3`                  | Minimax M3                 | 196,608   | 8,192      |
+| `nvidia/deepseek-ai/deepseek-v4-pro`           | DeepSeek V4 Pro            | 262,144   | 16,384     |
 
 The full compatibility catalog also retains these shipped refs for existing
 configurations and migration: `nvidia/qwen/qwen3.5-397b-a17b`,
 `nvidia/moonshotai/kimi-k2.5`, `nvidia/z-ai/glm-5.1`, `nvidia/z-ai/glm5`, and
 `nvidia/minimaxai/minimax-m2.7`. These references stay hidden from bundled and
-offline model pickers unless NVIDIA republishes them in its featured catalog.
+offline model pickers unless NVIDIA republishes them in its inference inventory.
 NVIDIA has retired the Qwen endpoint, so requests using its model reference no
 longer work. Migrate existing Qwen configurations to an active model.
 
@@ -128,11 +152,11 @@ longer work. Migrate existing Qwen configurations to an active model.
   </Accordion>
 
   <Accordion title="Catalog and pricing">
-    OpenClaw prefers NVIDIA's public featured-model catalog when NVIDIA auth is
-    configured and caches it for 24 hours. The bundled selectable fallback is a
-    static snapshot of NVIDIA's featured-model catalog; deprecated exact-reference
-    compatibility rows stay hidden from that fallback. Fresh featured rows can
-    restore models that NVIDIA has republished. Costs default to `0` in source
+    OpenClaw uses NVIDIA's inference inventory for availability and its featured
+    feed for ranking. Exact bundled metadata preserves reasoning and image
+    capabilities omitted by the featured feed. Deprecated exact-reference
+    compatibility rows stay hidden from the offline fallback; fresh inventory
+    can restore models that NVIDIA has republished. Costs default to `0` in source
     since NVIDIA currently offers free API access for the listed models.
   </Accordion>
 

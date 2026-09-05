@@ -285,7 +285,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
             }
         }
         let configuration = Subprocess.Configuration(
-            .path(.init(request.invocation.executable)),
+            executable: .path(.init(request.invocation.executable)),
             arguments: Arguments(request.invocation.arguments),
             environment: ManagedProcess.environment(from: environment),
             workingDirectory: request.invocation.cwd.map { .init($0.path) })

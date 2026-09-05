@@ -187,6 +187,7 @@ function resolvePhysicalStores(params: {
       });
       const physical: PhysicalStore = {
         databaseAgentId: normalizeAgentId(resolved.agentId ?? target.agentId),
+        ownerStorePath: target.storePath,
         path: resolved.path,
       };
       resolvePhysicalPathIdentity(physical.path);
@@ -277,6 +278,7 @@ function ledgerMatches(
 }
 
 function writeLedger(params: {
+  beforePersistentApply?: () => void;
   env: NodeJS.ProcessEnv;
   identity: Omit<LedgerReport, "outcomes" | "status" | "version">;
   now: number;
@@ -292,6 +294,7 @@ function writeLedger(params: {
   const reportJson = JSON.stringify(report);
   const identityHash = createHash("sha256").update(JSON.stringify(params.identity)).digest("hex");
   const runId = `${SOURCE_KEY}:${identityHash.slice(0, 24)}`;
+  params.beforePersistentApply?.();
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = getNodeSqliteKysely<LedgerDatabase>(db);
@@ -352,14 +355,9 @@ function writeLedger(params: {
 }
 
 /** Migrates retired agent-owned session keys without adding runtime read aliases. */
-async function migrateLegacyMainSessionKeysInternal(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  forceScan?: boolean;
-  legacyAgentId?: string;
-  mode: LegacyMainSessionMigrationMode;
-  now?: () => number;
-}): Promise<LegacyMainSessionMigrationResult> {
+async function migrateLegacyMainSessionKeysInternal(
+  params: Parameters<typeof migrateLegacyMainSessionKeys>[0],
+): Promise<LegacyMainSessionMigrationResult> {
   const env = params.env ?? process.env;
   const legacyAgentId = normalizeAgentId(params.legacyAgentId ?? "main");
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
@@ -514,6 +512,7 @@ async function migrateLegacyMainSessionKeysInternal(params: {
     isSameOpenClawAgentDatabasePath(store.path, destinationResolved.path),
   ) ?? {
     databaseAgentId: normalizeAgentId(destinationResolved.agentId ?? ownerAgentId),
+    ownerStorePath: destinationLogical,
     path: destinationResolved.path,
   };
 
@@ -546,6 +545,7 @@ async function migrateLegacyMainSessionKeysInternal(params: {
       };
       if (params.mode === "doctor-fix") {
         const repaired = await repairDivergentClaims({
+          beforePersistentApply: params.beforePersistentApply,
           canonicalKey,
           claims: divergentClaims,
           destination,
@@ -575,6 +575,7 @@ async function migrateLegacyMainSessionKeysInternal(params: {
       };
       if (params.mode === "doctor-fix") {
         const repaired = await repairDivergentClaims({
+          beforePersistentApply: params.beforePersistentApply,
           canonicalKey,
           claims: aliases,
           destination,
@@ -595,6 +596,7 @@ async function migrateLegacyMainSessionKeysInternal(params: {
     }
 
     const outcome = await processIdenticalClaims({
+      beforePersistentApply: params.beforePersistentApply,
       aliases,
       ...(destinationCanonical ? { canonical: destinationCanonical } : {}),
       canonicalKey,
@@ -635,6 +637,7 @@ async function migrateLegacyMainSessionKeysInternal(params: {
         );
   if (complete && params.mode !== "detect") {
     writeLedger({
+      beforePersistentApply: params.beforePersistentApply,
       env,
       identity: { ...identityBase, sourceLayout: resolveSourceLayout(resolved) },
       now: params.now?.() ?? Date.now(),
@@ -657,6 +660,7 @@ async function migrateLegacyMainSessionKeysInternal(params: {
 }
 
 export async function migrateLegacyMainSessionKeys(params: {
+  beforePersistentApply?: () => void;
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   /** Bypass the startup ledger shortcut and verify the physical legacy stores. */
@@ -668,6 +672,8 @@ export async function migrateLegacyMainSessionKeys(params: {
   try {
     return await migrateLegacyMainSessionKeysInternal(params);
   } catch (error) {
+    // Lost caller authority must abort setup, not become a retryable store warning.
+    params.beforePersistentApply?.();
     if (params.mode === "doctor-fix") {
       throw error;
     }

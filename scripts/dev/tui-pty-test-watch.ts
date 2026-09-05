@@ -1,11 +1,12 @@
 // Tui Pty Test Watch script supports OpenClaw repository automation.
-import { spawn } from "node:child_process";
 import { mkdir, open, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { terminateManagedChild } from "../lib/managed-child-process.mts";
 import { sleep as delay } from "../lib/sleep.mjs";
+import { resolveVitestHomeSelection } from "../lib/vitest-home-selection.mts";
+import { spawnOwnedVitestProcess } from "../lib/vitest-process.mts";
 
 type Options = {
   altScreen: boolean;
@@ -244,9 +245,13 @@ async function main(): Promise<void> {
   const useAltScreen = shouldUseAltScreen(options);
   await createMirrorFile(options.mirrorPath);
 
-  const child = spawn(
-    process.execPath,
-    [
+  const { child, completion } = spawnOwnedVitestProcess({
+    homeMode: resolveVitestHomeSelection(
+      ["--config", "test/vitest/vitest.tui-pty.config.ts", ...options.vitestArgs],
+      { env: process.env },
+    ),
+    command: process.execPath,
+    args: [
       "--no-maglev",
       resolveVitestCliEntry(),
       "run",
@@ -256,9 +261,8 @@ async function main(): Promise<void> {
       "--reporter=dot",
       ...options.vitestArgs,
     ],
-    {
+    options: {
       cwd: process.cwd(),
-      detached: process.platform !== "win32",
       env: {
         ...process.env,
         OPENCLAW_TUI_PTY_MIRROR_PATH: options.mirrorPath,
@@ -270,7 +274,7 @@ async function main(): Promise<void> {
       },
       stdio: ["ignore", "pipe", "pipe"],
     },
-  );
+  });
 
   let childStdout: Buffer = Buffer.alloc(0);
   let childStderr: Buffer = Buffer.alloc(0);
@@ -387,15 +391,18 @@ async function main(): Promise<void> {
     childStderr = appendBufferTail(childStderr, chunk);
   });
 
-  type ChildExit = { code: number | null; signal: NodeJS.Signals | null };
-  let childExit: ChildExit | null = null;
-  const childFinished = new Promise<ChildExit>((resolve) => {
-    child.once("exit", (code, signal) => {
-      childExit = { code, signal };
+  let childFinished = false;
+  // Keep escalation and mirror reads alive until descendants and output have joined.
+  // Capture rejection now so polling cannot leave a spawn/join failure unhandled.
+  const childOutcome = completion
+    .then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    )
+    .finally(() => {
+      childFinished = true;
       childStopper.cancel();
-      resolve(childExit);
     });
-  });
 
   const parentSignals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
   for (const signal of parentSignals) {
@@ -404,7 +411,7 @@ async function main(): Promise<void> {
 
   try {
     for (;;) {
-      if (childExit) {
+      if (childFinished) {
         break;
       }
       const result = await readNewMirrorData(options.mirrorPath, mirrorOffset);
@@ -419,9 +426,10 @@ async function main(): Promise<void> {
 
     mirrorOffset = await drainNewMirrorData(options.mirrorPath, mirrorOffset, writeMirrorChunk);
   } finally {
-    if (!childExit) {
+    if (!childFinished) {
       stopChild();
     }
+    await childOutcome;
     for (const signal of parentSignals) {
       process.off(signal, stopChild);
     }
@@ -433,9 +441,11 @@ async function main(): Promise<void> {
     restoreScreen();
   }
 
-  if (!childExit) {
-    childExit = await childFinished;
+  const outcome = await childOutcome;
+  if ("error" in outcome) {
+    throw outcome.error;
   }
+  const childExit = outcome.result;
 
   if (childStdout.byteLength > 0) {
     process.stdout.write(childStdout);

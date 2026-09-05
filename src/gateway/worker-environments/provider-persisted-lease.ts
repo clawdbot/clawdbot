@@ -1,6 +1,6 @@
 import type { WorkerProvider } from "../../plugins/types.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
-import { resolveWorkerTransportModeError } from "./service-validation.js";
+import { resolveWorkerLeaseTransportError } from "./service-validation.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 
 export function requestStaleWorkerDestroy(
@@ -20,20 +20,16 @@ export function requestStaleWorkerDestroy(
 
 export async function retireMismatchedWorkerLease(
   record: WorkerEnvironmentRecord,
-  provider: WorkerProvider<"internal">,
+  provider: WorkerProvider,
   store: WorkerEnvironmentStore,
   finishDestroy: (
     record: WorkerEnvironmentRecord,
-    provider: WorkerProvider<"internal">,
+    provider: WorkerProvider,
   ) => Promise<WorkerEnvironmentRecord>,
 ): Promise<boolean> {
-  const transportMode = record.nodeDeviceId
-    ? "worker-turn"
-    : record.sshEndpoint
-      ? "remote-exec"
-      : undefined;
-  const modeError = transportMode
-    ? resolveWorkerTransportModeError(provider, transportMode)
+  const transport = record.nodeDeviceId ? "node" : record.sshEndpoint ? "ssh" : undefined;
+  const modeError = transport
+    ? resolveWorkerLeaseTransportError(provider, transport, record.profileSnapshot.executionMode)
     : undefined;
   if (!modeError || record.destroyRequestedAtMs !== null) {
     return false;

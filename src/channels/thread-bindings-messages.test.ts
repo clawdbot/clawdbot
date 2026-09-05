@@ -14,7 +14,7 @@ describe("thread-binding names", () => {
       maxAgeMs: 48 * 60 * 60 * 1000,
     });
 
-    expect(intro).toContain("idle auto-unfocus after 24h inactivity");
+    expect(intro).toContain("idle expiry after 24h inactivity");
     expect(intro).toContain("max age 48h");
   });
 

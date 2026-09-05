@@ -14,7 +14,7 @@ export function prepareSessionStoreOwnershipForWrite(params: {
   env: NodeJS.ProcessEnv;
   explicitSetPaths?: readonly (readonly string[])[];
   explicitSetValueSource?: OpenClawConfig;
-}): { config: OpenClawConfig; sameFixedSessionStore: boolean } {
+}): { config: OpenClawConfig; sameFixedSessionStore: boolean; ownershipPaths: string[][] } {
   const sameFixedSessionStore = isSameFixedSessionStoreConfig(
     params.currentStore,
     params.targetConfig.session?.store,
@@ -37,9 +37,13 @@ export function prepareSessionStoreOwnershipForWrite(params: {
   // A compatibility owner belongs to one physical fixed store. Copied runtime config must not
   // carry it to another store; only an owner-specific authored path establishes the new owner.
   if (sameFixedSessionStore || !previousOwner || suppliesDestinationOwner) {
-    return { config: params.targetConfig, sameFixedSessionStore };
+    return { config: params.targetConfig, sameFixedSessionStore, ownershipPaths: [] };
   }
   const agents = structuredClone(params.targetConfig.agents ?? {});
   unsetConfigValueAtPath(agents as Record<string, unknown>, SESSION_STORE_OWNER_PATH.slice(1));
-  return { config: { ...params.targetConfig, agents }, sameFixedSessionStore };
+  return {
+    config: { ...params.targetConfig, agents },
+    sameFixedSessionStore,
+    ownershipPaths: [[...SESSION_STORE_OWNER_PATH]],
+  };
 }

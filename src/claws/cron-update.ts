@@ -14,6 +14,7 @@ import {
 } from "./cron.js";
 import type { ClawCronJob, ClawManifest } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
+import { collectClawRollbackFailures } from "./update-rollback.js";
 
 export type ClawCronUpdateExecution = {
   appliedIds: string[];
@@ -88,8 +89,16 @@ export async function applyClawCronUpdate(
   const undo: Array<() => Promise<void>> = [];
   const appliedIds: string[] = [];
   const nowMs = options.nowMs ?? Date.now();
+  let agentAvailable = false;
 
+  const waitForAgent = async () => {
+    if (!agentAvailable) {
+      await gateway.waitUntilAgentAvailable?.(updatePlan.agentId);
+      agentAvailable = true;
+    }
+  };
   const add = async (ref: PersistedClawCronRef): Promise<string> => {
+    await waitForAgent();
     let raw: unknown;
     try {
       raw = await gateway.add(clawCronGatewayInput(updatePlan.agentId, ref));
@@ -103,14 +112,7 @@ export async function applyClawCronUpdate(
     return result.id;
   };
   const rollback = async () => {
-    const failures: string[] = [];
-    for (const revert of undo.toReversed()) {
-      try {
-        await revert();
-      } catch (error) {
-        failures.push(coerceErrorMessage(error));
-      }
-    }
+    const failures = await collectClawRollbackFailures(undo.toReversed());
     if (failures.length > 0) {
       throw new ClawCronUpdateError(failures.join("; "));
     }
@@ -159,6 +161,8 @@ export async function applyClawCronUpdate(
           `Target cron declaration ${JSON.stringify(action.id)} is missing.`,
         );
       }
+      // A readiness failure must leave this declaration's ownership untouched.
+      await waitForAgent();
       const pending = targetRef({ agentId: updatePlan.agentId, job, previous, nowMs });
       upsertRef(pending, options);
       const schedulerJobId = await add(pending);

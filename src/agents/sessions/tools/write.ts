@@ -20,15 +20,20 @@ import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/common.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { generateDiffString, generateUnifiedPatch } from "./edit-diff.js";
-import { withFileMutationQueue } from "./file-mutation-queue.js";
+import {
+  resolveFileMutationQueueKey,
+  withFileMutationQueueKeyResolution,
+} from "./file-mutation-queue.js";
 import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import {
   invalidArgText,
   normalizeDisplayText,
   replaceTabs,
+  reuseTextComponent,
   shortenPath,
   str,
+  trimTrailingEmptyLines,
 } from "./render-utils.js";
 import type { WriteToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -72,6 +77,8 @@ const WriteToolOutputSchema = Type.Union([
  * Override these to delegate file writing to remote systems (for example SSH).
  */
 export interface WriteOperations {
+  /** Resolve the physical identity used to order this backend's file operations. */
+  resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Write content to a file */
   writeFile: (absolutePath: string, content: string) => Promise<void>;
   /** Create directory recursively */
@@ -243,14 +250,6 @@ function updateWriteHighlightCacheIncremental(
   return cache;
 }
 
-function trimTrailingEmptyLines(lines: string[]): string[] {
-  let end = lines.length;
-  while (end > 0 && lines[end - 1] === "") {
-    end--;
-  }
-  return lines.slice(0, end);
-}
-
 function formatWriteCall(
   args: { path?: string; file_path?: string; content?: string } | undefined,
   options: ToolRenderResultOptions,
@@ -323,9 +322,6 @@ async function readOriginalWriteState(
   content: string,
   ops: WriteOperations,
 ): Promise<WriteToolPrecheck> {
-  if (!ops.statFile) {
-    return { state: "unknown" };
-  }
   let stat: PersistedFileStat | null;
   try {
     stat = await ops.statFile(absolutePath);
@@ -349,14 +345,16 @@ async function readOriginalWriteState(
 
   try {
     const originalContent = await ops.readFile(absolutePath);
-    const originalText = Buffer.isBuffer(originalContent)
-      ? originalContent.toString("utf8")
-      : originalContent;
+    const originalBytes = Buffer.isBuffer(originalContent)
+      ? originalContent
+      : Buffer.from(originalContent, "utf8");
+    const originalText = originalBytes.toString("utf8");
     if (Buffer.byteLength(originalText, "utf8") > WRITE_PRECHECK_READ_LIMIT_BYTES) {
       return { state: "unknown", beforeStat: stat, readAttempted: true };
     }
     return {
-      state: originalText === content ? "same" : "different",
+      // No-op receipts need the same encoded bytes as post-write verification.
+      state: originalBytes.equals(Buffer.from(content, "utf8")) ? "same" : "different",
       beforeStat: stat,
       beforeText: originalText,
       readAttempted: true,
@@ -519,6 +517,7 @@ export function createWriteToolDefinition(
   options?: WriteToolOptions,
 ): ToolDefinition<typeof writeSchema, WriteToolDetails> {
   const ops = options?.operations ?? defaultWriteOperations;
+  const resolvePath = options?.operations ? resolveToCwd : resolveLocalPathToCwd;
   return {
     name: "write",
     label: "write",
@@ -537,21 +536,20 @@ export function createWriteToolDefinition(
       void toolCallId;
       void onUpdate;
       void ctx;
-      const absolutePath = resolveToCwd(path, cwd);
+      const absolutePath = resolvePath(path, cwd);
       const dir = dirname(absolutePath);
-      return withFileMutationQueue(absolutePath, async () => {
+      const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
+      return withFileMutationQueueKeyResolution(queueKey, async () => {
         const precheck = await readOriginalWriteState(absolutePath, content, ops);
         if (signal?.aborted) {
           throw new Error("Operation aborted");
         }
-        // Terminal no-op: file already has identical content.
+        // No-op: file already has identical content. Not terminal — the model
+        // may still be mid-task and needs a continuation, not an ended turn.
         if (precheck.state === "same") {
-          return {
-            ...textResult(`No changes made to ${path}. The file already has identical content.`, {
-              changed: false,
-            } satisfies WriteToolDetails),
-            terminate: true,
-          };
+          return textResult(`No changes made to ${path}. The file already has identical content.`, {
+            changed: false,
+          } satisfies WriteToolDetails);
         }
         const details = await resolveWriteDetails({ absolutePath, content, ops, path, precheck });
         try {
@@ -621,9 +619,7 @@ export function createWriteToolDefinition(
         component.clear();
         return component;
       }
-      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(output);
-      return text;
+      return reuseTextComponent(context.lastComponent, output);
     },
   };
 }

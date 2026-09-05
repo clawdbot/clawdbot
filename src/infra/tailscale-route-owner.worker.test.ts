@@ -2,6 +2,8 @@ import { fork } from "node:child_process";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   TAILSCALE_ROUTE_OWNER_ARG,
   type TailscaleRouteOwnerMessage,
@@ -9,7 +11,8 @@ import {
 import { runTailscaleRouteOwner } from "./tailscale-route-owner.worker.js";
 
 function spawnRouteOwnerFixture() {
-  const workerPath = fileURLToPath(new URL("./tailscale-route-owner.worker.ts", import.meta.url));
+  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.tailscaleRouteOwner);
+  const workerPath = fileURLToPath(workerUrl);
   const fixturePath = fileURLToPath(
     new URL("../../test/fixtures/tailscale-foreground-fixture.mjs", import.meta.url),
   );
@@ -19,7 +22,10 @@ function spawnRouteOwnerFixture() {
       TAILSCALE_ROUTE_OWNER_ARG,
       JSON.stringify({ argv: [fixturePath, "serve", "--yes", "--bg=false", "18789"] }),
     ],
-    { execArgv: ["--import", "tsx"], stdio: ["ignore", "ignore", "ignore", "ipc"] },
+    {
+      execArgv: resolveRuntimeWorkerArgv(workerUrl).slice(0, -1),
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
+    },
   );
   const messages: TailscaleRouteOwnerMessage[] = [];
   worker.on("message", (message: TailscaleRouteOwnerMessage) => messages.push(message));
@@ -64,14 +70,16 @@ describe("Tailscale route owner", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32")(
-    "terminates the claim when the Gateway IPC owner disappears",
-    async () => {
+  it.runIf(process.platform !== "win32").each([false, true])(
+    "terminates the claim when the Gateway IPC owner disappears (ready=%s)",
+    async (waitForReady) => {
       const { messages, worker } = spawnRouteOwnerFixture();
       try {
-        await vi.waitFor(() => {
-          expect(messages).toContainEqual({ type: "ready" });
-        });
+        if (waitForReady) {
+          await vi.waitFor(() => {
+            expect(messages).toContainEqual({ type: "ready" });
+          });
+        }
         const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
           (resolve) => {
             worker.once("exit", (code, signal) => resolve({ code, signal }));

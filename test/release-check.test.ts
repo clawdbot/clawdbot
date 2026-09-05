@@ -36,7 +36,6 @@ import {
   createPackedPluginSdkTypescriptSmokeProject,
   createPackedCompletionSmokeEnv,
   createPackedCliSmokeEnv,
-  createPackedBundledPluginPostinstallEnv,
   MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES,
   PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS,
   PACKED_CLI_SMOKE_COMMANDS,
@@ -716,7 +715,9 @@ describe("collectMissingPackPaths", () => {
       "dist/agents/compaction-planning.worker.js",
       "dist/agents/model-provider-auth.worker.js",
       "dist/agents/prepared-model-catalog.worker.js",
+      "dist/config/sessions/disk-budget.worker.js",
       "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
+      "dist/config/sessions/session-model-context.worker.js",
       "dist/config/sessions/session-transcript-reconcile.worker.js",
       "dist/state/openclaw-database-verify.worker.js",
       "dist/system-agent/setup-inference-detection.worker.js",
@@ -742,7 +743,6 @@ describe("collectMissingPackPaths", () => {
         ...requiredBundledPluginPackPaths,
         ...requiredStaticExtensionAssetPaths,
         ...requiredPluginSdkPackPaths,
-        ...packagedPrivatePluginSdkRuntimePaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "scripts/prepare-git-hooks.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
@@ -756,7 +756,10 @@ describe("collectMissingPackPaths", () => {
         "dist/agents/compaction-planning.worker.js",
         "dist/agents/model-provider-auth.worker.js",
         "dist/agents/prepared-model-catalog.worker.js",
+        "dist/extensions/memory-core/memory-search-knn.child.js",
+        "dist/config/sessions/disk-budget.worker.js",
         "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
+        "dist/config/sessions/session-model-context.worker.js",
         "dist/config/sessions/session-transcript-reconcile.worker.js",
         "dist/state/openclaw-database-verify.worker.js",
         "dist/system-agent/setup-inference-detection.worker.js",
@@ -784,13 +787,14 @@ describe("collectMissingPackPaths", () => {
         writeFileSync(filePath, "export {};\n");
       }
       for (const relativePath of requiredBundledPluginPackPaths) {
-        if (!/^dist\/extensions\/[^/]+\/package\.json$/u.test(relativePath)) {
-          continue;
-        }
-        const packageJsonPath = join(packageRoot, relativePath);
-        mkdirSync(dirname(packageJsonPath), { recursive: true });
-        writeFileSync(packageJsonPath, "{}\n");
+        const artifactPath = join(packageRoot, relativePath);
+        mkdirSync(dirname(artifactPath), { recursive: true });
+        writeFileSync(artifactPath, relativePath.endsWith(".json") ? "{}\n" : "export {};\n");
       }
+      writeFileSync(
+        join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH),
+        JSON.stringify(requiredBundledPluginPackPaths),
+      );
       for (const relativePath of collectInstalledBundledRuntimeSidecarPaths(packageRoot)) {
         const sidecarPath = join(packageRoot, relativePath);
         mkdirSync(dirname(sidecarPath), { recursive: true });
@@ -877,15 +881,18 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
       );
 
       expect(packageJson.dependencies?.openclaw).toBe(`file:${packageRoot}`);
+      expect(packageJson.dependencies?.["@types/ws"]).toBe("8.18.1");
+      expect(packageJson.dependencies?.typescript).toBe("6.0.3");
       expect(packageJson.dependencies?.["@openclaw/ai"]).toBe("file:/tmp/openclaw-ai.tgz");
-      expect(tsconfig.compilerOptions?.skipLibCheck).toBe(true);
+      expect(tsconfig.compilerOptions?.skipLibCheck).toBe(false);
       expect(source).toBe(fixtureSource);
       expect(source).toContain('"openclaw/plugin-sdk/core"');
       expect(source).toContain('"openclaw/plugin-sdk/plugin-entry"');
       expect(source).toContain('"openclaw/plugin-sdk/channel-entry-contract"');
       expect(source).toContain('"openclaw/plugin-sdk/config-contracts"');
       expect(source).toContain('"openclaw/plugin-sdk/runtime-env"');
-      expect(source).toContain('"openclaw/plugin-sdk/conversation-binding-inspection-runtime"');
+      expect(source).toContain('"openclaw/plugin-sdk/tool-plugin"');
+      expect(source).toContain("defineToolPlugin");
       expect(source).toContain("type PublicPluginSdkModules = [");
       expect(source).not.toContain("TelegramAccountConfig");
       expect(source).not.toContain("openclaw/plugin-sdk/channel-contract-testing");
@@ -896,9 +903,13 @@ describe("createPackedPluginSdkTypescriptSmokeProject", () => {
 });
 
 describe("collectPackUnpackedSizeErrors", () => {
-  it("accepts pack results within the unpacked size budget", () => {
+  it.each([
+    { label: "ordinary package", unpackedSize: 120_354_302 },
+    { label: "required native payload", unpackedSize: 243_066_603 },
+    { label: "exact budget", unpackedSize: 235 * 1024 * 1024 },
+  ])("accepts pack results at or below the budget: $label", ({ unpackedSize }) => {
     expect(
-      collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.14.tgz", 120_354_302)]),
+      collectPackUnpackedSizeErrors([makePackResult("candidate.tgz", unpackedSize)]),
     ).toStrictEqual([]);
   });
 
@@ -910,11 +921,19 @@ describe("collectPackUnpackedSizeErrors", () => {
     ).toStrictEqual([]);
   });
 
-  it("flags oversized pack results that risk low-memory startup failures", () => {
+  it("rejects pack results one byte above the unpacked size budget", () => {
     expect(
-      collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.12.tgz", 224_002_564)]),
+      collectPackUnpackedSizeErrors([makePackResult("candidate.tgz", 235 * 1024 * 1024 + 1)]),
     ).toEqual([
-      "openclaw-2026.3.12.tgz unpackedSize 224002564 bytes (213.6 MiB) exceeds budget 213909504 bytes (204.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
+      "candidate.tgz unpackedSize 246415361 bytes (235.0 MiB) exceeds budget 246415360 bytes (235.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
+    ]);
+  });
+
+  it("honors an explicit lower unpacked size budget", () => {
+    expect(
+      collectPackUnpackedSizeErrors([makePackResult("candidate.tgz", 101)], { budgetBytes: 100 }),
+    ).toEqual([
+      expect.stringContaining("unpackedSize 101 bytes (0.0 MiB) exceeds budget 100 bytes"),
     ]);
   });
 
@@ -996,14 +1015,5 @@ describe("collectCriticalPluginSdkEntrypointSizeErrors", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
-});
-
-describe("createPackedBundledPluginPostinstallEnv", () => {
-  it("keeps packed postinstall on the lazy bundled dependency path", () => {
-    expect(createPackedBundledPluginPostinstallEnv({ PATH: "/usr/bin" })).toEqual({
-      PATH: "/usr/bin",
-      OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
-    });
   });
 });

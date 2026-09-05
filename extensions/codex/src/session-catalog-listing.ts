@@ -1,14 +1,15 @@
-import { listAgentIds, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginNodeHostCommand } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
+  publishSessionCatalogHost,
   sessionCatalogAdoptedSourceKey,
   type SessionCatalogEntrySnapshot,
   type SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CodexThreadTurnsListResponse } from "./app-server/protocol.js";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import { listAdoptedSessionEntries } from "./session-catalog-adoption.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
@@ -25,6 +26,7 @@ import {
   CODEX_APP_SERVER_THREADS_CAPABILITY,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+  CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
   CODEX_LOCAL_SESSION_HOST_ID,
   DEFAULT_TRANSCRIPT_PAGE_LIMIT,
   filterCatalogPageByTitle,
@@ -38,6 +40,7 @@ import {
   parseJsonParams,
   parseTranscriptPage,
   readBoundedOptionalString,
+  readControlCursor,
   readGatewayParams,
   readPageParams,
   requireOnlyKeys,
@@ -46,9 +49,14 @@ import {
 import {
   codexNodeTerminalCapability,
   createCodexTerminalNodeHostCommand,
-  requireCatalogEligibleThread,
+  createCodexTerminalStartNodeHostCommand,
   type CodexTerminalConfigSources,
 } from "./session-catalog-terminal.js";
+import {
+  parseCodexCatalogTranscriptPage,
+  readCodexCatalogTranscriptPage,
+  readLegacyCodexTranscriptPage,
+} from "./session-catalog-transcript.js";
 import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
@@ -67,6 +75,7 @@ async function listVisiblePage(params: {
   limit: number;
   onExcludedThread?: (thread: { threadId: string; rolloutPath?: string }) => Promise<void>;
   searchTerm?: string;
+  signal?: AbortSignal;
 }): Promise<CodexSessionCatalogPage> {
   const excluded = params.excludedThreadIds;
   const sessions: ReturnType<typeof parseCatalogPage>["sessions"] = [];
@@ -74,7 +83,9 @@ async function listVisiblePage(params: {
   let nextCursor: string | undefined;
   let backwardsCursor: string | undefined;
   const seenCursors = new Set<string>();
+  // An issued page still settles; retirement stops its follow-up reads and classification.
   for (let pageIndex = 0; pageIndex < MAX_TITLE_SEARCH_CATALOG_PAGES; pageIndex += 1) {
+    params.signal?.throwIfAborted();
     let excludedFromPage = false;
     const rawPage = await params.control.listPage({
       limit: params.limit - sessions.length,
@@ -82,12 +93,14 @@ async function listVisiblePage(params: {
       ...(params.searchTerm ? { searchTerm: params.searchTerm } : {}),
       ...(params.cwd ? { cwd: params.cwd } : {}),
     });
+    params.signal?.throwIfAborted();
     const page = filterCatalogPageByTitle(parseCatalogPage(rawPage), params.searchTerm);
     if (pageIndex === 0) {
       backwardsCursor = page.backwardsCursor;
     }
     for (const managed of rawPage.managedThreads ?? []) {
       excludedFromPage = true;
+      params.signal?.throwIfAborted();
       await params.onExcludedThread?.(managed);
     }
     for (const session of page.sessions) {
@@ -96,6 +109,7 @@ async function listVisiblePage(params: {
         continue;
       }
       excludedFromPage = true;
+      params.signal?.throwIfAborted();
       await params.onExcludedThread?.({ threadId: session.threadId });
     }
     nextCursor = page.nextCursor;
@@ -123,6 +137,7 @@ async function listGatewayHost(params: {
   query: ReturnType<typeof readGatewayParams>;
   runtime: PluginRuntime;
   sessionEntries?: SessionCatalogEntrySnapshot;
+  signal?: AbortSignal;
   source?: CodexCatalogHome;
   excludedThreadIds?: ReadonlySet<string>;
   onExcludedThread?: (thread: { threadId: string; rolloutPath?: string }) => Promise<void>;
@@ -138,7 +153,9 @@ async function listGatewayHost(params: {
       limit: params.query.limitPerHost,
       onExcludedThread: params.onExcludedThread,
       searchTerm: params.query.search,
+      signal: params.signal,
     });
+    params.signal?.throwIfAborted();
     const adoptedSessions = await listAdoptedSessionEntries({
       agentId: params.agentId,
       bindingStore: params.bindingStore,
@@ -188,11 +205,13 @@ export async function listCodexSessionCatalog(params: {
   query?: CodexSessionCatalogParams;
   listNodes?: Parameters<SessionCatalogProvider["list"]>[0]["listNodes"];
   onHost?: (host: CodexSessionCatalogHost) => void;
+  waitUntil?: (completion: Promise<void>) => void;
+  signal?: AbortSignal;
   sessionEntries?: SessionCatalogEntrySnapshot;
   includeLocal?: boolean;
   localHomes?: CodexCatalogHome[];
 }): Promise<CodexSessionCatalogResult> {
-  const agentId = resolveSessionAgentIds({
+  const agentId = resolveSessionAgentIdsStrict({
     config: params.config ?? {},
     agentId: params.agentId,
   }).sessionAgentId;
@@ -208,6 +227,7 @@ export async function listCodexSessionCatalog(params: {
       ? [undefined]
       : []);
   const managedThreads = await params.bindingStore.managedThreads?.snapshot();
+  params.signal?.throwIfAborted();
   const fallbackSource = params.control.homesForAgent(agentId)[0];
   const localHosts = localSources.map((source) =>
     (() => {
@@ -223,6 +243,7 @@ export async function listCodexSessionCatalog(params: {
         query,
         runtime: params.runtime,
         sessionEntries: params.sessionEntries,
+        signal: params.signal,
         excludedThreadIds: managedThreadIds,
         ...(ownershipSource && params.bindingStore.managedThreads
           ? {
@@ -242,9 +263,7 @@ export async function listCodexSessionCatalog(params: {
     })(),
   );
   for (const host of localHosts) {
-    if (params.onHost) {
-      void host.then(params.onHost).catch(() => undefined);
-    }
+    publishSessionCatalogHost(params, host);
   }
   const wantsNodes =
     !requestedHostIds || query.hostIds?.some((hostId) => hostId.startsWith("node:"));
@@ -257,7 +276,8 @@ export async function listCodexSessionCatalog(params: {
       .filter(
         (node) =>
           node.gatewayLocal !== true &&
-          node.commands?.includes(CODEX_APP_SERVER_THREADS_LIST_COMMAND) &&
+          (node.commands?.includes(CODEX_APP_SERVER_THREADS_LIST_COMMAND) ||
+            codexNodeTerminalCapability(node).canStartTerminal) &&
           (!requestedHostIds || requestedHostIds.has(`node:${node.nodeId}`)),
       )
       .slice(0, MAX_HOST_COUNT - localHosts.length);
@@ -267,6 +287,7 @@ export async function listCodexSessionCatalog(params: {
       label: "Paired nodes",
       kind: "node",
       connected: false,
+      canStartTerminal: false,
       sessions: [],
       error: catalogError("NODE_LIST_FAILED", error),
     };
@@ -275,23 +296,26 @@ export async function listCodexSessionCatalog(params: {
       hosts: [...(await Promise.all(localHosts)), registryHost],
     };
   }
+  params.signal?.throwIfAborted();
   const adoptedNodeSessions = listNodeAdoptedSessionEntries({
     agentId,
     config: params.config,
     runtime: params.runtime,
     sessionEntries: params.sessionEntries,
   });
-  const nodeHosts = nodes.toSorted(compareNodeLabels).map(async (node) => {
-    const host = await listPairedNode({
+  const nodeHosts = nodes.toSorted(compareNodeLabels).map((node) =>
+    listPairedNode({
       agentId,
       runtime: params.runtime,
       node,
       query,
       adoptedSessions: adoptedNodeSessions,
+      terminalCapabilities: codexNodeTerminalCapability(node),
+      waitUntil: params.waitUntil,
+      signal: params.signal,
       ...(params.onHost ? { onHost: params.onHost } : {}),
-    });
-    return Object.assign(host, codexNodeTerminalCapability(node));
-  });
+    }),
+  );
   return { hosts: await Promise.all([...localHosts, ...nodeHosts]) };
 }
 
@@ -310,7 +334,10 @@ export function createCodexSessionCatalogNodeHostCommands(
     }
     const requestedAgentId = readBoundedOptionalString(parsed, "agentId", MAX_SESSION_ID_LENGTH);
     const config = configSources.getRuntimeConfig() ?? {};
-    const agentId = resolveSessionAgentIds({ config, agentId: requestedAgentId }).sessionAgentId;
+    const agentId = resolveSessionAgentIdsStrict({
+      config,
+      agentId: requestedAgentId,
+    }).sessionAgentId;
     if (!listAgentIds(config).includes(agentId)) {
       throw new CatalogParamsError(`unknown Codex session catalog agent: ${agentId}`);
     }
@@ -325,7 +352,7 @@ export function createCodexSessionCatalogNodeHostCommands(
       paramsJSON: JSON.stringify(request),
     };
   };
-  return [
+  const commands: OpenClawPluginNodeHostCommand[] = [
     {
       command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
       cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
@@ -373,7 +400,7 @@ export function createCodexSessionCatalogNodeHostCommands(
         const request = bindRequest(paramsJSON);
         const action = readNodeTranscriptParams(request.params);
         try {
-          await requireCatalogEligibleThread(request.control, action.threadId);
+          await request.control.requireEligibleThread(action.threadId);
           const page = parseTranscriptPage(
             await request.control.listTurnPage({
               threadId: action.threadId,
@@ -392,8 +419,31 @@ export function createCodexSessionCatalogNodeHostCommands(
         }
       },
     },
+    {
+      command: CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
+      cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
+      dangerous: false,
+      handle: async (paramsJSON) => {
+        const request = bindRequest(paramsJSON);
+        const action = readNodeTranscriptParams(request.params);
+        try {
+          return JSON.stringify(await readCodexCatalogTranscriptPage(request.control, action));
+        } catch (error) {
+          if (error instanceof CatalogParamsError) {
+            throw error;
+          }
+          throw new Error("Codex app-server transcript is unavailable", { cause: error });
+        }
+      },
+    },
     createCodexTerminalNodeHostCommand(bindRequest, configSources),
+    createCodexTerminalStartNodeHostCommand(),
   ];
+  // MacNodeHostWorker sets app ownership at launch. Its native catalog may use a
+  // different home, so the embedded worker must not advertise a replacement reader.
+  return process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app"
+    ? commands.filter(({ command }) => command !== CODEX_CATALOG_TRANSCRIPT_READ_COMMAND)
+    : commands;
 }
 
 type CodexNodeSessionTranscriptParams = {
@@ -431,10 +481,6 @@ function readBoundedLimit(value: unknown, key: string, fallback: number, max: nu
   return value as number;
 }
 
-function flattenTranscriptPageDesc(page: CodexThreadTurnsListResponse) {
-  return page.data.flatMap((turn) => turn.items.toReversed());
-}
-
 /** Reads the persisted transcript for a Gateway-local or paired-node Codex session. */
 export async function readCodexSessionTranscript(params: {
   agentId: string;
@@ -446,24 +492,25 @@ export async function readCodexSessionTranscript(params: {
   limit: number;
   source?: CodexCatalogHome;
 }): Promise<CodexSessionTranscriptPage> {
+  const cursor = readControlCursor(params.cursor, "transcript request");
+  // The read RPC leaves `limit` open-ended; every provider owns its own ceiling.
+  const limit = readBoundedLimit(
+    params.limit,
+    "limit",
+    DEFAULT_TRANSCRIPT_PAGE_LIMIT,
+    MAX_TRANSCRIPT_PAGE_LIMIT,
+  );
   if (params.source || params.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
-    await requireCatalogEligibleThread(params.control, params.threadId);
-    const listParams = {
+    const page = await readCodexCatalogTranscriptPage(params.control, {
       threadId: params.threadId,
-      limit: params.limit,
-      sortDirection: "desc" as const,
-      itemsView: "full" as const,
-      ...(params.cursor ? { cursor: params.cursor } : {}),
-    };
-    const response = await params.control.listTurnPage(listParams);
-    const page = parseTranscriptPage(response);
+      limit,
+      cursor,
+    });
     return {
       hostId: params.hostId,
       label: params.source?.label ?? "Local Codex",
       threadId: params.threadId,
-      items: flattenTranscriptPageDesc(page),
-      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
-      ...(page.backwardsCursor ? { backwardsCursor: page.backwardsCursor } : {}),
+      ...page,
     };
   }
 
@@ -477,25 +524,40 @@ export async function readCodexSessionTranscript(params: {
   if (!node) {
     throw new CatalogParamsError("paired-node Codex session host is offline or unavailable");
   }
-  const raw = await params.runtime.nodes.invoke({
-    nodeId,
-    command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
-    params: {
-      agentId: params.agentId,
-      threadId: params.threadId,
-      limit: params.limit,
-      ...(params.cursor ? { cursor: params.cursor } : {}),
-    },
-    timeoutMs: NODE_INVOKE_TIMEOUT_MS,
-    scopes: ["operator.write"],
-  });
-  const page = parseTranscriptPage(unwrapNodeInvokePayload(raw));
+  const invoke = async (command: string, request: { cursor?: string; limit: number }) =>
+    unwrapNodeInvokePayload(
+      await params.runtime.nodes.invoke({
+        nodeId,
+        command,
+        params: {
+          agentId: params.agentId,
+          threadId: params.threadId,
+          ...request,
+        },
+        timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+        scopes: ["operator.write"],
+      }),
+    );
+  // The shipped turns command is also consumed by native continuation. Older/native
+  // nodes keep that contract; upgraded headless nodes bound before node serialization.
+  const page = node.commands?.includes(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND)
+    ? parseCodexCatalogTranscriptPage(
+        await invoke(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND, { cursor, limit }),
+      )
+    : await readLegacyCodexTranscriptPage(
+        async ({ cursor: turnCursor, limit: turnLimit }) =>
+          parseTranscriptPage(
+            await invoke(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND, {
+              cursor: turnCursor,
+              limit: turnLimit,
+            }),
+          ),
+        { threadId: params.threadId, cursor, limit },
+      );
   return {
     hostId: params.hostId,
     label: nodeLabel(node),
     threadId: params.threadId,
-    items: flattenTranscriptPageDesc(page),
-    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
-    ...(page.backwardsCursor ? { backwardsCursor: page.backwardsCursor } : {}),
+    ...page,
   };
 }

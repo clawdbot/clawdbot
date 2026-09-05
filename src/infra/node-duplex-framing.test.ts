@@ -17,7 +17,10 @@ function dataFrame(overrides: Record<string, unknown> = {}): string {
 }
 
 describe("node duplex message framing", () => {
-  it("transfers binary messages larger than transport frames in both directions", async () => {
+  it.each([
+    ["ArrayBuffer", ArrayBuffer],
+    ["SharedArrayBuffer", SharedArrayBuffer],
+  ] as const)("transfers exact %s views in both directions", async (_name, BackingBuffer) => {
     const outboundFrames: string[] = [];
     const inboundFrames: string[] = [];
     const leftMessages: Uint8Array[] = [];
@@ -41,13 +44,17 @@ describe("node duplex message framing", () => {
       rightMessages.push(message);
     });
 
-    const outbound = Uint8Array.from({ length: 40_000 }, (_, index) => index % 251);
-    const inbound = Uint8Array.from({ length: 25_000 }, (_, index) => 255 - (index % 251));
+    const outboundBacking = new Uint8Array(new BackingBuffer(40_032)).fill(0xa5);
+    const outbound = outboundBacking.subarray(17, 40_017);
+    outbound.set(Uint8Array.from({ length: 40_000 }, (_, index) => index % 251));
+    const inboundBacking = new Uint8Array(new BackingBuffer(25_032)).fill(0x5a);
+    const inbound = Buffer.from(inboundBacking.buffer, 11, 25_000);
+    inbound.set(Uint8Array.from({ length: 25_000 }, (_, index) => 255 - (index % 251)));
     await left.send(outbound);
     await right.send(inbound);
 
     expect(rightMessages).toEqual([outbound]);
-    expect(leftMessages).toEqual([inbound]);
+    expect(leftMessages).toEqual([new Uint8Array(inbound)]);
     expect(outboundFrames.length).toBeGreaterThan(2);
     expect(inboundFrames.length).toBeGreaterThan(2);
     expect([...outboundFrames, ...inboundFrames]).toSatisfy((frames: string[]) =>

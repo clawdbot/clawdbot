@@ -10,6 +10,8 @@ import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
 } from "../../sessions/session-lifecycle-admission.js";
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "./main-session-recovery-admission.js";
+import { getMainSessionRecoveryRetryCount } from "./main-session-recovery-state.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-restart-recovery-marking.js";
 import {
   DEFAULT_RECOVERY_DELAY_MS,
@@ -27,7 +29,7 @@ import {
   recoverStore,
 } from "./main-session-restart-recovery-store.js";
 
-type RecoveryCounts = { recovered: number; failed: number; skipped: number };
+type RecoveryCounts = { started: number; settled: number; failed: number; skipped: number };
 
 async function runRecoveryRetries(params: {
   initialDelayMs: number;
@@ -68,15 +70,15 @@ export async function recoverRestartAbortedMainSessions(params: {
   cfg?: OpenClawConfig;
   onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
   stateDir?: string;
-  resumedSessionKeys?: Set<string>;
+  handledSessionKeys?: Set<string>;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
   gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<RecoveryCounts> {
-  const result = { recovered: 0, failed: 0, skipped: 0 };
-  const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
+  const result = { started: 0, settled: 0, failed: 0, skipped: 0 };
+  const handledSessionKeys = params.handledSessionKeys ?? new Set<string>();
 
   for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
     if (params.shouldContinue?.() === false) {
@@ -87,21 +89,22 @@ export async function recoverRestartAbortedMainSessions(params: {
       onExhaustedTarget: params.onExhaustedTarget,
       storePath,
       stateDir: params.stateDir,
-      resumedSessionKeys,
+      handledSessionKeys,
       activeSessionIds: params.activeSessionIds,
       activeSessionKeys: params.activeSessionKeys,
       lifecycleGeneration: params.lifecycleGeneration,
       shouldContinue: params.shouldContinue,
       gatewayRuntime: params.gatewayRuntime,
     });
-    result.recovered += storeResult.recovered;
+    result.started += storeResult.started;
+    result.settled += storeResult.settled;
     result.failed += storeResult.failed;
     result.skipped += storeResult.skipped;
   }
 
-  if (result.recovered > 0 || result.failed > 0) {
+  if (result.started > 0 || result.settled > 0 || result.failed > 0) {
     mainSessionRecoveryLog.info(
-      `main-session restart recovery complete: recovered=${result.recovered} failed=${result.failed} skipped=${result.skipped}`,
+      `main-session restart recovery startup complete: started=${result.started} settled=${result.settled} failed=${result.failed} skipped=${result.skipped}`,
     );
   }
   return result;
@@ -163,7 +166,7 @@ async function recoverExpectedRestartRecovery(params: {
           })
         : undefined;
   if (!loadExpected()) {
-    return { recovered: 0, failed: 0, skipped: 0 };
+    return { started: 0, settled: 0, failed: 0, skipped: 0 };
   }
   const assertExpectedCurrent = () => {
     if (!loadExpected()) {
@@ -176,6 +179,7 @@ async function recoverExpectedRestartRecovery(params: {
   const admission = await beginSessionWorkAdmission({
     scope: params.storePath,
     identities: [params.sessionKey, params.expectedClaim?.canonicalSessionKey, expectedSessionId],
+    owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
     assertAllowed: assertExpectedCurrent,
     revalidateAllowed: assertExpectedCurrent,
   });
@@ -188,7 +192,7 @@ async function recoverExpectedRestartRecovery(params: {
           observationOnly: params.observationOnly,
           storePath: params.storePath,
           stateDir: params.stateDir,
-          resumedSessionKeys: new Set<string>(),
+          handledSessionKeys: new Set<string>(),
           expectedClaim: params.expectedClaim,
           expectedTarget: params.expectedTarget,
           sessionWorkAdmissionHandoffId: handoffId,
@@ -199,7 +203,6 @@ async function recoverExpectedRestartRecovery(params: {
     );
   } finally {
     cancelSessionWorkAdmissionHandoff(handoffId);
-    admission.release();
   }
 }
 
@@ -227,7 +230,7 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(param
         storePath: params.storePath,
         gatewayRuntime,
       });
-    });
+    }, "main-session:restart-recovery");
   void runRecoveryRetries({
     initialDelayMs: 0,
     maxRetries: params.maxRetries ?? MAX_RECOVERY_RETRIES,
@@ -242,13 +245,14 @@ export function scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease(param
         },
         storePath: params.storePath,
       });
-      if (result.failed === 0 && (result.recovered > 0 || !stillPending)) {
+      if (result.failed === 0 && (result.started > 0 || result.settled > 0 || !stillPending)) {
         return true;
       }
       if (
         finalAttempt &&
-        stillPending?.mainRestartRecovery?.chargedAttempts === MAX_RECOVERY_RETRIES &&
-        !stillPending.mainRestartRecovery.reservation
+        getMainSessionRecoveryRetryCount(stillPending?.mainRestartRecovery) ===
+          MAX_RECOVERY_RETRIES &&
+        !stillPending?.mainRestartRecovery?.reservation
       ) {
         // The last ambiguous dispatch consumed the final durable charge. One
         // exact observation tombstones exhaustion without dispatching again.
@@ -274,7 +278,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
   waitForStart?: () => Promise<void>;
   gatewayRuntime: GatewayRecoveryRuntime;
 }): { stop: () => Promise<void> } {
-  const resumedSessionKeys = new Set<string>();
+  const handledSessionKeys = new Set<string>();
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const abortController = new AbortController();
   let stopped = false;
@@ -301,32 +305,34 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
           exhaustedTargets.set(`${target.storePath}\u0000${target.sessionKey}`, target);
         },
         stateDir: params.stateDir,
-        resumedSessionKeys,
+        handledSessionKeys,
         lifecycleGeneration,
         shouldContinue,
         gatewayRuntime: params.gatewayRuntime,
       });
-    });
+    }, "main-session:startup-recovery");
   };
   const reconcileExhaustedTargets = async (targets: Iterable<ExhaustedRestartRecoveryTarget>) => {
     const outcomes = await Promise.allSettled(
       [...targets].map((target) =>
-        runWithGatewayIndependentRootWorkAdmission(async () =>
-          recoverExpectedRestartRecovery({
-            cfg: params.getConfig(),
-            expectedTarget: {
-              canonicalSessionKey: target.canonicalSessionKey,
-              sessionId: target.sessionId,
+        runWithGatewayIndependentRootWorkAdmission(
+          async () =>
+            recoverExpectedRestartRecovery({
+              cfg: params.getConfig(),
+              expectedTarget: {
+                canonicalSessionKey: target.canonicalSessionKey,
+                sessionId: target.sessionId,
+                sessionKey: target.sessionKey,
+              },
+              lifecycleGeneration,
+              observationOnly: true,
               sessionKey: target.sessionKey,
-            },
-            lifecycleGeneration,
-            observationOnly: true,
-            sessionKey: target.sessionKey,
-            shouldContinue,
-            storePath: target.storePath,
-            stateDir: params.stateDir,
-            gatewayRuntime: params.gatewayRuntime,
-          }),
+              shouldContinue,
+              storePath: target.storePath,
+              stateDir: params.stateDir,
+              gatewayRuntime: params.gatewayRuntime,
+            }),
+          "main-session:target-recovery",
         ),
       ),
     );

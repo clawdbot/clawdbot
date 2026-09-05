@@ -49,7 +49,14 @@ export const BOARD_WIDGET_SNAPSHOT_COLUMNS = [
 
 const BOARD_GRANT_SEMANTICS_VERSION = 2;
 
+type BoardWidgetContentOwnership = {
+  contentOwner: BoardWidgetMaterializedPutParams["content"]["kind"];
+  registeredContentKind?: string;
+};
+
 type ParsedBoardManifest = {
+  contentOwner?: BoardWidgetContentOwnership["contentOwner"];
+  registeredContentKind?: string;
   declared?: BoardWidgetDeclared;
   declarationInvalid?: true;
   grantSemanticsVersion?: number;
@@ -74,6 +81,8 @@ type ParsedPluginContent = ParsedTrustedPluginContent | ParsedRegisteredPluginCo
 
 export function parseManifest(value: string): ParsedBoardManifest {
   const parsed = JSON.parse(value) as {
+    contentOwner?: unknown;
+    registeredContentKind?: unknown;
     netOrigins?: unknown;
     tools?: unknown;
     grantSemanticsVersion?: unknown;
@@ -83,6 +92,33 @@ export function parseManifest(value: string): ParsedBoardManifest {
     mcpAppInteractive?: unknown;
     mcpAppInstanceId?: unknown;
     registeredInstanceId?: unknown;
+  };
+  const contentOwnerPresent = Object.hasOwn(parsed, "contentOwner");
+  const contentOwner =
+    parsed.contentOwner === "html" ||
+    parsed.contentOwner === "mcp-app" ||
+    parsed.contentOwner === "plugin" ||
+    parsed.contentOwner === "registered"
+      ? parsed.contentOwner
+      : undefined;
+  const registeredContentKind =
+    typeof parsed.registeredContentKind === "string" &&
+    /^[a-z][a-z0-9-]{0,31}$/u.test(parsed.registeredContentKind)
+      ? parsed.registeredContentKind
+      : undefined;
+  if (
+    (contentOwnerPresent && contentOwner === undefined) ||
+    (contentOwner === "registered" && registeredContentKind === undefined) ||
+    (contentOwner !== "registered" && Object.hasOwn(parsed, "registeredContentKind"))
+  ) {
+    throw new BoardValidationError(
+      "invalid_operation",
+      "board widget content ownership is invalid",
+    );
+  }
+  const ownership: Pick<ParsedBoardManifest, "contentOwner" | "registeredContentKind"> = {
+    ...(contentOwner ? { contentOwner } : {}),
+    ...(registeredContentKind ? { registeredContentKind } : {}),
   };
   const netOrigins = Array.isArray(parsed.netOrigins)
     ? parsed.netOrigins.filter((entry): entry is string => typeof entry === "string")
@@ -142,6 +178,7 @@ export function parseManifest(value: string): ParsedBoardManifest {
       ...(tools?.length ? { tools } : {}),
     });
     return {
+      ...ownership,
       ...(declared ? { declared } : {}),
       ...(parsed.grantSemanticsVersion === BOARD_GRANT_SEMANTICS_VERSION
         ? { grantSemanticsVersion: BOARD_GRANT_SEMANTICS_VERSION }
@@ -158,13 +195,14 @@ export function parseManifest(value: string): ParsedBoardManifest {
     if (error instanceof BoardValidationError) {
       // Unsafe manifests persisted before declaration validation lose their
       // entire authority; retaining a partial old grant would widen access.
-      return { declarationInvalid: true };
+      return { ...ownership, declarationInvalid: true };
     }
     throw error;
   }
 }
 
 export function serializeManifest(
+  ownership: BoardWidgetContentOwnership,
   declared: BoardWidgetDeclared | undefined,
   grantState: BoardWidget["grantState"],
   frameAuthority?:
@@ -174,6 +212,7 @@ export function serializeManifest(
   nameIdentity?: BoardWidgetNameIdentityMarker,
 ): string {
   return JSON.stringify({
+    ...ownership,
     ...declared,
     ...(widgetOptions?.presentation ? { presentation: widgetOptions.presentation } : {}),
     ...(widgetOptions?.heightMode ? { heightMode: widgetOptions.heightMode } : {}),
@@ -202,6 +241,12 @@ export function createBoardWidgetContentFields(
   now: number,
 ) {
   const manifest = serializeManifest(
+    {
+      contentOwner: params.content.kind,
+      ...(params.content.kind === "registered"
+        ? { registeredContentKind: params.content.contentKind }
+        : {}),
+    },
     params.declared,
     grantState,
     params.content.kind === "mcp-app"
@@ -407,6 +452,37 @@ export function rowToWidget(
     row.content_kind === "plugin" && row.descriptor_json !== null
       ? parsePluginContent(row.descriptor_json)
       : undefined;
+  // Pre-ownership rows encode registered source in their descriptor; its kind
+  // is the exact pluginKind suffix guaranteed by the content-kind registrar.
+  const persistedOwner =
+    pluginContent && "source" in pluginContent
+      ? "registered"
+      : row.content_kind === "html" ||
+          row.content_kind === "mcp-app" ||
+          row.content_kind === "plugin"
+        ? row.content_kind
+        : undefined;
+  if (persistedOwner === undefined) {
+    throw new BoardValidationError("invalid_operation", "board widget content owner is invalid");
+  }
+  const persistedRegisteredContentKind =
+    persistedOwner === "registered"
+      ? pluginContent!.pluginKind.match(/^[a-z0-9][a-z0-9-]{0,63}:([a-z][a-z0-9-]{0,31})$/u)?.[1]
+      : undefined;
+  if (
+    (manifest.contentOwner !== undefined && manifest.contentOwner !== persistedOwner) ||
+    (persistedOwner === "registered" &&
+      (persistedRegisteredContentKind === undefined ||
+        (manifest.registeredContentKind !== undefined &&
+          manifest.registeredContentKind !== persistedRegisteredContentKind)))
+  ) {
+    throw new BoardValidationError(
+      "invalid_operation",
+      "board widget content ownership does not match persisted content",
+    );
+  }
+  const contentOwner = manifest.contentOwner ?? persistedOwner;
+  const registeredContentKind = manifest.registeredContentKind ?? persistedRegisteredContentKind;
   const instanceId =
     row.content_kind === "mcp-app"
       ? manifest.mcpAppInstanceId
@@ -418,6 +494,8 @@ export function rowToWidget(
     tabId: row.tab_id,
     ...(row.title !== null ? { title: row.title } : {}),
     contentKind: row.content_kind as BoardWidget["contentKind"],
+    contentOwner,
+    ...(registeredContentKind ? { registeredContentKind } : {}),
     ...(manifest.presentation ? { presentation: manifest.presentation } : {}),
     ...(manifest.heightMode ? { heightMode: manifest.heightMode } : {}),
     ...(pluginContent

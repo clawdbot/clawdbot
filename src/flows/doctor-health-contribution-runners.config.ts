@@ -27,6 +27,21 @@ function shouldSkipLegacyUpdateDoctorConfigWrite(env: NodeJS.ProcessEnv): boolea
   );
 }
 
+/** Removes queued retired profiles after any config references have been durably repaired. */
+export async function runRetiredAuthProfileCleanup(ctx: DoctorHealthFlowContext): Promise<void> {
+  const retiredAuthProfileCleanupPlans = ctx.configResult.retiredAuthProfileCleanupPlans;
+  if (!retiredAuthProfileCleanupPlans?.length) {
+    return;
+  }
+  const { removeAuthProfilesAcrossOwnerStores } = await import("../agents/auth-profiles.js");
+  for (const plan of retiredAuthProfileCleanupPlans) {
+    if (!(await removeAuthProfilesAcrossOwnerStores(plan))) {
+      throw new Error(`Failed to remove retired auth profile "${plan.profileIds.join(", ")}".`);
+    }
+  }
+  delete ctx.configResult.retiredAuthProfileCleanupPlans;
+}
+
 export async function runWriteConfigHealth(
   ctx: DoctorHealthFlowContext,
   options: { runPostWriteRepairs?: boolean } = {},
@@ -37,7 +52,7 @@ export async function runWriteConfigHealth(
     return;
   }
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
-  const { replaceConfigFile } = await import("../config/config.js");
+  const { transformConfigFile } = await import("../config/config.js");
   const { logConfigUpdated } = await import("../config/logging.js");
   const { shortenHomePath } = await import("../utils.js");
   const configResultWritePending =
@@ -58,18 +73,33 @@ export async function runWriteConfigHealth(
     }
     const legacyParentVersionOverride =
       resolveLegacyParentVersionOverride(ctx).lastTouchedVersionOverride;
+    const { restoreDoctorConfigEnvRefs } =
+      await import("../commands/doctor/shared/config-flow-steps.js");
+    const { assertShippedPluginInstallConfigImportCurrent } =
+      await import("../commands/doctor/shared/plugin-registry-migration.js");
     try {
-      await replaceConfigFile({
-        nextConfig: ctx.cfg,
+      await transformConfigFile({
+        transform: (_current, { snapshot }, { envSnapshotForRestore }) => {
+          // Revalidate the copied source under the config lock; never import after plugin repair.
+          assertShippedPluginInstallConfigImportCurrent(
+            snapshot,
+            ctx.configResult.pluginInstallConfigImport,
+          );
+          const nextConfig = restoreDoctorConfigEnvRefs(ctx.cfg, snapshot, envSnapshotForRestore);
+          return { nextConfig };
+        },
         afterWrite: { mode: "auto" },
         writeOptions: {
           auditOrigin: "doctor",
           allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
           skipPluginValidation:
             ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
-          ...(configResultWritePending && ctx.configResult.explicitSetPaths
+          ...(ctx.configResult.explicitSetPaths
             ? { explicitSetPaths: ctx.configResult.explicitSetPaths }
             : {}),
+          persistCanonicalAgentRoster: configResultWritePending
+            ? ctx.configResult.persistCanonicalAgentRoster
+            : undefined,
           preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
           ...(legacyParentVersionOverride
             ? { lastTouchedVersionOverride: legacyParentVersionOverride }
@@ -147,6 +177,7 @@ export async function runWriteConfigHealth(
   if (options.runPostWriteRepairs === false) {
     return;
   }
+  await runRetiredAuthProfileCleanup(ctx);
   if (ctx.configResult.retiredPhoneControlStateCleanupPending === true) {
     const { finalizeRetiredPhoneControlCleanup } =
       await import("../commands/doctor-retired-phone-control.js");

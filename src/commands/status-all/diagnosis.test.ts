@@ -106,6 +106,56 @@ describe("status-all diagnosis port checks", () => {
     gatewayMocks.summarizeLogTail.mockImplementation((lines: string[]) => lines);
   });
 
+  it("retains queue warnings from a successful gateway health snapshot", async () => {
+    const params = createBaseParams([]);
+    params.health = {
+      ok: true,
+      ts: 0,
+      durationMs: 42,
+      heartbeatSeconds: 60,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      deliveryQueues: {
+        failed: [{ queueName: "outbound", count: 2 }],
+        ingressPressure: [
+          {
+            channelId: "telegram",
+            accountId: "ops",
+            laneCount: 1,
+            pendingCount: 2,
+            claimedCount: 0,
+            blockedCount: 1,
+            oldestReceivedAt: Date.now(),
+          },
+        ],
+      },
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("Delivery queue: warning");
+    expect(output).toContain("outbound: 2");
+    expect(output).toContain(
+      "inbound telegram/ops: 1 pressured lane, 2 pending, 0 claimed, 1 blocked",
+    );
+  });
+
+  it("keeps a failed health request visible in the complete report", async () => {
+    const params = createBaseParams([]);
+    params.health = { error: "health request timed out" };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("Gateway health:\n  health request timed out");
+    expect(output).toContain("Pasteable debug report. Auth tokens redacted.");
+  });
+
   it("labels OpenClaw Tailscale exposure separately from daemon state", async () => {
     const params = createBaseParams([]);
     params.tailscale.backendState = "Running";
@@ -116,6 +166,14 @@ describe("status-all diagnosis port checks", () => {
     const output = params.lines.join("\n");
     expect(output).toContain("✓ Tailscale exposure: off · daemon Running · box.tail.ts.net");
     expect(output).not.toContain("Tailscale: off");
+  });
+
+  it("does not warn about an unavailable Tailscale daemon when exposure is disabled", async () => {
+    const params = createBaseParams([]);
+
+    await appendStatusAllDiagnosis(params);
+
+    expect(params.lines.join("\n")).toContain("✓ Tailscale exposure: off · daemon unknown");
   });
 
   it("treats same-process dual-stack loopback listeners as healthy", async () => {
@@ -185,58 +243,38 @@ describe("status-all diagnosis port checks", () => {
     expect(output).not.toContain("Detected OpenClaw Gateway listener");
   });
 
-  it("adds direct update restart guidance for failed update sentinels", async () => {
-    const params = createBaseParams([]);
-    params.sentinel = {
-      payload: {
-        kind: "update",
-        status: "error",
-        ts: Date.now() - 60_000,
-        stats: {
-          mode: "npm",
-          reason: "managed-service-handoff-failed",
-          steps: [],
+  it.each([
+    {
+      status: "error",
+      reason: "managed-service-handoff-failed",
+      headline: "⚠️ OpenClaw update failed: managed-service-handoff-failed.",
+      hint: "Run openclaw triage to diagnose and repair the failed update.",
+    },
+    {
+      status: "skipped",
+      reason: "restart-health-pending",
+      headline: "⬆️ OpenClaw update in progress: restarting.",
+      hint: "Check progress with openclaw update status.",
+    },
+  ] as const)(
+    "includes the shared update report for $status sentinels",
+    async ({ status, reason, headline, hint }) => {
+      const params = createBaseParams([]);
+      params.sentinel = {
+        payload: {
+          kind: "update",
+          status,
+          ts: Date.now() - 60_000,
+          stats: { mode: "npm", reason, steps: [] },
         },
-      },
-    };
-
-    await appendStatusAllDiagnosis(params);
-
-    const output = params.lines.join("\n");
-    expect(output).toContain(
-      "Update restart: failed · managed-service-handoff-failed · run openclaw gateway status --deep",
-    );
-    expect(output).toContain("Update restart failed; run openclaw gateway status --deep.");
-    expect(output).toContain(
-      "If the service is down, run openclaw gateway restart or openclaw gateway install --force.",
-    );
-  });
-
-  it("adds direct update restart guidance for pending update sentinels", async () => {
-    const params = createBaseParams([]);
-    params.sentinel = {
-      payload: {
-        kind: "update",
-        status: "skipped",
-        ts: Date.now() - 60_000,
-        stats: {
-          mode: "npm",
-          reason: "restart-health-pending",
-          steps: [],
-        },
-      },
-    };
-
-    await appendStatusAllDiagnosis(params);
-
-    const output = params.lines.join("\n");
-    expect(output).toContain(
-      "Update restart: restart pending health verification · run openclaw gateway status --deep",
-    );
-    expect(output).toContain(
-      "Update restart is still pending; run openclaw update status --json for handoff state.",
-    );
-  });
+      };
+      await appendStatusAllDiagnosis(params);
+      const output = params.lines.join("\n");
+      expect(output).toContain(`Update restart: ${headline}`);
+      expect(output).toContain(hint);
+      expect(output).not.toContain("run openclaw gateway restart");
+    },
+  );
 
   it("emits a soft warning when no agent sessions were active in the last 30m", async () => {
     const params = createBaseParams([]);

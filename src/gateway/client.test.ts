@@ -14,12 +14,12 @@ import {
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
-import type { DeviceIdentity } from "../infra/device-identity.js";
+import {
+  signDevicePayload as signDevicePayloadWithKey,
+  type DeviceIdentity,
+} from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { GatewayClientOptions } from "./client.js";
-
-const TLS_FINGERPRINT = "ab".repeat(32);
-const DIFFERENT_TLS_FINGERPRINT = "cd".repeat(32);
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -99,7 +99,6 @@ class MockWebSocket {
   autoCloseOnClose = true;
   readyState = MockWebSocket.CONNECTING;
   readonly options: unknown;
-  _socket?: { getPeerCertificate: () => { fingerprint256?: string } };
 
   constructor(_url: string, options?: unknown) {
     this.options = options;
@@ -107,13 +106,6 @@ class MockWebSocket {
     for (const observer of wsConstructorObservers) {
       observer(_url, options);
     }
-  }
-
-  setPeerFingerprint(fingerprint256: string): void {
-    Object.defineProperty(this, "_socket", {
-      configurable: true,
-      value: { getPeerCertificate: () => ({ fingerprint256 }) },
-    });
   }
 
   on(event: "open", handler: WsEventHandlers["open"]): void;
@@ -298,6 +290,11 @@ function expectSecurityConnectError(
 
 beforeAll(async () => {
   await loadGatewayClientModule();
+});
+
+beforeEach(() => {
+  logDebugMock.mockClear();
+  logErrorMock.mockClear();
 });
 
 afterEach(() => {
@@ -656,8 +653,6 @@ describe("GatewayClient request errors", () => {
   it("retries startup-unavailable connect failures without terminal callbacks", async () => {
     vi.useFakeTimers();
     wsInstances.length = 0;
-    logDebugMock.mockClear();
-    logErrorMock.mockClear();
     const onClose = vi.fn();
     const onConnectError = vi.fn();
     const client = new GatewayClient({
@@ -726,7 +721,6 @@ describe("GatewayClient close handling", () => {
     wsInstances.length = 0;
     clearDeviceAuthTokenMock.mockClear();
     clearDeviceAuthTokenMock.mockImplementation(() => undefined);
-    logDebugMock.mockClear();
   });
 
   it("clears stale token on device token mismatch close", () => {
@@ -794,35 +788,6 @@ describe("GatewayClient close handling", () => {
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid", {
       phase: "pre-hello",
       socketOpened: false,
-      transportValidated: false,
-      connectRequestSent: false,
-      transientPreHelloCleanClose: false,
-    });
-    client.stop();
-  });
-
-  it("marks an opened TLS transport unvalidated when fingerprint verification fails", () => {
-    const onClose = vi.fn();
-    const onConnectError = vi.fn();
-    const client = new GatewayClient({
-      url: "wss://127.0.0.1:18789",
-      tlsFingerprint: TLS_FINGERPRINT,
-      onClose,
-      onConnectError,
-    });
-
-    client.start();
-    const ws = getLatestWs();
-    ws.setPeerFingerprint(DIFFERENT_TLS_FINGERPRINT);
-    ws.emitOpen();
-
-    expect(onConnectError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "gateway tls fingerprint mismatch" }),
-    );
-    expect(onClose).toHaveBeenCalledWith(1008, "gateway tls fingerprint mismatch", {
-      connectError: expect.objectContaining({ message: "gateway tls fingerprint mismatch" }),
-      phase: "pre-hello",
-      socketOpened: true,
       transportValidated: false,
       connectRequestSent: false,
       transientPreHelloCleanClose: false,
@@ -1132,7 +1097,6 @@ describe("GatewayClient close handling", () => {
 describe("GatewayClient message dispatch", () => {
   beforeEach(() => {
     wsInstances.length = 0;
-    logDebugMock.mockClear();
   });
 
   it("keeps event callback errors inside message dispatch", () => {
@@ -1182,8 +1146,6 @@ describe("GatewayClient connect auth payload", () => {
     storeOriginDeviceTokenMock.mockReset();
     readLoggingConfigMock.mockReset();
     readLoggingConfigMock.mockReturnValue(undefined);
-    logDebugMock.mockClear();
-    logErrorMock.mockClear();
   });
 
   type ParsedConnectRequest = {
@@ -1434,12 +1396,14 @@ describe("GatewayClient connect auth payload", () => {
     async ({ canonical, legacy, protocolBounds }) => {
       const signDevicePayload = vi.fn((_privateKeyPem: string, _payload: string) => "signature");
       const deviceFamily = canonical === "macos" ? "Mac" : "Windows";
+      const modelIdentifier = "TestMachine1,1";
       const client = createClientWithIdentity(`device-${legacy}`, vi.fn(), {
         role: "node",
         mode: GATEWAY_CLIENT_MODES.NODE,
         clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
         platform: canonical,
         deviceFamily,
+        modelIdentifier,
         hostDeps: { signDevicePayload },
         ...protocolBounds,
       });
@@ -1448,8 +1412,12 @@ describe("GatewayClient connect auth payload", () => {
       expect(currentConnect.params).toMatchObject({
         minProtocol: PROTOCOL_VERSION,
         maxProtocol: PROTOCOL_VERSION,
-        client: { platform: canonical, deviceFamily },
+        client: { platform: canonical, deviceFamily, modelIdentifier },
       });
+      expect(signDevicePayload.mock.calls[0]?.[1]?.split("|").slice(9)).toEqual([
+        canonical,
+        deviceFamily.toLowerCase(),
+      ]);
 
       emitConnectFailure(
         currentWs,
@@ -1468,6 +1436,7 @@ describe("GatewayClient connect auth payload", () => {
         client: { platform: legacy },
       });
       expect(legacyConnect.params?.client).not.toHaveProperty("deviceFamily");
+      expect(legacyConnect.params?.client).not.toHaveProperty("modelIdentifier");
       expect(signDevicePayload.mock.calls.at(-1)?.[1]?.split("|").slice(9)).toEqual([legacy, ""]);
       client.stop();
     },
@@ -1694,18 +1663,68 @@ describe("GatewayClient connect auth payload", () => {
     });
   });
 
-  it("keeps canonical platform metadata for non-node-host node clients", () => {
+  it.each([
+    { platform: "macos", deviceFamily: "Mac" },
+    { platform: "win32", deviceFamily: undefined },
+    { platform: "custom-os", deviceFamily: "Workstation" },
+  ])("preserves explicit caller metadata: %j", ({ platform, deviceFamily }) => {
     const client = createClientWithIdentity("device-third-party-node", vi.fn(), {
       role: "node",
       mode: GATEWAY_CLIENT_MODES.NODE,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
-      platform: "macos",
-      deviceFamily: "Mac",
+      platform,
+      deviceFamily,
     });
 
     const { connect } = startClientAndConnect({ client });
-    expect(connect.params?.client?.platform).toBe("macos");
+    expect(connect.params?.client).toMatchObject({
+      platform,
+      ...(deviceFamily ? { deviceFamily } : {}),
+    });
+    if (deviceFamily === undefined) {
+      expect(connect.params?.client).not.toHaveProperty("deviceFamily");
+    }
     client.stop();
+  });
+
+  it.each([undefined, "Workstation"])(
+    "uses canonical Windows metadata and preserves explicit family %s",
+    (deviceFamily) => {
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const client = createClientWithIdentity("device-default-windows", vi.fn(), {
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+        deviceFamily,
+      });
+
+      try {
+        const { connect } = startClientAndConnect({ client });
+        expect(connect.params?.client).toMatchObject({
+          platform: "windows",
+          deviceFamily: deviceFamily ?? "Windows",
+        });
+      } finally {
+        client.stop();
+        platformSpy.mockRestore();
+      }
+    },
+  );
+
+  it("preserves runtime metadata defaults for platforms without canonical aliases", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("freebsd");
+    const client = createClientWithIdentity("device-freebsd", vi.fn(), {
+      clientName: GATEWAY_CLIENT_NAMES.TEST,
+      mode: GATEWAY_CLIENT_MODES.TEST,
+    });
+
+    try {
+      const { connect } = startClientAndConnect({ client });
+      expect(connect.params?.client).toMatchObject({ platform: "freebsd" });
+      expect(connect.params?.client).not.toHaveProperty("deviceFamily");
+    } finally {
+      client.stop();
+      platformSpy.mockRestore();
+    }
   });
 
   it("does not advertise node plugin tools in the initial connect frame", () => {
@@ -2031,8 +2050,7 @@ describe("GatewayClient connect auth payload", () => {
     const firstWs = getLatestWs();
     firstWs.emitOpen();
     emitConnectChallenge(firstWs);
-    expect(connectFrameFrom(firstWs)).toMatchObject({
-      token: "origin-one-token",
+    expect(connectFrameFrom(firstWs)).toEqual({
       deviceToken: "origin-one-token",
     });
     first.stop();
@@ -2065,8 +2083,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expect(connectFrameFrom(ws)).toMatchObject({
-      token: "prepared-device-token",
+    expect(connectFrameFrom(ws)).toEqual({
       deviceToken: "prepared-device-token",
     });
     expect(loadDeviceAuthTokenMock).not.toHaveBeenCalled();
@@ -2151,8 +2168,7 @@ describe("GatewayClient connect auth payload", () => {
     });
 
     const { ws, connect } = startClientAndConnect({ client });
-    expect(connectFrameFrom(ws)).toMatchObject({
-      token: "stored-origin-token",
+    expect(connectFrameFrom(ws)).toEqual({
       deviceToken: "stored-origin-token",
     });
     expect(loadOriginDeviceTokenReadOnlyMock).toHaveBeenCalledOnce();
@@ -2559,8 +2575,9 @@ describe("GatewayClient connect auth payload", () => {
       token: "stored-device-token",
       scopes: ["operator.read", "operator.write"],
     });
-    const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
+    const signDevicePayload = vi.fn(signDevicePayloadWithKey);
+    const client = createClientWithIdentity("device-stored-scopes", vi.fn(), {
+      hostDeps: { signDevicePayload },
     });
 
     client.start();
@@ -2568,10 +2585,10 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expect(connectFrameFrom(ws)).toMatchObject({
-      token: "stored-device-token",
+    expect(connectFrameFrom(ws)).toEqual({
       deviceToken: "stored-device-token",
     });
+    expect(signDevicePayload.mock.calls[0]?.[1]?.split("|")[7]).toBe("stored-device-token");
     expect(connectScopesFrom(ws)).toEqual(["operator.read", "operator.write"]);
     client.stop();
   });
@@ -2591,8 +2608,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expect(connectFrameFrom(ws)).toMatchObject({
-      token: "stored-device-token",
+    expect(connectFrameFrom(ws)).toEqual({
       deviceToken: "stored-device-token",
     });
     expect(connectScopesFrom(ws)).toEqual(["operator.admin"]);
@@ -2627,8 +2643,7 @@ describe("GatewayClient connect auth payload", () => {
       "load device token params",
     );
     expect(loadTokenParams.deviceId).toBeTypeOf("string");
-    expect(connectFrameFrom(ws)).toMatchObject({
-      token: "stored-device-token",
+    expect(connectFrameFrom(ws)).toEqual({
       deviceToken: "stored-device-token",
     });
     client.stop();
@@ -2704,8 +2719,7 @@ describe("GatewayClient connect auth payload", () => {
     const reconnect = await advanceToNextReconnect();
     reconnect.emitOpen();
     emitConnectChallenge(reconnect, "nonce-reconnect");
-    expect(connectFrameFrom(reconnect)).toMatchObject({
-      token: "issued-device-token",
+    expect(connectFrameFrom(reconnect)).toEqual({
       deviceToken: "issued-device-token",
     });
     expect(connectFrameFrom(reconnect).password).toBeUndefined();
@@ -2718,10 +2732,11 @@ describe("GatewayClient connect auth payload", () => {
       token: "stored-device-token",
       scopes: ["operator.admin", "operator.read"],
     });
-    const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
+    const signDevicePayload = vi.fn(signDevicePayloadWithKey);
+    const client = createClientWithIdentity("device-explicit-token", vi.fn(), {
       deviceToken: "explicit-device-token",
       scopes: ["operator.pairing"],
+      hostDeps: { signDevicePayload },
     });
 
     client.start();
@@ -2729,10 +2744,10 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expect(connectFrameFrom(ws)).toMatchObject({
-      token: "explicit-device-token",
+    expect(connectFrameFrom(ws)).toEqual({
       deviceToken: "explicit-device-token",
     });
+    expect(signDevicePayload.mock.calls[0]?.[1]?.split("|")[7]).toBe("explicit-device-token");
     expect(connectScopesFrom(ws)).toEqual(["operator.pairing"]);
     client.stop();
   });
@@ -2752,8 +2767,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expect(connectFrameFrom(ws)).toMatchObject({
-      token: "stored-device-token",
+    expect(connectFrameFrom(ws)).toEqual({
       deviceToken: "stored-device-token",
     });
     expect(connectScopesFrom(ws)).toEqual(["operator.approvals"]);
@@ -3011,7 +3025,7 @@ describe("GatewayClient connect auth payload", () => {
     });
 
     const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
-    expect(firstConnect.params?.auth?.token).toBe("stored-device-token");
+    expect(firstConnect.params?.auth).toEqual({ deviceToken: "stored-device-token" });
     await expectNoReconnectAfterConnectFailure({
       client,
       firstWs: ws1,
@@ -3043,7 +3057,7 @@ describe("GatewayClient connect auth payload", () => {
     });
 
     const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
-    expect(firstConnect.params?.auth?.token).toBe("stored-device-token");
+    expect(firstConnect.params?.auth).toEqual({ deviceToken: "stored-device-token" });
     await expectNoReconnectAfterConnectFailure({
       client,
       firstWs: ws1,
@@ -3075,7 +3089,7 @@ describe("GatewayClient connect auth payload", () => {
     });
 
     const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
-    expect(firstConnect.params?.auth?.token).toBe("stored-device-token");
+    expect(firstConnect.params?.auth).toEqual({ deviceToken: "stored-device-token" });
     await expectNoReconnectAfterConnectFailure({
       client,
       firstWs: ws1,

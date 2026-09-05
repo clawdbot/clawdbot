@@ -10,15 +10,25 @@ vi.mock("./doctor-bootstrap-size.js", () => ({
 }));
 
 vi.mock("./doctor-auth-flat-profiles.js", () => ({
+  collectOpenAICodexAuthProfileStoreIdMap: vi.fn(() => new Map()),
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue({
+    detected: [],
     changes: [],
+    configOwnerMigrationApplied: false,
     warnings: [],
   }),
-  maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => cfg),
+  maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => ({
+    config: cfg,
+    changes: [],
+    warnings: [],
+  })),
 }));
 
 vi.mock("./doctor-auth-legacy-oauth.js", () => ({
-  maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => cfg),
+  maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => ({
+    config: cfg,
+    retiredProfileCleanupPlans: [],
+  })),
 }));
 
 vi.mock("./doctor-auth-oauth-sidecar.js", () => ({
@@ -42,7 +52,8 @@ vi.mock("./doctor-claude-cli.js", () => ({
   noteClaudeCliHealth: vi.fn(),
 }));
 
-vi.mock("./doctor-command-owner.js", () => ({
+vi.mock("./doctor-command-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-command-owner.js")>()),
   noteCommandOwnerHealth: vi.fn(),
 }));
 

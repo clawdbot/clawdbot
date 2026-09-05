@@ -9,6 +9,7 @@ const enActivity = {
     visibleCount: "{visible} of {total}",
     search: "Search",
     searchPlaceholder: "Filter by activity, summary, run, session",
+    filters: "Filters",
     toolFilter: "Tool",
     allTools: "All tools",
     statusFilters: "Status filters",

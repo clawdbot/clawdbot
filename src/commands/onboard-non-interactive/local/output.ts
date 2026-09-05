@@ -4,6 +4,7 @@
  * JSON success/failure payloads and human-readable gateway health diagnostics
  * are kept here so local and remote setup report failures consistently.
  */
+import { formatCliCommand } from "../../../cli/command-format.js";
 import type { GatewayServiceLoadState } from "../../../daemon/service-types.js";
 import { redactSecrets } from "../../../logging/redact.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../../runtime.js";
@@ -118,7 +119,7 @@ export function classifyGatewayHealthFailure(params: {
     return "auth-mismatch";
   }
   if (
-    /\b(?:runtime[- ]deps?|runtime dependencies|cannot find module|sqlite-vec|loadextension)\b/i.test(
+    /\b(?:runtime[- ]deps?|runtime dependencies|cannot find (?:module|package)|(?:err_)?module_not_found|sqlite-vec|loadextension)\b/i.test(
       combined,
     )
   ) {
@@ -153,17 +154,16 @@ function recoveryHintForGatewayHealthFailure(
 ): string | undefined {
   switch (classification) {
     case "auth-mismatch":
-      return "Fix: run `openclaw doctor --fix`.";
     case "module-missing":
-      return "Fix: run `openclaw doctor --fix`.";
+      return `Fix: run \`${formatCliCommand("openclaw doctor --fix")}\`.`;
     case "service-missing":
-      return "Fix: run `openclaw gateway install --force`.";
+      return `Fix: run \`${formatCliCommand("openclaw gateway install --force")}\`.`;
     case "service-stopped":
-      return "Fix: run `openclaw gateway restart`.";
+      return `Fix: run \`${formatCliCommand("openclaw gateway restart")}\`.`;
     case "startup-blocked":
-      return "Fix: run `openclaw gateway status --deep`.";
+      return `Fix: run \`${formatCliCommand("openclaw gateway status --deep")}\`.`;
     case "not-listening":
-      return "Fix: start `openclaw gateway run`, or run `openclaw gateway restart` for a managed gateway.";
+      return `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, or run \`${formatCliCommand("openclaw gateway restart")}\` for a managed gateway.`;
     default:
       return undefined;
   }

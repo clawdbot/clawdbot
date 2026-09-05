@@ -54,8 +54,21 @@ type LabFeatureState = {
   overridden: boolean;
 };
 
-const LOCAL_MODEL_LEAN_FEATURE_ID = "localModelLean";
-const LOCAL_MODEL_LEAN_AUTO_MODEL_PATH = ["wizard", "localModelLeanAutoModel"] as const;
+function readConfiguredFeatureEnabled(
+  raw: unknown,
+  activeValues: readonly LabFeatureValue[],
+): boolean {
+  if (typeof raw === "boolean" || typeof raw === "string") {
+    return activeValues.includes(raw);
+  }
+  if (!isRecord(raw)) {
+    return false;
+  }
+  const enabled = raw.enabled;
+  return typeof enabled === "boolean" || typeof enabled === "string"
+    ? activeValues.includes(enabled)
+    : Object.keys(raw).some((key) => key !== "enabled");
+}
 
 export const LAB_FEATURES = [
   {
@@ -64,23 +77,12 @@ export const LAB_FEATURES = [
     description: () => t("labsPage.codeMode.description"),
     docsUrl: "https://docs.openclaw.ai/tools/code-mode",
     configPath: ["tools", "codeMode", "enabled"],
-    // The on position writes the shipped "auto" tier, never `true`: Labs offers
+    // The on position writes the "auto" tier, never `true`: Labs offers
     // Auto/Off, and force-on for unevaluated models stays a config-only choice.
     onValue: "auto",
     offValue: false,
     activeValues: [true, "auto"],
-    // Mirrors resolveCodeModeConfig: the shipped default is "auto", so an unset
-    // gate reads as on; only an explicit `false` (shorthand or leaf) reads off.
-    // `true` remains a valid config-only force-on and must also read as on.
-    readEnabled: (raw) => {
-      if (typeof raw === "boolean") {
-        return raw;
-      }
-      if (isRecord(raw)) {
-        return raw.enabled !== false;
-      }
-      return true;
-    },
+    readEnabled: null,
     enableAlso: null,
     resetScope: "gate",
     restartHint: null,
@@ -94,7 +96,9 @@ export const LAB_FEATURES = [
     onValue: true,
     offValue: false,
     activeValues: [true],
-    readEnabled: null,
+    // Mirrors resolveSwarmConfig: only an explicit false opts out; limits-only
+    // objects inherit the enabled default without owning the gate.
+    readEnabled: (raw) => raw !== false && (!isRecord(raw) || raw.enabled !== false),
     enableAlso: null,
     resetScope: "gate",
     restartHint: null,
@@ -112,18 +116,7 @@ export const LAB_FEATURES = [
     // and an object configuring anything besides `enabled` is already on.
     // Reading only the `enabled` leaf would show `{ mode: "tools" }` as off and
     // let a click replace that operator's mode with ours.
-    readEnabled: (raw) => {
-      if (typeof raw === "boolean") {
-        return raw;
-      }
-      if (!isRecord(raw)) {
-        return false;
-      }
-      const node = raw;
-      return typeof node.enabled === "boolean"
-        ? node.enabled
-        : Object.keys(node).some((key) => key !== "enabled");
-    },
+    readEnabled: (raw) => readConfiguredFeatureEnabled(raw, [true]),
     // resolveToolSearchConfig defaults an unset mode to "code" even in object
     // form, which is the surface with the weakest recall. Pin the bounded
     // directory instead, so enabling from Labs is the variant we recommend.
@@ -174,6 +167,20 @@ export const LAB_FEATURES = [
     enableAlso: null,
     resetScope: "gate",
     restartHint: null,
+  },
+  {
+    id: "customPluginUi",
+    title: () => t("labsPage.customPluginUi.title"),
+    description: () => t("labsPage.customPluginUi.description"),
+    docsUrl: "https://docs.openclaw.ai/plugins/feature-plugins",
+    configPath: ["gateway", "controlUi", "experimental", "customPlugins"],
+    onValue: true,
+    offValue: false,
+    activeValues: [true],
+    readEnabled: null,
+    enableAlso: null,
+    resetScope: "gate",
+    restartHint: () => t("labsPage.customPluginUi.restartRequired"),
   },
   {
     id: "auditMessages",
@@ -237,42 +244,15 @@ function recordAtPath(config: Record<string, unknown>, path: readonly string[]):
   return current;
 }
 
-function defaultModelRef(config: Record<string, unknown>): string | undefined {
-  const model = recordAtPath(config, ["agents", "defaults", "model"]);
-  if (typeof model === "string") {
-    return model;
-  }
-  if (!isRecord(model)) {
-    return undefined;
-  }
-  const primary = model.primary;
-  return typeof primary === "string" ? primary : undefined;
-}
-
-function onboardingOwnsLocalModelLean(
-  config: Record<string, unknown>,
-  feature: LabFeature,
-): boolean {
-  if (feature.id !== LOCAL_MODEL_LEAN_FEATURE_ID) {
-    return false;
-  }
-  const autoModel = recordAtPath(config, LOCAL_MODEL_LEAN_AUTO_MODEL_PATH);
-  return (
-    typeof autoModel === "string" &&
-    defaultModelRef(config) === autoModel &&
-    recordAtPath(config, feature.configPath) === true
-  );
-}
-
 function readEnabledFromParent(feature: LabFeature, parent: unknown): boolean {
   const key = feature.configPath.at(-1);
   if (feature.readEnabled) {
     return feature.readEnabled(parent);
   }
-  // Feature gates accept the shipped boolean shorthand as well as the object
-  // form. A registry path ending in `enabled` must reflect either shape.
-  if (key === "enabled" && typeof parent === "boolean") {
-    return parent;
+  // Feature gates can accept a boolean or mode shorthand as well as the object
+  // form. A registry path ending in `enabled` must reflect every active shape.
+  if (key === "enabled" && (typeof parent === "boolean" || typeof parent === "string")) {
+    return feature.activeValues.includes(parent);
   }
   if (!isRecord(parent) || !key) {
     return false;
@@ -313,11 +293,6 @@ export function resolveLabFeatureState(
   feature: LabFeature,
 ): LabFeatureState {
   const source = config ?? {};
-  // Onboarding records this generated value beside the model it belongs to.
-  // Treat the pair as one inherited default so Labs never mislabels or detaches it.
-  if (onboardingOwnsLocalModelLean(source, feature)) {
-    return { enabled: true, defaultEnabled: true, overridden: false };
-  }
   const parentPath = feature.configPath.slice(0, -1);
   const key = feature.configPath.at(-1);
   const parent = recordAtPath(source, parentPath);
@@ -337,7 +312,6 @@ export function resolveLabFeatureState(
 }
 
 export function labFeatureMergePatch(
-  config: Record<string, unknown> | null,
   feature: LabFeature,
   enabled: boolean,
 ): Record<string, unknown> {
@@ -351,24 +325,7 @@ export function labFeatureMergePatch(
   for (const segment of feature.configPath.slice(0, -1).toReversed()) {
     patch = { [segment]: patch };
   }
-  return releaseLabFeatureOwnership(config, feature, patch as Record<string, unknown>);
-}
-
-function releaseLabFeatureOwnership(
-  config: Record<string, unknown> | null,
-  feature: LabFeature,
-  patch: Record<string, unknown>,
-): Record<string, unknown> {
-  if (
-    feature.id !== LOCAL_MODEL_LEAN_FEATURE_ID ||
-    recordAtPath(config ?? {}, LOCAL_MODEL_LEAN_AUTO_MODEL_PATH) === undefined
-  ) {
-    return patch;
-  }
-  return {
-    ...patch,
-    wizard: { localModelLeanAutoModel: null },
-  };
+  return patch as Record<string, unknown>;
 }
 
 export function labFeatureResetPatch(
@@ -383,5 +340,5 @@ export function labFeatureResetPatch(
   for (const segment of path.toReversed()) {
     patch = { [segment]: patch };
   }
-  return releaseLabFeatureOwnership(config, feature, patch as Record<string, unknown>);
+  return patch as Record<string, unknown>;
 }

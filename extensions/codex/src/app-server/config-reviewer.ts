@@ -1,13 +1,17 @@
 import { readFileSync } from "node:fs";
-import { homedir as readHomeDir } from "node:os";
 import path from "node:path";
 import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/agent-runtime";
 import { parse as parseToml } from "smol-toml";
+import {
+  resolveCodexAppServerHomeDir,
+  resolveCodexAppServerUserHomeDir,
+} from "./auth-start-options.js";
 import type {
   CodexAppServerHomeScope,
   CodexModelBackedReviewerContext,
   ProviderAuthAliasConfig,
 } from "./config-contracts.js";
+import { readCodexEffectiveConfig, type CodexConfigReadClient } from "./config-layer-policy.js";
 import {
   firstTomlTableOffset,
   parseInlineOpenAIModelProviderBaseUrl,
@@ -16,26 +20,65 @@ import {
   stripTomlLineComments,
 } from "./config-requirements.js";
 import { readNonEmptyString, readRecord } from "./config-utils.js";
+import { readCodexAppServerConfigOptions } from "./launch-args.js";
+import type { CodexConfigReadResponse } from "./protocol-control-plane.js";
 
-const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_CONFIG_TOML_FILENAME = "config.toml";
+
+/** Cloud/system config can redirect reviews after local home/profile checks have passed. */
+export async function assertCodexModelBackedReviewerEffectiveConfig(params: {
+  client: CodexConfigReadClient;
+  approvalsReviewer: string;
+  cwd: string;
+  signal?: AbortSignal;
+}): Promise<CodexConfigReadResponse | undefined> {
+  if (
+    params.approvalsReviewer !== "auto_review" &&
+    params.approvalsReviewer !== "guardian_subagent"
+  ) {
+    return undefined;
+  }
+  const response = await readCodexEffectiveConfig(params.client, params.cwd, params.signal);
+  const effectiveConfig = response.config;
+  const modelProvider = effectiveConfig.model_provider;
+  const providers = effectiveConfig.model_providers;
+  const providerRecords = providers == null ? undefined : readRecord(providers);
+  const provider = providerRecords?.openai;
+  const openAIProvider = provider == null ? undefined : readRecord(provider);
+  if (
+    (modelProvider != null && modelProvider !== "openai") ||
+    (providers != null && !providerRecords) ||
+    (provider != null && !openAIProvider) ||
+    !isTrustedOptionalReviewerEndpoint(effectiveConfig.openai_base_url, isNativeOpenAIBaseUrl) ||
+    !isTrustedOptionalReviewerEndpoint(effectiveConfig.chatgpt_base_url, isNativeChatGPTBaseUrl) ||
+    !isTrustedOptionalReviewerEndpoint(openAIProvider?.base_url, isNativeOpenAIBaseUrl)
+  ) {
+    throw new Error(
+      "Codex model-backed approval reviewer requires the running server to use a trusted OpenAI endpoint",
+    );
+  }
+  return response;
+}
+
+function isTrustedOptionalReviewerEndpoint(
+  value: unknown,
+  isTrusted: (value: unknown) => boolean,
+): boolean {
+  return value == null || (typeof value === "string" && isTrusted(value));
+}
 
 export function canUseCodexModelBackedApprovalsReviewerForModel(
   params: CodexModelBackedReviewerContext,
 ): boolean {
   const explicitProvider = params.modelProvider?.trim().toLowerCase();
   const inferredProvider = inferProviderFromModelRef(params.model);
-  if (explicitProvider && explicitProvider !== "codex") {
-    return (
-      isTrustedCodexModelBackedApprovalsReviewerProvider(explicitProvider, params) &&
-      (inferredProvider === undefined ||
-        isTrustedCodexModelBackedApprovalsReviewerProvider(inferredProvider, params))
-    );
+  if (explicitProvider && explicitProvider !== "codex" && explicitProvider !== "openai") {
+    return false;
   }
-  if (inferredProvider !== undefined) {
-    return isTrustedCodexModelBackedApprovalsReviewerProvider(inferredProvider, params);
-  }
-  return isTrustedCodexModelBackedApprovalsReviewerProvider(explicitProvider, params);
+  return (
+    (inferredProvider ?? explicitProvider) === "openai" &&
+    isTrustedCodexModelBackedOpenAIProvider(params)
+  );
 }
 
 function isTrustedCodexModelBackedOpenAIProvider(params: {
@@ -45,6 +88,7 @@ function isTrustedCodexModelBackedOpenAIProvider(params: {
   agentDir?: string;
   codexConfigToml?: string | null;
   homeScope?: CodexAppServerHomeScope;
+  codexArgs?: readonly string[];
 }): boolean {
   if (!openAIBaseUrlEnvOverridesAreTrustedForModelBackedReview(params.env)) {
     return false;
@@ -108,63 +152,41 @@ export function resolveCodexModelBackedReviewerPolicyContext(params: {
   };
 }
 
-function isCodexModelBackedApprovalsReviewerProvider(provider: string | undefined): boolean {
-  const normalized = provider?.trim().toLowerCase();
-  return normalized === "openai";
-}
-
-function isTrustedCodexModelBackedApprovalsReviewerProvider(
-  provider: string | undefined,
-  params: CodexModelBackedReviewerContext,
-): boolean {
-  return (
-    isCodexModelBackedApprovalsReviewerProvider(provider) &&
-    isTrustedCodexModelBackedOpenAIProvider({
-      config: params.config,
-      env: params.env,
-      model: params.model,
-      agentDir: params.agentDir,
-      codexConfigToml: params.codexConfigToml,
-      homeScope: params.homeScope,
-    })
-  );
-}
-
 function readCodexBaseUrlOverridesForModelBackedReview(
   params: Pick<
     CodexModelBackedReviewerContext,
-    "agentDir" | "codexConfigToml" | "env" | "homeScope"
+    "agentDir" | "codexArgs" | "codexConfigToml" | "env" | "homeScope"
   >,
 ): { openAI: string[]; chatGPT: string[] } | false {
   const configToml = readCodexAppServerConfigToml(params);
   if (configToml === false) {
     return false;
   }
-  if (configToml === undefined) {
-    return { openAI: [], chatGPT: [] };
+  const configTomls = configToml === undefined ? [] : [configToml];
+  const nativeOverrides = readNativeCodexReviewerConfigOverrides(params);
+  if (nativeOverrides === false) {
+    return false;
   }
-  const topLevelContent = stripTomlLineComments(configToml).slice(
-    0,
-    firstTomlTableOffset(configToml),
-  );
-  const modelProviderOpenAISection = parseTomlTableSection(configToml, "model_providers.openai");
-  const openAIBaseUrl = parseTomlStringValue(topLevelContent, "openai_base_url");
-  const chatGPTBaseUrl = parseTomlStringValue(topLevelContent, "chatgpt_base_url");
-  const dottedProviderBaseUrl = parseTomlStringValue(
-    topLevelContent,
-    "model_providers.openai.base_url",
-  );
-  const inlineProviderBaseUrl = parseInlineOpenAIModelProviderBaseUrl(topLevelContent);
-  const sectionProviderBaseUrl = modelProviderOpenAISection
-    ? parseTomlStringValue(modelProviderOpenAISection, "base_url")
-    : undefined;
-  const openAI = [
-    openAIBaseUrl,
-    dottedProviderBaseUrl,
-    inlineProviderBaseUrl,
-    sectionProviderBaseUrl,
-  ];
-  const chatGPT = [chatGPTBaseUrl];
+  configTomls.push(...nativeOverrides);
+  const openAI: Array<string | undefined | false> = [];
+  const chatGPT: Array<string | undefined | false> = [];
+  for (const content of configTomls) {
+    const topLevelContent = stripTomlLineComments(content).slice(0, firstTomlTableOffset(content));
+    const modelProviderOpenAISection = parseTomlTableSection(content, "model_providers.openai");
+    const modelProvider = parseTomlStringValue(topLevelContent, "model_provider");
+    if (modelProvider === false || (modelProvider && modelProvider !== "openai")) {
+      return false;
+    }
+    openAI.push(
+      parseTomlStringValue(topLevelContent, "openai_base_url"),
+      parseTomlStringValue(topLevelContent, "model_providers.openai.base_url"),
+      parseInlineOpenAIModelProviderBaseUrl(topLevelContent),
+      modelProviderOpenAISection
+        ? parseTomlStringValue(modelProviderOpenAISection, "base_url")
+        : undefined,
+    );
+    chatGPT.push(parseTomlStringValue(topLevelContent, "chatgpt_base_url"));
+  }
   if ([...openAI, ...chatGPT].includes(false)) {
     return false;
   }
@@ -172,6 +194,45 @@ function readCodexBaseUrlOverridesForModelBackedReview(
     openAI: openAI.filter((entry): entry is string => typeof entry === "string"),
     chatGPT: chatGPT.filter((entry): entry is string => typeof entry === "string"),
   };
+}
+
+function readNativeCodexReviewerConfigOverrides(
+  params: Pick<CodexModelBackedReviewerContext, "agentDir" | "codexArgs" | "env" | "homeScope">,
+): string[] | false {
+  if (params.codexArgs?.some((arg) => !arg)) {
+    return false;
+  }
+  const overrides: string[] = [];
+  let profile: string | undefined;
+  for (const { name, value } of readCodexAppServerConfigOptions(params.codexArgs ?? [])) {
+    if (!value) {
+      return false;
+    }
+    if (name === "--profile" || name === "-p") {
+      profile = value;
+    } else {
+      overrides.push(`${value}\n`);
+    }
+  }
+  if (profile) {
+    if (path.basename(profile) !== profile || profile === "." || profile === "..") {
+      return false;
+    }
+    const configPath = resolveCodexAppServerConfigPath(params);
+    if (!configPath) {
+      return false;
+    }
+    try {
+      overrides.unshift(
+        readFileSync(path.join(path.dirname(configPath), `${profile}.config.toml`), "utf8"),
+      );
+    } catch (error) {
+      if (readErrorCode(error) !== "ENOENT") {
+        return false;
+      }
+    }
+  }
+  return overrides;
 }
 
 function readCodexAppServerConfigToml(
@@ -248,19 +309,9 @@ function resolveCodexAppServerConfigPath(
     return path.join(resolveCodexAppServerUserHomeDir(params.env), CODEX_CONFIG_TOML_FILENAME);
   }
   const agentDir = readNonEmptyString(params.agentDir);
-  const codexHome = agentDir
-    ? path.join(path.resolve(agentDir), CODEX_APP_SERVER_HOME_DIRNAME)
+  return agentDir
+    ? path.join(resolveCodexAppServerHomeDir(agentDir), CODEX_CONFIG_TOML_FILENAME)
     : undefined;
-  return codexHome ? path.join(codexHome, CODEX_CONFIG_TOML_FILENAME) : undefined;
-}
-
-/** Resolves the native user Codex home used by Desktop and the CLI. */
-export function resolveCodexAppServerUserHomeDir(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = readHomeDir,
-): string {
-  const configured = readNonEmptyString(env.CODEX_HOME);
-  return path.resolve(configured ?? path.join(homedir(), ".codex"));
 }
 
 function readErrorCode(error: unknown): string | undefined {

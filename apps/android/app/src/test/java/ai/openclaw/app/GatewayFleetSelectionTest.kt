@@ -3,9 +3,16 @@ package ai.openclaw.app
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
+import ai.openclaw.app.ui.controlUiOriginRule
+import ai.openclaw.app.ui.desktopUrl
+import ai.openclaw.app.ui.sessionDashboardUrl
+import ai.openclaw.app.ui.terminalUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 class GatewayFleetSelectionTest {
   @Test
@@ -106,4 +113,51 @@ class GatewayFleetSelectionTest {
       kind = GatewayRegistryEntryKind.DISCOVERED,
       name = stableId,
     )
+}
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class GatewayControlPageContextPathTest {
+  @Test
+  fun controlPageBasePreservesNormalizedGatewayContextPaths() {
+    val cases =
+      listOf(
+        GatewayEndpoint.manual("gateway.example", 443, true, "openclaw-gw") to
+          "https://gateway.example:443/openclaw-gw",
+        GatewayEndpoint.manual("gateway.example", 443, true, "/tenant%2Fgateway%20west") to
+          "https://gateway.example:443/tenant%2Fgateway%20west",
+        GatewayEndpoint.manual("gateway.example", 443, true, "//openclaw") to
+          "https://gateway.example:443//openclaw",
+        GatewayEndpoint.manual("gateway.example", 443, true, "/") to
+          "https://gateway.example:443",
+        GatewayEndpoint.manual("::1", 18789, false, "/gateway") to
+          "http://[::1]:18789/gateway",
+      )
+
+    cases.forEach { (endpoint, expected) ->
+      assertEquals(endpoint.contextPath, expected, gatewayControlPageBaseUrl(endpoint))
+    }
+  }
+
+  @Test
+  fun everyControlPagePreservesEncodedGatewayContextPathAndOrigin() {
+    val baseUrl =
+      gatewayControlPageBaseUrl(
+        GatewayEndpoint.manual("gateway.example", 443, true, "/tenant%2Fgateway%20west"),
+      )
+
+    assertEquals(
+      "https://gateway.example:443/tenant%2Fgateway%20west/focus/terminal",
+      terminalUrl(baseUrl),
+    )
+    assertEquals(
+      "https://gateway.example:443/tenant%2Fgateway%20west/focus/desktop",
+      desktopUrl(baseUrl),
+    )
+    assertEquals(
+      "https://gateway.example:443/tenant%2Fgateway%20west/dashboard/main/~key/qa",
+      sessionDashboardUrl(baseUrl, "agent:main:qa"),
+    )
+    assertEquals("https://gateway.example:443", controlUiOriginRule(baseUrl))
+  }
 }

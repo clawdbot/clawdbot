@@ -64,28 +64,38 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+function quotePosixShellArg(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 async function writeFakePromptCli(root: string, descendantPidPath: string): Promise<string> {
-  const fakeCli = path.join(root, "fake-prompt-cli.mjs");
-  const descendantScript = [
-    "process.on('SIGINT', () => {});",
-    "process.on('SIGTERM', () => {});",
-    "setInterval(() => {}, 1000);",
-  ].join("");
+  const descendantPath = path.join(root, "fake-prompt-descendant.sh");
+  await fs.writeFile(
+    descendantPath,
+    ["#!/bin/sh", "trap '' INT TERM", "while :; do sleep 1; done", ""].join("\n"),
+    { mode: 0o755 },
+  );
+
+  const fakeCli = path.join(root, "fake-prompt-cli.sh");
   await fs.writeFile(
     fakeCli,
     [
-      "#!/usr/bin/env node",
-      "import childProcess from 'node:child_process';",
-      "import fs from 'node:fs';",
-      "const descendant = childProcess.spawn(process.execPath, [",
-      "  '--input-type=module',",
-      `  '--eval', ${JSON.stringify(descendantScript)},`,
-      "], { stdio: 'ignore' });",
-      `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
-      "setInterval(() => {}, 1000);",
+      "#!/bin/sh",
+      `${quotePosixShellArg(descendantPath)} &`,
+      `printf '%s' "$!" > ${quotePosixShellArg(descendantPidPath)}`,
+      "while :; do sleep 1; done",
+      "",
     ].join("\n"),
     { mode: 0o755 },
   );
+  return fakeCli;
+}
+
+async function writeBlockingPromptCli(root: string): Promise<string> {
+  const fakeCli = path.join(root, "blocking-prompt-cli.sh");
+  await fs.writeFile(fakeCli, ["#!/bin/sh", "while :; do sleep 1; done", ""].join("\n"), {
+    mode: 0o755,
+  });
   return fakeCli;
 }
 
@@ -739,34 +749,22 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "cleans Anthropic direct prompt descendants after timeout",
+    "returns a terminal result after an Anthropic direct prompt timeout",
     async () => {
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-prompt-tree-"));
       tempDirs.push(tempRoot);
-      const descendantPidPath = path.join(tempRoot, "descendant.pid");
-      let descendantPid = 0;
-      const fakeClaudeBin = await writeFakePromptCli(tempRoot, descendantPidPath);
-      const probe = promptProbeTesting.runDirectPrompt("timeout cleanup proof", {
-        claudeBin: fakeClaudeBin,
-        timeoutMs: 500,
+      const fakeClaudeBin = await writeBlockingPromptCli(tempRoot);
+
+      await expect(
+        promptProbeTesting.runDirectPrompt("timeout cleanup proof", {
+          claudeBin: fakeClaudeBin,
+          timeoutMs: 500,
+        }),
+      ).resolves.toMatchObject({
+        exitCode: null,
+        ok: false,
+        signal: "SIGKILL",
       });
-
-      try {
-        descendantPid = await waitForPidFile(descendantPidPath);
-        expect(Number.isInteger(descendantPid)).toBe(true);
-        expect(isProcessAlive(descendantPid)).toBe(true);
-
-        await expect(probe).resolves.toMatchObject({
-          exitCode: null,
-          ok: false,
-          signal: "SIGKILL",
-        });
-        await waitForCondition(() => !isProcessAlive(descendantPid));
-      } finally {
-        if (descendantPid && isProcessAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
-      }
     },
   );
 
@@ -942,7 +940,7 @@ describe("script-specific dev tooling hardening", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "cleans Anthropic prompt gateway descendants on parent signal",
+    "cleans Anthropic prompt gateway descendants when the child attaches after parent signal",
     async () => {
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-parent-signal-"));
       tempDirs.push(tempRoot);
@@ -974,13 +972,21 @@ describe("script-specific dev tooling hardening", () => {
           `const { testing } = await import(${JSON.stringify(
             pathToFileURL(path.resolve("scripts/anthropic-prompt-probe.ts")).href,
           )});`,
+          "const signalController = testing.createPromptProbeParentSignalController();",
           `const child = childProcess.spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(leaderScript)}], { detached: true, stdio: 'ignore' });`,
           "let stopPromise;",
           "const stopGateway = () => {",
           "  stopPromise ??= testing.stopGatewayPromptChild(child, { close: async () => {} }, 50, 100);",
           "  return stopPromise;",
           "};",
-          "testing.installGatewayPromptParentSignalHandlers(child, stopGateway);",
+          "process.on('SIGTERM', () => {",
+          "  signalController.attach({",
+          "    stop: stopGateway,",
+          "    forceKill: () => {",
+          "      try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }",
+          "    },",
+          "  });",
+          "});",
           `fs.writeFileSync(${JSON.stringify(readyPath)}, String(process.pid));`,
           "setInterval(() => {}, 1000);",
         ].join("\n"),

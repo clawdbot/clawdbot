@@ -21,59 +21,36 @@ export type RuntimeToolSchemaDiagnostic = {
 
 /** Runtime tool list split into compatible tools and schema diagnostics. */
 type RuntimeToolSchemaInspection<TTool extends Pick<AnyAgentTool, "name" | "parameters">> = {
-  readonly tools: readonly TTool[];
+  readonly tools: TTool[];
   readonly diagnostics: readonly RuntimeToolSchemaDiagnostic[];
 };
 
-type RuntimeToolEntryRead<TTool extends Pick<AnyAgentTool, "name" | "parameters">> =
-  | {
-      readonly ok: true;
-      readonly tool: TTool;
-      readonly toolIndex: number;
-    }
-  | {
-      readonly ok: false;
-      readonly diagnostic: RuntimeToolSchemaDiagnostic;
-    };
-
 type ToolSchemaInspectionMode = "runtime" | "provider-normalizable";
 
-function unreadableRuntimeToolEntry<
-  TTool extends Pick<AnyAgentTool, "name" | "parameters"> = Pick<
-    AnyAgentTool,
-    "name" | "parameters"
-  >,
->(toolIndex: number): RuntimeToolEntryRead<TTool> {
+function unreadableRuntimeToolDiagnostic(toolIndex: number): RuntimeToolSchemaDiagnostic {
   return {
-    ok: false,
-    diagnostic: {
-      toolName: `tool[${toolIndex}]`,
-      toolIndex,
-      violations: [`tool[${toolIndex}] is unreadable`],
-    },
+    toolName: `tool[${toolIndex}]`,
+    toolIndex,
+    violations: [`tool[${toolIndex}] is unreadable`],
   };
 }
 
 function readRuntimeToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameters">>(
   tools: readonly TTool[],
-): RuntimeToolEntryRead<TTool>[] {
+): (TTool | undefined)[] {
   let length: number;
   try {
     length = tools.length;
   } catch {
-    return [unreadableRuntimeToolEntry<TTool>(0)];
+    return [undefined];
   }
-  const entries: RuntimeToolEntryRead<TTool>[] = [];
+  // Snapshot every entry before schema getters can mutate the source array.
+  const entries: (TTool | undefined)[] = [];
   for (let toolIndex = 0; toolIndex < length; toolIndex += 1) {
     try {
-      const tool = tools.at(toolIndex);
-      entries.push(
-        tool === undefined
-          ? unreadableRuntimeToolEntry<TTool>(toolIndex)
-          : { ok: true, tool, toolIndex },
-      );
+      entries.push(tools.at(toolIndex));
     } catch {
-      entries.push(unreadableRuntimeToolEntry<TTool>(toolIndex));
+      entries.push(undefined);
     }
   }
   return entries;
@@ -134,22 +111,23 @@ function inspectToolSchema(
 }
 
 function inspectToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameters">>(
-  entries: readonly RuntimeToolEntryRead<TTool>[],
+  entries: readonly (TTool | undefined)[],
   mode: ToolSchemaInspectionMode,
 ): RuntimeToolSchemaInspection<TTool> {
   const diagnostics: RuntimeToolSchemaDiagnostic[] = [];
   const compatibleTools: TTool[] = [];
-  for (const entry of entries) {
-    if (!entry.ok) {
-      diagnostics.push(entry.diagnostic);
+  for (let toolIndex = 0; toolIndex < entries.length; toolIndex += 1) {
+    const tool = entries[toolIndex];
+    if (tool === undefined) {
+      diagnostics.push(unreadableRuntimeToolDiagnostic(toolIndex));
       continue;
     }
-    const diagnostic = inspectToolSchema(entry.tool, entry.toolIndex, mode);
+    const diagnostic = inspectToolSchema(tool, toolIndex, mode);
     if (diagnostic) {
       diagnostics.push(diagnostic);
       continue;
     }
-    compatibleTools.push(entry.tool);
+    compatibleTools.push(tool);
   }
   return { tools: compatibleTools, diagnostics };
 }

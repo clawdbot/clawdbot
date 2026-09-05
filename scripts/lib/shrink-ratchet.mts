@@ -89,7 +89,10 @@ export function loadRatchetSources(root: string, filePaths: string[]) {
     if (headerEnd < 0) {
       throw new Error("Invalid git cat-file response for " + filePath);
     }
-    const size = Number(output.subarray(offset, headerEnd).toString("utf8").split(" ")[2]);
+    // Missing responses echo the requested path, whose spaces/newlines can spoof a size.
+    // Only a complete object header may frame source bytes.
+    const header = output.subarray(offset, headerEnd).toString("utf8");
+    const size = Number(/^[0-9a-f]+ (?:blob|tree|commit|tag) (\d+)$/u.exec(header)?.[1]);
     if (!Number.isSafeInteger(size)) {
       throw new Error("Could not read staged source " + filePath);
     }

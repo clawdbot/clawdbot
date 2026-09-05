@@ -54,7 +54,17 @@ enum ChatToolActivity {
     }
 }
 
-struct ChatToolActivityRow: View {
+struct ChatToolActivityRow: View, Equatable {
+    let item: ChatToolActivityItem
+
+    var body: some View {
+        // Compare the item before constructing the content: its initializer prepares
+        // the diff, which unchanged siblings must not repeat on every tool update.
+        ChatToolActivityRowContent(item: self.item)
+    }
+}
+
+private struct ChatToolActivityRowContent: View {
     let item: ChatToolActivityItem
     private let resolvedDiff: (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
     @State private var expanded = false
@@ -224,7 +234,7 @@ struct ChatToolActivityRow: View {
             if let detailLine = self.detailLine {
                 Text(detailLine)
                     .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(OpenClawChatTheme.assistantText.opacity(0.62))
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -421,6 +431,7 @@ struct ChatToolActivityList: View {
             // Protocol IDs can collide with specified fallback IDs; encounter order is unique here.
             ForEach(self.items.indices, id: \.self) { index in
                 ChatToolActivityRow(item: self.items[index])
+                    .equatable()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

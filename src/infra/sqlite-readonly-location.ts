@@ -10,8 +10,9 @@ import {
 import {
   createPrivateSqliteTempDirectory,
   createPrivateSqliteTempDirectorySync,
+  resolvePrivateSqliteSnapshotStagingRoot,
 } from "./sqlite-private-directory.js";
-import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+import { runSqliteReadOnlyWorker, runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
 
 const MAX_SNAPSHOT_ATTEMPTS = 10;
 const COPY_BUFFER_BYTES = 1024 * 1024;
@@ -19,6 +20,7 @@ const SQLITE_HEADER_BYTES = 20;
 const SQLITE_READONLY_RESULT_CODE = 8;
 const SQLITE_RESULT_CODE_MASK = 0xff;
 const SQLITE_JOURNAL_MAGIC = Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]);
+const SQLITE_SNAPSHOT_STAGING_PREFIX = `openclaw-sqlite-readonly-${process.pid}-`;
 const pendingTempDirectoryCleanup = new Set<string>();
 let cleanupExitHandlerInstalled = false;
 
@@ -42,6 +44,24 @@ type PreparedSqliteReadOnlyLocation = {
 };
 
 class SqliteSourceChangedError extends Error {}
+
+function sqliteSnapshotStagingError(tempDir: string, cause: unknown, allocation = false): unknown {
+  for (let depth = 0, error = cause; depth < 8 && error instanceof Error; depth += 1) {
+    const { code, errcode, path: errorPath }: NodeJS.ErrnoException & { errcode?: unknown } = error;
+    // SQLite FULL and IOERR_WRITE/FSYNC/DIR_FSYNC identify destination writes.
+    if (
+      allocation ||
+      ["ENOSPC", "EDQUOT"].includes(code ?? "") ||
+      (typeof errcode === "number" && [13, 778, 1034, 1290].includes(errcode)) ||
+      `${errorPath ?? ""}${path.sep}`.startsWith(`${tempDir}${path.sep}`)
+    ) {
+      const message = `${cause instanceof Error ? cause.message : String(cause)}${typeof errcode === "number" ? ` (SQLite errcode=${errcode})` : ""}; snapshot staging root ${allocation ? tempDir : path.dirname(tempDir)}: free disk space/quota or set XDG_CACHE_HOME to a writable filesystem`;
+      return new Error(message, { cause });
+    }
+    error = error.cause;
+  }
+  return cause;
+}
 
 function statIfPresent(pathname: string): BigIntStats | undefined {
   try {
@@ -281,6 +301,29 @@ function removeTempDirectory(tempDir: string): boolean {
   }
 }
 
+function adoptPreparedLocation(
+  location: string,
+  ownedRoot?: string,
+): PreparedSqliteReadOnlyLocation {
+  const tempDir = ownedRoot ?? path.dirname(location);
+  let active = true;
+  return {
+    location,
+    cleanup: () => {
+      if (!active) {
+        return true;
+      }
+      const removed = removeTempDirectory(tempDir);
+      if (removed) {
+        active = false;
+      } else if (ownedRoot) {
+        throw new Error(`SQLite read-only worker snapshot cleanup failed: ${tempDir}`);
+      }
+      return removed;
+    },
+  };
+}
+
 function recoverPrivateRollbackCopy(snapshotPath: string): void {
   if (rollbackJournalReferencesSuperJournal(`${snapshotPath}-journal`)) {
     throw new Error(
@@ -305,13 +348,18 @@ function recoverPrivateRollbackCopy(snapshotPath: string): void {
 
 function createStableReadOnlyCopyInTempDirectory(
   pathname: string,
-  journalMode: Exclude<SourceJournalMode, "unknown">,
-  tempDir: string,
+  journalMode: SourceJournalMode,
+  existingTempDir?: string,
+  stagingRoot = existingTempDir
+    ? path.dirname(existingTempDir)
+    : resolvePrivateSqliteSnapshotStagingRoot(),
 ): PreparedSqliteReadOnlyLocation {
-  const snapshotPath = path.join(tempDir, "database.sqlite");
-  const firstPath = path.join(tempDir, "first");
-  const secondPath = path.join(tempDir, "second");
+  let tempDir = existingTempDir;
   try {
+    tempDir ??= createPrivateSqliteTempDirectorySync(stagingRoot, SQLITE_SNAPSHOT_STAGING_PREFIX);
+    const snapshotPath = path.join(tempDir, "database.sqlite");
+    const firstPath = path.join(tempDir, "first");
+    const secondPath = path.join(tempDir, "second");
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
@@ -355,64 +403,46 @@ function createStableReadOnlyCopyInTempDirectory(
       // a later writable open can perform SQLite's normal crash recovery.
       recoverPrivateRollbackCopy(snapshotPath);
     }
-    let active = true;
-    return {
-      location: snapshotPath,
-      cleanup: () => {
-        if (!active) {
-          return true;
-        }
-        const removed = removeTempDirectory(tempDir);
-        if (removed) {
-          active = false;
-        }
-        return removed;
-      },
-    };
+    return adoptPreparedLocation(snapshotPath);
   } catch (error) {
-    removeTempDirectory(tempDir);
-    throw error;
+    if (tempDir) {
+      removeTempDirectory(tempDir);
+    }
+    throw sqliteSnapshotStagingError(tempDir ?? stagingRoot, error, !tempDir);
+  }
+}
+
+async function createSqliteSnapshotStagingDirectory(
+  stagingRoot = resolvePrivateSqliteSnapshotStagingRoot(),
+): Promise<string> {
+  try {
+    return await createPrivateSqliteTempDirectory(stagingRoot, SQLITE_SNAPSHOT_STAGING_PREFIX);
+  } catch (error) {
+    throw sqliteSnapshotStagingError(stagingRoot, error, true);
   }
 }
 
 async function createStableReadOnlyCopy(
   pathname: string,
   journalMode: Exclude<SourceJournalMode, "unknown">,
+  stagingRoot?: string,
 ): Promise<PreparedSqliteReadOnlyLocation> {
-  const tempDir = await createPrivateSqliteTempDirectory(
-    resolvePreferredOpenClawTmpDir(),
-    `openclaw-sqlite-readonly-${process.pid}-`,
-  );
-  return createStableReadOnlyCopyInTempDirectory(pathname, journalMode, tempDir);
-}
-
-function createStableReadOnlyCopySync(
-  pathname: string,
-  journalMode: Exclude<SourceJournalMode, "unknown">,
-): PreparedSqliteReadOnlyLocation {
-  const tempDir = createPrivateSqliteTempDirectorySync(
-    resolvePreferredOpenClawTmpDir(),
-    `openclaw-sqlite-readonly-${process.pid}-`,
-  );
+  const tempDir = await createSqliteSnapshotStagingDirectory(stagingRoot);
   return createStableReadOnlyCopyInTempDirectory(pathname, journalMode, tempDir);
 }
 
 async function createOnlineReadOnlyBackup(
   pathname: string,
+  stagingRoot?: string,
 ): Promise<PreparedSqliteReadOnlyLocation> {
-  const tempDir = await createPrivateSqliteTempDirectory(
-    resolvePreferredOpenClawTmpDir(),
-    `openclaw-sqlite-readonly-${process.pid}-`,
-  );
+  const tempDir = await createSqliteSnapshotStagingDirectory(stagingRoot);
   const snapshotPath = path.join(tempDir, "database.sqlite");
   const sqlite = requireNodeSqlite();
   try {
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
-    const source = openNodeSqliteDatabase(pathname, {
-      readOnly: true,
-    });
+    const source = openNodeSqliteDatabase(pathname, { readOnly: true });
     try {
       source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
       source.prepare("PRAGMA schema_version;").get();
@@ -435,23 +465,10 @@ async function createOnlineReadOnlyBackup(
     } finally {
       fs.closeSync(descriptor);
     }
-    let active = true;
-    return {
-      location: snapshotPath,
-      cleanup: () => {
-        if (!active) {
-          return true;
-        }
-        const removed = removeTempDirectory(tempDir);
-        if (removed) {
-          active = false;
-        }
-        return removed;
-      },
-    };
+    return adoptPreparedLocation(snapshotPath);
   } catch (error) {
     removeTempDirectory(tempDir);
-    throw error;
+    throw sqliteSnapshotStagingError(tempDir, error);
   }
 }
 
@@ -459,9 +476,12 @@ async function createOnlineReadOnlyBackup(
  * Active rollback and WAL state use SQLite's locking and backup protocol.
  * Crash residue that cannot be opened read-only is copied and recovered
  * privately so inspection never mutates coordination files beside the source.
+ * The InProcess exports are child-only: POSIX close() can release every lock
+ * the calling process holds on the same source inode.
  */
-export async function prepareSqliteReadOnlyLocation(
+export async function prepareSqliteReadOnlyLocationInProcess(
   pathname: string,
+  stagingRoot?: string,
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const canonicalPath = fs.realpathSync.native(pathname);
   let lastChange: Error | undefined;
@@ -478,7 +498,7 @@ export async function prepareSqliteReadOnlyLocation(
     }
     if (journalMode === "empty") {
       try {
-        return await createStableReadOnlyCopy(canonicalPath, journalMode);
+        return await createStableReadOnlyCopy(canonicalPath, journalMode, stagingRoot);
       } catch (error) {
         if (!(error instanceof SqliteSourceChangedError)) {
           throw error;
@@ -490,7 +510,7 @@ export async function prepareSqliteReadOnlyLocation(
     const sidecars = readSourceSidecars(canonicalPath);
     if (journalMode !== "wal" || (sidecars.wal && sidecars.shm)) {
       try {
-        return await createOnlineReadOnlyBackup(canonicalPath);
+        return await createOnlineReadOnlyBackup(canonicalPath, stagingRoot);
       } catch (error) {
         // A writer can add or remove sidecars before SQLite opens. Retry
         // incomplete WAL state or rollback crash residue through private copy.
@@ -510,7 +530,7 @@ export async function prepareSqliteReadOnlyLocation(
             throw error;
           }
           try {
-            return await createStableReadOnlyCopy(canonicalPath, "rollback");
+            return await createStableReadOnlyCopy(canonicalPath, "rollback", stagingRoot);
           } catch (copyError) {
             if (!(copyError instanceof SqliteSourceChangedError)) {
               throw copyError;
@@ -527,7 +547,7 @@ export async function prepareSqliteReadOnlyLocation(
       }
     }
     try {
-      return await createStableReadOnlyCopy(canonicalPath, "wal");
+      return await createStableReadOnlyCopy(canonicalPath, "wal", stagingRoot);
     } catch (error) {
       if (!(error instanceof SqliteSourceChangedError)) {
         throw error;
@@ -540,9 +560,9 @@ export async function prepareSqliteReadOnlyLocation(
   });
 }
 
-/** Synchronously prepares a stable private family for lock-free public inspection. */
-export function prepareSqliteReadOnlyLocationSync(
+export function prepareSqliteReadOnlyLocationSyncInProcess(
   pathname: string,
+  stagingRoot?: string,
 ): PreparedSqliteReadOnlyLocation {
   const canonicalPath = fs.realpathSync.native(pathname);
   let lastChange: Error | undefined;
@@ -557,14 +577,15 @@ export function prepareSqliteReadOnlyLocationSync(
       lastChange = error;
       continue;
     }
-    if (journalMode === "unknown") {
-      lastChange = new SqliteSourceChangedError(
-        `SQLite journal mode is unavailable while copying: ${canonicalPath}`,
-      );
-      continue;
-    }
     try {
-      return createStableReadOnlyCopySync(canonicalPath, journalMode);
+      // Stable malformed bytes still belong to SQLite's diagnostic path. The
+      // private copy checks bytes, sidecars, and mode before a reader opens it.
+      return createStableReadOnlyCopyInTempDirectory(
+        canonicalPath,
+        journalMode,
+        undefined,
+        stagingRoot,
+      );
     } catch (error) {
       if (!(error instanceof SqliteSourceChangedError)) {
         throw error;
@@ -575,6 +596,43 @@ export function prepareSqliteReadOnlyLocationSync(
   throw new Error(`SQLite source did not stabilize for read-only inspection: ${canonicalPath}`, {
     cause: lastChange,
   });
+}
+
+export async function prepareSqliteReadOnlyLocation(
+  pathname: string,
+  options: { preserveSourceArtifacts?: boolean; signal?: AbortSignal } = {},
+): Promise<PreparedSqliteReadOnlyLocation> {
+  let stagingRoot: string | undefined;
+  try {
+    options.signal?.throwIfAborted();
+    // A stopped worker may never publish its random snapshot path. Allocate its
+    // private parent first so cancellation can join the child and remove all copies.
+    if (options.signal) {
+      stagingRoot = await createSqliteSnapshotStagingDirectory();
+    }
+    options.signal?.throwIfAborted();
+    const location = await runSqliteReadOnlyWorker(pathname, {
+      mode: options.preserveSourceArtifacts ? "sync" : "async",
+      signal: options.signal,
+      stagingRoot,
+    });
+    options.signal?.throwIfAborted();
+    return adoptPreparedLocation(location, stagingRoot);
+  } catch (error) {
+    if (stagingRoot && !removeTempDirectory(stagingRoot)) {
+      throw new Error(`SQLite read-only worker snapshot cleanup failed: ${stagingRoot}`, {
+        cause: error,
+      });
+    }
+    options.signal?.throwIfAborted();
+    throw error;
+  }
+}
+
+export function prepareSqliteReadOnlyLocationSync(
+  pathname: string,
+): PreparedSqliteReadOnlyLocation {
+  return adoptPreparedLocation(runSqliteReadOnlyWorkerSync(pathname));
 }
 
 async function prepareSqliteSnapshotSource(

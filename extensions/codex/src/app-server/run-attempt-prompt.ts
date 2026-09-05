@@ -32,8 +32,8 @@ import {
   codexDynamicToolsFingerprint,
   codexLegacyDynamicToolsFingerprint,
 } from "./thread-lifecycle.js";
-
-const CODEX_META_KEY = "__openclaw";
+import { hasCodexMirrorOrigin } from "./transcript-mirror-attestation.js";
+import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 function isRestrictivePromptToolsAllow(toolsAllow: string[] | undefined): boolean {
   return toolsAllow !== undefined && !toolsAllow.some((name) => name.trim() === "*");
@@ -198,7 +198,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           return promptState.developerInstructions;
         },
       },
-      messages: structuredClone(historyState.messages),
+      messages: historyState.messages,
       ctx: hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       toolAuthority: {
@@ -207,7 +207,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
             .map((tool) => tool.name)
             .filter(isNonEmptyString),
-        assertActive: params.hostCapabilities.assertActive,
+        assertActive: connection.assertCurrent,
       },
     });
     return result;
@@ -343,15 +343,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       if (message.role !== "user" && message.role !== "assistant") {
         return false;
       }
-      const meta = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
-      const mirrorIdentity =
-        meta && typeof meta === "object" && !Array.isArray(meta)
-          ? (meta as Record<string, unknown>).mirrorIdentity
-          : undefined;
-      const mirrorOrigin =
-        meta && typeof meta === "object" && !Array.isArray(meta)
-          ? (meta as Record<string, unknown>).mirrorOrigin
-          : undefined;
+      const mirrorIdentity = readMirrorIdentity(message);
       const timestamp =
         typeof message.timestamp === "number"
           ? message.timestamp
@@ -364,8 +356,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           typeof message.idempotencyKey === "string" &&
           message.idempotencyKey.startsWith("codex-app-server:")
         ) &&
-        mirrorOrigin !== "codex-app-server" &&
-        !(typeof mirrorIdentity === "string" && mirrorIdentity.startsWith("codex-app-server:")) &&
+        !hasCodexMirrorOrigin(message) &&
+        !mirrorIdentity?.startsWith("codex-app-server:") &&
         Number.isFinite(timestamp) &&
         timestamp > (Number.isFinite(cutoff) ? cutoff : 0)
       );
@@ -409,7 +401,15 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     action: "started" | "resumed" | "forked",
     binding?: NonNullable<typeof mutable.startupBinding>,
   ) => {
-    if (activeContextEngine || !historyState.messages.some((message) => message.role === "user")) {
+    // A fresh thread can inherit summaries after all prior user messages were compacted away.
+    // Resumed bindings keep their separate incremental user/assistant handoff contract.
+    const hasContinuity = historyState.messages.some(
+      (message) =>
+        message.role === "user" ||
+        (action === "started" &&
+          (message.role === "compactionSummary" || message.role === "branchSummary")),
+    );
+    if (activeContextEngine || !hasContinuity) {
       return false;
     }
     if (action === "resumed" && promptState.precomputedStaleBindingContinuityProjectionApplied) {
@@ -441,6 +441,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     const previousThreadId = binding.threadId;
     const hadInactiveThreadBootstrapBinding = isInactiveThreadBootstrapBinding(binding);
     const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
+      assertCurrent: connection.assertCurrent,
       binding,
       bindingStore,
       identity: bindingIdentity,
@@ -449,6 +450,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       codexHome: appServer.start.env?.CODEX_HOME,
       config: params.config,
       contextEngineActive: Boolean(activeContextEngine),
+      expectedSessionRuntimeOwnership: params.expectedSessionRuntimeOwnership,
       projectedTurnTokens: estimateCodexAppServerProjectedTurnTokens({
         prompt: turnState.codexTurnPromptText,
         developerInstructions: buildRenderedCodexDeveloperInstructions(),

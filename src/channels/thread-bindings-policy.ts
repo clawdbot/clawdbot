@@ -11,8 +11,7 @@ import {
   type ThreadBindingLifecycleRecord,
 } from "../shared/thread-binding-lifecycle.js";
 import { asBoolean } from "../utils/boolean.js";
-import { getLoadedChannelPlugin } from "./plugins/index.js";
-import { resolveBundledChannelThreadBindingDefaultPlacement } from "./plugins/thread-binding-api.js";
+import { resolveChannelDefaultBindingPlacement } from "./conversation-resolution.js";
 
 export { resolveThreadBindingLifecycle } from "../shared/thread-binding-lifecycle.js";
 
@@ -53,36 +52,7 @@ function normalizeChannelId(value: string | undefined | null): string {
 
 /** Returns true when top-level commands should spawn in a child thread by default. */
 export function supportsAutomaticThreadBindingSpawn(channel: string): boolean {
-  return resolveDefaultTopLevelPlacement(channel) === "child";
-}
-
-/** Returns true when /thread here needs a native channel thread to exist first. */
-export function requiresNativeThreadContextForThreadHere(channel: string): boolean {
-  return resolveDefaultTopLevelPlacement(channel) === "child";
-}
-
-/** Resolves whether a thread binding should attach to the current thread or create a child. */
-export function resolveThreadBindingPlacementForCurrentContext(params: {
-  channel: string;
-  threadId?: string;
-}): "current" | "child" {
-  if (resolveDefaultTopLevelPlacement(params.channel) !== "child") {
-    return "current";
-  }
-  return params.threadId ? "current" : "child";
-}
-
-function resolveDefaultTopLevelPlacement(channel: string): "current" | "child" {
-  const normalized = normalizeChannelId(channel);
-  if (!normalized) {
-    return "current";
-  }
-  return (
-    // Loaded plugin metadata wins; bundled metadata is the startup-safe fallback.
-    getLoadedChannelPlugin(normalized)?.conversationBindings?.defaultTopLevelPlacement ??
-    resolveBundledChannelThreadBindingDefaultPlacement(normalized) ??
-    "current"
-  );
+  return resolveChannelDefaultBindingPlacement(channel) === "child";
 }
 
 function normalizeThreadBindingHours(raw: unknown): number | undefined {

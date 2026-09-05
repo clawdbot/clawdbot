@@ -1,5 +1,6 @@
 // Remote-Gateway onboarding adapters keep inference detection and activation on the Gateway host.
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import type {
   SystemAgentChatResult,
   SystemAgentSetupActivateResult,
@@ -7,7 +8,12 @@ import type {
   SystemAgentSetupVerifyResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { CallGatewayCliOptions } from "../gateway/call.js";
+import {
+  isGatewayClientRequestError,
+  isGatewayTransportError,
+  resolveDeviceIdentityForGatewayCall,
+  type CallGatewayCliOptions,
+} from "../gateway/call.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type {
   ActivateSetupInferenceParams,
@@ -24,6 +30,9 @@ const GATEWAY_SETUP_ACTIVATE_TIMEOUT_MS = 150_000;
 const GATEWAY_CODEX_SETUP_ACTIVATE_TIMEOUT_MS = 480_000;
 const GATEWAY_SETUP_VERIFY_TIMEOUT_MS = 30_000;
 const GATEWAY_SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
+const GATEWAY_RESTART_WAIT_TIMEOUT_MS = 45_000;
+const GATEWAY_RESTART_IDENTITY_ERROR =
+  "Inference settings were saved, but the Gateway did not provide a boot identity. Update and restart the remote Gateway, then run onboarding again.";
 
 type CallGateway = <T>(options: CallGatewayCliOptions) => Promise<T>;
 
@@ -137,6 +146,7 @@ function toSetupInferenceActivationResult(
       modelRef: result.modelRef,
       latencyMs: result.latencyMs,
       lines: result.lines,
+      ...(result.gatewayRestartRequired ? { gatewayRestartRequired: true } : {}),
     };
   }
   if (!isSetupInferenceFailureStatus(result.status) || !result.error?.trim()) {
@@ -206,12 +216,14 @@ export async function runRemoteGatewayInferenceOnboarding(
   const explicitAuth = Boolean(target.token || target.password);
   let gatewayWorkspace: string | undefined;
 
-  const request = async <T>(params: {
-    method: string;
-    payload: unknown;
-    timeoutMs: number;
-  }): Promise<T> =>
+  const request = async <T>(
+    params: Pick<
+      CallGatewayCliOptions,
+      "method" | "params" | "onHelloOk" | "signal" | "deviceIdentity"
+    > & { timeoutMs: number },
+  ): Promise<T> =>
     await callGateway<T>({
+      ...params,
       config: boundConfig,
       // Authenticated calls can pin the URL directly. Auth-free loopback
       // Gateways use the equivalently pinned config target because URL
@@ -221,15 +233,12 @@ export async function runRemoteGatewayInferenceOnboarding(
       ...(target.password ? { password: target.password } : {}),
       ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),
       ignoreEnvUrlOverride: true,
-      method: params.method,
-      params: params.payload,
-      timeoutMs: params.timeoutMs,
     });
 
   const detect = async (): Promise<SetupInferenceDetection> => {
     const result = await request<SystemAgentSetupDetectResult>({
       method: "openclaw.setup.detect",
-      payload: {},
+      params: {},
       timeoutMs: GATEWAY_SETUP_DETECT_TIMEOUT_MS,
     });
     const detection = toSetupInferenceDetection(result);
@@ -240,9 +249,10 @@ export async function runRemoteGatewayInferenceOnboarding(
   const activate = async (
     params: ActivateSetupInferenceParams,
   ): Promise<ActivateSetupInferenceResult> => {
+    let activationBootId: string | undefined;
     const result = await request<SystemAgentSetupActivateResult>({
       method: "openclaw.setup.activate",
-      payload: {
+      params: {
         kind: params.kind,
         ...(params.modelRef !== undefined ? { modelRef: params.modelRef } : {}),
         ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
@@ -250,22 +260,76 @@ export async function runRemoteGatewayInferenceOnboarding(
         ...(gatewayWorkspace ? { workspace: gatewayWorkspace } : {}),
       },
       timeoutMs: activationTimeoutMs(params.kind),
+      onHelloOk: (hello) => {
+        activationBootId = hello.server.bootId?.trim();
+      },
     });
     const activation = toSetupInferenceActivationResult(result);
     if (!activation.ok) {
       return activation;
     }
-    const verification = await request<SystemAgentSetupVerifyResult>({
-      method: "openclaw.setup.verify",
-      payload: {},
-      timeoutMs: GATEWAY_SETUP_VERIFY_TIMEOUT_MS,
-    });
-    assertVerifiedActivation({
-      activation,
-      verification,
-      ...(params.modelRef ? { requestedModelRef: params.modelRef } : {}),
-    });
-    return activation;
+    const restartBootId = activation.gatewayRestartRequired ? activationBootId : undefined;
+    if (activation.gatewayRestartRequired && !restartBootId) {
+      throw new Error(GATEWAY_RESTART_IDENTITY_ERROR);
+    }
+    const restartDeadline = Date.now() + GATEWAY_RESTART_WAIT_TIMEOUT_MS;
+    let retryDelayMs = 250;
+    for (;;) {
+      const remainingBeforeAttemptMs = restartDeadline - Date.now();
+      if (restartBootId && remainingBeforeAttemptMs <= 0) {
+        throw new Error(
+          "Inference settings were saved, but the Gateway did not finish restarting and verifying inference. Check the remote Gateway, then run onboarding again.",
+        );
+      }
+      const restartWait = new AbortController();
+      let requestedDelay = retryDelayMs;
+      try {
+        const verification = await request<SystemAgentSetupVerifyResult>({
+          method: "openclaw.setup.verify",
+          params: {},
+          timeoutMs: restartBootId
+            ? Math.min(GATEWAY_SETUP_VERIFY_TIMEOUT_MS, remainingBeforeAttemptMs)
+            : GATEWAY_SETUP_VERIFY_TIMEOUT_MS,
+          signal: restartWait.signal,
+          onHelloOk: (hello) => {
+            if (!restartBootId) {
+              return;
+            }
+            const bootId = hello.server.bootId?.trim();
+            // Verification runs inference. Cancel at hello so an old healthy
+            // listener cannot bill another completion or satisfy the restart.
+            if (!bootId || bootId === restartBootId) {
+              restartWait.abort(bootId ? "unchanged-boot" : "missing-boot");
+            }
+          },
+        });
+        if (!restartBootId || verification.ok || verification.status !== "unavailable") {
+          assertVerifiedActivation({
+            activation,
+            verification,
+            ...(params.modelRef ? { requestedModelRef: params.modelRef } : {}),
+          });
+          return activation;
+        }
+      } catch (error) {
+        if (restartWait.signal.reason === "missing-boot") {
+          throw new Error(GATEWAY_RESTART_IDENTITY_ERROR, { cause: error });
+        }
+        const retryable =
+          restartBootId &&
+          (restartWait.signal.reason === "unchanged-boot" ||
+            isGatewayTransportError(error) ||
+            (isGatewayClientRequestError(error) && error.retryable));
+        if (!retryable) {
+          throw error;
+        }
+        if (isGatewayClientRequestError(error)) {
+          requestedDelay = error.retryAfterMs ?? retryDelayMs;
+        }
+      }
+      await delay(Math.min(requestedDelay, Math.max(0, restartDeadline - Date.now())));
+      retryDelayMs = Math.min(retryDelayMs * 2, 2_000);
+    }
   };
 
   await runGuidedOnboarding({}, runtime, {
@@ -282,10 +346,14 @@ export async function runRemoteGatewayInferenceOnboarding(
           createClackPrompter(),
         ));
       await prompter.intro("OpenClaw");
+      // One-shot RPCs have different connections. Preserve a signed device
+      // owner across chat replies even when loopback shared auth needs no device.
+      const deviceIdentity = resolveDeviceIdentityForGatewayCall();
       const sessionId = randomUUID();
       let reply = await request<SystemAgentChatResult>({
         method: "openclaw.chat",
-        payload: { sessionId, welcomeVariant: "onboarding" },
+        deviceIdentity,
+        params: { sessionId, welcomeVariant: "onboarding" },
         timeoutMs: GATEWAY_SYSTEM_AGENT_CHAT_TIMEOUT_MS,
       });
 
@@ -309,7 +377,8 @@ export async function runRemoteGatewayInferenceOnboarding(
           });
           reply = await request<SystemAgentChatResult>({
             method: "openclaw.chat",
-            payload: { sessionId, message },
+            deviceIdentity,
+            params: { sessionId, message },
             timeoutMs: GATEWAY_SYSTEM_AGENT_CHAT_TIMEOUT_MS,
           });
         }

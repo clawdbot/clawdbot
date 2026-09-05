@@ -3,9 +3,11 @@
  * namespaced tool scopes here; code mode receives descriptors, virtual API
  * files, and a guarded invocation runtime.
  */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { tokTypes } from "acorn";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
-import type { PluginToolMcpMeta } from "../plugins/tools.js";
+import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
+import { sanitizeNodeIdFragment } from "./agent-bundle-mcp-names.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
   buildMcpApiResponse,
@@ -147,17 +149,12 @@ function createCodeModeNamespaceCatalogTool(
   };
 }
 
-function createCodeModeNamespaceLocalFunction(
-  toolName: string,
+function createCodeModeNamespaceApi(
   input: CodeModeNamespaceToolInputMapper,
 ): CodeModeNamespaceToolCall {
-  const normalizedToolName = toolName.trim();
-  if (!normalizedToolName) {
-    throw new Error("Code mode namespace local function name must be non-empty.");
-  }
   return {
     [CODE_MODE_NAMESPACE_TOOL_CALL]: true,
-    toolName: normalizedToolName,
+    toolName: "$api",
     local: true,
     input,
   };
@@ -294,19 +291,6 @@ function mcpNamespaceServerKey(mcp: NonNullable<CodeModeNamespaceCatalogEntry["m
     : JSON.stringify(["gateway", mcp.safeServerName]);
 }
 
-function sanitizeNodeFragment(value: string): string {
-  const fragment = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 32);
-  if (!fragment) {
-    return "node";
-  }
-  return /^[a-z]/.test(fragment) ? fragment : `node_${fragment}`.slice(0, 32);
-}
-
 function assignMcpNamespaceServerNames(
   servers: readonly McpNamespaceServer[],
 ): Map<string, string> {
@@ -332,7 +316,7 @@ function assignMcpNamespaceServerNames(
     if (!server.node || assignments.has(server.key)) {
       continue;
     }
-    const base = `${sanitizeNodeFragment(server.node.id)}_${server.safeServerName}`;
+    const base = `${sanitizeNodeIdFragment(server.node.id)}_${server.safeServerName}`;
     let candidate = base;
     let index = 2;
     while (used.has(candidate.toLowerCase())) {
@@ -346,7 +330,7 @@ function assignMcpNamespaceServerNames(
 }
 
 function mcpNodeLabel(node: NonNullable<McpNamespaceServer["node"]>): string {
-  return (node.displayName?.trim() || node.id).replace(/\s+/gu, " ").slice(0, 128);
+  return truncateUtf16Safe((node.displayName?.trim() || node.id).replace(/\s+/gu, " "), 128);
 }
 
 function createMcpNamespaceModel(
@@ -439,19 +423,15 @@ function createMcpNamespaceModel(
       params: buildMcpParamDocs(entry.parameters),
     });
   }
-  const docs = [...serverDocs.values()]
-    .map((server) =>
-      Object.assign({}, server, {
-        tools: server.tools.toSorted((a, b) => a.method.localeCompare(b.method)),
-      }),
-    )
-    .toSorted((a, b) => a.identifier.localeCompare(b.identifier));
-  root.$api = createCodeModeNamespaceLocalFunction("$api", (args) =>
-    buildMcpApiResponse({ servers: docs, args }),
-  );
+  const docs = Array.from(serverDocs.values(), (server) => {
+    // The model owns these rows until namespace/API publication.
+    server.tools = server.tools.toSorted((a, b) => a.method.localeCompare(b.method));
+    return server;
+  }).toSorted((a, b) => a.identifier.localeCompare(b.identifier));
+  root.$api = createCodeModeNamespaceApi((args) => buildMcpApiResponse({ servers: docs, args }));
   for (const server of docs) {
     const serverScope = scopeAtPath(root, [server.identifier]);
-    serverScope.$api = createCodeModeNamespaceLocalFunction("$api", (args) =>
+    serverScope.$api = createCodeModeNamespaceApi((args) =>
       buildMcpApiResponse({ servers: docs, server, args }),
     );
   }
@@ -475,7 +455,7 @@ interface AgentsApi {
   run<T>(prompt: string, options: AgentRunOptions & { schema: AgentJsonSchema }): Promise<T>;
 }
 
-/** Spawn collector agents concurrently. */
+/** Spawn collector agents concurrently; requests queue when bridge slots are full. */
 declare const agents: Readonly<AgentsApi>;
 /** Publish a phase heading for this swarm. */
 declare function phase(title: string): void;
@@ -601,24 +581,16 @@ function serializeNamespaceScopeValue(
   }
 }
 
-function resolveNamespacePath(
-  scope: CodeModeNamespaceScope,
-  path: readonly string[],
-): {
-  target: unknown;
-  parent: unknown;
-} {
+function resolveNamespacePath(scope: CodeModeNamespaceScope, path: readonly string[]): unknown {
   let current: unknown = scope;
-  let parent: unknown = undefined;
   for (const segment of path) {
     assertNamespacePathSegment(segment);
-    parent = current;
     if (!isRecord(current) && !Array.isArray(current)) {
-      return { target: undefined, parent };
+      return undefined;
     }
     current = (current as Record<string, unknown>)[segment];
   }
-  return { target: current, parent };
+  return current;
 }
 
 /** Creates the runtime descriptor/invocation layer for visible namespaces. */
@@ -626,10 +598,11 @@ export function createCodeModeNamespaceRuntime(
   catalog: readonly CodeModeNamespaceCatalogEntry[] = [],
 ): CodeModeNamespaceRuntime {
   const model = createMcpNamespaceModel(catalog);
-  const entries = model ? [createMcpNamespaceEntry(model)] : [];
-  const byId = new Map(entries.map((entry) => [entry.descriptor.id, entry]));
+  const entry = model ? createMcpNamespaceEntry(model) : undefined;
+  // Registration stays stable if a consumer mutates the exposed descriptor.
+  const registeredId = entry?.descriptor.id;
   return {
-    descriptors: entries.map((entry) => entry.descriptor),
+    descriptors: entry ? [entry.descriptor] : [],
     apiFiles: [
       {
         path: "agents.d.ts",
@@ -640,8 +613,7 @@ export function createCodeModeNamespaceRuntime(
       ...createMcpApiVirtualFiles(model?.docs ?? []),
     ],
     async invoke(namespaceId, path, args, executeTool) {
-      const entry = byId.get(namespaceId);
-      if (!entry) {
+      if (!entry || namespaceId !== registeredId) {
         throw new Error(`Unknown code mode namespace: ${namespaceId}`);
       }
       for (const segment of path) {
@@ -650,7 +622,7 @@ export function createCodeModeNamespaceRuntime(
       if (!entry.callablePaths.has(namespacePathKey(path))) {
         throw new Error(`Code mode namespace path is not callable: ${path.join(".")}`);
       }
-      const { target } = resolveNamespacePath(entry.scope, path);
+      const target = resolveNamespacePath(entry.scope, path);
       if (!isCodeModeNamespaceToolCall(target)) {
         throw new Error(`Code mode namespace path is not callable: ${path.join(".")}`);
       }

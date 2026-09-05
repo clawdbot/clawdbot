@@ -13,7 +13,9 @@ export {
 export {
   buildContractReplyPayloads,
   createContractToolTerminalObserver,
+  createHostTtsRuntimeContract,
   createOwnerBackedContractTool,
+  createProcessPollDeliveryContract,
   createTerminalPresentationContractTool,
   installCodexToolResultMiddleware,
   installOpenClawOwnedToolHooks,

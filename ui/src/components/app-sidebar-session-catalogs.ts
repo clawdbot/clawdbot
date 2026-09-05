@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionCatalog,
   SessionCatalogHost,
@@ -6,10 +7,13 @@ import type {
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { repoName } from "../lib/session-display.ts";
 import type {
   CatalogSessionContinuedDetail,
   CatalogSessionKey,
 } from "../lib/sessions/catalog-key.ts";
+import { buildCatalogSessionKey, parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
   const now = Date.now();
@@ -25,6 +29,64 @@ export function formatSidebarTimestamp(timestampMs: number | null | undefined): 
     fallback: "",
     suffix: timestampMs != null && timestampMs > now,
   });
+}
+
+export function normalizeCatalogTimestamp(timestamp: number | undefined): number | undefined {
+  return timestamp !== undefined && timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp;
+}
+
+export function findCatalogSessionHovercardRow(params: {
+  catalogs: readonly SessionCatalog[];
+  sessionKey: string;
+  liveRow?: SidebarSessionHovercardRow;
+}): SidebarSessionHovercardRow | undefined {
+  const catalogKey = parseCatalogSessionKey(params.sessionKey);
+  for (const catalog of params.catalogs) {
+    for (const host of catalog.hosts) {
+      for (const session of host.sessions) {
+        const key =
+          session.sessionKey ??
+          buildCatalogSessionKey({
+            catalogId: catalog.id,
+            hostId: host.hostId,
+            threadId: session.threadId,
+          });
+        const matchesCatalogKey =
+          // Routed catalog keys keep agent ownership; source lookup ignores only that prefix.
+          catalogKey?.catalogId === catalog.id &&
+          catalogKey.hostId === host.hostId &&
+          catalogKey.threadId === session.threadId;
+        if (key !== params.sessionKey && !matchesCatalogKey) {
+          continue;
+        }
+        const cwd = normalizeOptionalString(session.cwd);
+        const branch = normalizeOptionalString(session.gitBranch);
+        // A catalog cwd is authoritative workspace context, but it does not by
+        // itself prove repository identity; only projected Git facts do that.
+        return {
+          ...params.liveRow,
+          hasAutomation: params.liveRow?.hasAutomation === true,
+          label: params.liveRow?.label ?? (session.name || session.threadId),
+          // Once adopted, even an unset live color overrides stale catalog metadata.
+          color: params.liveRow ? params.liveRow.color : session.color,
+          createdActor: params.liveRow?.createdActor ?? session.createdActor,
+          createdAt: params.liveRow?.createdAt ?? normalizeCatalogTimestamp(session.createdAt),
+          updatedAt: params.liveRow?.updatedAt ?? normalizeCatalogTimestamp(session.updatedAt),
+          workContext: cwd
+            ? branch || session.pullRequest
+              ? {
+                  kind: "project",
+                  name: repoName(cwd),
+                  path: cwd,
+                  ...(branch ? { branch } : {}),
+                }
+              : { kind: "workspace", name: repoName(cwd), path: cwd }
+            : params.liveRow?.workContext,
+        };
+      }
+    }
+  }
+  return params.liveRow;
 }
 
 /** Session keys already adopted into OpenClaw sessions; the regular list hides
@@ -80,7 +142,9 @@ export function visibleCatalogHosts(
 }
 
 export type CatalogBackingSessionDisplay = {
-  label: string;
+  catalogIdentityKey: string;
+  catalogMenuOpen: boolean;
+  rowRef?: (element: Element | undefined) => void;
   subtitle?: string;
   pullRequest?: SessionCatalogSession["pullRequest"];
 };

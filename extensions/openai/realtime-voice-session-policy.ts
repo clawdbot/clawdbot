@@ -1,9 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import {
-  isProviderAuthProfileConfigured,
-  resolveProviderAuthProfileApiKey,
-} from "openclaw/plugin-sdk/provider-auth";
+import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   OpenAICompatibleRealtimeAudioFormat,
   RealtimeVoiceAudioFormat,
@@ -17,8 +13,7 @@ import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   toOpenAICompatibleRealtimeAudioFormat,
-} from "openclaw/plugin-sdk/realtime-voice";
-import { warn } from "openclaw/plugin-sdk/runtime-env";
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
@@ -29,24 +24,15 @@ import {
   asSafeIntegerInRange,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-auth.js";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   readRealtimeErrorDetail,
   resolveOpenAIProviderConfigRecord,
 } from "./realtime-provider-shared.js";
-import { resolveOpenAIChatGptSubscriptionAuth } from "./realtime-quicksilver-session.js";
-import { OPENAI_GPT_LIVE_MODELS } from "./realtime-quicksilver.js";
+import { OPENAI_GPT_LIVE_MODELS, OPENAI_GPT_LIVE_VOICES } from "./realtime-quicksilver.js";
 
-export type OpenAIRealtimeVoice =
-  | "alloy"
-  | "ash"
-  | "ballad"
-  | "cedar"
-  | "coral"
-  | "echo"
-  | "marin"
-  | "sage"
-  | "shimmer"
-  | "verse";
+export type OpenAIRealtimeVoice = (typeof OPENAI_REALTIME_VOICES)[number];
 
 export type OpenAIRealtimeUserMessageOptions = {
   toolChoice?: { type: "function"; name: string };
@@ -55,7 +41,7 @@ export type OpenAIRealtimeUserMessageOptions = {
 export type OpenAIRealtimeVoiceProviderConfig = {
   apiKey?: string;
   model?: string;
-  voice?: OpenAIRealtimeVoice;
+  voice?: string;
   temperature?: number;
   vadThreshold?: number;
   silenceDurationMs?: number;
@@ -97,7 +83,12 @@ export const OPENAI_REALTIME_MODELS = [
   ...OPENAI_GPT_LIVE_MODELS,
 ] as const;
 export const OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
-export const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
+export const OPENAI_REALTIME_CAPABILITIES: RealtimeVoiceProviderCapabilities & {
+  voicesByModel: Record<string, readonly string[]>;
+} = {
+  voicesByModel: Object.fromEntries(
+    OPENAI_GPT_LIVE_MODELS.map((model) => [model, OPENAI_GPT_LIVE_VOICES]),
+  ),
   transports: ["webrtc", "gateway-relay"],
   inputAudioFormats: [
     REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
@@ -137,7 +128,7 @@ export const OPENAI_REALTIME_VOICES = [
   "verse",
   "marin",
   "cedar",
-] as const satisfies readonly OpenAIRealtimeVoice[];
+] as const;
 
 export function normalizeOpenAIRealtimeVoice(value: unknown): OpenAIRealtimeVoice | undefined {
   if (typeof value !== "string") {
@@ -239,25 +230,22 @@ export function normalizeProviderConfig(
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
     }),
     model: normalizeOptionalString(raw?.model),
-    voice: normalizeOpenAIRealtimeVoice(raw?.speakerVoice ?? raw?.voice),
+    // Session creation selects the effective model; an earlier family fallback loses overrides.
+    voice: normalizeOptionalString(raw?.speakerVoice ?? raw?.voice)?.toLowerCase(),
     temperature: asFiniteNumber(raw?.temperature),
     vadThreshold: asUnitInterval(raw?.vadThreshold),
-    silenceDurationMs: asNonNegativeInteger(raw?.silenceDurationMs),
-    prefixPaddingMs: asNonNegativeInteger(raw?.prefixPaddingMs),
+    silenceDurationMs: asSafeIntegerInRange(raw?.silenceDurationMs, { min: 0 }),
+    prefixPaddingMs: asSafeIntegerInRange(raw?.prefixPaddingMs, { min: 0 }),
     interruptResponseOnInputAudio:
       typeof raw?.interruptResponseOnInputAudio === "boolean"
         ? raw.interruptResponseOnInputAudio
         : undefined,
-    minBargeInAudioEndMs: asNonNegativeInteger(raw?.minBargeInAudioEndMs),
+    minBargeInAudioEndMs: asSafeIntegerInRange(raw?.minBargeInAudioEndMs, { min: 0 }),
     reasoningEffort: normalizeOptionalString(raw?.reasoningEffort),
     azureEndpoint: normalizeOptionalString(raw?.azureEndpoint),
     azureDeployment: normalizeOptionalString(raw?.azureDeployment),
     azureApiVersion: normalizeOptionalString(raw?.azureApiVersion),
   };
-}
-
-function asNonNegativeInteger(value: unknown): number | undefined {
-  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function asUnitInterval(value: unknown): number | undefined {
@@ -399,6 +387,7 @@ export function hasOpenAIRealtimeApiKeyInput(configuredApiKey: string | undefine
 
 export function normalizeOpenAIRealtimeTools(
   tools: RealtimeVoiceTool[] | undefined,
+  warn: OpenAIRealtimeHost["warn"],
   maxNameLength?: number,
 ): RealtimeVoiceTool[] | undefined {
   const normalized: RealtimeVoiceTool[] = [];
@@ -505,11 +494,14 @@ export function buildOpenAIRealtimeGaSessionPolicy(params: {
   };
 }
 
-export async function resolveOpenAIRealtimePlatformAuth(params: {
-  configuredApiKey: string | undefined;
-  cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-  agentId?: string;
-}): Promise<OpenAIRealtimeApiKeyResolution> {
+export async function resolveOpenAIRealtimePlatformAuth(
+  params: {
+    configuredApiKey: string | undefined;
+    cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+    agentId?: string;
+  },
+  runtime: OpenAIRealtimeHost,
+): Promise<OpenAIRealtimeApiKeyResolution> {
   const configured = resolveOpenAIRealtimeSecretInput(params.configuredApiKey);
   if (
     configured.status === "available" ||
@@ -518,6 +510,7 @@ export async function resolveOpenAIRealtimePlatformAuth(params: {
     return configured;
   }
 
+  const { resolveProviderAuthProfileApiKey, resolveAgentDir } = runtime;
   const profileApiKey = await resolveProviderAuthProfileApiKey({
     provider: "openai",
     cfg: params.cfg,
@@ -537,52 +530,71 @@ export async function resolveOpenAIRealtimePlatformAuth(params: {
   return { status: "missing" };
 }
 
-export async function requireOpenAIRealtimePlatformAuth(params: {
-  configuredApiKey: string | undefined;
-  cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-  agentId?: string;
-}): Promise<Extract<OpenAIRealtimeApiKeyResolution, { status: "available" }>> {
-  const resolved = await resolveOpenAIRealtimePlatformAuth(params);
+export async function requireOpenAIRealtimePlatformAuth(
+  params: {
+    configuredApiKey: string | undefined;
+    cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+    agentId?: string;
+  },
+  runtime: OpenAIRealtimeHost,
+): Promise<Extract<OpenAIRealtimeApiKeyResolution, { status: "available" }>> {
+  const resolved = await resolveOpenAIRealtimePlatformAuth(params, runtime);
   if (resolved.status === "available") {
     return resolved;
   }
   throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
 }
 
-export async function resolveOpenAIQuicksilverBridgeAuth(params: {
-  configuredApiKey: string | undefined;
-  cfg: RealtimeVoiceBridgeCreateRequest["cfg"] | undefined;
-  agentId?: string;
-}) {
-  const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth({
-    cfg: params.cfg,
-    agentDir:
-      params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
-  });
+export async function resolveOpenAIQuicksilverBridgeAuth(
+  params: {
+    configuredApiKey: string | undefined;
+    cfg: RealtimeVoiceBridgeCreateRequest["cfg"] | undefined;
+    agentId?: string;
+  },
+  runtime: OpenAIRealtimeHost,
+) {
+  const { resolveAgentDir } = runtime;
+  const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
+    {
+      cfg: params.cfg,
+      agentDir:
+        params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
+    },
+    runtime,
+  );
   if (subscriptionAuth) {
     return subscriptionAuth;
   }
-  const platformAuth = await resolveOpenAIRealtimePlatformAuth(params);
+  const platformAuth = await resolveOpenAIRealtimePlatformAuth(params, runtime);
   if (platformAuth.status === "available") {
     return { type: "api-key" as const, token: platformAuth.value };
   }
   if (
-    hasOpenAIRealtimePlatformAuthInput({
-      configuredApiKey: params.configuredApiKey,
-      cfg: params.cfg,
-      agentId: params.agentId,
-    })
+    hasOpenAIRealtimePlatformAuthInput(
+      {
+        configuredApiKey: params.configuredApiKey,
+        cfg: params.cfg,
+        agentId: params.agentId,
+      },
+      runtime,
+    )
   ) {
     throw new Error(OPENAI_GPT_LIVE_AUTHORED_PLATFORM_AUTH_UNAVAILABLE);
   }
   throw new Error(OPENAI_GPT_LIVE_AUTH_REQUIRED);
 }
 
-export function hasOpenAIRealtimePlatformAuthInput(params: {
-  configuredApiKey: string | undefined;
-  cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-  agentId?: string;
-}): boolean {
+export function hasOpenAIRealtimePlatformAuthInput(
+  params: {
+    configuredApiKey: string | undefined;
+    cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+    agentId?: string;
+  },
+  {
+    isProviderAuthProfileConfigured,
+    resolveAgentDir,
+  }: Pick<PluginCapabilityCatalogContext, "isProviderAuthProfileConfigured" | "resolveAgentDir">,
+): boolean {
   if (hasOpenAIRealtimeConfiguredApiKeyInput(params.configuredApiKey)) {
     return true;
   }
@@ -602,10 +614,16 @@ export function hasOpenAIRealtimePlatformAuthInput(params: {
   return hasOpenAIRealtimeApiKeyInput(undefined);
 }
 
-export function hasOpenAIChatGptSubscriptionAuthInput(params: {
-  cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-  agentId?: string;
-}): boolean {
+export function hasOpenAIChatGptSubscriptionAuthInput(
+  params: {
+    cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+    agentId?: string;
+  },
+  {
+    isProviderAuthProfileConfigured,
+    resolveAgentDir,
+  }: Pick<PluginCapabilityCatalogContext, "isProviderAuthProfileConfigured" | "resolveAgentDir">,
+): boolean {
   return isProviderAuthProfileConfigured({
     provider: "openai",
     cfg: params.cfg,

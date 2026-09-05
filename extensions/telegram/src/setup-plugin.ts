@@ -1,4 +1,3 @@
-// Telegram plugin module composes the setup-safe channel surface.
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import type { ResolvedTelegramAccount } from "./accounts.js";
@@ -46,7 +45,10 @@ export function createTelegramSetupPluginBase(params: {
       nativeCommands: true,
       blockStreaming: true,
     },
-    reload: { configPrefixes: ["channels.telegram"] },
+    reload: {
+      configPrefixes: ["channels.telegram"],
+      noopPrefixes: ["messages.inbound", "messages.ackReactionScope"],
+    },
     configSchema: TelegramChannelConfigSchema,
     config: createTelegramPluginConfig(),
     secrets: {
