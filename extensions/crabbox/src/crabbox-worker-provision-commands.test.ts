@@ -124,4 +124,31 @@ describe("Crabbox setup profile authority", () => {
       }
     },
   );
+
+  it("rechecks authority after the setup command settles", async () => {
+    const { params, revoke } = createSetupFixture();
+    const entered = createDeferred<void>();
+    const resume = createDeferred<void>();
+    params.runCommand.mockImplementationOnce(async () => {
+      entered.resolve();
+      await resume.promise;
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+    const pending = runProvisionSetup(params).catch((cause: unknown) => cause);
+    await entered.promise;
+    revoke();
+    resume.resolve();
+
+    const error = await pending;
+    expect(error).toMatchObject({ message: "worker turn authority changed" });
+    expect(WorkerProviderError.takeCleanupComplete(error)).toBe(true);
+    expect(params.stopLease).toHaveBeenCalledOnce();
+  });
 });

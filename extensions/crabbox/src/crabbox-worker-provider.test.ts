@@ -976,6 +976,35 @@ describe("Crabbox worker provider", () => {
     expect(calls.filter((argv) => argv[1] === "stop")).toHaveLength(1);
   });
 
+  it("does not enroll after authority closes during the final readiness inspect", async () => {
+    const calls: string[][] = [];
+    const authority = createProvisionAuthority();
+    const beginNodeEnrollment = vi.fn(async () => defaultNodeEnrollment());
+    let inspections = 0;
+    const provider = providerWithRunner(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "inspect") {
+        inspections += 1;
+        if (inspections === 2) {
+          authority.revoke();
+        }
+        return commandResult({
+          stdout: inspectJson({ ready: inspections > 1, sshHostKey: HOST_KEY }),
+        });
+      }
+      return commandResult();
+    });
+
+    await expect(
+      provider.provisionDelegated!(PROFILE, OPERATION_ID, {
+        assertAuthorized: authority.assertAuthorized,
+        beginNodeEnrollment,
+      }),
+    ).rejects.toThrow("worker turn authority changed");
+    expect(beginNodeEnrollment).not.toHaveBeenCalled();
+    expect(calls.filter((argv) => argv[1] === "stop")).toHaveLength(1);
+  });
+
   it.each(["warmup", "inspect"] as const)(
     "preserves abort and authority precedence during %s",
     async (phase) => {

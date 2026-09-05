@@ -521,7 +521,7 @@ describe("worker session placement gate", () => {
     expect(() => restarted.releaseTurn(claim)).not.toThrow();
   });
 
-  it("retains an interrupted child fence across repeated restart recovery", () => {
+  it("retains an interrupted child fence across previous-reader recovery", () => {
     const claim = preclaim("run-worker-child-crash-recovery");
     const binding = bindingFor(claim);
     const childSessionKey = "agent:main:subagent:interrupted-child";
@@ -574,11 +574,13 @@ describe("worker session placement gate", () => {
         .get("spawn-before-crash"),
     ).toEqual({ status: "running", result_json: recoveryResultJson });
 
-    const firstRestart = createWorkerSessionPlacementStore({ database });
-    expect(firstRestart.recoverWorkerSessionToolOperationsAfterRestart()).toEqual({
-      count: 1,
-      interruptedChildPlacements: [interruptedChildPlacement],
-    });
+    const versionBefore = database.db.prepare("PRAGMA user_version").get();
+    // Current main's same-schema reader only marks running operations unknown.
+    database.db
+      .prepare(
+        "UPDATE worker_session_tool_operations SET status = 'unknown', updated_at_ms = ? WHERE status = 'running'",
+      )
+      .run(2_000);
     expect(
       database.db
         .prepare(
@@ -586,11 +588,12 @@ describe("worker session placement gate", () => {
         )
         .get("spawn-before-crash"),
     ).toEqual({ status: "unknown", result_json: recoveryResultJson });
-    const secondRestart = createWorkerSessionPlacementStore({ database });
-    expect(secondRestart.recoverWorkerSessionToolOperationsAfterRestart()).toEqual({
+    const candidateRestart = createWorkerSessionPlacementStore({ database });
+    expect(candidateRestart.recoverWorkerSessionToolOperationsAfterRestart()).toEqual({
       count: 0,
       interruptedChildPlacements: [interruptedChildPlacement],
     });
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual(versionBefore);
   });
 
   it("replaces a child recovery descriptor with the final tool result", () => {

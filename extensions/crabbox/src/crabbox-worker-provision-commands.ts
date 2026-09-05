@@ -78,6 +78,7 @@ export async function inspectWithContext(params: {
     signal: params.signal,
     timeoutMs: params.timeoutMs ?? resolveCrabboxLifecycleTimeoutMs(params.context.provider),
   });
+  params.assertAuthorized?.();
   if (result.termination === "exit" && result.code === 0) {
     // A successful but malformed response cannot attest the fixed lease. Provision callers
     // must preserve cleanup uncertainty so Gateway replay can inspect the lease later.
@@ -243,6 +244,7 @@ export async function runProvisionSetup(
         }),
       params.assertAuthorized,
     );
+    params.assertAuthorized?.();
     if (result.termination !== "exit" || result.code !== 0) {
       throw new WorkerProviderError(crabboxCommandError(params.phase, result).message);
     }

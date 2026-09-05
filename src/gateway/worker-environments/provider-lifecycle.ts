@@ -6,7 +6,6 @@ import {
   type WorkerExecutionMode,
   type WorkerLease,
   type WorkerProvider,
-  type WorkerProfile,
   type WorkerSshIdentity,
 } from "../../plugins/types.js";
 import { verifyWorkerAdmissionHandshake } from "./admission.js";
@@ -24,6 +23,7 @@ import {
   retireMismatchedWorkerLease,
 } from "./provider-persisted-lease.js";
 import { createWorkerProvisionCancellation } from "./provider-provisioning-cancellation.js";
+import { createWorkerSshIdentityResolver } from "./provider-ssh-identity.js";
 import {
   normalizeWorkerMachineOptions,
   requireProviderOperationTimeoutMs,
@@ -40,44 +40,6 @@ import type {
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 const ORPHANED_LEASE_ERROR = "Worker provider no longer recognizes the lease";
-
-export function createWorkerSshIdentityResolver(options: {
-  assertCurrent: (record: WorkerEnvironmentRecord) => void;
-  callProvider: WorkerProviderLifecycleOptions["callProvider"];
-  requireWorkerProfile: (value: unknown) => WorkerProfile;
-  resolveSshIdentity: WorkerProviderLifecycleOptions["resolveSshIdentity"];
-}) {
-  return (
-    record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
-    leaseId: string,
-    authorize?: () => void,
-  ) => {
-    const profile = options.requireWorkerProfile(record.profileSnapshot.settings);
-    return async (keyRef: SecretRef) => {
-      const resolveSshIdentity = options.resolveSshIdentity;
-      if (!resolveSshIdentity) {
-        throw new Error("Worker SSH identity resolution is unavailable");
-      }
-      const assertAuthorized = () => {
-        options.assertCurrent(record);
-        authorize?.();
-      };
-      return await options.callProvider(record.environmentId, async () => {
-        assertAuthorized();
-        const identity = await resolveSshIdentity({
-          provider,
-          leaseId,
-          profile,
-          keyRef,
-          assertAuthorized,
-        });
-        assertAuthorized();
-        return identity;
-      });
-    };
-  };
-}
 
 export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOptions) {
   const { store, callBootstrap, callProvider, inState, move, saveError, serviceError } = options;
