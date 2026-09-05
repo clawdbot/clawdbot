@@ -390,10 +390,24 @@ describe("gateway presence audience", () => {
           [idle, 1],
           [overlap, 0],
         ] as const) {
+          const isLiveIdle = (entry: SystemPresence) =>
+            entry.user?.id === idlePerson.user?.id && entry.reason !== "disconnect";
+          // A different socket's response cannot join this connection's server close.
+          const disconnected = onceMessage<{
+            type: string;
+            event: string;
+            payload: { presence: SystemPresence[] };
+          }>(
+            watcher.ws,
+            (frame) =>
+              frame.type === "event" &&
+              frame.event === "presence" &&
+              frame.payload.presence.filter(isLiveIdle).length === remaining,
+          );
           const closed = once(connection.ws, "close");
           connection.ws.close();
-          await closed;
-          const rows = await liveIdleRows();
+          const [, event] = await Promise.all([closed, disconnected]);
+          const rows = event.payload.presence.filter(isLiveIdle);
           expect(rows, "disconnect publishes only the surviving sockets").toHaveLength(remaining);
           if (remaining) {
             expect(rows[0]?.onlineSince).toBe(idlePerson.onlineSince);
