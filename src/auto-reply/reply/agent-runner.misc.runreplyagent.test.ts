@@ -1420,6 +1420,52 @@ describe("runReplyAgent block streaming", () => {
   });
 });
 
+describe("runReplyAgent inline tool verbosity", () => {
+  it.each([
+    { stored: "off", override: "full", expected: ["Tool summary", "Tool output"] },
+    { stored: "full", override: "off", expected: [] },
+    { stored: "full", override: "on", expected: ["Tool summary"] },
+  ] as const)(
+    "delivers tool progress with inline $override over stored $stored",
+    async ({ stored, override, expected }) => {
+      const storePath = path.join(rootDir, "sessions.json");
+      const sessionKey = "main";
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        verboseLevel: stored,
+      };
+      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+      const onToolResult = vi.fn(async (_payload: ReplyPayload) => {});
+      runEmbeddedAgentMock.mockImplementationOnce(
+        async (params: RunEmbeddedAgentInternalParams) => {
+          if (params.shouldEmitToolResult?.()) {
+            await params.onToolResult?.({ text: "Tool summary" });
+          }
+          if (params.shouldEmitToolOutput?.()) {
+            await params.onToolResult?.({ text: "Tool output" });
+          }
+          return { payloads: [{ text: "Done" }], meta: {} };
+        },
+      );
+      const result = await createBaseRun({
+        run: { sessionKey, verboseLevel: override, verboseLevelOverride: override },
+        reply: {
+          sessionKey,
+          storePath,
+          sessionEntry,
+          sessionStore: { [sessionKey]: sessionEntry },
+          resolvedVerboseLevel: override,
+          opts: { onToolResult },
+        },
+      }).run();
+      expect(onToolResult.mock.calls.map(([payload]) => payload.text)).toEqual(expected);
+      expect(loadSessionEntry({ storePath, sessionKey })?.verboseLevel).toBe(stored);
+      expectReplyText(result, "Done");
+    },
+  );
+});
+
 describe("runReplyAgent Active Memory inline debug", () => {
   // Seeds the plugin-owned debug rows through the canonical session accessor.
   async function writeActiveMemoryDebugEntry(params: {
