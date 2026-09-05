@@ -482,7 +482,8 @@ Tool Search should fail closed:
 - if a selected tool becomes unavailable, `tool_call` should fail
 - if a configured MCP server failed to connect or list its tools when the run
   started, its tools are absent from the catalog (a server reconnecting after
-  a dropped transport keeps its tools listed and is not reported);
+  a dropped transport keeps its tools listed, a per-requester OAuth server
+  keeps its `<server>__connect` sign-in tool, and neither is reported);
   `tool_search` results, and `tool_search_code` / Code Mode `exec` results,
   then carry an
   `unavailableMcpServers` entry naming that server and its redacted failure

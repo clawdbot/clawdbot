@@ -10,7 +10,11 @@ import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { runAgentLoop, type AgentEvent, type AgentMessage } from "../plugin-sdk/agent-core.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
-import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type {
+  McpToolCatalog,
+  RequesterMcpConnect,
+  SessionMcpRuntime,
+} from "./agent-bundle-mcp-types.js";
 import { buildBundleMcpPolicyLayers } from "./embedded-agent-runner/effective-tool-policy.js";
 import { createAgentHarnessPromptToolPolicy } from "./harness/prompt-tool-policy.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
@@ -119,9 +123,13 @@ function assistantMessage(content: AssistantMessage["content"]): AssistantMessag
 const LAUNCH_SUMMARY = "launch-summary-secret";
 const FAILURE_MESSAGE = "connect ECONNREFUSED 127.0.0.1:5230";
 
-function makeRuntime(catalog: McpToolCatalog): SessionMcpRuntime {
+function makeRuntime(
+  catalog: McpToolCatalog,
+  requesterConnect?: RequesterMcpConnect,
+): SessionMcpRuntime {
   return {
     sessionId: "session-tool-search-mcp-unavailable",
+    requesterConnect,
     workspaceDir: "/tmp",
     configFingerprint: "fingerprint",
     createdAt: 0,
@@ -131,6 +139,31 @@ function makeRuntime(catalog: McpToolCatalog): SessionMcpRuntime {
     peekCatalog: () => catalog,
     callTool: async () => ({ content: [{ type: "text", text: "ok" }] }),
     dispose: async () => {},
+  };
+}
+
+/** Sign-in surface `mergeMcpConnectCatalog` adds for a requester server absent from the live catalog. */
+function makeRequesterConnect(serverName: string): RequesterMcpConnect {
+  const description = `Connect your ${serverName} account.`;
+  return {
+    catalog: {
+      version: 1,
+      generatedAt: 0,
+      servers: { [serverName]: { serverName, launchSummary: "Requester OAuth", toolCount: 1 } },
+      tools: [
+        {
+          serverName,
+          safeServerName: serverName,
+          toolName: "connect",
+          description,
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: description,
+        },
+      ],
+    },
+    authorizedServerNames: [serverName],
+    configFingerprint: "requester",
+    createExecute: () => undefined,
   };
 }
 
@@ -189,8 +222,11 @@ async function createControls(
   mode: "tools" | "code" = "tools",
   /** Allowlist the run judged the diagnostics under, recorded with them. */
   runToolsAllow?: string[],
+  requesterConnect?: RequesterMcpConnect,
 ) {
-  const materialized = await materializeBundleMcpToolsForRun({ runtime: makeRuntime(catalog) });
+  const materialized = await materializeBundleMcpToolsForRun({
+    runtime: makeRuntime(catalog, requesterConnect),
+  });
   const config = { tools: { toolSearch: { enabled: true, mode } } };
   const catalogRef = createToolSearchCatalogRef();
   const controls = createToolSearchTools({ config, catalogRef });
@@ -503,6 +539,33 @@ describe("Tool Search with an unavailable MCP server", () => {
         args: {},
       }),
     ).rejects.toThrow("Unknown tool id: mcp:memos:memos__read_note");
+  });
+
+  it("keeps the sign-in tool of a failed requester server callable instead of naming an outage", async () => {
+    // An authorized per-requester server whose catalog load failed still gets
+    // its `memos__connect` tool from `mergeMcpConnectCatalog`; a notice that
+    // its tools are absent and must not be called would forbid that recovery.
+    const { control } = await createControls(
+      makeOutageCatalog(),
+      "tools",
+      undefined,
+      makeRequesterConnect("memos"),
+    );
+
+    const found = await control(TOOL_SEARCH_RAW_TOOL_NAME).execute("search-connect", {
+      query: "connect memos account",
+    });
+    expect(Array.isArray(found.details)).toBe(true);
+    expect(found.details).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "mcp:memos:memos__connect" })]),
+    );
+    // A miss on the failed server points at the sign-in tool, not at an outage.
+    await expect(
+      control(TOOL_CALL_RAW_TOOL_NAME).execute("lookup-connect", {
+        id: "mcp:memos:memos__read_note",
+        args: {},
+      }),
+    ).rejects.toThrow("Unknown tool id: mcp:memos:memos__read_note. Did you mean: memos__connect");
   });
 
   it("hides the outage behind a prompt-hook tool cap that cannot admit the failed server", async () => {
