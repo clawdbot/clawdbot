@@ -3131,7 +3131,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     {
       intent: "post-core floating",
       installedVersion: VERSION,
-      coreVersion: "2026.10.1",
+      coreVersion: `${Number(VERSION.split(".")[0]) + 1}.1.1`,
       priorSpec: "@openclaw/codex",
       expectedSpec: "@openclaw/codex",
       expectedIntegrity: undefined,
