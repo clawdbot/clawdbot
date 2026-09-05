@@ -1,7 +1,4 @@
-import {
-  asOptionalRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   appendAudit,
   appendInboxRead,
@@ -9,9 +6,7 @@ import {
   composeInbound,
   composeOutbound,
   confirmDelivery,
-  createAnthropicGuard,
   createMonotonicUlidFactory,
-  createOpenAiGuard,
   effectiveGuardPolicyVersion,
   formatHandleEpoch,
   InvalidDeliveryReceiptError,
@@ -40,6 +35,7 @@ import {
   type ReefTrustStore,
 } from "./trust-store.js";
 import type { InboxEntry, ReefDeliveryRejection, ReefIngressMessage, ReefKeys } from "./types.js";
+import { acceptReefWorkflowMessage } from "./workflow-inbox.js";
 
 interface LegacyDeliveryCandidate {
   to: string;
@@ -447,12 +443,23 @@ export class ReefMessageFlow {
       await this.options.transport.acknowledge(relayPeer, envelope.id, result.receipt);
       return;
     }
+    if (!matchesReefPeerIdentity(this.options.trust.get(relayPeer), reefPeerIdentity(friend))) {
+      throw new Error("Reef peer identity changed before ingress");
+    }
+    this.options.authoritySignal?.throwIfAborted();
+    const workflowAccepted = await acceptReefWorkflowMessage({
+      text: result.body.text,
+      peer: relayPeer,
+      identity: reefPeerIdentity(friend),
+      transportMessageId: envelope.id,
+    });
+    this.options.authoritySignal?.throwIfAborted();
     const budget = autonomyBudget(friend.autonomy);
-    if (budget.notifyOnly) {
+    if (!workflowAccepted && budget.notifyOnly) {
       await this.options.onOwnerNotice(
         `Reef message from @${relayPeer}'s agent: ${result.body.text}`,
       );
-    } else {
+    } else if (!workflowAccepted) {
       await this.options.onIngress({
         id: envelope.id,
         peer: relayPeer,
@@ -505,27 +512,4 @@ function isParkedInboundPipelineError(error: PipelineError): boolean {
   );
 }
 
-export function createConfiguredGuard(
-  config: ReefChannelConfig,
-  fetcher: typeof fetch = fetch,
-): GuardAdapter {
-  if (!config.guard) {
-    throw new Error("Reef guard is not configured");
-  }
-  const guardCredential = normalizeOptionalString(process.env[config.guard.apiKeyEnv]);
-  if (!guardCredential) {
-    throw new Error(
-      `Reef guard credential environment variable ${config.guard.apiKeyEnv} is unset`,
-    );
-  }
-  const options = {
-    apiKey: guardCredential,
-    pinnedModel: config.guard.pinnedModel,
-    timeoutMs: config.guard.timeoutMs,
-    rules: config.guard.rules,
-    fetch: fetcher,
-  };
-  return config.guard.provider === "openai"
-    ? createOpenAiGuard(options)
-    : createAnthropicGuard(options);
-}
+export { createConfiguredGuard } from "./configured-guard.js";

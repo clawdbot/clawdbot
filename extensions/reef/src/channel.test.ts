@@ -3,6 +3,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { recordChannelBotPairLoopAndCheckSuppression } from "openclaw/plugin-sdk/channel-inbound";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -18,7 +19,7 @@ import { generateIdentity } from "../protocol/index.js";
 import { runReefChannelLifecycle } from "./channel-lifecycle.js";
 import { reefPlugin } from "./channel.js";
 import { handleReefCommand } from "./commands.js";
-import { resolveReefConfig } from "./config-schema.js";
+import { autonomyBudget, resolveReefConfig } from "./config-schema.js";
 import { reefKeys } from "./flow.test-helpers.js";
 import { ReefFriendManager } from "./friends.js";
 import { resolveReefInboundDispatchContent } from "./inbound.js";
@@ -28,7 +29,11 @@ import {
   generateAndStoreKeys,
   reserveReefIdentityBinding,
 } from "./state.js";
-import { ReefInboxConnection, ReefTransportClient } from "./transport.js";
+import {
+  ReefInboxConnection,
+  ReefInboxEntryParkedError,
+  ReefTransportClient,
+} from "./transport.js";
 import { openReefTrustStore } from "./trust-store.js";
 
 describe("Reef inbound dispatch content", () => {
@@ -304,6 +309,33 @@ describe("Reef gateway account ownership", () => {
     }
     return send({ cfg, accountId: "default", to: "@molty", text });
   }
+
+  it("parks a budget-suppressed message instead of reporting successful ingress", async () => {
+    startAccount();
+    await vi.waitFor(() => expect(inboxDrains).toHaveLength(1));
+    const thread = `budget-${stateDir}`;
+    for (let index = 0; index < 12; index++) {
+      recordChannelBotPairLoopAndCheckSuppression({
+        scopeId: "reef:default",
+        conversationId: thread,
+        senderId: "molty",
+        receiverId: "clawd",
+        eventId: `budget-${index}`,
+        config: autonomyBudget("extended").botLoopProtection,
+        defaultEnabled: true,
+      });
+    }
+    await expect(
+      getActiveReef().flow.options.onIngress({
+        id: "budget-thirteenth",
+        peer: "molty",
+        text: "deferred reply",
+        thread,
+        provenance: "Untrusted peer message",
+        autonomy: "extended",
+      }),
+    ).rejects.toBeInstanceOf(ReefInboxEntryParkedError);
+  });
 
   it("retires outbound, command, and pairing authority before account shutdown drains", async () => {
     const account = startAccount();

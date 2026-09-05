@@ -1,4 +1,9 @@
+import {
+  buildSecretInputSchema,
+  registerSensitiveConfigSchema,
+} from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
+import { parseGuardBaseUrl } from "../protocol/guard-endpoint.js";
 import { GUARD_RULES_MAX_CHARS } from "../protocol/guard.js";
 import type { ReefAutonomy } from "./friend-types.js";
 
@@ -28,7 +33,23 @@ export const ReefChannelConfigSchema = z
       .object({
         provider: z.enum(["anthropic", "openai"]),
         pinnedModel: z.string().min(1),
-        apiKeyEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
+        apiKeyEnv: z
+          .string()
+          .regex(/^[A-Z_][A-Z0-9_]*$/)
+          .optional(),
+        apiKey: registerSensitiveConfigSchema(buildSecretInputSchema().optional()),
+        baseUrl: z
+          .string()
+          .refine((value) => {
+            try {
+              parseGuardBaseUrl(value);
+              return true;
+            } catch {
+              return false;
+            }
+          }, "Guard base URL requires HTTPS or numeric loopback HTTP without credentials, query, or hash")
+          .optional(),
+        reasoningEffort: z.enum(["low", "medium", "high"]).optional(),
         policyVersion: z.string().min(1),
         timeoutMs: z.number().int().min(100).max(120_000),
         rules: z
@@ -40,6 +61,22 @@ export const ReefChannelConfigSchema = z
           .optional(),
       })
       .strict()
+      .superRefine((guard, ctx) => {
+        if ((guard.apiKey === undefined) === (guard.apiKeyEnv === undefined)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["apiKey"],
+            message: "Configure exactly one of apiKey or apiKeyEnv",
+          });
+        }
+        if (guard.provider !== "openai" && guard.reasoningEffort !== undefined) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["reasoningEffort"],
+            message: "reasoningEffort is supported only by the OpenAI guard",
+          });
+        }
+      })
       .optional(),
     stateDir: z.string().min(1).optional(),
     requestPolicy: z.enum(["code-only", "friends-of-friends", "open"]).default("code-only"),

@@ -1,5 +1,6 @@
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
+import { parseGuardBaseUrl } from "./guard-endpoint.js";
 import {
   admitGuardAdapter,
   assertGuardRules,
@@ -19,6 +20,8 @@ interface AdapterOptions {
   fetch: FetchLike;
   timeoutMs?: number;
   rules?: GuardRules;
+  baseUrl?: string;
+  reasoningEffort?: "low" | "medium" | "high";
 }
 
 const verdictSchema = {
@@ -36,17 +39,20 @@ const verdictSchema = {
 export function createOpenAiGuard(options: AdapterOptions): GuardAdapter {
   assertPinnedModel(options.pinnedModel);
   assertGuardRules(options.rules);
+  const endpoint = `${parseGuardBaseUrl(options.baseUrl ?? "https://api.openai.com/v1")}/responses`;
   const raw: RawGuardAdapter = {
     providerId: "openai",
     pinnedModel: options.pinnedModel,
     async classifyRaw(request, signal) {
-      const response = await options.fetch("https://api.openai.com/v1/responses", {
+      const response = await options.fetch(endpoint, {
         method: "POST",
+        redirect: "error",
         signal,
         headers: { "content-type": "application/json", authorization: `Bearer ${options.apiKey}` },
         body: JSON.stringify({
           model: options.pinnedModel,
           instructions: instructionFor(request, options.rules),
+          ...(options.reasoningEffort ? { reasoning: { effort: options.reasoningEffort } } : {}),
           input: JSON.stringify(request),
           store: false,
           background: false,
@@ -98,12 +104,17 @@ export function createOpenAiGuard(options: AdapterOptions): GuardAdapter {
 export function createAnthropicGuard(options: AdapterOptions): GuardAdapter {
   assertPinnedModel(options.pinnedModel);
   assertGuardRules(options.rules);
+  if (options.reasoningEffort !== undefined) {
+    throw new Error("reasoningEffort is supported only by the OpenAI guard");
+  }
+  const endpoint = `${parseGuardBaseUrl(options.baseUrl ?? "https://api.anthropic.com/v1")}/messages`;
   const raw: RawGuardAdapter = {
     providerId: "anthropic",
     pinnedModel: options.pinnedModel,
     async classifyRaw(request, signal) {
-      const response = await options.fetch("https://api.anthropic.com/v1/messages", {
+      const response = await options.fetch(endpoint, {
         method: "POST",
+        redirect: "error",
         signal,
         headers: {
           "content-type": "application/json",
