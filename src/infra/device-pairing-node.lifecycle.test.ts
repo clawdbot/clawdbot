@@ -12,6 +12,8 @@ import {
   beginNodePairingConnect,
   finalizeNodePairingCleanupClaim,
   listNodePairing,
+  recordPairedNodeConnection,
+  recordPairedNodeDisconnection,
   rejectNodePairing,
   requestNodePairing,
 } from "./device-pairing-node.js";
@@ -166,4 +168,77 @@ describe("node surface approval lifetime", () => {
       });
     },
   );
+
+  test("keeps an aged capability reapproval through a recorded disconnect", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      const generation = await setupPairedNode(baseDir);
+      await expect(
+        recordPairedNodeConnection("node-1", 1_000, baseDir, generation),
+      ).resolves.toEqual({ recorded: true, firstConnection: true });
+      const requestedAtMs = Date.now();
+      const now = vi.spyOn(Date, "now").mockReturnValue(requestedAtMs);
+      try {
+        const { request } = await requestNodePairing(
+          { nodeId: "node-1", caps: ["voiceWake"], commands: ["system.run"] },
+          baseDir,
+        );
+        now.mockReturnValue(requestedAtMs + 24 * 60 * 60 * 1000);
+
+        await expect(
+          recordPairedNodeDisconnection({
+            nodeId: "node-1",
+            connectedAtMs: 1_000,
+            disconnectedAtMs: 2_000,
+            expectedPairingGeneration: generation,
+            baseDir,
+          }),
+        ).resolves.toEqual({ recorded: true });
+
+        const database = openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
+        });
+        expect(closeOpenClawStateDatabaseByPath(database.path)).toBe(true);
+        expect((await listNodePairing(baseDir)).pending).toEqual([request]);
+      } finally {
+        now.mockRestore();
+      }
+    });
+  });
+
+  test("supersedes an aged capability request with a changed surface", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      const requestedAtMs = Date.now();
+      const now = vi.spyOn(Date, "now").mockReturnValue(requestedAtMs);
+      try {
+        const first = await requestNodePairing(
+          { nodeId: "node-1", caps: ["voiceWake"], commands: ["system.run"] },
+          baseDir,
+        );
+        now.mockReturnValue(requestedAtMs + 24 * 60 * 60 * 1000);
+        const second = await requestNodePairing(
+          {
+            nodeId: "node-1",
+            caps: ["voiceWake"],
+            commands: ["system.run", "system.which"],
+          },
+          baseDir,
+        );
+
+        expect(second.superseded).toEqual([
+          { requestId: first.request.requestId, nodeId: "node-1" },
+        ]);
+        expect((await listNodePairing(baseDir)).pending).toEqual([second.request]);
+        await expect(
+          approveNodePairing(
+            first.request.requestId,
+            { callerScopes: ["operator.pairing", "operator.admin"] },
+            baseDir,
+          ),
+        ).resolves.toBeNull();
+      } finally {
+        now.mockRestore();
+      }
+    });
+  });
 });
