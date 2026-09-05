@@ -644,5 +644,4 @@ describe("manifest model catalog suppression planner", () => {
     expect(flashRows[0].source).toBe("manifest");
     expect(plan.rows.map((row) => row.id)).toContain("gemini-3.5-flash");
   });
-
 });
