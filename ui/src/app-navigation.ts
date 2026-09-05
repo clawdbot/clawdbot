@@ -292,6 +292,7 @@ const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
 ]);
 
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
+  settings: ["settings", "nav.settings", "common.settingsSections"],
   agents: ["bot", "tabs.agents", "subtitles.agents"],
   activity: ["activity", "tabs.activity", "subtitles.activity"],
   meetings: ["book", "tabs.meetings", "subtitles.meetings"],

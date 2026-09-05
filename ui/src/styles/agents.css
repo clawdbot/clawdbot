@@ -15,3 +15,22 @@
 .agents-panel-body + .settings-kv {
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
+
+@media (max-width: 640px) {
+  .agents-layout,
+  .agents-main {
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
+  }
+
+  .agents-layout > *,
+  .agents-main > * {
+    min-width: 0;
+  }
+
+  .agents-toolbar-actions {
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+}

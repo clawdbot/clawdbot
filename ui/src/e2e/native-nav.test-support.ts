@@ -1,5 +1,14 @@
 import type { Page } from "playwright";
 
+export async function installNativeEmbed(
+  page: Page,
+  host: { platform: "ios" | "macos" | "android"; formFactor: "phone" | "pad" | "desktop" },
+): Promise<void> {
+  await page.addInitScript((embed) => {
+    Object.assign(window, { __OPENCLAW_NATIVE_EMBED__: embed });
+  }, host);
+}
+
 // Mirror the native app's document-start flags and document-end chrome styling.
 export async function installNativeWebChrome(page: Page): Promise<void> {
   await page.addInitScript(() => {

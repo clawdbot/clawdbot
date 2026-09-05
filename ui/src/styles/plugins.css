@@ -968,6 +968,40 @@ h3.plugins-subheader {
 
 /* ---------- responsive ---------- */
 
+@media (max-width: 640px) {
+  openclaw-skills-page .plugins-toolbar--fields {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+  }
+
+  openclaw-skills-page .plugins-toolbar--fields > :is(.settings-segmented, .plugins-field) {
+    grid-column: 1 / -1;
+    width: 100%;
+    min-width: 0;
+  }
+
+  openclaw-skills-page .plugins-toolbar--fields > .settings-segmented {
+    height: auto;
+  }
+
+  openclaw-skills-page .plugins-toolbar__hint {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  openclaw-skills-page .plugins-toolbar:has(> .field) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  openclaw-skills-page .plugins-toolbar > .btn {
+    max-width: 100%;
+    white-space: normal;
+  }
+}
+
 @media (max-width: 560px) {
   .plugins-toolbar--fields > .settings-segmented {
     height: auto;

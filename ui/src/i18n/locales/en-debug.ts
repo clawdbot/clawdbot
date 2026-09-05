@@ -44,6 +44,7 @@ const enDebug = {
     overlay: {
       ...en.debug.overlay,
       eyebrow: "Live diagnostics",
+      open: "Open overlay",
       openWithShortcut: "Open overlay · {shortcut}",
       unavailable: "Unavailable",
       lanes: "Lanes",

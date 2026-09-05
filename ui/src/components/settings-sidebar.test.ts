@@ -39,6 +39,41 @@ afterEach(async () => {
 });
 
 describe("settings sidebar search", () => {
+  it("keeps save recovery available in the embedded page header", async () => {
+    const onRetry = vi.fn();
+    render(
+      renderSettingsSidebar({
+        presentation: "embed-page",
+        basePath: "",
+        activeRouteId: "appearance",
+        offline: false,
+        lastError: null,
+        gatewayVersion: "",
+        updateAvailable: null,
+        updateBusy: false,
+        onUpdate: vi.fn(),
+        ...inactiveRefresh,
+        searchQuery: "",
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate: vi.fn(),
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+        saveIndicator: { ...saveIndicator(), status: "error", lastError: "Save failed", onRetry },
+      }),
+      container,
+    );
+    expect(container.querySelector(".settings-sidebar")).toBeNull();
+    await vi.waitFor(() => {
+      const retry = container.querySelector<HTMLButtonElement>(
+        ".native-embed-header .settings-save-indicator__action",
+      );
+      expect(retry?.textContent?.trim()).toBe("Retry");
+    });
+    container.querySelector<HTMLButtonElement>(".settings-save-indicator__action")!.click();
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
   it("keeps Models selected while its setup flow is open", () => {
     render(
       renderSettingsSidebar({
