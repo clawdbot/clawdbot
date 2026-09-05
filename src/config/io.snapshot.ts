@@ -61,7 +61,7 @@ export async function readConfigFileSnapshotInternal(
   context: ConfigIoContext,
   options: InternalReadOptions = {},
 ): Promise<ReadConfigFileSnapshotInternalResult> {
-  const { deps, configPath } = context;
+  const { deps, configPath, pathResolution } = context;
   maybeLoadDotEnvForConfig(deps.env);
   const envBeforeRead = snapshotEnv(deps.env);
   if (!deps.fs.existsSync(configPath)) {
@@ -86,8 +86,7 @@ export async function readConfigFileSnapshotInternal(
         // same runtime defaults an existing empty {} config gets, so snapshot
         // consumers see identical out-of-box behavior either way.
         runtimeConfig: materializeRuntimeConfig(config, {
-          env: deps.env,
-          homedir: deps.homedir,
+          ...pathResolution,
           ...(coreOnly
             ? { manifestRegistry: { plugins: [] } }
             : { loadManifestRegistry: () => metadata.load(config).manifestRegistry }),
@@ -221,8 +220,7 @@ export async function readConfigFileSnapshotInternal(
     });
     const validated = await deps.measure("config.snapshot.read.validate", () =>
       validateConfigObjectWithPlugins(validationConfigRaw, {
-        env: deps.env,
-        homedir: deps.homedir,
+        ...pathResolution,
         pluginValidation: context.options.pluginValidation,
         loadPluginMetadataSnapshot: pluginMetadata.load,
         sourceRaw: effectiveParsed,
@@ -325,8 +323,7 @@ export async function readConfigFileSnapshotInternal(
     }
     const snapshotConfig = await deps.measure("config.snapshot.read.materialize", () =>
       materializeRuntimeConfig(validated.config, {
-        env: deps.env,
-        homedir: deps.homedir,
+        ...pathResolution,
         manifestRegistry:
           pluginMetadata.getSnapshot()?.manifestRegistry ??
           (context.options.pluginValidation === "core-only" ? { plugins: [] } : undefined),

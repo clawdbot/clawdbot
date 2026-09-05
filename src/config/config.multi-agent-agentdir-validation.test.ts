@@ -10,7 +10,7 @@ import type { OpenClawConfig } from "./types.js";
 import { validateConfigObject } from "./validation.js";
 
 describe("multi-agent agentDir validation", () => {
-  it.each(["HOME", "USERPROFILE", "OPENCLAW_HOME", "homedir"] as const)(
+  it.each(["HOME", "USERPROFILE", "OPENCLAW_HOME", "homedir", "relative OPENCLAW_HOME"] as const)(
     "keeps config validation and runtime paths in the selected %s",
     async (homeSource) => {
       await withTempHome(async (cliHome) => {
@@ -19,7 +19,12 @@ describe("multi-agent agentDir validation", () => {
         const cliShared = path.join(cliHome, "shared");
         await fs.mkdir(daemonShared, { recursive: true });
         await fs.mkdir(cliShared);
-        const env: NodeJS.ProcessEnv = homeSource === "homedir" ? {} : { [homeSource]: daemonHome };
+        const env: NodeJS.ProcessEnv =
+          homeSource === "homedir"
+            ? {}
+            : homeSource === "relative OPENCLAW_HOME"
+              ? { OPENCLAW_HOME: "~/daemon" }
+              : { [homeSource]: daemonHome };
         const config: OpenClawConfig = {
           agents: {
             ownership: "explicit",
@@ -31,7 +36,7 @@ describe("multi-agent agentDir validation", () => {
         const io = createConfigIO({
           configPath,
           env,
-          homedir: () => daemonHome,
+          homedir: homeSource === "relative OPENCLAW_HOME" ? undefined : () => daemonHome,
           observe: false,
           pluginValidation: "core-only",
           logger: { error: vi.fn(), warn: vi.fn() },
