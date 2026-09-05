@@ -17,6 +17,7 @@ import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js"
 import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
 import {
   applyFinalEffectiveToolPolicy,
+  buildBundleMcpPolicyLayers,
   createBundleMcpServerPolicyMatcher,
 } from "../effective-tool-policy.js";
 import { log } from "../logger.js";
@@ -245,10 +246,11 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     // Same allow/deny inputs the two passes above apply to materialized MCP
     // tools, resolved against the server namespace instead of a tool name: a
     // failed catalog load leaves that server's tool names unknown.
-    const admitsMcpServer = createBundleMcpServerPolicyMatcher({
+    const mcpPolicyLayers = buildBundleMcpPolicyLayers({
       conversationCapabilityProfile: runtimeCapabilityProfile,
       toolsAllow: effectiveToolsAllow,
     });
+    const admitsMcpServer = createBundleMcpServerPolicyMatcher(mcpPolicyLayers);
     return {
       bundleLspRuntime,
       bundleMcpRuntime,
@@ -257,10 +259,15 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       // `diagnostics` records which configured servers failed this run's catalog
       // load. Carry that fact with the tools it explains so Tool Search can name
       // the outage instead of reporting a bare miss; a server whose tools the
-      // policy could never admit stays hidden when it fails too.
-      mcpDiagnostics: bundleMcpRuntime?.diagnostics?.filter((diagnostic) =>
-        admitsMcpServer(diagnostic.safeServerName),
-      ),
+      // policy could never admit stays hidden when it fails too. The layers ride
+      // along because a prompt hook narrows this surface again later, and only
+      // all layers together decide whether any tool of that server survives.
+      mcpDiagnostics: bundleMcpRuntime?.diagnostics && {
+        diagnostics: bundleMcpRuntime.diagnostics.filter((diagnostic) =>
+          admitsMcpServer(diagnostic.safeServerName),
+        ),
+        policyLayers: mcpPolicyLayers,
+      },
       tools,
       uncompactedEffectiveTools,
       refreshTools: () => {

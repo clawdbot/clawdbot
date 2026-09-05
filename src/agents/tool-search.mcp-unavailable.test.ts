@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { buildBundleMcpPolicyLayers } from "./embedded-agent-runner/effective-tool-policy.js";
 import { createAgentHarnessPromptToolPolicy } from "./harness/prompt-tool-policy.js";
 import { MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS } from "./tool-search-types.js";
 import {
@@ -85,13 +86,26 @@ function makeEscapedOutagesCatalog(): McpToolCatalog {
   return catalog;
 }
 
-async function createControls(catalog: McpToolCatalog, mode: "tools" | "code" = "tools") {
+async function createControls(
+  catalog: McpToolCatalog,
+  mode: "tools" | "code" = "tools",
+  /** Allowlist the run judged the diagnostics under, recorded with them. */
+  runToolsAllow?: string[],
+) {
   const materialized = await materializeBundleMcpToolsForRun({ runtime: makeRuntime(catalog) });
   const config = { tools: { toolSearch: { enabled: true, mode } } };
   const catalogRef = createToolSearchCatalogRef();
   const controls = createToolSearchTools({ config, catalogRef });
   const tools = [...controls, ...materialized.tools];
-  applyToolSearchCatalog({ tools, config, catalogRef, mcpDiagnostics: materialized.diagnostics });
+  applyToolSearchCatalog({
+    tools,
+    config,
+    catalogRef,
+    mcpDiagnostics: materialized.diagnostics && {
+      diagnostics: materialized.diagnostics,
+      policyLayers: buildBundleMcpPolicyLayers({ toolsAllow: runToolsAllow }),
+    },
+  });
   const control = (name: string): AnyAgentTool =>
     expectDefined(
       controls.find((tool) => tool.name === name),
@@ -210,6 +224,33 @@ describe("Tool Search with an unavailable MCP server", () => {
     );
     policy.apply();
     expect((await search.execute("search-open", { query: "memos" })).details).toMatchObject(outage);
+  });
+
+  it("hides an outage that the run policy and the prompt-hook cap only admit apart", async () => {
+    // The run kept memos because `memos__read_note` survived its allowlist; the
+    // hook keeps `memos__write_note`. Each allowlist alone admits some memos
+    // tool, none satisfies both, so the final policy reaches no memos tool.
+    const { control, catalogRef, tools } = await createControls(makeOutageCatalog(), "tools", [
+      "memos__read_note",
+      "notes__list",
+    ]);
+    const search = control(TOOL_SEARCH_RAW_TOOL_NAME);
+    const policy = createAgentHarnessPromptToolPolicy({
+      tools,
+      catalogRef,
+      codeModeControlsEnabled: false,
+    });
+
+    policy.apply({ toolsAllow: ["memos__write_note", "notes__list"] });
+    expect(catalogRef.current?.mcpDiagnostics).toBeUndefined();
+    // `notes__list` survives both allowlists, so search itself stays callable.
+    expect((await search.execute("search-disjoint", { query: "memos" })).details).toEqual([]);
+
+    // A hook that keeps the memos tool the run kept still names the outage.
+    policy.apply({ toolsAllow: ["memos__read_note", "notes__list"] });
+    expect((await search.execute("search-shared", { query: "memos" })).details).toMatchObject({
+      unavailableMcpServers: [{ server: "memos", error: FAILURE_MESSAGE }],
+    });
   });
 
   it("keeps the outage payload inside the batch response cap at every limit", async () => {

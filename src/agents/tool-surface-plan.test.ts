@@ -406,14 +406,17 @@ describe("applyAgentToolSurfaceCatalog", () => {
       const controls = plan.codeModeControlsEnabled
         ? createCodeModeTools({ config, catalogRef, executeTool })
         : [createStubTool(TOOL_SEARCH_RAW_TOOL_NAME)];
-      const mcpDiagnostics = [
-        {
-          serverName: "memos",
-          safeServerName: "memos",
-          launchSummary: "memos",
-          message: "connect ECONNREFUSED",
-        },
-      ];
+      const mcpDiagnostics = {
+        diagnostics: [
+          {
+            serverName: "memos",
+            safeServerName: "memos",
+            launchSummary: "memos",
+            message: "connect ECONNREFUSED",
+          },
+        ],
+        policyLayers: [{ allow: ["memos__*"] }],
+      };
 
       applyAgentToolSurfaceCatalog({
         tools: [...controls, createStubTool("hidden_target")],

@@ -21,6 +21,7 @@ import {
   collectExplicitDenylist,
   expandPolicyWithPluginGroups,
   readToolAllowlistIntersection,
+  type ToolPolicyLike,
 } from "../tool-policy.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
@@ -94,33 +95,41 @@ export function applyFinalEffectiveToolPolicy(
 }
 
 /**
- * Whether the effective policy could still admit some tool of one bundle MCP
- * server, keyed by safe server name. A failed catalog load leaves that server's
- * tool names unknown, so its outage diagnostic is judged from the same allow/deny
- * layers as its tools, with the server namespace standing in for them.
+ * Allow/deny layers one boundary applies to bundle MCP tools, as data a later
+ * boundary can carry: layers must be judged together, since each one alone can
+ * admit a different tool of a server while their intersection admits none.
  */
-export function createBundleMcpServerPolicyMatcher(params: {
+export function buildBundleMcpPolicyLayers(params: {
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
   toolsAllow?: string[];
-}): (safeServerName: string) => boolean {
+}): ToolPolicyLike[] {
   const capabilityProfile = params.conversationCapabilityProfile;
   const allowlist = params.toolsAllow;
   const restrictions = allowlist ? (readToolAllowlistIntersection(allowlist) ?? [allowlist]) : [];
-  const layers = [
+  return [
     // `applyEmbeddedAttemptToolsAllow` runs first for real bundle tools: it
     // intersects independent restrictions and reads an empty one as "no tools",
     // where a pipeline layer's empty allow list means allow-all.
     ...restrictions.map((allow) => (allow.length > 0 ? { allow } : { deny: ["*"] })),
-    // The prompt-hook boundary re-narrows a set the run policy already filtered
-    // and passes only its allowlist; the profile layers apply once, upstream.
     ...(capabilityProfile
       ? buildConversationToolPolicyPipelineSteps({
           capabilityProfile,
           policies: resolveConversationToolPolicies({ capabilityProfile }),
           includeRuntimeToolPolicy: false,
-        }).map((step) => step.policy)
+        }).flatMap((step) => step.policy ?? [])
       : []),
   ];
+}
+
+/**
+ * Whether the effective policy could still admit some tool of one bundle MCP
+ * server, keyed by safe server name. A failed catalog load leaves that server's
+ * tool names unknown, so its outage diagnostic is judged from the same allow/deny
+ * layers as its tools, with the server namespace standing in for them.
+ */
+export function createBundleMcpServerPolicyMatcher(
+  layers: readonly ToolPolicyLike[],
+): (safeServerName: string) => boolean {
   return (safeServerName) => {
     // The failed server materialized no tools, so its namespace stands in for
     // the `bundle-mcp` plugin id every MCP tool carries: `bundle-mcp` and

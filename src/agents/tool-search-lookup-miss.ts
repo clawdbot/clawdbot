@@ -49,7 +49,7 @@ function boundedFailure(diagnostic: McpToolCatalogDiagnostic): string {
 export function describeUnavailableMcpServers(
   catalog: ToolSearchCatalogSession,
 ): UnavailableMcpServersNote | undefined {
-  const diagnostics = catalog.mcpDiagnostics;
+  const diagnostics = catalog.mcpDiagnostics?.diagnostics;
   if (!diagnostics?.length) {
     return undefined;
   }
@@ -93,7 +93,9 @@ function findUnavailableMcpServer(
   const server = MCP_CATALOG_ID_SERVER_RE.exec(needle)?.[1];
   return server === undefined
     ? undefined
-    : catalog.mcpDiagnostics?.find((diagnostic) => diagnostic.safeServerName === server);
+    : catalog.mcpDiagnostics?.diagnostics.find(
+        (diagnostic) => diagnostic.safeServerName === server,
+      );
 }
 
 function formatUnavailableMcpToolError(

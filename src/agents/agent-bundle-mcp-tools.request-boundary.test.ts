@@ -12,6 +12,7 @@ import type { McpCatalogTool, SessionMcpRuntime } from "./agent-bundle-mcp-types
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import {
   applyFinalEffectiveToolPolicy,
+  buildBundleMcpPolicyLayers,
   createBundleMcpServerPolicyMatcher,
 } from "./embedded-agent-runner/effective-tool-policy.js";
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
@@ -607,10 +608,12 @@ describe("failed MCP server outages follow the same policy as that server's tool
 
   it.each(outageCases)("names the memos outage under $label: $visible", async (testCase) => {
     const config: OpenClawConfig = { ...(testCase.tools ? { tools: testCase.tools } : {}), mcp };
-    const admitsMcpServer = createBundleMcpServerPolicyMatcher({
-      conversationCapabilityProfile: resolveConversationCapabilityProfile({ config }),
-      toolsAllow: testCase.toolsAllow,
-    });
+    const admitsMcpServer = createBundleMcpServerPolicyMatcher(
+      buildBundleMcpPolicyLayers({
+        conversationCapabilityProfile: resolveConversationCapabilityProfile({ config }),
+        toolsAllow: testCase.toolsAllow,
+      }),
+    );
     const namesWhenHealthy = await buildConfiguredMcpToolNamesAtRequestBoundary({
       cfg: config,
       serverName: "memos",
