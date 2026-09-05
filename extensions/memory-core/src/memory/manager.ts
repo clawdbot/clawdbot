@@ -46,7 +46,6 @@ import {
   resolveMemoryIndexManagerCacheKey,
   type MemoryIndexManagerPurpose,
 } from "./manager-registry.js";
-import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import { runMemorySearchMaintenance } from "./manager-search-maintenance.js";
 import { MemorySearchOrchestration } from "./manager-search-orchestration.js";
 import {
@@ -388,20 +387,11 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       }
 
       const runGeneration = async (keywordOnly: boolean) => {
-        // Reset must not overtake embeddings awaiting their final incremental writes.
-        // All sync generations own the existing maintenance lease through cleanup.
-        const lock = await waitForMemoryReindexLock(
-          resolveUserPath(this.settings.store.databasePath),
-        );
+        this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
         try {
-          this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
-          try {
-            await this.runSync(params);
-          } finally {
-            this.endSyncProviderGeneration();
-          }
+          await this.runSync(params);
         } finally {
-          lock.release();
+          this.endSyncProviderGeneration();
         }
       };
       try {

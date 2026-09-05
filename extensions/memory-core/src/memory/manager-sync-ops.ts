@@ -36,6 +36,7 @@ import {
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
 } from "./manager-provider-state.js";
+import { withMemoryReindexLock } from "./manager-reindex-lock.js";
 import {
   MEMORY_INDEX_PROVENANCE_VERSION,
   resolveConfiguredScopeHash,
@@ -157,6 +158,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   protected async runSync(params?: MemorySyncParams) {
     const hasTargetSessionRequest = this.hasRequestedTargetSessionSync(params);
     let needsFullReindex = Boolean(params?.force && !hasTargetSessionRequest);
+    let cachePrunedUnderLock = false;
     try {
       // An unavailable configured provider must not replace semantic vectors
       // with FTS-only rows; fresh and already-FTS-only indexes remain safe.
@@ -273,26 +275,33 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         return;
       }
       if (!needsFullSessionReindex) {
-        const targetedSessionSync = await runMemoryTargetedSessionSync({
-          hasSessionSource: this.sources.has("sessions"),
-          targetArchiveFiles,
-          reason: params?.reason,
-          progress: progress ?? undefined,
-          sessionsFullRetryDirty: this.sessionsFullRetryDirty,
-          sessionsReconcileDirty: this.sessionsReconcileDirty,
-          sessionsDirtyFiles: this.sessionsDirtyFiles,
-          syncArchiveFiles: async (targetedParams) => {
-            await this.syncArchiveFiles({
-              ...targetedParams,
-              corpusEntries: targetSessionSync?.corpusEntries,
-            });
-          },
-          shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
-          activateFallbackProvider: async (reason) => {
-            this.endSyncProviderGeneration();
-            return await this.activateFallbackProvider(reason);
-          },
-        });
+        // Targeted updates share coordination with other incremental writers,
+        // while reset and full reindex still require exclusive admission.
+        const targetedSessionSync = await withMemoryReindexLock(
+          resolveUserPath(this.settings.store.databasePath),
+          "shared",
+          async () =>
+            await runMemoryTargetedSessionSync({
+              hasSessionSource: this.sources.has("sessions"),
+              targetArchiveFiles,
+              reason: params?.reason,
+              progress: progress ?? undefined,
+              sessionsFullRetryDirty: this.sessionsFullRetryDirty,
+              sessionsReconcileDirty: this.sessionsReconcileDirty,
+              sessionsDirtyFiles: this.sessionsDirtyFiles,
+              syncArchiveFiles: async (targetedParams) => {
+                await this.syncArchiveFiles({
+                  ...targetedParams,
+                  corpusEntries: targetSessionSync?.corpusEntries,
+                });
+              },
+              shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
+              activateFallbackProvider: async (reason) => {
+                this.endSyncProviderGeneration();
+                return await this.activateFallbackProvider(reason);
+              },
+            }),
+        );
         if (targetedSessionSync.handled) {
           this.sessionsDirty = targetedSessionSync.sessionsDirty;
           if (targetedSessionSync.failure) {
@@ -301,84 +310,104 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
           return;
         }
       }
-      try {
-        if (needsFullReindex) {
-          await this.runInPlaceReindex({
-            reason: params?.reason,
-            force: params?.force,
-            progress: progress ?? undefined,
-          });
-          return;
-        }
+      // Embedding work may be slow, so only true shadow rebuilds own the
+      // exclusive lease. Shared incremental leases still prevent reset from
+      // overtaking writes without excluding other incremental generations.
+      await withMemoryReindexLock(
+        resolveUserPath(this.settings.store.databasePath),
+        needsFullReindex ? "exclusive" : "shared",
+        async () => {
+          try {
+            if (needsFullReindex) {
+              await this.runInPlaceReindex({
+                reason: params?.reason,
+                force: params?.force,
+                progress: progress ?? undefined,
+              });
+              return;
+            }
 
-        const shouldSyncMemory = this.sources.has("memory") && this.dirty;
-        const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
+            const shouldSyncMemory = this.sources.has("memory") && this.dirty;
+            const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
 
-        if (this.shouldDeferSourceWideBatch()) {
-          await this.executeSourceWideSync({
-            shouldSyncMemory,
-            shouldSyncSessions,
-            needsFullReindex,
-            needsFullSessionReindex,
-            targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
-            progress: progress ?? undefined,
-          });
-          if (shouldSyncMemory) {
-            this.clearMemoryRetryState();
-          }
-          if (shouldSyncSessions) {
-            this.clearSessionRetryState();
-          } else {
-            this.refreshSessionDirtyFlag();
-          }
-        } else {
-          if (shouldSyncMemory) {
-            await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
-            this.clearMemoryRetryState();
-          }
+            if (this.shouldDeferSourceWideBatch()) {
+              await this.executeSourceWideSync({
+                shouldSyncMemory,
+                shouldSyncSessions,
+                needsFullReindex,
+                needsFullSessionReindex,
+                targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
+                progress: progress ?? undefined,
+              });
+              if (shouldSyncMemory) {
+                this.clearMemoryRetryState();
+              }
+              if (shouldSyncSessions) {
+                this.clearSessionRetryState();
+              } else {
+                this.refreshSessionDirtyFlag();
+              }
+            } else {
+              if (shouldSyncMemory) {
+                await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
+                this.clearMemoryRetryState();
+              }
 
-          if (shouldSyncSessions) {
-            await this.syncArchiveFiles({
-              needsFullReindex: needsFullSessionReindex,
-              targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
-              progress: progress ?? undefined,
-            });
-            this.clearSessionRetryState();
-          } else {
-            this.refreshSessionDirtyFlag();
+              if (shouldSyncSessions) {
+                await this.syncArchiveFiles({
+                  needsFullReindex: needsFullSessionReindex,
+                  targetArchiveFiles: targetArchiveFiles
+                    ? Array.from(targetArchiveFiles)
+                    : undefined,
+                  progress: progress ?? undefined,
+                });
+                this.clearSessionRetryState();
+              } else {
+                this.refreshSessionDirtyFlag();
+              }
+            }
+          } catch (err) {
+            const reason = formatErrorMessage(err);
+            const shouldFallback = this.shouldFallbackOnError(err);
+            if (shouldFallback) {
+              // A failed generation cannot wait on its own sync lease while activating fallback.
+              this.endSyncProviderGeneration();
+            }
+            const activated = shouldFallback && (await this.activateFallbackProvider(reason));
+            if (activated) {
+              if (needsFullReindex && !hasTargetArchiveFiles) {
+                this.beginSyncProviderGeneration();
+                await this.runInPlaceReindex({
+                  reason: params?.reason ?? "fallback",
+                  force: true,
+                  progress: progress ?? undefined,
+                });
+              }
+              return;
+            }
+            if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {
+              this.syncOutcomes.recordActiveFailure(err);
+              log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
+              return;
+            }
+            throw err;
+          } finally {
+            if (!needsFullReindex) {
+              this.pruneEmbeddingCacheIfNeeded();
+              cachePrunedUnderLock = true;
+            }
           }
-        }
-      } catch (err) {
-        const reason = formatErrorMessage(err);
-        const shouldFallback = this.shouldFallbackOnError(err);
-        if (shouldFallback) {
-          // A failed generation cannot wait on its own sync lease while activating fallback.
-          this.endSyncProviderGeneration();
-        }
-        const activated = shouldFallback && (await this.activateFallbackProvider(reason));
-        if (activated) {
-          if (needsFullReindex && !hasTargetArchiveFiles) {
-            this.beginSyncProviderGeneration();
-            await this.runInPlaceReindex({
-              reason: params?.reason ?? "fallback",
-              force: true,
-              progress: progress ?? undefined,
-            });
-          }
-          return;
-        }
-        if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {
-          this.syncOutcomes.recordActiveFailure(err);
-          log.warn(`memory embeddings unavailable; leaving memory index dirty: ${reason}`);
-          return;
-        }
-        throw err;
-      }
+        },
+      );
     } finally {
       // Ordinary sync exits retain live cleanup, including preflight/no-op exits.
       // Full rebuild failures (including forced preflight) leave the primary alone.
-      if (!needsFullReindex) {
-        this.pruneEmbeddingCacheIfNeeded();
+      if (!needsFullReindex && !cachePrunedUnderLock) {
+        await withMemoryReindexLock(
+          resolveUserPath(this.settings.store.databasePath),
+          "shared",
+          async () => this.pruneEmbeddingCacheIfNeeded(),
+        );
       }
     }
   }
