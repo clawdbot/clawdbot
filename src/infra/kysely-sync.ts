@@ -1,7 +1,14 @@
 // Adapts node:sqlite sync database calls for Kysely-style query execution.
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
+import { toUSVString } from "node:util";
 import type { Compilable, CompiledQuery, Kysely, QueryResult, RawBuilder } from "kysely";
-import { InsertQueryNode, Kysely as KyselyInstance, sql as kyselySql, SqliteDialect } from "kysely";
+import {
+  InsertQueryNode,
+  Kysely as KyselyInstance,
+  SelectQueryNode,
+  sql as kyselySql,
+  SqliteDialect,
+} from "kysely";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   kyselyByDatabase,
@@ -14,9 +21,9 @@ import { pruneMapToMaxSize } from "./map-size.js";
 // going through Kysely's async driver path.
 
 export { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
-const statementInvalidationSymbol = Symbol("openclaw.kyselySyncStatementInvalidation");
-const statementCacheEnabledSymbol = Symbol("openclaw.kyselySyncStatementCacheEnabled");
-const authorizerActiveSymbol = Symbol("openclaw.kyselySyncAuthorizerActive");
+const statementInvalidationSymbol = Symbol.for("openclaw.kyselySyncStatementInvalidation");
+const statementCacheEnabledSymbol = Symbol.for("openclaw.kyselySyncStatementCacheEnabled");
+const authorizerActiveSymbol = Symbol.for("openclaw.kyselySyncAuthorizerActive");
 // Bound SQL plus variable-size bindings to about 2 MiB per enabled database.
 // Process-wide retention scales with open handles; repeated variable SQL can enter.
 const statementCacheCapacity = 32;
@@ -56,6 +63,17 @@ export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database
   });
   kyselyByDatabase.set(db, kysely as Kysely<unknown>);
   return kysely;
+}
+
+/** A single bound set avoids SQLite parameter and JS variadic-call limits. */
+export function sqliteStringSet(values: readonly string[]): RawBuilder<string> {
+  // Keep node:sqlite's USV binding. SQLite 3.44 needs JSON5 \x00 to retain NUL;
+  // consuming escaped backslashes first preserves literal "\\u0000" keys.
+  const encoded = JSON.stringify(values.map(toUSVString)).replace(/\\(?:\\|u0000)/g, (escape) =>
+    escape === "\\u0000" ? "\\x00" : escape,
+  );
+  /* kysely-allow-raw: JSON table-valued selection keeps one read snapshot and outer query ordering. */
+  return kyselySql<string>`(SELECT value FROM json_each(${encoded}))`;
 }
 
 function reportNodeSqliteKyselyQueryError(db: DatabaseSync, error: unknown): void {
@@ -226,7 +244,9 @@ function executeCompiledSqliteQuerySync<Row>(
   const parameters = compiledQuery.parameters as SQLInputValue[];
   try {
     return executeWithCachedStatement(db, compiledQuery.sql, parameters, (statement) => {
-      if (statement.columns().length > 0) {
+      // SELECT already guarantees a reader; avoid allocating native column metadata
+      // just to classify it. Raw SQL and other roots still need native classification.
+      if (SelectQueryNode.is(compiledQuery.query) || statement.columns().length > 0) {
         // Node's all() snapshots the column count before SQLite can reprepare
         // an expired statement. Eagerly consuming iterate() reads it after step.
         const iterator = statement.iterate(...parameters);
@@ -269,13 +289,14 @@ export function executeSqliteQuerySync<Row>(
   return executeCompiledSqliteQuerySync<Row>(db, query.compile());
 }
 
-/** Compile a fixed query once; bind fresh values through the normal sync executor on each call. */
-export function prepareSqliteQuerySync<Params, Row = unknown>(
-  db: DatabaseSync,
-  build: (
-    parameter: <Value extends SQLInputValue>(read: (params: Params) => Value) => RawBuilder<Value>,
-  ) => Compilable<Row>,
-): (params: Params) => QueryResult<Row> {
+type SqliteQueryBindingBuilder<Params, Row> = (
+  parameter: <Value extends SQLInputValue>(read: (params: Params) => Value) => RawBuilder<Value>,
+) => Compilable<Row>;
+
+/** Compile fixed SQL and fresh bindings without taking ownership of a native statement. */
+export function compileSqliteQueryBindings<Params, Row = unknown>(
+  build: SqliteQueryBindingBuilder<Params, Row>,
+) {
   const bindings = new Map<unknown, (params: Params) => SQLInputValue>();
   const compiled = build((read) => {
     const marker = Symbol("sqlite-query-parameter");
@@ -286,11 +307,24 @@ export function prepareSqliteQuerySync<Params, Row = unknown>(
     return kyselySql<ReturnType<typeof read>>`${marker}`;
   }).compile();
   const readers = compiled.parameters.map((value) => bindings.get(value) ?? (() => value));
+  return {
+    compiled,
+    // Keep bindings invocation-local: SQLite callbacks can re-enter the caller.
+    // SAFETY: Kysely bindings pass through unchanged; node:sqlite validates their runtime types.
+    bind: (params: Params) => readers.map((read) => read(params)) as SQLInputValue[],
+  };
+}
+
+/** Compile a fixed query once; bind fresh values through the normal sync executor on each call. */
+export function prepareSqliteQuerySync<Params, Row = unknown>(
+  db: DatabaseSync,
+  build: SqliteQueryBindingBuilder<Params, Row>,
+): (params: Params) => QueryResult<Row> {
+  const { compiled, bind } = compileSqliteQueryBindings(build);
   return (params) =>
     executeCompiledSqliteQuerySync(db, {
       ...compiled,
-      // Keep bindings invocation-local: SQLite callbacks can re-enter this runner.
-      parameters: readers.map((read) => read(params)),
+      parameters: bind(params),
     });
 }
 
@@ -304,7 +338,7 @@ export function* iterateSqliteQuerySync<Row>(
     // Iterators keep statement state across yields. A private statement prevents
     // nested iteration of identical SQL from resetting an earlier iterator.
     const statement = db.prepare(compiledQuery.sql);
-    if (statement.columns().length === 0) {
+    if (!SelectQueryNode.is(compiledQuery.query) && statement.columns().length === 0) {
       return;
     }
     const parameters = compiledQuery.parameters as SQLInputValue[];

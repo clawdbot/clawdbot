@@ -75,7 +75,11 @@ describeControlUiE2e("native link routing", () => {
       const messages: unknown[] = [];
       const host = window as Window & {
         openclawNativeLinkMessages?: unknown[];
-        webkit?: unknown;
+        webkit?: {
+          messageHandlers?: {
+            openclawLink?: { postMessage: (message: unknown) => void };
+          };
+        };
       };
       host.openclawNativeLinkMessages = messages;
       host.webkit = {

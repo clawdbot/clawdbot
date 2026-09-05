@@ -20,6 +20,7 @@ import {
   observeChatMediaResource,
   releaseChatMediaResourceSubscriber,
 } from "./chat-message-media.ts";
+import * as chatMessage from "./chat-message.ts";
 import { resetTranscriptSession } from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
@@ -61,6 +62,94 @@ describe("chat transcript invalidation", () => {
     },
   );
 
+  it.each(["unchanged", "stream-only"] as const)(
+    "keeps settled run frames idle during %s updates",
+    async (update) => {
+      vi.spyOn(Date, "now").mockReturnValue(60_000);
+      const completedRunId = "settled-run";
+      const activeRunId = "active-run";
+      const props = {
+        ...threadProps(`pane-settled-${update}`, "agent:main:dashboard:settled", [
+          {
+            role: "user",
+            content: "Inspect the workspace",
+            timestamp: 1_000,
+            __openclaw: { id: "settled-user", idempotencyKey: `${completedRunId}:user` },
+          },
+          {
+            role: "toolResult",
+            toolCallId: "settled-read",
+            toolName: "read",
+            content: "Read complete",
+            timestamp: 2_000,
+            runId: completedRunId,
+          },
+          {
+            role: "assistant",
+            content: "Workspace checked",
+            phase: "final_answer",
+            stopReason: "stop",
+            timestamp: 3_000,
+            runId: completedRunId,
+            __openclaw: { id: "settled-final" },
+          },
+          {
+            role: "user",
+            content: "Continue with the next task",
+            timestamp: 4_000,
+            __openclaw: { id: "active-user", idempotencyKey: `${activeRunId}:user` },
+          },
+        ]),
+        showToolCalls: true,
+        runId: activeRunId,
+        runActive: true,
+        runWorking: true,
+        stream: "Draft next reply",
+        streamStartedAt: 5_000,
+      };
+      const transcript = createTestTranscript();
+      const container = document.body.appendChild(document.createElement("div"));
+      const rerender = () => {
+        render(renderChatThread(props, transcript), container);
+        transcript.hostUpdated();
+      };
+      try {
+        rerender();
+        transcript.hostConnected();
+        await flushDeferredRowPrune();
+        const finalBubble = expectDefined(
+          container.querySelector('[data-entry-id="settled-final"]'),
+          "settled final reply",
+        );
+        const workToggle = expectDefined(
+          finalBubble.closest(".chat-group")?.querySelector(".chat-work-group button"),
+          "completed work disclosure",
+        );
+        expect(workToggle.getAttribute("aria-expanded")).toBe("false");
+        expect(container.querySelector(".chat-bubble.streaming")?.textContent).toContain(
+          props.stream,
+        );
+        const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+        if (update === "stream-only") {
+          props.stream = "Advanced next reply";
+        }
+        rerender();
+
+        expect(container.querySelector(".chat-bubble.streaming")?.textContent).toContain(
+          props.stream,
+        );
+        expect(container.querySelector('[data-entry-id="settled-final"]')).toBe(finalBubble);
+        expect(finalBubble.textContent).toContain("Workspace checked");
+        expect(workToggle.getAttribute("aria-expanded")).toBe("false");
+        expect(renderGroup.mock.calls.filter(([group]) => group.runId === completedRunId)).toEqual(
+          [],
+        );
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
+
   it("keeps built row identities across an A to B to A presentation reset", () => {
     const paneId = "pane-session-items";
     const messagesA = [{ role: "assistant", content: "session A", timestamp: 1_000 }];
@@ -97,6 +186,91 @@ describe("chat transcript invalidation", () => {
     expect(buildSpy).toHaveBeenCalledTimes(2);
     expect(restoredItemsA).toBe(itemsA);
     expect(restoredItemsA.every((item, index) => item === itemsA[index])).toBe(true);
+  });
+
+  it("keeps settled rows idle across session metadata updates but refreshes their identity gutter", () => {
+    vi.spyOn(Date, "now").mockReturnValue(60_000);
+    const props = threadProps("pane-session-metadata");
+    props.selectedSession = { key: props.sessionKey, kind: "direct", updatedAt: 1 };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => render(renderChatThread(props, transcript), container);
+    rerender();
+    const userRow = expectDefined(container.querySelector(".chat-group.user"), "user row");
+    expect(userRow.querySelector(".chat-avatar")).toBeNull();
+    const renderGroup = vi.spyOn(chatMessage, "renderMessageGroup");
+
+    props.selectedSession = { ...props.selectedSession, updatedAt: 2, label: "Renamed chat" };
+    rerender();
+    expect(renderGroup).not.toHaveBeenCalled();
+    expect(container.querySelector(".chat-group.user")).toBe(userRow);
+
+    props.selectedSession = { ...props.selectedSession, kind: "group" };
+    rerender();
+    expect(userRow.querySelector(".chat-avatar")).not.toBeNull();
+  });
+
+  it("rechecks visible images when the same session changes workspace protection", async () => {
+    const source = "/outside/project/policy-preview.png";
+    const props = threadProps("pane-media-policy", "agent:main:media-policy", [
+      {
+        role: "assistant",
+        content: [{ type: "image", url: source, alt: "Policy preview" }],
+        timestamp: 1_000,
+      },
+    ]);
+    props.selectedSession = {
+      key: props.sessionKey,
+      kind: "direct",
+      updatedAt: 1,
+      permissionMode: "full",
+    };
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () =>
+        props.selectedSession?.permissionMode === "full"
+          ? {
+              available: true,
+              mediaTicket: "full-access-image",
+              mediaTicketExpiresAt: new Date(Date.now() + 90_000).toISOString(),
+            }
+          : {
+              available: false,
+              reason: "Outside allowed folders",
+              canAllow: true,
+              retryable: false,
+            },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => {
+      render(renderChatThread(props, transcript), container);
+      transcript.hostUpdated();
+    };
+    props.onRequestUpdate = rerender;
+    rerender();
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+    expect(container.querySelector("img.chat-message-image")).not.toBeNull();
+
+    for (const permissionMode of ["workspace", "full", "workspace"] as const) {
+      props.selectedSession = { ...props.selectedSession, permissionMode };
+      rerender();
+      await flushDeferredRowPrune();
+      expect(Boolean(container.querySelector("img.chat-message-image"))).toBe(
+        permissionMode === "full",
+      );
+      if (permissionMode === "workspace") {
+        expect(container.querySelector(".chat-assistant-attachment-card")?.textContent).toContain(
+          "Allow image",
+        );
+      }
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    releaseChatMediaResourceSubscriber(rerender);
+    transcript.hostDisconnected();
   });
 
   it("rebinds guarded transcript images when the gateway rotates its auth token", async () => {
@@ -218,6 +392,16 @@ describe("chat transcript invalidation", () => {
           );
         });
       }
+      if (fetchMock.mock.calls.length === 2) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            available: false,
+            reason: "Outside allowed folders",
+            retryable: false,
+          }),
+        } as Response);
+      }
       return Promise.resolve({
         ok: true,
         json: async () => ({
@@ -278,7 +462,7 @@ describe("chat transcript invalidation", () => {
 
     const previousResource = observeChatMediaResource(
       "assistant-attachment",
-      `::test-auth-token::${source}`,
+      JSON.stringify(["", "test-auth-token", state.sessionKey, undefined, undefined, source]),
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(previousResource.subscribers.size).toBe(1);
@@ -294,7 +478,7 @@ describe("chat transcript invalidation", () => {
 
     expect(previousSignal?.aborted).toBe(true);
     expect(isChatMediaResourceCurrent(previousResource)).toBe(false);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(
       container.querySelector(".chat-assistant-attachment-card__status-meta")?.textContent,
     ).toContain("Outside allowed folders");
@@ -307,10 +491,10 @@ describe("chat transcript invalidation", () => {
 
     const restoredResource = observeChatMediaResource(
       "assistant-attachment",
-      `::test-auth-token::${source}`,
+      JSON.stringify(["", "test-auth-token", state.sessionKey, undefined, undefined, source]),
     );
     const metadataCalls = fetchMock.mock.calls.filter(([input]) => input.includes("meta=1"));
-    expect(metadataCalls).toHaveLength(2);
+    expect(metadataCalls).toHaveLength(3);
     expect(new Headers(metadataCalls[1]?.[1]?.headers).get("Authorization")).toBe(
       "Bearer test-auth-token",
     );

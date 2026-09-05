@@ -33,7 +33,11 @@ import type {
   ApplicationGatewayConnection,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
-import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
+import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
+import {
+  createGatewayControlUiReloadOptions,
+  isSameOriginGateway,
+} from "./gateway-control-ui-reload.ts";
 import {
   loadGatewaySessionSelection,
   loadSettings,
@@ -410,16 +414,19 @@ export function createApplicationGateway(
       everConnected = false;
     }
     connection = nextConnection;
-    // Trust the connected gateway's origin for avatar route resolution so
-    // split-origin Control UI deployments load uploaded/proxied avatars.
-    setAvatarGatewayOrigin(
-      nextConnection.gatewayUrl,
-      resolveControlUiAuthHeader({
-        settings: { token: nextConnection.token },
-        password: nextConnection.password,
-      }),
-      options.resourceBasePath,
-    );
+    // Both connection setup and hello bind resources to this connection's credentials.
+    const updateAvatarContext = (hello?: GatewayHelloOk) => {
+      setAvatarGatewayOrigin(
+        nextConnection.gatewayUrl,
+        resolveControlUiAuthCandidates({
+          hello,
+          settings: nextConnection,
+          password: nextConnection.password,
+        }),
+        options.resourceBasePath,
+      );
+    };
+    updateAvatarContext();
     updateSettings(
       {
         gatewayUrl: nextConnection.gatewayUrl,
@@ -457,6 +464,8 @@ export function createApplicationGateway(
         if (client !== nextClient) {
           return;
         }
+        // A successful hello retires bootstrap; the client has processed any issued device grant.
+        connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
         const exactBuildIdentityAvailable = Boolean(hello.server?.buildId?.trim());
         const controlUiBuildFresh = !(
           isSameOriginGateway(nextConnection.gatewayUrl) &&
@@ -483,20 +492,17 @@ export function createApplicationGateway(
           });
           const targetBuildId = hello.server?.buildId?.trim() || hello.server?.version?.trim();
           if (targetBuildId) {
-            void scheduleStaleChunkReload({ buildId: targetBuildId });
+            void scheduleStaleChunkReload({
+              buildId: targetBuildId,
+              ...createGatewayControlUiReloadOptions(
+                gateway,
+                () => isCurrentClient(nextClient) && isSameOriginGateway(nextConnection.gatewayUrl),
+              ),
+            });
           }
           return;
         }
-        setAvatarGatewayOrigin(
-          nextConnection.gatewayUrl,
-          resolveControlUiAuthHeader({
-            hello,
-            settings: { token: nextConnection.token },
-            password: nextConnection.password,
-          }),
-          options.resourceBasePath,
-        );
-        connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
+        updateAvatarContext(hello);
         if (persistConnectionSettings) {
           settings = loadSettings();
         }
@@ -556,7 +562,13 @@ export function createApplicationGateway(
         stopCanvasSurfaceLease();
         const mismatchedBuildId = readControlUiBuildMismatchId(error?.details);
         if (mismatchedBuildId) {
-          void scheduleStaleChunkReload({ buildId: mismatchedBuildId });
+          void scheduleStaleChunkReload({
+            buildId: mismatchedBuildId,
+            ...createGatewayControlUiReloadOptions(
+              gateway,
+              () => isCurrentClient(nextClient) && isSameOriginGateway(nextConnection.gatewayUrl),
+            ),
+          });
         }
         const startupPending =
           mismatchedBuildId === null &&
@@ -722,14 +734,6 @@ export function createApplicationGateway(
     },
   };
   return gateway;
-}
-
-function isSameOriginGateway(gatewayUrl: string): boolean {
-  try {
-    return new URL(gatewayUrl.replace(/^ws/u, "http")).origin === globalThis.location?.origin;
-  } catch {
-    return false;
-  }
 }
 
 function normalizeCanvasPluginSurfaceUrl(value: string | undefined): string | null {

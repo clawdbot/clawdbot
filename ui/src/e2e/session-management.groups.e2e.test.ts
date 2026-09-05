@@ -206,7 +206,13 @@ suite.define(() => {
       const name = dialog.getByRole("textbox", { name: "Rename session" });
       await name.waitFor({ state: "visible" });
       await expect.poll(() => name.inputValue()).toBe("Original name");
-      await captureUiProof(suite, page, "sidebar-session-rename-dialog.png");
+      await captureUiProof(
+        suite,
+        page,
+        "sidebar-session-rename-dialog.png",
+        dialog.locator("dialog"),
+        [name],
+      );
       await name.fill("Renamed session");
       await dialog.getByRole("button", { name: "Save" }).click();
 
@@ -1074,7 +1080,8 @@ suite.define(() => {
       const toggle = firstEmptyGroup.locator(".sidebar-session-group-toggle");
       await toggle.click();
       await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("false");
-      await expect.poll(groupHeight).toBe(expandedHeight);
+      // DOMRect measurements can differ by subpixel rounding without a layout change.
+      await expect.poll(groupHeight).toBeCloseTo(expandedHeight, 2);
       await expect
         .poll(() => firstEmptyGroup.locator(".sidebar-session-empty-hint").count())
         .toBe(0);

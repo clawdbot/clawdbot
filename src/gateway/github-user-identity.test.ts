@@ -42,7 +42,6 @@ function cloudflareSync(params: {
   assertion?: string;
   userHeader?: string;
   requiredHeaders?: string[];
-  preferCachedIdentity?: boolean;
 }) {
   return createAuthenticatedGitHubIdentitySync({
     authResult: {
@@ -62,7 +61,6 @@ function cloudflareSync(params: {
       "cf-access-jwt-assertion":
         params.assertion ?? accessAssertion("https://team.cloudflareaccess.com"),
     },
-    preferCachedIdentity: params.preferCachedIdentity,
   });
 }
 
@@ -417,6 +415,7 @@ describe("authenticated GitHub identity sync", () => {
 
   it("binds Cloudflare identity to email, GitHub IdP, numeric id, and canonical GitHub login", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
       const fetchMock = vi
         .spyOn(globalThis, "fetch")
         .mockResolvedValueOnce(
@@ -454,6 +453,7 @@ describe("authenticated GitHub identity sync", () => {
         githubIdentity: { login: "steipete" },
       });
 
+      clock.mockReturnValue(1_800_000_000_000 + 15 * 60_000);
       fetchMock
         .mockResolvedValueOnce(
           githubResponse({
@@ -472,85 +472,6 @@ describe("authenticated GitHub identity sync", () => {
       expect(fetchMock).toHaveBeenCalledTimes(4);
     });
   });
-
-  it.each([true, false])(
-    "reuses an exact Access identity before GitHub refresh only when requested: %s",
-    async (preferCachedIdentity) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const profile = syncGitHubIdentity({
-          identity: { accountId: 58493, login: "ada" },
-          authenticationAlias: { kind: "email", email: "ada@example.com" },
-        });
-        setDisplayName(profile.id, "User Chosen");
-        const fetchMock = vi
-          .spyOn(globalThis, "fetch")
-          .mockResolvedValueOnce(
-            githubResponse({
-              id: 58493,
-              email: "ada@example.com",
-              idp: { type: "github" },
-            }),
-          )
-          .mockResolvedValueOnce(githubResponse({ id: 58493, login: "ada-renamed" }));
-
-        const result = await cloudflareSync({
-          principal: "ADA@Example.COM",
-          preferCachedIdentity,
-        })?.();
-
-        expect(result?.profileId).toBe(profile.id);
-        expect(fetchMock).toHaveBeenCalledTimes(preferCachedIdentity ? 1 : 2);
-        expect(fetchMock.mock.calls[0]?.[0]).toBe(
-          "https://team.cloudflareaccess.com/cdn-cgi/access/get-identity",
-        );
-        expect(getUserProfileListItem(profile.id)).toMatchObject({
-          displayName: "User Chosen",
-          githubIdentity: { login: preferCachedIdentity ? "ada" : "ada-renamed" },
-        });
-      });
-    },
-  );
-
-  it.each([
-    { name: "missing binding", seedCache: false },
-    { name: "different account", accountId: 99999 },
-    { name: "different email", principal: "other@example.com" },
-    { name: "account and email on different profiles", accountId: 99999, otherProfile: true },
-  ])(
-    "requires GitHub verification for a $name even when cached identity is preferred",
-    async ({ seedCache, accountId, principal, otherProfile }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        if (seedCache !== false) {
-          syncGitHubIdentity({
-            identity: { accountId: 58493, login: "ada" },
-            authenticationAlias: { kind: "email", email: "ada@example.com" },
-          });
-        }
-        if (otherProfile) {
-          syncGitHubIdentity({
-            identity: { accountId: 99999, login: "other" },
-            authenticationAlias: { kind: "email", email: "other@example.com" },
-          });
-        }
-        const authenticatedEmail = principal ?? "ada@example.com";
-        const fetchMock = vi
-          .spyOn(globalThis, "fetch")
-          .mockResolvedValueOnce(
-            githubResponse({
-              id: accountId ?? 58493,
-              email: authenticatedEmail,
-              idp: { type: "github" },
-            }),
-          )
-          .mockResolvedValueOnce(githubResponse({}, 503));
-
-        await expect(
-          cloudflareSync({ principal: authenticatedEmail, preferCachedIdentity: true })?.(),
-        ).rejects.toMatchObject({ statusCode: 502 });
-        expect(fetchMock).toHaveBeenCalledTimes(2);
-      });
-    },
-  );
 
   it.each([
     { name: "malformed JWT", assertion: "not-a-jwt" },
@@ -616,6 +537,7 @@ describe("authenticated GitHub identity sync", () => {
 
   it("rejects a GitHub account-id mismatch without erasing prior identity", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
       setRuntimeConfigSnapshot({
         gateway: { controlUi: { github: { token: "configured-service-token" } } },
       });
@@ -630,6 +552,7 @@ describe("authenticated GitHub identity sync", () => {
         )
         .mockResolvedValueOnce(githubResponse({ id: 58493, login: "steipete" }));
       const first = await cloudflareSync({})?.();
+      clock.mockReturnValue(1_800_000_000_000 + 15 * 60_000);
       initialFetch
         .mockResolvedValueOnce(
           githubResponse({
@@ -660,6 +583,7 @@ describe("authenticated GitHub identity sync", () => {
     "reattaches the exact cached verified identity after a $name",
     async ({ githubResult, githubError }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
         const fetchMock = vi
           .spyOn(globalThis, "fetch")
           .mockResolvedValueOnce(
@@ -671,6 +595,7 @@ describe("authenticated GitHub identity sync", () => {
           )
           .mockResolvedValueOnce(githubResponse({ id: 58493, login: "steipete" }));
         const first = await cloudflareSync({})?.();
+        clock.mockReturnValue(1_800_000_000_000 + 15 * 60_000);
         fetchMock.mockResolvedValueOnce(
           githubResponse({
             id: 58493,

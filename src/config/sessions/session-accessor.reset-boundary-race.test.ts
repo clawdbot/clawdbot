@@ -5,6 +5,7 @@ import * as sqliteQueries from "../../infra/kysely-sync.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import {
   applySessionEntryLifecycleMutation,
+  loadSessionEntry,
   loadTranscriptEvents,
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
@@ -51,13 +52,40 @@ describe("reset boundary concurrency", () => {
     cleanupTempDirs(tempDirs);
   });
 
+  it("does not commit a reset after its caller closes during entry preparation", async () => {
+    const sessionKey = "agent:main:closing-reset";
+    const scope = { sessionKey, storePath };
+    await upsertSessionEntryCore(scope, { sessionId: "current-reset", updatedAt: 10 });
+    let current = true;
+    const commitGuard = () => {
+      if (!current) {
+        throw new Error("reset caller closed");
+      }
+    };
+    await expect(
+      resetSessionEntryLifecycle({
+        storePath,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+        commitGuard,
+        buildNextEntry: () => {
+          commitGuard();
+          queueMicrotask(() => {
+            current = false;
+          });
+          return { sessionId: "stale-reset", updatedAt: 20 };
+        },
+      }),
+    ).rejects.toThrow("reset caller closed");
+    expect(loadSessionEntry(scope)?.sessionId).toBe("current-reset");
+  });
+
   it.each([
     {
       name: "single reset",
       reset: async (scope: { sessionId: string; sessionKey: string; storePath: string }) =>
         resetSessionEntryLifecycle({
           buildNextEntry: () => ({ sessionId: "next-single", updatedAt: 20 }),
-          resetBoundary: { context: "preserve-tail", reason: "reset" },
+          resetBoundary: { context: "preserve-tail", reason: "reset", cwd: "/tmp/workspace" },
           storePath: scope.storePath,
           target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
         }),
@@ -71,7 +99,7 @@ describe("reset boundary concurrency", () => {
           upserts: [
             {
               entry: { sessionId: "next-bulk", updatedAt: 20 },
-              resetBoundary: { context: "preserve-tail", reason: "reset" },
+              resetBoundary: { context: "preserve-tail", reason: "reset", cwd: "/tmp/workspace" },
               sessionKey: scope.sessionKey,
             },
           ],

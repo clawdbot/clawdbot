@@ -1,14 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
+import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import * as migrationCheckpoint from "../infra/startup-migration-checkpoint.js";
+import { migrateLegacyConfigMachineState } from "../infra/state-migrations.config-machine-state.js";
+import { readBundledDiscoveryModeMemoized } from "../plugins/bundled-discovery-state.js";
 import {
   getCurrentPluginMetadataSnapshot,
   withPluginMetadataSnapshotScope,
 } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import { writePersistedInstalledPluginIndexWithLeaseSync } from "../plugins/installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store.js";
 import {
@@ -30,6 +33,7 @@ import {
   type DoctorConfigPreflightPluginSnapshotRead,
 } from "./doctor-config-preflight-plugin-index.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
+import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 
 async function withPreflightPluginFixture(
@@ -41,7 +45,11 @@ async function withPreflightPluginFixture(
   workspaceNames: string[] = [],
   fixturePluginId = "preflight-fixture",
 ) {
-  await withTempHome(async (home) => {
+  await withDoctorConfigPreflightHome(async (home) => {
+    // Scope real discovery to the synthetic plugins owned by this fixture.
+    const bundledRoot = path.join(home, "bundled");
+    await fs.mkdir(bundledRoot, { recursive: true });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
     const workspaces = Object.fromEntries(
       workspaceNames.map((name) => [name, path.join(home, name)]),
     );
@@ -126,6 +134,8 @@ describe("Doctor plugin persistence", () => {
     "verifies a persisted registry in the $scope scope (replacement before lease: $replaceBeforeLease)",
     async ({ scope, replaceBeforeLease }) => {
       await withPreflightPluginFixture(async (writeVersion) => {
+        const checkpointStatus = vi.spyOn(migrationCheckpoint, "readMigrationCheckpointStatus");
+        onTestFinished(() => checkpointStatus.mockRestore());
         const run = async () => {
           const owner = getPluginCache();
           const read = readPluginPreflight;
@@ -204,6 +214,7 @@ describe("Doctor plugin persistence", () => {
         } else {
           await run();
         }
+        expect(checkpointStatus).not.toHaveBeenCalled();
       });
     },
   );
@@ -437,34 +448,108 @@ describe("Doctor plugin persistence", () => {
     });
   });
 
-  it("returns the final accepted startup read with its metadata producer", async () => {
-    await withPreflightPluginFixture(async (_writeVersion, config) => {
-      const initial = await readPluginPreflight();
-      config.plugins!.entries = { "preflight-fixture": { enabled: false } };
-      await fs.writeFile(initial.snapshot.path, JSON.stringify(config));
-      let acceptedRead: DoctorConfigPreflightPluginSnapshotRead | undefined;
-      const result = await runDoctorConfigPreflight({
-        migrateState: false,
-        migrateLegacyConfig: false,
-        requireStartupMigrationCheckpoint: true,
-        preparePluginMetadataSnapshot: true,
-        observe: false,
-        measure: async (name, operation) => {
-          const measured = await operation();
-          if (name === "doctor.config-preflight.config-snapshot") {
-            acceptedRead = measured as DoctorConfigPreflightPluginSnapshotRead;
+  it.each(["derived", "persisted"])(
+    "returns the final accepted startup read after bundled discovery migration from a %s registry",
+    async (initialSource) => {
+      await withPreflightPluginFixture(async (_writeVersion, config) => {
+        const original = await readPluginPreflight();
+        // Documented per-plugin disablement keeps metadata discoverable without executing index.js.
+        config.plugins!.entries = { "preflight-fixture": { enabled: false } };
+        await fs.writeFile(original.snapshot.path, JSON.stringify(config));
+        await withPluginCache(createPluginCache(), async () => {
+          const initial = await readPluginPreflight();
+          expect(initial.snapshot.valid).toBe(true);
+          expect(initial.pluginMetadataSnapshot?.registrySource).toBe("derived");
+          expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
+          if (initialSource === "persisted") {
+            const lease = migrationCheckpoint.acquireStartupMigrationLease();
+            try {
+              writePersistedInstalledPluginIndexWithLeaseSync(
+                initial.pluginMetadataSnapshot!.index,
+                {
+                  env: process.env,
+                  lease,
+                },
+              );
+            } finally {
+              lease.release();
+            }
           }
-          return measured;
-        },
+          let acceptedRead: DoctorConfigPreflightPluginSnapshotRead | undefined;
+          let beforeConvergenceRead: DoctorConfigPreflightPluginSnapshotRead | undefined;
+          let result: Awaited<ReturnType<typeof runDoctorConfigPreflight>> | undefined;
+          let failure: string | undefined;
+          try {
+            // Startup is a new operation; the seeding generation intentionally retains old facts.
+            result = await withPluginCache(createPluginCache(), () =>
+              runDoctorConfigPreflight({
+                migrateState: false,
+                migrateLegacyConfig: false,
+                beforeStateMigrations: async () => true,
+                requireStartupMigrationCheckpoint: true,
+                preparePluginMetadataSnapshot: true,
+                observe: false,
+                measure: async (name, operation) => {
+                  if (name === "doctor.config-preflight.plugin-plan") {
+                    beforeConvergenceRead = acceptedRead;
+                    // The real machine-state migration must finish before startup convergence begins.
+                    expect(readBundledDiscoveryModeMemoized()).toBe("compat");
+                  }
+                  const measured = await operation();
+                  if (name === "doctor.config-preflight.fresh-config-guard") {
+                    // Exercise the real policy producer at the guarded migration boundary,
+                    // without pulling unrelated legacy-store discovery into this regression.
+                    const migrated = migrateLegacyConfigMachineState({ config, env: process.env });
+                    expect(migrated.changes).toContain(
+                      "Migrated plugins.bundledDiscovery → shared SQLite state",
+                    );
+                  }
+                  if (name === "doctor.config-preflight.config-snapshot") {
+                    const read = measured as DoctorConfigPreflightPluginSnapshotRead;
+                    if (!acceptedRead) {
+                      expect(read.pluginMetadataSnapshot?.registrySource).toBe(initialSource);
+                    }
+                    acceptedRead = read;
+                  }
+                  return measured;
+                },
+              }),
+            );
+          } catch (error) {
+            // Keep captured snapshot environments out of failure output.
+            failure = error instanceof Error ? error.message : String(error);
+          }
+          expect.soft(failure).toBeUndefined();
+          const policyHash = resolveInstalledPluginIndexPolicyHash(config, process.env);
+          expect(readBundledDiscoveryModeMemoized()).toBe("compat");
+          expect(policyHash).not.toBe(initial.pluginMetadataSnapshot?.policyHash);
+          expect(beforeConvergenceRead).toBeDefined();
+          expect(acceptedRead).toBeDefined();
+          expect(acceptedRead?.snapshot.raw).toBe(initial.snapshot.raw);
+          const durable = withPluginCache(createPluginCache(), () =>
+            readPersistedInstalledPluginIndexSync({ env: process.env }),
+          );
+          expect.soft(durable?.policyHash).toBe(policyHash);
+          expect
+            .soft(beforeConvergenceRead?.pluginMigrationFingerprint)
+            .toBe(acceptedRead?.pluginMigrationFingerprint);
+          expect.soft(acceptedRead?.pluginMetadataSnapshot?.registrySource).toBe("persisted");
+          expect(result).toBeDefined();
+          if (result) {
+            // The post-convergence generation, not the preceding persistence read, owns startup.
+            expect(result.snapshot === acceptedRead?.snapshot).toBe(true);
+            expect(result.baseConfig === acceptedRead?.snapshot.sourceConfig).toBe(true);
+            expect(result.pluginMetadataSnapshot === acceptedRead?.pluginMetadataSnapshot).toBe(
+              true,
+            );
+          }
+          expect(migrationCheckpoint.hasActiveStartupMigrationLease({ env: process.env })).toBe(
+            false,
+          );
+        });
       });
-      expect(acceptedRead?.pluginMetadataSnapshot?.registrySource).toBe("persisted");
-      // The post-convergence generation, not the preceding persistence read, owns startup.
-      expect(result.snapshot === acceptedRead?.snapshot).toBe(true);
-      expect(result.baseConfig === acceptedRead?.snapshot.sourceConfig).toBe(true);
-      expect(result.pluginMetadataSnapshot === acceptedRead?.pluginMetadataSnapshot).toBe(true);
-      expect(migrationCheckpoint.hasActiveStartupMigrationLease({ env: process.env })).toBe(false);
-    });
-  });
+    },
+  );
 
   it("refuses persistence verification when package facts change before the durable reread", async () => {
     const fixturePluginId = "preflight-\u001b[31mfixture";
@@ -525,10 +610,10 @@ describe("Doctor plugin persistence", () => {
         let identity: ReturnType<typeof resolveMigrationCheckpointIdentity> = null;
         // Pin the build input, not the result: source-only runtimes intentionally cannot record.
         // Identity, lease, formatting, and SQLite behavior still use the real checkpoint owner.
-        const realNeedsCheckpoint = migrationCheckpoint.needsStateMigrationCheckpoint;
+        const realNeedsCheckpoint = migrationCheckpoint.readMigrationCheckpointStatus;
         const realRecordCheckpoint = migrationCheckpoint.recordSuccessfulStateMigrations;
         const needsCheckpoint = vi
-          .spyOn(migrationCheckpoint, "needsStateMigrationCheckpoint")
+          .spyOn(migrationCheckpoint, "readMigrationCheckpointStatus")
           .mockImplementation((params) => realNeedsCheckpoint({ ...params, buildIdentity }));
         const recordCheckpoint = vi
           .spyOn(migrationCheckpoint, "recordSuccessfulStateMigrations")
@@ -568,7 +653,7 @@ describe("Doctor plugin persistence", () => {
                 pluginMigrationFingerprint: read.pluginMigrationFingerprint,
               });
               expect(read.pluginMetadataSnapshot?.registrySource).toBe("persisted");
-              expect(migrationCheckpoint.needsStateMigrationCheckpoint({ identity })).toBe(true);
+              expect(migrationCheckpoint.readMigrationCheckpointStatus({ identity })).toBe("stale");
               expect(readStateCheckpoint()).toBeUndefined();
               verified = true;
               if (interrupted) {
@@ -592,7 +677,9 @@ describe("Doctor plugin persistence", () => {
         );
         const recorded = !interrupted && buildIdentity !== null;
         expect(Boolean(readStateCheckpoint())).toBe(recorded);
-        expect(migrationCheckpoint.needsStateMigrationCheckpoint({ identity })).toBe(!recorded);
+        expect(migrationCheckpoint.readMigrationCheckpointStatus({ identity })).toBe(
+          recorded ? "state-current" : "stale",
+        );
       });
     },
   );

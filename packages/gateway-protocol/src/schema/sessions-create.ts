@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { HumanMentionsSchema } from "./human-mentions.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
@@ -58,6 +59,7 @@ export const SessionsCreateParamsSchema = closedObject({
   ),
   task: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
+  mentions: Type.Optional(HumanMentionsSchema),
   attachments: Type.Optional(ChatAttachmentsSchema),
   projectId: Type.Optional(
     Type.String({

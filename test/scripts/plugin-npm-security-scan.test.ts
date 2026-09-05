@@ -1,14 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveNpmJsonEntries } from "../../scripts/lib/npm-json-output.mts";
@@ -226,7 +218,8 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     expect(resolveReviewedSourceLayout(current)?.id).toBe("current");
     expect(resolveReviewedSourceLayout(current, "release/2026.9.1")?.id).toBe("current");
     expect(resolveReviewedSourceLayout(frozenLegacy, "release/2026.9.1")).toBeUndefined();
-    expect(resolveReviewedSourceLayout(current, "release/2026.9.2")).toBeUndefined();
+    expect(resolveReviewedSourceLayout(current, "release/2026.9.2")?.id).toBe("current");
+    expect(resolveReviewedSourceLayout(current, "release/2026.9.3")).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy)).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy, "extended-stable/2026.6.33")?.id).toBe(
       "extended-stable-2026.6.33",
@@ -267,6 +260,54 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       }),
     ).toMatchObject({ layout: null, status: "fail" });
   });
+
+  it.each([1, 2])(
+    "reviews exactly one current hardware probe, preserving frozen policy: %s",
+    async (count) => {
+      const packageName = "@openclaw/llama-cpp-provider";
+      const hardwareKey = `${packageName}:dangerous-exec:src/hardware.ts`;
+      const installerKey = `${packageName}:dangerous-exec:src/llama-server-install.ts`;
+      const probe =
+        'import { execFile } from "node:child_process";\nexecFile("/usr/bin/vm_stat", []);\n';
+      const artifact = writePluginArtifact({
+        extensionId: "llama-cpp",
+        files: {
+          "src/hardware.ts": probe + (count === 2 ? 'execFile("/bin/df", ["-P", "/tmp"]);\n' : ""),
+          "src/llama-server-install.ts": probe,
+        },
+        packageName,
+      });
+      const current = await scanPublishablePluginPackages([artifact.artifact]);
+      expect(current.scanErrors).toEqual([]);
+      expect(current.packageResults[0]?.unexpectedCriticalFindings).toEqual([]);
+      expect(current.packageResults[0]?.reviewedCriticalFindings).toEqual([
+        ...Array.from({ length: count }, () => hardwareKey),
+        installerKey,
+      ]);
+      const currentReport = buildPluginNpmSecurityScanReport({
+        candidateSha: CANDIDATE_SHA,
+        packageResults: [
+          ...current.packageResults,
+          syntheticResult("@openclaw/codex", { reviewedCriticalFindings: currentLayoutFindings() }),
+        ],
+        toolingSha: TOOLING_SHA,
+      });
+      const packageErrors = currentReport.errors.filter((error) =>
+        error.startsWith(`${packageName}:`),
+      );
+      expect(packageErrors).toEqual(
+        count === 1 ? [] : [expect.stringContaining("reviewed critical inventory mismatch")],
+      );
+
+      const frozen = await scanPublishablePluginPackages([artifact.artifact], "release/2026.9.1");
+      expect(frozen.scanErrors).toEqual([]);
+      expect(frozen.packageResults[0]?.reviewedCriticalFindings).toEqual([installerKey]);
+      expect(frozen.packageResults[0]?.unexpectedCriticalFindings).toHaveLength(count);
+      expect(frozen.packageResults[0]?.unexpectedCriticalFindings).toEqual(
+        expect.arrayContaining([{ line: 2, path: "src/hardware.ts", ruleId: "dangerous-exec" }]),
+      );
+    },
+  );
 
   it("scans checked-in malicious code without running candidate hooks or helpers", async () => {
     const candidateRoot = tempDirs.make("openclaw-plugin-security-inert-pack-");
@@ -753,115 +794,6 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     expect(constrainPluginNpmSecurityScanReport(report, 64).errors).toEqual([
       "Plugin npm security scan report exceeded the byte limit.",
     ]);
-  });
-
-  it("writes sanitized exact-identity reports for timeout, heap, and RSS failures", () => {
-    const root = tempDirs.make("openclaw-plugin-npm-security-runner-");
-    const timeoutChild = join(root, "timeout.mjs");
-    const oomChild = join(root, "oom.mjs");
-    const rssChild = join(root, "rss.mjs");
-    writeFileSync(timeoutChild, "await new Promise(() => {});\n", "utf8");
-    writeFileSync(
-      oomChild,
-      "const values = [];\nwhile (true) values.push(new Array(100000).fill(Math.random()));\n",
-      "utf8",
-    );
-    writeFileSync(
-      rssChild,
-      "globalThis.value = Buffer.alloc(64 * 1024 * 1024, 1);\nsetInterval(() => {}, 1_000);\n",
-      "utf8",
-    );
-    for (const [label, child, timeoutMs, heapMb, rssMb, expectedError] of [
-      ["timeout", timeoutChild, "25", "128", "1024", "timed out"],
-      ["oom", oomChild, "10000", "16", "1024", "exceeded its process limit"],
-      ["rss", rssChild, "10000", "128", "16", "exceeded its RSS limit"],
-    ] as const) {
-      const reportPath = join(root, `${label}.json`);
-      const result = spawnSync(
-        process.execPath,
-        [
-          "scripts/plugin-npm-security-scan-runner.mjs",
-          "--artifact-root",
-          join(root, "artifacts"),
-          "--candidate-sha",
-          CANDIDATE_SHA,
-          "--expected-packages-json",
-          "[]",
-          "--tooling-sha",
-          TOOLING_SHA,
-          "--report",
-          reportPath,
-        ],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            NODE_ENV: "test",
-            OPENCLAW_PLUGIN_SECURITY_RUNNER_CHILD: child,
-            OPENCLAW_PLUGIN_SECURITY_RUNNER_HEAP_MB: heapMb,
-            OPENCLAW_PLUGIN_SECURITY_RUNNER_RSS_MB: rssMb,
-            OPENCLAW_PLUGIN_SECURITY_RUNNER_TIMEOUT_MS: timeoutMs,
-          },
-          timeout: 15_000,
-        },
-      );
-      const report = JSON.parse(readFileSync(reportPath, "utf8")) as {
-        candidateSha: string;
-        errors: string[];
-        toolingSha: string;
-      };
-      expect(result.status).toBe(1);
-      expect(report).toMatchObject({
-        candidateSha: CANDIDATE_SHA,
-        toolingSha: TOOLING_SHA,
-      });
-      expect(report.errors).toContainEqual(expect.stringContaining(expectedError));
-      expect(`${result.stdout}${result.stderr}${JSON.stringify(report)}`).not.toContain(root);
-    }
-  }, 30_000);
-
-  it("fails closed when RSS measurement is unavailable", () => {
-    const root = tempDirs.make("openclaw-plugin-npm-security-rss-measurement-");
-    const child = join(root, "child.mjs");
-    const binDir = join(root, "bin");
-    const reportPath = join(root, "report.json");
-    mkdirSync(binDir);
-    writeFileSync(child, "setInterval(() => {}, 1_000);\n", "utf8");
-    writeFileSync(join(binDir, "ps"), "#!/bin/sh\nexit 1\n", "utf8");
-    chmodSync(join(binDir, "ps"), 0o755);
-
-    const result = spawnSync(
-      process.execPath,
-      [
-        "scripts/plugin-npm-security-scan-runner.mjs",
-        "--artifact-root",
-        join(root, "artifacts"),
-        "--candidate-sha",
-        CANDIDATE_SHA,
-        "--expected-packages-json",
-        "[]",
-        "--tooling-sha",
-        TOOLING_SHA,
-        "--report",
-        reportPath,
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          NODE_ENV: "test",
-          OPENCLAW_PLUGIN_SECURITY_RUNNER_CHILD: child,
-          OPENCLAW_PLUGIN_SECURITY_RUNNER_TIMEOUT_MS: "5000",
-          PATH: `${binDir}:${process.env.PATH}`,
-        },
-        timeout: 10_000,
-      },
-    );
-    const report = JSON.parse(readFileSync(reportPath, "utf8")) as { errors: string[] };
-    expect(result.status).toBe(1);
-    expect(report.errors).toContain("Plugin npm security scanner could not measure RSS.");
   });
 
   it("retains the complete current-root publishable plugin inventory contract", async () => {

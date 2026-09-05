@@ -2,9 +2,13 @@
 // Normalizes image attachments, offloads large media, and reports unsupported payloads.
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
-import { extensionForMime, kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import {
+  extensionForMime,
+  kindFromMime,
+  mimeTypeFromFilePath,
+  normalizeMimeType,
+} from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import type { MediaFact } from "../media/media-facts.js";
@@ -228,56 +232,8 @@ export class MediaOffloadError extends Error {
   }
 }
 
-function normalizeMime(mime?: string): string | undefined {
-  if (!mime) {
-    return undefined;
-  }
-  const cleaned = normalizeOptionalLowercaseString(mime.split(";")[0]);
-  return cleaned || undefined;
-}
-
-function isImageMime(mime?: string): boolean {
-  return typeof mime === "string" && mime.startsWith("image/");
-}
-
 function isGenericContainerMime(mime?: string): boolean {
   return mime === "application/zip" || mime === "application/octet-stream";
-}
-
-function shouldIgnoreImageMimeHint(params: { sniffedMime?: string; hintedMime?: string }): boolean {
-  return isGenericContainerMime(params.sniffedMime) && isImageMime(params.hintedMime);
-}
-
-function isSpecificMime(mime?: string): boolean {
-  return Boolean(mime && !isGenericContainerMime(mime));
-}
-
-function resolveAttachmentMime(params: {
-  sniffedMime?: string;
-  providedMime?: string;
-  labelMime?: string;
-}): string {
-  const trustedProvidedMime = shouldIgnoreImageMimeHint({
-    sniffedMime: params.sniffedMime,
-    hintedMime: params.providedMime,
-  })
-    ? undefined
-    : params.providedMime;
-  const trustedLabelMime = shouldIgnoreImageMimeHint({
-    sniffedMime: params.sniffedMime,
-    hintedMime: params.labelMime,
-  })
-    ? undefined
-    : params.labelMime;
-  return (
-    (isSpecificMime(params.sniffedMime) && params.sniffedMime) ||
-    (isSpecificMime(trustedProvidedMime) && trustedProvidedMime) ||
-    (isSpecificMime(trustedLabelMime) && trustedLabelMime) ||
-    params.sniffedMime ||
-    trustedProvidedMime ||
-    trustedLabelMime ||
-    "application/octet-stream"
-  );
 }
 
 function isBase64DataCharCode(code: number): boolean {
@@ -457,34 +413,23 @@ export async function parseMessageWithAttachments(
         );
       }
 
-      const providedMime = normalizeMime(mime);
-      const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
-      const labelMime = normalizeMime(mimeTypeFromFilePath(label));
+      const providedMime = normalizeMimeType(mime);
+      const mimeHints = [providedMime, mimeTypeFromFilePath(label)];
+      // Specific declared MIME precedes the filename when bytes are inconclusive.
+      // The canonical detector still owns byte precedence and container refinement.
+      const finalMime =
+        (await sniffMimeFromBase64(b64, {
+          additionalMimeHints: [
+            ...mimeHints.filter((hint) => !isGenericContainerMime(hint)),
+            ...mimeHints,
+          ],
+        })) ?? "application/octet-stream";
 
-      // Prefer specific MIME signals over generic container types. OOXML
-      // documents (docx/xlsx/pptx) sniff as application/zip; without this
-      // priority the agent would receive a `.zip` instead of the specific
-      // Office document the caller declared.
-      const finalMime = resolveAttachmentMime({ sniffedMime, providedMime, labelMime });
-
-      if (
-        sniffedMime &&
-        providedMime &&
-        !isGenericContainerMime(providedMime) &&
-        sniffedMime !== providedMime
-      ) {
-        const usedSource =
-          finalMime === sniffedMime
-            ? "sniffed"
-            : finalMime === providedMime
-              ? "provided"
-              : "label-derived";
-        log?.warn(
-          `attachment ${label}: mime mismatch (${providedMime} -> ${sniffedMime}), using ${usedSource}`,
-        );
+      if (providedMime && !isGenericContainerMime(providedMime) && finalMime !== providedMime) {
+        log?.warn(`attachment ${label}: mime mismatch (${providedMime} -> ${finalMime})`);
       }
 
-      const isImage = isImageMime(finalMime);
+      const isImage = finalMime.startsWith("image/");
       const shouldForceImageOffload = isImage && !(await resolveSupportsImages());
       if (isImage && !supportsInlineImages && !shouldForceImageOffload) {
         throw new UnsupportedAttachmentError(

@@ -1,4 +1,5 @@
 import Foundation
+@testable import OpenClaw
 @testable import OpenClawKit
 
 extension WebSocketTasking {
@@ -63,11 +64,13 @@ enum GatewayWebSocketTestSupport {
         id: String,
         tickIntervalMs: Int = 30000,
         deviceToken: String? = nil,
+        mainSessionKey: String? = nil,
         canvasPluginSurfaceURL: String? = nil,
         methods: [String] = [],
         capabilities: [String] = []) -> Data
     {
         let deviceTokenField = deviceToken.map { #", "deviceToken": "\#($0)""# } ?? ""
+        let sessionDefaultsField = mainSessionKey.map { #", "sessionDefaults": {"mainSessionKey": "\#($0)"}"# } ?? ""
         let pluginSurfaceField = canvasPluginSurfaceURL.map {
             #", "pluginSurfaceUrls": { "canvas": "\#($0)" }"#
         } ?? ""
@@ -91,7 +94,7 @@ enum GatewayWebSocketTestSupport {
               "presence": [ { "ts": 1 } ],
               "health": {},
               "stateVersion": { "presence": 0, "health": 0 },
-              "uptimeMs": 0
+              "uptimeMs": 0\(sessionDefaultsField)
             },
             "auth": { "role": "operator", "scopes": []\(deviceTokenField) },
             "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": \(tickIntervalMs) }
@@ -143,6 +146,13 @@ enum GatewayWebSocketTestSupport {
         return obj["id"] as? String
     }
 
+    static func requestMethod(from message: URLSessionWebSocketTask.Message) -> String? {
+        guard let obj = requestFrameObject(from: message), (obj["type"] as? String) == "req" else {
+            return nil
+        }
+        return obj["method"] as? String
+    }
+
     private static func requestFrameObject(from message: URLSessionWebSocketTask.Message) -> [String: Any]? {
         let data: Data? = switch message {
         case let .data(d): d
@@ -183,6 +193,7 @@ extension NSLock {
 }
 
 final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
+    typealias ReceiveResult = Result<URLSessionWebSocketTask.Message, Error>
     typealias SendHook = @Sendable (GatewayTestWebSocketTask, URLSessionWebSocketTask.Message, Int) async throws -> Void
     typealias ReceiveHook = @Sendable (GatewayTestWebSocketTask, Int) async throws -> URLSessionWebSocketTask.Message
 
@@ -193,8 +204,10 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private var connectRequestID: String?
     private var sendCount = 0
     private var receiveCount = 0
+    private var callbackReceiveCount = 0
     private var cancelCount = 0
-    private var pendingReceiveHandler: (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)?
+    private var pendingReceiveHandler: (@Sendable (ReceiveResult) -> Void)?
+    private var pendingInboundFrames: [ReceiveResult] = []
 
     init(sendHook: SendHook? = nil, receiveHook: ReceiveHook? = nil) {
         self.sendHook = sendHook
@@ -218,22 +231,24 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
         self.lock.withLock { self.sendCount }
     }
 
+    func snapshotCallbackReceiveCount() -> Int {
+        self.lock.withLock { self.callbackReceiveCount }
+    }
+
     func resume() {
         self.state = .running
     }
 
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         _ = (closeCode, reason)
-        let handler = self.lock.withLock { () -> (@Sendable (Result<
-            URLSessionWebSocketTask.Message,
-            Error,
-        >) -> Void)? in
+        let handler = self.lock.withLock { () -> (@Sendable (ReceiveResult) -> Void)? in
             self._state = .canceling
             self.cancelCount += 1
+            self.pendingInboundFrames.removeAll()
             defer { self.pendingReceiveHandler = nil }
             return self.pendingReceiveHandler
         }
-        handler?(Result<URLSessionWebSocketTask.Message, Error>.failure(URLError(.cancelled)))
+        handler?(.failure(URLError(.cancelled)))
     }
 
     func send(_ message: URLSessionWebSocketTask.Message) async throws {
@@ -265,25 +280,26 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     }
 
     func receive(
-        completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
+        completionHandler: @escaping @Sendable (ReceiveResult) -> Void)
     {
-        self.lock.withLock { self.pendingReceiveHandler = completionHandler }
+        let queued = self.lock.withLock { () -> ReceiveResult? in
+            self.callbackReceiveCount += 1
+            guard self._state != .canceling, self._state != .completed else {
+                return .failure(URLError(.cancelled))
+            }
+            guard !self.pendingInboundFrames.isEmpty else {
+                self.pendingReceiveHandler = completionHandler
+                return nil
+            }
+            return self.pendingInboundFrames.removeFirst()
+        }
+        if let queued {
+            completionHandler(queued)
+        }
     }
 
     func emitReceiveSuccess(_ message: URLSessionWebSocketTask.Message) {
-        let handler = self.lock.withLock { self.pendingReceiveHandler }
-        handler?(Result<URLSessionWebSocketTask.Message, Error>.success(message))
-    }
-
-    func emitReceiveSuccessOnce(_ message: URLSessionWebSocketTask.Message) {
-        let handler = self.lock.withLock { () -> (@Sendable (Result<
-            URLSessionWebSocketTask.Message,
-            Error,
-        >) -> Void)? in
-            defer { self.pendingReceiveHandler = nil }
-            return self.pendingReceiveHandler
-        }
-        handler?(Result<URLSessionWebSocketTask.Message, Error>.success(message))
+        self.emitInbound(.success(message))
     }
 
     func hasPendingReceiveHandler() -> Bool {
@@ -291,8 +307,22 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     }
 
     func emitReceiveFailure(_ error: Error = URLError(.networkConnectionLost)) {
-        let handler = self.lock.withLock { self.pendingReceiveHandler }
-        handler?(Result<URLSessionWebSocketTask.Message, Error>.failure(error))
+        self.emitInbound(.failure(error))
+    }
+
+    private func emitInbound(_ result: ReceiveResult) {
+        let handler = self.lock.withLock { () -> (@Sendable (ReceiveResult) -> Void)? in
+            guard self._state != .canceling, self._state != .completed else { return nil }
+            guard let handler = self.pendingReceiveHandler else {
+                // Preserve wire order while the channel handles a result and has not
+                // registered its next one-shot receive callback.
+                self.pendingInboundFrames.append(result)
+                return nil
+            }
+            self.pendingReceiveHandler = nil
+            return handler
+        }
+        handler?(result)
     }
 }
 

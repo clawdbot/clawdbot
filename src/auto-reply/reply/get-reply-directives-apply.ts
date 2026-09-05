@@ -10,15 +10,16 @@ import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "../../sessions/model-overrides.js";
+import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandContext } from "./commands-types.js";
+import { maybeHandleUnexpectedDirectiveArguments } from "./directive-handling.arguments.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import { resolveModelRuntimeDirective } from "./directive-handling.model-runtime.js";
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
-import { maybeHandleUnexpectedNativeDirectiveArguments } from "./directive-handling.native.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { formatModelSelectionScopeAck } from "./directive-handling.shared.js";
@@ -181,6 +182,7 @@ export async function applyInlineDirectiveOverrides(params: {
     typing,
     effectiveModelDirective,
   } = params;
+  const requesterProfileId = readSessionInputProfileId(ctx);
   let { directives } = params;
   let { provider, model } = params;
   let { contextTokens } = params;
@@ -301,6 +303,7 @@ export async function applyInlineDirectiveOverrides(params: {
       allowedModelCatalog: modelState.allowedModelCatalog,
       provider,
       agentId,
+      requesterProfileId,
     });
     if (lockedModelResolution.modelSelection) {
       typing.cleanup();
@@ -334,11 +337,11 @@ export async function applyInlineDirectiveOverrides(params: {
   }
 
   // Model-only directives have a focused persistence service; reject leftovers before that mutation.
-  if (directives.nativeCommand?.name === "model") {
-    const unexpectedNativeArguments = maybeHandleUnexpectedNativeDirectiveArguments(directives);
-    if (unexpectedNativeArguments) {
+  if (directives.command?.name === "model") {
+    const unexpectedArguments = maybeHandleUnexpectedDirectiveArguments(directives);
+    if (unexpectedArguments) {
       typing.cleanup();
-      return { kind: "reply", reply: unexpectedNativeArguments };
+      return { kind: "reply", reply: unexpectedArguments };
     }
   }
 
@@ -407,6 +410,7 @@ export async function applyInlineDirectiveOverrides(params: {
         allowedModelCatalog: modelState.allowedModelCatalog,
         provider,
         agentId,
+        requesterProfileId,
       });
       if (modelResolution.errorText) {
         typing.cleanup();
@@ -447,6 +451,7 @@ export async function applyInlineDirectiveOverrides(params: {
           modelCatalog: modelState.allowedModelCatalog,
           thinkingCatalog: modelState.allowedModelCatalog,
           canPersistStickyModelSelection,
+          validateAuthProfileSelection: modelResolution.validateAuthProfileSelection,
           ...(stickyModelSelectionTarget ? { stickyModelSelectionTarget } : {}),
           request: {
             ...modelSelection,

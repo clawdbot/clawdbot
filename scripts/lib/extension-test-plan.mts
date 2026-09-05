@@ -26,6 +26,7 @@ import { isTelegramExtensionRoot } from "../../test/vitest/vitest.extension-tele
 import { isVoiceCallExtensionRoot } from "../../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../../test/vitest/vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../../test/vitest/vitest.extension-zalo-paths.mjs";
+import { isPluginControlUiPath } from "../../test/vitest/vitest.ui-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import { parsePositiveInt } from "./numeric-options.mjs";
@@ -58,35 +59,34 @@ export type ExtensionBatchPlan = {
 type ExtensionTestShard = ExtensionBatchPlan & { checkName: string };
 
 const EXTENSION_TEST_COST_MULTIPLIERS: Record<string, number> = {
-  // CI shard planning uses measured wall time rather than raw file count.
-  // These ratios come from Blacksmith extension batch timings; import-heavy
-  // suites vary widely, and file count alone leaves long tail shards.
-  // Codex/Matrix/Memory/providers/QA/Telegram use summed test-step walls from
-  // run 33449014227, rounded up to 0.01s per counting file; checkout/build are separate.
-  "test/vitest/vitest.extension-acpx.config.ts": 0.75,
-  "test/vitest/vitest.extension-browser.config.ts": 0.5,
-  "test/vitest/vitest.extension-codex.config.ts": 3.38,
-  "test/vitest/vitest.extension-diffs.config.ts": 0.6,
-  "test/vitest/vitest.extension-discord.config.ts": 0.62,
-  "test/vitest/vitest.extension-feishu.config.ts": 0.18,
+  // Use the larger complete-family seconds/file from runs 33676780376/33747183683.
+  // Round up to 0.01s and retain prior floors; both used two CPUs and two workers.
+  // Runner setup and runtime preparation are charged separately.
+  "test/vitest/vitest.extension-acpx.config.ts": 2.3,
+  "test/vitest/vitest.extension-browser.config.ts": 0.71,
+  "test/vitest/vitest.extension-codex.config.ts": 5.28,
+  "test/vitest/vitest.extension-diffs.config.ts": 1.97,
+  "test/vitest/vitest.extension-discord.config.ts": 0.76,
+  "test/vitest/vitest.extension-feishu.config.ts": 0.72,
   "test/vitest/vitest.extension-imessage.config.ts": 1.7,
-  "test/vitest/vitest.extension-irc.config.ts": 1,
+  "test/vitest/vitest.extension-irc.config.ts": 2.06,
   "test/vitest/vitest.extension-line.config.ts": 1.1,
-  "test/vitest/vitest.extension-matrix.config.ts": 0.86,
-  "test/vitest/vitest.extension-mattermost.config.ts": 0.75,
-  "test/vitest/vitest.extension-media.config.ts": 0.7,
-  "test/vitest/vitest.extension-memory.config.ts": 1.15,
-  "test/vitest/vitest.extension-messaging.config.ts": 0.4,
-  "test/vitest/vitest.extension-misc.config.ts": 0.7,
-  "test/vitest/vitest.extension-msteams.config.ts": 0.5,
-  "test/vitest/vitest.extension-provider-openai.config.ts": 1.35,
-  "test/vitest/vitest.extension-providers.config.ts": 0.99,
-  "test/vitest/vitest.extension-qa.config.ts": 0.86,
-  "test/vitest/vitest.extension-slack.config.ts": 0.45,
-  "test/vitest/vitest.extension-telegram.config.ts": 5.4,
-  "test/vitest/vitest.extension-voice-call.config.ts": 0.27,
+  "test/vitest/vitest.extension-matrix.config.ts": 1.37,
+  "test/vitest/vitest.extension-mattermost.config.ts": 1.48,
+  "test/vitest/vitest.extension-media.config.ts": 1.38,
+  "test/vitest/vitest.extension-memory.config.ts": 1.57,
+  "test/vitest/vitest.extension-messaging.config.ts": 0.72,
+  "test/vitest/vitest.extension-misc.config.ts": 1.16,
+  "test/vitest/vitest.extension-msteams.config.ts": 0.62,
+  "test/vitest/vitest.extension-provider-openai.config.ts": 1.48,
+  "test/vitest/vitest.extension-providers.config.ts": 1.92,
+  "test/vitest/vitest.extension-qa.config.ts": 1.3,
+  "test/vitest/vitest.extension-signal.config.ts": 1.1,
+  "test/vitest/vitest.extension-slack.config.ts": 0.96,
+  "test/vitest/vitest.extension-telegram.config.ts": 8.98,
+  "test/vitest/vitest.extension-voice-call.config.ts": 1.38,
   "test/vitest/vitest.extension-whatsapp.config.ts": 0.8,
-  "test/vitest/vitest.extension-zalo.config.ts": 0.7,
+  "test/vitest/vitest.extension-zalo.config.ts": 0.94,
   // This shared config is comparatively cheap per file, so raw file count
   // overstates its real wall-clock cost during CI shard planning.
   "test/vitest/vitest.extensions.config.ts": 1.1,
@@ -162,9 +162,10 @@ function isPathInsideRepo(relativePath: string) {
 }
 
 function isSkippedTrackedTestFile(relativePath: string) {
-  return relativePath
-    .split("/")
-    .some((segment) => segment === "dist" || segment === "node_modules");
+  return (
+    isPluginControlUiPath(relativePath) ||
+    relativePath.split("/").some((segment) => segment === "dist" || segment === "node_modules")
+  );
 }
 
 let trackedRepoTestFiles: string[] | null | undefined;
@@ -233,6 +234,9 @@ function listFilesystemTestFiles(rootPath: string) {
     }
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
+      if (isPluginControlUiPath(normalizeRelative(path.relative(repoRoot, fullPath)))) {
+        continue;
+      }
       if (entry.isDirectory()) {
         if (entry.name === "node_modules" || entry.name === "dist") {
           continue;
@@ -292,7 +296,7 @@ export function splitExtensionTestProcessTargets(config: string, targets: string
     : [uniqueSortedTargets(targets)];
 }
 
-/** Split an extension config's test files across CI jobs without changing process lifetime. */
+/** Split an extension config's test files into CI envelopes without changing process lifetime. */
 export function splitExtensionTestJobTargets(config: string, targets: string[]) {
   const maxFilesPerJob = resolveExtensionTestJobFileLimit(config);
   return maxFilesPerJob

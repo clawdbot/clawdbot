@@ -14,7 +14,10 @@ import {
   importSqliteSessionRows,
   importSqliteSessionRowsBatch,
 } from "./session-accessor.sqlite-import.js";
-import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
+import {
+  hasSessionTranscriptMessage,
+  loadTranscriptEventsSync,
+} from "./session-accessor.sqlite-read.js";
 
 function target(state: OpenClawTestState, id: string) {
   return {
@@ -247,6 +250,9 @@ it("hands off exact SQLite bytes, duplicate IDs, timestamps and owner without ap
       }),
     ).toMatchObject({ skippedExisting: true, transcriptEvents: 0 });
     expect(loadTranscriptEventsSync({ ...params, sessionId: "exact" })).toHaveLength(3);
+    await expect(hasSessionTranscriptMessage({ ...params, sessionId: "exact" })).resolves.toBe(
+      true,
+    );
     await expect(listSessionBranches(params)).resolves.toEqual({
       status: "ok",
       branches: Array.from({ length: 2 }, () => ({

@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
-import { buildNpmResolutionInstallFields, resolveNpmInstallRecordSpec } from "./installs.js";
+import { buildNpmResolutionInstallFields } from "./installs.js";
 import { formatNewerExactPinnedNpmDefaultLineMessage } from "./update-attempt.js";
 import {
   resolveNewerExactPinnedNpmDefaultLine,
@@ -19,29 +19,22 @@ export async function reconcileUnchangedUpdate(params: {
   updateChannel?: UpdateChannel;
   timeoutMs?: number;
   hasSpecOverride: boolean;
-  hasOfficialNpmSpec: boolean;
   syncOfficialInstall: boolean;
-  preserveRecordIntent: boolean;
 }): Promise<{ config: OpenClawConfig; changed: boolean; outcome: PluginUpdateOutcome }> {
-  const newerExactPinnedDefaultLine =
-    !params.hasSpecOverride && !params.hasOfficialNpmSpec
-      ? await resolveNewerExactPinnedNpmDefaultLine({
-          currentVersion: params.currentVersion,
-          recordedSpec: params.record.spec,
-          probeNpmVersion: params.resolution.version,
-          updateChannel: params.updateChannel,
-          timeoutMs: params.timeoutMs,
-        })
-      : undefined;
+  const newerExactPinnedDefaultLine = !params.hasSpecOverride
+    ? await resolveNewerExactPinnedNpmDefaultLine({
+        currentVersion: params.currentVersion,
+        recordedSpec: params.record.spec,
+        probeNpmVersion: params.resolution.version,
+        updateChannel: params.updateChannel,
+        timeoutMs: params.timeoutMs,
+      })
+    : undefined;
 
   let config = params.config;
   let changed = false;
   if (params.syncOfficialInstall) {
-    const nextRecordSpec = resolveNpmInstallRecordSpec({
-      requestedSpec: params.recordSpec,
-      resolution: params.resolution,
-      pinResolvedRegistrySpec: !params.preserveRecordIntent,
-    });
+    const nextRecordSpec = params.recordSpec;
     if (nextRecordSpec !== params.record.spec) {
       const resolutionFields = buildNpmResolutionInstallFields(params.resolution);
       config = {

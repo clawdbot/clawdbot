@@ -325,6 +325,7 @@ export function createManifestPluginRecord(params: {
     origin: candidate.origin,
     workspaceDir: candidate.workspaceDir,
     trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
+    trust: manifestRecord.trust,
     enabled: params.enabled,
     compat: collectPluginManifestCompatCodes(manifestRecord),
     activationState: params.activationState,
@@ -334,6 +335,7 @@ export function createManifestPluginRecord(params: {
     configSchema: Boolean(manifestRecord.configSchema),
     contracts: manifestRecord.contracts,
     dashboard: manifestRecord.dashboard,
+    controlUi: manifestRecord.controlUi,
     mcpServers: manifestRecord.mcpServers,
   });
 }

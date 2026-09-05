@@ -11,9 +11,9 @@
   },
   "dependencies": {
     "convex": "1.45.0",
-    "nostr-tools": "2.24.3"
+    "nostr-tools": "2.25.0"
   },
   "devDependencies": {
-    "@types/node": "26.2.0"
+    "@types/node": "26.3.0"
   }
 }

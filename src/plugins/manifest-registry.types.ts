@@ -15,6 +15,7 @@ import type {
   PluginManifestChannelCommandDefaults,
   PluginManifestChannelConfig,
   PluginManifestContracts,
+  PluginManifestControlUi,
   PluginManifestDashboard,
   PluginManifestMediaUnderstandingProviderMetadata,
   PluginManifestMcpServer,
@@ -36,6 +37,7 @@ import type {
 } from "./package-manifest.types.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import type { PluginTrust } from "./plugin-trust.js";
 import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
 
 export type PluginManifestContractListKey =
@@ -66,7 +68,7 @@ export type PluginManifestRecord = {
   name?: string;
   description?: string;
   catalog?: PluginManifestCatalog;
-  icon?: string;
+  iconPath?: string;
   version?: string;
   packageName?: string;
   packageVersion?: string;
@@ -82,6 +84,8 @@ export type PluginManifestRecord = {
   channels: string[];
   providers: string[];
   providerDiscoverySource?: string;
+  /** Undefined is undeclared; null retains a rejected declaration without enabling full-entry fallback. */
+  capabilityCatalogSource?: string | null;
   modelSupport?: PluginManifestModelSupport;
   modelCatalog?: PluginManifestModelCatalog;
   modelPricing?: PluginManifestModelPricing;
@@ -108,8 +112,10 @@ export type PluginManifestRecord = {
   packageChannel?: PluginPackageChannel;
   packageInstall?: PluginPackageInstall;
   trustedOfficialInstall?: boolean;
+  trust?: PluginTrust;
   qaRunners?: PluginManifestQaRunner[];
   dashboard?: PluginManifestDashboard;
+  controlUi?: PluginManifestControlUi;
   mcpServers?: Record<string, PluginManifestMcpServer>;
   skills: string[];
   settingsFiles?: string[];

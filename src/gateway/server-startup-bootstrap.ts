@@ -40,7 +40,6 @@ import { applyLoggingConfig } from "../logging/logger.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
-import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
@@ -90,13 +89,17 @@ export async function prepareGatewayServerBootstrap(input: {
   if (startupElapsedMs > 0) {
     startupTrace.mark("process.bootstrap");
   }
-  await startupTrace.measure("state.ownership", async () => {
+  const inspectStateOwnership = async (signal?: AbortSignal) => {
     normalizeStateDirEnv(process.env);
     await assertOpenClawStateWriteAllowedAtPath({
       databasePath: resolveOpenClawStateSqlitePath(process.env),
       env: process.env,
+      signal,
     });
-  });
+  };
+  await startupTrace.measure("state.ownership", () =>
+    opts.startupOperation ? opts.startupOperation(inspectStateOwnership) : inspectStateOwnership(),
+  );
   const [
     {
       OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
@@ -112,14 +115,19 @@ export async function prepareGatewayServerBootstrap(input: {
       import("../state/openclaw-state-db-contract.js"),
     ]),
   );
-  const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
+  const inspectDatabaseSchemas = (signal?: AbortSignal) =>
     preflightOpenClawDatabaseSchemas({
+      signal,
       env: process.env,
       supportedVersions: {
         state: stateDatabase.OPENCLAW_STATE_SCHEMA_VERSION,
         agent: agentDatabase.OPENCLAW_AGENT_SCHEMA_VERSION,
       },
-    }),
+    });
+  const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
+    opts.startupOperation
+      ? opts.startupOperation(inspectDatabaseSchemas)
+      : inspectDatabaseSchemas(),
   );
   if (databaseSchemas.incompatible.length > 0) {
     for (const database of databaseSchemas.incompatible) {
@@ -292,7 +300,7 @@ export async function prepareGatewayServerBootstrap(input: {
     trustedProxyDeviceAutoApprove.scopes?.some((scope) => scope.trim() === ADMIN_SCOPE)
   ) {
     log.warn(
-      "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new browser device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin and grant admin per identity via gateway.auth.identityScopes instead.",
+      "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new operator device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin and grant admin per identity via gateway.auth.identityScopes instead.",
     );
   }
   const resolvedStartupAuthOverride = startupAuthOverride
@@ -331,8 +339,7 @@ export async function prepareGatewayServerBootstrap(input: {
   const reloadAuthOverride = authBootstrap.generatedToken
     ? mergeGatewayAuthConfig(resolvedStartupAuthOverride, { token: authBootstrap.generatedToken })
     : resolvedStartupAuthOverride;
-  const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
-  setDiagnosticsEnabledForProcess(diagnosticsEnabled);
+  setDiagnosticsEnabledForProcess(isDiagnosticsEnabled(cfgAtStart));
   setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
   const activeTaskCount = { get: () => 0 };
   setPreRestartDeferralCheck(
@@ -528,14 +535,7 @@ export async function prepareGatewayServerBootstrap(input: {
   });
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   const existingPluginMetadataSnapshot = getGatewayPluginMetadataSnapshot();
-  const currentPluginMetadataSnapshot =
-    existingPluginMetadataSnapshot ??
-    completePluginMetadataSnapshot({
-      snapshot: pluginMetadataSnapshot,
-      config: startupActivationSourceConfig,
-      env: process.env,
-      workspaceDir: defaultWorkspaceDir,
-    });
+  const currentPluginMetadataSnapshot = existingPluginMetadataSnapshot ?? pluginMetadataSnapshot;
   if (!existingPluginMetadataSnapshot) {
     setGatewayPluginMetadataSnapshot(currentPluginMetadataSnapshot, {
       config: startupActivationSourceConfig,
@@ -575,7 +575,6 @@ export async function prepareGatewayServerBootstrap(input: {
     generatedStartupAuthToken: authBootstrap.generatedToken !== undefined,
     resolvedStartupAuthOverride,
     startupTailscaleOverride,
-    diagnosticsEnabled,
     activeTaskCount,
     applyFixedGatewayOverlays,
     prepareReloadCandidate,

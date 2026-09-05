@@ -360,24 +360,60 @@ struct CronJobsListLite: Decodable {
         self.hasMore = try container.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false
         self.nextOffset = try container.decodeIfPresent(Int.self, forKey: .nextOffset)
     }
-}
 
-struct CronJobsSnapshotIdentity: Equatable {
-    let total: Int?
-    let revision: String?
-}
+    @MainActor
+    static func collect(
+        maximumPageCount: Int,
+        maximumJobCount: Int,
+        fetchPage: @MainActor (Int) async -> CronJobsListLite?) async -> CronJobsListLite?
+    {
+        var jobs: [CronJob] = []
+        var seenJobIDs: Set<String> = []
+        var expectedIdentity: SnapshotIdentity?
+        var offset = 0
+        for _ in 0..<maximumPageCount {
+            guard let page = await fetchPage(offset),
+                  page.total.map({ (0...maximumJobCount).contains($0) }) ?? true
+            else { return nil }
+            let revision = page.snapshotRevision?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let identity = SnapshotIdentity(
+                total: page.total,
+                revision: revision?.isEmpty == false ? revision : nil)
+            if let expectedIdentity, identity != expectedIdentity {
+                // Each offset page is locked separately by the Gateway. Reject a changed
+                // snapshot instead of combining rows from different revisions.
+                return nil
+            }
+            expectedIdentity = identity
+            for job in page.jobs {
+                guard seenJobIDs.insert(job.id).inserted else { return nil }
+            }
+            jobs.append(contentsOf: page.jobs)
+            guard jobs.count <= maximumJobCount else { return nil }
+            if let total = identity.total {
+                guard total >= jobs.count, total != jobs.count || !page.hasMore else { return nil }
+            }
+            guard page.hasMore else {
+                return CronJobsListLite(
+                    jobs: jobs,
+                    snapshotRevision: identity.revision,
+                    total: identity.total == jobs.count ? identity.total : nil,
+                    hasMore: false,
+                    nextOffset: nil)
+            }
+            guard let nextOffset = page.nextOffset,
+                  nextOffset > offset,
+                  nextOffset <= maximumJobCount
+            else { return nil }
+            offset = nextOffset
+        }
+        return nil
+    }
 
-func cronJobsSnapshotIdentity(page: CronJobsListLite, maximumCount: Int) -> CronJobsSnapshotIdentity? {
-    guard page.total.map({ (0...maximumCount).contains($0) }) ?? true else { return nil }
-    let revision = page.snapshotRevision?.trimmingCharacters(in: .whitespacesAndNewlines)
-    return CronJobsSnapshotIdentity(
-        total: page.total,
-        revision: revision?.isEmpty == false ? revision : nil)
-}
-
-func nextCronJobsListOffset(page: CronJobsListLite, currentOffset: Int) -> Int? {
-    guard page.hasMore, let nextOffset = page.nextOffset, nextOffset > currentOffset else { return nil }
-    return nextOffset
+    private struct SnapshotIdentity: Equatable {
+        let total: Int?
+        let revision: String?
+    }
 }
 
 struct DreamingStatusEnvelope: Decodable {

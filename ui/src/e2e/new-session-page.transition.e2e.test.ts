@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   controlUiBundledGatewayUrl,
@@ -24,6 +25,7 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const rosterMatch = { includeGlobal: true };
 const SESSION_KEY = "agent:main:dashboard:0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
 const RUN_ID = "transition-proof-run";
 const captureProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -48,6 +50,19 @@ async function captureProof(page: import("playwright").Page, fileName: string) {
   }
   const proofDir = transitionProofDir();
   await mkdir(proofDir, { recursive: true });
+  if (page.video()) {
+    await writeFile(
+      path.join(proofDir, fileName),
+      await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+        page
+          .locator(
+            ".new-session-page__message:visible, .agent-chat__composer-combobox textarea:visible",
+          )
+          .first(),
+      ]),
+    );
+    return;
+  }
   await page.screenshot({ fullPage: true, path: path.join(proofDir, fileName) });
 }
 
@@ -215,11 +230,12 @@ suite.define(() => {
       await expect.poll(() => page.locator(".new-session-page__error").count()).toBe(0);
       await captureProof(page, "default-mock-created.png");
 
-      const listRequestsBeforeReconnect = (await gateway.getRequests("sessions.list")).length;
+      const listRequestsBeforeReconnect = (await gateway.getRequests("sessions.list", rosterMatch))
+        .length;
       await gateway.closeLatest(1006, "mock reconnect");
       await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(1);
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(listRequestsBeforeReconnect);
       for (const sessionKey of sessionKeys) {
         await expect
@@ -234,7 +250,7 @@ suite.define(() => {
     }
   });
 
-  it("opens the confirmed session before roster or reference lookup completes and preserves effort", async () => {
+  it("commits the confirmed session URL before Chat loads and animates only the ready composer", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -311,14 +327,15 @@ suite.define(() => {
       const start = page.locator(".new-session-page__start-submit");
       await message.fill("keep progress moving");
       await expect.poll(() => start.isEnabled()).toBe(true);
-      await gateway.waitForRequest("sessions.list");
+      await gateway.waitForRequest("sessions.list", { match: rosterMatch });
       expect(
         await page.locator(`.sidebar-recent-session[data-session-key="${SESSION_KEY}"]`).count(),
       ).toBe(0);
-      const listRequestsBeforeSubmit = (await gateway.getRequests("sessions.list")).length;
+      const listRequestsBeforeSubmit = (await gateway.getRequests("sessions.list", rosterMatch))
+        .length;
 
       await gateway.deferNext("sessions.create");
-      await gateway.deferNext("sessions.list");
+      await gateway.deferNext("sessions.list", rosterMatch);
       await start.click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({ thinkingLevel: "xhigh" });
@@ -338,9 +355,15 @@ suite.define(() => {
         runId: RUN_ID,
         runStarted: true,
       });
-      await gateway.waitForRequest("sessions.list", { after: listRequestsBeforeSubmit });
+      await gateway.waitForRequest("sessions.list", {
+        after: listRequestsBeforeSubmit,
+        match: rosterMatch,
+      });
       await expect.poll(() => chatModuleRequested).toBe(true);
 
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(SESSION_KEY));
+      expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.resolve")).toHaveLength(0);
       expect(await submittedPrompt.isVisible()).toBe(true);
       expect(await submittedPrompt.count()).toBe(1);
       await captureProof(page, "01-chat-route-preparing.png");
@@ -412,7 +435,9 @@ suite.define(() => {
         .toBe("xhigh");
       await waitForCommittedChatRoute(page);
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(SESSION_KEY));
-      expect(await gateway.getRequests("sessions.list")).toHaveLength(listRequestsBeforeSubmit + 1);
+      expect(await gateway.getRequests("sessions.list", rosterMatch)).toHaveLength(
+        listRequestsBeforeSubmit + 1,
+      );
       expect(await gateway.getRequests("sessions.resolve")).toHaveLength(0);
       const invalidFrames = await page.evaluate(() => {
         const frames = Reflect.get(
@@ -695,7 +720,8 @@ suite.define(() => {
             await acceptedMarkdown
               .getByRole("button", { name: "Expand table", exact: true })
               .click();
-            const expandedTable = page.getByRole("dialog", { name: "Expanded table", exact: true });
+            const expandedTable = page.locator("openclaw-modal-dialog.markdown-table-modal");
+            await page.getByRole("dialog", { name: "Expanded table", exact: true }).waitFor();
             await expandedTable.getByRole("cell", { name: "Ready", exact: true }).waitFor();
             await expandedTable
               .getByRole("button", { name: "Close expanded table", exact: true })

@@ -9,13 +9,13 @@ Status: production-ready via WhatsApp Web (Baileys). The gateway owns the linked
 
 ## Install
 
-`openclaw onboard` and `openclaw channels add --channel whatsapp` prompt to install the plugin the first time you select it; `openclaw channels login --channel whatsapp` offers the same install flow if the plugin is missing. Dev checkouts use the local plugin path; stable/beta installs `@openclaw/whatsapp` from ClawHub first, falling back to npm. The WhatsApp runtime ships outside the core OpenClaw npm package, so its runtime dependencies stay with the external plugin. Manual install:
+`openclaw onboard` and `openclaw channels add --channel whatsapp` prompt to install the plugin the first time you select it; `openclaw channels login --channel whatsapp` offers the same install flow if the plugin is missing. Dev checkouts use the local plugin path; stable/beta installs `@openclaw/whatsapp` from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. The WhatsApp runtime ships outside the core OpenClaw npm package, so its runtime dependencies stay with the external plugin. Manual install:
 
 ```bash
-openclaw plugins install clawhub:@openclaw/whatsapp
+openclaw plugins install @openclaw/whatsapp
 ```
 
-Use the bare npm package (`@openclaw/whatsapp`) only for the registry fallback; pin an exact version only for a reproducible install.
+Use `npm:@openclaw/whatsapp` or `clawhub:@openclaw/whatsapp` to force a source; pin an exact version only for a reproducible install.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -290,7 +290,7 @@ Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHoo
     If no `channels.whatsapp` block exists at all, runtime falls back to `groupPolicy: "allowlist"` (with a warning log), even if `channels.defaults.groupPolicy` is set to something else.
 
     <Note>
-    Group-membership resolution has a single-account safety net: if only one WhatsApp account is configured and its `accounts.<id>.groups` is an explicit empty object (`{}`), that is treated as "not set" and falls back to the root `channels.whatsapp.groups` map, instead of silently blocking every group. With 2+ accounts configured, an explicit empty account map stays empty and does not fall back — this lets one account intentionally disable all groups without affecting siblings.
+    Inbound group handling uses `channels.whatsapp.accounts.<id>.groups` when set. Named accounts otherwise inherit `channels.whatsapp.accounts.default.groups`, then `channels.whatsapp.groups`; the default account uses its own map or the root map. Group maps replace one another as a whole, rather than merging individual group entries. An explicitly empty map (`{}`) replaces the inherited map too.
     </Note>
 
   </Tab>
@@ -299,9 +299,13 @@ Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHoo
     Group replies require a mention by default. Mention detection includes:
 
     - explicit WhatsApp mentions of the bot identity
-    - configured mention regex patterns (`agents.entries.*.groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
+    - mention regex patterns (`agents.entries.*.groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`); when neither is set, patterns are derived from the routed agent's `identity.name` and `identity.emoji`
     - inbound voice-note transcripts for authorized group messages
     - implicit reply-to-bot detection (reply sender matches bot identity)
+
+    An explicit `mentionPatterns: []` at the selected agent or global level suppresses identity-derived text patterns. Native mentions and reply-to-bot detection remain separate.
+
+    To process all allowed messages in a group, set `groups["<group-id>"].requireMention: false` in the map already supplying the account's group policy: `channels.whatsapp.groups` or the effective `channels.whatsapp.accounts.<id>.groups` map, including inherited `accounts.default.groups`. Preserve every existing wildcard and per-group setting. If you intentionally create an account-specific map instead of editing an inherited map, copy the complete inherited map first, then change only the target group's `requireMention`. When no map previously applied, include `"*": {}` to keep other chats admitted; retain existing restrictions otherwise. A saved session activation mode takes precedence over this config default; use `/activation always` for that session.
 
     Security: quote/reply only satisfies mention gating — it does **not** grant sender authorization. With `groupPolicy: "allowlist"`, non-allowlisted senders stay blocked even replying to an allowlisted user's message.
 

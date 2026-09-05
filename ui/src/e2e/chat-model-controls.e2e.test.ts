@@ -6,6 +6,190 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
 
 suite.define(() => {
+  it("shows and changes this chat's account without changing the default for new chats", async () => {
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-model-accounts", artifactRoot)
+      : undefined;
+    await suite.withPage(
+      {
+        viewport: { width: 393, height: 852 },
+        ...(artifactDir
+          ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
+          : {}),
+      },
+      async ({ page }) => {
+        const personal = {
+          authProfileId: "openai:personal",
+          provider: "openai",
+          label: "Test Person · Personal workspace",
+          authType: "oauth",
+          selected: false,
+        };
+        const work = {
+          ...personal,
+          authProfileId: "openai:work",
+          label: "Test Person · Work workspace",
+          selected: true,
+        };
+        const models = [
+          {
+            id: "gpt-5.5",
+            provider: "openai",
+            name: "GPT-5.5",
+            reasoning: false,
+            thinkingLevels: [],
+          },
+        ];
+        const sessionKey = "agent:main:main";
+        const sessionList = {
+          count: 1,
+          path: "",
+          ts: 1,
+          defaults: { model: "gpt-5.5", modelProvider: "openai", contextTokens: 200_000 },
+          sessions: [
+            {
+              key: sessionKey,
+              kind: "direct",
+              model: "gpt-5.5",
+              modelProvider: "openai",
+              updatedAt: 1,
+            },
+          ],
+        };
+        const gateway = await installMockGateway(page, {
+          agentModel: "openai/gpt-5.5",
+          models,
+          deferredMethods: ["sessions.patch"],
+          methodResponses: {
+            "sessions.list": sessionList,
+            "chat.metadata": {
+              commands: [],
+              models,
+              accountSelection: {
+                kind: "personal",
+                label: personal.label,
+                authProfileId: personal.authProfileId,
+                source: "user",
+              },
+            },
+            "users.listModelAccounts": {
+              profileId: "test-person",
+              accounts: [personal],
+              nextCursor: "accounts-page-2",
+              links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const composer = page.locator(".agent-chat__input").first();
+        const model = composer.locator('[data-chat-model-select="true"]');
+        await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
+        await model.click();
+        const account = composer.locator(".chat-model-account");
+        const picker = account.locator("wa-dropdown");
+        const trigger = picker.locator("[data-chat-account-trigger]");
+        await expect.poll(() => trigger.textContent()).toContain(personal.label);
+        for (const width of [320, 768, 1280]) {
+          await page.setViewportSize({ width, height: 900 });
+          await expect
+            .poll(async () => {
+              const box = await account.boundingBox();
+              return Boolean(box && box.width > 0 && box.x >= 0 && box.x + box.width <= width + 1);
+            })
+            .toBe(true);
+          if (artifactDir) {
+            await page.screenshot({
+              animations: "disabled",
+              path: `${artifactDir}/chat-account-${width}.png`,
+            });
+          }
+        }
+        await trigger.click();
+        const more = picker.getByRole("menuitem", {
+          name: "Load more saved accounts",
+          exact: true,
+        });
+        await expect.poll(() => more.isVisible()).toBe(true);
+        await page.keyboard.press("Escape");
+        await expect.poll(() => more.isVisible()).toBe(false);
+        await expect.poll(() => account.isVisible()).toBe(true);
+        await expect
+          .poll(() => trigger.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        await trigger.press("Enter");
+        await expect.poll(() => more.isVisible()).toBe(true);
+        await expect
+          .poll(() =>
+            picker
+              .locator('[data-chat-account-option="current"]')
+              .evaluate((element) => element === document.activeElement),
+          )
+          .toBe(true);
+        const inventoryRequests = await gateway.getRequests("users.listModelAccounts");
+        await gateway.deferNext("users.listModelAccounts", { cursor: "accounts-page-2" });
+        await more.click();
+        const nextPage = await gateway.waitForRequest("users.listModelAccounts", {
+          after: inventoryRequests.length,
+        });
+        expect(nextPage.params).toEqual({ cursor: "accounts-page-2" });
+        await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+        await gateway.resolveDeferred("users.listModelAccounts", {
+          profileId: "test-person",
+          accounts: [work],
+          links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
+        });
+        const workOption = picker.getByRole("menuitemradio", { name: work.label, exact: true });
+        await expect.poll(() => workOption.isVisible()).toBe(true);
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            path: `${artifactDir}/chat-account-page-2.png`,
+          });
+        }
+        await page.keyboard.press("Home");
+        await page.keyboard.press("ArrowDown");
+        await expect
+          .poll(() => workOption.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        await page.keyboard.press("Enter");
+        const patch = await gateway.waitForRequest("sessions.patch");
+        expect(patch.params).toEqual({
+          key: sessionKey,
+          model: `openai/gpt-5.5@${work.authProfileId}`,
+        });
+        await expect.poll(() => trigger.textContent()).toContain(personal.label);
+        await gateway.resolveDeferred("sessions.patch", { ok: true });
+        await gateway.setMethodResponse("sessions.list", sessionList);
+        await gateway.setMethodResponse("chat.metadata", {
+          commands: [],
+          models,
+          accountSelection: {
+            kind: "personal",
+            label: work.label,
+            authProfileId: work.authProfileId,
+            source: "user",
+          },
+        });
+        await gateway.emitGatewayEvent("chat.metadata.changed", {});
+        await gateway.emitGatewayEvent("sessions.changed", {
+          key: sessionKey,
+          agentId: "main",
+          reason: "patch",
+        });
+        await expect.poll(() => trigger.textContent()).toContain(work.label);
+        expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
+        expect(await gateway.getRequests("users.unlinkAuthProfile")).toHaveLength(0);
+        if (artifactDir) {
+          await page.screenshot({
+            animations: "disabled",
+            path: `${artifactDir}/chat-account-selected.png`,
+          });
+        }
+      },
+    );
+  });
+
   it.each(
     ["chat", "new"].flatMap((route) =>
       [false, true].map((tooltipOpen) => ({ route, tooltipOpen })),

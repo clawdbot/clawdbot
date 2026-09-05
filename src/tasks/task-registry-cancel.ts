@@ -22,6 +22,7 @@ import {
   tasks,
 } from "./task-registry-state.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import { getTaskRunOwner } from "./task-run-owner.js";
 
 function ensureTaskCancellationReady(task: TaskRecord): void {
   const runId = task.runId?.trim();
@@ -122,7 +123,18 @@ export async function cancelTaskById(params: {
       if (!processSessionId || !cancelBackgroundExecSession?.(processSessionId)) {
         return notCancelled("Background command has no active cancellation handle.");
       }
-    } else if (task.runtime !== "cli") {
+    } else if (task.runtime === "cli") {
+      const owner = getTaskRunOwner(task);
+      if (!owner) {
+        return notCancelled(
+          "Task has no live run owner. Use openclaw tasks audit to inspect its state.",
+        );
+      }
+      const result = await owner.cancel(cancellationError);
+      return result.ok
+        ? { found: true, cancelled: true, task: result.value }
+        : notCancelled(result.error);
+    } else {
       if (task.runtime === "cron") {
         const { cancelActiveCronTaskRun } = await loadTaskRegistryControlRuntime();
         if (

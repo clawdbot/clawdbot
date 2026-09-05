@@ -5,7 +5,6 @@ import android.net.ConnectivityManager
 import android.net.DnsResolver
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
@@ -62,26 +61,6 @@ private fun createContextDnsResolver(context: Context): DnsResolver = DnsResolve
 @Suppress("DEPRECATION")
 private fun createLegacyDnsResolver(): DnsResolver = DnsResolver.getInstance()
 
-internal fun gatewayDiscoveryStatusText(
-  localCount: Int,
-  wideAreaRcode: Int?,
-  wideAreaCount: Int,
-): String {
-  val wide =
-    when (wideAreaRcode) {
-      null -> "Wide: ?"
-      Rcode.NOERROR -> "Wide: $wideAreaCount"
-      Rcode.NXDOMAIN -> "Wide: NXDOMAIN"
-      else -> "Wide: ${Rcode.string(wideAreaRcode)}"
-    }
-
-  return when {
-    localCount == 0 && wideAreaRcode == null -> "Searching for gateways…"
-    localCount == 0 -> wide
-    else -> "Local: $localCount • $wide"
-  }
-}
-
 /**
  * Watches local DNS-SD and optional wide-area DNS-SD for reachable OpenClaw gateways.
  */
@@ -103,11 +82,6 @@ class GatewayDiscovery(
   /** Current discovered gateway list, merged from local DNS-SD and optional wide-area DNS-SD. */
   val gateways: StateFlow<List<GatewayEndpoint>> = _gateways.asStateFlow()
 
-  private val _statusText = MutableStateFlow("Searching…")
-
-  /** Short diagnostic text shown by connect UI while discovery is running. */
-  val statusText: StateFlow<String> = _statusText.asStateFlow()
-
   private var unicastJob: Job? = null
   private val dnsExecutor: Executor = Executors.newCachedThreadPool()
   private val availableNetworks = ConcurrentHashMap.newKeySet<Network>()
@@ -115,10 +89,6 @@ class GatewayDiscovery(
 
   // Legacy NSD callbacks share one handler and one resolve slot, which only a terminal callback releases.
   private val legacyResolutions = ArrayDeque<LegacyResolution>()
-
-  @Volatile private var lastWideAreaRcode: Int? = null
-
-  @Volatile private var lastWideAreaCount: Int = 0
 
   private val networkCallback =
     object : ConnectivityManager.NetworkCallback() {
@@ -173,9 +143,9 @@ class GatewayDiscovery(
     val cm = connectivity ?: return
     cm.activeNetwork?.let(availableNetworks::add)
     try {
-      // Track all networks so wide-area DNS can prefer VPN/split-DNS answers
-      // even when Android's active network is not the VPN.
-      cm.registerNetworkCallback(NetworkRequest.Builder().build(), networkCallback)
+      // Track app-visible networks, including VPNs, so wide-area DNS can prefer split-DNS
+      // answers even when Android's active network is not the VPN.
+      cm.registerNetworkCallback(gatewayNetworkRequest(), networkCallback)
     } catch (_: Throwable) {
       // ignore (best-effort)
     }
@@ -350,12 +320,6 @@ class GatewayDiscovery(
     _gateways.value =
       // Merge local and wide-area results deterministically for stable UI selection.
       (localById.values + unicastById.values).sortedBy { it.name.lowercase() }
-    _statusText.value =
-      gatewayDiscoveryStatusText(
-        localCount = localById.size,
-        wideAreaRcode = lastWideAreaRcode,
-        wideAreaCount = lastWideAreaCount,
-      )
   }
 
   private fun stableId(
@@ -451,8 +415,6 @@ class GatewayDiscovery(
 
     unicastById.clear()
     unicastById.putAll(next)
-    lastWideAreaRcode = ptrMsg.header.rcode
-    lastWideAreaCount = next.size
     publish()
 
     if (next.isEmpty()) {

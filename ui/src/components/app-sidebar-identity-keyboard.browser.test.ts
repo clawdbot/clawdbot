@@ -9,7 +9,7 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
     await import("./app-sidebar.ts");
     const { createGatewayHarness, createSessions, mountSidebar } =
       await import("../test-helpers/app-sidebar.ts");
-    const { userEvent } = await import("vitest/browser");
+    const { page, userEvent } = await import("vitest/browser");
     const { sidebar } = await mountSidebar(
       createGatewayHarness({ instanceId: "self-instance" } as GatewayBrowserClient).gateway,
       createSessions("main", ["agent:main:main"]),
@@ -20,6 +20,8 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
 
     const identity = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
     expect(identity).not.toBeNull();
+    // A pointer left by another test can open Help as the keyboard menu appears.
+    await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
     identity?.focus();
     await userEvent.keyboard("{Enter}");
 

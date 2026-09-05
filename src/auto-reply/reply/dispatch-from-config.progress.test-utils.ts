@@ -99,6 +99,122 @@ describe("dispatchReplyFromConfig", () => {
   });
 
   it.each([
+    { stored: "off", override: "full", expected: ["Tool summary", "Tool failure output"] },
+    { stored: "full", override: "off", expected: [] },
+    { stored: "full", override: "on", expected: ["Tool summary"] },
+  ] as const)(
+    "delivers admitted run verbosity $override instead of stored $stored",
+    async ({ stored, override, expected }) => {
+      setNoAbort();
+      sessionStoreMocks.currentEntry = {
+        sessionId: "session",
+        updatedAt: 0,
+        verboseLevel: stored,
+      };
+      const dispatcher = createDispatcher();
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "telegram",
+          ChatType: "direct",
+          SessionKey: "agent:main:telegram:direct:U1",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+        replyResolver: async (_ctx, opts) => {
+          opts?.onRunVerbosityResolved?.({
+            verboseLevelOverride: override,
+            resolvedVerboseLevel: override,
+          });
+          await opts?.onToolResult?.({ text: "Tool summary" });
+          await opts?.onToolResult?.({ text: "Tool failure output", isError: true });
+          return undefined;
+        },
+      });
+      expect(
+        vi.mocked(dispatcher.sendToolResult).mock.calls.map(([payload]) => payload.text),
+      ).toEqual(expected);
+      expect(sessionStoreMocks.currentEntry.verboseLevel).toBe(stored);
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    },
+  );
+
+  it("clears an earlier admitted verbosity override for an inherited queued run", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = { verboseLevel: "off" };
+    const dispatcher = createDispatcher();
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        ChatType: "direct",
+        SessionKey: "agent:main:telegram:direct:U1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        opts?.onRunVerbosityResolved?.({
+          verboseLevelOverride: "full",
+          resolvedVerboseLevel: "full",
+        });
+        await opts?.onToolResult?.({ text: "Explicit turn" });
+        opts?.onRunVerbosityResolved?.({ resolvedVerboseLevel: "on" });
+        await opts?.onToolResult?.({ text: "Inherited off" });
+        sessionStoreMocks.currentEntry = { verboseLevel: "on" };
+        await opts?.onToolResult?.({ text: "Inherited live on" });
+        return { text: "Done" };
+      },
+    });
+    expect(
+      vi.mocked(dispatcher.sendToolResult).mock.calls.map(([payload]) => payload.text),
+    ).toEqual(["Explicit turn", "Inherited live on"]);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Done" });
+  });
+
+  it("keeps verbose commentary in the channel draft when that draft owns progress", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = { verboseLevel: "on" };
+    const dispatcher = createDispatcher();
+    const onItemEvent = vi.fn();
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+        From: "telegram:group:-100123",
+        SessionKey: "agent:main:telegram:group:-100123",
+      }),
+      cfg: automaticGroupReplyConfig,
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        expect(opts?.commentaryPayloadsEnabled).toBe(false);
+        await opts?.onItemEvent?.({
+          itemId: "commentary-draft-1",
+          kind: "preamble",
+          progressText: "Inspecting the dispatch path.",
+        });
+        return { text: "Done." } satisfies ReplyPayload;
+      },
+      replyOptions: {
+        commentaryProgressEnabled: true,
+        progressPreambleEnabled: true,
+        commentaryPayloadsEnabled: true,
+        shouldDeliverCommentaryPayloads: () => false,
+        onItemEvent,
+      },
+    });
+
+    expect(onItemEvent).toHaveBeenCalledExactlyOnceWith({
+      itemId: "commentary-draft-1",
+      kind: "preamble",
+      progressText: "Inspecting the dispatch path.",
+    });
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({ text: "Done." });
+  });
+
+  it.each([
     { surface: "slack", verboseLevel: "on", nextVerboseLevel: "off", durableCommentary: true },
     { surface: "slack", verboseLevel: "off", nextVerboseLevel: "on", durableCommentary: false },
     { surface: "discord", verboseLevel: "on", nextVerboseLevel: "off", durableCommentary: true },
@@ -1176,39 +1292,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses tool error payloads when messages.suppressToolErrors is enabled", async () => {
-    setNoAbort();
-    const dispatcher = createDispatcher();
-    const onToolResult = vi.fn();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-      SessionKey: "agent:main:main",
-    });
-
-    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      await opts?.onToolResult?.({ text: "⚠️ 🛠️ sqlite3 failed", isError: true });
-      return { text: "handled" } satisfies ReplyPayload;
-    };
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: {
-        agents: { defaults: { verboseDefault: "on" } },
-        messages: {
-          suppressToolErrors: true,
-        },
-      } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: { onToolResult },
-    });
-
-    expect(onToolResult).not.toHaveBeenCalled();
-    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "handled" });
-  });
-
   it("keeps message-tool-only failed tool output compact in normal verbose mode", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
@@ -1269,7 +1352,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("keeps terminal tool-error fallbacks available when message-tool-only error text is hidden", async () => {
+  it("hides message-tool-only error text without a progress callback", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -1284,10 +1367,7 @@ describe("dispatchReplyFromConfig", () => {
       ChatType: "direct",
       SessionKey: "agent:main:telegram:direct:U1",
     });
-    let receivedOptions: GetReplyOptions | undefined;
-
     const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      receivedOptions = opts;
       await opts?.onToolResult?.({
         text: "🛠️ Bash: `ls /tmp/missing`\n```txt\nNo such file or directory\n```",
         isError: true,
@@ -1305,7 +1385,6 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
 
-    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
@@ -1368,9 +1447,7 @@ describe("dispatchReplyFromConfig", () => {
       ChatType: "direct",
       SessionKey: "agent:main:telegram:direct:U1",
     });
-    let receivedOptions: GetReplyOptions | undefined;
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      receivedOptions = opts;
       await opts?.onCommandOutput?.({
         phase: "end",
         name: "exec",
@@ -1394,11 +1471,10 @@ describe("dispatchReplyFromConfig", () => {
       status: "failed",
       exitCode: 1,
     });
-    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("keeps tool-error fallbacks eligible when a channel declines failed progress", async () => {
+  it("preserves declined failed progress callback results", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -1414,11 +1490,9 @@ describe("dispatchReplyFromConfig", () => {
       ChatType: "direct",
       SessionKey: "agent:main:discord:direct:U1",
     });
-    let receivedOptions: GetReplyOptions | undefined;
     let commandOutputResult: boolean | void = undefined;
     let itemEventResult: boolean | void = undefined;
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      receivedOptions = opts;
       commandOutputResult = await opts?.onCommandOutput?.({
         phase: "end",
         name: "exec",
@@ -1446,7 +1520,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(onItemEvent).toHaveBeenCalledTimes(1);
     expect(commandOutputResult).toBe(false);
     expect(itemEventResult).toBe(false);
-    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
@@ -1467,9 +1540,7 @@ describe("dispatchReplyFromConfig", () => {
       From: "whatsapp:group:123@g.us",
       SessionKey: "agent:main:whatsapp:group:123@g.us",
     });
-    let receivedOptions: GetReplyOptions | undefined;
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      receivedOptions = opts;
       await opts?.onItemEvent?.({
         itemId: "item-1",
         kind: "tool",
@@ -1493,11 +1564,10 @@ describe("dispatchReplyFromConfig", () => {
       name: "exec",
       status: "failed",
     });
-    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("keeps terminal tool-error fallbacks available when verbose turns on after a quiet failure", async () => {
+  it("keeps earlier failed progress hidden when verbose turns on later", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -1512,9 +1582,7 @@ describe("dispatchReplyFromConfig", () => {
       ChatType: "direct",
       SessionKey: "agent:main:telegram:direct:U1",
     });
-    let receivedOptions: GetReplyOptions | undefined;
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      receivedOptions = opts;
       await opts?.onCommandOutput?.({
         phase: "end",
         name: "exec",
@@ -1540,40 +1608,8 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(onCommandOutput).not.toHaveBeenCalled();
-    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("keeps terminal tool-error fallbacks available in verbose full mode", async () => {
-    setNoAbort();
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-      verboseLevel: "full",
-    };
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      ChatType: "direct",
-      SessionKey: "agent:main:telegram:direct:U1",
-    });
-    let receivedOptions: GetReplyOptions | undefined;
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      receivedOptions = opts;
-      return { text: "done" } satisfies ReplyPayload;
-    });
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
   it("delivers text-only tool summaries when verbose overrides preview suppression", async () => {

@@ -90,6 +90,12 @@ describe("persistent upstream fork continuation", () => {
     const clients: ReturnType<typeof createFakeCodexAppServerClient>[] = [];
     const createClient = (home: "secondary" | "ordinary") => {
       const client = createFakeCodexAppServerClient(async (method, requestParams) => {
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
         if (method === "skills/list") {
           return { data: [] };
         }
@@ -269,7 +275,7 @@ describe("persistent upstream fork continuation", () => {
       const developerInstructions = "Follow the child agent's current instructions.";
       const continueFork = async (store: CodexAppServerBindingStore, nativeClient = native) => {
         const connection = resolveCodexBindingAppServerConnection({
-          binding: await store.read(identity),
+          binding: store.read(identity),
           pluginConfig,
           config,
           agentDir,

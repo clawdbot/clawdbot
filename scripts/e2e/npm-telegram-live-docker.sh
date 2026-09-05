@@ -436,7 +436,7 @@ run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harn
   ${prepublish_registry_mount_args[@]+"${prepublish_registry_mount_args[@]}"} \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
-set -euo pipefail
+set -Eeuo pipefail
 source scripts/lib/openclaw-e2e-instance.sh
 source scripts/e2e/lib/prepublish-plugin-registry.sh
 
@@ -540,10 +540,14 @@ if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
     hotpath_model_value="$OPENAI_API_KEY"
   fi
   hotpath_channel_value="$(printf '%s:%s' 123456 "$hotpath_placeholder")"
-  # Non-interactive onboarding cannot approve plugin capabilities. This release
-  # harness explicitly accepts the staged Codex artifact before testing setup.
-  openclaw_e2e_run_command "$sut_command" plugins install @openclaw/codex \
-    --accept-capabilities >/tmp/openclaw-npm-telegram-codex-install.log 2>&1 </dev/null
+  # Older packages own their automatic setup. Successful candidate help, not a
+  # version guess, establishes whether this harness must preinstall Codex.
+  plugin_install_help="$(openclaw_e2e_run_command "$sut_command" plugins install --help)"
+  fixture_consent="$(printf '%s' "$plugin_install_help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)"
+  if [ -n "$fixture_consent" ]; then
+    openclaw_e2e_fixture_plugin_command "$sut_command" -- plugins install @openclaw/codex \
+      >/tmp/openclaw-npm-telegram-codex-install.log 2>&1 </dev/null
+  fi
   OPENAI_API_KEY="$hotpath_model_value" openclaw_e2e_run_command "$sut_command" onboard \
     --non-interactive --accept-risk \
     --mode local \

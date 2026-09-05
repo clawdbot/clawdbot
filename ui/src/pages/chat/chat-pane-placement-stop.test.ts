@@ -5,10 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
-  installDialogPolyfill,
+  createModalDialogTestFixture,
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
 import {
@@ -24,14 +25,16 @@ import {
 } from "./chat-pane.test-support.ts";
 import { renderChatPanePlacement } from "./components/chat-pane-placement.ts";
 
-let restoreDialogPolyfill: () => void;
+let dialogs: ReturnType<typeof createModalDialogTestFixture>;
 beforeEach(() => {
-  restoreDialogPolyfill = installDialogPolyfill();
+  dialogs = createModalDialogTestFixture();
 });
-afterEach(() => {
-  document.body.replaceChildren();
-  restoreDialogPolyfill();
-  vi.unstubAllGlobals();
+afterEach(async () => {
+  try {
+    await dialogs.cleanup();
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
 
 const placementTiming = { generation: 1, createdAtMs: 1, updatedAtMs: 1, stateChangedAtMs: 1 };
@@ -125,8 +128,8 @@ describe("chat pane worker stop", () => {
   ] as const)(
     "stops $placement.state $targetKind startup from the placement menu",
     async ({ placement, targetKind, copy }) => {
-      const request = vi.fn(async () => ({ ok: true }));
-      const refreshReplacement = vi.fn(async () => undefined);
+      const request = dialogs.mockRequest(async () => ({ ok: true }));
+      const refreshReplacement = vi.fn(async () => createSessionsListResult());
       const { pane } = createTestChatPane({
         client: createGatewayBrowserClientFixture({ request }),
         sessions: createSessionCapabilityFixture({ refreshReplacement }),
@@ -144,7 +147,7 @@ describe("chat pane worker stop", () => {
           session,
           placementStartupStatus: startup,
           onPlacementReclaim: () => {
-            reclaim = pane.reclaimHeaderPlacement(session);
+            reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
           },
         }),
         container,
@@ -221,7 +224,7 @@ describe("chat pane worker stop", () => {
   });
 
   it("does not issue reclaim for an offline device placement", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
+    const request = dialogs.mockRequest(async () => ({ ok: true }));
     const { pane } = createTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
       sessions: createSessionCapabilityFixture(),
@@ -278,8 +281,8 @@ describe("chat pane worker stop", () => {
           throw new Error("native confirm must not be used");
         }),
       );
-      const request = vi.fn(async () => ({ ok: true }));
-      const refreshReplacement = vi.fn(async () => undefined);
+      const request = dialogs.mockRequest(async () => ({ ok: true }));
+      const refreshReplacement = vi.fn(async () => createSessionsListResult());
       const { pane } = createTestChatPane({
         client: createGatewayBrowserClientFixture({ request }),
         sessions: createSessionCapabilityFixture({ refreshReplacement }),
@@ -299,7 +302,7 @@ describe("chat pane worker stop", () => {
         targetKind: runner === "device" ? "profile" : "device",
       });
 
-      const reclaim = pane.reclaimHeaderPlacement(session);
+      const reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
       const actions = await waitForConfirmDialogActions();
       const actionText = actions.textContent;
       const confirmation = document.body.querySelector("openclaw-modal-dialog")?.textContent;
@@ -330,7 +333,7 @@ describe("chat pane worker stop", () => {
   );
 
   it("does not reclaim when the operator cancels", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
+    const request = dialogs.mockRequest(async () => ({ ok: true }));
     const { pane } = createTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
       sessions: createSessionCapabilityFixture(),
@@ -356,7 +359,7 @@ describe("chat pane worker stop", () => {
       targetKind: "device",
     });
 
-    const reclaim = pane.reclaimHeaderPlacement(session);
+    const reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
     const actions = await waitForConfirmDialogActions();
     answerConfirmDialog(actions, "cancel");
     await reclaim;
@@ -366,7 +369,7 @@ describe("chat pane worker stop", () => {
   });
 
   it("does not reclaim after the connection changes while confirmation is open", async () => {
-    const request = vi.fn(async () => ({ ok: true }));
+    const request = dialogs.mockRequest(async () => ({ ok: true }));
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
       sessions: createSessionCapabilityFixture(),
@@ -392,7 +395,7 @@ describe("chat pane worker stop", () => {
       targetKind: "device",
     });
 
-    const reclaim = pane.reclaimHeaderPlacement(session);
+    const reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
     const actions = await waitForConfirmDialogActions();
     pane.connectionGeneration += 1;
     answerConfirmDialog(actions, "confirm");
@@ -405,7 +408,7 @@ describe("chat pane worker stop", () => {
   });
 
   it("publishes a reclaim failure for the current presentation", async () => {
-    const request = vi.fn(async () => {
+    const request = dialogs.mockRequest(async () => {
       throw new Error("reclaim failed");
     });
     const { pane, state } = createTestChatPane({
@@ -418,7 +421,7 @@ describe("chat pane worker stop", () => {
     );
     const session = activePlacementSession();
 
-    const reclaim = pane.reclaimHeaderPlacement(session);
+    const reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
     const actions = await waitForConfirmDialogActions();
     answerConfirmDialog(actions, "confirm");
     await reclaim;
@@ -428,8 +431,8 @@ describe("chat pane worker stop", () => {
   });
 
   it("does not publish a reclaim failure after leaving and returning", async () => {
-    const response = createDeferred<never>();
-    const request = vi.fn(() => response.promise);
+    const response = createDeferred<{ ok: true }>();
+    const request = dialogs.mockRequest(() => response.promise);
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
       sessions: createSessionCapabilityFixture(),
@@ -440,23 +443,27 @@ describe("chat pane worker stop", () => {
     );
     const session = activePlacementSession();
 
-    const reclaim = pane.reclaimHeaderPlacement(session);
-    const actions = await waitForConfirmDialogActions();
-    answerConfirmDialog(actions, "confirm");
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    pane.presented = false;
-    pane.presented = true;
-    response.reject(new Error("stale reclaim failed"));
-    await reclaim;
+    try {
+      const reclaim = dialogs.track(pane.reclaimHeaderPlacement(session));
+      const actions = await waitForConfirmDialogActions();
+      answerConfirmDialog(actions, "confirm");
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      pane.presented = false;
+      pane.presented = true;
+      response.reject(new Error("stale reclaim failed"));
+      await reclaim;
 
-    expect(state.lastError).toBeNull();
-    expect(state.chatError).toBeNull();
+      expect(state.lastError).toBeNull();
+      expect(state.chatError).toBeNull();
+    } finally {
+      response.resolve({ ok: true });
+    }
   });
 
   it("keeps reclaim progress with its session when the pane switches rows", async () => {
     const response = createDeferred<{ ok: true }>();
-    const request = vi.fn(() => response.promise);
-    const refreshReplacement = vi.fn(async () => undefined);
+    const request = dialogs.mockRequest(() => response.promise);
+    const refreshReplacement = vi.fn(async () => createSessionsListResult());
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
       sessions: createSessionCapabilityFixture({ refreshReplacement }),
@@ -476,30 +483,34 @@ describe("chat pane worker stop", () => {
       },
     } satisfies GatewaySessionRow;
 
-    const pendingReclaim = pane.reclaimHeaderPlacement(sessionA);
-    const actions = await waitForConfirmDialogActions();
-    answerConfirmDialog(actions, "confirm");
-    await vi.waitFor(() => expect(pane.headerPlacementReclaimingKey).toBe(sessionA.key));
+    try {
+      const pendingReclaim = dialogs.track(pane.reclaimHeaderPlacement(sessionA));
+      const actions = await waitForConfirmDialogActions();
+      answerConfirmDialog(actions, "confirm");
+      await vi.waitFor(() => expect(pane.headerPlacementReclaimingKey).toBe(sessionA.key));
 
-    state.sessionKey = sessionB.key;
-    const placementA = resolveChatPanePlacement({
-      gatewaySnapshot: pane.context.gateway.snapshot,
-      movingKey: null,
-      reclaimingKey: pane.headerPlacementReclaimingKey,
-      row: sessionA,
-    });
-    const placementB = resolveChatPanePlacement({
-      gatewaySnapshot: pane.context.gateway.snapshot,
-      movingKey: null,
-      reclaimingKey: pane.headerPlacementReclaimingKey,
-      row: sessionB,
-    });
-    expect(placementA.reclaimDisabledReason).toBe(t("common.loading"));
-    expect(placementB.reclaimDisabledReason).toBeUndefined();
+      state.sessionKey = sessionB.key;
+      const placementA = resolveChatPanePlacement({
+        gatewaySnapshot: pane.context.gateway.snapshot,
+        movingKey: null,
+        reclaimingKey: pane.headerPlacementReclaimingKey,
+        row: sessionA,
+      });
+      const placementB = resolveChatPanePlacement({
+        gatewaySnapshot: pane.context.gateway.snapshot,
+        movingKey: null,
+        reclaimingKey: pane.headerPlacementReclaimingKey,
+        row: sessionB,
+      });
+      expect(placementA.reclaimDisabledReason).toBe(t("common.loading"));
+      expect(placementB.reclaimDisabledReason).toBeUndefined();
 
-    response.resolve({ ok: true });
-    await pendingReclaim;
+      response.resolve({ ok: true });
+      await pendingReclaim;
 
-    expect(pane.headerPlacementReclaimingKey).toBeNull();
+      expect(pane.headerPlacementReclaimingKey).toBeNull();
+    } finally {
+      response.resolve({ ok: true });
+    }
   });
 });

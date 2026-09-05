@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import { describe, expect, it } from "vitest";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import {
@@ -47,6 +48,7 @@ describe("chat-queued-turns", () => {
     expect(map.get("run-a")?.sessionKey).toBe("main");
     expect(completeQueuedChatTurn(map, "run-a", controller)).toBe(true);
     expect(map.get("run-a")).toBeUndefined();
+    expect(getEventListeners(controller.signal, "abort")).toEqual([]);
   });
 
   it("removes the queued entry when its controller aborts", () => {
@@ -220,6 +222,7 @@ describe("chat-queued-turns", () => {
     });
 
     expect(retireQueuedChatTurnCancellation(map, "run-collected", controller)).toBe(true);
+    expect(getEventListeners(controller.signal, "abort")).toEqual([]);
     expect(
       abortQueuedChatTurnById(map, { runId: "run-collected", sessionKey: "main" }).aborted,
     ).toBe(false);

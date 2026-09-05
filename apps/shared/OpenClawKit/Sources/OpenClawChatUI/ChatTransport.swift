@@ -530,9 +530,19 @@ public enum OpenClawChatTransportSendError: Error, Sendable {
     case notDispatched
 }
 
+public enum OpenClawChatProgressCardError: LocalizedError, Sendable {
+    case ownerScopeUnavailable
+
+    public var errorDescription: String? {
+        OpenClawChatTransportUpgradeMessage.progressCardAgentScope
+    }
+}
+
 public enum OpenClawChatTransportUpgradeMessage {
-    public static let routingContract =
-        "Update the gateway before sending queued messages. This version requires safe delivery routing."
+    public static let progressCardAgentScope =
+        String(localized: "Update the gateway to load progress cards for this agent.")
+    public static let routingContract = String(
+        localized: "Update the gateway before sending queued messages. This version requires safe delivery routing.")
 }
 
 public enum OpenClawChatRunTerminalState: Sendable, Equatable {
@@ -750,7 +760,7 @@ public protocol OpenClawChatTransport: Sendable {
     /// gateway's advertised method set answers, nil when no catalog is known
     /// (disconnected, pre-catalog gateway, or non-gateway transport).
     func gatewayAdvertisesMethod(_ method: String) async -> Bool?
-    func fetchProgressCard(sessionKey: String) async throws -> ProgressCard?
+    func fetchProgressCard(sessionKey: String, agentID: String?) async throws -> ProgressCard?
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
     func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice]
     func loadModelCatalog(
@@ -883,7 +893,7 @@ extension OpenClawChatTransport {
         nil
     }
 
-    public func fetchProgressCard(sessionKey _: String) async throws -> ProgressCard? {
+    public func fetchProgressCard(sessionKey _: String, agentID _: String?) async throws -> ProgressCard? {
         nil
     }
 

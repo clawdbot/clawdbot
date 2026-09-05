@@ -1,3 +1,4 @@
+import type { AnyChunk } from "@slack/types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -38,6 +39,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     replyPlan,
     runtime,
     slackClient,
+    slackClientOptions,
     slackIdentity,
     slackMessageMetadata,
     slackStreamFallbackTeamId,
@@ -52,96 +54,17 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     observedReplyDelivery: false,
     observedFinalReplyDelivery: false,
   };
-  // Reply payloads routed through the native text stream. Track Slack
-  // acknowledgement separately because a later buffered suffix can fall back
-  // after earlier payloads are already visible.
-  const streamedDeliveries: Array<{
-    kind: ReplyDispatchKind;
-    content: string;
-    acknowledged: boolean;
-    outcome?: "success" | "failure";
-  }> = [];
-  const refreshStreamedAcknowledgements = (session: SlackStreamSession) => {
-    if (session.pendingText.length === 0) {
-      for (const delivery of streamedDeliveries) {
-        delivery.acknowledged = true;
-      }
-    }
-  };
-  const recordStreamedDelivery = (kind: ReplyDispatchKind, content: string) => {
-    const delivery: (typeof streamedDeliveries)[number] = {
-      kind,
-      content,
-      acknowledged: false,
-    };
-    streamedDeliveries.push(delivery);
-    return delivery;
-  };
-  const rememberStreamedDelivery = (
-    kind: ReplyDispatchKind,
+  const emitStreamedDelivery = (
     content: string,
-    session: SlackStreamSession,
+    result: { success: boolean; messageId?: string; error?: string },
   ) => {
-    recordStreamedDelivery(kind, content);
-    refreshStreamedAcknowledgements(session);
-  };
-  const emitAcknowledgedStreamedDeliveries = (messageId?: string) => {
-    for (const delivery of streamedDeliveries) {
-      if (!delivery.acknowledged || delivery.outcome) {
-        continue;
-      }
-      emitSlackMessageSentHooks({
-        ...messageSentHookContext,
-        to: messageSentHookTarget,
-        accountId: account.accountId,
-        content: delivery.content,
-        success: true,
-        ...(messageId ? { messageId } : {}),
-      });
-      delivery.outcome = "success";
-    }
-  };
-  const acknowledgeStoppedStreamedDeliveries = (
-    session: SlackStreamSession,
-    messageId?: string,
-  ) => {
-    refreshStreamedAcknowledgements(session);
-    for (const delivery of streamedDeliveries) {
-      delivery.acknowledged = true;
-    }
-    emitAcknowledgedStreamedDeliveries(messageId);
-  };
-  const emitFailedPendingStreamedDeliveries = (error: string) => {
-    for (const delivery of streamedDeliveries) {
-      if (delivery.acknowledged || delivery.outcome) {
-        continue;
-      }
-      emitSlackMessageSentHooks({
-        ...messageSentHookContext,
-        to: messageSentHookTarget,
-        accountId: account.accountId,
-        content: delivery.content,
-        success: false,
-        error,
-      });
-      delivery.outcome = "failure";
-    }
-  };
-  const emitSuccessfulPendingStreamedDeliveries = (messageId?: string) => {
-    for (const delivery of streamedDeliveries) {
-      if (delivery.acknowledged || delivery.outcome) {
-        continue;
-      }
-      emitSlackMessageSentHooks({
-        ...messageSentHookContext,
-        to: messageSentHookTarget,
-        accountId: account.accountId,
-        content: delivery.content,
-        success: true,
-        ...(messageId ? { messageId } : {}),
-      });
-      delivery.outcome = "success";
-    }
+    emitSlackMessageSentHooks({
+      ...messageSentHookContext,
+      to: messageSentHookTarget,
+      accountId: account.accountId,
+      content,
+      ...result,
+    });
   };
   let deliveryTracker = createSlackEventDeliveryTracker();
   const markPreviewPayloadDelivered = (params: {
@@ -183,7 +106,10 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
   const deliverPendingStreamFallback = async (
     session: SlackStreamSession,
     err: SlackStreamNotDeliveredError,
-  ): Promise<boolean> => {
+  ): Promise<{ messageId?: string } | undefined> => {
+    if (session.stoppedBySlack) {
+      return undefined;
+    }
     let fallbackError = err;
     if (!session.stopped) {
       try {
@@ -191,83 +117,88 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
           session,
           ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
         });
-        acknowledgeStoppedStreamedDeliveries(session, stopResult.messageId);
+        if (session.stoppedBySlack) {
+          return undefined;
+        }
         state.observedReplyDelivery = true;
         state.usedReplyThreadTs ??= session.threadTs;
-        return true;
+        return stopResult;
       } catch (stopErr) {
         if (stopErr instanceof SlackStreamNotDeliveredError) {
           fallbackError = stopErr;
         } else {
-          runtime.error?.(
-            danger(
-              `slack-stream: failed to finalize buffered text before fallback: ${formatSlackError(stopErr)}`,
-            ),
-          );
+          throw stopErr;
         }
       }
     }
-    emitAcknowledgedStreamedDeliveries();
-    // The Slack SDK still owns this text in-memory; no streaming API call has
-    // acknowledged it. Route through deliverReplies so pendingText that
-    // exceeds Slack's per-message text limit still lands (a single
-    // chat.postMessage would have failed with msg_too_long), and so the
-    // fallback respects the configured replyToMode/identity the same way
-    // normal replies do.
+    // The SDK retains definitely rejected text. Use the normal chunked sender;
+    // one chat.postMessage cannot carry a tail beyond Slack's text limit.
     const fallbackText = fallbackError.pendingText.trim();
     if (!fallbackText) {
-      return false;
+      return undefined;
     }
-    try {
-      await deliverReplies({
-        cfg: ctx.cfg,
-        replies: [{ text: fallbackText } as ReplyPayload],
-        target: prepared.replyTarget,
-        token: ctx.botToken,
-        accountId: account.accountId,
-        runtime,
-        textLimit: ctx.textLimit,
-        mediaMaxBytes: ctx.mediaMaxBytes,
-        replyThreadTs: session.threadTs,
-        replyToMode: replyDeliveryMode,
-        ...(slackIdentity ? { identity: slackIdentity } : {}),
-        ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
-        ...messageSentDeliveryHookContext,
-        deferMessageSentHooks: true,
-        eventScope: prepared.eventScope,
-      });
-      markSlackStreamFallbackDelivered(session);
-      if (!session.stopped) {
+    await deliverReplies({
+      cfg: ctx.cfg,
+      replies: [{ text: fallbackText } as ReplyPayload],
+      target: prepared.replyTarget,
+      token: ctx.botToken,
+      accountId: account.accountId,
+      runtime,
+      textLimit: ctx.textLimit,
+      mediaMaxBytes: ctx.mediaMaxBytes,
+      replyThreadTs: session.threadTs,
+      replyToMode: replyDeliveryMode,
+      ...(slackIdentity ? { identity: slackIdentity } : {}),
+      ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
+      ...messageSentDeliveryHookContext,
+      deferMessageSentHooks: true,
+      eventScope: prepared.eventScope,
+    });
+    markSlackStreamFallbackDelivered(session);
+    if (!session.stopped) {
+      try {
+        await stopSlackStream({
+          session,
+          ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
+        });
+      } catch (finalizeErr) {
+        runtime.error?.(
+          danger(
+            `slack-stream: failed to finalize native stream after fallback delivery: ${formatSlackError(finalizeErr)}`,
+          ),
+        );
+      }
+    }
+    state.observedReplyDelivery = true;
+    state.usedReplyThreadTs ??= session.threadTs;
+    logVerbose(
+      `slack-stream: streamed delivery failed (${fallbackError.slackCode}); delivered ${fallbackText.length} chars via deliverReplies fallback`,
+    );
+    // Chunked fallback has no single message ID for this reply payload.
+    return {};
+  };
+
+  const finishStream = async (chunks?: AnyChunk[]) => {
+    const session = state.streamSession;
+    if (session && !session.stopped) {
+      try {
         try {
           await stopSlackStream({
             session,
+            ...(chunks?.length ? { chunks } : {}),
             ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
           });
-        } catch (finalizeErr) {
-          runtime.error?.(
-            danger(
-              `slack-stream: failed to finalize native stream after fallback delivery: ${formatSlackError(finalizeErr)}`,
-            ),
-          );
+          state.observedReplyDelivery ||= session.delivered;
+        } catch (error) {
+          if (!(error instanceof SlackStreamNotDeliveredError)) {
+            throw error;
+          }
+          await deliverPendingStreamFallback(session, error);
         }
+      } catch (error) {
+        state.streamFailed = true;
+        runtime.error?.(danger(`slack-stream: failed to stop stream: ${formatSlackError(error)}`));
       }
-      // The combined fallback can span multiple logical payloads and Slack
-      // chunks, so no single message `ts` correctly identifies every event.
-      emitSuccessfulPendingStreamedDeliveries();
-      state.observedReplyDelivery = true;
-      state.usedReplyThreadTs ??= session.threadTs;
-      logVerbose(
-        `slack-stream: streamed delivery failed (${fallbackError.slackCode}); delivered ${fallbackText.length} chars via deliverReplies fallback`,
-      );
-      return true;
-    } catch (postErr) {
-      emitFailedPendingStreamedDeliveries(formatErrorMessage(postErr));
-      runtime.error?.(
-        danger(
-          `slack-stream: fallback deliverReplies failed after ${fallbackError.slackCode}: ${formatErrorMessage(postErr)}`,
-        ),
-      );
-      return false;
     }
   };
 
@@ -276,6 +207,9 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     kind: ReplyDispatchKind;
     forcedThreadTs?: string;
   }): Promise<string | undefined> => {
+    if (state.streamSession?.stoppedBySlack) {
+      return undefined;
+    }
     const replyThreadTs = resolveDeliveryThreadTs(params);
     const deliveryReplyThreadTs =
       replyDeliveryMode === "off" && !forcedReplyThreadTs && !isThreadReply
@@ -328,31 +262,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     return deliveryReplyThreadTs;
   };
 
-  const deliverBufferedStreamFallback = async (params: {
-    session: SlackStreamSession;
-    err: SlackStreamNotDeliveredError;
-    payload: ReplyPayload;
-    kind: ReplyDispatchKind;
-    textOverride: string;
-  }): Promise<boolean> => {
-    const delivered = await deliverPendingStreamFallback(params.session, params.err);
-    if (!delivered) {
-      return false;
-    }
-    replyPlan.markSent();
-    if (params.kind === "final") {
-      state.observedFinalReplyDelivery = true;
-    }
-    deliveryTracker.markDelivered({
-      kind: params.kind,
-      payload: params.payload,
-      threadTs: params.session.threadTs,
-      textOverride: params.textOverride,
-    });
-    rememberDeliveredThreadTs(params.kind, params.session.threadTs);
-    return true;
-  };
-
   const isStreamingEligible = (payload: ReplyPayload, options?: { maxTextBytes?: number }) => {
     const reply = resolveSendableOutboundReplyParts(payload);
     const renderPlan = resolveSlackReplyRenderPlan(payload);
@@ -376,7 +285,9 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     appendSeparator?: boolean;
     taskDisplayMode?: "plan" | "timeline";
   }): Promise<void> => {
-    const reply = resolveSendableOutboundReplyParts(params.payload);
+    if (state.streamSession?.stoppedBySlack) {
+      return;
+    }
     if (!isStreamingEligible(params.payload)) {
       await deliverNormally({
         payload: params.payload,
@@ -385,57 +296,47 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       });
       return;
     }
-
-    const text = params.streamText ?? reply.trimmedText;
-    const hookContent = reply.trimmedText;
-    // Even empty chunks force the SDK to flush short text. Final delivery must
-    // await Slack's receipt, not the later best-effort progress finalization.
-    const chunks = params.kind === "final" ? [] : undefined;
-    let plannedThreadTs: string | undefined;
+    if (!state.streamSession && state.nativeProgressStreamStartPromise) {
+      await state.nativeProgressStreamStartPromise;
+    }
+    if (state.streamSession?.stoppedBySlack) {
+      return;
+    }
+    let session = state.streamSession;
+    const threadTs = session?.threadTs ?? replyPlan.nextThreadTs();
+    if (state.streamFailed || !threadTs) {
+      state.streamFailed = true;
+      await deliverNormally({
+        payload: params.payload,
+        kind: params.kind,
+        forcedThreadTs: threadTs ?? state.nativeProgressStreamThreadTs,
+      });
+      return;
+    }
+    const hookContent = resolveSendableOutboundReplyParts(params.payload).trimmedText;
+    const text = params.streamText ?? hookContent;
+    if (deliveryTracker.hasDelivered({ ...params, threadTs, textOverride: text })) {
+      logVerbose("slack-stream: suppressed duplicate reply payload");
+      return;
+    }
+    let messageId: string | undefined;
     try {
-      if (!state.streamSession && state.nativeProgressStreamStartPromise) {
-        await state.nativeProgressStreamStartPromise;
-      }
-      if (state.streamFailed) {
-        await deliverNormally({
-          payload: params.payload,
-          kind: params.kind,
-          forcedThreadTs: state.streamSession?.threadTs ?? state.nativeProgressStreamThreadTs,
+      // Each logical reply owns an acknowledged send. Empty chunks flush short
+      // SDK buffers before core settles the reply, including queued fallbacks.
+      if (session) {
+        await appendSlackStream({
+          session,
+          text: `${params.appendSeparator === false ? "" : "\n"}${text}`,
+          chunks: [],
         });
-        return;
-      }
-      if (!state.streamSession) {
-        const streamThreadTs = replyPlan.nextThreadTs();
-        plannedThreadTs = streamThreadTs;
-        if (!streamThreadTs) {
-          logVerbose(
-            "slack-stream: no reply thread target for stream start, falling back to normal delivery",
-          );
-          state.streamFailed = true;
-          await deliverNormally({
-            payload: params.payload,
-            kind: params.kind,
-          });
-          return;
-        }
-        if (
-          deliveryTracker.hasDelivered({
-            kind: params.kind,
-            payload: params.payload,
-            threadTs: streamThreadTs,
-            textOverride: text,
-          })
-        ) {
-          logVerbose("slack-stream: suppressed duplicate stream start payload");
-          return;
-        }
-
-        state.streamSession = await startSlackStream({
+      } else {
+        session = await startSlackStream({
           client: slackClient,
+          clientOptions: slackClientOptions,
           channel: message.channel,
-          threadTs: streamThreadTs,
+          threadTs,
           text,
-          chunks,
+          chunks: [],
           ...(params.taskDisplayMode ? { taskDisplayMode: params.taskDisplayMode } : {}),
           ...(slackIdentity ? { identity: slackIdentity } : {}),
           teamId: await resolveSlackStreamRecipientTeamId({
@@ -446,136 +347,56 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
           }),
           userId: message.user,
         });
-        refreshStreamedAcknowledgements(state.streamSession);
-        // startSlackStream may only buffer locally. Count delivery only after
-        // the SDK reports a real Slack response.
-        if (state.streamSession.delivered) {
-          state.observedReplyDelivery = true;
-          if (params.kind === "final") {
-            state.observedFinalReplyDelivery = true;
-          }
-        }
-        // Remember the reply text delivered through the text stream so the
-        // `message_sent` hook can fire after stopSlackStream flushes it.
-        // Only the text-stream path captures this; every deliverNormally branch
-        // already emits via deliverReplies, so capturing there would
-        // double-emit for the same payload.
-        if (hookContent) {
-          rememberStreamedDelivery(params.kind, hookContent, state.streamSession);
-        }
-        rememberDeliveredThreadTs(params.kind, streamThreadTs);
-        replyPlan.markSent();
-        deliveryTracker.markDelivered({
-          kind: params.kind,
-          payload: params.payload,
-          threadTs: streamThreadTs,
-          textOverride: text,
-        });
-        return;
+        state.streamSession = session;
       }
-      if (
-        deliveryTracker.hasDelivered({
-          kind: params.kind,
-          payload: params.payload,
-          threadTs: state.streamSession.threadTs,
-          textOverride: text,
-        })
-      ) {
-        logVerbose("slack-stream: suppressed duplicate append payload");
-        return;
+      messageId = session.streamer.ts;
+    } catch (error) {
+      state.streamFailed = true;
+      if (!(error instanceof SlackStreamNotDeliveredError)) {
+        emitStreamedDelivery(hookContent, { success: false, error: formatErrorMessage(error) });
+        throw error;
       }
-
-      if (hookContent) {
-        // appendSlackStream buffers text before attempting the Slack flush.
-        // Record first so a later successful stop can acknowledge a thrown append.
-        recordStreamedDelivery(params.kind, hookContent);
-      }
-      await appendSlackStream({
-        session: state.streamSession,
-        text: `${params.appendSeparator === false ? "" : "\n"}${text}`,
-        chunks,
-      });
-      refreshStreamedAcknowledgements(state.streamSession);
-      // appendSlackStream also buffers locally below the SDK threshold; avoid
-      // optimistic "done" status until Slack acknowledges a flush.
-      if (state.streamSession.delivered && state.streamSession.pendingText.length === 0) {
-        state.observedReplyDelivery = true;
-        if (params.kind === "final") {
-          state.observedFinalReplyDelivery = true;
-        }
-      }
-      deliveryTracker.markDelivered({
-        kind: params.kind,
-        payload: params.payload,
-        threadTs: state.streamSession.threadTs,
-        textOverride: text,
-      });
-    } catch (err) {
-      if (err instanceof SlackStreamNotDeliveredError) {
-        state.streamFailed = true;
-        if (state.streamSession) {
-          const delivered = await deliverBufferedStreamFallback({
-            session: state.streamSession,
-            err,
-            payload: params.payload,
-            kind: params.kind,
-            textOverride: text,
-          });
-          if (delivered) {
-            return;
-          }
-          throw err;
-        }
+      if (!session) {
+        // Normal delivery owns the outcome of a definitely rejected start.
         await deliverNormally({
           payload: params.payload,
           kind: params.kind,
-          forcedThreadTs: plannedThreadTs,
+          forcedThreadTs: threadTs,
         });
         return;
       }
-      runtime.error?.(
-        danger(`slack-stream: streaming API call failed: ${formatSlackError(err)}, falling back`),
-      );
-      state.streamFailed = true;
-      // Non-benign streaming errors leave `pendingText` populated with every
-      // buffered chunk since the last flush (appendSlackStream accumulates
-      // into pendingText BEFORE the SDK call, so the failing chunk is
-      // included too). Route the full buffer through the chunked fallback so
-      // earlier chunks aren't lost, then skip deliverNormally - pendingText
-      // already contains this payload's text.
-      if (state.streamSession && state.streamSession.pendingText) {
-        const bufferedFallbackErr = new SlackStreamNotDeliveredError(
-          state.streamSession.pendingText,
-          "unknown",
-        );
-        const delivered = await deliverBufferedStreamFallback({
-          session: state.streamSession,
-          err: bufferedFallbackErr,
-          payload: params.payload,
-          kind: params.kind,
-          textOverride: text,
-        });
-        if (delivered) {
-          return;
+      try {
+        const fallback = await deliverPendingStreamFallback(session, error);
+        if (!fallback && !session.stoppedBySlack) {
+          throw error;
         }
-        throw err;
+        messageId = fallback?.messageId;
+      } catch (fallbackError) {
+        emitStreamedDelivery(hookContent, {
+          success: false,
+          error: formatErrorMessage(fallbackError),
+        });
+        throw fallbackError;
       }
-      await deliverNormally({
-        payload: params.payload,
-        kind: params.kind,
-        forcedThreadTs:
-          state.streamSession?.threadTs ?? state.nativeProgressStreamThreadTs ?? plannedThreadTs,
-      });
     }
+    if (session.stoppedBySlack && session.pendingText) {
+      emitStreamedDelivery(hookContent, { success: false, error: "Stopped by Slack user" });
+      return;
+    }
+    state.observedReplyDelivery = true;
+    if (params.kind === "final") {
+      state.observedFinalReplyDelivery = true;
+    }
+    rememberDeliveredThreadTs(params.kind, threadTs);
+    replyPlan.markSent();
+    deliveryTracker.markDelivered({ ...params, threadTs, textOverride: text });
+    emitStreamedDelivery(hookContent, { success: true, ...(messageId ? { messageId } : {}) });
   };
 
   return Object.assign(state, {
-    acknowledgeStoppedStreamedDeliveries,
     deliverNormally,
-    deliverPendingStreamFallback,
     deliverWithStreaming,
-    emitAcknowledgedStreamedDeliveries,
-    emitFailedPendingStreamedDeliveries,
+    finishStream,
     hasDelivered: (params: SlackEventDeliveryAttempt) => deliveryTracker.hasDelivered(params),
     isStreamingEligible,
     markPreviewPayloadDelivered,

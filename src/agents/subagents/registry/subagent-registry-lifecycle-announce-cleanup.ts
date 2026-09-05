@@ -240,11 +240,9 @@ const finalizeSubagentCleanup = async (
   }
   if (announceOutcome === "delivered" || announceOutcome === "intentional_non_delivery") {
     const delivery = ensureDeliveryState(entry);
-    const shouldCreditDelivery =
-      announceOutcome === "delivered" &&
-      (!options?.skipAnnounce ||
-        delivery.status === "delivered" ||
-        typeof delivery.announcedAt === "number");
+    const terminalNonDelivery =
+      announceOutcome === "intentional_non_delivery" && delivery.status === "failed";
+    const shouldCreditDelivery = announceOutcome === "delivered";
     if (shouldCreditDelivery) {
       const deliveredAt = delivery.deliveredAt ?? delivery.announcedAt ?? Date.now();
       delivery.status = "delivered";
@@ -254,24 +252,17 @@ const finalizeSubagentCleanup = async (
         delivery.announcedAt = deliveredAt;
         params.persist(runId);
       }
-    }
-    if (announceOutcome === "delivered") {
       clearSubagentPendingDelivery(entry);
+      delivery.lastDropReason = undefined;
     } else {
-      // The requester-settle batch owns the real delivery now. Retire the
-      // per-child retry obligation without converting the handoff into success.
-      delivery.status = "pending";
+      // A handoff stays pending for requester-settle; explicit suppression is
+      // terminal and must not start another turn that overrides the decision.
+      delivery.status = terminalNonDelivery ? "failed" : "pending";
       delivery.disposition = "intentional_non_delivery";
       delivery.payload = undefined;
       delivery.createdAt = undefined;
       delivery.attemptCount = undefined;
       delivery.nextAttemptAt = undefined;
-    }
-    const finalDelivery = ensureDeliveryState(entry);
-    if (shouldCreditDelivery) {
-      finalDelivery.status = "delivered";
-      finalDelivery.suspendedAt = undefined;
-      finalDelivery.suspendedReason = undefined;
     }
     if (shouldCreditDelivery && !options?.skipDeliveryStatus) {
       safeSetSubagentTaskDeliveryStatus(params, {
@@ -281,12 +272,9 @@ const finalizeSubagentCleanup = async (
     } else if (announceOutcome === "intentional_non_delivery" && !options?.skipDeliveryStatus) {
       safeSetSubagentTaskDeliveryStatus(params, {
         entry,
-        deliveryStatus: "pending",
+        deliveryStatus: terminalNonDelivery ? "failed" : "pending",
+        deliveryError: terminalNonDelivery ? getDeliveryLastError(entry) : undefined,
       });
-    }
-    if (announceOutcome === "delivered") {
-      finalDelivery.lastError = undefined;
-      finalDelivery.lastDropReason = undefined;
     }
     entry.wakeOnDescendantSettle = undefined;
     const completion = ensureCompletionState(entry);
@@ -306,6 +294,7 @@ const finalizeSubagentCleanup = async (
       entry,
       cleanup,
       completedAt: Date.now(),
+      skipRequesterSettleWake: terminalNonDelivery,
     });
     // Hook loading is best-effort; durable delivery and cleanup must already
     // be terminal before plugin code can fail or stall.
@@ -408,11 +397,11 @@ export const startSubagentAnnounceCleanupFlow = (
     return true;
   }
   let suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
+  const cleanupGeneration = beginSubagentCleanup(context, runId);
+  if (cleanupGeneration === undefined) {
+    return false;
+  }
   if (typeof entry.delivery?.announcedAt === "number" || entry.delivery?.status === "delivered") {
-    const cleanupGeneration = beginSubagentCleanup(context, runId);
-    if (cleanupGeneration === undefined) {
-      return false;
-    }
     runDetachedCleanupAttempt(context, {
       runId,
       entry,
@@ -424,10 +413,6 @@ export const startSubagentAnnounceCleanupFlow = (
       },
     });
     return true;
-  }
-  const cleanupGeneration = beginSubagentCleanup(context, runId);
-  if (cleanupGeneration === undefined) {
-    return false;
   }
   const cleanupSessionEntry = suppressSessionEffects
     ? undefined
@@ -524,17 +509,22 @@ export const startSubagentAnnounceCleanupFlow = (
   const pendingPayload = loadPendingFinalDeliveryPayload(entry);
   const requesterOrigin = normalizeDeliveryContext(pendingPayload.requesterOrigin);
   let latestDeliveryError = getDeliveryLastError(entry);
+  let committedDelivery: SubagentRunRecord["delivery"];
   const finalizeAnnounceCleanup = async (announceOutcome: SubagentAnnounceFlowOutcome) => {
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
       await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
       return;
     }
-    const shouldCreditPriorDelivery =
-      announceOutcome !== "delivered" && (await hasPriorRequesterDeliveryMirror(params, entry));
+    const hasDeliveryMirror =
+      announceOutcome !== "delivered" &&
+      entry.delivery?.status !== "delivered" &&
+      (await hasPriorRequesterDeliveryMirror(params, entry));
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
       await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
       return;
     }
+    // Requester-settle can commit delivery while the mirror lookup is pending.
+    const shouldCreditPriorDelivery = entry.delivery?.status === "delivered" || hasDeliveryMirror;
     if (shouldCreditPriorDelivery) {
       latestDeliveryError = undefined;
     }
@@ -574,6 +564,7 @@ export const startSubagentAnnounceCleanupFlow = (
     isChildSessionEffectsAllowed: childSessionEffectsAllowed,
     isCompletionDeliveryAllowed: () =>
       entry.suppressCompletionDelivery !== true &&
+      (entry.delivery?.status !== "delivered" || entry.delivery === committedDelivery) &&
       context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration),
     isCompletionOwnedByRequesterYield: () =>
       entry.requesterTurnYielded === true ||
@@ -618,14 +609,18 @@ export const startSubagentAnnounceCleanupFlow = (
         retireSupersededCleanupInBackground(context, runId, entry, cleanupGeneration);
         return;
       }
+      // A stale announce cannot replace a delivery already committed by requester-settle.
+      if (entry.delivery?.status === "delivered") {
+        return;
+      }
       recordAnnounceDeliveryResult(entry, delivery, params.runs);
       if (delivery.delivered) {
         const deliveryState = ensureDeliveryState(entry);
+        // Later chunks retain this receipt owner; requester settlement replaces it.
+        committedDelivery = deliveryState;
         deliveryState.status = "delivered";
         deliveryState.announcedAt = deliveryState.deliveredAt ?? Date.now();
-        deliveryState.lastError = undefined;
-        deliveryState.suspendedAt = undefined;
-        deliveryState.suspendedReason = undefined;
+        clearSubagentPendingDelivery(entry);
         // Identified platform delivery precedes best-effort transcript
         // mirroring; task ownership must become durable at that same edge.
         params.persist(runId);
@@ -637,6 +632,9 @@ export const startSubagentAnnounceCleanupFlow = (
         return;
       }
       const deliveryState = ensureDeliveryState(entry);
+      if (delivery.reason === "delivery_suppressed") {
+        deliveryState.status = "failed";
+      }
       latestDeliveryError = formatAnnounceDeliveryError(delivery);
       if (
         deliveryState.lastError !== latestDeliveryError ||

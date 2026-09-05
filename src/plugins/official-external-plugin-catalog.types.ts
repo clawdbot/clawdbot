@@ -122,7 +122,6 @@ export type OfficialExternalPluginCatalogEntry = {
   name?: string;
   version?: string;
   description?: string;
-  icon?: string;
   source?: string;
   kind?: string;
   featured?: boolean;

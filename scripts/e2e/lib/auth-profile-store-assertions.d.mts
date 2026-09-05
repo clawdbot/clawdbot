@@ -7,6 +7,8 @@ export type AuthProfileStoreAssertionOptions = {
 
 export declare function readSharedAuthProfileStoreText(stateDir: string): string;
 
+export declare function readCanonicalAuthProfileStoreText(stateDir: string): string;
+
 export declare function assertNoLegacyPrimaryAuthRows(stateDir: string): void;
 
 export declare function assertOpenAiEnvAuthProfileStore(

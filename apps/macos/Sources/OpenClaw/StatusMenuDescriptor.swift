@@ -113,6 +113,7 @@ struct StatusMenuDescriptor {
         case talkMode
         case allSessions
         case settings
+        case connection
         case debug
         case about
         case quit
@@ -223,7 +224,7 @@ struct StatusMenuDescriptor {
     }
 
     private static func footerSection(from snapshot: Snapshot) -> Section {
-        var entries = [Entry(.action(.settings))]
+        var entries = [Entry(.action(.settings)), Entry(.action(.connection))]
         if snapshot.debugEnabled {
             entries.append(Entry(.action(.debug)))
         }

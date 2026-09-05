@@ -16,7 +16,7 @@ import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
-  attestCodexPluginThreadApps,
+  checkCodexThreadAppAvailability,
   discardUnattestedCodexPluginThread,
 } from "./plugin-thread-attestation.js";
 import {
@@ -92,6 +92,7 @@ export async function materializePendingSupervisionBranch(
   params: PendingSupervisionMaterializationParams,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   let pending = params.binding.pendingSupervisionBranch;
+  const requestOptions = { signal: params.signal, assertCurrent: params.throwIfAborted };
   const connectionFingerprint = buildCodexAppServerConnectionFingerprint(
     params.appServer,
     params.attempt.agentDir,
@@ -106,7 +107,7 @@ export async function materializePendingSupervisionBranch(
     params.client.request(
       "thread/read",
       { threadId: pending.sourceThreadId, includeTurns: true },
-      { signal: params.signal },
+      requestOptions,
     ),
   );
   params.throwIfAborted();
@@ -141,7 +142,7 @@ export async function materializePendingSupervisionBranch(
       });
     } catch (error) {
       try {
-        const current = await params.bindingStore.read(params.bindingIdentity);
+        const current = params.bindingStore.read(params.bindingIdentity);
         if (matchesPendingSupervisionState(current, pending)) {
           cleanupExpected = pending;
         } else if (matchesPendingSupervisionState(current, expected)) {
@@ -175,9 +176,7 @@ export async function materializePendingSupervisionBranch(
       "supervision-model-probe-fork",
       async () => {
         try {
-          return await params.client.request("thread/fork", probeParams, {
-            signal: params.signal,
-          });
+          return await params.client.request("thread/fork", probeParams, requestOptions);
         } catch (error) {
           if (!(error instanceof CodexAppServerRpcError)) {
             throw new CodexAppServerUnsafeSubscriptionError(
@@ -258,9 +257,7 @@ export async function materializePendingSupervisionBranch(
       "supervision-thread-start",
       async () => {
         try {
-          return await params.client.request("thread/start", startParams, {
-            signal: params.signal,
-          });
+          return await params.client.request("thread/start", startParams, requestOptions);
         } catch (error) {
           if (error instanceof CodexAppServerRpcError) {
             throw new CodexThreadStartRequestError(error);
@@ -299,7 +296,7 @@ export async function materializePendingSupervisionBranch(
     if (params.provisionalAppIds?.length) {
       try {
         await params.lifecycleTiming.measure("plugin-app-attestation", () =>
-          attestCodexPluginThreadApps({
+          checkCodexThreadAppAvailability({
             client: params.client,
             threadId: finalThreadId,
             appIds: params.provisionalAppIds ?? [],
@@ -330,7 +327,7 @@ export async function materializePendingSupervisionBranch(
         params.client.request(
           "thread/inject_items",
           { threadId: finalThreadId, items: history.responseItems },
-          { signal: params.signal },
+          requestOptions,
         ),
       );
       params.throwIfAborted();
@@ -343,21 +340,25 @@ export async function materializePendingSupervisionBranch(
     );
     let committed = false;
     try {
-      committed = await params.bindingStore.mutate(params.bindingIdentity, {
-        kind: "commit-pending-supervision-branch",
-        expected: pending,
-        threadId: finalThreadId,
-        patch: {
-          ...params.bindingPatch,
-          model: nativeModel,
-          modelProvider: bindingModelProvider,
-          historyCoveredThrough,
+      committed = await params.bindingStore.mutate(
+        params.bindingIdentity,
+        {
+          kind: "commit-pending-supervision-branch",
+          expected: pending,
+          threadId: finalThreadId,
+          patch: {
+            ...params.bindingPatch,
+            model: nativeModel,
+            modelProvider: bindingModelProvider,
+            historyCoveredThrough,
+          },
         },
-      });
+        params.throwIfAborted,
+      );
     } catch (error) {
       let current: CodexAppServerThreadBinding | undefined;
       try {
-        current = await params.bindingStore.read(params.bindingIdentity);
+        current = params.bindingStore.read(params.bindingIdentity);
       } catch (readError) {
         provisionalCleanupSafe = false;
         throw new CodexAppServerUnsafeSubscriptionError(

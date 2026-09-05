@@ -15,13 +15,16 @@ export * from "./schema/skill-history.js";
 export * from "./schema/skill-library.js";
 export * from "./schema/ui-command.js";
 export * from "./schema/board.js";
+export * from "./schema/canvas.js";
 export * from "./schema/progress-card.js";
 export {
   SessionCreatedActorSchema,
+  SessionEntryArchiveReasonSchema,
   SessionPermissionModeSchema,
   SessionOwnerSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
+  type SessionEntryArchiveReason,
   type SessionOwner,
   type SessionPermissionMode,
   type SessionRow,
@@ -37,6 +40,7 @@ export {
   SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
   SESSION_CREATE_RETRY_WINDOW_MS,
 } from "./schema/sessions-create.js";
+export { TASKS_LIST_CURSOR_MAX_LENGTH } from "./schema/tasks.js";
 export * from "./schema/projects.js";
 export * from "./migration-api.js";
 export * from "./restart-unavailable.js";

@@ -63,7 +63,7 @@ import {
   formatClawDiagnostics,
   logClawExperimentalWarning,
 } from "./claws-cli-output.js";
-import { waitUntilGatewayConfigApplied } from "./claws-cli.gateway-readiness.js";
+import { waitUntilGatewayAgentAvailable } from "./claws-cli.gateway-readiness.js";
 import type {
   ClawsAddOptions,
   ClawsExportOptions,
@@ -476,7 +476,7 @@ export async function runClawsAddCommand(
         add: async (input) => await callGatewayFromCli("cron.add", {}, input),
         list: async (agentId) =>
           await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
-        waitUntilAgentAvailable: async () => await waitUntilGatewayConfigApplied(),
+        waitUntilAgentAvailable: waitUntilGatewayAgentAvailable,
       },
     });
   } catch (error) {

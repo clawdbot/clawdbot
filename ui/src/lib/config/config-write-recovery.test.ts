@@ -103,6 +103,36 @@ function createRecoveryHarness(
 }
 
 describe("config write recovery", () => {
+  it("reconciles the bytes dispatched after original-config parsing settles", async () => {
+    vi.useFakeTimers();
+    const harness = createRecoveryHarness();
+    const { runtimeConfig, submissions } = harness;
+    const parsing = deferred<void>();
+    try {
+      await runtimeConfig.ensureLoaded();
+      runtimeConfig.state.configRawOriginalParsePending = parsing.promise;
+      runtimeConfig.patchForm(nodePath, "before-parse");
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+      expect(submissions).toHaveLength(0);
+
+      runtimeConfig.patchForm(nodePath, "dispatched");
+      parsing.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(submissions).toEqual([{ raw: rawForNode("dispatched"), baseHash: "before" }]);
+
+      runtimeConfig.patchForm(nodePath, "newer");
+      await harness.reconnect();
+      expect(runtimeConfig.state.configDraftBaseHash).toBe("own-commit");
+      expect(runtimeConfig.state.configForm).toEqual(nodeConfig("newer"));
+      expect(runtimeConfig.state.configAutoSaveStatus).toBe("paused");
+      await expect(runtimeConfig.save()).resolves.toBe(true);
+      expect(submissions[1]).toEqual({ raw: rawForNode("newer"), baseHash: "own-commit" });
+    } finally {
+      parsing.resolve();
+      harness.dispose();
+    }
+  });
+
   it("retains pending plugin allowlist ownership without removing authored entries", async () => {
     vi.useFakeTimers();
     const harness = createRecoveryHarness(

@@ -16,6 +16,7 @@ import {
   cancelCronEdit,
   createInitialCronState,
   hasCronFormErrors,
+  invalidateCronRefresh,
   loadCronJobsPage,
   loadCronModelSuggestions,
   loadCronRuns,
@@ -120,7 +121,7 @@ class CronPage extends OpenClawLightDomElement {
             this.gateway.client &&
             event.event === "cron"
           ) {
-            void this.refreshCron({ tableFilters: true });
+            void this.refreshCron({ tableFilters: true, coalesce: true });
           }
         }),
     );
@@ -132,6 +133,7 @@ class CronPage extends OpenClawLightDomElement {
 
   private resetGatewayState(snapshot?: ApplicationContext["gateway"]["snapshot"]) {
     this.clearHeartbeatScratch();
+    invalidateCronRefresh(this.cron);
     const connected = snapshot?.phase === "connected";
     this.cron = createInitialCronState({
       client: snapshot?.client ?? null,
@@ -155,7 +157,7 @@ class CronPage extends OpenClawLightDomElement {
       void this.context.agents.ensureList();
     }
     if (!this.cron.cronStatus && !this.cron.cronLoading) {
-      void this.refreshCron({ tableFilters: true });
+      void this.refreshCron({ tableFilters: true, coalesce: true });
     } else if (!this.cron.cronRuns.length && !this.cron.cronRunsLoadingMore) {
       void this.loadRuns(this.cron.cronRunsScope === "all" ? null : this.cron.cronRunsJobId);
     }
@@ -229,24 +231,24 @@ class CronPage extends OpenClawLightDomElement {
     }
   }
 
-  private async refreshCron(options: { tableFilters: boolean }) {
+  private async refreshCron(options: { tableFilters: boolean; coalesce?: boolean }) {
     const cronState = this.cron;
     if (!cronState.connected || !cronState.client) {
       return;
     }
     const activeCronJobId = cronState.cronRunsScope === "job" ? cronState.cronRunsJobId : null;
-    void this.loadRuns(activeCronJobId);
+    void this.loadRuns(activeCronJobId, options.coalesce);
     void this.context.channels.refresh(false);
     await Promise.all([
-      this.runCronTask((current) => loadCronStatus(current)),
+      this.runCronTask((current) => loadCronStatus(current, options)),
       this.runCronTask((current) =>
         loadCronJobsPage(current, { tableFilters: options.tableFilters }),
       ),
     ]);
   }
 
-  private loadRuns(jobId: string | null) {
-    return this.runCronTask((cronState) => loadCronRuns(cronState, jobId));
+  private loadRuns(jobId: string | null, coalesce = false) {
+    return this.runCronTask((cronState) => loadCronRuns(cronState, jobId, { coalesce }));
   }
 
   private async loadModelSuggestions(cronState: CronState) {

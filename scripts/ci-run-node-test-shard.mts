@@ -13,17 +13,17 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { isConstrainedCiCheckHost } from "./lib/local-check-runtime.mts";
 import { parsePositiveInt, readPositiveEnvInt } from "./lib/numeric-options.mjs";
 
-// Two concurrent plans halve the serial tail of packed jobs. Children run with
-// inner test-projects parallelism 1 so a job never exceeds two Vitest runs;
-// stacking outer and inner parallelism oversubscribes the 4 vCPU runner class.
+// CI admits at most two plans only when the actual host has room. Each plan
+// keeps inner test-projects parallelism 1; runner labels cannot establish capacity.
 const PLAN_CONCURRENCY = 2;
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
 const FS_MODULE_CACHE_WRITER_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER";
@@ -319,12 +319,28 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   const baseEnv = options.env ?? process.env;
   // Respect serial timing-sensitive bins and never clone cache slots that
   // cannot receive a plan.
-  const concurrency = Math.min(
-    plans.length,
+  const requestedConcurrency =
     options.concurrency === undefined
       ? readPositiveEnvInt("OPENCLAW_NODE_TEST_PLAN_CONCURRENCY", baseEnv, PLAN_CONCURRENCY)
-      : parsePositiveInt(options.concurrency, "Shard plan concurrency"),
+      : parsePositiveInt(options.concurrency, "Shard plan concurrency");
+  const ci = baseEnv.CI === "true" || baseEnv.GITHUB_ACTIONS === "true";
+  const hostResources = ci
+    ? { logicalCpuCount: os.availableParallelism(), totalMemoryBytes: os.totalmem() }
+    : null;
+  const concurrency = Math.min(
+    plans.length,
+    requestedConcurrency,
+    hostResources
+      ? isConstrainedCiCheckHost(hostResources)
+        ? 1
+        : PLAN_CONCURRENCY
+      : requestedConcurrency,
   );
+  if (hostResources) {
+    console.log(
+      `[shard:resources] logicalCpuCount=${hostResources.logicalCpuCount} totalMemoryBytes=${hostResources.totalMemoryBytes} requested plans=${requestedConcurrency} admitted plans=${concurrency}`,
+    );
+  }
   const runner = options.runChild ?? runChild;
   const scratchDir = options.scratchDir ?? mkdtempSync(join(tmpdir(), "openclaw-node-shard-"));
   const persistentCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
@@ -339,49 +355,60 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   let nextIndex = 0;
   let exitCode = 0;
   const workers = Array.from({ length: concurrency }, async (_, cacheSlot) => {
-    while (nextIndex < plans.length && (exitCode === 0 || options.continueOnFailure)) {
-      const index = nextIndex;
-      nextIndex += 1;
-      const entry = plans[index];
-      if (!entry) {
-        return;
-      }
-      const targetArgs = entry.kind === "target" ? [entry.target] : entry.plan.configs;
-      if (!Array.isArray(targetArgs) || targetArgs.length === 0) {
-        console.error(`Missing node test shard configs for ${entry.name}`);
-        exitCode = exitCode || 1;
-        if (!options.continueOnFailure) {
+    try {
+      while (nextIndex < plans.length && (exitCode === 0 || options.continueOnFailure)) {
+        const index = nextIndex;
+        nextIndex += 1;
+        const entry = plans[index];
+        if (!entry) {
           return;
         }
-        continue;
+        const targetArgs = entry.kind === "target" ? [entry.target] : entry.plan.configs;
+        if (!Array.isArray(targetArgs) || targetArgs.length === 0) {
+          console.error(`Missing node test shard configs for ${entry.name}`);
+          exitCode = exitCode || 1;
+          if (!options.continueOnFailure) {
+            return;
+          }
+          continue;
+        }
+        const vitestExtraArgs = [
+          baseEnv,
+          entry.kind === "group" ? entry.plan.env : undefined,
+        ].flatMap((env) => {
+          const value = parseJsonEnv(env ?? {}, VITEST_EXTRA_ARGS_ENV_KEY, []);
+          return isStringArray(value) ? value : [];
+        });
+        const args =
+          vitestExtraArgs.length > 0 ? [...targetArgs, "--", ...vitestExtraArgs] : targetArgs;
+        const childEnv = buildChildEnv(entry, baseEnv, scratchDir, index, {
+          serial: concurrency === 1,
+          cacheSlot,
+        });
+        const code = await runner(
+          args,
+          childEnv,
+          entry.name,
+          entry.kind === "group" ? (entry.timingKey ?? entry.name) : entry.name,
+        );
+        if (code !== 0) {
+          // Ordinary CI stops scheduling after failure; cache warmers explicitly
+          // continue so later groups still seed their independent transforms.
+          exitCode = exitCode || code;
+        }
       }
-      const vitestExtraArgs = [
-        baseEnv,
-        entry.kind === "group" ? entry.plan.env : undefined,
-      ].flatMap((env) => {
-        const value = parseJsonEnv(env ?? {}, VITEST_EXTRA_ARGS_ENV_KEY, []);
-        return isStringArray(value) ? value : [];
-      });
-      const args =
-        vitestExtraArgs.length > 0 ? [...targetArgs, "--", ...vitestExtraArgs] : targetArgs;
-      const childEnv = buildChildEnv(entry, baseEnv, scratchDir, index, {
-        serial: concurrency === 1,
-        cacheSlot,
-      });
-      const code = await runner(
-        args,
-        childEnv,
-        entry.name,
-        entry.kind === "group" ? (entry.timingKey ?? entry.name) : entry.name,
-      );
-      if (code !== 0) {
-        // Ordinary CI stops scheduling after failure; cache warmers explicitly
-        // continue so later groups still seed their independent transforms.
-        exitCode = exitCode || code;
-      }
+    } catch (error) {
+      // Setup failures stop admission immediately; live children still own
+      // their cache slots until every admitted worker has joined.
+      nextIndex = plans.length;
+      throw error;
     }
   });
-  await Promise.all(workers);
+  const outcomes = await Promise.allSettled(workers);
+  const rejected = outcomes.find((outcome) => outcome.status === "rejected");
+  if (rejected) {
+    throw rejected.reason;
+  }
   if (persistentCacheRoot && baseEnv[FS_MODULE_CACHE_WRITER_ENV_KEY] === "1") {
     try {
       const pruned = pruneFsModuleCache(

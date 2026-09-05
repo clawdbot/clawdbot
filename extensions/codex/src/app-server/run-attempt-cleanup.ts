@@ -89,15 +89,16 @@ export async function cleanupCodexAttempt(
     }
     await runCleanupStep("codex-trajectory-flush", () => trajectoryRecorder?.flush());
     const retainLiveIncognitoThread =
-      (terminalState.turnSucceeded ||
+      (terminalState.settledTurnStatus === "completed" ||
         (state.permissionChangeRestart === "confirmed" && !params.abortSignal?.aborted)) &&
       isIncognitoSessionKey(params.sessionKey);
-    // Incognito uses the same generation owner but retains its creation policy
-    // without idle eviction. Native-preserved and supervised lifetimes stay separate.
+    // Incognito retains its creation policy without idle eviction; supervision stays separate.
+    // Ordinary failed turns keep loaded configuration too: native unsubscribe delays unload.
+    // Retain that configuration owner so later input can reuse the same thread.
     const retainedOrdinaryThread =
       ((retainLiveIncognitoThread &&
         resourceState.thread.liveThreadEphemeralPolicy !== undefined) ||
-        (terminalState.turnSucceeded &&
+        (terminalState.settledTurnStatus !== undefined &&
           !isIncognitoSessionKey(params.sessionKey) &&
           params.cleanupBundleMcpOnRunEnd !== true &&
           resourceState.thread.liveThreadConfigFingerprint !== undefined &&
@@ -105,13 +106,11 @@ export async function cleanupCodexAttempt(
           resourceState.thread.connectionScope !== "supervision" &&
           !resourceState.thread.ringZeroConfigFingerprint)) &&
       resourceState.thread.clientId === resolveCodexAppServerClientInstanceId(resourceState.client)
-        ? (await bindingStore.read(bindingIdentity))?.threadId === resourceState.thread.threadId &&
+        ? bindingStore.read(bindingIdentity)?.threadId === resourceState.thread.threadId &&
           (await bindingStore.withLease(bindingIdentity, async () => {
             // Reset/end uses this same generation lease. Never publish an old
             // active turn after its session binding has already been retired.
-            if (
-              (await bindingStore.read(bindingIdentity))?.threadId !== resourceState.thread.threadId
-            ) {
+            if (bindingStore.read(bindingIdentity)?.threadId !== resourceState.thread.threadId) {
               return false;
             }
             return await retainCodexAppServerBindingSubscription(
@@ -159,13 +158,14 @@ export async function cleanupCodexAttempt(
     );
     await runCleanupStep("codex-turn-deadline-clear", () => deadlines.dispose());
     await runCleanupStep("codex-dynamic-tool-cleanup", async () => {
-      const cleanupReason = terminalState.turnSucceeded
-        ? "completion"
-        : state.timeout
-          ? "timeout"
-          : runAbortController.signal.aborted
-            ? "cancel"
-            : "error";
+      const cleanupReason =
+        terminalState.settledTurnStatus === "completed"
+          ? "completion"
+          : state.timeout
+            ? "timeout"
+            : runAbortController.signal.aborted
+              ? "cancel"
+              : "error";
       const cleanups = prompt.context.attemptTools.runCleanups.splice(0);
       await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(cleanupReason)));
     });
@@ -192,12 +192,6 @@ export async function cleanupCodexAttempt(
       }
     });
     await runCleanupStep("codex-sandbox-release", releaseSandboxExecEnvironment);
-    await runCleanupStep("codex-scoped-mcp-dispose", () =>
-      prompt.context.attemptTools.scopedMcpTools?.dispose(),
-    );
-    await runCleanupStep("codex-configured-mcp-dispose", () =>
-      prompt.context.attemptTools.configuredMcp?.dispose(),
-    );
     await runCleanupStep("codex-abort-listener-remove", () => {
       runAbortController.signal.removeEventListener("abort", abortListener);
     });

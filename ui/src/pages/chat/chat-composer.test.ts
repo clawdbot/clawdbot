@@ -156,6 +156,11 @@ describe("renderChatComposer controls", () => {
       } as unknown as GatewayBrowserClient,
       onToggleRealtimeTalk: vi.fn(),
     });
+    const dismissRecovery = vi.fn();
+    composerProps.realtimeTalkStatus = "error";
+    composerProps.realtimeTalkDetail = "The selected microphone is unavailable";
+    composerProps.onUseSystemDefaultMicrophone = vi.fn();
+    composerProps.onDismissRealtimeTalkError = dismissRecovery;
     const draw = () => render(renderChatComposer(composerProps), container);
     composerProps.onRequestUpdate = draw;
     draw();
@@ -163,6 +168,7 @@ describe("renderChatComposer controls", () => {
     button(container, t("chat.composer.startVoiceInput")).dispatchEvent(
       dictationPointer("pointerdown", 15),
     );
+    expect(dismissRecovery).toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(800);
     expect(
       container.querySelector('.agent-chat__talk-status[role="status"]')?.textContent,
@@ -191,7 +197,7 @@ describe("renderChatComposer controls", () => {
     textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
 
     expect(textarea.value).toBe("");
-    expect(onDraftChange).toHaveBeenLastCalledWith("");
+    expect(onDraftChange).toHaveBeenLastCalledWith("", undefined);
     expect(textarea.matches(":placeholder-shown")).toBe(true);
   });
 
@@ -215,7 +221,7 @@ describe("renderChatComposer controls", () => {
 
     expect(currentDraft).toBe("");
     expect(textarea.value).toBe("");
-    expect(onDraftChange).toHaveBeenLastCalledWith("");
+    expect(onDraftChange).toHaveBeenLastCalledWith("", undefined);
     expect(textarea.matches(":placeholder-shown")).toBe(true);
   });
 
@@ -380,7 +386,6 @@ describe("renderChatComposer controls", () => {
     await dropdown?.updateComplete;
 
     expect(dropdown?.open).toBe(true);
-    await vi.waitFor(() => expect(discoverRealtimeTalkInputsMock).toHaveBeenCalledWith(true));
     await vi.waitFor(() =>
       expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(3),
     );

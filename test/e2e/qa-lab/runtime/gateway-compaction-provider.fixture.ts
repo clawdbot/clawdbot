@@ -17,7 +17,12 @@ type CaseMode =
   | "writer-replaced"
   | "cancelled-after-commit"
   | "active-failure"
-  | "success";
+  | "success"
+  | "heartbeat-fresh-restricted"
+  | "heartbeat-upgraded-native-failure"
+  | "heartbeat-upgraded-restart"
+  | "heartbeat-substituted"
+  | "heartbeat-revoked";
 type TimelineEntry = { sequence: number; event: string; [key: string]: unknown };
 
 // The shared deferred helper imports application code before the outer isolation guard.
@@ -47,7 +52,7 @@ export async function waitForCompactionProofCheckpoint(pending: Promise<unknown>
 }
 
 export function createCompactionProofCase(mode: CaseMode) {
-  const id = randomUUID();
+  const id: string = randomUUID();
   return {
     mode,
     sessionId: id,
@@ -55,9 +60,16 @@ export function createCompactionProofCase(mode: CaseMode) {
     finalMarker: `QA-COMPACTION-FINAL-${id}`,
     recoveryMarker: `QA-COMPACTION-NEXT-${id}`,
     overflowSeen: gate(),
+    beforeHookHeld: gate(),
+    releaseBeforeHook: gate(),
+    beforeHookSettled: gate(),
     summaryHeld: gate(),
     releaseSummary: gate(),
     summarySettled: gate(),
+    hostCommitHeld: gate(),
+    releaseHostCommit: gate(),
+    nativeCompactRequestHeld: gate(),
+    releaseNativeCompactRequest: gate(),
     afterHookHeld: gate(),
     releaseAfterHook: gate(),
     afterHookSettled: gate(),
@@ -116,6 +128,43 @@ export function stageCompactionProofHook(workspaceDir: string, baseUrl: string) 
     if (!response.ok) {
       throw new Error("Compaction proof hook checkpoint failed");
     }
+  }
+}
+`,
+  );
+  return hookName;
+}
+
+/** Hold the real context-engine before hook so the caller can mutate exact run authority. */
+export function stageHeartbeatCompactionProofHook(workspaceDir: string, baseUrl: string) {
+  const hookName = "qa-heartbeat-compaction-authority-barrier";
+  const hookDir = path.join(workspaceDir, "hooks", hookName);
+  mkdirSync(hookDir, { recursive: true });
+  writeFileSync(
+    path.join(hookDir, "HOOK.md"),
+    [
+      "---",
+      `name: ${hookName}`,
+      "description: Hold heartbeat compaction before provider dispatch",
+      'metadata: {"openclaw":{"events":["gateway:startup","session:compact:before"]}}',
+      "---",
+      "",
+    ].join("\n"),
+  );
+  const hookTimeoutMs = 3 * COMPACTION_PROOF_TIMEOUT_MS;
+  writeFileSync(
+    path.join(hookDir, "handler.js"),
+    `export default async function heartbeatCompactionBarrier(event) {
+  const phase = event.type === "gateway" ? "ready" : "before-held";
+  const response = await fetch(${JSON.stringify(`${baseUrl}/qa/compaction-hook/`)} + phase, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sessionKey: event.sessionKey, sessionId: event.context.sessionId }),
+    signal: AbortSignal.timeout(${hookTimeoutMs}),
+  });
+  await response.text();
+  if (!response.ok) {
+    throw new Error("Heartbeat compaction proof hook checkpoint failed");
   }
 }
 `,
@@ -202,6 +251,53 @@ export async function startCompactionProofProvider(
       const proof = active;
       assert.ok(proof, "Provider request arrived outside an owned case");
       assert.ok(proof.timeline.length < 64, "Unexpected provider retry loop");
+      if (request.url === "/v1/qa/host-compaction-commit") {
+        assert.equal(proof.mode, "heartbeat-upgraded-restart");
+        assert.equal(body.sessionKey, proof.sessionKey, "Host commit changed its session key");
+        assert.equal(body.sessionId, proof.sessionId, "Host commit changed its session identity");
+        recordCompactionProofCheckpoint(proof, "host-compaction-commit-held");
+        proof.hostCommitHeld.resolve();
+        await proof.releaseHostCommit.promise;
+        writeJson(response, 200, { ok: true });
+        return;
+      }
+      if (request.url === "/v1/qa/compaction-hook/before-held") {
+        assert.equal(body.sessionKey, proof.sessionKey, "Before hook changed its session key");
+        assert.equal(body.sessionId, proof.sessionId, "Before hook changed its session identity");
+        recordCompactionProofCheckpoint(proof, "before-hook-held");
+        proof.beforeHookHeld.resolve();
+        await proof.releaseBeforeHook.promise;
+        recordCompactionProofCheckpoint(proof, "before-hook-settled");
+        proof.beforeHookSettled.resolve();
+        writeJson(response, 200, { ok: true });
+        return;
+      }
+      if (request.url === "/v1/qa/native-compact/held") {
+        assert.ok(
+          proof.mode === "heartbeat-upgraded-native-failure",
+          "Native compaction barrier reached outside the upgraded case",
+        );
+        assert.equal(
+          body.threadId,
+          "thread-qa-codex-heartbeat",
+          "Native compaction changed Codex thread identity",
+        );
+        assert.ok(
+          typeof body.requestId === "number" || typeof body.requestId === "string",
+          "Native compaction callback omitted its request id",
+        );
+        recordCompactionProofCheckpoint(proof, "native-compact-request-held", {
+          requestId: body.requestId,
+          threadId: body.threadId,
+        });
+        proof.nativeCompactRequestHeld.resolve();
+        await proof.releaseNativeCompactRequest.promise;
+        recordCompactionProofCheckpoint(proof, "native-compact-request-released", {
+          requestId: body.requestId,
+        });
+        writeJson(response, 200, { ok: true });
+        return;
+      }
       if (
         request.url === "/v1/qa/compaction-hook/held" ||
         request.url === "/v1/qa/compaction-hook/settled"
@@ -216,7 +312,10 @@ export async function startCompactionProofProvider(
           });
           recordCompactionProofCheckpoint(proof, "after-hook-held");
           proof.afterHookHeld.resolve();
-          if (proof.mode === "cancelled-after-commit") {
+          if (
+            proof.mode === "cancelled-after-commit" ||
+            proof.mode === "heartbeat-upgraded-native-failure"
+          ) {
             await proof.releaseAfterHook.promise;
           }
         } else {
@@ -239,7 +338,12 @@ export async function startCompactionProofProvider(
         (item) => item.role === "user" && textOf(item).includes(proof.recoveryMarker),
       );
       if (SUMMARY_INSTRUCTIONS.test(instructions)) {
-        assert.ok(proof.normalRequests > 0, "Compaction started before the injected HTTP overflow");
+        if (!proof.mode.startsWith("heartbeat-")) {
+          assert.ok(
+            proof.normalRequests > 0,
+            "Compaction started before the injected HTTP overflow",
+          );
+        }
         proof.summaryRequests += 1;
         recordCompactionProofCheckpoint(proof, "summary-held", {
           bytes,
@@ -325,13 +429,22 @@ export async function startCompactionProofProvider(
       active = proof;
     },
     async stop() {
+      active?.releaseBeforeHook.resolve();
       active?.releaseSummary.resolve();
+      active?.releaseHostCommit.resolve();
+      active?.releaseNativeCompactRequest.resolve();
       active?.releaseAfterHook.resolve();
       active?.releaseSuccessor.resolve();
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      });
       await Promise.all(requests);
     },
   };

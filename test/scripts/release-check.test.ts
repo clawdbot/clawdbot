@@ -1,5 +1,5 @@
 // Release Check tests cover release check script behavior.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   copyFileSync,
   mkdtempSync,
@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { create } from "tar";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import {
@@ -35,7 +36,7 @@ function requirePluginEntries(config: { plugins?: { entries?: Record<string, unk
 }
 
 describe("release-check", () => {
-  it("loads sparse release tooling and checks the separate target SDK inventory", () => {
+  it("loads sparse release tooling and checks the separate target SDK and worker inventories", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-target-"));
     try {
       const toolingRoot = join(root, "tooling");
@@ -59,7 +60,12 @@ describe("release-check", () => {
       symlinkSync(resolve("node_modules"), join(toolingRoot, "node_modules"), "junction");
       mkdirSync(join(root, "scripts", "lib"), { recursive: true });
       mkdirSync(join(root, "extensions"));
-      writeFileSync(join(root, "package.json"), JSON.stringify({ files: ["dist"] }));
+      const packageJson = JSON.stringify({
+        name: "openclaw",
+        version: "2026.9.1",
+        files: ["dist"],
+      });
+      writeFileSync(join(root, "package.json"), packageJson);
       writeFileSync(
         join(root, "scripts/lib/plugin-sdk-entrypoints.json"),
         JSON.stringify(["target-private", "target-public"]),
@@ -104,6 +110,57 @@ describe("release-check", () => {
           "dist/plugin-sdk/target-public.js",
         ],
       });
+
+      copyFileSync("appcast.xml", join(root, "appcast.xml"));
+      mkdirSync(join(root, "src/shared"), { recursive: true });
+      const packedRoot = join(root, "package");
+      const packedFiles = {
+        "package.json": packageJson,
+        "dist/entry.js": 'import "./cli/run-main.js";',
+        "dist/cli/run-main.js": "export {};",
+        "dist/run-gateway.js": "const GATEWAY_AUTH_MODES = []; function addGatewayRunCommand() {}",
+        "dist/worker/worker.mjs": "export {};",
+        "dist/worker/workspace-rsync-receiver.mjs": "export {};",
+      };
+      for (const [relativePath, source] of Object.entries(packedFiles)) {
+        const destination = join(packedRoot, relativePath);
+        mkdirSync(dirname(destination), { recursive: true });
+        writeFileSync(destination, source);
+      }
+      const tarball = join(root, "target.tgz");
+      create({ cwd: root, file: tarball, gzip: true, sync: true }, ["package"]);
+      for (const declaresLauncher of [false, true]) {
+        writeFileSync(
+          join(root, "src/shared/worker-bundle-hash.ts"),
+          'export const WORKER_BUNDLE_ENTRY_PATH = "worker.mjs";\n' +
+            'export const WORKER_BUNDLE_RSYNC_RECEIVER_PATH = "workspace-rsync-receiver.mjs";\n' +
+            (declaresLauncher
+              ? 'export const WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH = "github-exec-launcher.mjs";\n'
+              : ""),
+        );
+        const result = spawnSync(
+          process.execPath,
+          [
+            "--import",
+            join(toolingRoot, "scripts/tsx.mjs"),
+            join(toolingRoot, "scripts/release-check.ts"),
+            "--tarball",
+            tarball,
+          ],
+          {
+            cwd: root,
+            encoding: "utf8",
+            env: { ...process.env, TSX_TSCONFIG_PATH: join(toolingRoot, "tsconfig.json") },
+          },
+        );
+        expect(result.status).toBe(1);
+        // The two-artifact target reaches the next check; the fixture omits SDK output.
+        expect(result.stderr).toContain(
+          declaresLauncher
+            ? "Worker deploy artifact dist/worker/github-exec-launcher.mjs is missing."
+            : "release-check: packed dist/plugin-sdk directory not found.",
+        );
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

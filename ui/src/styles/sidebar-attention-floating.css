@@ -36,10 +36,6 @@ html.openclaw-native-web-chrome openclaw-sidebar-attention.sidebar-attention--fl
   );
 }
 
-:is(.shell--onboarding, .shell--settings) openclaw-sidebar-attention.sidebar-attention--floating {
-  inset: auto auto max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
-}
-
 /* A stale-client refresh card shares the collapsed overlay strip's row; drop it
    below the fixed attention cluster instead of rendering both at the origin. */
 .sidebar-attention--floating ~ .sidebar-update-card--floating .sidebar-update-card {

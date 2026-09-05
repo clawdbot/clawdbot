@@ -176,6 +176,7 @@ function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
     throw new RequestScopedSubagentRuntimeError();
   };
   return {
+    complete: unavailable,
     run: unavailable,
     waitForRun: unavailable,
     getSessionMessages: unavailable,

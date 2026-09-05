@@ -6,7 +6,6 @@ import {
   type Question,
   type QuestionRecord,
   type QuestionRequestParams,
-  type QuestionResolveParams,
   validateQuestionGetParams,
   validateQuestionListParams,
   validateQuestionRequestParams,
@@ -347,7 +346,7 @@ export function createQuestionHandlers(
         validationError("question.waitAnswer", validateQuestionWaitAnswerParams.errors, respond);
         return;
       }
-      const request = params as { id: string; timeoutMs?: number };
+      const request = params;
       try {
         const question = manager.get(request.id);
         if (question) {
@@ -362,13 +361,18 @@ export function createQuestionHandlers(
             return;
           }
         }
-        const answer = await manager.waitAnswer(request.id, request.timeoutMs);
-        const resolvedQuestion = manager.get(request.id);
-        if (resolvedQuestion) {
+        const answer = await manager.waitAnswer(
+          request.id,
+          request.timeoutMs,
+          request.includeResolutionId,
+        );
+        // Reauthorize the original question's immutable routing, not a getter
+        // that could expire/cancel it merely because this observer stopped.
+        if (question) {
           const authorizationError = authorizeQuestionRecord({
             cfg: context.getRuntimeConfig(),
             client,
-            question: resolvedQuestion,
+            question,
             access: "read",
           });
           if (authorizationError) {
@@ -388,7 +392,7 @@ export function createQuestionHandlers(
         validationError("question.resolve", validateQuestionResolveParams.errors, respond);
         return;
       }
-      const request = params as QuestionResolveParams;
+      const request = params;
       try {
         const question = manager.get(request.id);
         if (question) {
@@ -423,7 +427,9 @@ export function createQuestionHandlers(
           }
           respond(
             true,
-            manager.resolve(request.id, request.answers, request.resolvedBy),
+            manager.resolve(request.id, request.answers, request.resolvedBy, {
+              resolutionId: request.resolutionId,
+            }),
             undefined,
           );
           return;
@@ -458,15 +464,18 @@ export function createQuestionHandlers(
             request.id,
             { answers: { [secretQuestion.questionId]: ["stored"] } },
             request.resolvedBy,
-            () => {
-              storeWriteService.write({
-                name: binding.name,
-                value,
-                kind: "secret",
-                ...(allowedHosts !== undefined ? { allowedHosts } : {}),
-                updatedBy: storeWriteService.resolveUpdatedBy(client),
-              });
-              saved = true;
+            {
+              resolutionId: request.resolutionId,
+              commit: () => {
+                storeWriteService.write({
+                  name: binding.name,
+                  value,
+                  kind: "secret",
+                  ...(allowedHosts !== undefined ? { allowedHosts } : {}),
+                  updatedBy: storeWriteService.resolveUpdatedBy(client),
+                });
+                saved = true;
+              },
             },
           );
           await storeWriteService.reloadReference(binding.name);

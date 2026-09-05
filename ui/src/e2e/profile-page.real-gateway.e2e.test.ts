@@ -56,8 +56,8 @@ suite.define(() => {
         agents: {
           defaults: { workspace: state.workspaceDir },
           entries: {
-            main: { default: true, name: "Main", workspace: state.workspaceDir },
-            clipper: { name: "Clipper", workspace: clipperWorkspace },
+            main: { name: "Main", workspace: state.workspaceDir },
+            clipper: { default: true, name: "Clipper", workspace: clipperWorkspace },
           },
         },
         gateway: {

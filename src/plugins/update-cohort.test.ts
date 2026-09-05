@@ -1,9 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { attachPluginInstallOwnerMigrations } from "./install-transaction.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const syncPluginsForUpdateChannelMock = vi.fn();
 const updateNpmInstalledPluginsMock = vi.fn();
@@ -76,8 +80,10 @@ function installedIndex(params: {
 }
 
 describe("plugin release cohort package reconciliation", () => {
+  const tempDirs: string[] = [];
+  afterEach(() => cleanupTrackedTempDirs(tempDirs));
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     collectMissingPluginInstallPayloadsMock.mockResolvedValue([]);
     syncPluginsForUpdateChannelMock.mockImplementation(async ({ config }) => ({
       config,
@@ -91,6 +97,87 @@ describe("plugin release cohort package reconciliation", () => {
       },
     }));
   });
+
+  it.each(["missing", "replaced"] as const)(
+    "reconciles %s payloads against the new package metadata",
+    async (state) => {
+      const { loadInstalledPluginIndex } = await vi.importActual<
+        typeof import("./installed-plugin-index.js")
+      >("./installed-plugin-index.js");
+      loadInstalledPluginIndexMock.mockImplementation(loadInstalledPluginIndex);
+      const root = fs.realpathSync(makeTrackedTempDir("openclaw-cohort", tempDirs));
+      const installPath = path.join(root, "package");
+      const env = {
+        ...process.env,
+        HOME: root,
+        OPENCLAW_STATE_DIR: path.join(root, "state"),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
+      };
+      const writePayload = (pluginId: string) => {
+        fs.mkdirSync(installPath, { recursive: true });
+        fs.writeFileSync(
+          path.join(installPath, "package.json"),
+          JSON.stringify({
+            name: "@example/cohort",
+            version: "1.0.0",
+            openclaw: { extensions: ["./index.js"] },
+          }),
+        );
+        fs.writeFileSync(
+          path.join(installPath, "openclaw.plugin.json"),
+          JSON.stringify({ id: pluginId, configSchema: { type: "object" } }),
+        );
+        fs.writeFileSync(path.join(installPath, "index.js"), "module.exports = {};\n");
+      };
+      if (state === "replaced") {
+        writePayload("retired-child");
+      }
+      const records = {
+        cohort: { source: "npm", spec: "@example/cohort", installPath },
+      } satisfies Record<string, PluginInstallRecord>;
+      const config = {
+        plugins: {
+          installs: records,
+          entries: { "retired-child": { enabled: true }, unrelated: { enabled: false } },
+        },
+      } satisfies OpenClawConfig;
+      if (state === "missing") {
+        collectMissingPluginInstallPayloadsMock.mockResolvedValueOnce([
+          { pluginId: "cohort", installPath, reason: "missing-package-dir" },
+        ]);
+      }
+      updateNpmInstalledPluginsMock.mockImplementation(async ({ config: current }) => {
+        writePayload("current-child");
+        return {
+          config: {
+            ...current,
+            plugins: {
+              ...current.plugins,
+              installs: { cohort: { ...records.cohort, version: "1.0.0" } },
+            },
+          },
+          changed: true,
+          outcomes: [],
+        };
+      });
+
+      const result = await withPluginCache(createPluginCache(), () =>
+        convergePluginReleaseCohort({
+          config,
+          installRecords: records,
+          channel: "stable",
+          timeoutMs: 60_000,
+          env,
+        }),
+      );
+
+      expect(result.config.plugins?.entries?.unrelated).toEqual({ enabled: false });
+      if (state === "replaced") {
+        expect(result.config.plugins?.entries).not.toHaveProperty("retired-child");
+      }
+      expect(result.config.plugins?.installs?.cohort?.version).toBe("1.0.0");
+    },
+  );
 
   it("removes the legacy load path after a successful post-core owner migration", async () => {
     const legacyRoot = "/plugins/qqbot-legacy";

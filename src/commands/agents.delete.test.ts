@@ -18,7 +18,7 @@ import {
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
-  listSessionEntriesCore,
+  listSessionEntriesReadOnly,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -34,6 +34,10 @@ import {
   listOpenClawRegisteredAgentDatabases,
   registerOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   baseConfigSnapshot,
@@ -202,7 +206,7 @@ function expectSessionStore(
   expect(
     Object.fromEntries(
       [...agentIds].flatMap((storeAgentId) =>
-        listSessionEntriesCore({
+        listSessionEntriesReadOnly({
           agentId: storeAgentId,
           storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: storeAgentId }),
         }).map(({ entry, sessionKey }) => [sessionKey, entry]),
@@ -769,6 +773,44 @@ describe("agents delete command", () => {
       expect(readAgentProvenance("child")).toMatchObject({ creatorAgentId: "ops" });
     });
   });
+
+  it.each(["agent", "sessions"])(
+    "retains a deleted agent's %s directory containing a surviving database",
+    async (directory) => {
+      await withStateDirEnv("openclaw-agents-delete-foreign-directory-", async ({ stateDir }) => {
+        const retainedDirectory = path.join(stateDir, "agents", "ops", directory);
+        const cfg: OpenClawConfig = {
+          agents: {
+            entries: {
+              main: { default: true, workspace: path.join(stateDir, "workspace-main") },
+              ops: { workspace: path.join(stateDir, "workspace-ops") },
+            },
+          },
+        };
+        await arrangeAgentsDeleteTest({ stateDir, cfg, sessions: {} });
+        const foreign = openOpenClawAgentDatabase({
+          agentId: "main",
+          path: path.join(retainedDirectory, "kept.sqlite"),
+        });
+        closeOpenClawAgentDatabaseByPath(foreign.path);
+        fsSafeMocks.movePathToTrash.mockImplementation(async (targetPath) => {
+          const destination = `${targetPath}.trashed`;
+          await fs.rename(targetPath, destination);
+          return destination;
+        });
+
+        await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+        expect(readJsonLogs()[0]).not.toHaveProperty("purgeFailed");
+        expect(fsSafeMocks.movePathToTrash).not.toHaveBeenCalledWith(
+          retainedDirectory,
+          expect.anything(),
+        );
+        expect((await fs.stat(foreign.path)).isFile()).toBe(true);
+        expect(readAgentDeletionJournal("ops")?.cleanupCompleted).toBe(true);
+      });
+    },
+  );
 
   it("resumes offline deletion after cleanup was interrupted", async () => {
     await withStateDirEnv("openclaw-agents-delete-recovery-", async ({ stateDir }) => {

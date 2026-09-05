@@ -108,7 +108,7 @@ describe("exhausted delivery producer recovery", () => {
       now += 1;
       await enqueue("later-control");
       await queueStorage.reserveDeliveryAttempt("later-control", 1, tmpDir());
-      now += 30_000;
+      now += 60_000;
       closeOpenClawStateDatabaseForTest();
 
       const log = await recover(mode);
@@ -136,7 +136,7 @@ describe("exhausted delivery producer recovery", () => {
     "%s cannot terminalize a replacement producer acquired during recovery admission",
     async (mode) => {
       const originalClaim = await reserveProducer("replaced-producer");
-      now += 30_001;
+      now += 60_001;
       let replacementClaim: string | undefined;
       resolveAdapter.mockReturnValue({
         durableFinal: {
@@ -199,7 +199,7 @@ describe("exhausted delivery producer recovery", () => {
       const id = "unfinished-owner-settlement";
       const completion = await preparePendingFinal(id);
       const fault = vi
-        .spyOn(sessionAccessor, "updateSessionEntry")
+        .spyOn(sessionAccessor, "patchSessionEntryCore")
         .mockRejectedValueOnce(new Error("synthetic owner storage unavailable"));
 
       await recover(mode);
@@ -248,7 +248,7 @@ describe("exhausted delivery producer recovery", () => {
           status: "suppressed",
           reason: "no_visible_payload",
         });
-        vi.spyOn(sessionAccessor, "updateSessionEntry").mockRejectedValueOnce(
+        vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockRejectedValueOnce(
           new Error("synthetic rejection projection failure"),
         );
         throw new PlatformMessageNotDispatchedError("synthetic permanent rejection", {
@@ -297,7 +297,7 @@ describe("exhausted delivery producer recovery", () => {
       const load = queueStorage.loadUnfinishedDelivery;
       vi.spyOn(queueStorage, "loadUnfinishedDelivery").mockImplementationOnce(async (...args) => {
         const snapshot = await load(...args);
-        now += 29_999;
+        now += 59_999;
         expect(await renewDeliveryPlatformSendLease(id, tmpDir(), claimId)).toBeGreaterThan(now);
         now += 2;
         return snapshot;
@@ -306,7 +306,7 @@ describe("exhausted delivery producer recovery", () => {
       expect(await queueStorage.loadPendingDelivery(id, tmpDir())).toMatchObject({
         recoveryState: "send_attempt_started",
         platformSendAttemptId: claimId,
-        availableAt: startTime + 59_999,
+        availableAt: startTime + 119_999,
       });
     },
   );
@@ -338,8 +338,8 @@ describe("exhausted delivery producer recovery", () => {
     await preparePendingFinal(id);
     const entered = createDeferred();
     const release = createDeferred();
-    const update = sessionAccessor.updateSessionEntry;
-    vi.spyOn(sessionAccessor, "updateSessionEntry").mockImplementationOnce(async (...args) => {
+    const update = sessionAccessor.patchSessionEntryCore;
+    vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementationOnce(async (...args) => {
       entered.resolve();
       await release.promise;
       return update(...args);
@@ -375,7 +375,7 @@ describe("exhausted delivery producer recovery", () => {
     await fs.writeFile(artifact, "audio-bytes");
     const completion = await preparePendingFinal(id, [{ text: "reply", mediaUrl: artifact }]);
     const fault = vi
-      .spyOn(sessionAccessor, "updateSessionEntry")
+      .spyOn(sessionAccessor, "patchSessionEntryCore")
       .mockRejectedValueOnce(new Error("synthetic owner fault"));
     await recover("startup");
     const database = openOpenClawStateDatabase({

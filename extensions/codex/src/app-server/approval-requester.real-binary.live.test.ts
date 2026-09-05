@@ -144,7 +144,7 @@ describeLive("Codex app-server approval requester real-binary bridge", () => {
         });
 
         expect(result.terminal.kind, JSON.stringify(result.terminal)).toBe("ok");
-        const binding = await bindingStore.read(sessionBindingIdentity(params));
+        const binding = bindingStore.read(sessionBindingIdentity(params));
         expect(binding).toMatchObject({ cwd: workspace, model: modelId });
         expect(binding?.threadId).toEqual(expect.any(String));
         expect(await fs.readFile(target, "utf8")).toBe("REAL_BINARY_OWNER_OK\n");

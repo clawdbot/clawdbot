@@ -19,9 +19,11 @@ import {
 } from "../generate-npm-package-lock.mts";
 import { resolveNpmRunner } from "../npm-runner.mts";
 import type { NpmRunnerParams } from "../npm-runner.mts";
+import { mapPluginCatalogEntries } from "./bundled-plugin-build-entries.mjs";
 import {
   listPluginNpmRuntimeBuildOutputs,
   resolvePluginNpmRuntimeBuildPlan,
+  toPackageRuntimeEntry,
 } from "./plugin-npm-runtime-build.mts";
 import type { PluginNpmRuntimeBuildPlan, PluginPackageJson } from "./plugin-npm-runtime-build.mts";
 import { pnpmLockfileDocuments } from "./pnpm-lockfile-documents.mjs";
@@ -170,11 +172,14 @@ export function resolvePluginRuntimeChannelMetadata(
   const packagedChannel: JsonRecord = { ...channel };
   for (const metadataKey of ["configuredState", "persistedAuthState"]) {
     const metadata = channel[metadataKey];
+    // Incomplete pairs may be env-backed; only module-backed probes need outputs.
     if (
       !Object.hasOwn(channel, metadataKey) ||
       !isRecord(metadata) ||
       typeof metadata.specifier !== "string" ||
-      !metadata.specifier.trim()
+      !metadata.specifier.trim() ||
+      typeof metadata.exportName !== "string" ||
+      !metadata.exportName.trim()
     ) {
       continue;
     }
@@ -1049,7 +1054,18 @@ export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
   const pluginId =
     typeof manifest.id === "string" && manifest.id ? manifest.id : path.basename(packageDir);
   const generatedChannelConfigs = readGeneratedBundledChannelConfigs(repoRoot).get(pluginId);
-  const augmentedManifest = mergeGeneratedChannelConfigs(manifest, generatedChannelConfigs);
+  const runtimePlan =
+    manifest.providerCatalogEntry || manifest.capabilityCatalogEntry
+      ? resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir })
+      : null;
+  const augmentedManifest = mergeGeneratedChannelConfigs(
+    runtimePlan
+      ? mapPluginCatalogEntries(manifest, (entry: string) =>
+          toPackageRuntimeEntry(entry, runtimePlan.runtimeFormat),
+        )
+      : manifest,
+    generatedChannelConfigs,
+  );
   const changed = JSON.stringify(augmentedManifest) !== JSON.stringify(manifest);
   return {
     manifestPath,

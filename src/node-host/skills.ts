@@ -9,7 +9,8 @@ import {
   NODE_SKILL_MAX_TOTAL_BYTES,
   NODE_SKILL_NAME_RE,
 } from "../shared/node-skill-constraints.js";
-import { loadSkillsFromDirSafe } from "../skills/loading/local-loader.js";
+import { loadSingleSkillDirectory } from "../skills/loading/local-loader.js";
+import { tryRealpath } from "../skills/loading/symlink-targets.js";
 import { resolveConfigDir } from "../utils.js";
 
 type ScanNodeHostedSkillsOptions = {
@@ -42,7 +43,10 @@ export function resolveNodeHostedSkillDirectory(locator: string, nodeId: string)
   }
 }
 
-function listCandidateSkillFiles(skillsDir: string, warn: (message: string) => void): string[] {
+function listCandidateSkills(
+  skillsDir: string,
+  warn: (message: string) => void,
+): Array<{ name: string; filePath: string }> {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(skillsDir, { withFileTypes: true });
@@ -52,7 +56,7 @@ function listCandidateSkillFiles(skillsDir: string, warn: (message: string) => v
     }
     return [];
   }
-  const candidates: string[] = [];
+  const candidates: Array<{ name: string; filePath: string }> = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name.startsWith(".")) {
       continue;
@@ -60,13 +64,14 @@ function listCandidateSkillFiles(skillsDir: string, warn: (message: string) => v
     const filePath = path.join(skillsDir, entry.name, "SKILL.md");
     try {
       if (fs.statSync(filePath, { throwIfNoEntry: false })?.isFile()) {
-        candidates.push(filePath);
+        candidates.push({ name: entry.name, filePath });
       }
     } catch (error) {
       warn(`node host skill skipped (${filePath}): ${String(error)}`);
     }
   }
-  return candidates.toSorted((left, right) => left.localeCompare(right, "en"));
+  // Accepted names must match their unique child directories, so this is descriptor order.
+  return candidates.toSorted((left, right) => left.name.localeCompare(right.name, "en"));
 }
 
 export function scanNodeHostedSkills(
@@ -82,75 +87,40 @@ export function scanNodeHostedSkills(
   } catch (error) {
     warn(`node host skill scan skipped (${rootSkillFile}): ${String(error)}`);
   }
-  const candidates = listCandidateSkillFiles(skillsDir, warn);
-  if (candidates.length === 0) {
-    return [];
-  }
-
-  const loadedSkills: ReturnType<typeof loadSkillsFromDirSafe>["skills"] = [];
-  const frontmatterByFilePath = new Map<string, Record<string, string>>();
-  for (const candidate of candidates) {
-    let invalidFrontmatter = false;
-    const candidatePath = path.resolve(candidate);
-    const loaded = loadSkillsFromDirSafe({
-      dir: path.dirname(candidate),
-      source: "openclaw-node",
-      maxBytes: NODE_SKILL_MAX_CONTENT_BYTES,
-      onDiagnostic: (diagnostic) => {
-        if (path.resolve(diagnostic.path) === candidatePath) {
-          invalidFrontmatter = true;
-        }
-        warn(`node host skill skipped (${diagnostic.path}): ${diagnostic.message}`);
-      },
-    });
-    const skill = loaded.skills.find((entry) => path.resolve(entry.filePath) === candidatePath);
-    if (skill) {
-      loadedSkills.push(skill);
-      const frontmatter = loaded.frontmatterByFilePath.get(skill.filePath);
-      if (frontmatter) {
-        frontmatterByFilePath.set(skill.filePath, frontmatter);
+  const descriptors: NodeSkillDescriptor[] = [];
+  let totalBytes = 0;
+  for (const candidate of listCandidateSkills(skillsDir, warn)) {
+    const skillDir = path.dirname(candidate.filePath);
+    const rootRealPath = tryRealpath(skillDir);
+    let diagnosed = false;
+    const loaded = rootRealPath
+      ? loadSingleSkillDirectory({
+          skillDir,
+          rootRealPath,
+          source: "openclaw-node",
+          maxBytes: NODE_SKILL_MAX_CONTENT_BYTES,
+          onDiagnostic: (diagnostic) => {
+            diagnosed = true;
+            warn(`node host skill skipped (${diagnostic.path}): ${diagnostic.message}`);
+          },
+        })
+      : null;
+    if (!loaded) {
+      if (!diagnosed) {
+        warn(`node host skill skipped (${candidate.filePath}): has invalid or missing frontmatter`);
       }
       continue;
     }
-    let size: number | undefined;
-    try {
-      size = fs.statSync(candidate, { throwIfNoEntry: false })?.size;
-    } catch (error) {
-      warn(`node host skill skipped (${candidate}): ${String(error)}`);
-      continue;
-    }
-    const reason = invalidFrontmatter
-      ? null
-      : typeof size === "number" && size > NODE_SKILL_MAX_CONTENT_BYTES
-        ? `exceeds ${NODE_SKILL_MAX_CONTENT_BYTES} bytes`
-        : "has invalid or missing frontmatter";
-    if (reason) {
-      warn(`node host skill skipped (${candidate}): ${reason}`);
-    }
-  }
-
-  const descriptors: NodeSkillDescriptor[] = [];
-  const seenNames = new Set<string>();
-  let totalBytes = 0;
-  for (const skill of loadedSkills.toSorted((left, right) =>
-    left.name.localeCompare(right.name, "en"),
-  )) {
-    const frontmatter = frontmatterByFilePath.get(skill.filePath);
+    // Metadata and advertised instructions must come from the same bounded descriptor read.
+    const { skill, frontmatter, content } = loaded;
     if (
-      frontmatter?.name?.trim() !== skill.name ||
+      frontmatter.name?.trim() !== skill.name ||
       frontmatter.description?.trim() !== skill.description ||
-      path.basename(skill.baseDir) !== skill.name
+      candidate.name !== skill.name
     ) {
       warn(
         `node host skill skipped (${skill.filePath}): directory, name, and frontmatter must match`,
       );
-      continue;
-    }
-    let content: string;
-    try {
-      content = fs.readFileSync(skill.filePath, "utf8");
-    } catch (error) {
-      warn(`node host skill skipped (${skill.filePath}): ${String(error)}`);
       continue;
     }
     const contentBytes = Buffer.byteLength(content, "utf8");
@@ -163,10 +133,6 @@ export function scanNodeHostedSkills(
       warn(`node host skill skipped (${skill.filePath}): invalid name, description, or size`);
       continue;
     }
-    if (seenNames.has(skill.name)) {
-      warn(`node host skill skipped (${skill.filePath}): duplicate name ${skill.name}`);
-      continue;
-    }
     if (descriptors.length >= NODE_SKILL_MAX_COUNT) {
       warn(`node host skill skipped (${skill.filePath}): exceeds ${NODE_SKILL_MAX_COUNT} skills`);
       continue;
@@ -177,7 +143,6 @@ export function scanNodeHostedSkills(
       );
       continue;
     }
-    seenNames.add(skill.name);
     totalBytes += contentBytes;
     descriptors.push({ name: skill.name, description: skill.description, content });
   }

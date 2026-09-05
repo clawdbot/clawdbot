@@ -21,8 +21,11 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerPermissionSelectionTest {
   private val json = chatControllerTestJson
   private val permissionCapabilities = setOf("session-settings-contract", "session-settings-cas-v1")
@@ -671,6 +674,7 @@ class ChatControllerPermissionSelectionTest {
       )
       assertTrue(controller.pendingSessionSettingsKeys.value.isEmpty())
       if (!sendAccepted) assertTrue(controller.sendMessageAwaitAcceptance("keep this draft", "off", emptyList()))
+      runCurrent()
       assertEquals(1, gateway.callCount("chat.send"))
       assertEquals(
         if (queueFastMode) ChatFastMode.On else ChatFastMode.Off,
@@ -1194,7 +1198,7 @@ class ChatControllerPermissionSelectionTest {
             }
 
             else -> {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           }
         }
@@ -1219,6 +1223,7 @@ class ChatControllerPermissionSelectionTest {
 
       releasePatch.complete(Unit)
       assertTrue(send.await())
+      runCurrent()
       assertEquals(
         listOf("sessions.patch", "chat.send"),
         requests.filter { it == "sessions.patch" || it == "chat.send" },

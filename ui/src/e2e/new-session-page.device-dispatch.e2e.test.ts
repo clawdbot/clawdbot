@@ -232,6 +232,10 @@ suite.define(() => {
           suite,
           page,
           `failed-topology-${value.replace(":", "-")}.png`,
+          {
+            surface: page.locator('.new-session-page__where-popover wa-popup [part="popup"]'),
+            content: [selectedDevice, automaticDevice],
+          },
         );
         expect(await start.isDisabled()).toBe(true);
         expect(await selectedDevice.isDisabled()).toBe(true);
@@ -356,7 +360,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
         await expect
-          .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))
+          .poll(() => page.locator("#new-session-checkout-trigger").getAttribute("data-worktree"))
           .toBe("true");
         if (preference.kind === "cloud") {
           await page.evaluate(() => {

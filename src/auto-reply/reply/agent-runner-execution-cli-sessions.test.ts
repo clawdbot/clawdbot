@@ -394,6 +394,7 @@ describe("executeAgentTurn: CLI session routing", () => {
       sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
       updatedAt: 1,
     };
+    await replaceSessionEntry({ sessionKey: "agent:main:main", storePath }, sessionEntry);
     const activeSessionStore = { main: sessionEntry };
 
     await replaceSessionEntry({ sessionKey: "main", storePath }, sessionEntry);

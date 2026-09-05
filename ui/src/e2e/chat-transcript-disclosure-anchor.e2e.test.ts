@@ -1,8 +1,10 @@
 // Control UI E2E tests protect transcript disclosure geometry across animation frames.
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiElementScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -17,6 +19,22 @@ const suite = createControlUiE2eSuite({
   name: "Control UI transcript disclosure anchoring",
   startServerBeforeBrowser: true,
 });
+
+async function captureDisclosureThemes(directory: string, name: string, summary: Locator) {
+  const page = summary.page();
+  for (const theme of ["light", "dark"] as const) {
+    if (theme === "dark") {
+      await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+      await expect
+        .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
+        .toBe("dark");
+    }
+    await fs.writeFile(
+      path.join(directory, `${name}-${theme}.png`),
+      await takeControlUiElementScreenshot(page, page.locator(".chat-main"), [summary]),
+    );
+  }
+}
 
 type DisclosureFrame = {
   expanded: boolean;
@@ -111,7 +129,7 @@ async function showSplitDashboard(page: import("playwright").Page, sessionKey: s
     { key: sessionKey, settingsKey: storageKey },
   );
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
-  await page.locator('.side-panel [data-panel-slot="chat"] .chat-thread').waitFor();
+  await page.locator(".chat-pane-primary-column .chat-thread").waitFor();
 }
 
 suite.define(() => {
@@ -807,16 +825,7 @@ suite.define(() => {
         path.join(artifactDir, "disclosure-geometry.json"),
         `${JSON.stringify(traces, null, 2)}\n`,
       );
-      await page.locator(".chat-main").screenshot({
-        path: path.join(artifactDir, "disclosure-geometry-light.png"),
-      });
-      await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
-      await expect
-        .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
-        .toBe("dark");
-      await page.locator(".chat-main").screenshot({
-        path: path.join(artifactDir, "disclosure-geometry-dark.png"),
-      });
+      await captureDisclosureThemes(artifactDir, "disclosure-geometry", middleWorkSummary);
     }
     await context.close();
     for (const frames of Object.values(traces)) {
@@ -932,16 +941,7 @@ suite.define(() => {
         path.join(artifactDir, "raw-details-geometry.json"),
         `${JSON.stringify(traces, null, 2)}\n`,
       );
-      await page.locator(".chat-main").screenshot({
-        path: path.join(artifactDir, "raw-details-geometry-light.png"),
-      });
-      await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
-      await expect
-        .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
-        .toBe("dark");
-      await page.locator(".chat-main").screenshot({
-        path: path.join(artifactDir, "raw-details-geometry-dark.png"),
-      });
+      await captureDisclosureThemes(artifactDir, "raw-details-geometry", toolSummary);
     }
     traces.rawDetailsMiddleCollapse = await toggleDisclosureWithFrameTrace(page, rawDetailsToggle);
     const video = page.video();

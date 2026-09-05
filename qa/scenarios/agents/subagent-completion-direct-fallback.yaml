@@ -53,6 +53,7 @@ scenario:
           expectedSendCount: 1
       restartMarker: QA-SUBAGENT-TERMINAL-RESTART-OK
       metadataSentinel: QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK
+      parentAcknowledgment: Worker started.
 
 flow:
   steps:
@@ -73,6 +74,9 @@ flow:
         - set: verdicts
           value:
             expr: "[]"
+        - set: directFallbackProofs
+          value:
+            expr: "[]"
         # The task ledger records terminal delivery after the subagent lifecycle
         # owner settles it. Use that fact instead of guessing with wall-clock sleeps.
         - set: readSettledTerminalTask
@@ -82,6 +86,15 @@ flow:
                 - caseName
               async: true
               expr: "(await env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 }, { timeoutMs: 10000 })).tasks?.find((task) => task.title === `qa-terminal-${caseName}` && task.deliveryStatus === 'delivered')"
+        # The channel payload alone could also come from the completion model.
+        # Match the fallback owner's persisted mirror to this exact child run.
+        - set: readDirectFallbackReceipts
+          value:
+            lambda:
+              params:
+                - task
+              async: true
+              expr: "(await env.gateway.call('chat.history', { agentId: 'qa', sessionKey: task.sessionKey, limit: 100, maxChars: 20000 }, { timeoutMs: 10000 })).messages?.filter((message) => message.role === 'assistant' && message.provider === 'openclaw' && message.model === 'delivery-mirror' && message.__openclaw?.idempotencyKey === `announce:v1:${task.childSessionKey}:${task.runId}:text-direct`) ?? []"
         - forEach:
             items:
               expr: config.cases
@@ -112,7 +125,7 @@ flow:
                 args:
                   - lambda:
                       async: true
-                      expr: "(async () => { const task = await readSettledTerminalTask(terminalCase.name); if (!task) return undefined; const matchingCount = state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId && String(candidate.text ?? '').trim() === terminalCase.marker).length; return terminalCase.expectedSendCount === 0 || matchingCount >= terminalCase.expectedSendCount ? task : undefined; })().catch(() => undefined)"
+                      expr: "(async () => { const task = await readSettledTerminalTask(terminalCase.name); if (!task) return undefined; if (terminalCase.name !== 'silent' && (await readDirectFallbackReceipts(task)).length === 0) return undefined; const matchingCount = state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId && String(candidate.text ?? '').trim() === terminalCase.marker).length; return terminalCase.expectedSendCount === 0 || matchingCount >= terminalCase.expectedSendCount ? task : undefined; })().catch(() => undefined)"
                   - 60000
                   - 250
               - set: caseOutbound
@@ -124,6 +137,20 @@ flow:
               - set: caseRequests
                 value:
                   expr: "env.mock ? await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`) : []"
+              - set: directFallbackReceipts
+                value:
+                  expr: "await readDirectFallbackReceipts(terminalTask)"
+              - assert:
+                  expr: "terminalCase.name === 'silent' || (directFallbackReceipts.length === 1 && directFallbackReceipts[0].content.filter((block) => block.type === 'text').map((block) => block.text).join('') === terminalCase.marker)"
+                  message:
+                    expr: "`terminal ${terminalCase.name}: missing or duplicate direct-fallback receipt: ${JSON.stringify(directFallbackReceipts)}`"
+              - assert:
+                  expr: "caseOutbound.filter((message) => !message.deleted && String(message.text ?? '').trim() === config.parentAcknowledgment).length === 1"
+                  message:
+                    expr: "`terminal ${terminalCase.name}: spawning parent did not acknowledge its completed turn`"
+              - set: appendDirectFallbackProof
+                value:
+                  expr: "directFallbackProofs.push({ case: terminalCase.name, taskId: terminalTask.taskId, receiptKeys: directFallbackReceipts.map((message) => message.__openclaw.idempotencyKey) })"
               - assert:
                   expr: "matchingOutbound.length === terminalCase.expectedSendCount"
                   message:
@@ -205,12 +232,22 @@ flow:
           args:
             - lambda:
                 async: true
-                expr: "(async () => { const task = await readSettledTerminalTask('restart'); if (!task) return undefined; const delivered = state.getSnapshot().messages.slice(restartStartIndex).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId && String(candidate.text ?? '').trim() === config.restartMarker); return delivered ? task : undefined; })().catch(() => undefined)"
+                expr: "(async () => { const task = await readSettledTerminalTask('restart'); if (!task || (await readDirectFallbackReceipts(task)).length === 0) return undefined; const delivered = state.getSnapshot().messages.slice(restartStartIndex).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId && String(candidate.text ?? '').trim() === config.restartMarker); return delivered ? task : undefined; })().catch(() => undefined)"
             - 60000
             - 250
         - set: restartMatches
           value:
             expr: "state.getSnapshot().messages.slice(restartStartIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId && String(candidate.text ?? '').trim() === config.restartMarker)"
+        - set: restartFallbackReceipts
+          value:
+            expr: "await readDirectFallbackReceipts(restartTask)"
+        - assert:
+            expr: "restartFallbackReceipts.length === 1 && restartFallbackReceipts[0].content.filter((block) => block.type === 'text').map((block) => block.text).join('') === config.restartMarker"
+            message:
+              expr: "`restart completion did not use its exact direct-fallback owner: ${JSON.stringify(restartFallbackReceipts)}`"
+        - set: appendRestartFallbackProof
+          value:
+            expr: "directFallbackProofs.push({ case: 'restart', taskId: restartTask.taskId, receiptKeys: restartFallbackReceipts.map((message) => message.__openclaw.idempotencyKey) })"
         - assert:
             expr: "restartMatches.length === 1"
             message:
@@ -249,4 +286,4 @@ flow:
             expr: "verdicts.length === 4 && verdicts.every((verdict) => verdict.pass === true)"
             message:
               expr: "`terminal reply verdict matrix incomplete: ${JSON.stringify(verdicts)}`"
-      detailsExpr: "JSON.stringify({ harness: 'qa-channel + qa-lab bus + ephemeral Gateway child + mock-openai', verdicts }, null, 2)"
+      detailsExpr: "JSON.stringify({ harness: 'qa-channel + qa-lab bus + ephemeral Gateway child + mock-openai', verdicts, directFallbackProofs }, null, 2)"

@@ -20,6 +20,7 @@ export const tuiPtyTestFiles = [
   "src/tui/tui-task-suggestions-pty.e2e.test.ts",
   "src/tui/tui-error-pty.e2e.test.ts",
   "src/tui/tui-hyperlinks-pty.e2e.test.ts",
+  "src/tui/tui-picker-cancel-pty.e2e.test.ts",
   "src/tui/tui-pty-local.e2e.test.ts",
 ];
 

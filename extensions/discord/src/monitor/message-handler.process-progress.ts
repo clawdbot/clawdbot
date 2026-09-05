@@ -11,10 +11,6 @@ type CallbackPayload<K extends keyof ReplyOptions> =
   NonNullable<ReplyOptions[K]> extends (...args: infer Args) => unknown ? Args[0] : never;
 type DraftPreview = ReturnType<typeof createDiscordDraftPreviewController>;
 
-function isProcessAborted(abortSignal?: AbortSignal): boolean {
-  return Boolean(abortSignal?.aborted);
-}
-
 function isFailedProgress(payload: {
   phase?: string;
   status?: string;
@@ -124,7 +120,7 @@ export function createDiscordMessageProgressRuntime(params: {
     },
     onNarrationUpdate: draftPreview.narrationProgressEnabled
       ? async (payload) => {
-          if (isProcessAborted(abortSignal) || shouldYieldDraftCommentary()) {
+          if (abortSignal?.aborted || shouldYieldDraftCommentary()) {
             return;
           }
           await draftPreview.pushNarrationProgress(payload.text);
@@ -148,7 +144,7 @@ export function createDiscordMessageProgressRuntime(params: {
     },
     streamReasoningInNonStreamModes: reasoningWindowEnabled,
     onToolStart: async (payload) => {
-      if (isProcessAborted(abortSignal)) {
+      if (abortSignal?.aborted) {
         return false;
       }
       await params.reactions.maybeBindToToolReaction(payload);
@@ -188,13 +184,13 @@ export function createDiscordMessageProgressRuntime(params: {
       return await draftPreview.pushPatchEvent(payload);
     },
     onCompactionStart: async () => {
-      if (!isProcessAborted(abortSignal)) {
+      if (!abortSignal?.aborted) {
         await params.reactions.controller.setCompacting();
       }
       return false;
     },
     onCompactionEnd: async () => {
-      if (!isProcessAborted(abortSignal)) {
+      if (!abortSignal?.aborted) {
         params.reactions.controller.cancelPending();
         await params.reactions.controller.setThinking();
       }

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
@@ -552,18 +553,17 @@ describe("executeAgentTurn: provider failures", () => {
     async (phase) => {
       state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
         params.onExecutionPhase?.({ phase });
-        throw new FailoverError("CLI exceeded timeout (600s) and was terminated.", {
-          reason: "timeout",
-          provider: "claude-cli",
-          code: "cli_overall_timeout",
-          cliTimeout: {
+        throw createCliTimeoutError(
+          { provider: "claude-cli" },
+          {
             mode: "overall",
             timeoutSeconds: 600,
             observedActivity: true,
             activeToolCount: phase === "tool_execution_started" ? 1 : 0,
             backgroundTaskCount: 0,
           },
-        });
+          "cli_overall_timeout",
+        );
       });
 
       const result = await executeTestTurn();
@@ -580,19 +580,17 @@ describe("executeAgentTurn: provider failures", () => {
   it("does not retry a CLI timeout whose recorded activity has no execution phase mark", async () => {
     vi.useFakeTimers();
     // FIXED(refactor-02b): the typed CLI activity fact blocks whole-turn replay without a phase mark.
-    const timeoutError = new FailoverError("CLI exceeded timeout (600s) and was terminated.", {
-      reason: "timeout",
-      provider: "claude-cli",
-      model: "claude-opus-4-8",
-      code: "cli_overall_timeout",
-      cliTimeout: {
+    const timeoutError = createCliTimeoutError(
+      { provider: "claude-cli", model: "claude-opus-4-8" },
+      {
         mode: "overall",
         timeoutSeconds: 600,
         observedActivity: true,
         activeToolCount: 0,
         backgroundTaskCount: 0,
       },
-    });
+      "cli_overall_timeout",
+    );
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
       result: await params.run(
@@ -629,18 +627,17 @@ describe("executeAgentTurn: provider failures", () => {
   it("warns about partial effects when an active CLI tool hits the no-output watchdog", async () => {
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       params.onExecutionPhase?.({ phase: "tool_execution_started" });
-      throw new FailoverError("CLI produced no output for 120s and was terminated.", {
-        reason: "timeout",
-        provider: "claude-cli",
-        code: "cli_no_output_timeout",
-        cliTimeout: {
+      throw createCliTimeoutError(
+        { provider: "claude-cli" },
+        {
           mode: "no-output",
           timeoutSeconds: 120,
           observedActivity: true,
           activeToolCount: 1,
           backgroundTaskCount: 0,
         },
-      });
+        "cli_no_output_timeout",
+      );
     });
 
     const result = await executeTestTurn();

@@ -11,5 +11,5 @@ export function safeParseJson(value: string): unknown {
 
 /** Parses JSON into a non-array record, returning undefined for every other result. */
 export function safeParseJsonRecord(value: string): Record<string, unknown> | undefined {
-  return asOptionalRecord(safeParseJson(value));
+  return /^[\t\n\r ]*\{/.test(value) ? asOptionalRecord(safeParseJson(value)) : undefined;
 }
