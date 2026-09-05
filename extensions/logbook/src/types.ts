@@ -83,3 +83,55 @@ export type LogbookStatus = {
   todayCards: number;
   timeZone: string;
 };
+
+export type LogbookDatabase = {
+  frames: {
+    id: number;
+    captured_at_ms: number;
+    day: string;
+    path: string;
+    screen_index: number;
+    width: number | null;
+    height: number | null;
+    byte_size: number;
+    content_hash: string;
+    idle: number;
+    batch_id: number | null;
+  };
+  batches: {
+    id: number;
+    day: string;
+    start_ms: number;
+    end_ms: number;
+    status: LogbookBatchStatus;
+    error: string | null;
+    frame_count: number;
+    model: string | null;
+    created_ms: number;
+    updated_ms: number;
+  };
+  observations: {
+    id: number;
+    batch_id: number;
+    day: string;
+    start_ms: number;
+    end_ms: number;
+    text: string;
+  };
+  cards: {
+    id: number;
+    day: string;
+    start_ms: number;
+    end_ms: number;
+    title: string;
+    summary: string;
+    detail: string;
+    category: string;
+    app_primary: string | null;
+    app_secondary: string | null;
+    distractions: string;
+    keyframe_id: number | null;
+    updated_ms: number;
+  };
+  standups: { day: string; text: string; updated_ms: number };
+};

@@ -614,7 +614,7 @@ export class LogbookService {
 
   async ask(day: string, question: string): Promise<string> {
     const store = this.requireStore();
-    const observations = store.observationsInRange(day, 0, Number.MAX_SAFE_INTEGER).slice(-200);
+    const observations = store.observationsInRange(day, 0, Number.MAX_SAFE_INTEGER, 200);
     const result = await this.deps.runtime.llm.complete({
       messages: [
         {
