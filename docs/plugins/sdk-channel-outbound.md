@@ -67,6 +67,12 @@ adoption can tombstone a row before the channel's delivery promise returns.
 Optional settings include custom append delays, a `drain` option block for
 advanced drain ordering/concurrency/retry policy, an external `abortSignal`, a
 clock, pump error reporting, a stopped-error factory, and admission policy.
+`drain.resolvePendingDisposition(record, context)` is an opt-in channel policy
+that can terminally fail a stored pending row before it is claimed. Return
+`null` or `undefined` to keep the row claimable. The hook receives unvalidated
+stored payload bytes, so unreadable rows must remain claimable for the canonical
+claim-time codec. A failed compare-and-set keeps that lane fenced for the
+current drain pass rather than allowing later same-lane work to overtake it.
 The returned monitor exposes `admit`, `ensureQueueAvailable`, `start`, `pause`,
 `stop`, `waitForIdle`, `isRunning`, and `isStopped`. Use the idempotent
 `ensureQueueAvailable()` check when plugin-owned migration or preparation must

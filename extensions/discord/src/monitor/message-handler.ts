@@ -19,6 +19,11 @@ export function createDiscordMessageHandler(
     accountId: params.accountId,
     client: params.client,
     runtime: params.runtime,
+    botUserId: params.botUserId,
+    cfg: params.cfg,
+    discordConfig: params.discordConfig,
+    guildEntries: params.guildEntries,
+    threadBindings: params.threadBindings,
     dispatch: (event, lifecycle) =>
       dispatcher(event, params.client, {
         abortSignal: lifecycle.abortSignal,

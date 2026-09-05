@@ -34,6 +34,7 @@ import { createDiscordMessageRunQueue } from "./message-run-queue.js";
 
 type SetStatusFn = (patch: Record<string, unknown>) => void;
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
+
 function mockCalls(source: MockCallSource): Array<Array<unknown>> {
   return source.mock.calls;
 }
