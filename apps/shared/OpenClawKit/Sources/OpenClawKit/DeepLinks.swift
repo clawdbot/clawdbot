@@ -479,7 +479,7 @@ public struct GatewayConnectEndpoint: Codable, Sendable, Equatable {
         guard (1...65535).contains(self.port) else { return nil }
         var components = URLComponents()
         components.scheme = self.tls ? "wss" : "ws"
-        components.host = self.host
+        components.host = self.host.contains(":") && !self.host.hasPrefix("[") ? "[" + self.host + "]" : self.host
         components.port = self.port
         components.percentEncodedPath = self.contextPath ?? ""
         return components.url

@@ -19,6 +19,24 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
 }
 
 @Suite struct DeepLinksSecurityTests {
+    @Test(arguments: [
+        ("::1", false, "ws://[::1]:18789"),
+        ("fd00::1", false, "ws://[fd00::1]:18789"),
+        ("fd00::1", true, "wss://[fd00::1]:18789"),
+        ("[::1]", false, "ws://[::1]:18789"),
+        ("[fd00::1]", true, "wss://[fd00::1]:18789"),
+        ("fe80::1%en0", false, "ws://[fe80::1%25en0]:18789"),
+        ("[fe80::1%en0]", false, "ws://[fe80::1%25en0]:18789"),
+        ("127.0.0.1", false, "ws://127.0.0.1:18789"),
+        ("gateway.example", true, "wss://gateway.example:18789"),
+    ])
+    func gatewayEndpointFormatsRawAndBracketedHosts(host: String, tls: Bool, expectedURL: String) {
+        let endpoint = GatewayConnectEndpoint(host: host, port: 18789, tls: tls)
+
+        #expect(endpoint.host == host)
+        #expect(endpoint.websocketURL?.absoluteString == expectedURL)
+    }
+
     @Test func setupResultInitializerDefaultsOptionalFields() {
         let result = DevicePairSetupCodeResult(
             setupid: "setup-1",
@@ -267,7 +285,8 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
     }
 
     @Test func legacyEncodedFallbackEndpointDecodesWithoutContextPath() throws {
-        let payload = #"{"host":"gateway.example","port":443,"tls":true,"fallbackEndpoints":[{"host":"fallback.example","port":443,"tls":true}]}"#
+        let payload = #"{"host":"gateway.example","port":443,"tls":true,"fallbackEndpoints":["# +
+            #"{"host":"fallback.example","port":443,"tls":true}]}"#
 
         let link = try JSONDecoder().decode(
             GatewayConnectDeepLink.self,
@@ -336,6 +355,26 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
                 password: nil))
     }
 
+    @Test(arguments: [
+        ("::1", false, "ws://[::1]:18789"),
+        ("fd00::1", false, "ws://[fd00::1]:18789"),
+        ("fd00::1", true, "wss://[fd00::1]:18789"),
+        ("[fd00::1]", false, "ws://[fd00::1]:18789"),
+        ("fe80::1%en0", false, "ws://[fe80::1%25en0]:18789"),
+        ("2001:db8::1", true, "wss://[2001:db8::1]:18789"),
+    ])
+    func setupCodeParsesIPv6HostPayload(host: String, tls: Bool, expectedURL: String) {
+        let payload = #"{"host":"\#(host)","port":18789,"tls":\#(tls),"bootstrapToken":"tok"}"#
+
+        for input in [payload, setupCode(from: payload)] {
+            let link = GatewayConnectDeepLink.fromSetupInput(input)
+
+            #expect(link?.host == host)
+            #expect(link?.bootstrapToken == "tok")
+            #expect(link?.websocketURL?.absoluteString == expectedURL)
+        }
+    }
+
     @Test func setupCodeParsesHostPayloadWithTLSDefaultPort() {
         let payload = #"{"host":"gateway.tailnet.ts.net","tls":true,"bootstrapToken":"tok"}"#
         #expect(
@@ -348,8 +387,9 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
                 password: nil))
     }
 
-    @Test func setupCodeRejectsInsecureHostPayload() {
-        let payload = #"{"host":"gateway.tailnet.ts.net","port":18789,"tls":false,"bootstrapToken":"tok"}"#
+    @Test(arguments: ["gateway.tailnet.ts.net", "2001:db8::1", "[2001:db8::1]"])
+    func setupCodeRejectsInsecureHostPayload(host: String) {
+        let payload = #"{"host":"\#(host)","port":18789,"tls":false,"bootstrapToken":"tok"}"#
         #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
     }
 

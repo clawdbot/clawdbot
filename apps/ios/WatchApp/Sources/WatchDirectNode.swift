@@ -751,11 +751,11 @@ final class WatchDirectNode {
     }
 
     private static func httpBaseURL(for link: GatewayConnectDeepLink) -> URL? {
-        guard link.tls else { return nil }
-        var components = URLComponents()
+        guard link.tls, let websocketURL = link.websocketURL,
+              var components = URLComponents(url: websocketURL, resolvingAgainstBaseURL: false)
+        else { return nil }
         components.scheme = "https"
-        components.host = link.host
-        components.port = link.port
+        components.path = ""
         return components.url
     }
 
