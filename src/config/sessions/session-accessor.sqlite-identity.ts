@@ -1,6 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+import type { OpenClawAgentDatabaseClaim } from "../../state/openclaw-agent-db-identity.js";
 import type { SessionEntry } from "./types.js";
+
+type SessionIdentityDatabase = OpenClawAgentDatabaseClaim["database"];
 
 type SqliteSessionEntryRemovalIdentity = {
   expectedEntry?: SessionEntry;
@@ -31,17 +35,23 @@ function emitCommittedSessionEntryRemoval(sessionKey: string, entry?: SessionEnt
   });
 }
 
-export function emitCommittedSessionEntryRemovals(
+export function prepareCommittedSessionEntryRemovals(
   removals: readonly SqliteSessionEntryRemovalIdentity[],
-): void {
-  const emittedKeys = new Set<string>();
+): () => void {
+  const previousByKey = new Map<string, ReturnType<typeof toSessionIdentityTarget>>();
   for (const removal of removals) {
-    if (emittedKeys.has(removal.sessionKey)) {
-      continue;
+    if (!previousByKey.has(removal.sessionKey)) {
+      previousByKey.set(
+        removal.sessionKey,
+        toSessionIdentityTarget(removal.expectedEntry, [removal.sessionKey]),
+      );
     }
-    emittedKeys.add(removal.sessionKey);
-    emitCommittedSessionEntryRemoval(removal.sessionKey, removal.expectedEntry);
   }
+  return () => {
+    for (const previous of previousByKey.values()) {
+      emitSessionIdentityMutation({ kind: "delete", previous });
+    }
+  };
 }
 
 function emitCommittedSessionEntryChange(params: {
@@ -63,86 +73,96 @@ function emitCommittedSessionEntryChange(params: {
   });
 }
 
-export function emitCommittedSessionIdentityDiff(
+export function prepareSessionIdentityPublication(
+  database: SessionIdentityDatabase,
   previous: ReadonlyMap<string, SessionEntry>,
   current: ReadonlyMap<string, SessionEntry>,
-): void {
-  const currentKeysBySessionId = new Map<string, string[]>();
-  for (const [sessionKey, entry] of current) {
-    const sessionId = normalizeOptionalString(entry.sessionId);
-    if (sessionId) {
-      currentKeysBySessionId.set(sessionId, [
-        ...(currentKeysBySessionId.get(sessionId) ?? []),
+): () => void {
+  const publish = () => {
+    const currentKeysBySessionId = new Map<string, string[]>();
+    for (const [sessionKey, entry] of current) {
+      const sessionId = normalizeOptionalString(entry.sessionId);
+      if (sessionId) {
+        currentKeysBySessionId.set(sessionId, [
+          ...(currentKeysBySessionId.get(sessionId) ?? []),
+          sessionKey,
+        ]);
+      }
+    }
+
+    const movedKeysByCurrentKey = new Map<string, string[]>();
+    const handledPreviousKeys = new Set<string>();
+    const handledCurrentKeys = new Set<string>();
+    for (const [sessionKey, entry] of previous) {
+      if (current.has(sessionKey)) {
+        continue;
+      }
+      const sessionId = normalizeOptionalString(entry.sessionId);
+      const currentKeys = sessionId ? currentKeysBySessionId.get(sessionId) : undefined;
+      if (currentKeys?.length !== 1) {
+        continue;
+      }
+      const [currentKey] = currentKeys;
+      if (!currentKey) {
+        continue;
+      }
+      movedKeysByCurrentKey.set(currentKey, [
+        ...(movedKeysByCurrentKey.get(currentKey) ?? []),
         sessionKey,
       ]);
+      handledPreviousKeys.add(sessionKey);
+      handledCurrentKeys.add(currentKey);
     }
-  }
+    for (const [currentKey, previousKeys] of movedKeysByCurrentKey) {
+      const currentEntry = current.get(currentKey);
+      if (currentEntry) {
+        emitSessionIdentityMutation({
+          kind: "move",
+          previous: toSessionIdentityTarget(currentEntry, previousKeys),
+          current: toSessionIdentityTarget(currentEntry, [currentKey]),
+        });
+      }
+    }
 
-  const movedKeysByCurrentKey = new Map<string, string[]>();
-  const handledPreviousKeys = new Set<string>();
-  const handledCurrentKeys = new Set<string>();
-  for (const [sessionKey, entry] of previous) {
-    if (current.has(sessionKey)) {
-      continue;
+    for (const [sessionKey, previousEntry] of previous) {
+      const currentEntry = current.get(sessionKey);
+      if (currentEntry) {
+        handledCurrentKeys.add(sessionKey);
+        emitCommittedSessionEntryChange({
+          currentEntry,
+          currentKey: sessionKey,
+          previousEntry,
+          previousKey: sessionKey,
+        });
+      } else if (!handledPreviousKeys.has(sessionKey)) {
+        emitCommittedSessionEntryRemoval(sessionKey, previousEntry);
+      }
     }
-    const sessionId = normalizeOptionalString(entry.sessionId);
-    const currentKeys = sessionId ? currentKeysBySessionId.get(sessionId) : undefined;
-    if (currentKeys?.length !== 1) {
-      continue;
-    }
-    const [currentKey] = currentKeys;
-    if (!currentKey) {
-      continue;
-    }
-    movedKeysByCurrentKey.set(currentKey, [
-      ...(movedKeysByCurrentKey.get(currentKey) ?? []),
-      sessionKey,
-    ]);
-    handledPreviousKeys.add(sessionKey);
-    handledCurrentKeys.add(currentKey);
-  }
-  for (const [currentKey, previousKeys] of movedKeysByCurrentKey) {
-    const currentEntry = current.get(currentKey);
-    if (currentEntry) {
+
+    for (const [sessionKey, currentEntry] of current) {
+      if (handledCurrentKeys.has(sessionKey)) {
+        continue;
+      }
       emitSessionIdentityMutation({
-        kind: "move",
-        previous: toSessionIdentityTarget(currentEntry, previousKeys),
-        current: toSessionIdentityTarget(currentEntry, [currentKey]),
+        kind: "create",
+        previous: { sessionKeys: [] },
+        current: toSessionIdentityTarget(currentEntry, [sessionKey]),
       });
     }
-  }
-
-  for (const [sessionKey, previousEntry] of previous) {
-    const currentEntry = current.get(sessionKey);
-    if (currentEntry) {
-      handledCurrentKeys.add(sessionKey);
-      emitCommittedSessionEntryChange({
-        currentEntry,
-        currentKey: sessionKey,
-        previousEntry,
-        previousKey: sessionKey,
-      });
-    } else if (!handledPreviousKeys.has(sessionKey)) {
-      emitCommittedSessionEntryRemoval(sessionKey, previousEntry);
+  };
+  // Savepoint success is not COMMIT; identity observers can cancel live work.
+  return () => {
+    if (!deferSqlitePostCommitPublication(database.db, publish)) {
+      publish();
     }
-  }
-
-  for (const [sessionKey, currentEntry] of current) {
-    if (handledCurrentKeys.has(sessionKey)) {
-      continue;
-    }
-    emitSessionIdentityMutation({
-      kind: "create",
-      previous: { sessionKeys: [] },
-      current: toSessionIdentityTarget(currentEntry, [sessionKey]),
-    });
-  }
+  };
 }
 
-export function emitCommittedLifecycleIdentityMutations(params: {
+export function prepareLifecycleIdentityPublication(params: {
+  database: SessionIdentityDatabase;
   projected: SqliteProjectedLifecycleIdentityMutation;
   removedSessionKeys: readonly string[];
-}): void {
+}): () => void {
   const removedKeys = new Set(params.removedSessionKeys);
   const previous = new Map(
     params.projected.removals
@@ -156,5 +176,5 @@ export function emitCommittedLifecycleIdentityMutations(params: {
     }
     current.set(upsert.sessionKey, upsert.entry);
   }
-  emitCommittedSessionIdentityDiff(previous, current);
+  return prepareSessionIdentityPublication(params.database, previous, current);
 }

@@ -486,7 +486,6 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   isRawModelRun: boolean;
   messages: AgentMessage[];
   preparedUserTurnMessage?: AgentMessage;
-  heartbeatOutcomeContext?: string;
   prompt: PromptAssemblyContext;
   replaceSessionMessages: (messages: AgentMessage[]) => void;
   sessionAgentId: string;
@@ -622,11 +621,7 @@ export function prepareEmbeddedAttemptPromptContext(input: {
   }
   const runtimeContextForHook = isRuntimeOnlyTurn
     ? undefined
-    : [
-        currentInboundContextText,
-        promptSubmission.runtimeContext?.trim(),
-        input.heartbeatOutcomeContext?.trim(),
-      ]
+    : [currentInboundContextText, promptSubmission.runtimeContext?.trim()]
         .filter((value): value is string => Boolean(value))
         .join("\n\n") || undefined;
   const runtimeContextMessageForCurrentTurn =

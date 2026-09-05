@@ -21,7 +21,7 @@ export type HeartbeatWakeSource =
   | "retry"
   | "other";
 
-export type HeartbeatWakeOverride = {
+type HeartbeatWakeOverride = {
   target?: string;
   to?: string | undefined;
   accountId?: string | undefined;

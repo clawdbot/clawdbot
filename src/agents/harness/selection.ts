@@ -10,9 +10,11 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { claimHeartbeatContextForUserRun } from "../../infra/heartbeat-outcome-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProviderRefOwnership } from "../../plugins/providers.js";
 import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
+import { resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveGroupToolPolicy } from "../agent-tools.policy.js";
 import {
   isHostScopedAgentToolActive,
@@ -534,9 +536,36 @@ export async function runAgentHarnessAttempt(
                       : input;
                   },
               (prepared) =>
-                pluginAttempt.runWithHostScope(() =>
-                  runAgentHarnessLifecycleAttempt(harness, prepared),
-                ),
+                pluginAttempt.runWithHostScope(() => {
+                  if (prepared.trigger !== "user" || !prepared.sessionKey) {
+                    return runAgentHarnessLifecycleAttempt(harness, prepared);
+                  }
+                  const note = claimHeartbeatContextForUserRun({
+                    ...prepared,
+                    agentId: resolveSessionAgentIds(prepared).sessionAgentId,
+                    storePath: prepared.sessionTarget?.storePath,
+                    detached: prepared.sessionPersistence === "detached",
+                    assertCurrent: resolveAdmittedRunActiveAssertion(
+                      internalParams.admittedRunContext,
+                      prepared.abortSignal,
+                    ),
+                  });
+                  if (!note) {
+                    return runAgentHarnessLifecycleAttempt(harness, prepared);
+                  }
+                  const context = prepared.currentInboundContext;
+                  const append = (text?: string) => [text, note].filter(Boolean).join("\n\n");
+                  return runAgentHarnessLifecycleAttempt(harness, {
+                    ...prepared,
+                    currentInboundContext: {
+                      ...context,
+                      text: append(context?.text),
+                      ...(context?.resumableText !== undefined
+                        ? { resumableText: append(context.resumableText) }
+                        : {}),
+                    },
+                  });
+                }),
             ),
         );
       }),

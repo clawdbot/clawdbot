@@ -23,7 +23,6 @@ import {
   type HeartbeatRunResult,
   type HeartbeatWakeHandler,
   type HeartbeatWakeIntent,
-  type HeartbeatWakeRequest,
   isRetryableHeartbeatSkipReason,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
@@ -381,19 +380,7 @@ export function startHeartbeatRunner(opts: {
     );
   };
 
-  const wakeHandler: HeartbeatWakeHandler = async (params: HeartbeatWakeRequest) =>
-    run({
-      reason: params.reason,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      heartbeat: params.heartbeat,
-      scheduledEveryMs: params.scheduledEveryMs,
-      tasks: params.tasks,
-      retainedWork: params.retainedWork,
-      source: params.source,
-      intent: params.intent,
-    });
-  const disposeWakeHandler = setHeartbeatWakeHandler(wakeHandler);
+  const disposeWakeHandler = setHeartbeatWakeHandler(run);
   updateConfig(state.cfg);
 
   const cleanup = () => {

@@ -41,7 +41,6 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
-import { emitCommittedSessionEntryRemovals } from "./session-accessor.sqlite-identity.js";
 import {
   planSessionLifecycleArtifactCleanup,
   planSessionStateDeleteIfUnreferenced,
@@ -173,7 +172,6 @@ export async function cleanupSessionLifecycleArtifactsCore(
               `SQLite session reclamation returned ${reclaimed.kind} for ${plan.kind}`,
             );
           }
-          emitCommittedSessionEntryRemovals(cleanupPlan.entries);
           return reclaimed.value;
         });
       }),

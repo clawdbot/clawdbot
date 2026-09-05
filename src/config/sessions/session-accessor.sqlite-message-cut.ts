@@ -18,7 +18,7 @@ import {
   readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   getSessionKysely,
@@ -240,11 +240,8 @@ async function mutateSqliteSessionAtMessage(
       : undefined);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     let previousIdentity = new Map<string, SessionEntry>();
-    let currentIdentity = new Map<string, SessionEntry>();
-    let databasePath: string | undefined;
-    const result = runOpenClawAgentWriteTransaction((database) => {
+    const { databasePath, result, publish } = runOpenClawAgentWriteTransaction((database) => {
       params.commitGuard?.();
-      databasePath = database.path;
       const identityKeys = uniqueStrings([
         ...collectSessionEntryLookupKeys(database, sourceKey),
         ...collectSessionEntryLookupKeys(database, targetKey),
@@ -259,10 +256,14 @@ async function mutateSqliteSessionAtMessage(
         sourceKey,
         targetKey,
       });
-      currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
-      return mutationResult;
+      const currentIdentity = readSessionIdentitySnapshot(database, identityKeys);
+      return {
+        databasePath: database.path,
+        result: mutationResult,
+        publish: prepareSessionIdentityPublication(database, previousIdentity, currentIdentity),
+      };
     }, toDatabaseOptions(resolved));
-    if (result.status === "created" && databasePath) {
+    if (result.status === "created") {
       invalidateSessionBranchCache(databasePath, [
         ...[...previousIdentity.values()].flatMap((entry) =>
           entry.sessionId ? [entry.sessionId] : [],
@@ -270,7 +271,7 @@ async function mutateSqliteSessionAtMessage(
         ...(result.entry.sessionId ? [result.entry.sessionId] : []),
       ]);
     }
-    emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+    publish();
     return result;
   });
 }

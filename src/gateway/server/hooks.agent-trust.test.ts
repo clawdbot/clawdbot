@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveSystemEventOptionsOwnerAgentId } from "../../infra/system-event-ownership.js";
+import { resolveSystemEventOwnerAgentId } from "../../infra/system-event-ownership.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -89,7 +89,7 @@ function waitForFast<T>(
 function expectOwnedSystemEvent(text: string, ownerAgentId: string): void {
   const call = enqueueSystemEventMock.mock.calls.find(([queuedText]) => queuedText === text);
   expect(call?.[1]).toEqual({ sessionKey: "global" });
-  expect(resolveSystemEventOptionsOwnerAgentId(call?.[1] as object)).toBe(ownerAgentId);
+  expect(resolveSystemEventOwnerAgentId(call?.[1] as object)).toBe(ownerAgentId);
 }
 
 function buildMinimalParams(overrides: { agentStartAdmissionTimeoutMs?: number } = {}) {

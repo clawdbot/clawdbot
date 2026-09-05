@@ -12,7 +12,7 @@ import {
   readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { emitCommittedSessionIdentityDiff } from "./session-accessor.sqlite-identity.js";
+import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import {
   formatSqliteSessionReferenceForScope,
@@ -139,12 +139,15 @@ async function applySqliteCompactionCheckpointSessionOperation(
         targetKey,
       );
       return {
-        previousIdentity,
-        currentIdentity: readSessionIdentitySnapshot(database, identityKeys),
+        publish: prepareSessionIdentityPublication(
+          database,
+          previousIdentity,
+          readSessionIdentitySnapshot(database, identityKeys),
+        ),
         result,
       };
     }, toDatabaseOptions(resolved));
-    emitCommittedSessionIdentityDiff(committed.previousIdentity, committed.currentIdentity);
+    committed.publish();
     return committed.result;
   });
 }

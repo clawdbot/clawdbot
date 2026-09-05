@@ -43,6 +43,7 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
+import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   assertNoOpenClawAgentDatabaseLeases,
@@ -367,6 +368,7 @@ function* openOpenClawAgentDatabaseSteps(
       synchronous: "NORMAL",
     });
     ensureOpenClawAgentSchema(db, agentId, pathname);
+    registerOpenClawAgentDatabaseIdentity(db);
     const database = { agentId, db, path: pathname, walMaintenance };
     cache.incognito.add(database);
     cache.unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
@@ -440,6 +442,7 @@ function* openOpenClawAgentDatabaseSteps(
     db.enableLoadExtension(false);
     enableNodeSqliteKyselyStatementCache(db);
     openedDb = db;
+    registerOpenClawAgentDatabaseIdentity(db);
     // Eviction churn must avoid migration/convergence and registry busy waits.
     // Version and owner can change while evicted, so their read-only gates run on every open.
     let isValidatedReopen = getValidatedOpenClawAgentDatabaseOwner(pathname) === agentId;
