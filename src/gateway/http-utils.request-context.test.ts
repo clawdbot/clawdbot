@@ -224,6 +224,81 @@ describe("resolveGatewayRequestContext", () => {
     expect(result.sessionKey).toMatch(/^agent:scripts:/);
   });
 
+  it("keeps the session key owner over a default agent for a generic model", () => {
+    runtimeConfig.value = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "scripts" }],
+      },
+    };
+
+    const result = resolveGatewayRequestContext({
+      req: createReq({ "x-openclaw-session-key": "agent:scripts:foobar" }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+    });
+
+    expect(result.agentId).toBe("scripts");
+  });
+
+  it("rejects an agent header that conflicts with the session key owner", () => {
+    runtimeConfig.value = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "scripts" }],
+      },
+    };
+
+    expect(() =>
+      resolveGatewayRequestContext({
+        req: createReq({
+          "x-openclaw-agent-id": "main",
+          "x-openclaw-session-key": "agent:scripts:foobar",
+        }),
+        model: "openclaw",
+        sessionPrefix: "openai",
+        defaultMessageChannel: "webchat",
+      }),
+    ).toThrow("Selected agent 'main' does not match the agent in `x-openclaw-session-key`");
+  });
+
+  it("rejects an agent-specific model that conflicts with the session key owner", () => {
+    runtimeConfig.value = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "scripts" }],
+      },
+    };
+
+    expect(() =>
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-session-key": "agent:scripts:foobar" }),
+        model: "openclaw/main",
+        sessionPrefix: "openai",
+        defaultMessageChannel: "webchat",
+      }),
+    ).toThrow("Selected agent 'main' does not match the agent in `x-openclaw-session-key`");
+  });
+
+  it("accepts a selector that agrees with the session key owner", () => {
+    runtimeConfig.value = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "scripts" }],
+      },
+    };
+
+    const result = resolveGatewayRequestContext({
+      req: createReq({
+        "x-openclaw-agent-id": "scripts",
+        "x-openclaw-session-key": "agent:scripts:foobar",
+      }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+    });
+
+    expect(result.agentId).toBe("scripts");
+    expect(result.sessionKey).toBe("agent:scripts:foobar");
+  });
+
   it("still requires an explicit owner when a multi-agent fleet request has no session key or agent header", () => {
     runtimeConfig.value = {
       agents: {

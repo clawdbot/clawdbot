@@ -64,6 +64,7 @@ import {
   getBearerToken,
   getHeader,
   isAgentSelectionRequiredError,
+  isGatewayAgentSelectionConflictError,
   isGatewaySessionKeyOverrideError,
   isInvalidGatewayModelError,
   isUnknownGatewayAgentError,
@@ -407,6 +408,7 @@ async function runResponsesAgentCommand(params: {
   extraSystemPrompt: string;
   modelOverride?: string;
   streamParams: { maxTokens?: number; temperature?: number; topP?: number } | undefined;
+  agentId: string;
   sessionKey: string;
   runId: string;
   messageChannel: string;
@@ -423,6 +425,9 @@ async function runResponsesAgentCommand(params: {
       extraSystemPrompt: params.extraSystemPrompt || undefined,
       model: params.modelOverride,
       streamParams: params.streamParams ?? undefined,
+      // Command preparation otherwise derives the owner from the session key
+      // alone, which can disagree with the agent the request resolved to.
+      agentId: params.agentId,
       sessionKey: params.sessionKey,
       runId: params.runId,
       deliver: false,
@@ -491,7 +496,8 @@ export async function handleOpenResponsesHttpRequest(
     if (
       isAgentSelectionRequiredError(err) ||
       isInvalidGatewayModelError(err) ||
-      isUnknownGatewayAgentError(err)
+      isUnknownGatewayAgentError(err) ||
+      isGatewayAgentSelectionConflictError(err)
     ) {
       sendInvalidRequest(res, err.message);
       return true;
@@ -740,6 +746,7 @@ export async function handleOpenResponsesHttpRequest(
         extraSystemPrompt,
         modelOverride,
         streamParams,
+        agentId,
         sessionKey,
         runId: responseId,
         messageChannel,
@@ -1170,6 +1177,7 @@ export async function handleOpenResponsesHttpRequest(
         extraSystemPrompt,
         modelOverride,
         streamParams,
+        agentId,
         sessionKey,
         runId: responseId,
         messageChannel,
