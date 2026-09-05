@@ -735,6 +735,33 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expect(forwarded.sessionKey).toBe("agent:main:main");
   });
 
+  test("rejects a plan that omits the session identity stored in its approval binding", () => {
+    const sessionKey = "agent:main:discord:channel:123";
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
+    record.request.systemRunPlan = {
+      argv: echoSafeArgv,
+      cwd: null,
+      commandText: echoSafeCommand,
+      agentId: null,
+      sessionKey: null,
+    };
+    record.request.systemRunBinding = systemRunApprovalBinding(echoSafeArgv, {
+      agentId: "main",
+      sessionKey,
+    });
+
+    const result = sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, agentId: "main", sessionKey },
+      record,
+    });
+
+    expectRejectedForwardingResult(
+      result,
+      "APPROVAL_REQUEST_MISMATCH",
+      "approval id does not match request",
+    );
+  });
+
   test("forwards a validated shell preview for legacy node allowlist matching", () => {
     const argv = ["/bin/sh", "-lc", "/bin/hostname"];
     const record = makeRecord('/bin/sh -lc "/bin/hostname"', argv);

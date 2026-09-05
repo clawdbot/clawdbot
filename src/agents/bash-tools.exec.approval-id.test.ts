@@ -1745,7 +1745,7 @@ describe("exec approvals", () => {
     expect(params.approved).toBeUndefined();
     expect(params.approvalDecision).toBeUndefined();
     expect(params.approvalSource).toBe("ask-fallback");
-    expect(params.systemRunPlan).toStrictEqual(preparedPlan);
+    expect(params.systemRunPlan).toStrictEqual({ ...preparedPlan, agentId: "main" });
     expect(params.runId).toBeTypeOf("string");
   });
 
