@@ -1,5 +1,6 @@
 // WebSocket message-handler health tests cover post-connect startup-unavailable and health-gated dispatch.
 import type { IncomingMessage } from "node:http";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
@@ -15,6 +16,7 @@ import {
   getActiveDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { tryBeginGatewaySuspendAdmission } from "../../../process/gateway-work-admission.js";
 import {
   ensureProfileForEmail,
   setDisplayName,
@@ -1307,6 +1309,67 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
             expect.objectContaining({ id: canonical.id }),
           );
         });
+      });
+    },
+  );
+
+  it.each(["resume", "close"] as const)(
+    "settles identity sync parked by suspension when the Gateway handles %s",
+    async (action) => {
+      await withGatewayTestState({ label: "gateway-suspended-identity" }, async () => {
+        const canonical = ensureProfileForEmail("canonical@example.test");
+        const sync = vi.fn(async () => ({
+          profileId: canonical.id,
+          updatedAt: canonical.updatedAt,
+        }));
+        createAuthenticatedGitHubIdentitySyncMock.mockReturnValueOnce(sync);
+        resolveConnectAuthStateMock.mockResolvedValueOnce({
+          authResult: {
+            ok: true,
+            method: "tailscale",
+            user: "ada@github",
+            tailscaleIdentity: { login: "ada@github", name: "Ada Lovelace" },
+          },
+          authOk: true,
+          authMethod: "tailscale",
+          sharedAuthOk: true,
+        });
+        const suspension = tryBeginGatewaySuspendAdmission(() => {});
+        expect(suspension?.commit()).toBe(true);
+        let closing: Promise<void> | undefined;
+        try {
+          const harness = attachGatewayHarness({
+            connId: "conn-suspended-identity",
+            connectNonce: "nonce-suspended-identity",
+          });
+          harness.sendConnect("connect-suspended-identity", {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: { id: "test", version: "dev", platform: "test", mode: "test" },
+            role: "operator",
+            caps: [],
+          });
+          await waitForFast(() => expect(harness.socketSend).toHaveBeenCalled());
+          await nextTurn();
+          expect(sync).not.toHaveBeenCalled();
+          if (action === "resume") {
+            suspension?.release();
+            await waitForFast(() => expect(sync).toHaveBeenCalledOnce());
+            return;
+          }
+          let drained = false;
+          closing = cleanupGatewayHarnesses().then(() => {
+            drained = true;
+          });
+          await nextTurn();
+          expect.soft(drained, "closing does not wait for suspension expiry").toBe(true);
+          suspension?.release();
+          await closing;
+          expect(sync).not.toHaveBeenCalled();
+        } finally {
+          suspension?.release();
+          await closing;
+        }
       });
     },
   );
