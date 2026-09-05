@@ -633,6 +633,26 @@ describe("createBundleMcpToolRuntime", () => {
     expect(runtime.diagnostics).toEqual(diagnostics);
   });
 
+  it("keeps a recovering server with retained tools out of the outage record", async () => {
+    // A closed transport schedules a catalog retry that keeps the server entry
+    // and its tools; only a server without a catalog entry is unavailable.
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        diagnostics: [
+          {
+            serverName: "bundleProbe",
+            safeServerName: "bundleProbe",
+            launchSummary: "bundleProbe",
+            message: "mcp transport closed",
+          },
+        ],
+      }),
+    });
+
+    expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
+    expect(runtime.diagnostics).toBeUndefined();
+  });
+
   it("applies per-server MCP tool filters to resource and prompt utility tools", async () => {
     const base = makeToolRuntime({ tools: [], serverName: "knowledge" });
     const runtime = await materializeBundleMcpToolsForRun({

@@ -575,11 +575,17 @@ export async function materializeBundleMcpToolsForRun(params: {
       reservedToolNames,
     });
 
+    // A diagnostic beside a retained server entry is a recovery in progress
+    // (`scheduleCatalogServerRetry` keeps the server and its tools while it
+    // reconnects); only a server with no catalog entry left this run no tools.
+    const unavailableServers = catalog.diagnostics?.filter(
+      (diagnostic) => !Object.hasOwn(catalog.servers, diagnostic.serverName),
+    );
     return {
       tools,
       appTools,
-      ...(catalog.diagnostics && catalog.diagnostics.length > 0
-        ? { diagnostics: catalog.diagnostics }
+      ...(unavailableServers && unavailableServers.length > 0
+        ? { diagnostics: unavailableServers }
         : {}),
       restrictAppTools: (allowedTools) => {
         const next = new Map<string, Set<string>>();

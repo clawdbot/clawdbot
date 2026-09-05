@@ -481,8 +481,10 @@ Tool Search should fail closed:
 - if a tool is not in the effective policy, search should not return it
 - if a selected tool becomes unavailable, `tool_call` should fail
 - if a configured MCP server failed to connect or list its tools when the run
-  started, its tools are absent from the catalog; `tool_search` results, and
-  `tool_search_code` / Code Mode `exec` results, then carry an
+  started, its tools are absent from the catalog (a server reconnecting after
+  a dropped transport keeps its tools listed and is not reported);
+  `tool_search` results, and `tool_search_code` / Code Mode `exec` results,
+  then carry an
   `unavailableMcpServers` entry naming that server and its redacted failure
   (the in-script `search` keeps returning a plain array), and `tool_describe` /
   `tool_call` for one of its `mcp:<server>:…` ids report the outage instead of
