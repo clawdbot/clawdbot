@@ -1,3 +1,4 @@
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { toErrorObject } from "./errors.js";
 import { installationTargetEnv } from "./installation-target-context.js";
@@ -89,33 +90,24 @@ process.on("message", (raw: unknown) => {
           return run?.status === "running" && run.phase === "repairing";
         },
         onEvent: (event) => send({ type: "event", event }),
-        validate: (signal) =>
-          new Promise<UpdateRepairValidation>((resolve, reject) => {
-            signal.throwIfAborted();
-            const id = ++requestId;
-            const clear = () => {
-              signal.removeEventListener("abort", abort);
-              pending = undefined;
-            };
-            const abort = () => {
-              clear();
-              send({ type: "cancel-validation", id });
-              reject(toErrorObject(signal.reason, "Repair validation cancelled."));
-            };
-            pending = {
-              id,
-              resolve: (validation) => {
-                clear();
-                resolve(validation);
-              },
-              reject: (error) => {
-                clear();
-                reject(error);
-              },
-            };
-            signal.addEventListener("abort", abort, { once: true });
+        validate: async (signal) => {
+          signal.throwIfAborted();
+          const id = ++requestId;
+          const deferred = createDeferredCore<UpdateRepairValidation>();
+          const abort = () => {
+            send({ type: "cancel-validation", id });
+            deferred.reject(toErrorObject(signal.reason, "Repair validation cancelled."));
+          };
+          pending = { id, ...deferred };
+          signal.addEventListener("abort", abort, { once: true });
+          try {
             send({ type: "validate", id });
-          }),
+            return await deferred.promise;
+          } finally {
+            signal.removeEventListener("abort", abort);
+            pending = undefined;
+          }
+        },
       })
         .then((result) => {
           closeOpenClawStateDatabase();

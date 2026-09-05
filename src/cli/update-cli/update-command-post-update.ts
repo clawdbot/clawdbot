@@ -27,6 +27,8 @@ import { tryWriteCompletionCache, type UpdateCommandOptions } from "./shared.js"
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
+import { repairUpdateService } from "./update-command-repair-service.js";
+import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   UpdateCommandFailure,
@@ -34,8 +36,6 @@ import {
 } from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
-import { repairUpdateService } from "./update-command-repair-service.js";
-import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
 import {
   assertGatewayServiceManagementAllowedForUpdate,
@@ -353,7 +353,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     await (
       rollbackStopState ?? params.preManagedServiceStop
     )?.windowsTaskAutoStartRecovery?.complete(
-      rolledBack || finalResult.status === "ok" ||
+      rolledBack ||
+        finalResult.status === "ok" ||
         (finalResult.recovery?.serviceRestartSafe === true &&
           finalResult.recovery.service === "healthy"),
     );

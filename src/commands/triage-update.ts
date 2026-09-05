@@ -20,7 +20,7 @@ const updateIdentitySchema = z.object({
   sha: z.string().nullish(),
   version: z.string().nullish(),
 });
-const updateFailureSchema = z
+export const updateFailureSchema = z
   .union([
     z.object({
       result: z.object({
