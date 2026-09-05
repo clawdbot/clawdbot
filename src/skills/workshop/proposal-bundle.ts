@@ -10,15 +10,10 @@ import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import type { PreparedSkillProposalSupportFile, SkillProposalReadResult } from "./types.js";
 
 const MAX_EVALUATION_FILES = 256;
-export const MAX_EVALUATION_FILE_BYTES = 1024 * 1024;
-export const MAX_EVALUATION_BUNDLE_BYTES = 8 * 1024 * 1024;
+const MAX_EVALUATION_FILE_BYTES = 1024 * 1024;
+const MAX_EVALUATION_BUNDLE_BYTES = 8 * 1024 * 1024;
 const MAX_EVALUATION_PATH_DEPTH = 16;
 const EXCLUDED_ROOT_DIRS = new Set([".clawhub", ".clawdhub", ".openclaw"]);
-
-export function isUtf8Buffer(content: Buffer): boolean {
-  const utf8 = content.toString("utf8");
-  return !utf8.includes("\0") && Buffer.from(utf8, "utf8").equals(content);
-}
 
 export async function buildSkillProposalEvaluationBundles(params: {
   proposal: SkillProposalReadResult;
@@ -140,7 +135,7 @@ async function readSkillTreeFiles(
 
 function fileFromBuffer(relativePath: string, content: Buffer): PluginHookSkillBundleFile {
   const utf8 = content.toString("utf8");
-  const isUtf8 = isUtf8Buffer(content);
+  const isUtf8 = !utf8.includes("\0") && Buffer.from(utf8, "utf8").equals(content);
   return {
     path: relativePath,
     content: isUtf8 ? utf8 : content.toString("base64"),

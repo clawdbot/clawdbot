@@ -41,7 +41,7 @@ const {
   fetchWithSsrFGuardMock,
   sendCronAnnouncePayloadStrictMock,
   runCronIsolatedAgentTurnMock,
-  runSkillCollectionReviewForAgentMock,
+  buildCollectionReviewPromptMock,
   getGlobalHookRunnerMock,
   runCronChangedMock,
   abortAndDrainEmbeddedAgentRunMock,
@@ -80,7 +80,7 @@ const {
     status: "ok",
     summary: "ok",
   })),
-  runSkillCollectionReviewForAgentMock: vi.fn(),
+  buildCollectionReviewPromptMock: vi.fn(async () => "review"),
   runCronChangedMock: vi.fn(async (_event: unknown, _context?: unknown) => {}),
   getGlobalHookRunnerMock: vi.fn(() => ({
     hasHooks: (hookName: string) => hookName === "cron_changed",
@@ -220,8 +220,8 @@ vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
 }));
 
-vi.mock("../skills/workshop/collection-review.js", () => ({
-  runSkillCollectionReviewForAgent: runSkillCollectionReviewForAgentMock,
+vi.mock("../skills/workshop/collection-review-prompt.js", () => ({
+  buildCollectionReviewPrompt: buildCollectionReviewPromptMock,
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -486,7 +486,7 @@ describe("buildGatewayCronService", () => {
     fetchWithSsrFGuardMock.mockClear();
     sendCronAnnouncePayloadStrictMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
-    runSkillCollectionReviewForAgentMock.mockReset();
+    buildCollectionReviewPromptMock.mockReset().mockResolvedValue("review");
     runCronChangedMock.mockClear();
     getGlobalHookRunnerMock.mockClear();
     abortAndDrainEmbeddedAgentRunMock.mockClear();
@@ -530,7 +530,7 @@ describe("buildGatewayCronService", () => {
         { ...spec.input, delivery: { mode: "announce" } },
         { enabledExplicit: true, systemOwned: true },
       );
-      runSkillCollectionReviewForAgentMock.mockResolvedValueOnce({
+      runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
         status: "ok",
         summary: "review complete",
       });
@@ -569,45 +569,6 @@ describe("buildGatewayCronService", () => {
     if (!job) {
       throw new Error("expected the skill collection review monitor");
     }
-    runSkillCollectionReviewForAgentMock.mockImplementationOnce(
-      async (params: {
-        job: typeof job;
-        abortSignal?: AbortSignal;
-        onExecutionStarted?: typeof onExecutionStarted;
-        onExecutionPhase?: typeof onExecutionPhase;
-        onLaneWait?: typeof onLaneWait;
-        executionIdentity?: CronExecutionIdentityAdmission;
-        runTurn: (input: {
-          job: typeof job;
-          message: string;
-          abortSignal?: AbortSignal;
-          onExecutionStarted?: typeof onExecutionStarted;
-          onExecutionPhase?: typeof onExecutionPhase;
-          onLaneWait?: typeof onLaneWait;
-          executionIdentity?: CronExecutionIdentityAdmission;
-          executionRoot: {
-            workspaceDir: string;
-            cwd: string;
-            sessionRoot: string;
-            requireWritableSandbox?: boolean;
-          };
-        }) => Promise<unknown>;
-      }) =>
-        await params.runTurn({
-          job: params.job,
-          message: "review",
-          abortSignal: params.abortSignal,
-          onExecutionStarted: params.onExecutionStarted,
-          onExecutionPhase: params.onExecutionPhase,
-          onLaneWait: params.onLaneWait,
-          executionIdentity: params.executionIdentity,
-          executionRoot: {
-            workspaceDir: "/tmp/workshop",
-            cwd: "/tmp/workshop",
-            sessionRoot: "/tmp/workshop",
-          },
-        }),
-    );
 
     try {
       await getCronDeps(state).runIsolatedAgentJob({
@@ -627,6 +588,7 @@ describe("buildGatewayCronService", () => {
           onExecutionPhase,
           onLaneWait,
           executionIdentity,
+          skillsSnapshot: { prompt: "", skills: [] },
         }),
       );
     } finally {

@@ -1,12 +1,34 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { recordSkillCollectionReviewHistory } from "../../skills/workshop/collection-review-state.js";
+import type { SkillCollectionReviewResult } from "../../skills/workshop/collection-review-state.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
 const cleanups: Array<() => Promise<void>> = [];
+
+function recordSkillCollectionReviewHistory(
+  agentId: string,
+  time: number,
+  result: SkillCollectionReviewResult,
+  options: { env: NodeJS.ProcessEnv },
+) {
+  openOpenClawStateDatabase(options)
+    .db.prepare(`INSERT INTO skill_workshop_collection_reviews
+    (review_id, owner_agent_id, backup_id, create_time, kept_names_json, written_names_json, dropped_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(
+      result.backupId,
+      agentId,
+      result.backupId,
+      time,
+      JSON.stringify(result.kept),
+      JSON.stringify(result.written),
+      JSON.stringify(result.dropped),
+    );
+}
 
 const createSkillWorkshopTool = (
   options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {

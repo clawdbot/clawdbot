@@ -104,7 +104,10 @@ import {
 } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { runSkillCollectionReviewForAgent } from "../skills/workshop/collection-review.js";
+import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
+import { buildCollectionReviewPrompt } from "../skills/workshop/collection-review-prompt.js";
+import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
+import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import {
   createCronExitWatchers,
   type CronExitResult,
@@ -899,43 +902,41 @@ export function buildGatewayCronService(params: {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
       const reviewAgentId = skillCollectionReviewMonitorAgentId(job);
-      if (reviewAgentId) {
-        return await runSkillCollectionReviewForAgent({
-          config: runtimeConfig,
-          agentId: reviewAgentId,
-          job,
+      if (reviewAgentId && resolveSkillWorkshopConfig(runtimeConfig).autonomous.mode !== "auto") {
+        return { status: "skipped", summary: "Skill collection review disabled." };
+      }
+      const executionRoot = reviewAgentId
+        ? resolveWorkshopSkillsDir(runtimeConfig, agentId)
+        : undefined;
+      const turnMessage = executionRoot
+        ? await buildCollectionReviewPrompt(executionRoot)
+        : message;
+      try {
+        return await runCronIsolatedAgentTurn({
+          cfg: runtimeConfig,
+          deps: params.deps,
+          job: executionRoot
+            ? { ...job, payload: { ...job.payload, kind: "agentTurn", message: turnMessage } }
+            : job,
+          message: turnMessage,
           abortSignal,
           onExecutionStarted,
           onExecutionPhase,
           onLaneWait,
           executionIdentity,
-          runTurn: async ({ job: reviewJob, message: reviewMessage, ...reviewParams }) =>
-            await runCronIsolatedAgentTurn({
-              cfg: runtimeConfig,
-              deps: params.deps,
-              job: reviewJob,
-              message: reviewMessage,
-              ...reviewParams,
-              agentId,
-              sessionKey,
-              lane: "cron",
-            }),
+          agentId,
+          sessionKey,
+          lane: "cron",
+          executionRoot,
+          skillsSnapshot: executionRoot ? { prompt: "", skills: [] } : undefined,
         });
+      } finally {
+        // Normal file tools can finish edits before cancellation. Refresh future
+        // sessions without rewriting files or invalidating the running session.
+        if (executionRoot) {
+          bumpSkillsSnapshotVersion({ reason: "workshop" });
+        }
       }
-      return await runCronIsolatedAgentTurn({
-        cfg: runtimeConfig,
-        deps: params.deps,
-        job,
-        message,
-        abortSignal,
-        onExecutionStarted,
-        onExecutionPhase,
-        onLaneWait,
-        executionIdentity,
-        agentId,
-        sessionKey,
-        lane: "cron",
-      });
     },
     runCommandJob: async ({ job, abortSignal }) => {
       const result = await runCronCommandJob({

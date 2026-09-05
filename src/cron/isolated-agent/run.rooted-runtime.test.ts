@@ -22,6 +22,23 @@ const executionRoot = "/tmp/workshop-skills";
 describe("runCronIsolatedAgentTurn — rooted runtime fallback", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
+  it.each([
+    { prompt: "", skills: [] },
+    { prompt: "Explicit safe instructions", skills: [{ name: "safe" }] },
+  ])("preserves the host-selected instruction snapshot: $prompt", async (skillsSnapshot) => {
+    runWithModelFallbackMock.mockImplementation(async (params: TestModelFallbackRunnerParams) => ({
+      result: await runInitialModelFallbackAttempt(params),
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({ executionRoot, skillsSnapshot }),
+    );
+    expect(result.status).toBe("ok");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledWith(expect.objectContaining({ skillsSnapshot }));
+  });
+
   it("rejects all-CLI fallbacks after a rooted embedded candidate fails", async () => {
     resolveEffectiveAgentRuntimeMock.mockImplementation(({ modelId }: { modelId: string }) =>
       modelId === "gpt-5.4" ? "openclaw" : "claude-cli",

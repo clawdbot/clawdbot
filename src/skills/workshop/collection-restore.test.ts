@@ -2,17 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CronStoredJob } from "../../cron/types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
-import { latestCommittedBackupId, type CollectionBackupManifest } from "./collection-backup.js";
+import type { CollectionBackupManifest } from "./collection-backup.js";
+import { seedLegacyCollectionBackup } from "./collection-backup.test-support.js";
 import { resolveSkillCollectionBackupRoot } from "./collection-paths.js";
 import { restoreLatestSkillCollectionBackup } from "./collection-restore.js";
-import { listSkillCollectionReviewOutcomes } from "./collection-review-state.js";
-import { runSkillCollectionReviewForAgent } from "./collection-review.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
 const dispatchChange = vi.hoisted(() => vi.fn(async (_event: { action: string }) => {}));
@@ -22,21 +20,6 @@ vi.mock("../lifecycle/skill-change-hook.js", () => ({
   snapshotCommittedSkillArtifactBestEffort: snapshotArtifact,
   dispatchCommittedSkillChangeBestEffort: dispatchChange,
 }));
-
-const job: CronStoredJob = {
-  id: "collection-review",
-  declarationKey: "skill-collection-review:main",
-  name: "Collection review",
-  agentId: "main",
-  enabled: true,
-  createdAtMs: 1,
-  updatedAtMs: 1,
-  schedule: { kind: "every", everyMs: 604_800_000 },
-  sessionTarget: "isolated",
-  wakeMode: "next-heartbeat",
-  payload: { kind: "agentTurn", message: "review" },
-  state: {},
-};
 
 let state: OpenClawTestState;
 let skillsRoot: string;
@@ -63,22 +46,8 @@ async function writeSkill(relativeDir: string, body: string, name = path.basenam
   return file;
 }
 
-async function review(change: () => Promise<unknown>) {
-  const result = await runSkillCollectionReviewForAgent({
-    config: {},
-    agentId: "main",
-    job,
-    env: state.env,
-    runTurn: async () => {
-      await change();
-      return { status: "ok", summary: "reviewed" };
-    },
-  });
-  expect(result.status).toBe("ok");
-  return path.join(
-    backupRoot,
-    expectDefined(await latestCommittedBackupId(backupRoot), "review backup"),
-  );
+function seedBackup(change: () => Promise<unknown>) {
+  return seedLegacyCollectionBackup(skillsRoot, backupRoot, change);
 }
 
 function restore() {
@@ -94,7 +63,7 @@ describe("skill collection backup and restore", () => {
   it("restores updates and drops, removes review-created skills, and preserves later files", async () => {
     const updated = await writeSkill("updated", "# Original\n");
     await writeSkill("dropped", "# Dropped\n");
-    await review(async () => {
+    await seedBackup(async () => {
       await writeSkill("updated", "# Changed\n");
       await fs.rm(path.join(skillsRoot, "dropped"), { recursive: true });
       await writeSkill("created", "# Created\n");
@@ -121,7 +90,7 @@ describe("skill collection backup and restore", () => {
 
   it("restores grouped directories under their declared keys and rejects escaping manifests", async () => {
     const file = await writeSkill("group/folder", "# Grouped\n", "declared-name");
-    const backupDir = await review(() => fs.rm(path.dirname(file), { recursive: true }));
+    const backupDir = await seedBackup(() => fs.rm(path.dirname(file), { recursive: true }));
     await expect(restore()).resolves.toMatchObject({ restored: ["declared-name"] });
     await expect(fs.readFile(file, "utf8")).resolves.toContain("# Grouped");
     expect(snapshotArtifact).toHaveBeenCalledWith(
@@ -145,7 +114,7 @@ describe("skill collection backup and restore", () => {
     "preserves a manual edit made %s",
     async (when) => {
       const file = await writeSkill("procedure", "# Original\n");
-      await review(() => writeSkill("procedure", "# Reviewed\n"));
+      await seedBackup(() => writeSkill("procedure", "# Reviewed\n"));
       if (when === "after review") {
         await fs.appendFile(file, "Manual improvement\n");
       } else {
@@ -161,7 +130,7 @@ describe("skill collection backup and restore", () => {
 
   it("keeps history-only backups read-only", async () => {
     const file = await writeSkill("procedure", "# Original\n");
-    const backupDir = await review(() => writeSkill("procedure", "# Reviewed\n"));
+    const backupDir = await seedBackup(() => writeSkill("procedure", "# Reviewed\n"));
     const manifestFile = path.join(backupDir, "manifest.json");
     const manifest = JSON.parse(
       await fs.readFile(manifestFile, "utf8"),
@@ -176,7 +145,7 @@ describe("skill collection backup and restore", () => {
     "preserves a legacy backup with %s deep content when its digest cannot be verified",
     async (deepContent) => {
       const file = await writeSkill("procedure", "# Original\n");
-      const backupDir = await review(() => writeSkill("procedure", "# Reviewed\n"));
+      const backupDir = await seedBackup(() => writeSkill("procedure", "# Reviewed\n"));
       const savedSkill = path.join(backupDir, "skills", "procedure");
       const relative = path.join(
         "references",
@@ -218,7 +187,7 @@ describe("skill collection backup and restore", () => {
     "preserves recovery data when restore fails (rollback also fails: %s)",
     async (rollbackFails) => {
       const file = await writeSkill("procedure", "# Original\n");
-      const backupDir = await review(() => writeSkill("procedure", "# Reviewed\n"));
+      const backupDir = await seedBackup(() => writeSkill("procedure", "# Reviewed\n"));
       const copy = fs.cp.bind(fs);
       let failed = false;
       const copySpy = vi
@@ -251,22 +220,4 @@ describe("skill collection backup and restore", () => {
       }
     },
   );
-
-  it("restores the pre-turn tree when committing its backup fails", async () => {
-    const file = await writeSkill("procedure", "# Original\n");
-    vi.spyOn(fs, "rename").mockRejectedValueOnce(new Error("backup commit failed"));
-    const result = await runSkillCollectionReviewForAgent({
-      config: {},
-      agentId: "main",
-      job,
-      env: state.env,
-      runTurn: async () => {
-        await writeSkill("procedure", "# Changed\n");
-        return { status: "ok" };
-      },
-    });
-    expect(result.status).toBe("error");
-    await expect(fs.readFile(file, "utf8")).resolves.toContain("# Original");
-    expect(listSkillCollectionReviewOutcomes("main", { env: state.env })).toEqual([]);
-  });
 });

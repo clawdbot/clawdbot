@@ -5,20 +5,6 @@ import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { logWarn } from "../../logger.js";
 
-/** Roll back a turn whose full result could not be inspected. The caller retains the backup on failure. */
-export async function restoreSkillCollectionReviewTree(params: {
-  skillsRoot: string;
-  backupDir: string;
-}): Promise<void> {
-  await fs.rm(params.skillsRoot, { recursive: true, force: true });
-  await fs.cp(path.join(params.backupDir, "skills"), params.skillsRoot, {
-    recursive: true,
-    errorOnExist: true,
-    force: false,
-    preserveTimestamps: true,
-  });
-}
-
 export async function restoreSkillCollectionBackupTransaction(params: {
   skillsRoot: string;
   backupDir: string;
@@ -68,7 +54,7 @@ export async function restoreSkillCollectionBackupTransaction(params: {
   }
 }
 
-export async function restoreSkillCollectionBackup(params: {
+async function restoreSkillCollectionBackup(params: {
   skillsRoot: string;
   backupDir: string;
   skillDirs: readonly string[];

@@ -559,14 +559,16 @@ export async function prepareCronRunContext(params: {
     }
     commandBody = appendCronUnattendedRunPreamble(commandBody, { externalHook: isExternalHook });
 
-    const skillsSnapshot = await resolveCronSkillsSnapshot({
-      workspaceDir: executionWorkspaceDir,
-      config: cfgWithAgentDefaults,
-      agentId,
-      existingSnapshot: cronSession.sessionEntry.skillsSnapshot,
-      librarySelections: cronSession.sessionEntry.skillLibrarySelections,
-      isFastTestEnv: params.isFastTestEnv,
-    });
+    const skillsSnapshot =
+      input.skillsSnapshot ??
+      (await resolveCronSkillsSnapshot({
+        workspaceDir: executionWorkspaceDir,
+        config: cfgWithAgentDefaults,
+        agentId,
+        existingSnapshot: cronSession.sessionEntry.skillsSnapshot,
+        librarySelections: cronSession.sessionEntry.skillLibrarySelections,
+        isFastTestEnv: params.isFastTestEnv,
+      }));
     await persistCronSkillsSnapshotIfChanged({
       isFastTestEnv: params.isFastTestEnv,
       cronSession,

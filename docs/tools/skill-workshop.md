@@ -108,71 +108,46 @@ Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 
 ## Collection review
 
-In `auto` mode, the Gateway runs one system-owned cron job per agent each week
-(a multi-agent roster needs `agents.ownership: "explicit"`, see
-[Multi-agent](/concepts/multi-agent)).
-Each job appears in `openclaw cron list` and runs every 7 days. Cron owns the
-cadence; the job is enabled only when
-`skills.workshop.autonomous.mode` is `auto`. Each turn uses the normal agent
-tools and its agent's full Workshop directory as its working directory,
-file-tool root, and session root. It keeps distinct useful skills, rewrites
-weak ones, consolidates overlap, and drops junk or stale fragments.
-The review announces nothing; results are in the review history and the cron
-run record.
-The file tools are rooted at that directory. The review keeps the normal `exec`
-tool, but shell access follows the operator's cron exec-approval policy. With
-the default policy and no connected approval client, `exec` is denied
-immediately and the reviewer continues with file tools. Reviewed skill
-instructions cannot grant host access that the operator has not already granted
-to automations.
-If an enabled sandbox uses `workspaceAccess: "rw"`, the review uses the agent's
-Workshop directory as its sandbox workspace. If it uses `"ro"` or `"none"`, the
-review records `sandbox workspace is not read-write; collection review skipped`,
-does not run, and does not commit a backup or advance the skill snapshot.
-Choosing `auto` intentionally authorizes those rewrites and drops without a
-second approval **for Workshop-owned paths only**; `propose` and `off` do not
-run collection review.
+In `auto` mode, the Gateway maintains one weekly automation per agent. It is
+a normal isolated agent turn: cron owns scheduling, cancellation, and run
+history. `propose` and `off` disable these reviews.
 
-Each reviewer reads only its agent's Workshop directory. The turn edits files
-directly. The prompt includes the full relative file index from the same snapshot
-used for inspection, so discovery does not depend on shell access. A full-tree
-snapshot is created before the turn; every changed or
-added file is scanned after it. Critical findings or symbolic links revert the
-affected skill directory while other safe changes stay. Root-level files are
-reverted individually. Unchanged skills stay untouched.
-A `SKILL.md` placed directly in the agent's Workshop root is ignored; skills
-live in subdirectories.
-The review runs on the embedded runtime only; model fallback candidates that
-use CLI runtimes are skipped for this job.
-Collection review records its changes in review history and the backup manifest;
-it does not create proposal rows.
+The reviewer reads and edits the agent's Workshop directory with normal file
+tools. Its prompt includes the complete relative file index and recorded usage.
+Skill contents are review material, not active instructions. It keeps useful
+procedures, simplifies bloated skills, consolidates overlap, and removes obsolete
+files. Zero recorded use alone never justifies removal.
 
-Recorded usage counts and last-used recency are supporting evidence, not an
-age-based lifecycle: heavy use favors preserving a skill's procedure, while no
-recorded use alone never justifies removing it.
+The file tools stay rooted at the Workshop directory. Shell commands use the
+operator's existing cron execution and approval policy; enabling review does not
+grant additional shell access. With the default policy and no approval client,
+shell commands are denied. File discovery does not need a shell.
 
-Each agent's collection edits share one lock with proposal writes and restore.
-One completed backup is retained under that agent directory. If recovery fails,
-its pending backup is also retained for inspection. The changed collection
-appears in new agent runs; running sessions keep their existing skill snapshot.
+Reviews require the embedded runtime. If an enabled sandbox has
+`workspaceAccess: "ro"` or `"none"`, the turn refuses to run rather than editing
+a disposable copy. A writable sandbox uses the agent's Workshop directory.
+The inventory is limited to 10,000 entries and six directory levels; an
+incomplete inventory produces a visible failed run.
 
-To undo the last completed cleanup, ask the agent to restore the skill
-collection. It uses `skill_workshop` action `restore_collection` under the same
-agent-scoped lock. Restore refuses if any affected skill changed after cleanup.
-For an older backup that cannot be verified, follow the
-[manual recovery guidance](#when-an-older-backup-cannot-be-restored-automatically).
+### Changes and recovery
 
-Each attempt is persisted under the agent id review key before the model starts.
-The inventory is bounded to 10,000 entries and six directory levels. A larger tree fails the
-review with a recorded error; split or prune the agent's Workshop directory by
-hand before running it again.
+Collection review follows normal agent file-edit semantics. Completed edits
+remain if a later step fails or the turn is cancelled. There is no collection-wide
+transaction, post-turn scanner, automatic rollback, or separate review history
+writer. This also prevents a failed review from restoring an old tree over
+concurrent operator edits. Per-skill proposal validation, scanning, and apply
+behavior described above are unchanged.
 
-Every completed review records its kept, written, and dropped skill names in
-the shared state database, including the reason for each drop. OpenClaw retains
-the latest 90 outcomes per agent.
+The reviewer ends with a summary of changes and removal reasons, or why no change
+was needed. Find it in the automation's run history. Reviews do not announce into
+a conversation. Future sessions load changed skills; running sessions retain
+their existing instruction snapshot.
 
-The reviewer is asked to keep `SKILL.md` files near or below 10,000 characters.
-This is guidance, not a hard limit for collection edits.
+Existing collection backups are preserved. The `restore_collection` action
+can restore a retained backup from the previous review implementation, but new
+reviews do not create collection backups. The `history` action reads those
+historical review records; current results belong to automation history.
+Restore refuses to overwrite affected skills changed after that backup.
 
 ### When an older backup cannot be restored automatically
 
@@ -186,8 +161,7 @@ Do not edit backup hashes or delete or flatten live files merely to make restore
 
 For operator-led recovery:
 
-1. Pause writes to the agent's Workshop, including collection review. A later cleanup can
-   replace the retained backup.
+1. Pause writes to the agent's Workshop, including collection review, before comparing or restoring files.
 2. Locate the backup under
    `<agentDir>/skill-workshop/collection-backups/<backup-id>/`.
    Its `manifest.json` identifies the affected Workshop-relative directories in
@@ -570,8 +544,9 @@ Proposal descriptions are always capped at 160 bytes, independent of
 | `skills.curator.restore`           | `operator.admin` |
 
 `skills.curator.status` reports live skill usage recorded from trusted
-`skill.used` events, plus the latest collection review for each agent and per-workspace
-experience review outcomes. Age-based skill lifecycle curation is retired.
+`skill.used` events, retained pre-cron collection review records, and per-workspace
+experience review outcomes. Current collection reviews use automation run history.
+Age-based skill lifecycle curation is retired.
 `skills.curator.pin`, `skills.curator.unpin`, and `skills.curator.restore` remain
 registered for existing clients, but always return an error explaining that the
 weekly collection review now manages the skill collection.
