@@ -14,6 +14,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import {
   appendTranscriptEventSync,
   appendTranscriptMessage,
+  cleanupPluginHostSessionStore,
   listSessionEntriesCore,
   listSessionTranscriptInstances,
   loadSessionEntry,
@@ -122,6 +123,61 @@ function createSessionScope(label: string) {
 }
 
 describe("SQLite session entry cache", () => {
+  it.each(["plugin-owned-state", "promoted-slots"] as const)(
+    "scans plugin cleanup metadata without decoding saved prompts (%s)",
+    async (mode) => {
+      const scope = createSessionScope("plugin-cleanup");
+      const siblingScope = { ...scope, sessionKey: "agent:main:plugin-cleanup-sibling" };
+      const skillsSnapshot = { prompt: "unneeded cleanup prompt".repeat(4096), skills: [] };
+      const systemPromptReport = {
+        source: "run" as const,
+        generatedAt: 1,
+        systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+        injectedWorkspaceFiles: [],
+        skills: { promptChars: 0, entries: [] },
+        tools: { listChars: 0, schemaChars: 0, entries: [] },
+      };
+      const entry = {
+        sessionId: "plugin-cleanup",
+        updatedAt: 1,
+        skillsSnapshot,
+        systemPromptReport,
+        pluginExtensions: { fixture: { state: { active: true } } },
+        pluginExtensionSlotKeys: { fixture: { state: "fixtureState" } },
+        fixtureState: { active: true },
+      };
+      await upsertSessionEntryCore(scope, entry);
+      await upsertSessionEntryCore(siblingScope, { ...entry, sessionId: "plugin-cleanup-sibling" });
+      const siblingBefore = loadSessionEntry(siblingScope);
+      expect(siblingBefore).toBeDefined();
+      const database = openOpenClawAgentDatabase(scope);
+
+      parseSessionEntryCalls.mockClear();
+      expect(
+        await cleanupPluginHostSessionStore({
+          agentId: scope.agentId,
+          storePath: database.path,
+          sessionKey: scope.sessionKey,
+          pluginId: "fixture",
+          sessionEntrySlotKeys: new Set(["fixtureState"]),
+          mode,
+        }),
+      ).toBe(1);
+      expect(parseSessionEntryCalls).toHaveBeenCalled();
+      expect(
+        parseSessionEntryCalls.mock.calls.every(([json]) => Buffer.byteLength(json) < 1024),
+      ).toBe(true);
+      const cleaned = loadSessionEntry(scope);
+      expect(cleaned?.skillsSnapshot).toEqual(skillsSnapshot);
+      expect(cleaned?.systemPromptReport).toEqual(systemPromptReport);
+      expect(cleaned).not.toHaveProperty("fixtureState");
+      expect(cleaned?.pluginExtensions).toEqual(
+        mode === "promoted-slots" ? entry.pluginExtensions : undefined,
+      );
+      expect(loadSessionEntry(siblingScope)).toEqual(siblingBefore);
+    },
+  );
+
   it("omits saved prompts from usage inventory while preserving full transcript reads", async () => {
     const scope = createSessionScope("usage-inventory");
     const sessionId = "usage-inventory";
