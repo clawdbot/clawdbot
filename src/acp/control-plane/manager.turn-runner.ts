@@ -1,4 +1,5 @@
 /** Runs ACP turns, failover, timeout cleanup, and detached-task progress mirroring. */
+import { resolveSessionIdentityFromMeta } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
 import { expectDefined } from "@openclaw/normalization-core";
 import { logVerbose } from "../../globals.js";
@@ -27,7 +28,10 @@ import {
 import { applyManagerRuntimeControls } from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
-import { prepareFreshManagerRuntimeHandleRetry } from "./manager.runtime-resume-state.js";
+import {
+  clearPersistedManagerRuntimeIdentity,
+  prepareFreshManagerRuntimeHandleRetry,
+} from "./manager.runtime-resume-state.js";
 import { consumeAcpTurnStream } from "./manager.turn-stream.js";
 import {
   awaitTurnWithTimeout,
@@ -163,6 +167,23 @@ export async function runManagerTurn(params: {
       lastError: formatAcpErrorChain(errorToRecord),
     });
     throw errorToRecord;
+  };
+  const clearPersistedOneshotIdentity = async (
+    expectedIdentity: ReturnType<typeof resolveSessionIdentityFromMeta>,
+  ) => {
+    try {
+      await clearPersistedManagerRuntimeIdentity({
+        cfg: input.cfg,
+        sessionKey,
+        agentId,
+        writeSessionMeta: params.writeSessionMeta,
+        expectedIdentity: expectedIdentity ?? null,
+      });
+    } catch (error) {
+      logVerbose(
+        `acp-manager: failed to clear persisted ACP identity after oneshot close for ${sessionKey}: ${String(error)}`,
+      );
+    }
   };
 
   let acpTurnMarkedActive = false;
@@ -349,6 +370,7 @@ export async function runManagerTurn(params: {
               if (!activeTurn) {
                 return;
               }
+              const closingIdentity = resolveSessionIdentityFromMeta(meta);
               await cleanupTimedOutTurn({
                 sessionKey,
                 activeTurn,
@@ -359,6 +381,9 @@ export async function runManagerTurn(params: {
                     agentId,
                     handle: turn.handle,
                   });
+                },
+                onOneshotCloseSucceeded: async () => {
+                  await clearPersistedOneshotIdentity(closingIdentity);
                 },
               });
             },
@@ -480,17 +505,26 @@ export async function runManagerTurn(params: {
             meta &&
             meta.mode === "oneshot"
           ) {
+            let oneshotCloseSucceeded = false;
             try {
               await runtime.close({
                 handle,
                 reason: "oneshot-complete",
               });
+              oneshotCloseSucceeded = true;
             } catch (error) {
               logVerbose(
                 `acp-manager: ACP oneshot close failed for ${sessionKey}: ${String(error)}`,
               );
             } finally {
               params.runtimeHandles.clear(params);
+            }
+            // Only clear the persisted resume identity once close is confirmed to have
+            // succeeded. If close failed, the backend session may still be live, so retain
+            // the identity so a later cache-miss ensure can reconnect to it instead of
+            // orphaning it and opening a second backend session (#124852 follow-up).
+            if (oneshotCloseSucceeded) {
+              await clearPersistedOneshotIdentity(resolveSessionIdentityFromMeta(meta));
             }
           }
         }
