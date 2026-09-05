@@ -551,40 +551,35 @@ describe("setupPluginConfig", () => {
   it.each([
     {
       name: "an integer enum member as a number",
-      enumMembers: [1, 2],
       schemaProp: { type: "integer", enum: [1, 2] },
       selectedToken: "__enum_0__",
       expected: 1,
     },
     {
       name: "a boolean enum member as a boolean",
-      enumMembers: [true, false],
       schemaProp: { type: "boolean", enum: [true, false] },
       selectedToken: "__enum_0__",
       expected: true,
     },
     {
       name: "a later integer enum member selected by index",
-      enumMembers: [10, 20, 30],
       schemaProp: { type: "integer", enum: [10, 20, 30] },
       selectedToken: "__enum_2__",
       expected: 30,
     },
     {
       name: "distinct members sharing a string label keep distinct types",
-      enumMembers: ["1", 1],
       schemaProp: { type: ["string", "integer"], enum: ["1", 1] },
       selectedToken: "__enum_1__",
       expected: 1,
     },
     {
       name: "an object enum member by index",
-      enumMembers: [{ mode: "auto" }, { mode: "manual" }],
       schemaProp: { type: "object", enum: [{ mode: "auto" }, { mode: "manual" }] },
       selectedToken: "__enum_1__",
       expected: { mode: "manual" },
     },
-  ])("preserves the typed enum value for $name", async ({ enumMembers, schemaProp, selectedToken, expected }) => {
+  ])("preserves the typed enum value for $name", async ({ schemaProp, selectedToken, expected }) => {
     const pluginId = "typed-enum-plugin";
     loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
