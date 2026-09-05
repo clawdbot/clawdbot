@@ -180,6 +180,9 @@ struct OpenClawTypographyTests {
         let settingsSupport = try String(
             contentsOf: Self.sourceURL("Design/SettingsProTabSupport.swift"),
             encoding: .utf8)
+        let settingsHub = try String(
+            contentsOf: Self.sourceURL("Settings/SettingsHubScreen.swift"),
+            encoding: .utf8)
         let approvalDialog = try String(
             contentsOf: Self.sourceURL("Gateway/ExecApprovalPromptDialog.swift"),
             encoding: .utf8)
@@ -291,6 +294,15 @@ struct OpenClawTypographyTests {
         #expect(onboardingSecureOption.contains(".font(OpenClawType.captionSemiBold)"))
 
         #expect(settingsSections.contains(".font(OpenClawType.body)"))
+        for label in ["Gateway", "Approvals"] {
+            let text = try Self.extract(settingsHub, from: "Text(\"\(label)\")", to: "}")
+            #expect(text.contains(".font(OpenClawType.subheadSemiBold)"))
+        }
+        let approvalBadge = try Self.extract(
+            settingsHub,
+            from: "Text(self.appModel.pendingExecApprovalCount.formatted())",
+            to: "}")
+        #expect(approvalBadge.contains(".font(OpenClawType.captionSemiBold)"))
         #expect(settingsSections.contains("Text(warningText)"))
         #expect(settingsSections.contains(".font(OpenClawType.caption)"))
         #expect(approvalDialog.contains("Text(warningText)"))

@@ -207,7 +207,8 @@ extension SettingsProTab {
         }
         let notificationSettings = await UNUserNotificationCenter.current().notificationSettings()
         self.applyNotificationStatus(notificationSettings.authorizationStatus)
-        self.registerForRemoteNotificationsIfEnrollmentReady()
+        IOSDeviceSettingsActions.registerForRemoteNotificationsIfEnrollmentReady(
+            status: notificationSettings.authorizationStatus)
 
         let issueCount = SettingsDiagnostics.issueCount(
             gatewayConnected: self.gatewayDiagnosticConnected,
@@ -268,7 +269,7 @@ extension SettingsProTab {
             authorizationStatus: authorization.authorizationStatus,
             accuracyAuthorization: authorization.accuracyAuthorization)
         Task {
-            let locationServicesEnabled = await Self.locationServicesEnabled()
+            let locationServicesEnabled = await LocationService.servicesEnabled()
             guard refreshID == self.locationPermissionRefreshID else { return }
             let latestAuthorization = self.appModel.locationAuthorizationSnapshot
             let latestMode = modeOverride ?? OpenClawLocationMode(rawValue: self.locationModeRaw) ?? .off
@@ -278,12 +279,6 @@ extension SettingsProTab {
                 authorizationStatus: latestAuthorization.authorizationStatus,
                 accuracyAuthorization: latestAuthorization.accuracyAuthorization)
         }
-    }
-
-    private static func locationServicesEnabled() async -> Bool {
-        await Task.detached(priority: .utility) {
-            CLLocationManager.locationServicesEnabled()
-        }.value
     }
 
     func syncAfterOnboardingReset() {
@@ -640,17 +635,9 @@ extension SettingsProTab {
         self.refreshLocationPermissionSummary(desiredMode: mode)
         defer { self.isChangingLocationMode = false }
 
-        if mode == .off {
-            _ = await self.appModel.requestLocationPermissions(mode: mode)
-            self.pendingLocationMode = nil
-            self.locationModeRaw = rawValue
-            self.previousLocationModeRaw = rawValue
-            self.refreshLocationPermissionSummary(desiredMode: mode)
-            self.gatewayController.refreshActiveGatewayRegistrationFromSettings()
-            return
-        }
-
-        let granted = await self.appModel.requestLocationPermissions(mode: mode)
+        let granted = await IOSDeviceSettingsActions.applyLocationMode(
+            mode,
+            appModel: self.appModel)
         self.refreshLocationPermissionSummary(desiredMode: mode)
         if granted {
             self.pendingLocationMode = nil
@@ -711,10 +698,6 @@ extension SettingsProTab {
     func setLocationMode(_ mode: OpenClawLocationMode) {
         let rawValue = mode.rawValue
         let previous = self.previousLocationModeRaw
-        if self.locationModeRaw != rawValue {
-            self.locationModeRaw = rawValue
-            return
-        }
         Task {
             await self.applyLocationMode(mode, rawValue: rawValue, previous: previous)
         }
@@ -723,7 +706,7 @@ extension SettingsProTab {
     func applyPendingLocationModeIfAvailable() {
         guard let mode = self.pendingLocationMode else { return }
         Task {
-            let locationServicesEnabled = await Self.locationServicesEnabled()
+            let locationServicesEnabled = await LocationService.servicesEnabled()
             let authorization = self.appModel.locationAuthorizationSnapshot
             let summary = LocationPermissionSummary(
                 desiredMode: mode,
@@ -751,94 +734,36 @@ extension SettingsProTab {
             let status = settings.authorizationStatus
             Task { @MainActor in
                 self.applyNotificationStatus(status)
-                self.registerForRemoteNotificationsIfEnrollmentReady()
+                IOSDeviceSettingsActions.registerForRemoteNotificationsIfEnrollmentReady(status: status)
             }
         }
     }
 
     func handleNotificationServingToggleChange(_ isOn: Bool) {
-        guard isOn else {
-            self.notificationServingEnabled = false
-            // UIKit stops APNs delivery here; re-enabling registers again and the
-            // app delegate republishes the current token to the active gateway.
-            UIApplication.shared.unregisterForRemoteNotifications()
-            return
-        }
-
-        switch self.notificationStatus {
-        case .allowed:
-            self.enableNotificationServing()
-        case .notSet:
-            guard self.prepareNotificationEnrollment() else { return }
-            self.requestNotificationAuthorizationFromSettings()
-        case .notAllowed, .unknown:
-            self.notificationServingEnabled = true
-            self.openNotificationSettings()
-        case .checking:
-            break
-        }
-    }
-
-    private func prepareNotificationEnrollment() -> Bool {
-        if PushBuildConfig.current.usesOpenClawHostedRelay,
-           !PushEnrollmentConsent.disclosureAccepted
-        {
-            self.showNotificationRelayDisclosure = true
-            return false
-        }
-        return true
-    }
-
-    private func enableNotificationServing() {
-        guard self.prepareNotificationEnrollment() else { return }
-        self.notificationServingEnabled = true
-        self.registerForRemoteNotificationsIfEnrollmentReady()
+        guard self.notificationStatus != .checking else { return }
+        self.updateNotificationServing(isOn)
     }
 
     func acceptNotificationRelayDisclosure() {
-        PushEnrollmentConsent.markDisclosureAccepted()
-        switch self.notificationStatus {
-        case .allowed:
-            self.enableNotificationServing()
-        case .notSet:
-            self.requestNotificationAuthorizationFromSettings()
-        case .notAllowed, .unknown:
-            self.notificationServingEnabled = true
-            self.openNotificationSettings()
-        case .checking:
-            self.notificationServingEnabled = false
-        }
+        self.updateNotificationServing(true, acceptingDisclosure: true)
     }
 
-    func requestNotificationAuthorizationFromSettings() {
+    private func updateNotificationServing(_ enabled: Bool, acceptingDisclosure: Bool = false) {
         guard !self.isRequestingNotificationAuthorization else { return }
-        PushEnrollmentConsent.markDisclosureAccepted()
         self.isRequestingNotificationAuthorization = true
         Task {
-            let granted = await (try? UNUserNotificationCenter.current().requestAuthorization(options: [
-                .alert,
-                .badge,
-                .sound,
-            ])) ?? false
-            let settings = await UNUserNotificationCenter.current().notificationSettings()
-            await MainActor.run {
-                self.isRequestingNotificationAuthorization = false
-                self.notificationStatus = SettingsNotificationStatus(settings.authorizationStatus)
-                self.notificationServingEnabled = granted && self.notificationStatus.allowsNotifications
-                guard self.notificationServingEnabled else { return }
-                self.registerForRemoteNotificationsIfEnrollmentReady()
+            defer { self.isRequestingNotificationAuthorization = false }
+            let status = await IOSDeviceSettingsActions.setNotificationsEnabled(
+                enabled,
+                confirmDisclosure: {
+                    if acceptingDisclosure { return true }
+                    self.showNotificationRelayDisclosure = true
+                    return false
+                })
+            if let status {
+                self.applyNotificationStatus(status)
             }
         }
-    }
-
-    @MainActor
-    func registerForRemoteNotificationsIfEnrollmentReady() {
-        guard self.notificationServingEnabled else { return }
-        guard !PushBuildConfig.current.usesOpenClawHostedRelay
-            || PushEnrollmentConsent.disclosureAccepted
-        else { return }
-        guard self.notificationStatus.allowsNotifications else { return }
-        UIApplication.shared.registerForRemoteNotifications()
     }
 
     @MainActor
@@ -949,11 +874,6 @@ extension SettingsProTab {
                 targetStableID: stableID,
                 allowManualOverride: true)
             : nil
-    }
-
-    func openNotificationSettings() {
-        guard let url = URL(string: UIApplication.openNotificationSettingsURLString) else { return }
-        UIApplication.shared.open(url)
     }
 
     func title(for route: SettingsRoute) -> String {

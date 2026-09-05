@@ -88,6 +88,8 @@ struct SettingsProTab: View {
     @State var showTalkIssueDetails = false
     @State var systemAgentChatStore = IOSSystemAgentChatStore()
     let directRoute: SettingsRoute?
+    let usesOfflineFallback: Bool
+    let registersNavigationDestinations: Bool
     let acceptsGatewaySetupRequests: Bool
     let headerSidebarAction: OpenClawSidebarHeaderAction?
     let navigateToRoute: (SettingsRoute) -> Void
@@ -98,6 +100,8 @@ struct SettingsProTab: View {
 
     init(
         directRoute: SettingsRoute? = nil,
+        usesOfflineFallback: Bool = false,
+        registersNavigationDestinations: Bool = true,
         acceptsGatewaySetupRequests: Bool = false,
         headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
         navigateToRoute: @escaping (SettingsRoute) -> Void,
@@ -107,6 +111,8 @@ struct SettingsProTab: View {
         onGatewaySetupRequestHandled: ((Int) -> Void)? = nil)
     {
         self.directRoute = directRoute
+        self.usesOfflineFallback = usesOfflineFallback
+        self.registersNavigationDestinations = registersNavigationDestinations
         self.acceptsGatewaySetupRequests = acceptsGatewaySetupRequests
         self.headerSidebarAction = headerSidebarAction
         self.navigateToRoute = navigateToRoute
@@ -122,26 +128,37 @@ struct SettingsProTab: View {
                 self.settingsContent))
     }
 
-    private var settingsContent: some View {
-        Group {
-            if let directRoute {
-                self.destination(for: directRoute)
-            } else {
-                self.settingsNavigationContent
-            }
+    @ViewBuilder private var settingsContent: some View {
+        if self.registersNavigationDestinations {
+            self.settingsRootContent
+                .navigationDestination(for: SettingsRoute.self) { route in
+                    self.destination(for: route)
+                }
+        } else {
+            self.settingsRootContent
         }
-        // Direct routes and the Settings list share RootTabs' path. Register
-        // here so Approvals opened from Overview can also push Notifications.
-        .navigationDestination(for: SettingsRoute.self) { route in
-            self.destination(for: route)
+    }
+
+    @ViewBuilder
+    private var settingsRootContent: some View {
+        if let directRoute {
+            self.destination(for: directRoute)
+        } else {
+            self.settingsNavigationContent
         }
     }
 
     private var settingsNavigationContent: some View {
         List {
-            self.gatewaySection
-            self.settingsListSection
+            if self.usesOfflineFallback {
+                self.gatewayDestination
+                self.offlineDeviceSection
+            } else {
+                self.gatewaySection
+                self.settingsListSection
+            }
         }
+        .accessibilityIdentifier(self.usesOfflineFallback ? "SettingsHub.Fallback" : "Settings.NativeList")
         .font(OpenClawType.body)
         .navigationTitle("Settings")
         .toolbar {

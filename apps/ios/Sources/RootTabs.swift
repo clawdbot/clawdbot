@@ -30,14 +30,14 @@ struct RootTabs: View {
     @AppStorage("onboarding.quickSetupDismissed") private var quickSetupDismissed: Bool = false
     @State private var selectedSidebarDestination: SidebarDestination = Self.initialSidebarDestination
     @State private var selectedSettingsRoute: SettingsRoute? =
-        Self.initialSettingsRoute ?? Self.initialSidebarDestination.settingsRoute
+        Self.initialSidebarDestination.settingsRoute
     @State private var activeSettingsRoute: SettingsRoute? =
         Self.initialSettingsRoute ?? Self.initialSidebarDestination.settingsRoute
     @State private var selectedSettingsRouteRequestID: Int = 0
     @State private var sidebarModel = RootSidebarModel()
     // Embedded Settings rows push onto the sidebar stack; clear it before
     // changing sidebar roots so stale settings detail screens cannot survive.
-    @State private var sidebarNavigationPath: [SettingsRoute] = []
+    @State private var sidebarNavigationPath: [SettingsRoute] = Self.initialSettingsRoute.map { [$0] } ?? []
     @State private var isSidebarDetailRootVisible: Bool = true
     @State private var isSidebarVisible: Bool = Self.initialSidebarVisibility ?? false
     @State private var sidebarVisibilityUserOverridden: Bool = Self.initialSidebarVisibility != nil
@@ -275,10 +275,8 @@ struct RootTabs: View {
         let shellID = self.sidebarDetailShellID
         return self.sidebarDetail
             .id(shellID)
-            // RootTabs disables destination-owned stacks at its call sites. A
-            // destination-style NavigationLink therefore replaces this shared
-            // root, so visibility guards its native back-swipe without relying
-            // on the typed Settings path.
+            // Destination-style links replace this root inside the shared stack;
+            // the Settings hub owns its stack and reports typed pushes through the path.
             .onAppear {
                 guard self.sidebarDetailShellID == shellID else { return }
                 self.isSidebarDetailRootVisible = true
@@ -408,24 +406,11 @@ struct RootTabs: View {
                 headerSidebarAction: self.sidebarHeaderAction,
                 gatewayAction: { self.selectSidebarDestination(.gateway) })
         case .settings:
-            if let selectedSettingsRoute {
-                SettingsProTab(
-                    directRoute: selectedSettingsRoute,
-                    headerSidebarAction: self.sidebarHeaderAction,
-                    navigateToRoute: pushSidebarSettingsRoute,
-                    onRouteChange: handleSettingsRouteChange,
-                    onApprovalNotificationsRoute: suppressExecApprovalPromptForNotificationSettings,
-                    gatewaySetupRequest: self.gatewaySetupRequest,
-                    onGatewaySetupRequestHandled: handleGatewaySetupRequest)
-            } else {
-                SettingsProTab(
-                    headerSidebarAction: self.sidebarHeaderAction,
-                    navigateToRoute: pushSidebarSettingsRoute,
-                    onRouteChange: handleSettingsRouteChange,
-                    onApprovalNotificationsRoute: suppressExecApprovalPromptForNotificationSettings,
-                    gatewaySetupRequest: self.gatewaySetupRequest,
-                    onGatewaySetupRequestHandled: handleGatewaySetupRequest)
-            }
+            SettingsHubScreen(
+                navigationPath: self.$sidebarNavigationPath,
+                headerSidebarAction: self.sidebarHeaderAction,
+                onRouteChange: handleSettingsRouteChange,
+                onApprovalNotificationsRoute: suppressExecApprovalPromptForNotificationSettings)
         case .gateway:
             SettingsProTab(
                 directRoute: self.selectedSettingsRoute ?? self.selectedSidebarDestination.settingsRoute ?? .gateway,
@@ -440,8 +425,14 @@ struct RootTabs: View {
     }
 
     private var sidebarDetailNavigationShell: some View {
-        NavigationStack(path: self.$sidebarNavigationPath) {
-            self.sidebarDetailShell
+        Group {
+            if self.selectedSidebarDestination == .settings {
+                self.sidebarDetailShell
+            } else {
+                NavigationStack(path: self.$sidebarNavigationPath) {
+                    self.sidebarDetailShell
+                }
+            }
         }
         .onChange(of: self.sidebarNavigationPath) { _, navigationPath in
             self.handleSidebarSettingsNavigationPathChange(navigationPath)
@@ -871,10 +862,11 @@ extension RootTabs {
         if route != .notifications {
             self.suppressedExecApprovalForNotificationSettings = nil
         }
-        self.selectedSettingsRoute = route
+        self.selectedSettingsRoute = nil
         self.activeSettingsRoute = route
         self.selectedSettingsRouteRequestID &+= 1
         self.selectedSidebarDestination = .settings
+        self.sidebarNavigationPath = [route]
         guard self.shouldCollapseSidebarAfterSelection else { return }
         withAnimation(self.sidebarAnimation) {
             self.setSidebarVisible(false)

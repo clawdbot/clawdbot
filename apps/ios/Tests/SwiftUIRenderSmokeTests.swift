@@ -16,21 +16,22 @@ struct SwiftUIRenderSmokeTests {
         return window
     }
 
-    @Test @MainActor func `settings pro tab builds in light and dark mode`() {
+    @Test @MainActor func `settings hub fallback builds in light and dark mode`() {
+        var windows: [UIWindow] = []
+        defer { windows.forEach { $0.isHidden = true } }
+
         for scheme in [ColorScheme.light, ColorScheme.dark] {
             let appModel = NodeAppModel()
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-            let root = NavigationStack {
-                SettingsProTab(navigateToRoute: { _ in })
-            }
-            .environment(AppAppearanceModel())
-            .environment(appModel)
-            .environment(appModel.voiceWake)
-            .environment(gatewayController)
-            .preferredColorScheme(scheme)
+            let root = SettingsHubScreen(navigationPath: .constant([]))
+                .environment(AppAppearanceModel())
+                .environment(appModel)
+                .environment(appModel.voiceWake)
+                .environment(gatewayController)
+                .preferredColorScheme(scheme)
 
-            _ = Self.host(root)
+            windows.append(Self.host(root))
         }
     }
 

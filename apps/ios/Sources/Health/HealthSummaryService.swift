@@ -28,13 +28,15 @@ enum HealthAuthorization {
     }
 
     @MainActor
-    static func enable() async throws {
+    static func enable(isCurrent: @MainActor () -> Bool = { true }) async throws {
+        guard !Task.isCancelled, isCurrent() else { throw CancellationError() }
         guard self.isAvailable else {
             throw NSError(domain: "Health", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Health data is unavailable on this device.",
             ])
         }
         try await HKHealthStore().requestAuthorization(toShare: [], read: self.readTypes)
+        guard !Task.isCancelled, isCurrent() else { throw CancellationError() }
         // HealthKit intentionally does not reveal read denial. This flag records only
         // the user's explicit OpenClaw sharing choice, never inferred authorization.
         UserDefaults.standard.set(true, forKey: self.enabledKey)

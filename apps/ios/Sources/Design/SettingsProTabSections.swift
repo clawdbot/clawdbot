@@ -212,6 +212,37 @@ extension SettingsProTab {
         }
     }
 
+    var offlineDeviceSection: some View {
+        Section {
+            self.settingsListRow(
+                icon: "applewatch",
+                iconColor: .green,
+                title: "Apple Watch",
+                route: .appleWatch)
+                .accessibilityIdentifier("settings-watch-row")
+            self.settingsListRow(
+                icon: "stethoscope",
+                iconColor: .teal,
+                title: "Diagnostics",
+                route: .diagnostics)
+            self.settingsListRow(
+                icon: "doc.text",
+                iconColor: .gray,
+                title: "Licenses",
+                route: .licenses)
+                .accessibilityIdentifier("settings-licenses-row")
+            self.settingsListRow(
+                icon: "info.circle.fill",
+                iconColor: .gray,
+                title: "About",
+                route: .about)
+        } header: {
+            Text("Device")
+                .font(OpenClawType.captionSemiBold)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     func settingsListRow(
         icon: String,
         iconColor: Color,

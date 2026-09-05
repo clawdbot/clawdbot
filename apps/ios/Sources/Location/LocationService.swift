@@ -37,6 +37,13 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
         self.configureLocationManager()
     }
 
+    static func servicesEnabled() async -> Bool {
+        // The global service check performs blocking XPC; keep it off the UI actor.
+        await Task.detached(priority: .utility) {
+            CLLocationManager.locationServicesEnabled()
+        }.value
+    }
+
     func authorizationStatus() -> CLAuthorizationStatus {
         self.cachedAuthorizationSnapshot.authorizationStatus
     }
