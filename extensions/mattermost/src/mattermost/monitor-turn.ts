@@ -487,13 +487,15 @@ export async function dispatchMattermostInboundTurn(
             ...(turnAdoptionLifecycle
               ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle)
               : {}),
-            allowProgressCallbacksWhenSourceDeliverySuppressed: draftToolProgressEnabled
+            allowProgressCallbacksWhenSourceDeliverySuppressed: draftProgressEnabled
               ? true
               : undefined,
             preserveProgressCallbackStartOrder: draftPreviewEnabled ? true : undefined,
-            onObservedReplyDelivery: observedSeparateFinalDeliveryEnabled
+            onObservedReplyDelivery: draftProgressEnabled
               ? async () => {
-                  separateProgress.recordSuccessfulFinal();
+                  if (observedSeparateFinalDeliveryEnabled) {
+                    separateProgress.recordSuccessfulFinal();
+                  }
                   await draftStream.clear();
                 }
               : undefined,

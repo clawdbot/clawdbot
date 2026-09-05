@@ -1908,7 +1908,7 @@ describe("mattermost inbound user posts", () => {
     await monitor;
 
     const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
-    expect(replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBeUndefined();
+    expect(replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
     expect(replyOptions?.onObservedReplyDelivery).toBeTypeOf("function");
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(draftStream.retainTerminalText).not.toHaveBeenCalled();
