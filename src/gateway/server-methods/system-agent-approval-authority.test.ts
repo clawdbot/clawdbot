@@ -518,13 +518,30 @@ describe("prepareDelegatedSystemAgentApproval", () => {
   });
 
   it.for([
-    { source: "ambient", fullPermission: false },
-    { source: "ambient", fullPermission: true },
-    { source: "wire", fullPermission: false },
-    { source: "wire", fullPermission: true },
+    {
+      firstSource: "wire",
+      secondSource: "wire",
+      abortLease: "second",
+      fullPermission: false,
+      applies: true,
+    },
+    {
+      firstSource: "ambient",
+      secondSource: "wire",
+      abortLease: "second",
+      fullPermission: true,
+      applies: true,
+    },
+    {
+      firstSource: "wire",
+      secondSource: "wire",
+      abortLease: "first",
+      fullPermission: false,
+      applies: false,
+    },
   ] as const)(
-    "reuses the exact $source worker approval with Full Access=$fullPermission",
-    async ({ source, fullPermission }, testContext) => {
+    "reuses $firstSource-to-$secondSource approval across leases without transferring its authority ($abortLease closes)",
+    async ({ firstSource, secondSource, abortLease, fullPermission, applies }, testContext) => {
       const proposal = {
         operation: { kind: "gateway-restart" as const },
         hash: "e".repeat(64),
@@ -554,14 +571,24 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       const operationalRunInstance = createOperationalRunInstanceRef("delegated-worker-run");
       const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
 
-      const firstClaim = workerTurnClaim("turn-2");
-      const queueForClaim = async (claim: WorkerSessionTurnClaim, withFullPermission: boolean) => {
+      const firstController = new AbortController();
+      const secondController = new AbortController();
+      const firstAuthority = claimAgentRunApprovalAuthority(authority, [firstController.signal]);
+      const secondAuthority = claimAgentRunApprovalAuthority(authority, [secondController.signal]);
+      expect(firstAuthority.claimId).not.toBe(secondAuthority.claimId);
+      const turnClaim = workerTurnClaim("turn-2");
+      const queueForAuthority = async (
+        source: "ambient" | "wire",
+        approvalAuthority: typeof firstAuthority,
+        signal: AbortSignal,
+        withFullPermission: boolean,
+      ) => {
         const trustedAgentRuntime = {
           kind: "agentRuntime",
           agentId: "main",
           sessionKey: "agent:main:main",
           operationalRunInstance,
-          delegatedAuthority: { kind: "worker", ...authority, turnClaim: claim },
+          delegatedAuthority: { kind: "worker", ...approvalAuthority, turnClaim },
           ...(withFullPermission ? { fullPermission: true as const } : {}),
         } satisfies AgentRuntimeIdentity;
         const queue = () =>
@@ -581,22 +608,52 @@ describe("prepareDelegatedSystemAgentApproval", () => {
                 agentId: "main",
                 sessionKey: "agent:main:main",
                 operationalRunInstance,
-                workerTurnClaim: claim,
+                approvalAuthority,
+                approvalSignals: [signal],
+                workerTurnClaim: turnClaim,
                 fullPermission: withFullPermission,
               },
               queue,
             );
       };
-      const firstApprovalId = await queueForClaim(firstClaim, false);
-      const secondClaim = workerTurnClaim("turn-2");
-      const secondApprovalId = await queueForClaim(secondClaim, fullPermission);
+      const firstApprovalId = await queueForAuthority(
+        firstSource,
+        firstAuthority,
+        firstController.signal,
+        false,
+      );
+      const secondApprovalId = await queueForAuthority(
+        secondSource,
+        secondAuthority,
+        secondController.signal,
+        fullPermission,
+      );
 
       expect(secondApprovalId).toBe(firstApprovalId);
       expect(manager.listPendingRecords()).toHaveLength(1);
+      expect(manager.getSnapshot(firstApprovalId)?.agentRuntimeDelegatedAuthority).toMatchObject({
+        claimId: firstAuthority.claimId,
+      });
       expect(session.engine.resolveOperatorApproval).not.toHaveBeenCalled();
       const completion = session.pendingApproval?.completion;
-      manager.expire(firstApprovalId!);
+      expect(completion).toBeDefined();
+      (abortLease === "first" ? firstController : secondController).abort();
+      expect(manager.resolve(firstApprovalId, "allow-once", "operator-ui")).toBe(applies);
       await completion;
+      if (applies) {
+        expect(session.engine.resolveOperatorApproval).toHaveBeenCalledWith(
+          "allow-once",
+          proposal.hash,
+          expect.any(Function),
+          undefined,
+        );
+      } else {
+        expect(
+          session.engine.resolveOperatorApproval.mock.calls.some(
+            ([decision]) => decision === "allow-once",
+          ),
+        ).toBe(false);
+      }
     },
   );
 });
