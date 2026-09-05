@@ -301,11 +301,9 @@ struct OnboardingDashboardHandoffTests {
             scheduledDeadlines.append((deadline, routeIdentity))
         }
         view.aiSetup.retryFromScratch()
+        // Verification publishes its receipt before the retry continuation schedules recovery.
         for _ in 0..<200 {
-            if case .verified = OnboardingSystemAgentResumeStore.pendingState(
-                for: "local",
-                defaults: defaults)
-            {
+            if !scheduledDeadlines.isEmpty {
                 break
             }
             try? await Task.sleep(nanoseconds: 5_000_000)
