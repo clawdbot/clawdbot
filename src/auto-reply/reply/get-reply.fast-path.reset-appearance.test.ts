@@ -1,5 +1,7 @@
 // Fast-path /reset appearance coverage lives here so get-reply.fast-path.test.ts
-// stays under the max-lines ratchet. Native slash still calls initFastReplySessionState.
+// stays under the max-lines ratchet. Native /new and /reset are excluded from the
+// native slash fast path, so initFastReplySessionState only sees a reset through the
+// fast test bootstrap in get-reply.ts.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
