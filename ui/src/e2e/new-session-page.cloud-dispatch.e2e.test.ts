@@ -477,6 +477,7 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [startupStatus]),
         );
       }
+      await gateway.waitForRequest("sessions.describe", { match: { key: sessionKey } });
       const describeRequestsAfterNavigation = (await gateway.getRequests("sessions.describe"))
         .length;
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));

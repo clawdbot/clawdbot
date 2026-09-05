@@ -46,12 +46,13 @@ function withSummary(sessions: readonly GatewaySessionRow[]): GatewaySessionRow[
       groupId: child.swarmGroupId,
       createdAt: child.updatedAt ?? 1,
       execution: { status: child.status === "queued" ? "queued" : "running" },
-      ...(child.status === "done" ||
-      child.status === "failed" ||
-      child.status === "killed" ||
-      child.status === "timeout"
-        ? { collectorCompletion: { status: child.status } }
-        : {}),
+      collectorCompletion:
+        child.status === "done" ||
+        child.status === "failed" ||
+        child.status === "killed" ||
+        child.status === "timeout"
+          ? { status: child.status }
+          : undefined,
     }));
   return [
     {

@@ -209,7 +209,9 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     }
     const { sessionKey: parentKey, agentId } = target;
     const client = state.client;
-    if (!client) return;
+    if (!client) {
+      return;
+    }
     const sourceEpoch = state.connectionEpoch;
     const isCurrent = () =>
       this.state === state &&

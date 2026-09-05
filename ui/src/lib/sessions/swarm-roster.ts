@@ -140,7 +140,9 @@ export class SwarmRosterHydrator {
       const delayMs = Math.min(30_000, 1_000 * 2 ** Math.min(this.attempts - 1, 5));
       this.timer = setTimeout(() => {
         this.timer = null;
-        if (isCurrent()) this.update(params);
+        if (isCurrent()) {
+          this.update(params);
+        }
       }, delayMs);
     };
     // Counts belong to the parent read; optional child names must never hold them hostage.
@@ -153,14 +155,20 @@ export class SwarmRosterHydrator {
     void params
       .readParent()
       .then((parent) => {
-        if (!isCurrent()) return;
+        if (!isCurrent()) {
+          return;
+        }
         hydrated = true;
         this.revision = revision;
         this.rows = parent ? mergeSwarmSessionRows(this.rows, [parent]) : [];
         params.onRows(this.rows);
-        if (!parent) return;
+        if (!parent) {
+          return;
+        }
         void children.then((rows) => {
-          if (!isCurrent()) return;
+          if (!isCurrent()) {
+            return;
+          }
           const changedCurrentRows = params
             .currentRows()
             .filter(
@@ -172,7 +180,9 @@ export class SwarmRosterHydrator {
             ? mergeSwarmSessionRows(mergeSwarmSessionRows(rows, [parent]), changedCurrentRows)
             : [parent];
           params.onRows(this.rows);
-          if (!rows) scheduleRetry();
+          if (!rows) {
+            scheduleRetry();
+          }
         });
       })
       .catch((error: unknown) => {

@@ -307,7 +307,9 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
 
   protected resolveChatReadTarget(): ReturnType<typeof resolveUiConversationIdentity> | undefined {
     const state = this.state;
-    if (!state) return undefined;
+    if (!state) {
+      return undefined;
+    }
     const identity = resolveUiConversationIdentity(state, state.sessionKey);
     if (identity.agentId) {
       return identity;

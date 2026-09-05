@@ -46,7 +46,9 @@ function collectSwarmTasks(
   for (const row of sessions) {
     const groupId = row.swarmGroupId?.trim();
     const status = groupId ? members.get(groupId)?.get(row.key) : undefined;
-    if (!status || !groupId) continue;
+    if (!status || !groupId) {
+      continue;
+    }
     const entries = byGroup.get(groupId) ?? [];
     entries.push({
       phaseRank: row.swarmPhaseRank ?? Number.MAX_SAFE_INTEGER,
