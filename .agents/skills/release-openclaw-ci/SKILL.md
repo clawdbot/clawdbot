@@ -114,8 +114,8 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
 - Use one release operator, one transition-only watcher, and at most one
   investigator for the current failed surface. Do not build audit-review-plan
   trees around a single workflow transition.
-- For regular beta/stable releases, treat the product-complete pre-changelog
-  commit as the Code SHA. Full product validation and performance evidence bind
+- For regular beta/stable releases, treat the product-complete commit with
+  substantive version-matched draft notes as the Code SHA. Full product validation and performance evidence bind
   to that SHA. The later Release SHA may reuse those results only when it is a
   descendant whose complete changed path set is exactly `CHANGELOG.md`.
 - Extended-stable validates one exact branch tip; it does not reuse the regular
@@ -326,7 +326,7 @@ enabled after proving the workflow commit is still on trusted `main` lineage.
 Pass `-f reuse_evidence=false` only when the operator intentionally needs a
 fresh full run.
 
-After the Code SHA is green, commit only `CHANGELOG.md` and run the same helper
+After the Code SHA is green, finalize the draft in a `CHANGELOG.md`-only commit and run the same helper
 against the Release SHA. The parent must report
 `policy=changelog-only-release-v1`, `evidenceSha=<code-sha>`, and
 `changedPaths=["CHANGELOG.md"]`; it should reuse the product matrix instead of
