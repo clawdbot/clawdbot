@@ -928,7 +928,11 @@ describe("monitorTlonProvider history ownership", () => {
         );
 
         expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
-        const [contextInput] = inboundRuntimeMock.buildContext.mock.calls[0];
+        const buildContextCall = inboundRuntimeMock.buildContext.mock.calls[0];
+        if (!buildContextCall) {
+          throw new Error("expected inbound context call");
+        }
+        const [contextInput] = buildContextCall;
         expect(contextInput.message.bodyForAgent).toContain("current-server-message-0");
         expect(contextInput.message.bodyForAgent).toContain("current-server-message-49");
         expect(contextInput.message.bodyForAgent).not.toContain("old-cache-");
