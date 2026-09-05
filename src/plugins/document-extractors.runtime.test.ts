@@ -1,5 +1,6 @@
 // Covers document extractor runtime hooks supplied by plugins.
 import { describe, expect, it, vi } from "vitest";
+import { loadBundledDocumentExtractorEntriesFromDir } from "./document-extractor-public-artifacts.js";
 import { resolvePluginDocumentExtractors } from "./document-extractors.runtime.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
@@ -67,17 +68,25 @@ describe("resolvePluginDocumentExtractors", () => {
     expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
   });
 
-  it("respects global plugin disablement", () => {
-    expect(
-      resolvePluginDocumentExtractors({
-        config: {
-          plugins: {
-            enabled: false,
+  it.each([{ allow: undefined }, { allow: ["document-extract"] }])(
+    "respects global plugin disablement with allow=$allow",
+    ({ allow }) => {
+      vi.mocked(loadPluginMetadataSnapshot).mockClear();
+      vi.mocked(loadBundledDocumentExtractorEntriesFromDir).mockClear();
+      expect(
+        resolvePluginDocumentExtractors({
+          config: {
+            plugins: {
+              enabled: false,
+              allow,
+            },
           },
-        },
-      }),
-    ).toStrictEqual([]);
-  });
+        }),
+      ).toStrictEqual([]);
+      expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+      expect(loadBundledDocumentExtractorEntriesFromDir).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not expand an operator plugin allowlist", () => {
     expect(
