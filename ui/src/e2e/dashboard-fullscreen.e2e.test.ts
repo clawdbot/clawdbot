@@ -478,7 +478,7 @@ suite.define(() => {
           await gateway.setMethodResponse("board.get", {
             ...widgetSnapshot,
             revision: 2,
-            widgets: widgetSnapshot.widgets.map((widget) => ({ ...widget, revision: 2 })),
+            widgets: [{ ...widgetSnapshot.widgets[0], revision: 2 }],
           });
           await gateway.emitGatewayEvent("board.changed", { sessionKey, widget: "long-dashboard" });
           const replacement = page.frameLocator(".board-widget__frame").frameLocator("iframe");

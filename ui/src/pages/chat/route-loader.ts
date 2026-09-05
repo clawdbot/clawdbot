@@ -472,6 +472,8 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey: cached.sessionKey,
+      // The connection-bound handoff has already validated this agent scope.
+      agentId: target.agentId,
       ...sessionRouteHints(routeLocation),
       face,
       ...(target.shortId.length > 8 ? { shortId: target.shortId } : {}),
