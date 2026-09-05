@@ -1,6 +1,7 @@
 // Control UI proof against an isolated real Gateway and trusted user identity.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { createServer, type ViteDevServer } from "vite";
 import { expect, it } from "vitest";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
 import { ensureProfileForEmail, setDisplayName } from "../../../src/state/user-profiles.ts";
@@ -37,6 +38,7 @@ suite.define(() => {
       },
     });
     let gateway: GatewayServer | undefined;
+    let proxy: ViteDevServer | undefined;
     try {
       const clipperWorkspace = state.path("workspace-clipper");
       await mkdir(clipperWorkspace, { recursive: true });
@@ -78,14 +80,40 @@ suite.define(() => {
         sidecarStartup: "defer",
       });
 
+      // Chromium does not consistently apply extraHTTPHeaders to WebSocket upgrades.
+      proxy = await createServer({
+        configFile: false,
+        envFile: false,
+        root: state.workspaceDir,
+        appType: "custom",
+        logLevel: "error",
+        server: {
+          host: "127.0.0.1",
+          port: 0,
+          proxy: {
+            "/": {
+              target: `http://127.0.0.1:${port}`,
+              ws: true,
+              headers: {
+                "x-forwarded-for": "192.0.2.10",
+                "x-forwarded-proto": "http",
+                "x-forwarded-user": authenticatedUser,
+              },
+            },
+          },
+        },
+      });
+      await proxy.listen();
+      const proxyUrl = proxy.resolvedUrls?.local[0];
+      if (!proxyUrl) {
+        throw new Error("Profile test proxy did not expose a loopback URL");
+      }
+      const gatewayUrl = new URL(proxyUrl);
+      gatewayUrl.protocol = "ws:";
+
       const proofDir = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? suite.artifactDir : null;
       await suite.withPage(
         {
-          extraHTTPHeaders: {
-            "x-forwarded-for": "192.0.2.10",
-            "x-forwarded-proto": "http",
-            "x-forwarded-user": authenticatedUser,
-          },
           locale: "en-US",
           serviceWorkers: "block",
           viewport: { height: 800, width: 1280 },
@@ -95,7 +123,7 @@ suite.define(() => {
         },
         async ({ page }) => {
           const url = new URL("settings/profile", suite.server.baseUrl);
-          url.hash = new URLSearchParams({ gatewayUrl: `ws://127.0.0.1:${port}` }).toString();
+          url.hash = new URLSearchParams({ gatewayUrl: gatewayUrl.href }).toString();
           const response = await page.goto(url.href);
           expect(response?.status()).toBe(200);
           const confirmation = page.locator("openclaw-gateway-url-confirmation");
@@ -121,9 +149,13 @@ suite.define(() => {
       );
     } finally {
       try {
-        await gateway?.close({ reason: "profile real Gateway e2e cleanup" });
+        await proxy?.close();
       } finally {
-        await state.cleanup();
+        try {
+          await gateway?.close({ reason: "profile real Gateway e2e cleanup" });
+        } finally {
+          await state.cleanup();
+        }
       }
     }
   });
