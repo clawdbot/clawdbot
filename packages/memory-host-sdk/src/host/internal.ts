@@ -64,7 +64,7 @@ export type MemoryChunk = {
 };
 
 // Persisted with index metadata so boundary changes rebuild unchanged files.
-export const MEMORY_CHUNKING_VERSION = 3;
+export const MEMORY_CHUNKING_VERSION = 4;
 
 type MultimodalMemoryChunk = {
   chunk: MemoryChunk;
@@ -548,6 +548,24 @@ export function splitCuratedMarkdownEntries(content: string): CuratedMarkdownEnt
   return entries;
 }
 
+/** Takes the trailing slice of text within the weighted char budget, without splitting surrogate pairs. */
+function takeTailByEstimatedChars(text: string, budget: number): string {
+  let acc = 0;
+  let start = text.length;
+  while (start > 0) {
+    const lastCodeUnit = text.charCodeAt(start - 1);
+    const charStart =
+      lastCodeUnit >= 0xdc00 && lastCodeUnit <= 0xdfff && start > 1 ? start - 2 : start - 1;
+    const weight = estimateStringChars(text.slice(charStart, start));
+    if (acc + weight > budget) {
+      break;
+    }
+    acc += weight;
+    start = charStart;
+  }
+  return text.slice(start);
+}
+
 export function chunkMarkdown(
   content: string,
   chunking: { tokens: number; overlap: number; perEntry?: boolean },
@@ -603,18 +621,17 @@ export function chunkMarkdown(
         continue;
       }
       const entrySize = estimateStringChars(entry.line) + 1;
-      if (entrySize > window) {
-        // A segment wider than the overlap window would carry its full bulk
-        // into the next chunk, overshooting the budget; keep only its
-        // trailing window instead.
-        const tailStart = Math.max(0, entry.line.length - (window - 1));
-        let tail = entry.line.slice(tailStart);
-        const firstCodeUnit = tail.charCodeAt(0);
-        if (firstCodeUnit >= 0xdc00 && firstCodeUnit <= 0xdfff) {
-          tail = tail.slice(1);
+      const remaining = window - acc;
+      if (entrySize > remaining) {
+        if (kept.length === 0) {
+          // A segment wider than the remaining window keeps only its trailing
+          // slice, measured in the same weighted units as the budget.
+          const tail = takeTailByEstimatedChars(entry.line, Math.max(0, remaining - 1));
+          if (tail.length > 0) {
+            kept.unshift({ line: tail, lineNo: entry.lineNo });
+            acc += estimateStringChars(tail) + 1;
+          }
         }
-        kept.unshift({ line: tail, lineNo: entry.lineNo });
-        acc += estimateStringChars(tail) + 1;
         break;
       }
       acc += entrySize;
