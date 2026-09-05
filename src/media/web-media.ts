@@ -182,6 +182,7 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/x-7z-compressed",
   "application/x-tar",
   "application/zip",
+  "application/epub+zip",
   "text/csv",
   "text/markdown",
   "text/plain",
@@ -311,6 +312,49 @@ function resolveLocalMediaFileName(filePath: string): string | undefined {
 function hasHtmlDocumentShape(text: string): boolean {
   const sample = text.trimStart().slice(0, 8192);
   return /^(?:<!doctype\s+html\b|<html\b)/iu.test(sample) || /<\/(?:html|body)>/iu.test(sample);
+}
+
+// FictionBook documents carry a fixed namespace on their root element. Match only that
+// root (after an optional BOM, XML declaration, comments, or doctype) so host-read
+// accepts demonstrable FictionBook content rather than every text-valid XML file.
+const FICTIONBOOK_ROOT_RE =
+  /^\uFEFF?(?:\s*(?:<\?[\s\S]*?\?>|<!--[\s\S]*?-->|<!DOCTYPE[^>]*>))*\s*<(?:(?<prefix>[A-Za-z_][\w.-]*):)?FictionBook(?=[\s/>])(?<attributes>[^>]*)>/u;
+const FICTIONBOOK_NAMESPACE = "http://www.gribuser.ru/xml/fictionbook/2.0";
+const XML_ROOT_ATTRIBUTE_RE =
+  /\s+(?<name>[A-Za-z_:][\w:.-]*)\s*=\s*(?<quote>["'])(?<value>[\s\S]*?)\k<quote>/guy;
+
+function readXmlRootAttribute(attributes: string, name: string): string | undefined {
+  let cursor = 0;
+  let value: string | undefined;
+  while (cursor < attributes.length) {
+    XML_ROOT_ATTRIBUTE_RE.lastIndex = cursor;
+    const attribute = XML_ROOT_ATTRIBUTE_RE.exec(attributes);
+    if (!attribute) {
+      break;
+    }
+    cursor = XML_ROOT_ATTRIBUTE_RE.lastIndex;
+    if (attribute.groups?.name !== name) {
+      continue;
+    }
+    if (value !== undefined) {
+      return undefined;
+    }
+    value = attribute.groups.value;
+  }
+  return /^\s*\/?\s*$/u.test(attributes.slice(cursor)) ? value : undefined;
+}
+
+function hasFictionBookDocumentShape(text: string): boolean {
+  const root = FICTIONBOOK_ROOT_RE.exec(text.slice(0, 8192));
+  if (!root) {
+    return false;
+  }
+  const rootPrefix = root.groups?.prefix;
+  const namespaceAttribute = rootPrefix ? `xmlns:${rootPrefix}` : "xmlns";
+  return (
+    readXmlRootAttribute(root.groups?.attributes ?? "", namespaceAttribute) ===
+    FICTIONBOOK_NAMESPACE
+  );
 }
 
 type HostReadHtmlTrust =
@@ -499,6 +543,24 @@ function isAllowedHostReadTextAlias(mime: string | undefined, filePath?: string)
   return ext !== undefined && allowedExtensions.includes(ext);
 }
 
+function isAllowedHostReadFictionBook(params: {
+  sniffedContentType?: string;
+  filePath?: string;
+  buffer?: Buffer;
+}): boolean {
+  const sniffedMime = normalizeMimeType(params.sniffedContentType);
+  if (sniffedMime && sniffedMime !== "application/xml" && sniffedMime !== "text/xml") {
+    return false;
+  }
+  if (![".fb2", ".xml"].includes(getFileExtension(params.filePath) ?? "")) {
+    return false;
+  }
+  // The extension only signals operator intent; the accept decision is content-based for
+  // both .fb2 and .xml so the host-read boundary stays format-specific.
+  const text = getValidatedHostReadText(params.buffer);
+  return text !== undefined && hasFictionBookDocumentShape(text);
+}
+
 function formatCapLimit(label: string, cap: number, size: number): string {
   return `${label} exceeds ${formatMediaSize(cap)} limit (got ${formatMediaSize(size)})`;
 }
@@ -586,6 +648,15 @@ function assertHostReadMediaAllowed(params: {
     return;
   }
   if (
+    isAllowedHostReadFictionBook({
+      sniffedContentType: params.sniffedContentType,
+      filePath: params.filePath,
+      buffer: params.buffer,
+    })
+  ) {
+    return;
+  }
+  if (
     params.kind === "document" &&
     normalizedMime &&
     HOST_READ_ALLOWED_DOCUMENT_MIMES.has(normalizedMime)
@@ -595,7 +666,7 @@ function assertHostReadMediaAllowed(params: {
     );
   }
   throw new HostReadMediaTypeError(
-    `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, archives, and validated plain-text documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
+    `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, EPUBs, FictionBook documents, archives, and validated plain-text documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
 }
 
