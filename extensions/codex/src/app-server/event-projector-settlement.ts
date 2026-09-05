@@ -14,6 +14,7 @@ type PresentationStage =
 export class CodexProjectionSettlement {
   readonly params: EmbeddedRunAttemptParams;
   terminalReceipt: CodexTurn | undefined;
+  turnTainted = false;
   private stage: string | undefined;
   private readonly pending = new Map<Promise<void>, PresentationStage>();
 

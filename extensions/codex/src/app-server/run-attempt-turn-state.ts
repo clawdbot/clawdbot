@@ -49,7 +49,9 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     // this marker remains the user-interrupt hint until Codex exposes abortReason.
     sawCodexInterruptMarker: false,
     timeout: undefined as CodexAttemptTimeout | undefined,
+    // SAFETY: Only the correlated completed-answer deadline fills this initially empty slot.
     settlementWarning: undefined as AttemptSettlementWarning | undefined,
+    // SAFETY: Finalization fills this initially empty slot while its transcript mirror is pending.
     pendingSettlementStage: undefined as string | undefined,
     clientClosedPromptError: undefined as string | undefined,
     clientClosedDiagnostic: undefined as string | undefined,

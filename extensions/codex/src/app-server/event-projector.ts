@@ -68,7 +68,7 @@ export class CodexAppServerEventProjector {
   private readonly toolProgressProjection: CodexToolProgressProjection;
   private readonly toolTranscriptProjection: CodexToolTranscriptProjection;
   private completedTurn: CodexTurn | undefined;
-  private projectionClosed = false;
+  private readonly projectionController = new AbortController();
   /** Structured overloads may continue once the exact settled transcript is captured. */
   settledTurnFailureFinalizationAllowed = false;
   private readonly terminalFailure = new CodexTerminalFailureProjection();
@@ -109,7 +109,9 @@ export class CodexAppServerEventProjector {
       remoteWorkspaceRoot: options.remoteWorkspaceRoot,
       readFile: options.readRemoteWorkspaceFile,
       requestTimeoutMs: options.remoteWorkspaceRequestTimeoutMs,
-      signal: options.runAbortSignal,
+      signal: options.runAbortSignal
+        ? AbortSignal.any([options.runAbortSignal, this.projectionController.signal])
+        : this.projectionController.signal,
     });
     this.toolProgressProjection = new CodexToolProgressProjection(params);
     this.toolTranscriptProjection = new CodexToolTranscriptProjection(
@@ -151,6 +153,10 @@ export class CodexAppServerEventProjector {
     return this.completedTurn?.status;
   }
 
+  private get projectionClosed(): boolean {
+    return this.projectionController.signal.aborted;
+  }
+
   /** Native completion owns the answer independently of unfinished host projection. */
   recoverCompletedAnswer(): boolean {
     const completed = this.settlement.completedAnswer;
@@ -158,7 +164,7 @@ export class CodexAppServerEventProjector {
       return false;
     }
     // Retire accepted writes before the enriched final enters the same mirror owner.
-    this.projectionClosed = true;
+    this.projectionController.abort();
     this.transcriptCheckpoint.abandon();
     this.completedTurn = completed.turn;
     this.assistantProjection.recordSnapshotItem(completed.answer);
@@ -202,7 +208,7 @@ export class CodexAppServerEventProjector {
 
   /** Fence delayed projections before the turn's final snapshot leaves its owner. */
   closeProjection(): Promise<void> {
-    this.projectionClosed = true;
+    this.projectionController.abort();
     return this.settlement.project("transcript/checkpoint", () =>
       this.transcriptCheckpoint.flush(true),
     );
@@ -388,6 +394,7 @@ export class CodexAppServerEventProjector {
       turnId: this.turnId,
       upstreamUserText: this.options.upstreamUserText,
       completedTurn: this.completedTurn,
+      turnTainted: this.settlement.turnTainted,
       promptError: this.terminalFailure.promptError,
       promptErrorSource: this.terminalFailure.promptErrorSource,
       providerRefusal: this.terminalFailure.providerRefusal,

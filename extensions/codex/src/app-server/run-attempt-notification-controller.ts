@@ -210,6 +210,8 @@ export function createCodexAttemptNotificationController(
       }
       const nativeItem = readCodexNotificationItem(notification.params);
       if (nativeItem?.type === "webSearch") {
+        // Native result provenance must survive an abandoned transcript projection.
+        projector.settlement.turnTainted ||= notification.method === "item/completed";
         projector.recordNativeToolOutcome(nativeItem);
       }
     }

@@ -808,6 +808,9 @@ If the native turn completed successfully with a complete final answer, expiry
 preserves that answer as a degraded success. OpenClaw retires unfinished
 projection and stale writes, then persists the answer through the existing
 transcript owner, preserving write ordering and hooks.
+Recovered replies retain native network-result provenance even when the
+corresponding tool projection did not settle or a message-write hook replaces
+the message.
 
 The `turn.settlement_warning` trajectory event records the pending presentation
 callback, transcript/checkpoint write, or media projection stage, together with

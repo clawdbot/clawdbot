@@ -389,7 +389,8 @@ export async function finalizeCodexAttempt(
       });
     };
     try {
-      if (projectionDrained && settlementPhase === "active") {
+      // Canceling retired media can drain the queue; that cannot reopen ordinary settlement.
+      if (projectionDrained && settlementPhase === "active" && !state.settlementWarning) {
         mirrorOutcome = await Promise.race([
           mirrorFinal(),
           drainGraceElapsed.promise.then(() => unavailableMirror),

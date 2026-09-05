@@ -26,6 +26,7 @@ import {
   type CodexThreadHistoryImportResult,
 } from "./transcript-history-projection.js";
 import {
+  applyCodexTranscriptTaint,
   attachCodexMirrorAttestation,
   attachCodexMirrorRunId,
   fingerprintCodexMirrorSourceMessage,
@@ -409,7 +410,9 @@ async function mirror(params: {
         idempotencyKeys: candidateIdempotencyKeys,
       });
       assertWritable();
+      const taint = { tainted: false };
       for (const { dedupeIdentity, idempotencyKey, message, sourceFingerprint } of candidates) {
+        const sourceMessage = applyCodexTranscriptTaint(message, taint);
         const mirrorIdentity = readMirrorIdentity(message);
         const ownsRun = Boolean(
           params.runId &&
@@ -423,12 +426,12 @@ async function mirror(params: {
         const ownedMessage =
           ownsRun && params.runId
             ? attachCodexMirrorRunId(
-                message,
+                sourceMessage,
                 params.runId,
                 ownsTerminal,
                 terminalOwner?.settlementWarning,
               )
-            : message;
+            : sourceMessage;
         const transcriptMessage = {
           ...attachCodexMirrorAttestation(ownedMessage, sourceFingerprint),
           ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -520,6 +523,8 @@ async function mirror(params: {
             openclawAsyncDelivery: { itemId: message.openclawAsyncDelivery.itemId },
           });
         }
+        // Whole-message hooks can replace metadata, but cannot erase source-owned taint.
+        messageToAppend = applyCodexTranscriptTaint(messageToAppend, taint);
         messageToAppend = projectAgentHarnessTranscriptMessageForDisplay({
           hidden: (message as { display?: boolean }).display === false,
           message: messageToAppend,

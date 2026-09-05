@@ -16,7 +16,7 @@ import {
 } from "./attempt-timeouts.js";
 import { CodexAppServerClient } from "./client.js";
 import { isJsonObject } from "./protocol.js";
-import { turnCompleted } from "./protocol.test-helpers.js";
+import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
   createNativeRunParams,
   createStartedThreadHarness,
@@ -318,6 +318,7 @@ describe("Codex app-server terminal settlement", () => {
   ] as const)(
     "settles $termination at $boundary with writer release $release",
     async ({ boundary, termination, release }) => {
+      const queuedNetworkResult = boundary === "checkpoint" && termination === "timeout";
       const params = createTestParams();
       await attachSqliteSessionTarget(
         params,
@@ -413,25 +414,39 @@ describe("Codex app-server terminal settlement", () => {
             },
           },
         });
+        const completedCommand = {
+          id: "checkpoint-command",
+          type: "commandExecution",
+          command: "echo saved",
+          cwd: params.workspaceDir,
+          commandActions: [],
+          processId: null,
+          source: "agent",
+          status: "completed",
+          aggregatedOutput: "saved",
+          exitCode: 0,
+          durationMs: 1,
+        };
+        if (queuedNetworkResult) {
+          void harness.notify(itemNotification("item/completed", completedCommand));
+          await vi.waitFor(() => expect(checkpointMirror).toHaveBeenCalledOnce(), fastWait);
+          void harness.notify(
+            itemNotification("item/completed", {
+              id: "queued-search",
+              type: "webSearch",
+              query: "synthetic network result",
+              action: { type: "search", query: "synthetic network result" },
+              results: null,
+            }),
+          );
+        }
         const receivedAt = Date.now();
-        await harness.notify(
+        void harness.notify(
           turnCompleted({
             id: "turn-1",
             status: "completed",
             items: [
-              {
-                id: "checkpoint-command",
-                type: "commandExecution",
-                command: "echo saved",
-                cwd: params.workspaceDir,
-                commandActions: [],
-                processId: null,
-                source: "agent",
-                status: "completed",
-                aggregatedOutput: "saved",
-                exitCode: 0,
-                durationMs: 1,
-              },
+              ...(queuedNetworkResult ? [] : [completedCommand]),
               {
                 id: "checkpoint-answer",
                 type: "agentMessage",
@@ -534,6 +549,11 @@ describe("Codex app-server terminal settlement", () => {
                   },
                 },
               });
+              if (queuedNetworkResult) {
+                expect(assistantRows[0]).toMatchObject({
+                  message: { __openclaw: { turnTainted: true } },
+                });
+              }
             }
             if (boundary === "publication") {
               expect(publishedTerminal).toHaveBeenCalledExactlyOnceWith(
