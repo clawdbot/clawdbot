@@ -1,6 +1,7 @@
 // Detects Windows console/OEM code pages and decodes console output encodings.
 import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import { getWindowsCmdExePath, queryWindowsRegistryValue } from "./windows-install-roots.js";
 
 const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
@@ -93,6 +94,7 @@ export function resolveWindowsConsoleEncoding(): string | null {
   }
   try {
     const result = spawnSync(getWindowsCmdExePath(), ["/d", "/s", "/c", "chcp"], {
+      env: resolveDiagnosticProcessEnv(),
       windowsHide: true,
       encoding: "utf8",
       killSignal: "SIGKILL",
@@ -122,6 +124,7 @@ function resolveWindowsSystemEncoding(): string | null {
       "powershell.exe",
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::Default.CodePage"],
       {
+        env: resolveDiagnosticProcessEnv(),
         windowsHide: true,
         encoding: "utf8",
         killSignal: "SIGKILL",
@@ -197,6 +200,13 @@ function decodeWindowsBufferWithFallback(params: {
     return params.buffer.toString("utf8");
   }
 
+  // Windows PowerShell files and command output can declare UTF-16 with a BOM;
+  // honor it before consulting either the system or console legacy code page.
+  const [first, second] = params.buffer;
+  if ((first === 0xff && second === 0xfe) || (first === 0xfe && second === 0xff)) {
+    return new TextDecoder(first === 0xff ? "utf-16le" : "utf-16be").decode(params.buffer);
+  }
+
   const utf8 = decodeStrictUtf8(params.buffer);
   if (utf8 !== null) {
     return utf8;
@@ -243,47 +253,84 @@ export function createWindowsOutputDecoder(params?: {
     : new TextDecoder("utf-8", preserveUtf8Bom ? { ignoreBOM: true } : undefined);
   let useLegacyDecoder = false;
   let pendingUtf8Bytes = Buffer.alloc(0);
+  let pendingBomByte: number | null | undefined = platform === "win32" ? undefined : null;
+  let utf16Decoder: TextDecoder | null = null;
+
+  const decodeCurrent = (buffer: Buffer): string => {
+    if (!legacyDecoder || !utf8Decoder) {
+      return streamingUtf8Decoder?.decode(buffer, { stream: true }) ?? "";
+    }
+    if (useLegacyDecoder) {
+      return legacyDecoder.decode(buffer, { stream: true });
+    }
+    // Stay on strict UTF-8 until it fails; replay any pending lead bytes through the legacy
+    // decoder so split GBK/Big5/etc. characters are not lost at the fallback boundary.
+    const replayBuffer =
+      pendingUtf8Bytes.length > 0 ? Buffer.concat([pendingUtf8Bytes, buffer]) : buffer;
+    try {
+      const decoded = utf8Decoder.decode(buffer, { stream: true });
+      pendingUtf8Bytes = Buffer.from(getTrailingIncompleteUtf8Bytes(replayBuffer));
+      return decoded;
+    } catch {
+      useLegacyDecoder = true;
+      pendingUtf8Bytes = Buffer.alloc(0);
+      return legacyDecoder.decode(replayBuffer, { stream: true });
+    }
+  };
+
+  const flushCurrent = (): string => {
+    if (!legacyDecoder || !utf8Decoder) {
+      return streamingUtf8Decoder?.decode() ?? "";
+    }
+    if (useLegacyDecoder) {
+      return legacyDecoder.decode();
+    }
+    try {
+      const decoded = utf8Decoder.decode();
+      pendingUtf8Bytes = Buffer.alloc(0);
+      return decoded;
+    } catch {
+      useLegacyDecoder = true;
+      const replayBuffer = pendingUtf8Bytes;
+      pendingUtf8Bytes = Buffer.alloc(0);
+      return replayBuffer.length > 0 ? legacyDecoder.decode(replayBuffer) : "";
+    }
+  };
 
   return {
     decode(chunk) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      if (!legacyDecoder || !utf8Decoder) {
-        return streamingUtf8Decoder?.decode(buffer, { stream: true }) ?? "";
+      if (utf16Decoder) {
+        return utf16Decoder.decode(buffer, { stream: true });
       }
-      if (useLegacyDecoder) {
-        return legacyDecoder.decode(buffer, { stream: true });
+      if (pendingBomByte === null || buffer.length === 0) {
+        return pendingBomByte === null ? decodeCurrent(buffer) : "";
       }
-      // Stay on strict UTF-8 until it fails; replay any pending lead bytes through the legacy
-      // decoder so split GBK/Big5/etc. characters are not lost at the fallback boundary.
-      const replayBuffer =
-        pendingUtf8Bytes.length > 0 ? Buffer.concat([pendingUtf8Bytes, buffer]) : buffer;
-      try {
-        const decoded = utf8Decoder.decode(buffer, { stream: true });
-        pendingUtf8Bytes = Buffer.from(getTrailingIncompleteUtf8Bytes(replayBuffer));
-        return decoded;
-      } catch {
-        useLegacyDecoder = true;
-        pendingUtf8Bytes = Buffer.alloc(0);
-        return legacyDecoder.decode(replayBuffer, { stream: true });
+
+      const candidate =
+        pendingBomByte === undefined
+          ? buffer
+          : Buffer.concat([Buffer.from([pendingBomByte]), buffer]);
+      const [first, second] = candidate;
+      // Delay only an ambiguous UTF-16 lead byte; replay non-matches unchanged.
+      if (second === undefined && (first === 0xff || first === 0xfe)) {
+        pendingBomByte = first;
+        return "";
       }
+      pendingBomByte = null;
+      if ((first === 0xff && second === 0xfe) || (first === 0xfe && second === 0xff)) {
+        utf16Decoder = new TextDecoder(first === 0xff ? "utf-16le" : "utf-16be");
+        return utf16Decoder.decode(candidate, { stream: true });
+      }
+      return decodeCurrent(candidate);
     },
     flush() {
-      if (!legacyDecoder || !utf8Decoder) {
-        return streamingUtf8Decoder?.decode() ?? "";
+      if (utf16Decoder) {
+        return utf16Decoder.decode();
       }
-      if (useLegacyDecoder) {
-        return legacyDecoder.decode();
-      }
-      try {
-        const decoded = utf8Decoder.decode();
-        pendingUtf8Bytes = Buffer.alloc(0);
-        return decoded;
-      } catch {
-        useLegacyDecoder = true;
-        const replayBuffer = pendingUtf8Bytes;
-        pendingUtf8Bytes = Buffer.alloc(0);
-        return replayBuffer.length > 0 ? legacyDecoder.decode(replayBuffer) : "";
-      }
+      const pending = typeof pendingBomByte === "number" ? Buffer.from([pendingBomByte]) : null;
+      pendingBomByte = null;
+      return (pending ? decodeCurrent(pending) : "") + flushCurrent();
     },
   };
 }

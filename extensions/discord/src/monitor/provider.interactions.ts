@@ -1,6 +1,6 @@
 // Discord provider module implements model/runtime integration.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -9,7 +9,11 @@ import {
   getDiscordExecApprovalApprovers,
   isDiscordExecApprovalClientEnabled,
 } from "../exec-approvals.js";
-import type { BaseCommand, BaseMessageInteractiveComponent, Modal } from "../internal/discord.js";
+import type {
+  BaseMessageInteractiveComponent,
+  DiscordCommand,
+  Modal,
+} from "../internal/discord.js";
 import { createDiscordVoiceCommand, DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
 import {
   createAgentComponentControls,
@@ -51,16 +55,16 @@ export function createDiscordProviderInteractionSurface(params: {
   allowFrom: DiscordAccountConfig["allowFrom"];
   dmPolicy: NonNullable<DiscordAccountConfig["dmPolicy"]>;
   runtime: RuntimeEnv;
-  channelRuntime?: ChannelRuntimeSurface;
+  channelRuntime?: PluginRuntime["channel"];
   abortSignal?: AbortSignal;
   createNativeCommand?: typeof createDiscordNativeCommand;
 }): {
-  commands: BaseCommand[];
+  commands: DiscordCommand[];
   components: BaseMessageInteractiveComponent[];
   modals: Modal[];
 } {
   const createNativeCommand = params.createNativeCommand ?? createDiscordNativeCommand;
-  const commands: BaseCommand[] = params.commandSpecs.map((spec) => {
+  const commands: DiscordCommand[] = params.commandSpecs.map((spec) => {
     if (
       params.nativeEnabled &&
       params.voiceEnabled &&
@@ -84,6 +88,7 @@ export function createDiscordProviderInteractionSurface(params: {
       sessionPrefix: params.sessionPrefix,
       ephemeralDefault: params.ephemeralDefault,
       threadBindings: params.threadBindings,
+      dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     });
   });
 
@@ -134,6 +139,7 @@ export function createDiscordProviderInteractionSurface(params: {
       accountId: params.accountId,
       sessionPrefix: params.sessionPrefix,
       threadBindings: params.threadBindings,
+      dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     }),
     createDiscordModelPickerFallbackButton({
       cfg: params.cfg,
@@ -141,6 +147,7 @@ export function createDiscordProviderInteractionSurface(params: {
       accountId: params.accountId,
       sessionPrefix: params.sessionPrefix,
       threadBindings: params.threadBindings,
+      dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     }),
     createDiscordModelPickerFallbackSelect({
       cfg: params.cfg,
@@ -148,6 +155,7 @@ export function createDiscordProviderInteractionSurface(params: {
       accountId: params.accountId,
       sessionPrefix: params.sessionPrefix,
       threadBindings: params.threadBindings,
+      dispatchReplyFromConfig: params.channelRuntime?.reply?.dispatchReplyFromConfig,
     }),
   ];
   const activityButton = createDiscordActivityButton(
@@ -159,6 +167,7 @@ export function createDiscordProviderInteractionSurface(params: {
       allowFrom: params.allowFrom,
       dmPolicy: params.dmPolicy,
       runtime: params.runtime,
+      channelRuntime: params.channelRuntime,
       token: params.token,
     },
     params.applicationId,

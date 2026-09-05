@@ -347,6 +347,25 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
     expect(fs.existsSync(sidecarPath)).toBe(true);
   });
 
+  it("does not prompt when only unreferenced sidecars remain (guaranteed no-op)", async () => {
+    const state = await makeTestState();
+    await state.writeJson(
+      path.join("credentials", "auth-profiles", "cccccccccccccccccccccccccccccccc.json"),
+      {
+        version: 1,
+        profileId: "openai-codex:orphan",
+        provider: "openai-codex",
+        access: "orphaned-access-token",
+        refresh: "orphaned-refresh-token",
+      },
+    );
+
+    const prompter = makePrompter(true);
+    await maybeRepairLegacyOAuthSidecarProfiles({ cfg: {}, prompter });
+
+    expect(prompter.confirmAutoFix).not.toHaveBeenCalled();
+  });
+
   it.runIf(process.platform !== "win32")(
     "scans symlinked state agents before treating sidecars as unreferenced",
     async () => {
@@ -482,6 +501,64 @@ describe("maybeRepairLegacyOAuthSidecarProfiles", () => {
         delete process.env.OPENCLAW_AGENT_DIR;
       } else {
         process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
+      }
+    }
+  });
+
+  it("scans PI_CODING_AGENT_DIR like the flat-store migration so sidecar secrets inline first", async () => {
+    const state = await makeTestState();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = state.path("pi-agent");
+    const authPath = path.join(agentDir, "auth-profiles.json");
+    const profileId = "openai-codex:pi";
+    const ref = {
+      source: "openclaw-credentials" as const,
+      provider: "openai-codex" as const,
+      id: "ffffffffffffffffffffffffffffffff",
+    };
+    try {
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(
+        authPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              [profileId]: { type: "oauth", provider: "openai-codex", oauthRef: ref },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      const sidecarPath = await state.writeJson(
+        path.join("credentials", "auth-profiles", `${ref.id}.json`),
+        {
+          version: 1,
+          profileId,
+          provider: "openai-codex",
+          access: "pi-access-token",
+          refresh: "pi-refresh-token",
+        },
+      );
+
+      const result = await maybeRepairLegacyOAuthSidecarProfiles({
+        cfg: {},
+        prompter: makePrompter(true),
+        now: () => 987,
+      });
+
+      expect(result.detected).toEqual([authPath]);
+      expect(result.warnings).toStrictEqual([]);
+      expect(result.changes).toHaveLength(1);
+      expect(fs.existsSync(sidecarPath)).toBe(false);
+    } finally {
+      if (previousAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
       }
     }
   });

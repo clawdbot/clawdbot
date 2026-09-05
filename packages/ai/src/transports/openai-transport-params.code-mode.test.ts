@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   assertCodeModeResponsesToolSurface,
   enforceCodeModeResponsesToolSurface,
@@ -133,6 +133,41 @@ describe("OpenAI Code Mode payload tool filtering", () => {
     expect(() =>
       assertCodeModeResponsesToolSurface(payload, visibleToolNames, allowedHostedToolTypes),
     ).not.toThrow();
+  });
+
+  it("observes exact final-egress identities without a second payload parser", () => {
+    const observer = vi.fn();
+    const payload = {
+      tools: [
+        { type: "function", name: "exec" },
+        { type: "function", function: { name: "wait" } },
+        {
+          functionDeclarations: [{ name: "computer" }, { name: "rogue" }],
+        },
+        { type: "web_search" },
+        { type: "file_search" },
+      ],
+    };
+
+    enforceCodeModeResponsesToolSurface(
+      payload,
+      visibleToolNames,
+      new Set(["web_search"]),
+      observer,
+    );
+
+    expect(observer).toHaveBeenCalledOnce();
+    expect(observer).toHaveBeenCalledWith({
+      beforeToolIdentities: [
+        "client:exec",
+        "client:wait",
+        "client:computer",
+        "client:rogue",
+        "hosted:web_search",
+        "hosted:file_search",
+      ],
+      afterToolIdentities: ["client:exec", "client:wait", "hosted:web_search"],
+    });
   });
 
   it.each(["functionDeclarations", "function_declarations"] as const)(

@@ -21,7 +21,9 @@ function validateBrowserControlOverrideSpecifier(specifier: string): string {
 }
 
 /** Creates the Browser plugin service registered by the plugin entrypoint. */
-export function createBrowserPluginService(): OpenClawPluginService {
+export function createBrowserPluginService(params: {
+  stopOnDemand: () => Promise<void>;
+}): OpenClawPluginService {
   let handle: BrowserControlHandle = null;
 
   return {
@@ -55,8 +57,7 @@ export function createBrowserPluginService(): OpenClawPluginService {
         }
         return;
       }
-      const { stopBrowserControlService } = await import("./control-service.js");
-      await stopBrowserControlService();
+      await params.stopOnDemand();
     },
   };
 }

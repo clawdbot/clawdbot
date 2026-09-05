@@ -105,9 +105,11 @@ export function withCachedMigrationConfigRuntime(
   };
 }
 
-async function backupExistingMigrationTarget(
+/** Back up an existing migration target within the report's item backup directory. */
+export async function backupMigrationItemTarget(
   target: string,
   reportDir: string,
+  opts: { dereference?: boolean } = {},
 ): Promise<string | undefined> {
   if (!(await pathExists(target))) {
     return undefined;
@@ -121,7 +123,11 @@ async function backupExistingMigrationTarget(
     .slice(0, 12);
   const backupDir = await fs.mkdtemp(path.join(backupRoot, `${Date.now()}-${targetHash}-`));
   const backupPath = path.join(backupDir, path.basename(target));
-  await fs.cp(target, backupPath, { recursive: true, force: true });
+  await fs.cp(target, backupPath, {
+    recursive: true,
+    force: true,
+    ...(opts.dereference === undefined ? {} : { dereference: opts.dereference }),
+  });
   return backupPath;
 }
 
@@ -289,30 +295,32 @@ export async function copyMigrationFileItem(
   if (!item.source || !item.target) {
     return markMigrationItemError(item, MIGRATION_REASON_MISSING_SOURCE_OR_TARGET);
   }
+  let result = item;
   try {
     const targetExists = await pathExists(item.target);
     if (targetExists && !opts.overwrite) {
       return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
     }
     const backupPath = opts.overwrite
-      ? await backupExistingMigrationTarget(item.target, reportDir)
+      ? await backupMigrationItemTarget(item.target, reportDir)
       : undefined;
+    // Keep the recovery path when a subsequent copy fails.
+    result = {
+      ...item,
+      details: { ...item.details, ...(backupPath ? { backupPath } : {}) },
+    };
     await fs.mkdir(path.dirname(item.target), { recursive: true });
     await fs.cp(item.source, item.target, {
       recursive: true,
       force: Boolean(opts.overwrite),
       errorOnExist: !opts.overwrite,
     });
-    return {
-      ...item,
-      status: "migrated",
-      details: { ...item.details, ...(backupPath ? { backupPath } : {}) },
-    };
+    return { ...result, status: "migrated" };
   } catch (err) {
     if (isFileAlreadyExistsError(err)) {
-      return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
+      return markMigrationItemConflict(result, MIGRATION_REASON_TARGET_EXISTS);
     }
-    return markMigrationItemError(item, err instanceof Error ? err.message : String(err));
+    return markMigrationItemError(result, err instanceof Error ? err.message : String(err));
   }
 }
 

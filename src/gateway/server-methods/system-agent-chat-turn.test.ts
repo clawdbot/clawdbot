@@ -138,4 +138,22 @@ describe("system-agent chat input", () => {
       step: { id: "channel", type: "select" },
     });
   });
+
+  it("projects a personal-account handoff without claiming a mutation or changing action", () => {
+    expect(
+      buildSystemAgentChatResult({
+        sessionId: "s1",
+        reply: {
+          text: "Open your account controls; nothing has changed.",
+          action: "none",
+          handoff: { kind: "model-accounts" },
+        },
+      }),
+    ).toEqual({
+      sessionId: "s1",
+      reply: "Open your account controls; nothing has changed.",
+      action: "none",
+      handoff: { kind: "model-accounts" },
+    });
+  });
 });

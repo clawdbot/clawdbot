@@ -42,6 +42,8 @@ import {
   globalAfterEach0,
   globalAfterAll1,
 } from "./loader.test-harness.js";
+import { getActiveMemorySearchManagerCore } from "./memory-runtime.js";
+import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
@@ -209,32 +211,8 @@ describe("loadOpenClawPlugins", () => {
             filename: "index.cjs",
             body: memoryPluginBody("memory-b"),
           });
-          fs.writeFileSync(
-            path.join(memoryADir, "openclaw.plugin.json"),
-            JSON.stringify(
-              {
-                id: "memory-a",
-                kind: "memory",
-                configSchema: EMPTY_PLUGIN_SCHEMA,
-              },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
-          fs.writeFileSync(
-            path.join(memoryBDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              {
-                id: "memory-b",
-                kind: "memory",
-                configSchema: EMPTY_PLUGIN_SCHEMA,
-              },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
+          updatePluginManifest({ dir: memoryADir }, { kind: "memory" });
+          updatePluginManifest({ dir: memoryBDir }, { kind: "memory" });
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           return loadOpenClawPlugins({
@@ -408,43 +386,22 @@ describe("loadOpenClawPlugins", () => {
         label:
           "loads dreaming engine alongside a different memory slot plugin when dreaming is enabled",
         loadRegistry: () => {
-          const bundledDir = makePluginLoaderTempDir();
-          const memoryCoreDir = path.join(bundledDir, "memory-core");
-          const memoryLanceDir = path.join(bundledDir, "memory-lancedb");
-          mkdirSafe(memoryCoreDir);
-          mkdirSafe(memoryLanceDir);
-          writePlugin({
-            id: "memory-core",
-            dir: memoryCoreDir,
-            filename: "index.cjs",
-            body: memoryPluginBody("memory-core"),
+          // Active Memory grants private-transcript recall by resolved plugin id,
+          // so the real bundled sidecar must not lend its recall declarations to
+          // the resolved slot owner.
+          setupBundledDreamingMemoryPlugins({
+            coreBody: `module.exports = {
+              id: "memory-core",
+              kind: "memory",
+              register(api) {
+                api.registerMemoryCapability({
+                  deterministicRecallToolName: "memory_search",
+                  supportsPrivateTranscriptRecall: true,
+                  promptBuilder: () => ["sidecar prompt"],
+                });
+              },
+            };`,
           });
-          writePlugin({
-            id: "memory-lancedb",
-            dir: memoryLanceDir,
-            filename: "index.cjs",
-            body: memoryPluginBody("memory-lancedb"),
-          });
-          const openSchema = { type: "object", additionalProperties: true };
-          fs.writeFileSync(
-            path.join(memoryCoreDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              { id: "memory-core", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
-          fs.writeFileSync(
-            path.join(memoryLanceDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              { id: "memory-lancedb", kind: "memory", configSchema: openSchema },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
-          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           return loadOpenClawPlugins({
             cache: false,
@@ -467,51 +424,19 @@ describe("loadOpenClawPlugins", () => {
           expect(lance?.status).toBe("loaded");
           expect(lance?.memorySlotSelected).toBe(true);
           expect(core?.memorySlotSelected).not.toBe(true);
+          const resolved = resolveMemoryCapabilityRegistration(registry.memoryCapabilities);
+          expect(resolved?.pluginId).toBe("memory-core");
+          expect(resolved?.capability.deterministicRecallToolName).toBeUndefined();
+          expect(resolved?.capability.supportsPrivateTranscriptRecall).toBeUndefined();
+          expect(resolved?.capability.promptBuilder).toBeDefined();
         },
       },
       {
         label: "excludes dreaming engine when dreaming is disabled and it is not the slot",
         loadRegistry: () => {
-          const bundledDir = makePluginLoaderTempDir();
-          const memoryCoreDir = path.join(bundledDir, "memory-core");
-          const memoryLanceDir = path.join(bundledDir, "memory-lancedb");
-          mkdirSafe(memoryCoreDir);
-          mkdirSafe(memoryLanceDir);
-          writePlugin({
-            id: "memory-core",
-            dir: memoryCoreDir,
-            filename: "index.cjs",
-            body: `throw new Error("memory-core should not load when dreaming is disabled");`,
+          setupBundledDreamingMemoryPlugins({
+            coreBody: `throw new Error("memory-core should not load when dreaming is disabled");`,
           });
-          writePlugin({
-            id: "memory-lancedb",
-            dir: memoryLanceDir,
-            filename: "index.cjs",
-            body: memoryPluginBody("memory-lancedb"),
-          });
-          fs.writeFileSync(
-            path.join(memoryCoreDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              { id: "memory-core", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
-          fs.writeFileSync(
-            path.join(memoryLanceDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              {
-                id: "memory-lancedb",
-                kind: "memory",
-                configSchema: { type: "object", additionalProperties: true },
-              },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
-          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           return loadOpenClawPlugins({
             cache: false,
@@ -549,15 +474,7 @@ describe("loadOpenClawPlugins", () => {
             filename: "index.cjs",
             body: `throw new Error("memory-core should not load when memory slot is none");`,
           });
-          fs.writeFileSync(
-            path.join(memoryCoreDir, "openclaw.plugin.json"),
-            JSON.stringify(
-              { id: "memory-core", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
-              null,
-              2,
-            ),
-            "utf-8",
-          );
+          updatePluginManifest({ dir: memoryCoreDir }, { kind: "memory" });
           process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
 
           return loadOpenClawPlugins({
@@ -611,6 +528,90 @@ describe("loadOpenClawPlugins", () => {
     ] as const;
 
     runRegistryScenarios(scenarios, ({ loadRegistry }) => loadRegistry());
+  });
+
+  it("routes direct-facade indexing I/O to the configured memory slot owner", async () => {
+    const traceKey = "openclaw.test.memory-slot-runtime-owner";
+    const trace: string[] = [];
+    (globalThis as Record<PropertyKey, unknown>)[Symbol.for(traceKey)] = trace;
+    const runtimePluginBody = (id: string, includeRecall: boolean, direct: boolean) => `
+      const trace = globalThis[Symbol.for(${JSON.stringify(traceKey)})];
+      const id = ${JSON.stringify(id)};
+      ${direct ? 'const { registerMemoryCapability } = require("openclaw/plugin-sdk/memory-host-core");' : ""}
+      module.exports = {
+        id,
+        kind: "memory",
+        register(api) {
+          const capability = {
+            runtime: {
+              async getMemorySearchManager() {
+                trace.push(id + ":manager");
+                return {
+                  manager: {
+                    async sync(input) {
+                      trace.push(id + ":sync:" + input.reason);
+                    },
+                  },
+                };
+              },
+              resolveMemoryBackendConfig() {
+                return { backend: "builtin" };
+              },
+            },
+            ${includeRecall ? 'deterministicRecallToolName: "memory_search", supportsPrivateTranscriptRecall: true,' : ""}
+            promptBuilder: () => [id + " prompt"],
+          };
+          ${direct ? "registerMemoryCapability(id, capability);" : "api.registerMemoryCapability(capability);"}
+        },
+      };`;
+
+    try {
+      const selected = writePlugin({
+        id: "memory-lancedb",
+        body: runtimePluginBody("memory-lancedb", false, true),
+      });
+      updatePluginManifest(selected, {
+        kind: "memory",
+        configSchema: { type: "object", additionalProperties: true },
+      });
+      const bundledDir = makePluginLoaderTempDir();
+      const sidecarDir = path.join(bundledDir, "memory-core");
+      mkdirSafe(sidecarDir);
+      const sidecar = writePlugin({
+        id: "memory-core",
+        dir: sidecarDir,
+        filename: "index.cjs",
+        body: runtimePluginBody("memory-core", true, false),
+      });
+      updatePluginManifest(sidecar, { kind: "memory" });
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+      const config = {
+        plugins: {
+          allow: [selected.id, sidecar.id],
+          load: { paths: [selected.file] },
+          slots: { memory: selected.id },
+          entries: {
+            [selected.id]: { enabled: true, config: { dreaming: { enabled: true } } },
+            [sidecar.id]: { enabled: true },
+          },
+        },
+      };
+      const registry = loadOpenClawPlugins({ cache: false, config });
+      const resolved = resolveMemoryCapabilityRegistration(registry.memoryCapabilities);
+      const acquired = await getActiveMemorySearchManagerCore({
+        cfg: config,
+        agentId: "main",
+      });
+      await acquired.manager?.sync?.({ reason: "post-compaction" });
+
+      expect(resolved?.pluginId).toBe(selected.id);
+      expect(resolved?.capability.deterministicRecallToolName).toBeUndefined();
+      expect(resolved?.capability.supportsPrivateTranscriptRecall).toBeUndefined();
+      expect(trace).toEqual(["memory-lancedb:manager", "memory-lancedb:sync:post-compaction"]);
+    } finally {
+      delete (globalThis as Record<PropertyKey, unknown>)[Symbol.for(traceKey)];
+    }
   });
 
   it("loads dreaming sidecar metadata through a restrictive selected-memory allowlist", async () => {

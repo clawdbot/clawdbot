@@ -81,18 +81,6 @@ describe("gateway tool", () => {
     });
   });
 
-  it("exposes only config read actions", () => {
-    const tool = createGatewayTool();
-    const parameters = tool.parameters as {
-      properties?: { action?: { enum?: string[] } };
-    };
-
-    expect(parameters.properties?.action?.enum).toEqual(["config.get", "config.schema.lookup"]);
-    expect(tool.description).toBe(
-      "Read gateway config + schema. Writes/restart: use openclaw tool.",
-    );
-  });
-
   it("scopes config.get output to the requested path and keeps metadata compact", async () => {
     const result = await createGatewayTool().execute("call-config-get", {
       action: "config.get",

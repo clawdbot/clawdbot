@@ -72,6 +72,110 @@ afterEach(async () => {
 });
 
 describe("forkSessionFromParentTranscript", () => {
+  it.each(["existing-entry", "decision-skip"])(
+    "checks authority before applying a %s child patch",
+    async (reason) => {
+      const root = await makeRoot("openclaw-parent-fork-skip-guard-");
+      const storePath = path.join(root, "sessions.json");
+      const parentKey = "agent:main:main";
+      const childKey = "agent:main:child";
+      await replaceSessionEntry(
+        { sessionKey: parentKey, storePath },
+        {
+          sessionId: "parent-guarded",
+          updatedAt: 1,
+          totalTokens: 200_000,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+        },
+      );
+      await replaceSessionEntry(
+        { sessionKey: childKey, storePath },
+        { sessionId: "child-guarded", updatedAt: 1, label: "original" },
+      );
+      const original = loadSessionEntry({ sessionKey: childKey, storePath });
+      await expect(
+        forkSessionEntryFromParentTarget({
+          storePath,
+          parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
+          sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
+          skipForkWhen: () => reason === "existing-entry",
+          skipPatch: () => ({ label: "unauthorized" }),
+          decisionSkipPatch: () => ({ label: "unauthorized" }),
+          commitGuard: () => {
+            throw new Error("parent authority closed");
+          },
+        }),
+      ).rejects.toThrow("parent authority closed");
+      expect(loadSessionEntry({ sessionKey: childKey, storePath })).toEqual(original);
+    },
+  );
+
+  it("checks authority inside same- and cross-database transcript commits", async () => {
+    const root = await makeRoot("openclaw-parent-fork-guard-");
+    const storePath = path.join(root, "sessions.json");
+    const parentSessionId = "parent-guarded";
+    await seedParentTranscript({
+      storePath,
+      parentSessionId,
+      events: [
+        {
+          type: "session",
+          version: 3,
+          id: parentSessionId,
+          timestamp: "2026-08-18T00:00:00.000Z",
+          cwd: root,
+        },
+        {
+          type: "message",
+          id: "private-message",
+          parentId: null,
+          timestamp: "2026-08-18T00:00:01.000Z",
+          message: { role: "user", content: "private context" },
+        },
+      ],
+    });
+
+    for (const target of [
+      {
+        agentId: "main",
+        sessionId: "same-database-child",
+        sessionKey: "agent:main:guarded-child",
+        targetStorePath: undefined,
+      },
+      {
+        agentId: "work",
+        sessionId: "cross-database-child",
+        sessionKey: "agent:work:guarded-child",
+        targetStorePath: path.join(root, "work-sessions.json"),
+      },
+    ]) {
+      const commitGuard = () => {
+        throw new Error("session participation changed");
+      };
+      await expect(
+        forkSessionFromParentTranscript({
+          agentId: "main",
+          commitGuard,
+          parentEntry: { sessionId: parentSessionId, updatedAt: 1 },
+          parentSessionKey: "agent:main:main",
+          sessionKey: target.sessionKey,
+          storePath,
+          targetSessionId: target.sessionId,
+          ...(target.targetStorePath ? { targetStorePath: target.targetStorePath } : {}),
+        }),
+      ).rejects.toThrow("session participation changed");
+      await expect(
+        loadTranscriptEvents({
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          storePath: target.targetStorePath ?? storePath,
+        }),
+      ).resolves.toEqual([]);
+    }
+  });
+
   it("forks the active branch without synchronously opening the session manager", async () => {
     const root = await makeRoot("openclaw-parent-fork-");
     const sessionsDir = path.join(root, "sessions");

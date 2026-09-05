@@ -1,5 +1,4 @@
 // Canvas QA proof crosses the registered agent tool and a real Gateway/node socket.
-import { rm } from "node:fs/promises";
 import path from "node:path";
 import {
   createPluginRegistryFixture,
@@ -29,32 +28,7 @@ import {
 
 const E2E_TIMEOUT_MS = 180_000;
 const SESSION_KEY = "agent:main:canvas-node-qa";
-const PNG_FIXTURE_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aUkcAAAAASUVORK5CYII=";
-const VALID_A2UI_JSONL = [
-  JSON.stringify({
-    surfaceUpdate: {
-      surfaceId: "main",
-      components: [
-        {
-          id: "root",
-          component: { Text: { text: { literalString: "Canvas node proof" } } },
-        },
-      ],
-    },
-  }),
-  JSON.stringify({ beginRendering: { surfaceId: "main", root: "root" } }),
-].join("\n");
-const CANVAS_NODE_COMMANDS = [
-  "canvas.present",
-  "canvas.hide",
-  "canvas.navigate",
-  "canvas.eval",
-  "canvas.snapshot",
-  "canvas.a2ui.push",
-  "canvas.a2ui.pushJSONL",
-  "canvas.a2ui.reset",
-] as const;
+const CANVAS_NODE_COMMANDS = ["canvas.present", "canvas.hide", "canvas.navigate"] as const;
 
 type NodeInvokeFrame = {
   id: string;
@@ -89,11 +63,13 @@ const actions = [
       url: "https://canvas.test/present",
       placement: { x: 12, y: 34, width: 640, height: 480 },
     },
+    details: { url: "https://canvas.test/present" },
   },
   {
     args: { action: "hide", timeoutMs: 5_002 },
     command: "canvas.hide",
     params: null,
+    details: {},
   },
   {
     args: {
@@ -103,38 +79,13 @@ const actions = [
     },
     command: "canvas.navigate",
     params: { url: "https://canvas.test/navigate" },
-  },
-  {
-    args: { action: "eval", javaScript: "document.title", timeoutMs: 5_004 },
-    command: "canvas.eval",
-    params: { javaScript: "document.title" },
-  },
-  {
-    args: {
-      action: "snapshot",
-      outputFormat: "png",
-      maxWidth: 720,
-      quality: 0.8,
-      timeoutMs: 5_005,
-    },
-    command: "canvas.snapshot",
-    params: { format: "png", maxWidth: 720, quality: 0.8 },
-  },
-  {
-    args: { action: "a2ui_push", jsonl: VALID_A2UI_JSONL, timeoutMs: 5_006 },
-    command: "canvas.a2ui.pushJSONL",
-    params: { jsonl: VALID_A2UI_JSONL },
-  },
-  {
-    args: { action: "a2ui_reset", timeoutMs: 5_007 },
-    command: "canvas.a2ui.reset",
-    params: null,
+    details: { url: "https://canvas.test/navigate" },
   },
 ] as const;
 
-describe("Canvas agent tool over a paired Linux node", () => {
+describe("Canvas agent tool over a paired macOS node", () => {
   it(
-    "forwards every registered Canvas action with its invocation context",
+    "forwards every presenter action and reports the visible outcome",
     { timeout: E2E_TIMEOUT_MS },
     async () => {
       const state = await createOpenClawTestState({
@@ -177,7 +128,6 @@ describe("Canvas agent tool over a paired Linux node", () => {
 
       const invocations: CapturedInvocation[] = [];
       const handlerErrors: Error[] = [];
-      const snapshotPaths: string[] = [];
       const previousPluginRegistry = captureActivePluginRegistrySnapshot();
       let gateway: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
       let operatorClient: GatewayClient | undefined;
@@ -202,7 +152,7 @@ describe("Canvas agent tool over a paired Linux node", () => {
             pluginId: "canvas",
             policy: expect.objectContaining({
               commands: [...CANVAS_NODE_COMMANDS],
-              defaultPlatforms: expect.arrayContaining(["linux"]),
+              defaultPlatforms: ["macos"],
             }),
           }),
         ]);
@@ -222,7 +172,7 @@ describe("Canvas agent tool over a paired Linux node", () => {
           path: path.join(state.home, "canvas-operator.sqlite"),
         });
         const nodeIdentity = loadOrCreateDeviceIdentity({
-          path: path.join(state.home, "canvas-linux-node.sqlite"),
+          path: path.join(state.home, "canvas-macos-node.sqlite"),
         });
         operatorClient = await connectGatewayClient({
           url: `ws://127.0.0.1:${port}`,
@@ -243,9 +193,9 @@ describe("Canvas agent tool over a paired Linux node", () => {
           url: `ws://127.0.0.1:${port}`,
           token: gatewayToken,
           clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-          clientDisplayName: "canvas-linux-node",
+          clientDisplayName: "canvas-macos-node",
           clientVersion: "1.0.0",
-          platform: "linux",
+          platform: "macos",
           mode: GATEWAY_CLIENT_MODES.NODE,
           role: "node",
           scopes: [],
@@ -254,7 +204,7 @@ describe("Canvas agent tool over a paired Linux node", () => {
           deviceIdentity: nodeIdentity,
           requestTimeoutMs: 60_000,
           timeoutMs: 60_000,
-          timeoutMessage: "timeout waiting for Canvas Linux node",
+          timeoutMessage: "timeout waiting for Canvas macOS node",
           onEvent: (event) => {
             if (event.event !== "node.invoke.request") {
               return;
@@ -304,19 +254,7 @@ describe("Canvas agent tool over a paired Linux node", () => {
               { cause: error },
             );
           }
-          if (action.command === "canvas.eval") {
-            expect(result.details).toEqual({ result: "canvas-eval-result" });
-          }
-          if (action.command === "canvas.snapshot") {
-            expect(result.details).toMatchObject({
-              format: "png",
-              media: { outbound: false },
-            });
-            const snapshotPath = (result.details as { path?: unknown } | undefined)?.path;
-            if (typeof snapshotPath === "string") {
-              snapshotPaths.push(snapshotPath);
-            }
-          }
+          expect(result.details).toEqual({ ok: true, node: nodeId, ...action.details });
         }
 
         expect(handlerErrors).toEqual([]);
@@ -348,7 +286,6 @@ describe("Canvas agent tool over a paired Linux node", () => {
           actions.length,
         );
       } finally {
-        await Promise.allSettled(snapshotPaths.map((snapshotPath) => rm(snapshotPath)));
         if (nodeClient) {
           await disconnectGatewayClient(nodeClient);
         }
@@ -388,7 +325,7 @@ async function waitForCanvasNode(operator: GatewayClient, nodeId: string): Promi
       }>("node.list", {});
       const node = result.nodes?.find((entry) => entry.nodeId === nodeId && entry.connected);
       expect(node).toBeDefined();
-      expect(node?.commands).toEqual(expect.arrayContaining([...CANVAS_NODE_COMMANDS]));
+      expect(node?.commands).toEqual([...CANVAS_NODE_COMMANDS].toSorted());
     },
     { timeout: 15_000, interval: 100 },
   );
@@ -440,10 +377,6 @@ async function respondToCanvasInvocation(params: {
     "canvas.present": { presented: true },
     "canvas.hide": { hidden: true },
     "canvas.navigate": { navigated: true },
-    "canvas.eval": { result: "canvas-eval-result" },
-    "canvas.snapshot": { format: "png", base64: PNG_FIXTURE_BASE64 },
-    "canvas.a2ui.pushJSONL": { accepted: true },
-    "canvas.a2ui.reset": { reset: true },
   };
   if (!Object.hasOwn(responseByCommand, frame.command)) {
     throw new Error(`unexpected Canvas node command: ${frame.command}`);

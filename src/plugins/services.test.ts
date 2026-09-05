@@ -17,6 +17,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { STATE_DIR } from "../config/paths.js";
+import { hasInternalDiagnosticEventInterest } from "../infra/diagnostic-event-listener-presence.js";
 import {
   emitTrustedDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -31,7 +32,8 @@ import {
 import { queuePluginSessionsChanged, subscribePluginSessionsChanged } from "./gateway-events.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
-import { startPluginServices } from "./services.js";
+import { listPluginServiceHealthFailures } from "./service-health.js";
+import { startPluginServices, type PluginServicesHandle } from "./services.js";
 
 type TrustedExporterInternalDiagnostics = NonNullable<
   OpenClawPluginServiceContext["internalDiagnostics"]
@@ -82,9 +84,7 @@ function expectServiceContexts(
   config: Parameters<typeof startPluginServices>[0]["config"],
 ) {
   expect(contexts).not.toHaveLength(0);
-  contexts.forEach((ctx) => {
-    expectServiceContext(ctx, config);
-  });
+  contexts.forEach((ctx) => expectServiceContext(ctx, config));
 }
 
 function expectServiceLifecycleState(params: {
@@ -182,6 +182,75 @@ describe("startPluginServices", () => {
     await handle.stop();
 
     expectServiceLifecycleState({ starts, stops, contexts, config });
+  });
+
+  it("publishes cleanup ownership before service startup can yield", async () => {
+    let releaseStart: (() => void) | undefined;
+    const serviceStarted = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const stopService = vi.fn();
+    const siblingStart = vi.fn();
+    let lifecycleHandle: PluginServicesHandle | undefined;
+
+    const starting = startPluginServices({
+      registry: createRegistry([
+        { id: "blocking", start: () => serviceStarted, stop: stopService },
+        { id: "sibling", start: siblingStart },
+      ]),
+      config: createServiceConfig(),
+      onHandle: (handle) => {
+        lifecycleHandle = handle;
+      },
+    });
+
+    expect(lifecycleHandle).toBeDefined();
+    let stopSettled = false;
+    const stopping = lifecycleHandle!.stop().then(() => {
+      stopSettled = true;
+    });
+    await Promise.resolve();
+    expect(stopSettled).toBe(false);
+    expect(stopService).not.toHaveBeenCalled();
+
+    releaseStart?.();
+    await starting;
+    await stopping;
+
+    expect(stopService).toHaveBeenCalledOnce();
+    expect(siblingStart).not.toHaveBeenCalled();
+  });
+
+  it("fences service health reporters to their owning generation", async () => {
+    const contexts: OpenClawPluginServiceContext[] = [];
+    const registry = createRegistry([
+      {
+        id: "service",
+        start: (ctx) => {
+          contexts.push(ctx);
+        },
+      },
+    ]);
+    const generationA = await startPluginServices({ registry, config: createServiceConfig() });
+    const generationB = await startPluginServices({ registry, config: createServiceConfig() });
+
+    contexts[0]?.serviceHealth?.reportFailure(new Error("stale failure"));
+    expect(listPluginServiceHealthFailures(registry)).toEqual([]);
+    contexts[1]?.serviceHealth?.reportFailure(new Error("current failure"));
+    expect(listPluginServiceHealthFailures(registry)).toEqual([
+      {
+        pluginId: "plugin:test",
+        serviceId: "service",
+        origin: "workspace",
+        error: "current failure",
+      },
+    ]);
+
+    await generationA.stop();
+    expect(listPluginServiceHealthFailures(registry)).toHaveLength(1);
+    contexts[1]?.serviceHealth?.clearFailure();
+    expect(listPluginServiceHealthFailures(registry)).toEqual([]);
+    await generationB.stop();
   });
 
   it("drains producer diagnostics before exporters stop and propagates exporter failures", async () => {
@@ -302,28 +371,6 @@ describe("startPluginServices", () => {
 
     await handle.stop();
     expect(rollback).toHaveBeenCalledOnce();
-  });
-
-  it("runs concurrent and repeated shutdowns through one cleanup operation", async () => {
-    let releaseStop: (() => void) | undefined;
-    const stopping = new Promise<void>((resolve) => {
-      releaseStop = resolve;
-    });
-    const stop = vi.fn(() => stopping);
-    const handle = await startTrackingServices({
-      services: [{ id: "service", start: () => {}, stop }],
-    });
-
-    const firstStop = handle.stop();
-    const secondStop = handle.stop();
-    releaseStop?.();
-    await Promise.all([firstStop, secondStop]);
-
-    expect(firstStop).toBe(secondStop);
-    expect(stop).toHaveBeenCalledOnce();
-
-    await handle.stop();
-    expect(stop).toHaveBeenCalledOnce();
   });
 
   it("binds gateway events to the owning plugin namespace and scope", async () => {
@@ -841,6 +888,36 @@ describe("startPluginServices", () => {
       "sidecars.plugin-services.plugin~003Atest.service_a",
     ]);
     expect(new Set(measured).size).toBe(measured.length);
+  });
+
+  it("retains filtered diagnostic interests only for the exporter service lifetime", async () => {
+    const received = vi.fn();
+    const service: OpenClawPluginService = {
+      id: "diagnostics-otel",
+      start: (ctx) => {
+        ctx.internalDiagnostics!.onEvent(received, { include: ["log.record"] });
+      },
+    };
+    const handle = await startPluginServices({
+      registry: createRegistry([service], service.id, "bundled"),
+      config: createServiceConfig(),
+    });
+    expect(hasInternalDiagnosticEventInterest("log.record")).toBe(true);
+    expect(hasInternalDiagnosticEventInterest("gateway.event_loop.sample")).toBe(false);
+    expect(hasInternalDiagnosticEventInterest("gateway.rpc")).toBe(false);
+    emitTrustedDiagnosticEvent({ type: "log.record", level: "INFO", message: "synthetic" });
+    emitTrustedDiagnosticEvent({ type: "gateway.rpc", phase: "received", method: "health" });
+    emitTrustedDiagnosticEvent({
+      type: "gateway.event_loop.sample",
+      intervalMs: 1_000,
+      delayMaxMs: 1_500,
+    });
+    await waitForDiagnosticEventsDrained();
+    expect(received.mock.calls.map(([event]) => event.type)).toEqual(["log.record"]);
+    await handle.stop();
+    expect(hasInternalDiagnosticEventInterest("log.record")).toBe(false);
+    expect(hasInternalDiagnosticEventInterest("gateway.event_loop.sample")).toBe(false);
+    expect(hasInternalDiagnosticEventInterest("gateway.rpc")).toBe(false);
   });
 
   it("grants internal diagnostics only to trusted diagnostics exporter services", async () => {

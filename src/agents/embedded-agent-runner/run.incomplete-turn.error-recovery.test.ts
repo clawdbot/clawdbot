@@ -1,29 +1,80 @@
 // Focused incomplete-turn behavior coverage.
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE } from "../../llm/types.js";
 import {
-  EMPTY_RESPONSE_RETRY_INSTRUCTION,
-  makeLastAssistant,
-  resolveIncompleteTurnPayloadText,
-  makeIncompleteTurnParams,
-  makeEmptyResponseRetryParams,
-  makeSilentReplyParams,
-} from "./run.incomplete-turn.test-helpers.js";
-import { resetRunIncompleteTurnOwnerMocks } from "./run.incomplete-turn.test-support.js";
-import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
+  buildEmbeddedRunnerAssistant,
+  makeEmbeddedRunnerAttempt,
+} from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   resolveEmptyResponseRetryInstruction,
   shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn-recovery.js";
+import { resolveIncompleteTurnPayloadText } from "./run/incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
-describe("runEmbeddedAgent incomplete-turn safety", () => {
-  beforeEach(() => {
-    resetRunIncompleteTurnOwnerMocks();
-  });
+const EMPTY_RESPONSE_RETRY_INSTRUCTION =
+  "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 
+type LastAssistant = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+
+function makeLastAssistant(overrides: Record<string, unknown> = {}): LastAssistant {
+  return { ...buildEmbeddedRunnerAssistant({}), ...overrides } as LastAssistant;
+}
+
+function makeAttemptResult(
+  overrides: Partial<EmbeddedRunAttemptResult> = {},
+): EmbeddedRunAttemptResult {
+  return makeEmbeddedRunnerAttempt(overrides);
+}
+
+function makeEmptyResponseRetryParams(
+  attemptOverrides: Partial<EmbeddedRunAttemptResult> = {},
+  overrides: Partial<
+    Omit<Parameters<typeof resolveEmptyResponseRetryInstruction>[0], "attempt">
+  > = {},
+): Parameters<typeof resolveEmptyResponseRetryInstruction>[0] {
+  return {
+    provider: "openai",
+    modelId: "gpt-5.6-luna",
+    payloadCount: 0,
+    aborted: false,
+    timedOut: false,
+    attempt: makeEmbeddedRunnerAttempt(attemptOverrides),
+    ...overrides,
+  };
+}
+
+function makeIncompleteTurnParams(
+  attemptOverrides: Partial<EmbeddedRunAttemptResult> = {},
+): Parameters<typeof resolveIncompleteTurnPayloadText>[0] {
+  return {
+    payloadCount: 0,
+    aborted: false,
+    externalAbort: false,
+    timedOut: false,
+    attempt: makeEmbeddedRunnerAttempt(attemptOverrides),
+  };
+}
+
+function makeSilentReplyParams(
+  attempt: EmbeddedRunAttemptResult,
+  overrides: Partial<
+    Omit<Parameters<typeof shouldTreatEmptyAssistantReplyAsSilent>[0], "attempt">
+  > = {},
+): Parameters<typeof shouldTreatEmptyAssistantReplyAsSilent>[0] {
+  return {
+    allowEmptyAssistantReplyAsSilent: true,
+    payloadCount: 0,
+    aborted: false,
+    timedOut: false,
+    attempt,
+    ...overrides,
+  };
+}
+
+describe("incomplete-turn error recovery", () => {
   it("retries replay-safe errored turns that only emitted thinking blocks", () => {
     const assistant = makeLastAssistant({
       stopReason: "error",

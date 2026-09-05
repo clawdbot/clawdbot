@@ -5,7 +5,6 @@ import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.j
 import {
   createDeliveryState,
   deliverFallback,
-  deliverProgressCollapseSummary,
   finalizePendingAnswerBlockDraft,
 } from "./bot-message-dispatch-delivery.js";
 import {
@@ -289,7 +288,6 @@ export const dispatchTelegramMessage = async (
     cfg,
     runtime,
     replyToMode,
-    streamMode,
     telegramCfg,
     telegramDeps: injectedTelegramDeps,
     retryDispatchErrors = false,
@@ -348,7 +346,6 @@ export const dispatchTelegramMessage = async (
   const progressState = createProgressState(
     turnConfig,
     draftState,
-    () => turn,
     async () => await prepareAnswerLaneForToolProgress(turn),
   );
   const deliveryState = createDeliveryState({ ...turnConfig, lanes: draftState.lanes }, () => turn);
@@ -387,6 +384,12 @@ export const dispatchTelegramMessage = async (
       }
     }
     loadFreshSessionEntry.clear();
+    // Media hydration and other pre-dispatch work can outlive the durable
+    // ingress watchdog. Never enter the reply pipeline after that owner has
+    // already fenced this attempt; the canonical spool row will retry it.
+    if (isDispatchSuperseded()) {
+      return { kind: "completed" };
+    }
     if (status.controller && !isRoomEvent) {
       void status.controller.setThinking();
     }
@@ -396,8 +399,7 @@ export const dispatchTelegramMessage = async (
       turn.dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
-      // Terminal order: stop producers, drain queued drafts, materialize accepted text,
-      // clean previews, then collapse the progress window.
+      // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
       turn.progressCompositor.cancel();
       await waitForDraftEvents(turn);
       try {
@@ -407,15 +409,6 @@ export const dispatchTelegramMessage = async (
         runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
       }
       await cleanupDrafts(turn, isDispatchSuperseded());
-      if (
-        streamMode === "progress" &&
-        turn.sawProgressFinal &&
-        !turn.dispatchError &&
-        !turn.hadErrorReplyFailureOrSkip &&
-        !isDispatchSuperseded()
-      ) {
-        await deliverProgressCollapseSummary(turn);
-      }
     }
   } finally {
     dispatchWasSuperseded = isDispatchSuperseded();
@@ -433,22 +426,23 @@ export const dispatchTelegramMessage = async (
 
   const deliverySummary = turn.deliveryState.snapshot();
   let sentFallback = false;
+  const terminalFailure = turn.dispatchError || turn.agentRunFailed;
   const shouldSendFailureFallback =
     !isRoomEvent &&
-    !suppressFailureFallback &&
+    (!suppressFailureFallback || turn.agentRunFailed) &&
     !turn.finalAnswerDelivered &&
-    (turn.dispatchError ||
+    (terminalFailure ||
       deliverySummary.failedNonSilent > 0 ||
       (deliverySummary.skippedNonSilent > 0 && !turn.suppressSilentReplyFallback));
   if (shouldSendFailureFallback) {
-    const fallbackText = turn.dispatchError
+    const fallbackText = terminalFailure
       ? "Something went wrong while processing your request. Please try again."
       : EMPTY_RESPONSE_FALLBACK;
     const result = await deliverFallback(
       turn,
       [{ text: fallbackText }],
       telegramCfg.silentErrorReplies === true &&
-        (turn.dispatchError != null || turn.hadErrorReplyFailureOrSkip),
+        Boolean(terminalFailure || turn.hadErrorReplyFailureOrSkip),
     );
     sentFallback = result.delivered;
   }
@@ -518,7 +512,8 @@ export const dispatchTelegramMessage = async (
       {
         outcome:
           turn.agentRunFailed ||
-          (!turn.finalAnswerDelivered && (turn.dispatchError != null || sentFallback))
+          turn.dispatchError != null ||
+          (!turn.finalAnswerDelivered && sentFallback)
             ? "error"
             : "done",
       },

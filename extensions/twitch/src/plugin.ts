@@ -11,6 +11,7 @@ import {
   buildChannelOutboundSessionRoute,
   createChatChannelPlugin,
   stripChannelTargetPrefix,
+  type PluginRuntime,
 } from "openclaw/plugin-sdk/channel-core";
 import {
   createAccountStatusSink,
@@ -41,7 +42,7 @@ import {
 import { twitchMessageAdapter, twitchOutbound } from "./outbound.js";
 import { probeTwitch } from "./probe.js";
 import { resolveTwitchTargets } from "./resolver.js";
-import { twitchSetupContract, twitchSetupWizard } from "./setup-surface.js";
+import { twitchSetupPlugin } from "./setup-surface.js";
 import { collectTwitchStatusIssues } from "./status.js";
 import type {
   ChannelLogSink,
@@ -80,6 +81,17 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         console.warn,
       ),
     },
+    threading: {
+      matchesToolContextTarget: ({ target, toolContext }) => {
+        const channel = normalizeTwitchMessagingTarget(target);
+        return (
+          Boolean(channel) &&
+          [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
+            (current) => current != null && normalizeTwitchMessagingTarget(current) === channel,
+          )
+        );
+      },
+    },
     outbound: twitchOutbound,
     base: {
       id: "twitch",
@@ -91,12 +103,18 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         blurb: "Twitch chat integration",
         aliases: ["twitch-chat"],
       },
-      setupContract: twitchSetupContract,
-      setupWizard: twitchSetupWizard,
+      setupContract: twitchSetupPlugin.setupContract,
+      setupWizard: twitchSetupPlugin.setupWizard,
+      reload: twitchSetupPlugin.reload,
       capabilities: {
         chatTypes: ["group"],
       },
       messaging: {
+        normalizeTarget: normalizeTwitchMessagingTarget,
+        targetResolver: {
+          looksLikeId: (input) => Boolean(normalizeTwitchMessagingTarget(input)),
+          hint: "<channel-name>",
+        },
         inferTargetChatType: ({ to }) => (normalizeTwitchMessagingTarget(to) ? "group" : undefined),
         resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
           const channel = normalizeTwitchMessagingTarget(target);
@@ -185,6 +203,11 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         startAccount: async (ctx): Promise<void> => {
           const account = ctx.account;
           const accountId = ctx.accountId;
+          // SAFETY: Gateway startup supplies the full registered runtime behind its context-only public type.
+          const channelRuntime = ctx.channelRuntime as PluginRuntime["channel"] | undefined;
+          if (!channelRuntime?.inbound?.buildContext) {
+            throw new Error("Twitch requires its registered channel runtime context builder");
+          }
           const statusSink = createAccountStatusSink({
             accountId,
             setStatus: ctx.setStatus,
@@ -211,6 +234,7 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
                 return monitorTwitchProvider({
                   account,
                   accountId,
+                  channelRuntime,
                   config: ctx.cfg,
                   runtime: ctx.runtime,
                   abortSignal: ctx.abortSignal,

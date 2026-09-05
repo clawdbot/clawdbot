@@ -13,6 +13,7 @@ const refreshPreparedModelRuntimeSnapshotsMock = vi.fn(
       defaultWorkspaceDir?: string;
       catalogMode?: "live" | "static";
       allowGatewaySubagentBinding?: boolean;
+      isPublicationCurrent?: () => boolean;
     },
   ) => {},
 );
@@ -32,6 +33,7 @@ vi.mock("../agents/prepared-model-runtime.js", () => ({
       defaultWorkspaceDir?: string;
       catalogMode?: "live" | "static";
       allowGatewaySubagentBinding?: boolean;
+      isPublicationCurrent?: () => boolean;
     },
   ) => refreshPreparedModelRuntimeSnapshotsMock(cfg, options),
 }));
@@ -86,7 +88,7 @@ describe("gateway startup primary model warmup", () => {
     const hydrate = vi.fn();
 
     await hydrateConfiguredExternalCliAuth({
-      cfg,
+      getConfig: () => cfg,
       log: { warn: vi.fn() },
       deps: {
         listAgentIds: () => ["main", "secondary"],
@@ -99,8 +101,8 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(hydrate).toHaveBeenCalledTimes(2);
-    expect(hydrate).toHaveBeenCalledWith("/tmp/main", ["openai"]);
-    expect(hydrate).toHaveBeenCalledWith("/tmp/secondary", ["anthropic"]);
+    expect(hydrate).toHaveBeenCalledWith(cfg, "/tmp/main", ["openai"]);
+    expect(hydrate).toHaveBeenCalledWith(cfg, "/tmp/secondary", ["anthropic"]);
     expect(refreshPreparedModelRuntimeSnapshotsMock).not.toHaveBeenCalled();
   });
 

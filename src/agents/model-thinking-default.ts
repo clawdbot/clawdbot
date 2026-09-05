@@ -33,7 +33,7 @@ export function resolveThinkingDefault(params: {
 }
 
 /** Resolves thinking default after loading runtime catalog only when needed. */
-export async function resolveThinkingDefaultWithRuntimeCatalog(params: {
+export async function resolveThinkingDefaultWithRuntimeCatalogCore(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;

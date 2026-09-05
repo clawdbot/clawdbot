@@ -236,8 +236,6 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
-        page.setDefaultTimeout(10_000);
-
         const gateway = await installMockGateway(page, {
           historyMessages: [
             {
@@ -407,8 +405,6 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
-        page.setDefaultTimeout(10_000);
-
         const gateway = await installMockGateway(page, {
           assistantAgentId: "work",
           defaultAgentId: "work",
@@ -456,16 +452,23 @@ suite.define(() => {
             },
           },
           sessionKey: "global",
+          sessionScope: "global",
         });
 
-        const globalRouteKey = "agent:work:global";
-        const response = await page.goto(controlUiSessionUrl(suite.server.baseUrl, globalRouteKey));
+        const response = await page.goto(
+          controlUiSessionUrl(suite.server.baseUrl, "agent:work:main"),
+        );
         expect(response?.status()).toBe(200);
         await page
           .getByText("Configured global foreground is ready.")
           .waitFor({ state: "visible" });
-        expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(globalRouteKey));
+        expect(new URL(page.url()).pathname).toBe("/chat/work");
         expect(await gateway.getRequests("connect")).toHaveLength(1);
+        expect(await gateway.getRequests("chat.startup")).toEqual([
+          expect.objectContaining({
+            params: expect.objectContaining({ sessionKey: "agent:work:primary", agentId: "work" }),
+          }),
+        ]);
 
         const headline = `Configured-global observer notice for ${testCase.sessionKey}`;
         const digest = observerDigest({

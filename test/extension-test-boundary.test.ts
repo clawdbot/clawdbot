@@ -98,7 +98,7 @@ function findExtensionImports(source: string): string[] {
 }
 
 function isAllowedExtensionPublicImport(specifier: string): boolean {
-  return /(?:^|\/)extensions\/[^/]+\/(?:api|index|runtime-api|setup-entry|login-qr-api)\.js$/u.test(
+  return /(?:^|\/)extensions\/[^/]+\/(?:api|index|runtime-api|setup-entry|login-qr-api|test-api)\.js$/u.test(
     specifier,
   );
 }
@@ -270,24 +270,6 @@ describe("non-extension test boundaries", () => {
     const offenders = files.filter((file) => {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
       return findBundledPluginPublicSurfaceImports(source).length > 0;
-    });
-
-    expect(offenders).toStrictEqual([]);
-  });
-
-  it("keeps bundled plugin sync test-api loaders out of core tests", () => {
-    const files = [
-      ...walkCode(path.join(repoRoot, "src")),
-      ...walkCode(path.join(repoRoot, "test")),
-    ]
-      .filter((file) => !file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX))
-      .filter((file) => !file.startsWith(CHANNEL_CONTRACT_TEST_HELPERS_PREFIX))
-      .filter((file) => !file.startsWith("test/helpers/"))
-      .filter((file) => file !== "test/extension-test-boundary.test.ts");
-
-    const offenders = files.filter((file) => {
-      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      return source.includes("loadBundledPluginTestApiSync(");
     });
 
     expect(offenders).toStrictEqual([]);

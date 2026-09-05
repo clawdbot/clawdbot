@@ -8,7 +8,9 @@ export function filterConsolidationCandidates(
 }
 
 /** Explicitly tainted origins must never promote through any durable write path. */
-export function isPromotionOriginBlocked(candidate: PromotionCandidate): boolean {
+export function isPromotionOriginBlocked(
+  candidate: Pick<PromotionCandidate, "provenance">,
+): boolean {
   const originClass = candidate.provenance?.originClass;
   return originClass === "untrusted" || originClass === "system";
 }

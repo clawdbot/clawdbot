@@ -6,9 +6,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   captureEnv,
   createPathResolutionEnv,
@@ -16,17 +17,7 @@ import {
   setTestEnvValue,
   withEnvAsync,
 } from "../test-utils/env.js";
-
-type CollectPluginsTrustFindings =
-  typeof import("./audit-plugins-trust.js").collectPluginsTrustFindings;
-
-async function collectPluginsTrustFindingsForTest(
-  ...args: Parameters<CollectPluginsTrustFindings>
-): Promise<Awaited<ReturnType<CollectPluginsTrustFindings>>> {
-  vi.resetModules();
-  const { collectPluginsTrustFindings } = await import("./audit-plugins-trust.js");
-  return await collectPluginsTrustFindings(...args);
-}
+import { collectPluginsTrustFindings } from "./audit-plugins-trust.js";
 
 const mockChannelPlugins = vi.hoisted(() => [
   {
@@ -172,7 +163,7 @@ describe("security audit install metadata findings", () => {
   };
 
   const runInstallMetadataAudit = async (cfg: OpenClawConfig, stateDir: string) => {
-    return await collectPluginsTrustFindingsForTest({ cfg, stateDir });
+    return await collectPluginsTrustFindings({ cfg, stateDir });
   };
 
   const writeHookInstalls = (
@@ -231,8 +222,10 @@ describe("security audit install metadata findings", () => {
   });
 
   afterAll(async () => {
+    // Fixture writers and audit readers share one SQLite owner; close it before removing files.
+    closeOpenClawStateDatabaseForTest();
     if (fixtureRoot) {
-      await fs.rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
   });
 
@@ -473,7 +466,7 @@ describe("security audit extension tool reachability findings", () => {
   let pathResolutionEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
   const runSharedExtensionsAudit = async (config: OpenClawConfig) => {
-    return await collectPluginsTrustFindingsForTest({
+    return await collectPluginsTrustFindings({
       cfg: config,
       stateDir: sharedExtensionsStateDir,
     });
@@ -509,7 +502,7 @@ describe("security audit extension tool reachability findings", () => {
     homedirSpy?.mockRestore();
     pathResolutionEnvSnapshot?.restore();
     if (fixtureRoot) {
-      await fs.rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
     }
   });
 

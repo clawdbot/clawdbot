@@ -245,9 +245,9 @@ flow:
                   - ref: transcriptRoot
                   - recursive: true
                     force: true
-              - set: requestCountBeforeRecall
+              - set: requestCursorBeforeRecall
                 value:
-                  expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+                  expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
               - set: targetStartIndex
                 value:
                   expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
@@ -286,7 +286,7 @@ flow:
                   - utf8
               - set: recallRequests
                 value:
-                  expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBeforeRecall) : []"
+                  expr: "env.mock ? await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeRecall}`) : []"
               - set: recallRequestDebug
                 value:
                   expr: "recallRequests.map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, toolOutput: String(request.toolOutput ?? '').slice(0, 1200), finalText: String(request.finalText ?? '').slice(0, 300), allInputText: String(request.allInputText ?? '').slice(-500) }))"
@@ -329,9 +329,9 @@ flow:
                     - set: helperCountBeforeGroupDestination
                       value:
                         expr: "(await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).length"
-                    - set: groupRequestCountBefore
+                    - set: groupRequestCursorBefore
                       value:
-                        expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length"
+                        expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
                     - sendInbound:
                         conversation:
                           id:
@@ -347,7 +347,7 @@ flow:
                       args:
                         - lambda:
                             async: true
-                            expr: "await (async () => { const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests`); return requests.length > groupRequestCountBefore ? requests.slice(groupRequestCountBefore) : undefined; })()"
+                            expr: "await (async () => { const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${groupRequestCursorBefore}`); return requests.length > 0 ? requests : undefined; })()"
                         - expr: liveTurnTimeoutMs(env, 60000)
                         - 100
                     - set: helperCountAfterGroupDestination
@@ -391,9 +391,9 @@ flow:
                     - set: helperCountBeforePaused
                       value:
                         expr: "(await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).length"
-                    - set: pausedRequestCountBefore
+                    - set: pausedRequestCursorBefore
                       value:
-                        expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length"
+                        expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
                     - sendInbound:
                         conversation:
                           id:
@@ -409,7 +409,7 @@ flow:
                       args:
                         - lambda:
                             async: true
-                            expr: "await (async () => { const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests`); return requests.length > pausedRequestCountBefore ? requests.slice(pausedRequestCountBefore) : undefined; })()"
+                            expr: "await (async () => { const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${pausedRequestCursorBefore}`); return requests.length > 0 ? requests : undefined; })()"
                         - expr: liveTurnTimeoutMs(env, 60000)
                         - 100
                     - set: helperCountAfterPaused
@@ -422,9 +422,9 @@ flow:
                         expr: "pausedRequests.every((request) => !String(request.allInputText ?? '').includes(config.privateFact) && !String(request.allInputText ?? '').includes('<active_memory_plugin>'))"
                         message:
                           expr: "`paused conversation received private recall context: ${JSON.stringify(pausedRequests)}`"
-                    - set: freshRequestCountBefore
+                    - set: freshRequestCursorBefore
                       value:
-                        expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length"
+                        expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
                     - sendInbound:
                         conversation:
                           id:
@@ -440,7 +440,7 @@ flow:
                       args:
                         - lambda:
                             async: true
-                            expr: "await (async () => { const requests = (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(freshRequestCountBefore); return requests.some((request) => String(request.allInputText ?? '').includes('<active_memory_plugin>')) ? requests : undefined; })()"
+                            expr: "await (async () => { const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${freshRequestCursorBefore}`); return requests.some((request) => String(request.allInputText ?? '').includes('<active_memory_plugin>')) ? requests : undefined; })()"
                         - expr: liveTurnTimeoutMs(env, 60000)
                         - 100
                     - set: helperCountAfterFresh
@@ -472,9 +472,9 @@ flow:
                     - set: helperCountBeforeDisabled
                       value:
                         expr: "(await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).length"
-                    - set: disabledRequestCountBefore
+                    - set: disabledRequestCursorBefore
                       value:
-                        expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length"
+                        expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
                     - sendInbound:
                         conversation:
                           id:
@@ -490,7 +490,7 @@ flow:
                       args:
                         - lambda:
                             async: true
-                            expr: "await (async () => { const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests`); return requests.length > disabledRequestCountBefore ? requests.slice(disabledRequestCountBefore) : undefined; })()"
+                            expr: "await (async () => { const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${disabledRequestCursorBefore}`); return requests.length > 0 ? requests : undefined; })()"
                         - expr: liveTurnTimeoutMs(env, 60000)
                         - 100
                     - set: helperCountAfterDisabled

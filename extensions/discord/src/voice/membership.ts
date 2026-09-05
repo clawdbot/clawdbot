@@ -1,7 +1,7 @@
 // Discord plugin module owns voice-session participant membership events.
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import type { APIVoiceState, Client } from "../internal/discord.js";
 import {
   collectDiscordVoiceParticipants,
@@ -234,7 +234,7 @@ export class DiscordVoiceMembershipTracker {
 
   private publish(entry: VoiceSessionEntry, text: string): boolean {
     try {
-      return enqueueSystemEvent(text, this.eventOptions(entry));
+      return enqueueRoutedSystemEvent(text, entry.route, this.eventOptions(entry));
     } catch (err) {
       this.logFailure(entry, err);
       return false;
@@ -276,12 +276,10 @@ export class DiscordVoiceMembershipTracker {
   }
 
   private eventOptions(entry: VoiceSessionEntry): {
-    sessionKey: string;
     contextKey: string;
     replace: true;
   } {
     return {
-      sessionKey: entry.route.sessionKey,
       contextKey: `discord:voice-membership:${this.accountId}:${entry.guildId}`,
       replace: true,
     };

@@ -5,7 +5,13 @@
   },
   "name": "Google Meet",
   "description": "OpenClaw Google Meet participant plugin for joining calls through Chrome or Twilio transports.",
-  "icon": "https://cdn.simpleicons.org/googlemeet",
+  "cliCommands": [
+    {
+      "name": "googlemeet",
+      "description": "Join and manage Google Meet calls",
+      "hasSubcommands": true
+    }
+  ],
   "enabledByDefault": true,
   "commandAliases": [{ "name": "googlemeet" }],
   "activation": {

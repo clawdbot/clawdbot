@@ -72,20 +72,25 @@ function resolveProviderChoiceOptions(params?: {
   );
 }
 
-/** Format all currently available auth-choice values for CLI help/validation. */
+/**
+ * Format every accepted `--auth-choice` value for CLI help and validation.
+ *
+ * This is the single owner of that set: help text, onboard preflight, and the
+ * non-interactive dispatcher all render it, so an advertised value is always an
+ * accepted one. Deprecated aliases stay out; `auth-choice-legacy.ts` normalizes
+ * them before any surface sees them.
+ */
 export function formatAuthChoiceChoicesForCli(params?: {
   includeSkip?: boolean;
-  includeLegacyAliases?: boolean;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string {
   const values = [
     ...formatStaticAuthChoiceChoicesForCli(params).split("|"),
-    ...resolveProviderSetupFlowContributions({
-      ...params,
-      scope: "text-inference",
-    }).map((contribution) => contribution.option.value),
+    ...resolveProviderSetupFlowContributions({ ...params, scope: "all" }).map(
+      (contribution) => contribution.option.value,
+    ),
   ];
 
   return uniqueStrings(values).join("|");

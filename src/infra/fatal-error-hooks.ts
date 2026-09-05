@@ -38,8 +38,3 @@ export function runFatalErrorHooks(context: FatalErrorHookContext): string[] {
   }
   return messages;
 }
-
-/** Clears registered fatal-error hooks; test-only helper. */
-export function resetFatalErrorHooksForTest(): void {
-  hooks.clear();
-}

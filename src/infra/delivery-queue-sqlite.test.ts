@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   claimDeliveryQueueEntryPlatformSend,
@@ -10,14 +11,16 @@ import {
 } from "./delivery-queue-sqlite-claim.js";
 import { commitStagedDeliveryQueueEntryOnceAcrossNamespaces } from "./delivery-queue-sqlite-namespace.js";
 import {
-  commitStagedDeliveryQueueEntry,
   completeDeliveryQueueEntry,
   countFailedDeliveryQueueEntries,
+  countPendingDeliveryQueueEntries,
   deleteDeliveryQueueEntry,
   getDeliveryQueueEntryStatus,
+  getDeliveryQueueEntryOwners,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
+  pruneExpiredDeliveryQueueTombstones,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
 } from "./delivery-queue-sqlite.js";
@@ -91,7 +94,6 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       enqueueValid("valid-b");
 
       const entries = loadDeliveryQueueEntries(QUEUE, stateDir);
-      expect(entries).toHaveLength(2);
       expect(entries.map((e) => e.id).toSorted()).toEqual(["valid-a", "valid-b"]);
     });
 
@@ -109,6 +111,56 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
 
       expect(loadDeliveryQueueEntries(QUEUE, stateDir)).toHaveLength(3);
     });
+  });
+
+  it("counts pending rows across only the selected namespaces", () => {
+    enqueueValid("pending");
+    upsertDeliveryQueueEntry({
+      queueName: "other-q",
+      entry: { id: "other", enqueuedAt: Date.now(), retryCount: 0 },
+      stateDir,
+    });
+    upsertDeliveryQueueEntry({
+      queueName: "ignored-q",
+      entry: { id: "ignored", enqueuedAt: Date.now(), retryCount: 0 },
+      stateDir,
+    });
+    completeDeliveryQueueEntry(QUEUE, "pending", stateDir);
+
+    expect(countPendingDeliveryQueueEntries([QUEUE, "other-q"], stateDir)).toBe(1);
+    expect(countPendingDeliveryQueueEntries([], stateDir)).toBe(0);
+  });
+
+  it("reads ownership without materializing unrelated queue payloads", () => {
+    const id = "large-pending-payload";
+    for (const status of ["pending", "failed"] as const) {
+      const entry = {
+        id,
+        enqueuedAt: Date.now(),
+        retryCount: 0,
+        payload: "x".repeat(16_384),
+        ...(status === "failed" ? { recoveryState: "settlement_pending" } : {}),
+      };
+      upsertDeliveryQueueEntry({ queueName: status, entry, status, stateDir });
+    }
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    const reads = trackSqliteStatementExecutions(db, ["owners"], (sql) =>
+      sql.startsWith("select ") && sql.includes('from "delivery_queue_entries"') ? "owners" : null,
+    );
+    try {
+      expect(getDeliveryQueueEntryOwners(["pending", "failed"], id, stateDir)).toEqual(
+        new Map([
+          ["failed", { status: "failed", settlementPending: true }],
+          ["pending", { status: "pending" }],
+        ]),
+      );
+      expect(reads.rowCounts.owners).toBe(2);
+      expect(reads.textBytes.owners).toBeLessThan(1024);
+    } finally {
+      reads.restore();
+    }
   });
 
   describe("updateDeliveryQueueEntry with corrupt row", () => {
@@ -242,17 +294,9 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
     });
 
     it.each([
-      { name: "ordinary", commit: commitStagedDeliveryQueueEntry, expected: true },
-      {
-        name: "insert-only",
-        commit: (params: Parameters<typeof commitStagedDeliveryQueueEntry>[0]) =>
-          commitStagedDeliveryQueueEntryOnceAcrossNamespaces({
-            ...params,
-            conflictQueueNames: ["outbound-legacy"],
-          }),
-        expected: "created",
-      },
-    ])("indexes $name staged outbound commits", ({ commit, expected }) => {
+      { name: "ordinary", conflictQueueNames: [] },
+      { name: "cross-namespace", conflictQueueNames: ["outbound-legacy"] },
+    ])("indexes $name staged outbound commits", ({ conflictQueueNames }) => {
       const stagingQueueName = "outbound-media-staging";
       const stagingId = "metadata-staged-media";
       const outboundEntry = {
@@ -272,14 +316,15 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       });
 
       expect(
-        commit({
+        commitStagedDeliveryQueueEntryOnceAcrossNamespaces({
           queueName: "outbound",
           entry: outboundEntry,
           stagingId,
           stagingQueueName,
+          conflictQueueNames,
           stateDir,
         }),
-      ).toBe(expected);
+      ).toBe("created");
 
       const { db } = openOpenClawStateDatabase({
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
@@ -364,6 +409,14 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
 
       expect(loadDeliveryQueueEntry(QUEUE, "rt-completed", stateDir)).toBeNull();
       expect(getDeliveryQueueEntryStatus(QUEUE, "rt-completed", stateDir)).toBe("completed");
+      expect(getDeliveryQueueEntryStatus(QUEUE, "rt-expired-completed", stateDir)).toBe(
+        "completed",
+      );
+      countFailedDeliveryQueueEntries(stateDir);
+      expect(getDeliveryQueueEntryStatus(QUEUE, "rt-expired-completed", stateDir)).toBe(
+        "completed",
+      );
+      pruneExpiredDeliveryQueueTombstones(stateDir);
       expect(getDeliveryQueueEntryStatus(QUEUE, "rt-expired-completed", stateDir)).toBeUndefined();
       const { db } = openOpenClawStateDatabase({
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
@@ -649,7 +702,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
           stateDir,
         });
         expect(staleClaimId).toEqual(expect.any(String));
-        vi.setSystemTime(Date.now() + 30_001);
+        vi.setSystemTime(Date.now() + 60_001);
         if (!staleClaimId) {
           throw new Error("test invariant: the original producer claim must be available");
         }
@@ -674,7 +727,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         expect(recoveredClaimId).not.toBe(staleClaimId);
         expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)).toMatchObject({
           recoveryState: "producer_claimed",
-          availableAt: Date.now() + 30_000,
+          availableAt: Date.now() + 60_000,
           producerClaimId: recoveredClaimId,
         });
         expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)?.platformSendStartedAt).toBeUndefined();
@@ -739,10 +792,10 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
               claimId,
               stateDir,
             }),
-          ).toBe(Date.now() + 30_000);
+          ).toBe(Date.now() + 60_000);
           expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)).toMatchObject({
             recoveryState,
-            availableAt: Date.now() + 30_000,
+            availableAt: Date.now() + 60_000,
             ...(recoveryState === "producer_claimed"
               ? { producerClaimId: claimId }
               : { platformSendAttemptId: claimId }),
@@ -986,65 +1039,5 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         recoveryState: "completed_permanent",
       });
     });
-  });
-});
-
-describe("countFailedDeliveryQueueEntries", () => {
-  let tmpDir: string;
-  let stateDir: string;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-dq-count-"));
-    stateDir = path.join(tmpDir, "state");
-    fs.mkdirSync(stateDir, { recursive: true });
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  function enqueue(queueName: string, id: string, enqueuedAt: number) {
-    upsertDeliveryQueueEntry({
-      queueName,
-      entry: { id, enqueuedAt, retryCount: 0 },
-      stateDir,
-    });
-  }
-
-  it("returns an empty list when nothing is dead-lettered", () => {
-    enqueue("outbound", "pending-1", 1_000);
-
-    expect(countFailedDeliveryQueueEntries(stateDir)).toEqual([]);
-  });
-
-  it("counts dead-lettered entries per queue with the oldest failure timestamp", () => {
-    enqueue("outbound", "dead-1", 1_000);
-    enqueue("outbound", "dead-2", 2_000);
-    enqueue("outbound", "still-pending", 3_000);
-    enqueue("session", "dead-3", 4_000);
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(50_000);
-      moveDeliveryQueueEntryToFailed("outbound", "dead-1", stateDir);
-      vi.setSystemTime(60_000);
-      moveDeliveryQueueEntryToFailed("outbound", "dead-2", stateDir);
-      vi.setSystemTime(70_000);
-      moveDeliveryQueueEntryToFailed("session", "dead-3", stateDir);
-    } finally {
-      vi.useRealTimers();
-    }
-
-    const counts = countFailedDeliveryQueueEntries(stateDir);
-
-    expect(counts).toHaveLength(2);
-    const outbound = counts.find((queue) => queue.queueName === "outbound");
-    expect(outbound?.count).toBe(2);
-    expect(outbound?.oldestFailedAt).toBe(50_000);
-    const session = counts.find((queue) => queue.queueName === "session");
-    expect(session?.count).toBe(1);
-    expect(session?.oldestFailedAt).toBe(70_000);
-    expect(loadDeliveryQueueEntries("outbound", stateDir).map((entry) => entry.id)).toEqual([
-      "still-pending",
-    ]);
   });
 });

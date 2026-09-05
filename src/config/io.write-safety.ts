@@ -17,7 +17,6 @@ export function assertBaseSnapshotStillCurrent(
 ): void {
   if (snapshot.path !== configPath) {
     throw new ConfigMutationConflictError("config path changed since last load", {
-      currentHash: null,
       retryable: false,
     });
   }
@@ -41,7 +40,7 @@ export function assertBaseSnapshotStillCurrent(
     currentExists !== snapshot.exists ||
     (currentExists && expectedHash !== null && currentHash !== expectedHash)
   ) {
-    throw new ConfigMutationConflictError("config changed since last load", { currentHash });
+    throw new ConfigMutationConflictError("config changed since last load");
   }
 }
 

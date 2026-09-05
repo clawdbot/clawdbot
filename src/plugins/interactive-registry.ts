@@ -131,20 +131,6 @@ export function registerPluginInteractiveHandlerInRegistry(
   );
 }
 
-/** Registers one compatibility handler in the currently selected channel registry. */
-export function registerRegistryPluginInteractiveHandler(
-  pluginId: string,
-  registration: PluginInteractiveHandlerRegistration,
-  opts?: { pluginName?: string; pluginRoot?: string },
-): InteractiveRegistrationResult {
-  return registerPluginInteractiveHandlerWithOptions(
-    requireInteractiveRegistrationRegistry().interactiveHandlers,
-    resolveDirectPluginRegistrationOwner(pluginId) ?? pluginId,
-    registration,
-    opts,
-  );
-}
-
 /** Clears all active plugin interactive handlers. */
 export function clearPluginInteractiveHandlers(): void {
   requireActivePluginChannelRegistry().interactiveHandlers.length = 0;

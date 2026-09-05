@@ -213,6 +213,10 @@ struct ChatSessionSidebar: View {
             Spacer(minLength: 0)
             self.badges(for: node)
         }
+        .overlay(alignment: .leading) {
+            OpenClawSessionColorStripe(color: session.color)
+                .offset(x: -6)
+        }
         // The tag type must equal the List selection type (String?) exactly.
         .tag(Optional(session.key))
         .contextMenu { self.contextMenu(for: session) }
@@ -220,6 +224,11 @@ struct ChatSessionSidebar: View {
 
     @ViewBuilder
     private func badges(for node: ChatSessionSidebarModel.Node) -> some View {
+        if node.badges.queuedCount > 0 {
+            Image(systemName: "hourglass")
+                .foregroundStyle(OpenClawChatTheme.warning)
+                .accessibilityLabel(String(localized: "Thread queued"))
+        }
         if node.badges.runningCount > 0 {
             ProgressView()
                 .controlSize(.small)
@@ -265,9 +274,17 @@ struct ChatSessionSidebar: View {
                 systemImage: session.pinned == true ? "pin.slash" : "pin")
         }
         Button {
-            Task { await self.viewModel.forkSession(key: session.key) }
+            Task {
+                await self.viewModel.forkSession(
+                    key: session.key,
+                    fromLastCompleted: session.hasActiveRun == true)
+            }
         } label: {
-            self.actionLabel(String(localized: "Fork"), systemImage: "arrow.triangle.branch")
+            self.actionLabel(
+                session.hasActiveRun == true
+                    ? String(localized: "Fork from last completed message")
+                    : String(localized: "Fork"),
+                systemImage: "arrow.triangle.branch")
         }
         Button {
             self.viewModel.setSessionUnread(key: session.key, unread: session.unread != true)
@@ -287,6 +304,9 @@ struct ChatSessionSidebar: View {
                     session.isArchived ? String(localized: "Restore") : String(localized: "Archive"),
                     systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
             }
+        }
+        OpenClawSessionColorMenu(color: session.color) { color in
+            Task { await self.viewModel.setSessionColor(key: session.key, color: color) }
         }
         Divider()
         Button {

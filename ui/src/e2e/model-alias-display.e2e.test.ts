@@ -1,6 +1,8 @@
-import { mkdir } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -26,15 +28,15 @@ const models = [
   },
 ];
 
-const proofDir =
-  process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-    ? path.join(process.cwd(), ".artifacts", "control-ui-e2e", "model-alias-display")
-    : null;
+let proofDir: string | null;
+beforeEach(() => {
+  proofDir =
+    process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+      ? createControlUiE2eArtifactDir("model-alias-display")
+      : null;
+});
 
 async function createProofContext() {
-  if (proofDir) {
-    await mkdir(proofDir, { recursive: true });
-  }
   return suite.newBrowserContext({
     locale: "en-US",
     serviceWorkers: "block",
@@ -63,37 +65,37 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const main = page.getByRole("main");
-      const picker = main.locator("wa-select.chat-controls__model-picker").first();
+      const picker = main.locator('[data-chat-model-select="true"]').first();
       await picker.waitFor({ state: "visible", timeout: 10_000 });
       await picker.click();
 
       const opus = main.locator(
-        'wa-option[value="anthropic/claude-opus-4-8"] .picker-select__label',
+        '[data-chat-model-option="anthropic/claude-opus-4-8"] .chat-controls__model-option-name',
       );
       const sonnet = main.locator(
-        'wa-option[value="anthropic/claude-sonnet-5"] .picker-select__label',
+        '[data-chat-model-option="anthropic/claude-sonnet-5"] .chat-controls__model-option-name',
       );
       await expect.poll(() => opus.textContent()).toBe("Opus 4.8 · opus");
       await expect.poll(() => sonnet.textContent()).toBe("Sonnet 5 · sonnet");
 
       if (proofDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(proofDir, "anthropic-versioned-model-aliases.png"),
-        });
+        await writeFile(
+          path.join(proofDir, "anthropic-versioned-model-aliases.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [opus, sonnet]),
+        );
       }
 
       const nvidia = main.locator(
-        'wa-option[value="nvidia/moonshotai/kimi-k2.5"] .picker-select__label',
+        '[data-chat-model-option="nvidia/moonshotai/kimi-k2.5"] .chat-controls__model-option-name',
       );
-      await expect.poll(() => nvidia.textContent()).toBe("Kimi K2.5 (NVIDIA)");
+      await expect.poll(() => nvidia.textContent()).toBe("Kimi K2.5");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       if (proofDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(proofDir, "preserved-nvidia-model-alias.png"),
-        });
+        await writeFile(
+          path.join(proofDir, "preserved-nvidia-model-alias.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [nvidia]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);
@@ -160,10 +162,10 @@ suite.define(() => {
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
       if (proofDir) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(proofDir, "agents-versioned-model-aliases.png"),
-        });
+        await writeFile(
+          path.join(proofDir, "agents-versioned-model-aliases.png"),
+          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [select]),
+        );
       }
     } finally {
       await suite.closeBrowserContext(context);

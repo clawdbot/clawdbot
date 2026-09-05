@@ -53,25 +53,6 @@ private actor CoordinatorInvokeLifecycleProbe {
     }
 }
 
-private actor CoordinatorRouteInvalidationHookProbe {
-    private var callCount = 0
-    private let blockedCallGate: AsyncTestGate
-
-    init(blockedCallGate: AsyncTestGate) {
-        self.blockedCallGate = blockedCallGate
-    }
-
-    func run() async {
-        self.callCount += 1
-        guard self.callCount == 2 else { return }
-        await self.blockedCallGate.wait()
-    }
-
-    func calls() -> Int {
-        self.callCount
-    }
-}
-
 private actor CoordinatorDrainSnapshotProbe {
     private var captured = false
 
@@ -86,12 +67,19 @@ private actor CoordinatorDrainSnapshotProbe {
 
 private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
     private var stopCount = 0
+    private let stopGate = AsyncTestGate()
+    private var blockedRouteClearAuthorityGeneration: UInt64?
+    private let routeClearEnteredGate = AsyncTestGate()
+    private let routeClearReleaseGate = AsyncTestGate()
 
     func start(launch _: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
         MacNodeHostManifest(version: "test", caps: [], commands: [], pathEnv: "/usr/bin:/bin")
     }
 
-    func supports(_: String) async -> Bool { false }
+    func supports(_: String) async -> Bool {
+        false
+    }
+
     func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         BridgeInvokeResponse(id: request.id, ok: false)
     }
@@ -99,10 +87,74 @@ private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
     func handleInput(invokeId _: String, seq _: Int, payloadJSON _: String) async {}
     func cancel(invokeId _: String) async {}
 
-    func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) async -> Bool { true }
-    func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
-    func stop() async { self.stopCount += 1 }
-    func stops() -> Int { self.stopCount }
+    func setRoute(_ route: GatewayNodeSessionRoute?, authorityGeneration: UInt64) async -> Bool {
+        guard route == nil,
+              authorityGeneration == self.blockedRouteClearAuthorityGeneration
+        else { return true }
+        self.routeClearEnteredGate.open()
+        await self.routeClearReleaseGate.wait()
+        return true
+    }
+
+    func blockRouteClear(_ authorityGeneration: UInt64) {
+        self.blockedRouteClearAuthorityGeneration = authorityGeneration
+    }
+
+    func waitUntilBlockedRouteClearEntered() async {
+        await self.routeClearEnteredGate.wait()
+    }
+
+    func releaseBlockedRouteClear() {
+        self.routeClearReleaseGate.open()
+    }
+
+    func gatewayConnected(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func stop() async {
+        self.stopCount += 1
+        self.stopGate.open()
+    }
+
+    func waitUntilStopped() async {
+        await self.stopGate.wait()
+    }
+
+    func stops() -> Int {
+        self.stopCount
+    }
+}
+
+private actor CoordinatorFailingStartWorkerProbe: MacNodeHostWorking {
+    static let failureReason = "worker exited with status exited(1)"
+    static let failureDiagnostic = "[openclaw] state database uses newer schema version 10"
+    private var startCalls = 0
+
+    func start(launch _: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
+        self.startCalls += 1
+        throw MacNodeHostWorker.WorkerError.unavailable(
+            reason: Self.failureReason,
+            diagnostic: Self.failureDiagnostic)
+    }
+
+    func supports(_: String) async -> Bool {
+        false
+    }
+
+    func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
+        BridgeInvokeResponse(id: request.id, ok: false)
+    }
+
+    func handleInput(invokeId _: String, seq _: Int, payloadJSON _: String) async {}
+    func cancel(invokeId _: String) async {}
+    func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) async -> Bool {
+        true
+    }
+
+    func gatewayConnected(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func stop() async {}
+
+    func startCallCount() -> Int {
+        self.startCalls
+    }
 }
 
 private final class CoordinatorRetrySleeperProbe: @unchecked Sendable {
@@ -132,7 +184,40 @@ private struct CoordinatorWaitTimeout: Error, CustomStringConvertible {
     }
 }
 
+struct MacNodeModeCoordinatorDeviceAuthTests {
+    @Test
+    @MainActor
+    func `unproven legacy token failure exposes gateway re-pair action`() throws {
+        let failure = MacNodeModeCoordinator.nodeGatewayConnectionFailure(
+            GatewayConnectAuthError(
+                message: "pairing required",
+                detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
+                canRetryWithDeviceToken: false))
+
+        #expect(failure.reason == "This device is not approved yet — Approve on gateway")
+        let status = try #require(MacNodeChannelState.unavailable(
+            reason: failure.reason,
+            diagnostic: failure.diagnostic).operatorStatusLine)
+        #expect(status.label == "Mac node unavailable — This device is not approved yet — Approve on gateway")
+        #expect(status.diagnostic == "The gateway received the connection request, "
+            + "but this device must be approved first.")
+    }
+}
+
 struct MacNodeModeCoordinatorTests {
+    private func nodeDeviceAuthBinding(
+        deviceAuthGatewayID: String?) throws -> (allowStoredDeviceAuth: Bool, gatewayID: String?)
+    {
+        let endpoint = try GatewayConnection.EndpointSnapshot(
+            config: (
+                url: #require(URL(string: "wss://gateway.example.invalid")),
+                token: nil,
+                password: nil),
+            routeAuthority: nil,
+            deviceAuthGatewayID: deviceAuthGatewayID)
+        return MacNodeModeCoordinator.nodeDeviceAuthBinding(for: endpoint)
+    }
+
     private func waitUntil(
         _ description: String,
         timeout: Duration = .seconds(2),
@@ -154,13 +239,13 @@ struct MacNodeModeCoordinatorTests {
     @MainActor
     private func cleanupRevocationTest(
         lifecycleInvalidationGate: AsyncTestGate,
-        routeInvalidationGate: AsyncTestGate,
+        worker: CoordinatorNodeHostWorkerProbe,
         successor: Task<Void, Error>?,
         gateway: GatewayNodeSession,
         coordinator: MacNodeModeCoordinator) async
     {
         lifecycleInvalidationGate.open()
-        routeInvalidationGate.open()
+        await worker.releaseBlockedRouteClear()
         successor?.cancel()
         if let successor {
             _ = await successor.result
@@ -193,6 +278,38 @@ struct MacNodeModeCoordinatorTests {
         #expect(await worker.stops() == 2)
 
         await coordinator.stopAndWait()
+    }
+
+    @Test @MainActor func `ordinary gateway reconnect preserves the startup scoped worker`() async {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker)
+
+        coordinator.enqueueRouteInvalidationForTesting()
+        await coordinator.waitForRouteInvalidationForTesting()
+
+        #expect(await worker.stops() == 0)
+        await coordinator.stopAndWait()
+    }
+
+    @Test @MainActor func `terminal stop owns cleanup after coordinator release`() async {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        var coordinator: MacNodeModeCoordinator? = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker)
+
+        // The MainActor task cannot begin until this test suspends below.
+        coordinator?.stop()
+        coordinator?.stop()
+        coordinator = nil
+        await worker.waitUntilStopped()
+
+        #expect(await worker.stops() == 1)
     }
 
     @Test @MainActor func `terminal worker failure is reported instead of scheduling another restart`() async throws {
@@ -254,6 +371,121 @@ struct MacNodeModeCoordinatorTests {
         await coordinator.stopAndWait()
     }
 
+    @Test @MainActor func `queued failure from replaced worker does not penalize replacement`() async throws {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker)
+        let command = ["/usr/local/bin/openclaw", "node", "worker"]
+
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+        await coordinator.handleNodeHostConfigurationChangeForTesting()
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+
+        // Generation zero belongs to the replaced process. Handle it only after
+        // the successor input is installed so the ordering is deterministic.
+        coordinator.handleNodeHostWorkerFailureForTesting(configurationGeneration: .zero)
+
+        try coordinator.prepareNodeHostWorkerRetryForTesting(command: command)
+        await coordinator.stopAndWait()
+    }
+
+    // Regression: an exhausted node-host worker must degrade the connect to
+    // native capabilities with a visible reason. Before this, retry exhaustion
+    // (and any startup-scoped worker failure) aborted the whole connection
+    // attempt, so the node channel never dialed and the operator saw nothing.
+    @Test @MainActor func `worker retry exhaustion degrades the node connect instead of blocking it`() async throws {
+        let worker = CoordinatorFailingStartWorkerProbe()
+        let session = GatewayNodeSession()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker,
+            notificationCenter: NotificationCenter(),
+            nodeHostWorkerRetryPolicy: MacNodeHostWorkerRetryPolicy(maximumRetryCount: 0))
+
+        try coordinator.prepareNodeHostWorkerRetryForTesting(
+            command: ["/usr/local/bin/openclaw", "node", "worker"])
+        let initialFailure = try await coordinator.resolveWorkerManifestForConnectionForTesting()
+        #expect(initialFailure.unavailable?.reason == CoordinatorFailingStartWorkerProbe.failureReason)
+        #expect(initialFailure.unavailable?.diagnostic == CoordinatorFailingStartWorkerProbe.failureDiagnostic)
+
+        coordinator.handleNodeHostWorkerFailureForTesting()
+        await coordinator.waitForRouteInvalidationForTesting()
+
+        let resolved = try await coordinator.resolveWorkerManifestForConnectionForTesting()
+        #expect(resolved.manifest == nil)
+        #expect(resolved.unavailable?.reason.contains("unexpected exits") == true)
+        #expect(resolved.unavailable?.reason.contains(CoordinatorFailingStartWorkerProbe.failureReason) == true)
+        #expect(resolved.unavailable?.diagnostic == initialFailure.unavailable?.diagnostic)
+        // The exhausted budget must also stop worker respawn attempts.
+        #expect(await worker.startCallCount() == 1)
+        await coordinator.stopAndWait()
+    }
+
+    @Test func `node channel states map to operator status lines`() {
+        #expect(MacNodeChannelState.idle.operatorStatusLine == nil)
+        #expect(MacNodeChannelState.connected(workerUnavailableReason: nil).operatorStatusLine == nil)
+
+        let degraded = MacNodeChannelState
+            .connected(workerUnavailableReason: "worker exited: schema mismatch")
+            .operatorStatusLine
+        #expect(degraded?.label == "Mac node degraded — worker exited: schema mismatch")
+        #expect(degraded?.diagnostic == nil)
+        #expect(degraded?.isDegraded == true)
+
+        let unavailable = MacNodeChannelState
+            .unavailable(reason: "state database uses newer schema version 10\nTry: openclaw doctor")
+            .operatorStatusLine
+        #expect(unavailable?.label == "Mac node unavailable — state database uses newer schema version 10")
+        #expect(unavailable?.diagnostic == nil)
+        #expect(unavailable?.isDegraded == false)
+    }
+
+    @Test func `worker stderr never becomes part of the operator status headline`() throws {
+        let diagnostic = "[openclaw] bootstrap failed: state database uses a newer schema"
+        let reason = "worker exited with status exited(1)"
+        let states: [MacNodeChannelState] = [
+            .unavailable(reason: reason, diagnostic: diagnostic),
+            .connected(workerUnavailableReason: reason, diagnostic: diagnostic),
+        ]
+
+        for state in states {
+            let line = try #require(state.operatorStatusLine)
+            #expect(line.label.contains(reason))
+            #expect(!line.label.contains(diagnostic))
+            #expect(line.diagnostic == diagnostic)
+        }
+    }
+
+    @Test func `operator diagnostics preserve complete lines within their display budget`() throws {
+        let inputLines = (0..<10).map { index in
+            "[openclaw] line \(index): " + String(repeating: "bootstrap failure details ", count: 5)
+        }
+        let input = inputLines.joined(separator: "\n")
+        let line = try #require(MacNodeChannelState.unavailable(
+            reason: "worker exited",
+            diagnostic: input).operatorStatusLine)
+        let diagnostic = try #require(line.diagnostic)
+        let completeLines = String(diagnostic.dropLast()).split(separator: "\n").map(String.init)
+
+        #expect(diagnostic.count <= 360)
+        #expect(completeLines.count <= 4)
+        #expect(diagnostic.hasSuffix("…"))
+        #expect(completeLines.elementsEqual(inputLines.prefix(completeLines.count)))
+
+        let longLine = Array(repeating: "bootstrap", count: 100).joined(separator: " ")
+        let singleLine = try #require(MacNodeChannelState.unavailable(
+            reason: "worker exited",
+            diagnostic: longLine).operatorStatusLine?.diagnostic)
+
+        #expect(singleLine.count <= 360)
+        #expect(singleLine.hasSuffix("…"))
+        #expect(String(singleLine.dropLast()).split(separator: " ").allSatisfy { $0 == "bootstrap" })
+    }
+
     @Test func `paused node state requires route disconnect`() {
         #expect(MacNodeModeCoordinator.pausedStateRequiresDisconnect(true))
         #expect(!MacNodeModeCoordinator.pausedStateRequiresDisconnect(false))
@@ -272,11 +504,18 @@ struct MacNodeModeCoordinatorTests {
             nextPaused: false,
             previousComputerControlEnabled: true,
             nextComputerControlEnabled: true))
+        #expect(MacNodeModeCoordinator.controlTransitionRequiresRouteInvalidation(
+            previousPaused: false,
+            nextPaused: false,
+            previousComputerControlEnabled: true,
+            nextComputerControlEnabled: true,
+            previousComputerControlProvider: .peekaboo,
+            nextComputerControlProvider: .cua))
     }
 
     @Test func `first endpoint snapshot rejects a stale captured endpoint`() throws {
-        let first = GatewayConnection.EndpointSnapshot(
-            config: try GatewayConnection.Config(
+        let first = try GatewayConnection.EndpointSnapshot(
+            config: GatewayConnection.Config(
                 url: #require(URL(string: "wss://first.example.invalid")),
                 token: "first-token",
                 password: nil),
@@ -292,16 +531,37 @@ struct MacNodeModeCoordinatorTests {
         #expect(!MacNodeModeCoordinator.endpointState(replacement, matches: first))
     }
 
+    @Test func `node device auth binding uses the endpoint owner`() throws {
+        let binding = try self.nodeDeviceAuthBinding(deviceAuthGatewayID: "gateway-a")
+
+        #expect(binding.allowStoredDeviceAuth)
+        #expect(binding.gatewayID == "gateway-a")
+    }
+
+    @Test func `node device auth binding rejects unscoped storage`() throws {
+        let binding = try self.nodeDeviceAuthBinding(deviceAuthGatewayID: nil)
+
+        #expect(!binding.allowStoredDeviceAuth)
+        #expect(binding.gatewayID == nil)
+    }
+
+    @Test func `node device auth binding keeps gateway owners distinct`() throws {
+        let first = try self.nodeDeviceAuthBinding(deviceAuthGatewayID: "gateway-a")
+        let second = try self.nodeDeviceAuthBinding(deviceAuthGatewayID: "gateway-b")
+
+        #expect(first.gatewayID != second.gatewayID)
+    }
+
     @Test func `stop pause and endpoint changes revoke final connect admission`() throws {
-        let first = GatewayConnection.EndpointSnapshot(
-            config: try GatewayConnection.Config(
+        let first = try GatewayConnection.EndpointSnapshot(
+            config: GatewayConnection.Config(
                 url: #require(URL(string: "wss://first.example.invalid")),
                 token: "token",
                 password: nil),
             routeAuthority: nil,
             revision: 1)
-        let replacement = GatewayConnection.EndpointSnapshot(
-            config: try GatewayConnection.Config(
+        let replacement = try GatewayConnection.EndpointSnapshot(
+            config: GatewayConnection.Config(
                 url: #require(URL(string: "wss://second.example.invalid")),
                 token: "token",
                 password: nil),
@@ -372,19 +632,17 @@ struct MacNodeModeCoordinatorTests {
         let webSocketSession = GatewayTestWebSocketSession()
         let gateway = GatewayNodeSession()
         let lifecycleInvalidationGate = AsyncTestGate()
-        let routeInvalidationGate = AsyncTestGate()
         let lifecycle = CoordinatorInvokeLifecycleProbe(
             routeInvalidationGate: lifecycleInvalidationGate)
-        let routeInvalidationHook = CoordinatorRouteInvalidationHookProbe(
-            blockedCallGate: routeInvalidationGate)
         let drainSnapshot = CoordinatorDrainSnapshotProbe()
+        let worker = CoordinatorNodeHostWorkerProbe()
         let runtime = MacNodeRuntime(computerControlEnabled: { true })
         let coordinator = MacNodeModeCoordinator(
             session: gateway,
             runtime: runtime,
+            nodeHostWorker: worker,
             initialPaused: false,
-            initialComputerControlEnabled: true,
-            routeInvalidationHook: { await routeInvalidationHook.run() })
+            initialComputerControlEnabled: true)
         let options = GatewayConnectOptions(
             role: "node",
             scopes: [],
@@ -424,7 +682,7 @@ struct MacNodeModeCoordinatorTests {
                     "timeoutMs": 0,
                 ],
             ])
-            task.emitReceiveSuccessOnce(.data(invokeEvent))
+            task.emitReceiveSuccess(.data(invokeEvent))
             try await self.waitUntil("computer invoke start") {
                 await lifecycle.state().started
             }
@@ -484,10 +742,9 @@ struct MacNodeModeCoordinatorTests {
             #expect(generationsAfterSecondRevocation.routeAuthority == generationsBeforeRefresh.routeAuthority + 2)
             #expect(generationsAfterSecondRevocation.completedRouteAuthority == generationsBeforeRefresh.routeAuthority)
 
+            await worker.blockRouteClear(generationsAfterSecondRevocation.routeAuthority)
             lifecycleInvalidationGate.open()
-            try await self.waitUntil("second route invalidation hook") {
-                await routeInvalidationHook.calls() == 2
-            }
+            await worker.waitUntilBlockedRouteClearEntered()
             let stateWhileSecondRevocationBlocked = await lifecycle.state()
             #expect(webSocketSession.snapshotMakeCount() == 1)
             #expect(!stateWhileSecondRevocationBlocked.successorConnected)
@@ -498,7 +755,7 @@ struct MacNodeModeCoordinatorTests {
                 generationsAfterSecondRevocation.routeAuthority,
                 isPaused: false))
 
-            routeInvalidationGate.open()
+            await worker.releaseBlockedRouteClear()
             try await successorTask.value
 
             let finalState = await lifecycle.state()
@@ -517,7 +774,7 @@ struct MacNodeModeCoordinatorTests {
         } catch {
             await self.cleanupRevocationTest(
                 lifecycleInvalidationGate: lifecycleInvalidationGate,
-                routeInvalidationGate: routeInvalidationGate,
+                worker: worker,
                 successor: successor,
                 gateway: gateway,
                 coordinator: coordinator)
@@ -525,7 +782,7 @@ struct MacNodeModeCoordinatorTests {
         }
         await self.cleanupRevocationTest(
             lifecycleInvalidationGate: lifecycleInvalidationGate,
-            routeInvalidationGate: routeInvalidationGate,
+            worker: worker,
             successor: successor,
             gateway: gateway,
             coordinator: coordinator)
@@ -591,7 +848,11 @@ struct MacNodeModeCoordinatorTests {
 
         #expect(!caps.contains(OpenClawCapability.browser.rawValue))
         #expect(!commands.contains(OpenClawBrowserCommand.proxy.rawValue))
-        #expect(commands.contains(OpenClawCanvasCommand.present.rawValue))
+        #expect(commands.filter { $0.hasPrefix("canvas.") } == [
+            OpenClawCanvasCommand.present.rawValue,
+            OpenClawCanvasCommand.hide.rawValue,
+            OpenClawCanvasCommand.navigate.rawValue,
+        ])
         #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
         #expect(!commands.contains(OpenClawFileSystemCommand.listDir.rawValue))
         #expect(!commands.contains(OpenClawSystemCommand.run.rawValue))
@@ -1157,47 +1418,45 @@ struct MacNodeModeCoordinatorTests {
         #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
     }
 
-    @Test func `stale repair cannot replace a newer stored pin`() async throws {
-        try await withFakeGatewayTLSKeychain {
-            let url = try #require(URL(string: "wss://gateway.example.ts.net"))
-            let storeKey = "test-stale-repair"
-            GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
-            let route = try #require(GatewayTLSRoute.resolve(
-                url: url,
-                connectionMode: .remote,
-                configuredFingerprint: nil,
-                storedFingerprint: "old",
-                storeKey: storeKey))
-            let firstFailure = GatewayTLSValidationFailure(
-                kind: .pinMismatch,
-                host: "gateway.example.ts.net",
-                storeKey: storeKey,
-                expectedFingerprint: "old",
-                observedFingerprint: "new",
-                systemTrustOk: true,
-                port: 443)
-            let staleFailure = GatewayTLSValidationFailure(
-                kind: .pinMismatch,
-                host: "gateway.example.ts.net",
-                storeKey: storeKey,
-                expectedFingerprint: "old",
-                observedFingerprint: "stale",
-                systemTrustOk: true,
-                port: 443)
+    @Test(.gatewayTLSStoreIsolated) func `stale repair cannot replace a newer stored pin`() async throws {
+        let url = try #require(URL(string: "wss://gateway.example.ts.net"))
+        let storeKey = "test-stale-repair"
+        GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: nil,
+            storedFingerprint: "old",
+            storeKey: storeKey))
+        let firstFailure = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "gateway.example.ts.net",
+            storeKey: storeKey,
+            expectedFingerprint: "old",
+            observedFingerprint: "new",
+            systemTrustOk: true,
+            port: 443)
+        let staleFailure = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "gateway.example.ts.net",
+            storeKey: storeKey,
+            expectedFingerprint: "old",
+            observedFingerprint: "stale",
+            systemTrustOk: true,
+            port: 443)
 
-            let firstRepaired = await GatewayTLSRepairCoordinator.shared.repair(
-                route: route,
-                url: url,
-                failure: firstFailure)
-            let staleRepaired = await GatewayTLSRepairCoordinator.shared.repair(
-                route: route,
-                url: url,
-                failure: staleFailure)
+        let firstRepaired = await GatewayTLSRepairCoordinator.shared.repair(
+            route: route,
+            url: url,
+            failure: firstFailure)
+        let staleRepaired = await GatewayTLSRepairCoordinator.shared.repair(
+            route: route,
+            url: url,
+            failure: staleFailure)
 
-            #expect(firstRepaired)
-            #expect(!staleRepaired)
-            #expect(GatewayTLSStore.loadFingerprint(stableID: storeKey) == "new")
-        }
+        #expect(firstRepaired)
+        #expect(!staleRepaired)
+        #expect(GatewayTLSStore.loadFingerprint(stableID: storeKey) == "new")
     }
 
     @Test func `auto repairs trusted loopback pin mismatch`() throws {

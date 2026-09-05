@@ -54,6 +54,7 @@ export function createCronContinuationController(params: {
               !current ||
               marker?.phase !== "continuing" ||
               marker.ownerRunId !== params.runId ||
+              marker.ownerLifecycleGeneration !== params.lifecycleGeneration ||
               marker.lifecycleRevision !== activeClaim.lifecycleRevision
             ) {
               return { result: false };
@@ -164,7 +165,7 @@ export function createCronContinuationController(params: {
       params.context.logGateway.warn(
         `cron continuation release recovery exhausted for ${params.runId}`,
       );
-    });
+    }, "cron:continuation-recovery");
     return false;
   };
 

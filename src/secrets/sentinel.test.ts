@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { redactSensitiveText } from "../logging/redact.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import {
@@ -11,7 +11,7 @@ import {
 
 describe("secret sentinels", () => {
   afterEach(() => {
-    delete process.env.OPENCLAW_SECRET_SENTINELS;
+    vi.unstubAllEnvs();
     resetSecretRedactionRegistryForTest();
   });
 
@@ -74,17 +74,22 @@ describe("secret sentinels", () => {
   });
 
   it.each(["off", " OFF ", "0", "false", "False"])(
-    "returns plaintext when the kill switch is %s",
+    "preserves provider plaintext compatibility when the switch is %s",
     (value) => {
-      process.env.OPENCLAW_SECRET_SENTINELS = value;
+      vi.stubEnv("OPENCLAW_SECRET_SENTINELS", value);
       expect(mintSecretSentinel("kill-switch-secret", { label: "model-auth:test" })).toBe(
         "kill-switch-secret",
       );
+      expect(
+        redactSensitiveText("kill-switch-secret", { mode: "tools", patterns: [] }),
+      ).not.toContain("kill-switch-secret");
     },
   );
 
-  it("registers minted values for exact redaction across registry eviction", () => {
-    const first = "sentinel-registry-value-000";
+  it.each([
+    { label: "ordinary", first: "sentinel-registry-value-000" },
+    { label: "64 KiB", first: "x".repeat(64 * 1024) },
+  ])("registers minted values across registry eviction ($label)", ({ first }) => {
     const firstSentinel = mintSecretSentinel(first, { label: "model-auth:0" });
     for (let index = 1; index <= 512; index += 1) {
       mintSecretSentinel(`sentinel-registry-value-${index.toString().padStart(3, "0")}`, {

@@ -190,6 +190,12 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   if (method === "sessions.create") {
     return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
   }
+  if (method === "sessions.dispatch") {
+    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
+  }
+  if (method === "sessions.move") {
+    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
+  }
   if (method === "sessions.delete") {
     return [resolveDynamicSessionMutationRequiredScope(method, params) ?? ADMIN_SCOPE];
   }
@@ -200,9 +206,9 @@ function findMissingOperatorScope(
   requiredScopes: readonly OperatorScope[],
   scopes: readonly string[],
 ): OperatorScope | undefined {
-  return requiredScopes.find((scope) => {
-    return !scopes.includes(scope) && !(scope === READ_SCOPE && scopes.includes(WRITE_SCOPE));
-  });
+  return requiredScopes.find(
+    (scope) => !authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
+  );
 }
 
 /** Returns the narrowest known operator scopes needed to call a gateway method. */

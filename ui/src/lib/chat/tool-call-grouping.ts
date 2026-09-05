@@ -10,6 +10,7 @@ import {
   resolveToolCallTargetPaths,
   type ToolCallKind,
 } from "./tool-call-view.ts";
+import { resolveToolDisplay } from "./tool-display.ts";
 
 type ToolGroupSummaryInput = {
   name: string;
@@ -73,7 +74,9 @@ function countCard(counts: GroupCounts, card: ToolGroupSummaryInput): void {
         break;
       default:
         counts.others += 1;
-        counts.otherNames.add(card.name);
+        // Same display label as the standalone row, so a collapsed rollup of
+        // e.g. heartbeat_respond reads "Heartbeat Respond" in both shapes.
+        counts.otherNames.add(resolveToolDisplay({ name: card.name, args: card.args }).label);
     }
   }
 }

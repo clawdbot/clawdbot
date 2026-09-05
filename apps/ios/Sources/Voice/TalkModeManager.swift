@@ -695,7 +695,7 @@ final class TalkModeManager: NSObject {
         let micOk = if self.allowSimulatorCapture {
             true
         } else {
-            await Self.requestMicrophonePermission()
+            await VoicePermissionSupport.requestMicrophonePermission(timeoutErrorDomain: "TalkMode")
         }
         GatewayDiagnostics.log(
             "talk.timeline microphone permission ok=\(micOk) "
@@ -734,13 +734,13 @@ final class TalkModeManager: NSObject {
         let speechOk = if self.allowSimulatorCapture {
             true
         } else {
-            await Self.requestSpeechPermission()
+            await VoicePermissionSupport.requestSpeechPermission(timeoutErrorDomain: "TalkMode")
         }
         guard speechOk else {
             self.logger.warning("start blocked: speech permission denied")
             self.stopNativeCaptureAndDiscardTranscript()
             deactivateAudioSession()
-            let status = Self.permissionMessage(
+            let status = VoicePermissionSupport.speechPermissionMessage(
                 kind: String(localized: "Speech recognition"),
                 status: SFSpeechRecognizer.authorizationStatus())
             self.setStatus(
@@ -1278,7 +1278,7 @@ final class TalkModeManager: NSObject {
     {
         guard !self.allowSimulatorCapture else { return }
 
-        let micOk = await Self.requestMicrophonePermission()
+        let micOk = await VoicePermissionSupport.requestMicrophonePermission(timeoutErrorDomain: "TalkMode")
         try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
         guard micOk else {
             self.setStatus(
@@ -1290,10 +1290,10 @@ final class TalkModeManager: NSObject {
             ])
         }
 
-        let speechOk = await Self.requestSpeechPermission()
+        let speechOk = await VoicePermissionSupport.requestSpeechPermission(timeoutErrorDomain: "TalkMode")
         try self.ensurePushToTalkStartCurrent(captureId: captureId, canStartCapture: canStartCapture)
         guard speechOk else {
-            let status = Self.permissionMessage(
+            let status = VoicePermissionSupport.speechPermissionMessage(
                 kind: String(localized: "Speech recognition"),
                 status: SFSpeechRecognizer.authorizationStatus())
             self.setStatus(
@@ -2179,7 +2179,8 @@ final class TalkModeManager: NSObject {
             return .started
         }
         guard let gateway else {
-            return .unavailable(realtimeIssue(message: "Gateway not connected", phase: "start"))
+            return .unavailable(
+                realtimeIssue(message: String(localized: "Gateway is not connected"), phase: "start"))
         }
         let startedAt = Self.nowSeconds()
         if self.prefetchedRealtimeSession == nil, let prefetchTask = realtimePrefetchTask {
@@ -2310,7 +2311,8 @@ final class TalkModeManager: NSObject {
 
     private func startRealtimeRelayIfAvailable(attemptID: Int) async -> RealtimeStartResult {
         guard let gateway else {
-            return .unavailable(realtimeIssue(message: "Gateway not connected", phase: "start"))
+            return .unavailable(
+                realtimeIssue(message: String(localized: "Gateway is not connected"), phase: "start"))
         }
         guard self.foregroundAudioCaptureAllowed else {
             self.setStatus(
@@ -2319,6 +2321,11 @@ final class TalkModeManager: NSObject {
                 watchPresentation: .localized("Paused"))
             GatewayDiagnostics.log("talk realtime ignored: app backgrounded")
             return .ignored
+        }
+        guard self.isCurrentStartAttempt(attemptID) else { return .ignored }
+        guard let gatewayRoute = await gateway.currentRoute() else {
+            return .unavailable(
+                realtimeIssue(message: String(localized: "Gateway is not connected"), phase: "start"))
         }
         guard self.isCurrentStartAttempt(attemptID) else { return .ignored }
         if self.realtimeRelaySession != nil {
@@ -2342,24 +2349,30 @@ final class TalkModeManager: NSObject {
         GatewayDiagnostics.log("talk.timeline realtime relay start attempt sessionKey=\(sessionKey)")
         let startedAt = Self.nowSeconds()
         let relaySession = RealtimeTalkRelaySession(
-            gateway: gateway,
+            transport: .ios(gateway: gateway, route: gatewayRoute),
             options: RealtimeTalkRelaySession.Options(
                 sessionKey: sessionKey,
                 provider: self.realtimeProvider,
                 model: self.realtimeModelId,
                 voice: self.realtimeVoiceId),
-            pcmPlayer: self.pcmPlayer,
+            audioCapture: IOSRealtimeTalkAudioCapture(),
+            pcmPlayer: RealtimePCMStreamingAudioPlayer(),
             onStatus: { [weak self] status in
                 guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
                 self.handleRealtimeRelayStatus(status)
             },
-            onIssue: { [weak self] issue in
+            onIssue: { [weak self] relayIssue in
                 guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
+                let issue = Self.runtimeIssue(from: relayIssue)
                 self.realtimeRelayStartIssue = issue
                 self.pendingRealtimeIssue = issue
                 self.gatewayTalkLastIssueText = issue.diagnosticSummary
                 self.gatewayTalkActiveModeTitle = String(localized: "Realtime unavailable")
                 self.gatewayTalkActiveModeSubtitle = issue.displayMessage
+            },
+            onTermination: { [weak self] termination in
+                guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
+                self.handleRealtimeRelayTermination(termination)
             },
             onSpeakingChanged: { [weak self] speaking in
                 guard let self, self.realtimeRelayGeneration == relayGeneration else { return }
@@ -2950,7 +2963,7 @@ final class TalkModeManager: NSObject {
         do {
             let started = Date()
             let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let resolvedVoice = resolveVoiceAlias(requestedVoice)
+            let resolvedVoice = TalkVoiceAliases.resolve(requestedVoice, aliases: self.voiceAliases)
             if requestedVoice?.isEmpty == false, resolvedVoice == nil {
                 self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
             }
@@ -3272,7 +3285,9 @@ final class TalkModeManager: NSObject {
     private func applyDirective(_ directive: TalkDirective?) {
         let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let usesGatewayVoiceIds = self.runtimeRoute.usesGatewayTalkSpeak
-        let resolvedVoice = usesGatewayVoiceIds ? requestedVoice : resolveVoiceAlias(requestedVoice)
+        let resolvedVoice = usesGatewayVoiceIds
+            ? requestedVoice
+            : TalkVoiceAliases.resolve(requestedVoice, aliases: self.voiceAliases)
         if !usesGatewayVoiceIds, requestedVoice?.isEmpty == false, resolvedVoice == nil {
             self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
         }
@@ -3619,7 +3634,7 @@ final class TalkModeManager: NSObject {
         speechGeneration: Int) async -> IncrementalSpeechContext
     {
         let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedVoice = resolveVoiceAlias(requestedVoice)
+        let resolvedVoice = TalkVoiceAliases.resolve(requestedVoice, aliases: self.voiceAliases)
         if requestedVoice?.isEmpty == false, resolvedVoice == nil {
             self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
         }
@@ -3952,19 +3967,6 @@ private struct IncrementalSpeechBuffer {
 }
 
 extension TalkModeManager {
-    func resolveVoiceAlias(_ value: String?) -> String? {
-        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let normalized = trimmed.lowercased()
-        if let mapped = voiceAliases[normalized] {
-            return mapped
-        }
-        if self.voiceAliases.values.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
-            return trimmed
-        }
-        return Self.isLikelyVoiceId(trimmed) ? trimmed : nil
-    }
-
     func resolveVoiceId(
         preferred: String?,
         apiKey: String,
@@ -3974,10 +3976,10 @@ extension TalkModeManager {
         if !trimmed.isEmpty {
             // Config / directives can provide a raw ElevenLabs voiceId (not an alias).
             // Accept it directly to avoid unnecessary listVoices calls (and accidental fallback selection).
-            if Self.isLikelyVoiceId(trimmed) {
+            if TalkVoiceAliases.isLikelyID(trimmed) {
                 return trimmed
             }
-            if let resolved = resolveVoiceAlias(trimmed) {
+            if let resolved = TalkVoiceAliases.resolve(trimmed, aliases: self.voiceAliases) {
                 return resolved
             }
             self.logger.warning("unknown voice alias \(trimmed, privacy: .public)")
@@ -4008,11 +4010,6 @@ extension TalkModeManager {
             self.logger.error("elevenlabs list voices failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }
-    }
-
-    static func isLikelyVoiceId(_ value: String) -> Bool {
-        guard value.count >= 10 else { return false }
-        return value.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
     }
 
     private static func normalizedTalkApiKey(_ raw: String?) -> String? {
@@ -4147,17 +4144,13 @@ extension TalkModeManager {
         let phase = Self.phase(forRealtimeStatus: status)
         if status == "Listening (Realtime)" {
             // Ready can be followed by a buffered close before start() resumes. Commit continuous
-            // state here so the close still enters bounded recovery.
+            // state here so the typed terminal callback still enters bounded recovery.
             self.markRealtimeSessionReady()
         } else {
             self.setStatus(
                 Self.presentationText(forRealtimeStatus: status),
                 phase: phase,
                 watchPresentation: Self.watchPresentation(forRealtimeStatus: status))
-            if status == "Ready" {
-                self.realtimeRelaySession = nil
-                self.handleRealtimeSessionFinish()
-            }
         }
         self.isListening = phase == .listening
         if phase == .thinking || phase == .connecting {
@@ -4165,6 +4158,13 @@ extension TalkModeManager {
             self.isSpeaking = false
             self.isUserSpeechDetected = false
         }
+    }
+
+    private func handleRealtimeRelayTermination(_ termination: RealtimeTalkRelayTermination) {
+        GatewayDiagnostics.log("talk realtime relay terminated reason=\(String(describing: termination))")
+        self.realtimeRelaySession = nil
+        guard self.captureMode != .pushToTalk else { return }
+        self.handleRealtimeSessionFinish()
     }
 
     private func prepareRealtimeRelayStart() {
@@ -4196,6 +4196,16 @@ extension TalkModeManager {
             model: self.realtimeModelId,
             transport: self.executionMode == .realtimeRelay ? "gateway-relay" : "webrtc",
             phase: phase)
+    }
+
+    static func runtimeIssue(from issue: RealtimeTalkRelayIssue) -> TalkRuntimeIssue {
+        TalkRuntimeIssue(
+            code: TalkRuntimeIssue.Code(rawValue: issue.code) ?? .realtimeUnavailable,
+            message: issue.message,
+            provider: issue.provider,
+            model: issue.model,
+            transport: issue.transport,
+            phase: issue.phase)
     }
 
     private func realtimeIssue(from error: Error, phase: String) -> TalkRuntimeIssue {
@@ -4626,6 +4636,7 @@ extension TalkModeManager {
         let forceSpeaker = TalkDefaults.speakerphoneEnabled()
         let options = TalkAudioRoute.categoryOptions(speakerphoneEnabled: forceSpeaker)
         try session.setCategory(.playAndRecord, mode: mode, options: options)
+        try session.setAllowHapticsAndSystemSoundsDuringRecording(true)
         try? session.setPreferredSampleRate(48000)
         try? session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true, options: [])
@@ -4823,7 +4834,8 @@ extension TalkModeManager {
             offerHeaders: nil,
             model: "gpt-realtime-2",
             voice: "marin",
-            expiresAt: nil)
+            expiresAt: nil,
+            clientControl: nil)
     }
 
     func _test_prepareLiveRealtimeVoiceSession(
@@ -4841,7 +4853,8 @@ extension TalkModeManager {
             offerHeaders: nil,
             model: "gpt-realtime-2",
             voice: "marin",
-            expiresAt: nil)
+            expiresAt: nil,
+            clientControl: nil)
         self.realtimeSession = TalkRealtimeWebRTCSession(
             gateway: gateway,
             sessionKey: self.mainSessionKey,
@@ -5083,6 +5096,12 @@ extension TalkModeManager {
 
     func _test_handleRealtimeRelayStatus(_ status: String) {
         self.handleRealtimeRelayStatus(status)
+    }
+
+    func _test_handleRealtimeRelayTermination(
+        _ termination: RealtimeTalkRelayTermination = .remoteClose(reason: "completed"))
+    {
+        self.handleRealtimeRelayTermination(termination)
     }
 
     func _test_prepareEnabledRealtimeSessionForClose() {

@@ -1,7 +1,6 @@
 import {
   getPreparedRuntimeAuthMaterializations,
   registerRuntimeAuthMaterializationMutationListener,
-  type RuntimeAuthMaterialization,
 } from "./auth-profiles/runtime-materializations.js";
 import { setPreparedModelRuntimeAuthMaterializations } from "./prepared-model-runtime-auth.js";
 import {
@@ -13,6 +12,20 @@ type MaterializationMutationEvent = {
   agentDir?: string;
   affectsInheritedStores: boolean;
 };
+
+export function configuredOwnersAreRequestVisible(
+  owners: ReadonlyMap<string, PreparedModelRuntimeOwner>,
+): boolean {
+  for (const owner of owners.values()) {
+    if (owner.provenance !== "configured") {
+      continue;
+    }
+    if (!owner.snapshot || owner.needsRefresh || owner.pending) {
+      return false;
+    }
+  }
+  return true;
+}
 
 export function registerPreparedRuntimeAuthMaterializationPublisher(
   owners: ReadonlyMap<string, PreparedModelRuntimeOwner>,
@@ -33,7 +46,6 @@ function publishPreparedRuntimeAuthMaterializations(params: {
   owners: ReadonlyMap<string, PreparedModelRuntimeOwner>;
   onInvalidated: () => void;
   onPublished: () => void;
-  read?: (agentDir?: string) => readonly RuntimeAuthMaterialization[];
 }): void {
   const event = {
     ...params.event,
@@ -51,15 +63,20 @@ function publishPreparedRuntimeAuthMaterializations(params: {
   if (affectedOwners.length === 0) {
     return;
   }
-  params.onInvalidated();
-  const read = params.read ?? getPreparedRuntimeAuthMaterializations;
   for (const { owner, snapshot } of affectedOwners) {
     // A successful route only changes this bounded secret-free fact set. Rebuilding the model
     // catalog here would pull plugin lifecycle work into the turn-completion boundary.
     setPreparedModelRuntimeAuthMaterializations(
       snapshot,
-      Object.freeze([...read(owner.input.agentDir)]),
+      Object.freeze([...getPreparedRuntimeAuthMaterializations(owner.input.agentDir)]),
     );
   }
+  // Chat metadata treats published as "every configured owner is capturable".
+  // A bind on one agent must not announce while a sibling is stale or a replacement
+  // still holds needsRefresh; that refresh fail-closes the Control UI picker.
+  if (!configuredOwnersAreRequestVisible(params.owners)) {
+    return;
+  }
+  params.onInvalidated();
   params.onPublished();
 }

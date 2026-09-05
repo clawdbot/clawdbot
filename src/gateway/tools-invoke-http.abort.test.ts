@@ -154,7 +154,7 @@ describe("POST /tools/invoke request cancellation", () => {
     }
   });
 
-  it("passes a request-owned abort signal to the tool and releases its disconnect watcher", async () => {
+  it("revokes the tool signal after a successful request and releases its disconnect watcher", async () => {
     const response = await invokeAbortProbe();
 
     expect(response.status).toBe(200);
@@ -163,7 +163,7 @@ describe("POST /tools/invoke request cancellation", () => {
 
     const toolSignal = lifecycle.execute.mock.calls[0]?.[2];
     expect(toolSignal).toBeInstanceOf(AbortSignal);
-    expect(toolSignal?.aborted).toBe(false);
+    expect(toolSignal?.aborted).toBe(true);
     expect(lifecycle.beforeHook).toHaveBeenCalledWith(
       expect.objectContaining({ signal: toolSignal }),
     );

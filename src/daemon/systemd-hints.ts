@@ -1,5 +1,6 @@
 /** Renders Linux systemd availability hints for gateway service commands. */
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveDaemonContainerContext } from "./container-context.js";
 import {
   classifySystemdUnavailableDetail,
   type SystemdUnavailableKind,
@@ -8,7 +9,7 @@ import {
 type SystemdUnavailableHintOptions = {
   wsl?: boolean;
   kind?: SystemdUnavailableKind | null;
-  container?: boolean;
+  env?: Record<string, string | undefined>;
 };
 
 /** Detects details that should get systemd availability repair hints. */
@@ -36,9 +37,9 @@ export function renderSystemdUnavailableHints(
   }
   return [
     "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
-    ...(options.container || options.kind !== "user_bus_unavailable"
+    ...(resolveDaemonContainerContext(options.env) || options.kind !== "user_bus_unavailable"
       ? []
       : renderSystemdHeadlessServerHints()),
-    `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("openclaw gateway")}\`.`,
+    `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("openclaw gateway", options.env)}\`.`,
   ];
 }

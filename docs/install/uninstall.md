@@ -13,13 +13,18 @@ Two paths:
 
 ## Easy path (CLI still installed)
 
+The command attempts independent requested cleanup scopes and returns a nonzero status if any scope fails or is blocked. Service teardown remains the safety gate for state and workspace deletion; if that gate fails, those data scopes are preserved while app cleanup is still attempted. Partial cleanup is reported explicitly and is never followed by an unconditional completion result.
+
 Recommended: use the built-in uninstaller:
 
 ```bash
 openclaw uninstall
 ```
 
-State removal preserves configured workspace directories unless you also select `--workspace`.
+The interactive prompt preselects only the Gateway service. For complete local
+removal, also select state, workspace, and app in the prompt, or run
+`openclaw uninstall --all`. State removal preserves configured workspace
+directories unless you also select `--workspace`.
 
 Preview what will be removed (safe):
 
@@ -118,7 +123,7 @@ Default unit name is `openclaw-gateway.service` (or `openclaw-gateway-<profile>.
 
 ```bash
 systemctl --user disable --now openclaw-gateway.service
-rm -f ~/.config/systemd/user/openclaw-gateway.service
+rm -f ~/.config/systemd/user/openclaw-gateway.service{,.bak}
 systemctl --user daemon-reload
 ```
 

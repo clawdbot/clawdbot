@@ -1,6 +1,10 @@
 // Health-state tests cover probe coalescing, sensitive snapshots, and broadcast version behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../../process/gateway-work-admission.js";
 import type { HealthSummary } from "../health/types.js";
 
 /**
@@ -25,6 +29,11 @@ vi.mock("../health/collector.js", () => ({
 vi.mock("../../config/io.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/io.js")>()),
   getRuntimeConfig: getRuntimeConfigMock,
+}));
+
+vi.mock("../../config/runtime-snapshot.js", () => ({
+  getRuntimeConfigAppliedHash: () => "internal-applied-hash",
+  getRuntimeConfigSourceSnapshot: () => null,
 }));
 
 vi.mock("../../infra/update-startup.js", () => ({
@@ -63,6 +72,11 @@ function createHealthSummary(): HealthSummary {
   };
 }
 
+const revisionProjector = {
+  projectRawHash: (hash: string) => `raw-token:${hash}`,
+  projectResolvedHash: (hash: string) => `resolved-token:${hash}`,
+};
+
 async function loadHealthState() {
   vi.resetModules();
   collectGatewayHealthSnapshotMock.mockReset();
@@ -76,6 +90,41 @@ async function loadHealthState() {
 }
 
 describe("buildGatewaySnapshot update metadata", () => {
+  it("reads suspension synchronously without waiting for health collection", async () => {
+    const healthState = await loadHealthState();
+    resetGatewayWorkAdmission();
+    const read = () =>
+      healthState.buildGatewaySnapshot({ client: null, revisionProjector }).suspension;
+    try {
+      expect(read()).toEqual({ phase: "accepting" });
+      const suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(read()).toEqual({ phase: "preparing" });
+      suspension?.drain();
+      expect(read()).toEqual({ phase: "draining" });
+      suspension?.commit();
+      expect(read()).toEqual({ phase: "prepared" });
+      suspension?.release();
+      expect(read()).toEqual({ phase: "accepting" });
+      expect(collectGatewayHealthSnapshotMock).not.toHaveBeenCalled();
+    } finally {
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it.each([
+    { agent: { model: "openai/gpt-5.6-luna" }, expected: true },
+    { agent: {}, expected: false },
+  ])("advertises modelConfigured=$expected for the default agent", async ({ agent, expected }) => {
+    const healthState = await loadHealthState();
+    getRuntimeConfigMock.mockReturnValue({
+      agents: { entries: { main: agent } },
+    });
+
+    const snapshot = healthState.buildGatewaySnapshot({ client: null, revisionProjector });
+
+    expect(snapshot.sessionDefaults?.modelConfigured).toBe(expected);
+  });
+
   it.each([
     { role: "operator", scopes: ["operator.pairing"], allowed: false },
     { role: "node", scopes: ["operator.read", "operator.admin"], allowed: false },
@@ -106,7 +155,11 @@ describe("buildGatewaySnapshot update metadata", () => {
       install: { kind: "git" },
     });
 
-    const snapshot = healthState.buildGatewaySnapshot({ includeUpdateDetails: false });
+    const snapshot = healthState.buildGatewaySnapshot({
+      client: null,
+      includeUpdateDetails: false,
+      revisionProjector,
+    });
 
     expect(snapshot.updateAvailable).toEqual({
       currentVersion: "2026.8.7",
@@ -115,6 +168,7 @@ describe("buildGatewaySnapshot update metadata", () => {
     });
     expect(snapshot.updateSchedule).toBeUndefined();
     expect(snapshot.sessionDefaults).toMatchObject({ ownership: "sole", selectionRequired: false });
+    expect(snapshot.appliedConfigHash).toBe("resolved-token:internal-applied-hash");
     expect(getUpdateScheduleMock).not.toHaveBeenCalled();
   });
 
@@ -138,7 +192,11 @@ describe("buildGatewaySnapshot update metadata", () => {
     getUpdateAvailableMock.mockReturnValue(updateAvailable);
     getUpdateScheduleMock.mockReturnValue(updateSchedule);
 
-    const snapshot = healthState.buildGatewaySnapshot({ includeUpdateDetails: true });
+    const snapshot = healthState.buildGatewaySnapshot({
+      client: null,
+      includeUpdateDetails: true,
+      revisionProjector,
+    });
 
     expect(snapshot.updateAvailable).toBe(updateAvailable);
     expect(snapshot.updateSchedule).toBe(updateSchedule);

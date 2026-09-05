@@ -21,6 +21,7 @@ import {
 import {
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
+  createConditionalWarningCollector,
   createOpenProviderGroupPolicyWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
@@ -30,8 +31,10 @@ import {
 import { buildTokenChannelStatusSummary } from "openclaw/plugin-sdk/channel-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
-import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
-import { listResolvedDirectoryUserEntriesFromAllowFrom } from "openclaw/plugin-sdk/directory-runtime";
+import {
+  createChannelDirectoryAdapter,
+  listResolvedDirectoryUserEntriesFromAllowFrom,
+} from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { sendPayloadWithChunkedTextAndMedia } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -44,6 +47,7 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import {
   inspectZaloAccount,
+  isZaloAccountConfigured,
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
   resolveZaloAccount,
@@ -132,10 +136,6 @@ const zaloMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
-function isZaloAccountConfigured(account: ResolvedZaloAccount): boolean {
-  return account.tokenStatus ? account.tokenStatus !== "missing" : Boolean(account.token?.trim());
-}
-
 const zaloConfigAdapter = createScopedChannelConfigAdapter<ResolvedZaloAccount>({
   sectionKey: "zalo",
   listAccountIds: listZaloAccountIds,
@@ -188,6 +188,12 @@ const collectZaloSecurityWarnings = createOpenProviderGroupPolicyWarningCollecto
       }),
     ];
   },
+});
+const collectZaloOpenGroupFindings = createConditionalWarningCollector.findings({
+  collectWarnings: collectZaloSecurityWarnings,
+  checkId: "channels.zalo.groups.open",
+  severity: "critical",
+  title: "Zalo security warning",
 });
 
 export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
@@ -285,7 +291,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
     },
     security: {
       resolveDmPolicy: resolveZaloDmPolicy,
-      collectWarnings: collectZaloSecurityWarnings,
+      collectWarnings: collectZaloOpenGroupFindings,
     },
     pairing: {
       text: {

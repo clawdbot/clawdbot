@@ -8,6 +8,7 @@ import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayErrorDetails
+import ai.openclaw.app.gateway.GatewayHelloSummary
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
@@ -19,54 +20,329 @@ import ai.openclaw.app.node.InvokeDispatcher
 import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
+import ai.openclaw.app.ui.canFinishOnboarding
 import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okhttp3.mockwebserver.Dispatcher
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.QueueDispatcher
+import okhttp3.mockwebserver.RecordedRequest
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.runners.model.MultipleFailureException
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowNetwork
+import org.robolectric.shadows.ShadowNetworkCapabilities
+import java.io.IOException
 import java.lang.reflect.Field
+import java.net.InetAddress
+import java.net.Proxy
+import java.net.ProxySelector
+import java.net.SocketAddress
+import java.net.URI
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewayBootstrapAuthTest {
+  private data class RuntimeFixture(
+    val runtime: NodeRuntime,
+    val startupJobs: List<Job>,
+  )
+
+  private val runtimes = mutableListOf<RuntimeFixture>()
+  private val previousProxySelector = ProxySelector.getDefault()
+  private val gatewayServerDelegate =
+    lazy {
+      MockWebServer().apply {
+        (dispatcher as QueueDispatcher).setFailFast(MockResponse().setResponseCode(503))
+        start(InetAddress.getByName("127.0.0.1"), 0)
+      }
+    }
+  private val gatewayServer by gatewayServerDelegate
+
+  @After
+  fun closeFixtures() {
+    val failures =
+      runtimes
+        .mapNotNull { (runtime, startupJobs) ->
+          runCatching {
+            try {
+              drainWithMainLooper {
+                // Stop discovery/fleet producers before snapshotting sessions. Keep their shared
+                // parent alive until disconnect tails have drained accepted frames and callbacks.
+                startupJobs.forEach { it.cancel() }
+                startupJobs.joinAll()
+                val sessions =
+                  listOf(readField<GatewaySession>(runtime, "operatorSession"), readField<GatewaySession>(runtime, "nodeSession")) +
+                    readField<Map<String, Any>>(runtime, "secondaryOperatorSessions").values.map { readField<GatewaySession>(it, "session") }
+                runtime.disconnect()
+                sessions.forEach { it.disconnectAndJoin() }
+              }
+            } finally {
+              closeNodeRuntimeTestFixture(runtime)
+            }
+          }.exceptionOrNull()
+        }.toMutableList()
+    try {
+      if (gatewayServerDelegate.isInitialized()) {
+        runCatching { gatewayServer.shutdown() }.exceptionOrNull()?.let(failures::add)
+      }
+    } finally {
+      ProxySelector.setDefault(previousProxySelector)
+    }
+    MultipleFailureException.assertEmpty(failures)
+  }
+
+  private fun trackRuntime(runtime: NodeRuntime): NodeRuntime =
+    runtime.also {
+      runtimes +=
+        RuntimeFixture(
+          it,
+          readField<CoroutineScope>(it, "scope")
+            .coroutineContext.job.children
+            .toList(),
+        )
+    }
+
+  private fun gatewayEndpoint(): GatewayEndpoint = GatewayEndpoint.manual("127.0.0.1", gatewayServer.port)
+
+  private fun tlsGatewayEndpoint(): GatewayEndpoint = GatewayEndpoint.manual("gateway.test", gatewayServer.port, tlsEnabled = true)
+
   @Before
-  fun clearPlainPrefs() {
+  fun setUpFixtures() {
     RuntimeEnvironment
       .getApplication()
       .getSharedPreferences("openclaw.node", android.content.Context.MODE_PRIVATE)
       .edit()
       .clear()
       .commit()
+    // Numeric loopback is not a system-trust candidate. Route the synthetic DNS
+    // authority through our proxy, and keep loopback independent of machine proxy settings.
+    ProxySelector.setDefault(
+      object : ProxySelector() {
+        override fun select(uri: URI): List<Proxy> = if (uri.host == "gateway.test") listOf(gatewayServer.toProxyAddress()) else listOf(Proxy.NO_PROXY)
+
+        override fun connectFailed(
+          uri: URI,
+          address: SocketAddress,
+          failure: IOException,
+        ) = Unit
+      },
+    )
   }
+
+  @Test
+  fun networkAttachmentWakesEveryDesiredSecondaryGateway() =
+    runBlocking {
+      data class Peer(
+        val server: MockWebServer,
+        val stalled: CompletableDeferred<Unit>,
+        val resumed: CompletableDeferred<Unit>,
+        val release: CountDownLatch,
+      )
+      val (app, prefs, runtime) = gatewayFixture()
+      val peers =
+        List(2) {
+          val stalled = CompletableDeferred<Unit>()
+          val resumed = CompletableDeferred<Unit>()
+          val release = CountDownLatch(1)
+          val attempts = AtomicInteger()
+          val server =
+            MockWebServer().apply {
+              dispatcher =
+                object : Dispatcher() {
+                  override fun dispatch(request: RecordedRequest): MockResponse {
+                    when (attempts.incrementAndGet()) {
+                      3 -> {
+                        stalled.complete(Unit)
+                        release.await(10, TimeUnit.SECONDS)
+                      }
+
+                      4 -> {
+                        resumed.complete(Unit)
+                      }
+                    }
+                    return MockResponse().setResponseCode(503)
+                  }
+                }
+              start()
+            }
+          Peer(server, stalled, resumed, release)
+        }
+      try {
+        for (peer in peers) {
+          val endpoint = GatewayEndpoint.manual("127.0.0.1", peer.server.port)
+          prefs.gatewayRegistry.upsert(
+            GatewayRegistryEntry(
+              stableId = endpoint.stableId,
+              kind = GatewayRegistryEntryKind.MANUAL,
+              name = endpoint.name,
+              host = endpoint.host,
+              port = endpoint.port,
+              tls = false,
+            ),
+          )
+          prefs.saveGatewayCredentials(endpoint.stableId, token = "shared-token")
+          runtime.setGatewayConnectionEnabled(endpoint.stableId, true)
+        }
+        // The real fleet collector creates both sessions. Hold their third HTTP upgrade
+        // responses so only a recovery wake can admit another attempt before release.
+        withTimeout(10_000) { peers.forEach { it.stalled.await() } }
+        val network = ShadowNetwork.newInstance(321)
+        val capabilities = ShadowNetworkCapabilities.newInstance()
+        shadowOf(capabilities).addCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        shadowOf(app.getSystemService(ConnectivityManager::class.java)).networkCallbacks.toList().forEach { callback ->
+          callback.onAvailable(network)
+          callback.onCapabilitiesChanged(network, capabilities)
+        }
+        withTimeout(2_000) { peers.forEach { it.resumed.await() } }
+      } finally {
+        peers.forEach { it.release.countDown() }
+        runtime.disconnect()
+        peers.forEach { it.server.shutdown() }
+      }
+    }
+
+  @Test
+  fun nodeFirstBootstrapBecomesReadyWhenOperatorConnects() {
+    assertReadyAfterBothSessionsConnect(nodeFirst = true)
+  }
+
+  @Test
+  fun operatorFirstConnectionRefreshesApprovalWhenNodeConnects() {
+    assertReadyAfterBothSessionsConnect(nodeFirst = false)
+  }
+
+  private fun assertReadyAfterBothSessionsConnect(nodeFirst: Boolean) =
+    runBlocking {
+      val (app, prefs, runtime) = gatewayFixture()
+      val runtimeJob = requireNotNull(readField<CoroutineScope>(runtime, "scope").coroutineContext[Job])
+      try {
+        // Stop startup collectors before callbacks register a gateway, but keep the scope live
+        // so the real ready callbacks can launch their refreshes without opening sockets.
+        withTimeout(10_000) {
+          val startupJobs = runtimeJob.children.toList()
+          startupJobs.forEach { it.cancel() }
+          startupJobs.forEach { it.join() }
+        }
+        writeField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
+        val deviceId = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
+        val initialNodeListRead = CompletableDeferred<Job>()
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "node.list" -> {
+              if (runtime.nodeConnected.value) {
+                """{"nodes":[{"nodeId":"$deviceId","paired":true,"connected":true,"approvalState":"approved"}]}"""
+              } else {
+                initialNodeListRead.complete(requireNotNull(currentCoroutineContext()[Job]))
+                """{"nodes":[]}"""
+              }
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        }
+        val hello =
+          GatewayHelloSummary(
+            serverName = "Test gateway",
+            remoteAddress = "127.0.0.1:18789",
+            serverVersion = null,
+            mainSessionKey = null,
+            updateAvailable = null,
+            authScopes = listOf("operator.read"),
+            methods = setOf("node.list"),
+          )
+
+        fun connectSession(fieldName: String) {
+          val session = readField<GatewaySession>(runtime, fieldName)
+          readField<(GatewayHelloSummary) -> Unit>(session, "onConnected")(hello)
+        }
+
+        fun ready(): Boolean =
+          canFinishOnboarding(
+            isConnected = runtime.gatewayConnectionDisplay.value.isConnected,
+            isNodeConnected = runtime.nodeConnected.value,
+            nodeCapabilityApproval = runtime.nodeCapabilityApproval.value,
+          )
+
+        connectSession(if (nodeFirst) "nodeSession" else "operatorSession")
+        withTimeout(10_000) {
+          if (nodeFirst) {
+            // Finish the offline node refresh before operator success can make it usable.
+            runtimeJob.children.toList().forEach { it.join() }
+          } else {
+            // Settle the empty read before node success can hide a missing node-ready refresh.
+            initialNodeListRead.await().join()
+          }
+        }
+        assertEquals(GatewayNodeCapabilityApproval.Loading, runtime.nodeCapabilityApproval.value)
+        assertFalse(ready())
+        assertFalse(runtime.nodesDevicesRefreshing.value)
+
+        connectSession(if (nodeFirst) "operatorSession" else "nodeSession")
+        withTimeoutOrNull(10_000) {
+          runtime.nodeCapabilityApproval.first { it == GatewayNodeCapabilityApproval.Approved }
+        }
+
+        assertEquals(GatewayNodeCapabilityApproval.Approved, runtime.nodeCapabilityApproval.value)
+        assertTrue(ready())
+      } finally {
+        runtime.disconnect()
+        runtimeJob.cancelAndJoin()
+      }
+    }
 
   @Test
   fun standaloneStatusPreservesLiveOperatorConnection() {
@@ -298,25 +574,6 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
-  fun nodeConnectStartsOperatorAfterBootstrapHandoffWhenOperatorWasConnecting() {
-    val (app, prefs, runtime) = gatewayFixture()
-    val deviceId = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
-    val endpoint = GatewayEndpoint.manual(host = "127.0.0.1", port = 18789)
-    DeviceAuthStore(prefs).saveToken(endpoint.stableId, deviceId, "operator", "bootstrap-operator-token")
-
-    writeField(runtime, "operatorStatusText", "Connecting…")
-    invokeMaybeStartOperatorSessionAfterNodeConnect(
-      runtime = runtime,
-      endpoint = endpoint,
-      auth = auth(bootstrapToken = "setup-bootstrap-token"),
-    )
-
-    val desired = desiredConnection(runtime, "operatorSession")
-    assertNotNull(desired)
-    assertNull(readField<String?>(desired!!, "bootstrapToken"))
-  }
-
-  @Test
   fun resolveGatewayConnectAuth_prefersExplicitSetupAuthOverStoredPrefs() {
     val (_, prefs, runtime) = gatewayFixture()
     val endpoint = GatewayEndpoint.manual("gateway.example", 18789)
@@ -338,7 +595,7 @@ class GatewayBootstrapAuthTest {
     runBlocking {
       val (_, prefs, runtime) =
         gatewayFixture { _, _ -> GatewayTlsProbeResult(fingerprintSha256 = "ab".repeat(32)) }
-      val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 18789)
+      val endpoint = tlsGatewayEndpoint()
       prefs.saveGatewayCredentials(endpoint.stableId, token = "stale-shared-token", password = "stale-password")
       val explicitAuth = auth(bootstrapToken = "setup-bootstrap-token")
 
@@ -359,7 +616,7 @@ class GatewayBootstrapAuthTest {
     runBlocking {
       val (_, prefs, runtime) =
         gatewayFixture { _, _ -> GatewayTlsProbeResult(fingerprintSha256 = "bb".repeat(32), systemTrusted = true) }
-      val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 18789)
+      val endpoint = tlsGatewayEndpoint()
       val oldFingerprint = "aa".repeat(32)
       val newFingerprint = "bb".repeat(32)
       prefs.saveGatewayTlsFingerprint(endpoint.stableId, oldFingerprint)
@@ -393,7 +650,7 @@ class GatewayBootstrapAuthTest {
   fun connect_systemTrustedCandidateWithoutStoredPinUsesPlatformTrust() {
     val (_, prefs, runtime) =
       gatewayFixture { _, _ -> GatewayTlsProbeResult(fingerprintSha256 = "bb".repeat(32), systemTrusted = true) }
-    val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 18789)
+    val endpoint = tlsGatewayEndpoint()
 
     runtime.connect(
       endpoint,
@@ -406,6 +663,9 @@ class GatewayBootstrapAuthTest {
     assertNull(prefs.loadGatewayTlsFingerprint(endpoint.stableId))
     assertEquals(endpoint.stableId, prefs.gatewayRegistry.activeStableId.value)
     assertNull(runtime.pendingGatewayTrust.value)
+    val request = gatewayServer.takeRequest(5, TimeUnit.SECONDS)
+    assertNotNull("The TLS candidate must use the test-owned proxy", request)
+    assertEquals("CONNECT gateway.test:${gatewayServer.port} HTTP/1.1", request!!.requestLine)
   }
 
   @Test
@@ -414,7 +674,7 @@ class GatewayBootstrapAuthTest {
     val newFingerprint = "bb".repeat(32)
     val (_, prefs, runtime) =
       gatewayFixture { _, _ -> GatewayTlsProbeResult(fingerprintSha256 = newFingerprint, systemTrusted = true) }
-    val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 18789)
+    val endpoint = tlsGatewayEndpoint()
     prefs.saveGatewayTlsFingerprint(endpoint.stableId, oldFingerprint)
 
     runtime.connect(
@@ -438,37 +698,26 @@ class GatewayBootstrapAuthTest {
   fun connect_ignoresStaleTlsProbeAfterDisconnect() =
     runBlocking {
       val fingerprint = "aa".repeat(32)
-      val probeStarted = CompletableDeferred<Unit>()
+      val probeJob = CompletableDeferred<Job>()
       val probeResult = CompletableDeferred<GatewayTlsProbeResult>()
       val (_, prefs, runtime) =
         gatewayFixture { _, _ ->
-          probeStarted.complete(Unit)
+          probeJob.complete(checkNotNull(currentCoroutineContext()[Job]))
           probeResult.await()
         }
-      val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 18789)
+      val endpoint = tlsGatewayEndpoint()
       prefs.saveGatewayTlsFingerprint(endpoint.stableId, fingerprint)
-      val runtimeScope = readField<CoroutineScope>(runtime, "scope")
-      val existingJobs =
-        runtimeScope.coroutineContext[Job]
-          ?.children
-          ?.toSet()
-          .orEmpty()
 
       runtime.connect(
         endpoint,
         auth(token = "shared-token"),
       )
-      probeStarted.await()
-      val probeJob =
-        runtimeScope.coroutineContext[Job]
-          ?.children
-          ?.singleOrNull { it !in existingJobs }
-          ?: error("Expected one TLS probe job")
+      val tlsProbeJob = probeJob.await()
 
       runtime.disconnect()
       probeResult.complete(GatewayTlsProbeResult(fingerprintSha256 = fingerprint))
       // Join the owning coroutine so assertions run after its stale-attempt guard.
-      probeJob.join()
+      tlsProbeJob.join()
 
       assertNull(runtime.pendingGatewayTrust.value)
       assertNull(desiredBootstrapToken(runtime, "nodeSession"))
@@ -485,7 +734,7 @@ class GatewayBootstrapAuthTest {
           probeStarted.complete(Unit)
           probeResult.await()
         }
-      val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 18789)
+      val endpoint = tlsGatewayEndpoint()
       prefs.gatewayRegistry.upsert(
         GatewayRegistryEntry(
           stableId = endpoint.stableId,
@@ -518,7 +767,7 @@ class GatewayBootstrapAuthTest {
     armSavedActiveManualGateway(prefs)
 
     runtime.connect(
-      GatewayEndpoint.manual(host = "127.0.0.1", port = 18789),
+      gatewayEndpoint(),
       auth(token = "initial-token"),
     )
     runtime.disconnect()
@@ -529,7 +778,7 @@ class GatewayBootstrapAuthTest {
     val desired = waitForDesiredConnection(runtime, "nodeSession")
     val endpoint = readField<GatewayEndpoint>(desired, "endpoint")
     assertEquals("127.0.0.1", endpoint.host)
-    assertEquals(18789, endpoint.port)
+    assertEquals(gatewayServer.port, endpoint.port)
     assertEquals("shared-token", readField<String?>(desired, "token"))
   }
 
@@ -538,7 +787,7 @@ class GatewayBootstrapAuthTest {
     val (runtime, prefs) = createNeutralizedRuntime()
     armSavedActiveManualGateway(prefs)
 
-    runtime.connect(GatewayEndpoint.manual(host = "127.0.0.1", port = 18789))
+    runtime.connect(gatewayEndpoint())
     runtime.disconnect()
     runtime.setCameraEnabled(true)
     runtime.setLocationMode(LocationMode.WhileUsing)
@@ -557,8 +806,8 @@ class GatewayBootstrapAuthTest {
   fun advertisedSurfaceSettingsReconnectNodeWithCurrentCommands() {
     val (runtime, prefs) = createNeutralizedRuntime()
     armSavedActiveManualGateway(prefs)
-    val endpoint = GatewayEndpoint.manual(host = "127.0.0.1", port = 18789)
-    writeField(runtime, "connectedEndpoint", endpoint)
+    val endpoint = gatewayEndpoint()
+    runBlocking { assertTrue(runtime.connectSwitchingGateway(endpoint)) }
 
     runtime.setCameraEnabled(true)
 
@@ -587,14 +836,11 @@ class GatewayBootstrapAuthTest {
     shadowOf(app).denyPermissions(Manifest.permission.CAMERA)
     val (runtime, prefs) = createNeutralizedRuntime()
     armSavedActiveManualGateway(prefs)
-    writeField(
-      runtime,
-      "connectedEndpoint",
-      GatewayEndpoint.manual(host = "127.0.0.1", port = 18789),
-    )
+    runBlocking { assertTrue(runtime.connectSwitchingGateway(gatewayEndpoint())) }
+    val original = waitForDesiredConnection(runtime, "nodeSession")
 
     runtime.refreshNodePermissionSurface()
-    assertNull(desiredConnection(runtime, "nodeSession"))
+    assertSame(original, desiredConnection(runtime, "nodeSession"))
 
     shadowOf(app).grantPermissions(Manifest.permission.CAMERA)
     runtime.refreshNodePermissionSurface()
@@ -613,15 +859,15 @@ class GatewayBootstrapAuthTest {
       gatewayFixture { _, _ -> GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_UNAVAILABLE) }
 
     runtime.connect(
-      GatewayEndpoint.manual(host = "gateway.example", port = 18789),
+      tlsGatewayEndpoint(),
       auth(token = "shared-token"),
     )
 
+    val prompt = waitForGatewayTrustPrompt(runtime)
     assertEquals(
       "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
-      waitForStatusText(runtime),
+      runtime.statusText.value,
     )
-    val prompt = waitForGatewayTrustPrompt(runtime)
     assertNull(prompt.fingerprintSha256)
     assertEquals(GatewayTlsProbeFailure.TLS_UNAVAILABLE, prompt.probeFailure)
   }
@@ -630,7 +876,7 @@ class GatewayBootstrapAuthTest {
   fun connect_enforcesAcceptedManualFingerprintAfterTlsProbeFailure() {
     val (_, prefs, runtime) =
       gatewayFixture { _, _ -> GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_UNAVAILABLE) }
-    val endpoint = GatewayEndpoint.manual(host = "gateway.example", port = 18789)
+    val endpoint = tlsGatewayEndpoint()
 
     runtime.connect(
       endpoint,
@@ -652,15 +898,15 @@ class GatewayBootstrapAuthTest {
       gatewayFixture { _, _ -> GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT) }
 
     runtime.connect(
-      GatewayEndpoint.manual(host = "gateway.example", port = 18789),
+      tlsGatewayEndpoint(),
       auth(token = "shared-token"),
     )
 
+    val prompt = waitForGatewayTrustPrompt(runtime)
     assertEquals(
       "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
-      waitForStatusText(runtime),
+      runtime.statusText.value,
     )
-    val prompt = waitForGatewayTrustPrompt(runtime)
     assertNull(prompt.fingerprintSha256)
     assertEquals(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT, prompt.probeFailure)
   }
@@ -692,7 +938,7 @@ class GatewayBootstrapAuthTest {
       val app = RuntimeEnvironment.getApplication()
       val prefs = testPrefs(app)
       val transcriptCache = RecordingTranscriptCache()
-      val runtime = NodeRuntime(app, prefs, transcriptCache)
+      val runtime = trackRuntime(NodeRuntime(app, prefs, transcriptCache))
       val target = GatewayEndpoint.manual("target.example", 18789).stableId
 
       assertTrue(runtime.resetGatewaySetupAuth(target))
@@ -704,7 +950,7 @@ class GatewayBootstrapAuthTest {
   fun switchToUndiscoveredGatewayKeepsCurrentConnectionAndActiveGateway() {
     val (_, prefs, runtime) = gatewayFixture()
     neutralizeColdStartAutoConnect(runtime)
-    val current = GatewayEndpoint.manual("127.0.0.1", 18789)
+    val current = gatewayEndpoint()
     val missingStableId = "bonjour-missing"
     prefs.gatewayRegistry.upsert(
       GatewayRegistryEntry(
@@ -737,59 +983,88 @@ class GatewayBootstrapAuthTest {
   fun gatewayConnectDoesNotHoldAuthMonitorWhileWaitingForSessionLifecycle() =
     runBlocking {
       val app = RuntimeEnvironment.getApplication()
-      val runtime = NodeRuntime(app, testPrefs(app))
-      val endpoint = GatewayEndpoint.manual("127.0.0.1", 18789)
+      val prefs = testPrefs(app).apply { setManualTls(false) }
+      val runtime = trackRuntime(NodeRuntime(app, prefs))
+      neutralizeColdStartAutoConnect(runtime)
+      val connectFrame = CompletableDeferred<JsonObject>()
+      gatewayServer.enqueue(
+        MockResponse().withWebSocketUpgrade(
+          object : WebSocketListener() {
+            override fun onOpen(
+              webSocket: WebSocket,
+              response: Response,
+            ) {
+              webSocket.send("""{"type":"event","event":"connect.challenge","payload":{"nonce":"bootstrap-test","ts":1700000000123}}""")
+            }
+
+            override fun onMessage(
+              webSocket: WebSocket,
+              text: String,
+            ) {
+              connectFrame.complete(Json.parseToJsonElement(text).jsonObject)
+            }
+          },
+        ),
+      )
+      val endpoint = gatewayEndpoint()
       val auth = auth(bootstrapToken = "bootstrap")
       val nodeSession = readField<GatewaySession>(runtime, "nodeSession")
       val lifecycleLock = readField<Any>(nodeSession, "lifecycleLock")
       val connectWithAuth =
         runtime.javaClass.declaredMethods.single { method ->
-          method.name == "connectWithAuth" && method.parameterTypes.size == 4
+          method.name == "connectWithAuth" && method.parameterTypes.size == 3
         }
       connectWithAuth.isAccessible = true
       val lockHeld = CompletableDeferred<Unit>()
       val releaseLock = CompletableDeferred<Unit>()
       val lifecycleDispatcher = Executors.newFixedThreadPool(3).asCoroutineDispatcher()
+      val workers = CoroutineScope(SupervisorJob() + lifecycleDispatcher)
       val lockHolder =
-        async(lifecycleDispatcher) {
+        workers.async {
           synchronized(lifecycleLock) {
             lockHeld.complete(Unit)
             runBlocking { releaseLock.await() }
           }
         }
-      lockHeld.await()
-
-      val connect =
-        async(lifecycleDispatcher) {
-          connectWithAuth.invoke(runtime, endpoint, auth, false, { Unit })
-        }
       try {
+        withTimeout(5_000) { lockHeld.await() }
+        val connect = workers.async { connectWithAuth.invoke(runtime, endpoint, auth, { Unit }) }
         withTimeout(5_000) {
           while (readField<Int>(runtime, "gatewayConnectOperationsInFlight") == 0) delay(10)
         }
         val callback =
-          async(lifecycleDispatcher) {
-            val method =
-              runtime.javaClass.getDeclaredMethod(
-                "maybeStartOperatorSessionAfterNodeConnect",
-                GatewayEndpoint::class.java,
-                NodeRuntime.GatewayConnectAuth::class.java,
-              )
+          workers.async {
+            val method = runtime.javaClass.getDeclaredMethod("runGatewayConnectOperation", Function0::class.java)
             method.isAccessible = true
-            method.invoke(runtime, endpoint, auth)
+            method.invoke(runtime, { Unit })
           }
         withTimeout(1_000) { callback.await() }
+        releaseLock.complete(Unit)
+        withTimeout(5_000) {
+          lockHolder.await()
+          connect.await()
+        }
+        val request = gatewayServer.takeRequest(5, TimeUnit.SECONDS)
+        assertNotNull("The runtime must reach the test-owned listener after lifecycle release", request)
+        assertEquals("websocket", request!!.getHeader("Upgrade"))
+        val frame = withTimeout(5_000) { connectFrame.await() }
+        assertEquals("connect", frame["method"]?.jsonPrimitive?.content)
+        val params = frame.getValue("params").jsonObject
+        assertEquals("node", params["role"]?.jsonPrimitive?.content)
+        assertEquals(
+          "bootstrap",
+          params
+            .getValue("auth")
+            .jsonObject["bootstrapToken"]
+            ?.jsonPrimitive
+            ?.content,
+        )
       } finally {
         releaseLock.complete(Unit)
         try {
-          withTimeout(5_000) {
-            lockHolder.await()
-            connect.await()
-          }
+          workers.coroutineContext.job.cancelAndJoin()
         } finally {
           lifecycleDispatcher.close()
-          runtime.disconnect()
-          readField<CoroutineScope>(runtime, "scope").coroutineContext[Job]?.cancel()
         }
       }
       Unit
@@ -802,7 +1077,7 @@ class GatewayBootstrapAuthTest {
     val prefs = testPrefs(app)
     prefs.setVoiceMicEnabled(true)
 
-    val runtime = NodeRuntime(app, prefs)
+    val runtime = trackRuntime(NodeRuntime(app, prefs))
 
     assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
     assertFalse(prefs.voiceMicEnabled.value)
@@ -1068,22 +1343,6 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
-  fun sameTalkModeReassertionStopsManualMicCapture() {
-    val runtime = createVoiceRuntime()
-    readField<CoroutineScope>(runtime, "scope").coroutineContext[Job]?.cancel()
-    runtime.setTalkModeEnabled(true)
-    val micCapture = readField<Lazy<MicCaptureManager>>(runtime, "micCapture\$delegate").value
-    micCapture.setMicEnabled(true)
-
-    runtime.setTalkModeEnabled(true)
-
-    assertFalse(runtime.micEnabled.value)
-    assertEquals(VoiceCaptureMode.TalkMode, runtime.voiceCaptureMode.value)
-    val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
-    assertTrue(talkMode.isEnabled.value)
-  }
-
-  @Test
   fun backgroundingStopsTalkModeCapture() {
     val runtime = createTestRuntime(RuntimeEnvironment.getApplication())
     val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
@@ -1127,7 +1386,7 @@ class GatewayBootstrapAuthTest {
 
     invokeAutoConnectIfNeeded(runtime)
 
-    val desired = desiredConnection(runtime, "nodeSession") ?: error("Expected desired node connection")
+    val desired = waitForDesiredConnection(runtime, "nodeSession")
     assertEquals("127.0.0.1", readField<GatewayEndpoint>(desired, "endpoint").host)
     assertEquals("shared-token", readField<String?>(desired, "token"))
   }
@@ -1143,22 +1402,22 @@ class GatewayBootstrapAuthTest {
     assertNull(desiredConnection(runtime, "nodeSession"))
   }
 
-  // Arms the registry only after the runtime's background work is neutralized, so the real
+  // Arms the registry only after the runtime's startup work is neutralized, so the real
   // discovery collector can never observe an auto-connectable active gateway.
   private fun createNeutralizedRuntime(): Pair<NodeRuntime, SecurePrefs> {
     val app = RuntimeEnvironment.getApplication()
     val prefs = testPrefs(app)
-    val runtime = NodeRuntime(app, prefs)
+    val runtime = trackRuntime(NodeRuntime(app, prefs))
     neutralizeColdStartAutoConnect(runtime)
     return runtime to prefs
   }
 
   private fun armSavedActiveManualGateway(prefs: SecurePrefs) {
+    val savedEndpoint = gatewayEndpoint()
     prefs.setManualEnabled(true)
-    prefs.setManualHost("127.0.0.1")
-    prefs.setManualPort(18789)
+    prefs.setManualHost(savedEndpoint.host)
+    prefs.setManualPort(savedEndpoint.port)
     prefs.setManualTls(false)
-    val savedEndpoint = GatewayEndpoint.manual(host = "127.0.0.1", port = 18789)
     prefs.gatewayRegistry.upsert(
       GatewayRegistryEntry(
         stableId = savedEndpoint.stableId,
@@ -1181,10 +1440,14 @@ class GatewayBootstrapAuthTest {
 
   // NodeRuntime's init collects gateway discovery on a background dispatcher and auto-connects
   // the saved active gateway whenever that collector happens to run, racing scripted lifecycle
-  // steps (observed as CI-only flakes on loaded Linux runners). Cancel and join all runtime-scope
-  // work so nothing runs in the background; arm the registry only afterwards.
+  // steps (observed as CI-only flakes on loaded Linux runners). Cancel and join startup jobs
+  // before arming the registry, but keep the parent live for subsequent real session IO.
   private fun neutralizeColdStartAutoConnect(runtime: NodeRuntime) {
-    runBlocking { readField<CoroutineScope>(runtime, "scope").coroutineContext[Job]?.cancelAndJoin() }
+    runBlocking {
+      val jobs = runtimes.single { it.runtime === runtime }.startupJobs
+      jobs.forEach { it.cancel() }
+      jobs.joinAll()
+    }
   }
 
   private fun waitForGatewayTrustPrompt(runtime: NodeRuntime): NodeRuntime.GatewayTrustPrompt {
@@ -1195,7 +1458,7 @@ class GatewayBootstrapAuthTest {
     error("Expected pending gateway trust prompt")
   }
 
-  private fun createTestRuntime(app: android.app.Application): NodeRuntime = NodeRuntime(app, testPrefs(app))
+  private fun createTestRuntime(app: android.app.Application): NodeRuntime = trackRuntime(NodeRuntime(app, testPrefs(app)))
 
   private fun createVoiceRuntime(
     app: android.app.Application = RuntimeEnvironment.getApplication(),
@@ -1227,7 +1490,7 @@ class GatewayBootstrapAuthTest {
     val runtime =
       tlsFingerprintProbe?.let { NodeRuntime(app, prefs, tlsFingerprintProbe = it) }
         ?: NodeRuntime(app, prefs)
-    return GatewayFixture(app, prefs, runtime)
+    return GatewayFixture(app, prefs, trackRuntime(runtime))
   }
 
   private fun auth(
@@ -1242,17 +1505,6 @@ class GatewayBootstrapAuthTest {
   ): NodeRuntime.GatewayConnectAuth? = resolveOperatorSessionConnectAuth(auth, storedToken)
 
   private fun usesStoredOperatorToken(auth: NodeRuntime.GatewayConnectAuth): Boolean = operatorSessionUsesStoredDeviceToken(auth, "stored-token")
-
-  private fun waitForStatusText(runtime: NodeRuntime): String {
-    repeat(50) {
-      val status = runtime.statusText.value
-      if (status != "Verify gateway TLS fingerprint…") {
-        return status
-      }
-      Thread.sleep(10)
-    }
-    error("Expected status text update")
-  }
 
   private fun desiredBootstrapToken(
     runtime: NodeRuntime,
@@ -1279,21 +1531,6 @@ class GatewayBootstrapAuthTest {
       Thread.sleep(10)
     }
     error("Expected desired connection for $sessionFieldName")
-  }
-
-  private fun invokeMaybeStartOperatorSessionAfterNodeConnect(
-    runtime: NodeRuntime,
-    endpoint: GatewayEndpoint,
-    auth: NodeRuntime.GatewayConnectAuth,
-  ) {
-    val method =
-      runtime.javaClass.getDeclaredMethod(
-        "maybeStartOperatorSessionAfterNodeConnect",
-        GatewayEndpoint::class.java,
-        NodeRuntime.GatewayConnectAuth::class.java,
-      )
-    method.isAccessible = true
-    method.invoke(runtime, endpoint, auth)
   }
 
   private fun writeField(

@@ -870,6 +870,66 @@ cli note
     );
   });
 
+  it("reports the rollback command when compilation fails after a ChatGPT import", async () => {
+    const { rootDir, config } = await createCliVault({ initialize: true });
+    const exportDir = await createChatGptExport(rootDir);
+    const firstApplied = JSON.parse(
+      await runRegisteredWikiCommand(config, [
+        "chatgpt",
+        "import",
+        "--export",
+        exportDir,
+        "--json",
+      ]),
+    ) as { runId?: string };
+    const firstRunId = expectDefined(firstApplied.runId, "first ChatGPT import runId");
+    const sourceFile = await findImportedSourceFile(rootDir);
+    const pagePath = path.join(rootDir, "sources", sourceFile);
+    const firstContent = await fs.readFile(pagePath, "utf8");
+
+    const reportPath = path.join(rootDir, "reports", "stale-pages.md");
+    const validReport = await fs.readFile(reportPath, "utf8");
+    await fs.writeFile(reportPath, "---\nmalformed\n---\n# Stale Pages\n", "utf8");
+
+    const conversationsPath = path.join(exportDir, "conversations.json");
+    const conversationsText = await fs.readFile(conversationsPath, "utf8");
+    await fs.writeFile(
+      conversationsPath,
+      conversationsText.replace(
+        "Noted. I will keep travel options close to the airport.",
+        "Updated: window seats now.",
+      ),
+      "utf8",
+    );
+
+    let importError: unknown;
+    try {
+      await runRegisteredWikiCommand(config, [
+        "chatgpt",
+        "import",
+        "--export",
+        exportDir,
+        "--json",
+      ]);
+    } catch (error) {
+      importError = error;
+    }
+    const message = importError instanceof Error ? importError.message : "";
+    const failedRunId = message.match(/chatgpt-[a-f0-9]{12}/u)?.[0];
+    expect(failedRunId).toBeDefined();
+    expect(failedRunId).not.toBe(firstRunId);
+    expect(message).toContain("changed source pages, but vault compilation failed");
+    expect(message).toContain(`openclaw wiki chatgpt rollback ${failedRunId}`);
+    await expect(fs.readFile(pagePath, "utf8")).resolves.not.toBe(firstContent);
+
+    await fs.writeFile(reportPath, validReport, "utf8");
+    const rollback = JSON.parse(
+      await runRegisteredWikiCommand(config, ["chatgpt", "rollback", failedRunId!, "--json"]),
+    ) as { restoredCount: number };
+    expect(rollback.restoredCount).toBe(1);
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(firstContent);
+  });
+
   it("preserves user edits made after a re-import when rolling back an updated page", async () => {
     const { rootDir, config } = await createCliVault({ initialize: true });
     const exportDir = await createChatGptExport(rootDir);

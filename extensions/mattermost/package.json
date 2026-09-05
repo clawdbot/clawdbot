@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/mattermost",
-  "version": "2026.8.1",
+  "version": "2026.9.1",
   "description": "OpenClaw Mattermost channel plugin",
   "repository": {
     "type": "git",
@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "ws": "8.21.1",
+    "ws": "8.21.3",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -16,7 +16,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.8.1"
+    "openclaw": ">=2026.9.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -79,7 +79,10 @@
               "flags": "--use-env",
               "description": "Use Mattermost environment credentials"
             },
-            "envVars": ["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]
+            "envVars": [
+              "MATTERMOST_BOT_TOKEN",
+              "MATTERMOST_URL"
+            ]
           }
         ]
       }
@@ -92,10 +95,10 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.8.1"
+      "pluginApi": ">=2026.9.1"
     },
     "build": {
-      "openclawVersion": "2026.8.1",
+      "openclawVersion": "2026.9.1",
       "bundledDist": false
     },
     "release": {

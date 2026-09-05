@@ -16,7 +16,7 @@ title: "Thinking levels"
   - xhigh ~ "ultrathink+" (GPT-5.2+ and Codex models, plus Anthropic Claude Opus 4.7+ effort)
   - adaptive → provider-managed adaptive thinking (supported for Claude 4.6 on Anthropic/Bedrock, Anthropic Claude Opus 4.7+, and Google Gemini dynamic thinking)
   - max → provider max reasoning (Anthropic Claude Opus 4.7+; Ollama maps this to its highest native `think` effort)
-  - ultra → provider max reasoning plus proactive sub-agent orchestration when the selected model/runtime supports it
+  - ultra → proactive sub-agent orchestration with runtime-selected reasoning when the selected model/runtime supports it
   - `x-high`, `x_high`, `extra-high`, `extra high`, and `extra_high` map to `xhigh`.
   - `highest` maps to `high`.
 - Provider notes:
@@ -30,9 +30,9 @@ title: "Thinking levels"
   - Direct DeepSeek V4 models expose `/think xhigh|max`; both map to DeepSeek `reasoning_effort: "max"` while lower non-off levels map to `high`.
   - OpenRouter-routed DeepSeek V4 models expose `/think xhigh` and send OpenRouter-supported `reasoning.effort` values instead of DeepSeek-native top-level `reasoning_effort`. Lower non-off levels map to `high`, and stored `max` overrides fall back to `xhigh`.
   - Ollama thinking-capable models expose `/think low|medium|high|max`. Verified full-effort Ollama Cloud families such as GLM 5.2 and DeepSeek V4 send each matching native `think` effort, including `max`; other models and local Ollama keep the compatible `high` mapping for `/think max`.
-  - OpenAI GPT models map `/think` through model-specific Responses API effort support. `/think off` sends `reasoning.effort: "none"` only when the target model supports it; otherwise OpenClaw omits the disabled reasoning payload instead of sending an unsupported value.
-  - GPT-5.6 Sol and Terra expose native `/think ultra` through the Codex runtime. GPT-5.6 Luna exposes levels through `max` because its Codex catalog does not advertise Ultra.
-  - The embedded OpenClaw runtime exposes logical `/think ultra` for GPT-5.6 Sol, Terra, and Luna. It sends provider max effort and adds run-scoped proactive sub-agent orchestration guidance.
+  - OpenAI GPT models map `/think` through the selected model and auth route's effort support. On supported OpenAI Platform/API-key routes, `/think off` sends explicit `reasoning.effort: "none"`, including when using the Codex runtime. Subscription routes that do not support `none` retain the provider or native runtime's default reasoning behavior; `off` does not guarantee zero reasoning there. Supervised native Codex threads keep their own thinking settings.
+  - GPT-6 Astra and GPT-5.6 Sol and Terra expose native `/think ultra` through the Codex runtime with either Platform API-key or ChatGPT subscription auth. OpenClaw preserves Ultra for ordinary turns; `/btw` intentionally runs at `off`. Codex owns proactive delegation and the model-specific inference effort (Astra uses `xhigh`). Ultra is not sent as a raw Responses API reasoning effort. GPT-5.6 Luna exposes levels through `max` because its Codex catalog does not advertise Ultra.
+  - The embedded OpenClaw runtime exposes logical `/think ultra` for GPT-6 Astra and GPT-5.6 Sol, Terra, and Luna. It sends provider max effort and adds run-scoped proactive sub-agent orchestration guidance.
   - Custom OpenAI-compatible catalog entries can opt into `/think xhigh` by setting `models.providers.<provider>.models[].compat.supportedReasoningEfforts` to include `"xhigh"`. This uses the same compat metadata that maps outbound OpenAI reasoning effort payloads, so menus, session validation, agent CLI, and `llm-task` agree with transport behavior.
   - Stale configured OpenRouter Hunter Alpha refs skip proxy reasoning injection because that retired route could return final answer text through reasoning fields.
   - Google Gemini maps `/think adaptive` to Gemini's provider-owned dynamic thinking. Gemini 3 requests omit a fixed `thinkingLevel`, while Gemini 2.5 requests send `thinkingBudget: -1`; fixed levels still map to the closest Gemini `thinkingLevel` or budget for that model family.
@@ -52,14 +52,14 @@ title: "Thinking levels"
 
 - Send a message that is **only** the directive (whitespace allowed), e.g. `/think:medium` or `/t high`.
 - That sticks for the current session (per-sender by default). Use `/think default` to clear the session override and inherit the configured/provider default; aliases include `inherit`, `clear`, `reset`, and `unpin`.
-- `/think off` stores an explicit off override. It disables thinking until you change or clear the session override.
+- `/think off` stores an explicit off override until you change or clear it. Whether the upstream model can disable thinking depends on the selected provider and auth route.
 - Confirmation reply is sent (`Thinking level set to high.` / `Thinking disabled.`). If the level is invalid (e.g. `/thinking big`), the command is rejected with a hint and the session state is left unchanged.
 - Send `/think` (or `/think:`) with no argument to see the current thinking level.
 
 ## Application by agent
 
 - **Embedded OpenClaw**: the resolved level is passed to the in-process OpenClaw agent runtime.
-- **Claude CLI backend**: concrete non-off levels are passed to Claude Code as `--effort` when using `claude-cli`; `adaptive` removes configured effort flags and delegates effective effort to Claude Code's environment, settings, and model defaults. See [CLI backends](/gateway/cli-backends).
+- **Claude CLI backend**: concrete levels are mapped to Claude Code `--effort`; models that allow fixed budgets also receive a matching `MAX_THINKING_TOKENS` launch value. `adaptive` removes both configured effort flags and fixed-budget overrides, delegating effective thinking to Claude Code's environment, settings, and model defaults. See [CLI backends](/gateway/cli-backends).
 
 ## Fast mode (/fast)
 
@@ -113,6 +113,7 @@ title: "Thinking levels"
 - Directive-only message toggles whether thinking blocks are shown in replies.
 - When enabled, reasoning is sent as a **separate message** prefixed with `Thinking`.
 - `stream`: streams reasoning while the reply is generating when the active channel supports reasoning previews, then sends the final answer without reasoning.
+- Control UI history shows saved reasoning only for `on`, with **View → Reasoning** enabled. `off` and `stream` keep it hidden, including after reload.
 - Alias: `/reason`.
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
 - Resolution order: inline directive, then session override, then per-agent default (`agents.entries.*.reasoningDefault`), then global default (`agents.defaults.reasoningDefault`), then fallback (`off`).
@@ -125,15 +126,16 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 
 ## Heartbeats
 
-- Heartbeat probe body is the configured heartbeat prompt (default: `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
+- Heartbeat probe body is the configured heartbeat prompt (default: `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
 - Heartbeat delivery uses the last outbound-capable non-reasoning payload. Separate reasoning or `Thinking` payloads remain internal, and a reasoning-only heartbeat result produces no alert.
 
 ## Web chat UI
 
-- The web chat thinking selector mirrors the session's stored level from the inbound session store/config when the page loads.
-- Picking another level writes the session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.
+- The web chat thinking selector shows the explicit session override, or the inherited configured/provider default when no override is stored.
+- Refreshing, reloading, or compacting a conversation keeps an inherited choice inherited; it does not store the resolved level as an override. While model metadata is loading, refreshes retain the known thinking profile for the same model and runtime.
+- Selecting a level on the effort slider writes an explicit session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.
 - Sending while model, reasoning, or speed picker changes are still being applied waits for every pending picker patch; if a change fails, the message stays unsent for review.
-- The first option is always the clear-override choice. It shows `Inherited: <resolved level>`, including `Inherited: Off` when inherited thinking is disabled.
+- The effort control displays the resolved level, such as `Medium` or `Off`. To clear an override and return to inheritance, send `/think default`.
 - Explicit picker choices use their direct level labels while preserving provider labels when present (for example `Maximum` for a provider-labeled `max` option).
 - The picker uses `thinkingLevels` returned by the gateway session row/defaults, with `thinkingOptions` kept as a legacy label list. The browser UI does not keep its own provider regex list; plugins own model-specific level sets.
 - `/think:<level>` still works and updates the same stored session level, so chat directives and the picker stay in sync.

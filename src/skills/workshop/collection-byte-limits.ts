@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import type { PreparedWorkspaceSkillMutation } from "../lifecycle/workspace-skill-write.js";
@@ -12,6 +11,7 @@ import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 export async function assertCollectionReadsCurrent(
   current: readonly WritableSkillCollectionEntry[],
   readSkillHashes: ReadonlyMap<string, string>,
+  plannedSkillKeys: ReadonlySet<string>,
   maxBytes: number,
 ): Promise<void> {
   let totalBytes = 0;
@@ -21,7 +21,8 @@ export async function assertCollectionReadsCurrent(
     if (totalBytes > maxBytes) {
       throw new Error(`Writable skill collection exceeds the ${maxBytes}-byte review limit.`);
     }
-    if (readSkillHashes.get(skill.name) !== sha256Hex(content)) {
+    const skillKey = skill.skillKey;
+    if (plannedSkillKeys.has(skillKey) && readSkillHashes.get(skillKey) !== sha256Hex(content)) {
       throw new Error(`Skill changed after it was read: ${skill.name}`);
     }
   }
@@ -33,37 +34,33 @@ export async function assertResultCollectionBytes(
   prepared: readonly PreparedWorkspaceSkillMutation[],
   maxBytes: number,
 ): Promise<void> {
-  const currentByName = new Map(current.map((skill) => [skill.name, skill]));
-  const preparedByName = new Map(
-    prepared.map((mutation) => [path.basename(mutation.skillDir), mutation]),
-  );
+  // Unlisted skills keep their current bytes; listed ones are dropped or replaced by `prepared`.
+  const plannedSkillKeys = new Set(plan.map((entry) => entry.skillKey));
   let totalBytes = 0;
-  for (const entry of plan) {
-    if (entry.action === "drop") {
-      continue;
+  for (const skill of current) {
+    if (!plannedSkillKeys.has(skill.skillKey)) {
+      totalBytes += (await fs.stat(skill.filePath)).size;
     }
-    const existing = currentByName.get(entry.name);
-    const mutation = preparedByName.get(entry.name);
-    if (mutation) {
-      totalBytes += Buffer.byteLength(mutation.skillFile.content);
-    } else if (existing) {
-      totalBytes += (await fs.stat(existing.filePath)).size;
-    } else {
-      throw new Error(`Resulting skill is missing: ${entry.name}`);
-    }
-    if (totalBytes > maxBytes) {
-      throw new Error(`Resulting skill collection exceeds the ${maxBytes}-byte review limit.`);
-    }
+  }
+  for (const mutation of prepared) {
+    totalBytes += Buffer.byteLength(mutation.skillFile.content);
+  }
+  if (totalBytes > maxBytes) {
+    throw new Error(`Resulting skill collection exceeds the ${maxBytes}-byte review limit.`);
   }
 }
 
 export async function assertCollectionMutationCurrent(
   current: readonly WritableSkillCollectionEntry[],
   expectedTreeHashes: ReadonlyMap<string, string>,
+  plannedSkillKeys: ReadonlySet<string>,
   prepared: readonly PreparedWorkspaceSkillMutation[],
 ): Promise<void> {
   for (const skill of current) {
-    const expectedTreeHash = expectedTreeHashes.get(skill.name);
+    if (!plannedSkillKeys.has(skill.skillKey)) {
+      continue;
+    }
+    const expectedTreeHash = expectedTreeHashes.get(skill.skillKey);
     if (
       !expectedTreeHash ||
       (await readSkillProposalTargetTreeSha256(skill.baseDir)) !== expectedTreeHash

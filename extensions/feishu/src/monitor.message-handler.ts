@@ -1,4 +1,4 @@
-// Feishu plugin module implements monitor.message handler behavior.
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { claimUnprocessedFeishuMessage, type FeishuMessageProcessingClaim } from "./dedup.js";
@@ -186,10 +186,9 @@ export function createFeishuMessageReceiveHandler({
 }: FeishuMessageReceiveHandlerContext): (
   data: unknown,
 ) => Promise<{ kind: "deferred" } | { kind: "failed-retryable"; error: unknown } | void> {
-  const inboundDebounceMs = channelRuntime.debounce.resolveInboundDebounceMs({
-    cfg,
-    channel: "feishu",
-  });
+  const readConfig = createRuntimeConfigReader(cfg);
+  const resolveDebounceMs = () =>
+    channelRuntime.debounce.resolveInboundDebounceMs({ cfg: readConfig(), channel: "feishu" });
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const enqueue = createSequentialQueue({
@@ -274,15 +273,16 @@ export function createFeishuMessageReceiveHandler({
 
   const inboundDebouncer =
     channelRuntime.debounce.createInboundDebouncer<FeishuMessageDebounceEntry>({
-      debounceMs: inboundDebounceMs,
+      debounceMs: resolveDebounceMs(),
+      resolveDebounceMs,
       buildKey: ({ event }) => {
         const chatId = event.message.chat_id?.trim();
         const senderId = resolveSenderDebounceId(event);
         if (!chatId || !senderId) {
           return null;
         }
-        const rootId = event.message.root_id?.trim();
-        const threadKey = rootId ? `thread:${rootId}` : "chat";
+        const threadId = event.message.root_id?.trim() || event.message.thread_id?.trim();
+        const threadKey = threadId ? `thread:${threadId}` : "chat";
         return `feishu:${accountId}:${chatId}:${threadKey}:${senderId}`;
       },
       shouldDebounce: ({ event }) => {

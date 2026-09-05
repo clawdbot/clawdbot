@@ -16,6 +16,7 @@ import {
   type SessionPickerChoice,
 } from "../tui/tui-session-picker.js";
 import type { ResumeCliOptions } from "./resume-cli.js";
+import { isTerminalInteractive } from "./terminal-interactivity.js";
 
 const RESUME_INTERACTIVE_TERMINAL_GUIDANCE =
   "Attaching to a session requires an interactive terminal. Re-run `openclaw resume [query]` from an interactive terminal.";
@@ -115,7 +116,7 @@ function parseHandoffSessionResolveResult(value: unknown): ParsedHandoffSessionR
 }
 
 function requireInteractiveResumeTerminal() {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+  if (!isTerminalInteractive()) {
     throw new Error(RESUME_INTERACTIVE_TERMINAL_GUIDANCE);
   }
 }

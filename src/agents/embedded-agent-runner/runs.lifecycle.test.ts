@@ -13,13 +13,16 @@ import {
   clearActiveEmbeddedRun,
   getActiveEmbeddedRunSnapshot,
   isEmbeddedAgentRunHandleActive,
-  isEmbeddedRunAbandoned,
+  markEmbeddedRunRecoveringTimeout,
   markActiveEmbeddedRunAbandoned,
+  resolveEmbeddedRunAbandonment,
+  resolveActiveEmbeddedRunOwner,
+  resolveActiveEmbeddedRunOwnerByRunId,
+  restoreEmbeddedRunTimeoutAbandonment,
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
-  waitForActiveEmbeddedRuns,
   waitForEmbeddedAgentRunEnd,
 } from "./runs.js";
 import { testing } from "./runs.test-support.js";
@@ -30,11 +33,13 @@ function createRunHandle(
   overrides: {
     abort?: () => void;
     isAbortable?: boolean;
+    isAborted?: () => boolean;
     isCompacting?: boolean;
     isStreaming?: boolean;
     isStopped?: () => boolean;
     messageInjection?: RunHandle["messageInjection"];
     runId?: string;
+    startedAtMs?: number;
     queueMessage?: RunHandle["queueMessage"];
     supportsQueueMessageImages?: boolean;
     supportsTranscriptCommitWait?: boolean;
@@ -45,10 +50,12 @@ function createRunHandle(
   const abort = overrides.abort ?? (() => {});
   return {
     runId: overrides.runId,
+    startedAtMs: overrides.startedAtMs,
     queueMessage: overrides.queueMessage ?? (async () => {}),
     ...(overrides.messageInjection ? { messageInjection: overrides.messageInjection } : {}),
     isStreaming: () => overrides.isStreaming ?? true,
     ...(overrides.isStopped ? { isStopped: overrides.isStopped } : {}),
+    ...(overrides.isAborted ? { isAborted: overrides.isAborted } : {}),
     ...(overrides.isAbortable !== undefined
       ? { isAbortable: () => overrides.isAbortable !== false }
       : {}),
@@ -156,7 +163,7 @@ describe("embedded-agent runner run lifecycle", () => {
   });
 
   it("waits for a replacement run under the same session id", async () => {
-    const firstHandle = createRunHandle();
+    const firstHandle = createRunHandle({ runId: "run-first" });
     const replacementHandle = createRunHandle();
     setActiveEmbeddedRun("session-replaced", firstHandle);
 
@@ -174,63 +181,6 @@ describe("embedded-agent runner run lifecycle", () => {
 
     clearActiveEmbeddedRun("session-replaced", replacementHandle);
     await expect(waitPromise).resolves.toBe(true);
-  });
-
-  it("waits for active runs to drain", async () => {
-    vi.useFakeTimers();
-    try {
-      const handle = createRunHandle();
-      setActiveEmbeddedRun("session-a", handle);
-      setTimeout(() => {
-        clearActiveEmbeddedRun("session-a", handle);
-      }, 500);
-
-      const waitPromise = waitForActiveEmbeddedRuns(1_000, { pollMs: 100 });
-      await vi.advanceTimersByTimeAsync(500);
-      const result = await waitPromise;
-
-      expect(result.drained).toBe(true);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
-  });
-
-  it("returns drained=false when timeout elapses", async () => {
-    vi.useFakeTimers();
-    try {
-      setActiveEmbeddedRun("session-a", createRunHandle());
-
-      const waitPromise = waitForActiveEmbeddedRuns(1_000, { pollMs: 100 });
-      await vi.advanceTimersByTimeAsync(1_000);
-      const result = await waitPromise;
-      expect(result.drained).toBe(false);
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
-  });
-
-  it("clamps oversized active-run drain poll intervals", async () => {
-    vi.useFakeTimers();
-    try {
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-      const handle = createRunHandle();
-      setActiveEmbeddedRun("session-a", handle);
-
-      const waitPromise = waitForActiveEmbeddedRuns(undefined, {
-        pollMs: Number.MAX_SAFE_INTEGER,
-      });
-      await Promise.resolve();
-
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-      clearActiveEmbeddedRun("session-a", handle);
-      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
-      await expect(waitPromise).resolves.toEqual({ drained: true });
-    } finally {
-      await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
-    }
   });
 
   it("shares active run state across distinct module instances", async () => {
@@ -255,6 +205,54 @@ describe("embedded-agent runner run lifecycle", () => {
     } finally {
       testing.resetActiveEmbeddedRuns();
     }
+  });
+
+  it("does not let a marker from another module instance restore a replacement recovery", async () => {
+    const runsA = await importFreshModule<typeof import("./runs.js")>(
+      import.meta.url,
+      "./runs.js?scope=recovery-a",
+    );
+    const runsB = await importFreshModule<typeof import("./runs.js")>(
+      import.meta.url,
+      "./runs.js?scope=recovery-b",
+    );
+    const sessionId = "session-cross-module-recovery";
+    const sessionKey = "agent:main:cross-module-recovery";
+    const firstHandle = createRunHandle({ runId: "run-first" });
+    runsA.setActiveEmbeddedRun(sessionId, firstHandle, sessionKey);
+    expect(
+      runsA.markActiveEmbeddedRunAbandoned({
+        sessionId,
+        handle: firstHandle,
+        sessionKey,
+        reason: "timeout",
+      }),
+    ).toBe(true);
+    const staleMarker = runsA.markEmbeddedRunRecoveringTimeout({
+      sessionId,
+      runId: "run-first",
+    });
+    expect(staleMarker).toBeDefined();
+
+    const replacementHandle = createRunHandle({ runId: "run-second" });
+    runsB.setActiveEmbeddedRun(sessionId, replacementHandle, sessionKey);
+    expect(
+      runsB.markActiveEmbeddedRunAbandoned({
+        sessionId,
+        handle: replacementHandle,
+        sessionKey,
+        reason: "timeout",
+      }),
+    ).toBe(true);
+    const currentMarker = runsB.markEmbeddedRunRecoveringTimeout({
+      sessionId,
+      runId: "run-second",
+    });
+    expect(currentMarker).toBeDefined();
+
+    expect(runsA.restoreEmbeddedRunTimeoutAbandonment(staleMarker!)).toBe(false);
+    expect(runsB.resolveEmbeddedRunAbandonment({ sessionId })).toBe("recovering_timeout");
+    expect(runsB.restoreEmbeddedRunTimeoutAbandonment(currentMarker!)).toBe(true);
   });
 
   it("tracks actual embedded handles separately from reply-operation ownership", () => {
@@ -304,16 +302,16 @@ describe("embedded-agent runner run lifecycle", () => {
       }),
     ).toBe(true);
 
-    expect(isEmbeddedRunAbandoned({ sessionId: "session-timeout" })).toBe(true);
-    expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(true);
-    expect(isEmbeddedRunAbandoned({ sessionFile })).toBe(true);
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-timeout" })).toBe("timeout");
+    expect(resolveEmbeddedRunAbandonment({ sessionKey: "agent:main:main" })).toBe("timeout");
+    expect(resolveEmbeddedRunAbandonment({ sessionFile })).toBe("timeout");
 
     const nextHandle = createRunHandle();
     setActiveEmbeddedRun("session-next", nextHandle, "agent:main:main", sessionFile);
 
-    expect(isEmbeddedRunAbandoned({ sessionId: "session-timeout" })).toBe(false);
-    expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(false);
-    expect(isEmbeddedRunAbandoned({ sessionFile })).toBe(false);
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-timeout" })).toBeUndefined();
+    expect(resolveEmbeddedRunAbandonment({ sessionKey: "agent:main:main" })).toBeUndefined();
+    expect(resolveEmbeddedRunAbandonment({ sessionFile })).toBeUndefined();
 
     expect(
       markActiveEmbeddedRunAbandoned({
@@ -325,7 +323,71 @@ describe("embedded-agent runner run lifecycle", () => {
     ).toBe(true);
     setActiveEmbeddedRun("session-third", createRunHandle(), "agent:main:main");
 
-    expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(false);
+    expect(resolveEmbeddedRunAbandonment({ sessionKey: "agent:main:main" })).toBeUndefined();
+  });
+
+  it("does not reject completions while a timeout is recovering", () => {
+    const handle = createRunHandle();
+    setActiveEmbeddedRun("session-recovering", handle, "agent:main:recovering");
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-recovering",
+        handle,
+        sessionKey: "agent:main:recovering",
+        reason: "timeout",
+      }),
+    ).toBe(true);
+
+    const recoveryMarker = markEmbeddedRunRecoveringTimeout({ sessionId: "session-recovering" });
+    expect(recoveryMarker).toMatchObject({ sessionId: "session-recovering" });
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-recovering" })).toBe(
+      "recovering_timeout",
+    );
+    expect(restoreEmbeddedRunTimeoutAbandonment(recoveryMarker!)).toBe(true);
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-recovering" })).toBe("timeout");
+  });
+
+  it("does not let a stale recovery marker mutate a replacement timeout", () => {
+    const firstHandle = createRunHandle({ runId: "run-first" });
+    setActiveEmbeddedRun("session-recovery-replaced", firstHandle, "agent:main:replaced");
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-recovery-replaced",
+        handle: firstHandle,
+        sessionKey: "agent:main:replaced",
+        reason: "timeout",
+      }),
+    ).toBe(true);
+    expect(
+      markEmbeddedRunRecoveringTimeout({
+        sessionId: "session-recovery-replaced",
+        runId: "run-other",
+      }),
+    ).toBeUndefined();
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-recovery-replaced" })).toBe(
+      "timeout",
+    );
+    const staleMarker = markEmbeddedRunRecoveringTimeout({
+      sessionId: "session-recovery-replaced",
+      runId: "run-first",
+    });
+    expect(staleMarker).toBeDefined();
+
+    const replacementHandle = createRunHandle({ runId: "run-second" });
+    setActiveEmbeddedRun("session-recovery-replaced", replacementHandle, "agent:main:replaced");
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId: "session-recovery-replaced",
+        handle: replacementHandle,
+        sessionKey: "agent:main:replaced",
+        reason: "timeout",
+      }),
+    ).toBe(true);
+
+    expect(restoreEmbeddedRunTimeoutAbandonment(staleMarker!)).toBe(false);
+    expect(resolveEmbeddedRunAbandonment({ sessionId: "session-recovery-replaced" })).toBe(
+      "timeout",
+    );
   });
 
   it("ignores timeout abandonment from a stale replaced handle", () => {
@@ -344,7 +406,7 @@ describe("embedded-agent runner run lifecycle", () => {
       }),
     ).toBe(false);
 
-    expect(isEmbeddedRunAbandoned({ sessionKey: "agent:main:main" })).toBe(false);
+    expect(resolveEmbeddedRunAbandonment({ sessionKey: "agent:main:main" })).toBeUndefined();
   });
 
   it("treats repeated clears for a completed run handle as idempotent", () => {
@@ -393,5 +455,36 @@ describe("embedded-agent runner run lifecycle", () => {
 
     clearActiveEmbeddedRun("session-snapshot", handle);
     expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toBeUndefined();
+  });
+
+  it("projects one active run identity from either registry key", () => {
+    const handle = createRunHandle({
+      runId: "run-recovery",
+      startedAtMs: 1_700_000_000_000,
+    });
+    setActiveEmbeddedRun("session-recovery", handle, "agent:main:main");
+
+    const expected = {
+      runId: "run-recovery",
+      sessionId: "session-recovery",
+      sessionKey: "agent:main:main",
+      startedAtMs: 1_700_000_000_000,
+    };
+    expect(resolveActiveEmbeddedRunOwner("session-recovery")).toMatchObject(expected);
+    expect(resolveActiveEmbeddedRunOwnerByRunId("run-recovery")).toMatchObject(expected);
+  });
+
+  it("rejects a stale recovered Stop after the session owner changes", () => {
+    const firstAbort = vi.fn();
+    const secondAbort = vi.fn();
+    const first = createRunHandle({ runId: "run-first", abort: firstAbort });
+    const second = createRunHandle({ runId: "run-second", abort: secondAbort });
+    setActiveEmbeddedRun("session-recovery", first, "agent:main:main");
+    const identity = resolveActiveEmbeddedRunOwnerByRunId("run-first");
+    setActiveEmbeddedRun("session-recovery", second, "agent:main:main");
+
+    expect(identity?.abort()).toBe(false);
+    expect(firstAbort).not.toHaveBeenCalled();
+    expect(secondAbort).not.toHaveBeenCalled();
   });
 });

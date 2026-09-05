@@ -6,19 +6,22 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerResolvedAgentDir } from "../agents/agent-dir-registry.js";
+import { getRuntimeAuthProfileStoreCredentialMutationToken } from "../agents/auth-profiles/mutation-lineage.js";
+import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
-  getRuntimeAuthProfileStoreCredentialMutationToken,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
   readPersistedAuthProfileStateRaw,
   readPersistedAuthProfileStoreRaw,
+  readPersistedSharedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
   writePersistedAuthProfileStateRaw,
 } from "../agents/auth-profiles/sqlite.js";
 import {
   getRuntimeAuthProfileStoreSnapshot,
+  loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
 import { testing as storeTesting } from "../agents/auth-profiles/store.test-support.js";
@@ -27,6 +30,10 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   buildTalkTestProviderConfig,
   TALK_TEST_PROVIDER_API_KEY_PATH,
@@ -306,6 +313,8 @@ describe("secrets apply", () => {
     storeTesting.resetRuntimeSnapshotPublisherForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
     await fs.rm(fixture.rootDir, { recursive: true, force: true });
   });
 
@@ -402,6 +411,98 @@ describe("secrets apply", () => {
     };
     expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
     expect(nextAuthStore.profiles["openai:default"].keyRef).toBeUndefined();
+  });
+
+  it("keeps shared and implicit agent writes inside the explicitly routed state root", async () => {
+    const ambientStateDir = path.join(fixture.rootDir, "ambient-state");
+    const ambientMainDir = path.join(ambientStateDir, "agents", "main", "agent");
+    const ambientOpsDir = path.join(ambientStateDir, "agents", "ops", "agent");
+    vi.stubEnv("OPENCLAW_STATE_DIR", ambientStateDir);
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:ambient-shared": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-ambient-shared",
+          },
+        },
+      },
+      ambientMainDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:ambient-ops": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-ambient-ops",
+          },
+        },
+      },
+      ambientOpsDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    await writeJsonFile(fixture.configPath, {
+      agents: { entries: { ops: {} } },
+      models: { providers: { openai: createOpenAiProviderConfig() } },
+    });
+    const stateDatabase = openOpenClawStateDatabase({ env: fixture.env }).db;
+    stateDatabase
+      .prepare(
+        `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+         VALUES ('auth.sharedStore', ?, 1)`,
+      )
+      .run(JSON.stringify({ location: "state-db" }));
+    stateDatabase
+      .prepare(
+        "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, 1)",
+      )
+      .run(
+        "authProfiles.store",
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:target-shared": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-target-shared",
+            },
+          },
+        }),
+      );
+    noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, fixture.env);
+
+    await runSecretsApply({
+      plan: createPlan({
+        targets: [createOpenAiProviderTarget()],
+        options: createOneWayScrubOptions(),
+      }),
+      env: fixture.env,
+      write: true,
+    });
+
+    expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual({
+      version: 1,
+      profiles: {
+        "openai:target-shared": {
+          type: "api_key",
+          provider: "openai",
+        },
+      },
+    });
+    expect(readPersistedAuthProfileStoreRaw(ambientMainDir)).toMatchObject({
+      profiles: { "openai:ambient-shared": { key: "sk-ambient-shared" } },
+    });
+    expect(readPersistedAuthProfileStoreRaw(ambientOpsDir)).toMatchObject({
+      profiles: { "openai:ambient-ops": { key: "sk-ambient-ops" } },
+    });
+    expect(
+      readPersistedAuthProfileStoreRaw(path.join(fixture.stateDir, "agents", "ops", "agent")),
+    ).toBeNull();
   });
 
   it("skips exec SecretRef checks during dry-run unless explicitly allowed", async () => {
@@ -589,6 +690,62 @@ describe("secrets apply", () => {
       provider: "default",
       id: "OPENAI_API_KEY",
     });
+  });
+
+  it("preserves relocated shared inheritance when applying an agent SecretRef", async () => {
+    const sharedDir = path.join(fixture.rootDir, "relocated-shared");
+    const agentDir = path.join(fixture.rootDir, "ops-agent");
+    fixture.env.OPENCLAW_AGENT_DIR = sharedDir;
+    vi.stubEnv("OPENCLAW_STATE_DIR", fixture.stateDir);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", sharedDir);
+    noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" }, fixture.env);
+    const shared: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:inherited": { type: "api_key", provider: "openai", key: "fake-inherited" },
+      },
+    };
+    const local: AuthProfileStore = {
+      version: 1,
+      profiles: { "openai:local": { type: "api_key", provider: "openai", key: "fake-local" } },
+    };
+    registerResolvedAgentDir({ agentId: "ops", agentDir });
+    await writeJsonFile(resolveAuthProfileDatabasePath(sharedDir), shared);
+    await writeJsonFile(resolveAuthProfileDatabasePath(agentDir), local);
+    await writeJsonFile(fixture.configPath, { agents: { entries: { ops: { agentDir } } } });
+    replaceRuntimeAuthProfileStoreSnapshots([
+      { agentDir, store: loadAuthProfileStoreWithoutExternalProfiles(agentDir) },
+    ]);
+    expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:inherited"]).toEqual(
+      shared.profiles["openai:inherited"],
+    );
+    await runSecretsApply({
+      plan: createPlan({
+        targets: [
+          {
+            type: "auth-profiles.api_key.key",
+            path: "profiles.openai:local.key",
+            pathSegments: ["profiles", "openai:local", "key"],
+            agentId: "ops",
+            ref: OPENAI_API_KEY_ENV_REF,
+          },
+        ],
+        options: {
+          scrubEnv: false,
+          scrubAuthProfilesForProviderTargets: false,
+          scrubLegacyAuthJson: false,
+        },
+      }),
+      env: fixture.env,
+      write: true,
+    });
+    expect(readPersistedAuthProfileStoreRaw(agentDir)).toMatchObject({
+      profiles: { "openai:local": { keyRef: OPENAI_API_KEY_ENV_REF } },
+    });
+    expect(readPersistedAuthProfileStoreRaw(sharedDir)).toEqual(shared);
+    const runtime = getRuntimeAuthProfileStoreSnapshot(agentDir);
+    expect(runtime?.profiles["openai:inherited"]).toEqual(shared.profiles["openai:inherited"]);
+    expect(runtime?.profiles["openai:default"]).toBeUndefined();
   });
 
   it("rolls back committed auth rows when runtime publication fails", async () => {
@@ -1163,7 +1320,12 @@ describe("secrets apply", () => {
           openai: {
             ...createOpenAiProviderConfig(),
             headers: {
-              "x-api-key": "sk-header-plaintext",
+              "X.Trace": "sk-header-plaintext",
+            },
+            request: {
+              headers: {
+                "X.Request.Trace": "sk-request-header-plaintext",
+              },
             },
           },
         },
@@ -1173,8 +1335,23 @@ describe("secrets apply", () => {
     const plan = createPlan({
       targets: [
         createOpenAiProviderHeaderTarget({
-          pathSegments: ["models", "providers", "openai", "headers", "x-api-key"],
+          path: 'models.providers.openai.headers["X.Trace"]',
+          pathSegments: ["models", "providers", "openai", "headers", "X.Trace"],
         }),
+        {
+          ...createOpenAiProviderHeaderTarget({
+            path: 'models.providers.openai.request.headers["X.Request.Trace"]',
+            pathSegments: [
+              "models",
+              "providers",
+              "openai",
+              "request",
+              "headers",
+              "X.Request.Trace",
+            ],
+          }),
+          type: "models.providers.request.headers",
+        },
       ],
       options: {
         scrubEnv: false,
@@ -1191,11 +1368,15 @@ describe("secrets apply", () => {
         providers?: {
           openai?: {
             headers?: Record<string, unknown>;
+            request?: { headers?: Record<string, unknown> };
           };
         };
       };
     };
-    expect(nextConfig.models?.providers?.openai?.headers?.["x-api-key"]).toEqual(
+    expect(nextConfig.models?.providers?.openai?.headers?.["X.Trace"]).toEqual(
+      OPENAI_API_KEY_ENV_REF,
+    );
+    expect(nextConfig.models?.providers?.openai?.request?.headers?.["X.Request.Trace"]).toEqual(
       OPENAI_API_KEY_ENV_REF,
     );
   });

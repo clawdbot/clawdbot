@@ -7,10 +7,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { removeRegistryEntry, updateRegistry } from "../agents/sandbox/registry.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
-import {
-  readWorkspaceStateSnapshot,
-  resolveWorkspaceStateIdentity,
-} from "../agents/workspace-state-store.js";
+import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
+import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import {
   listSessionEntryKeysReadOnly,
   upsertSessionEntryCore,

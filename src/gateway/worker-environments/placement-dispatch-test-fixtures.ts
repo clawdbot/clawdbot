@@ -33,20 +33,30 @@ export const REQUEST: WorkerDispatchRequest = {
   sessionKey: "agent:main:session-1",
   agentId: "main",
   profileId: "development",
+  executionMode: "worker-turn",
 };
+
+export function seedProvisioningPlacement(
+  store: PlacementStore,
+  environmentId: string,
+  executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
+): WorkerSessionPlacementRecord {
+  const requested = store.startDispatch({ ...REQUEST, executionMode });
+  return store.transition({
+    sessionId: REQUEST.sessionId,
+    from: "requested",
+    to: "provisioning",
+    expectedGeneration: requested.generation,
+    patch: { environmentId },
+  });
+}
 
 export function seedSyncingPlacement(
   store: PlacementStore,
   environmentId: string,
+  executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
 ): WorkerSessionPlacementRecord {
-  let current = store.startDispatch(REQUEST);
-  current = store.transition({
-    sessionId: REQUEST.sessionId,
-    from: "requested",
-    to: "provisioning",
-    expectedGeneration: current.generation,
-    patch: { environmentId },
-  });
+  let current = seedProvisioningPlacement(store, environmentId, executionMode);
   current = store.transition({
     sessionId: REQUEST.sessionId,
     from: "provisioning",
@@ -60,8 +70,9 @@ export function seedSyncingPlacement(
 export function seedStartingPlacement(
   store: PlacementStore,
   environmentId: string,
+  executionMode: WorkerDispatchRequest["executionMode"] = REQUEST.executionMode,
 ): WorkerSessionPlacementRecord {
-  let current = seedSyncingPlacement(store, environmentId);
+  let current = seedSyncingPlacement(store, environmentId, executionMode);
   current = store.transition({
     sessionId: REQUEST.sessionId,
     from: "syncing",
@@ -77,9 +88,13 @@ export function seedStartingPlacement(
 
 export function seedActivePlacement(
   store: PlacementStore,
-  params: { environmentId: string; ownerEpoch: number },
+  params: {
+    environmentId: string;
+    ownerEpoch: number;
+    executionMode?: WorkerDispatchRequest["executionMode"];
+  },
 ): WorkerSessionPlacementRecord {
-  const current = seedStartingPlacement(store, params.environmentId);
+  const current = seedStartingPlacement(store, params.environmentId, params.executionMode);
   return store.transition({
     sessionId: REQUEST.sessionId,
     from: "starting",
@@ -112,6 +127,8 @@ export function createDispatchEnvironmentFixtures(generation = 1) {
     profileId: "development",
     profileSnapshot,
     provisionOperationId: "provision-1",
+    nodeSetupId: null,
+    nodeDeviceId: null,
     sharedHost: false,
     bootstrapReceipt,
     teardownTerminalState: null,

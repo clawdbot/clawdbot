@@ -1,33 +1,42 @@
 // Focused incomplete-turn behavior coverage.
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  runEmbeddedAgent,
-  makeLastAssistant,
+  buildEmbeddedRunnerAssistant,
+  makeEmbeddedRunnerAttempt,
+} from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import {
   resolveIncompleteTurnPayloadText,
-  makeRunParams,
-  makeIncompleteTurnParams,
-  expectWarnMessageWith,
-  expectNoWarnMessageWith,
-} from "./run.incomplete-turn.test-helpers.js";
-import {
-  mockedBuildEmbeddedRunPayloads,
-  mockedClassifyFailoverReason,
-  mockedRunEmbeddedAttempt,
-  resetRunIncompleteTurnOwnerMocks,
-} from "./run.incomplete-turn.test-support.js";
-import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
-import {
-  resolveReplayInvalidFlag,
   shouldRetryMissingAssistantTurn,
 } from "./run/incomplete-turn-resolution.js";
-import { normalizeEmbeddedRunAttemptResult } from "./run/run-attempt-result.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
-describe("runEmbeddedAgent incomplete-turn safety", () => {
-  beforeEach(() => {
-    resetRunIncompleteTurnOwnerMocks();
-  });
+type LastAssistant = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
 
+function makeLastAssistant(overrides: Record<string, unknown> = {}): LastAssistant {
+  return { ...buildEmbeddedRunnerAssistant({}), ...overrides } as LastAssistant;
+}
+
+function makeAttemptResult(
+  overrides: Partial<EmbeddedRunAttemptResult> = {},
+): EmbeddedRunAttemptResult {
+  return makeEmbeddedRunnerAttempt(overrides);
+}
+
+function makeIncompleteTurnParams(
+  attemptOverrides: Partial<EmbeddedRunAttemptResult> = {},
+  overrides: Partial<Omit<Parameters<typeof resolveIncompleteTurnPayloadText>[0], "attempt">> = {},
+): Parameters<typeof resolveIncompleteTurnPayloadText>[0] {
+  return {
+    payloadCount: 0,
+    aborted: false,
+    externalAbort: false,
+    timedOut: false,
+    attempt: makeEmbeddedRunnerAttempt(attemptOverrides),
+    ...overrides,
+  };
+}
+
+describe("incomplete-turn payload resolution", () => {
   it("surfaces no-visible-answer recovery for app-server interrupted tool-only output", () => {
     const interruptedToolOnlyAttempt = makeAttemptResult({
       assistantTexts: [],
@@ -51,6 +60,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
       payloadCount: interruptedToolOnlyAttempt.assistantTexts.length,
       aborted: false,
+      externalAbort: false,
       timedOut: false,
       attempt: interruptedToolOnlyAttempt,
     });
@@ -274,94 +284,5 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     );
 
     expect(incompleteTurnText).toBeNull();
-  });
-
-  it("surfaces an error for tool-use terminal turn with pre-tool text via runEmbeddedAgent (#76477)", async () => {
-    mockedClassifyFailoverReason.mockReturnValue(null);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        assistantTexts: ["Initial analysis of the issue..."],
-        toolMetas: [{ toolName: "read", meta: "path=src/index.ts" }],
-        lastAssistant: {
-          stopReason: "toolUse",
-          provider: "anthropic",
-          model: "sonnet-4.6",
-          content: [
-            { type: "text", text: "Initial analysis of the issue..." },
-            { type: "tool_use", id: "tool_1", name: "read", input: { path: "src/index.ts" } },
-          ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-      }),
-    );
-
-    const result = await runEmbeddedAgent(
-      makeRunParams("run-tool-use-dropped-final-text", {
-        provider: "anthropic",
-        model: "sonnet-4.6",
-      }),
-    );
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(result.payloads?.[0]?.isError).toBe(true);
-    expect(result.payloads?.[0]?.text).toContain("couldn't generate a response");
-    expectWarnMessageWith("incomplete turn detected");
-  });
-
-  it("delivers the current final answer when the session assistant is stale (#80918)", async () => {
-    mockedClassifyFailoverReason.mockReturnValue(null);
-    const finalText = "The requested update is complete.";
-    mockedBuildEmbeddedRunPayloads.mockReturnValueOnce([{ text: finalText }]);
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        assistantTexts: [finalText],
-        toolMetas: [{ toolName: "update_plan", replaySafe: true }],
-        lastAssistant: makeLastAssistant({
-          stopReason: "toolUse",
-          content: [{ type: "tool_use", id: "tool_1", name: "update_plan", input: {} }],
-          usage: { input: 100, output: 5, total: 105 },
-        }),
-        currentAttemptAssistant: makeLastAssistant({
-          content: [{ type: "text", text: finalText }],
-          usage: { input: 200, output: 20, total: 220 },
-        }),
-      }),
-    );
-
-    const result = await runEmbeddedAgent(makeRunParams("run-current-assistant-after-tool-use"));
-
-    expect(result.payloads).toEqual([{ text: finalText }]);
-    expect(mockedBuildEmbeddedRunPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        currentAssistant: expect.objectContaining({
-          stopReason: "stop",
-          content: [{ type: "text", text: finalText }],
-        }),
-        lastAssistant: expect.objectContaining({
-          stopReason: "stop",
-          content: [{ type: "text", text: finalText }],
-        }),
-      }),
-    );
-    expect(result.meta.finalAssistantVisibleText).toBe(finalText);
-    expect(result.meta.stopReason).toBe("stop");
-    expect(result.meta.agentMeta?.lastCallUsage).toMatchObject({
-      input: 200,
-      output: 20,
-      total: 220,
-    });
-    expectNoWarnMessageWith("incomplete turn detected");
-  });
-
-  it("treats missing replay metadata as replay-invalid", () => {
-    const attempt = makeAttemptResult();
-    delete (attempt as Partial<EmbeddedRunAttemptResult>).replayMetadata;
-
-    const normalizedAttempt = normalizeEmbeddedRunAttemptResult(attempt);
-
-    expect(normalizedAttempt.replayMetadata).toEqual({
-      hadPotentialSideEffects: true,
-      replaySafe: false,
-    });
-    expect(resolveReplayInvalidFlag({ attempt: normalizedAttempt })).toBe(true);
   });
 });

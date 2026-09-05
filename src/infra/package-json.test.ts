@@ -22,7 +22,7 @@ describe("package-json helpers", () => {
         JSON.stringify({
           version: " 1.2.3 ",
           name: "  @openclaw/demo  ",
-          packageManager: " pnpm@10.8.1 ",
+          packageManager: " pnpm@12.0.0 ",
         }),
         "utf8",
       );
@@ -32,7 +32,7 @@ describe("package-json helpers", () => {
         expectedVersion: "1.2.3",
         expectedName: "@openclaw/demo",
       });
-      await expect(readPackageManagerSpec(root)).resolves.toBe("pnpm@10.8.1");
+      await expect(readPackageManagerSpec(root)).resolves.toBe("pnpm@12.0.0");
     });
   });
 

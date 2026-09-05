@@ -1,9 +1,14 @@
 import { afterEach, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 export const CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS = 800;
+
+function configGatewayHello(): GatewayHelloOk {
+  return gatewayHelloForMethods(["config.schema", "config.set", "config.apply", "config.patch"]);
+}
 
 export function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -21,7 +26,7 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
     phase: ApplicationGatewayPhase;
     sessionKey: string;
     hello?: GatewayHelloOk | null;
-  } = { client, phase: "connected", sessionKey: "main" };
+  } = { client, phase: "connected", sessionKey: "main", hello: configGatewayHello() };
   const listeners = new Set<(next: typeof snapshot) => void>();
   return {
     gateway: {
@@ -42,7 +47,7 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
         client: nextClient,
         phase: connected ? "connected" : "reconnecting",
         sessionKey: "main",
-        hello,
+        hello: hello === undefined ? configGatewayHello() : hello,
       };
       for (const listener of listeners) {
         listener(snapshot);

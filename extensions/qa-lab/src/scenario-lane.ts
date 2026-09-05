@@ -29,21 +29,19 @@ function resolveQaScenarioLaneChannels(params: {
   if (selectedChannel) {
     return [selectedChannel];
   }
-  const scenarioChannel = params.scenario.execution.channel?.trim().toLowerCase();
-  if (scenarioChannel) {
-    return [scenarioChannel];
+  const declaredChannels = params.scenario.execution.channels ?? [];
+  if (declaredChannels.length === 1) {
+    return declaredChannels;
   }
   if (params.scenario.execution.kind === "flow") {
-    const driverChannels = params.scenario.execution.channels?.filter(
-      (channel) => channel !== "qa-channel",
-    );
-    const supportedChannels = driverChannels?.filter(
+    const driverChannels = declaredChannels.filter((channel) => channel !== "qa-channel");
+    const supportedChannels = driverChannels.filter(
       (channel) => !params.supportsChannel || params.supportsChannel(channel),
     );
-    if (supportedChannels?.length) {
+    if (supportedChannels.length) {
       return supportedChannels;
     }
-    if (driverChannels?.length) {
+    if (driverChannels.length) {
       return driverChannels;
     }
   }
@@ -102,14 +100,9 @@ export function describeQaProviderLaneMismatches(params: {
     effectiveChannelDriver === "qa-channel"
       ? "qa-channel"
       : params.channel?.trim().toLowerCase() || undefined;
-  const scenarioChannel = params.scenario.execution.channel?.trim().toLowerCase();
-  if (scenarioChannel && effectiveChannel !== scenarioChannel) {
-    mismatches.push(`channel=${scenarioChannel}`);
-  }
-  const allowedChannels =
-    params.scenario.execution.kind === "flow" ? params.scenario.execution.channels : undefined;
-  if (allowedChannels && !allowedChannels.includes(effectiveChannel ?? "")) {
-    mismatches.push(`channel=${allowedChannels.join("|")}`);
+  const declaredChannels = params.scenario.execution.channels ?? [];
+  if (declaredChannels.length > 0 && !declaredChannels.includes(effectiveChannel ?? "")) {
+    mismatches.push(`channel=${declaredChannels.join("|")}`);
   }
   if (
     params.scenario.execution.kind === "flow" &&

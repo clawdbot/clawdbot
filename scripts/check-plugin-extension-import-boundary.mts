@@ -28,11 +28,6 @@ type PluginExtensionInventoryEntry = {
   resolvedPath: string | null;
   reason: string;
 };
-type ScriptIo = {
-  stdout: { write(chunk: string): unknown };
-  stderr: { write(chunk: string): unknown };
-};
-
 function compareEntries(left: PluginExtensionInventoryEntry, right: PluginExtensionInventoryEntry) {
   return (
     left.file.localeCompare(right.file) ||
@@ -124,35 +119,19 @@ const formatInventoryHuman = (inventory: PluginExtensionInventoryEntry[]) =>
 /**
  * Runs the plugin-extension import boundary check.
  */
-async function runPluginExtensionImportBoundaryCheck(
-  argv: string[] = process.argv.slice(2),
-  streams: ScriptIo = { stdout: process.stdout, stderr: process.stderr },
-): Promise<0 | 1> {
-  const json = argv.includes("--json");
+async function runPluginExtensionImportBoundaryCheck(): Promise<0 | 1> {
   const actual = await collectPluginExtensionImportBoundaryInventory();
 
-  if (json) {
-    writeLine(streams.stdout, JSON.stringify(actual, null, 2));
-    return actual.length > 0 ? 1 : 0;
-  }
-
-  writeLine(streams.stdout, formatInventoryHuman(actual));
+  writeLine(process.stdout, formatInventoryHuman(actual));
   if (actual.length === 0) {
     return 0;
   }
-  writeLine(streams.stderr, `${ruleText} violations found (${actual.length}).`);
+  writeLine(process.stderr, `${ruleText} violations found (${actual.length}).`);
   return 1;
 }
 
-/**
- * Entrypoint wrapper for the plugin-extension import boundary check.
- */
-export async function main(argv?: string[], io?: ScriptIo): Promise<0 | 1> {
-  const exitCode = await runPluginExtensionImportBoundaryCheck(argv, io);
-  if (!io) {
-    process.exitCode = exitCode;
-  }
-  return exitCode;
+async function main(): Promise<void> {
+  process.exitCode = await runPluginExtensionImportBoundaryCheck();
 }
 
 runAsScript(import.meta.url, main);

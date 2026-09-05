@@ -100,6 +100,7 @@ function buildMcpShowPrivateRouteRequest(params: HandleCommandsParams): ExecAppr
       config: params.cfg,
     });
   return {
+    approvalKind: "exec",
     id: "mcp-show-private-route",
     request: {
       command: params.command.commandBodyNormalized,

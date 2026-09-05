@@ -37,6 +37,44 @@ public enum TalkConfigParsing {
             normalizedPayload: false)
     }
 
+    public static func firstNonEmptyString(
+        _ config: [String: AnyCodable]?,
+        keys: [String]) -> String?
+    {
+        guard let config else { return nil }
+        for key in keys {
+            let value = config[key]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value?.isEmpty == false { return value }
+        }
+        return nil
+    }
+
+    public static func singleRealtimeProviderID(_ providers: [String: AnyCodable]?) -> String? {
+        guard let providers, providers.count == 1 else { return nil }
+        let provider = providers.keys.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return provider?.isEmpty == false ? provider : nil
+    }
+
+    public static func realtimeProviderConfig(
+        providers: [String: AnyCodable]?,
+        provider: String?) -> [String: AnyCodable]?
+    {
+        guard let providers else { return nil }
+        if let provider {
+            if let exact = providers[provider]?.dictionaryValue {
+                return exact
+            }
+            return providers.first { key, _ in
+                key.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .caseInsensitiveCompare(provider) == .orderedSame
+            }?.value.dictionaryValue
+        }
+        if providers.count == 1 {
+            return providers.values.first?.dictionaryValue
+        }
+        return nil
+    }
+
     public static func resolvedPositiveInt(_ value: AnyCodable?, fallback: Int) -> Int {
         if let timeout = value?.intValue, timeout > 0 {
             return timeout

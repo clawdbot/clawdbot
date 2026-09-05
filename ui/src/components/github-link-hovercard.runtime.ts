@@ -2,23 +2,27 @@ import { initialState, Task } from "@lit/task";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { ReactiveElement } from "lit";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { html, nothing, ReactiveElement, render, type TemplateResult } from "lit";
 import type { ControlUiGitHubPreview } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n, t } from "../i18n/index.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import "../styles/github-link-hovercard.css";
 import {
   GITHUB_HOVERCARD_OPEN_DELAY_MS,
   githubLinkAnchorFromEvent,
+  gitHubProfileUrl,
   parseGitHubLinkTarget,
   type GitHubLinkTarget,
 } from "./github-link-target.ts";
+import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
 
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
 const CACHE_LIMIT = 100;
-const VIEWPORT_PADDING = 12;
-const CARD_GAP = 10;
 
 type GitHubPreview = GitHubLinkTarget & ControlUiGitHubPreview;
 
@@ -29,7 +33,8 @@ type PreviewState = {
 
 type CacheEntry = {
   expiresAt: number;
-  promise: Promise<GitHubPreview>;
+  promise: Promise<ControlUiGitHubPreview>;
+  signal: AbortSignal;
 };
 
 let nextHovercardId = 0;
@@ -48,7 +53,26 @@ function safeAvatarDataUrl(value: unknown): string | undefined {
     : undefined;
 }
 
-function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): GitHubPreview {
+/** Gateway data is untrusted here: keep only well-formed logins and inlined avatars. */
+function parseCoAuthors(value: unknown): { login: string; avatarDataUrl?: string }[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const parsed = value.flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+    const login = readNonBlankString(entry.login);
+    if (!login) {
+      return [];
+    }
+    const avatarDataUrl = safeAvatarDataUrl(entry.avatarDataUrl);
+    return [avatarDataUrl ? { login, avatarDataUrl } : { login }];
+  });
+  return parsed.length > 0 ? parsed : undefined;
+}
+
+function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): ControlUiGitHubPreview {
   if (!isRecord(value)) {
     throw new Error("GitHub response was not an object");
   }
@@ -63,11 +87,11 @@ function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): GitHubP
     throw new Error("GitHub response did not match the requested link");
   }
   return {
-    ...target,
     additions: asFiniteNumber(value.additions),
     avatarDataUrl: safeAvatarDataUrl(value.avatarDataUrl),
-    changedFiles: asFiniteNumber(value.changedFiles),
     closedAt: readNonBlankString(value.closedAt),
+    coAuthorCount: asFiniteNumber(value.coAuthorCount),
+    coAuthors: parseCoAuthors(value.coAuthors),
     comments: asFiniteNumber(value.comments),
     createdAt: requiredString(value, "createdAt"),
     deletions: asFiniteNumber(value.deletions),
@@ -105,116 +129,155 @@ function previewState(preview: GitHubPreview): PreviewState {
     : { label: t("githubPreview.states.closed"), tone: "purple" };
 }
 
-function appendTextElement(
-  parent: HTMLElement,
-  tagName: keyof HTMLElementTagNameMap,
-  className: string,
-  text: string,
-): HTMLElement {
-  const element = document.createElement(tagName);
-  element.className = className;
-  element.textContent = text;
-  parent.append(element);
-  return element;
+function renderAvatar(dataUrl: string | undefined) {
+  return dataUrl
+    ? html`<img
+        class="github-link-hovercard__avatar"
+        alt=""
+        decoding="async"
+        referrerpolicy="no-referrer"
+        src=${dataUrl}
+      />`
+    : nothing;
 }
 
-function appendMetric(parent: HTMLElement, className: string, text: string): void {
-  appendTextElement(parent, "span", `github-link-hovercard__metric ${className}`, text);
+function renderCoAuthors(preview: GitHubPreview) {
+  const coAuthors = preview.coAuthors ?? [];
+  const total = preview.coAuthorCount ?? coAuthors.length;
+  if (coAuthors.length === 0) {
+    return nothing;
+  }
+  // Counted from rendered faces, not fetched people: avatar inlining is optional,
+  // and a co-author with no face must fall into "+N" rather than disappear.
+  const faces = coAuthors.filter((coAuthor) => coAuthor.avatarDataUrl).length;
+  const hidden = Math.max(0, total - faces);
+  if (faces === 0 && hidden === 0) {
+    return nothing;
+  }
+  const label = t("githubPreview.coAuthors", {
+    logins: coAuthors.map((coAuthor) => coAuthor.login).join(", "),
+  });
+  return html`<span
+    class="github-link-hovercard__coauthors"
+    title=${label}
+    role="img"
+    aria-label=${label}
+    >${coAuthors.map((coAuthor) => renderAvatar(coAuthor.avatarDataUrl))}${
+      hidden > 0
+        ? html`<span class="github-link-hovercard__coauthors-more">+${hidden}</span>`
+        : nothing
+    }</span
+  >`;
+}
+
+function renderCardLink(className: string, href: string, content: string | TemplateResult) {
+  return html`<a
+    class=${className}
+    href=${href}
+    target=${EXTERNAL_LINK_TARGET}
+    rel=${buildExternalLinkRel()}
+    >${content}</a
+  >`;
 }
 
 function renderLoading(card: HTMLDivElement): void {
-  card.replaceChildren();
   card.dataset.loading = "true";
   card.removeAttribute("data-state");
-  appendTextElement(card, "div", "github-link-hovercard__loading", t("githubPreview.loading"));
+  card.setAttribute("aria-label", t("githubPreview.loading"));
+  const rows = [
+    ["header", ["badge", "repo", "time"]],
+    ["title", ["title"]],
+    ["footer", ["author", "metrics"]],
+  ] as const;
+  render(
+    html`<div class="github-link-hovercard__skeleton" aria-hidden="true">
+      ${rows.map(
+        ([rowClass, parts]) =>
+          html`<div class=${`github-link-hovercard__${rowClass}`}>
+            ${parts.map(
+              (part) =>
+                html`<span class=${`skeleton github-link-hovercard__placeholder--${part}`}></span>`,
+            )}
+          </div>`,
+      )}
+    </div>`,
+    card,
+  );
 }
 
-function renderUnavailable(card: HTMLDivElement): void {
-  card.replaceChildren();
+function renderUnavailable(card: HTMLDivElement, error: string): void {
   card.dataset.loading = "false";
   card.dataset.state = "unavailable";
-  appendTextElement(
+  const label = t("githubPreview.unavailable");
+  card.setAttribute("aria-label", label);
+  const showError = error && error !== label;
+  const errorId = `${card.id}-error`;
+  if (showError) {
+    card.setAttribute("aria-describedby", errorId);
+  }
+  render(
+    html`<div class="github-link-hovercard__unavailable">
+      <div>${label}</div>
+      ${
+        showError
+          ? html`<div class="github-link-hovercard__error" id=${errorId}>${error}</div>`
+          : nothing
+      }
+    </div>`,
     card,
-    "div",
-    "github-link-hovercard__unavailable",
-    t("githubPreview.unavailable"),
   );
 }
 
 function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
-  card.replaceChildren();
   card.dataset.loading = "false";
   const state = previewState(preview);
   card.dataset.state = state.tone;
-
-  const header = document.createElement("div");
-  header.className = "github-link-hovercard__header";
-  const badge = document.createElement("span");
-  badge.className = "github-link-hovercard__state";
-  badge.dataset.tone = state.tone;
-  const stateDot = document.createElement("span");
-  stateDot.className = "github-link-hovercard__state-dot";
-  stateDot.setAttribute("aria-hidden", "true");
-  badge.append(stateDot, document.createTextNode(state.label));
-  header.append(badge);
-  appendTextElement(
-    header,
-    "span",
-    "github-link-hovercard__repo",
-    `${preview.owner}/${preview.repo} #${preview.number}`,
+  const comments = preview.comments ?? 0;
+  render(
+    html`<div class="github-link-hovercard__header">
+        <span class="github-link-hovercard__state" data-tone=${state.tone}
+          ><span class="github-link-hovercard__state-dot" aria-hidden="true"></span
+          >${state.label}</span
+        >
+        ${renderCardLink(
+          "github-link-hovercard__repo",
+          preview.href,
+          `${preview.owner}/${preview.repo} #${preview.number}`,
+        )}
+        <time class="github-link-hovercard__time"
+          >${formatRelativeTimestamp(Date.parse(preview.updatedAt))}</time
+        >
+      </div>
+      ${renderCardLink("github-link-hovercard__title", preview.href, preview.title)}
+      <div class="github-link-hovercard__footer">
+        ${renderCardLink(
+          "github-link-hovercard__author",
+          gitHubProfileUrl(preview.login),
+          html`${renderAvatar(preview.avatarDataUrl)}${preview.login}`,
+        )}${renderCoAuthors(preview)}
+        ${
+          preview.kind === "pull"
+            ? html`<span
+                class="github-link-hovercard__metrics github-link-hovercard__metrics--diff"
+              >
+                <span class="github-link-hovercard__metric github-link-hovercard__metric--additions"
+                  >+${preview.additions ?? 0}</span
+                >
+                <span class="github-link-hovercard__metric github-link-hovercard__metric--deletions"
+                  >−${preview.deletions ?? 0}</span
+                >
+              </span>`
+            : html`<span class="github-link-hovercard__metrics">
+                <span class="github-link-hovercard__metric"
+                  >${t(comments === 1 ? "githubPreview.comment" : "githubPreview.comments", {
+                    count: String(comments),
+                  })}</span
+                >
+              </span>`
+        }
+      </div>`,
+    card,
   );
-  appendTextElement(
-    header,
-    "time",
-    "github-link-hovercard__time",
-    formatRelativeTimestamp(Date.parse(preview.updatedAt)),
-  );
-
-  const title = document.createElement("div");
-  title.className = "github-link-hovercard__title";
-  title.textContent = preview.title;
-
-  const footer = document.createElement("div");
-  footer.className = "github-link-hovercard__footer";
-  const author = document.createElement("span");
-  author.className = "github-link-hovercard__author";
-  if (preview.avatarDataUrl) {
-    const avatar = document.createElement("img");
-    avatar.className = "github-link-hovercard__avatar";
-    avatar.alt = "";
-    avatar.decoding = "async";
-    avatar.referrerPolicy = "no-referrer";
-    avatar.src = preview.avatarDataUrl;
-    author.append(avatar);
-  }
-  author.append(document.createTextNode(preview.login));
-  footer.append(author);
-
-  const metrics = document.createElement("span");
-  metrics.className = "github-link-hovercard__metrics";
-  if (preview.kind === "pull") {
-    appendMetric(metrics, "github-link-hovercard__metric--additions", `+${preview.additions ?? 0}`);
-    appendMetric(metrics, "github-link-hovercard__metric--deletions", `−${preview.deletions ?? 0}`);
-    const files = preview.changedFiles ?? 0;
-    appendMetric(
-      metrics,
-      "",
-      t(files === 1 ? "githubPreview.file" : "githubPreview.files", {
-        count: String(files),
-      }),
-    );
-  } else {
-    const comments = preview.comments ?? 0;
-    appendMetric(
-      metrics,
-      "",
-      t(comments === 1 ? "githubPreview.comment" : "githubPreview.comments", {
-        count: String(comments),
-      }),
-    );
-  }
-  footer.append(metrics);
-  card.append(header, title, footer);
   card.setAttribute(
     "aria-label",
     t("githubPreview.ariaLabel", {
@@ -229,41 +292,60 @@ function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
 }
 
 export class GitHubLinkHovercardProvider extends ReactiveElement {
-  client: GatewayBrowserClient | null = null;
+  // Lit must replay values assigned before the lazy custom element upgrades,
+  // otherwise own properties shadow the identity-resetting accessors below.
+  static override properties = {
+    client: { attribute: false, noAccessor: true },
+    agentId: { attribute: false, noAccessor: true },
+  };
+
+  private gatewayClient: GatewayBrowserClient | null = null;
+  private selectedAgentId: string | undefined;
+
+  get client(): GatewayBrowserClient | null {
+    return this.gatewayClient;
+  }
+
+  set client(value: GatewayBrowserClient | null) {
+    if (value === this.gatewayClient) {
+      return;
+    }
+    this.close();
+    this.cache.clear();
+    this.gatewayClient = value;
+  }
+
+  get agentId(): string | undefined {
+    return this.selectedAgentId;
+  }
+
+  set agentId(value: string | undefined) {
+    if (value === this.selectedAgentId) {
+      return;
+    }
+    this.close();
+    this.cache.clear();
+    this.selectedAgentId = value;
+  }
 
   private readonly cache = new Map<string, CacheEntry>();
   private activeAnchor: HTMLAnchorElement | null = null;
   private activeTarget: GitHubLinkTarget | null = null;
-  private card: HTMLDivElement | null = null;
-  private describedBy: string | null = null;
-  private focusInside = false;
-  private openTimer: number | null = null;
-  private pointerInside = false;
-  private renderedPreview: GitHubPreview | null = null;
-  private renderedUnavailable = false;
+  // Which surface opened the current card: gates whether focus landing inside
+  // the portaled card (e.g. clicking the title link) can hold it open, so a
+  // pointer-driven open still fully releases on mouse-out (see handleCardPointerLeave).
+  private activeTrigger: "focus" | "pointer" | null = null;
+  private readonly hovercard = new PortaledHovercardController(() => this.close());
   private stopI18n: (() => void) | null = null;
+  // Spans the synchronous focus() that hands focus back to the trigger, so the
+  // card the user just dismissed cannot reopen under them (handleCardKeyDown).
+  private suppressFocusOpen = false;
   private readonly previewTask = new Task(this, {
     autoRun: false,
     args: () => [this.activeTarget] as const,
-    task: ([target], { signal }) => (target ? this.loadPreview(target, signal) : initialState),
-    onComplete: (preview) => {
-      const card = this.card;
-      if (!card) {
-        return;
-      }
-      this.renderedPreview = preview;
-      renderPreview(card, preview);
-      this.positionCard();
-    },
-    onError: () => {
-      const card = this.card;
-      if (!card) {
-        return;
-      }
-      this.renderedUnavailable = true;
-      renderUnavailable(card);
-      this.positionCard();
-    },
+    // Share metadata, not navigation: each activation owns its full validated URL.
+    task: async ([target], { signal }) =>
+      target ? { ...(await this.loadPreview(target, signal)), ...target } : initialState,
   });
   private readonly activeAnchorObserver = new MutationObserver(() => {
     const anchor = this.activeAnchor;
@@ -287,7 +369,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     this.addEventListener("focusout", this.handleFocusOut);
     this.addEventListener("keydown", this.handleKeyDown);
     this.addEventListener("click", this.handleClick);
-    this.stopI18n ??= i18n.subscribe(this.handleLocaleChange);
+    this.stopI18n ??= i18n.subscribe(() => this.requestUpdate());
   }
 
   override disconnectedCallback(): void {
@@ -303,20 +385,20 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     super.disconnectedCallback();
   }
 
-  private readonly handleLocaleChange = () => {
-    const card = this.card;
+  protected override updated(): void {
+    const card = this.hovercard.card;
     if (!card) {
       return;
     }
-    if (this.renderedPreview) {
-      renderPreview(card, this.renderedPreview);
-    } else if (this.renderedUnavailable) {
-      renderUnavailable(card);
-    } else {
-      renderLoading(card);
-    }
-    this.positionCard();
-  };
+    card.removeAttribute("aria-describedby");
+    this.previewTask.render({
+      initial: () => renderLoading(card),
+      pending: () => renderLoading(card),
+      complete: (preview) => renderPreview(card, preview),
+      error: (error) => renderUnavailable(card, truncateUtf16Safe(formatUiError(error), 320)),
+    });
+    this.hovercard.position();
+  }
 
   private readonly handlePointerOver = (event: Event) => {
     const pointer = event as PointerEvent;
@@ -339,13 +421,46 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     if (event.relatedTarget instanceof Node && anchor.contains(event.relatedTarget)) {
       return;
     }
-    this.pointerInside = false;
-    if (!this.focusInside) {
-      this.close();
+    this.hovercard.pointerInside = false;
+    this.hovercard.scheduleClose();
+  };
+
+  private readonly handleCardPointerEnter = () => {
+    this.hovercard.pointerOverCard = true;
+    this.hovercard.clearClose();
+  };
+
+  private readonly handleCardPointerLeave = () => {
+    this.hovercard.pointerOverCard = false;
+    // A pointer-opened card must release fully on mouse-out even if a click
+    // inside the card (e.g. the title link) left it focused; otherwise it
+    // would stay stuck open with nothing left driving the intent.
+    if (this.activeTrigger === "pointer") {
+      this.hovercard.cardFocusInside = false;
     }
+    this.hovercard.scheduleClose();
+  };
+
+  // The card is portaled to document.body, so focus landing on its title link
+  // never reaches the provider's delegated focusin/focusout listeners; track it
+  // directly so keyboard users can tab into the link without losing the card.
+  private readonly handleCardFocusIn = () => {
+    this.hovercard.cardFocusInside = true;
+    this.hovercard.clearClose();
+  };
+
+  private readonly handleCardFocusOut = (event: FocusEvent) => {
+    if (event.relatedTarget instanceof Node && this.hovercard.card?.contains(event.relatedTarget)) {
+      return;
+    }
+    this.hovercard.cardFocusInside = false;
+    this.hovercard.scheduleClose();
   };
 
   private readonly handleFocusIn = (event: Event) => {
+    if (this.suppressFocusOpen) {
+      return;
+    }
     const anchor = githubLinkAnchorFromEvent(event);
     const target = anchor ? parseGitHubLinkTarget(anchor.href) : null;
     if (!anchor || !target) {
@@ -361,16 +476,47 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     if (event.relatedTarget instanceof Node && this.activeAnchor.contains(event.relatedTarget)) {
       return;
     }
-    this.focusInside = false;
-    if (!this.pointerInside) {
-      this.close();
-    }
+    this.hovercard.focusInside = false;
+    this.hovercard.scheduleClose();
   };
 
   private readonly handleKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
       this.close();
+      return;
     }
+    // The card is portaled to document.body and never lands next to its trigger
+    // in the tab sequence; forward Tab in, and let the card hand focus back
+    // (handleCardKeyDown), so its links stay keyboard-reachable at all.
+    if (event.key !== "Tab" || event.shiftKey || event.target !== this.activeAnchor) {
+      return;
+    }
+    const [first] = this.hovercard.focusables();
+    if (!first) {
+      return;
+    }
+    event.preventDefault();
+    first.focus();
+  };
+
+  private readonly handleCardKeyDown = (event: KeyboardEvent) => {
+    if (event.key !== "Escape" && event.key !== "Tab") {
+      return;
+    }
+    // Tab moves between the card's own links normally and only exits at the edge
+    // of that run: the card has no tab-sequence neighbour, so leaving it lands on
+    // the trigger like Escape does instead of dropping focus to the document.
+    const focusables = this.hovercard.focusables();
+    const edge = event.shiftKey ? focusables[0] : focusables.at(-1);
+    if (event.key === "Tab" && document.activeElement !== edge) {
+      return;
+    }
+    event.preventDefault();
+    const anchor = this.activeAnchor;
+    this.close();
+    this.suppressFocusOpen = true;
+    anchor?.focus({ preventScroll: true });
+    this.suppressFocusOpen = false;
   };
 
   private readonly handleClick = () => {
@@ -384,10 +530,11 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     delay: number,
   ): void {
     this.activate(anchor, target, delay);
+    this.activeTrigger = trigger;
     if (trigger === "pointer") {
-      this.pointerInside = true;
+      this.hovercard.pointerInside = true;
     } else {
-      this.focusInside = true;
+      this.hovercard.focusInside = true;
     }
   }
 
@@ -398,60 +545,57 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     this.close();
     this.activeAnchor = anchor;
     this.activeTarget = target;
-    this.describedBy = anchor.getAttribute("aria-describedby");
+    // Announce the popup affordance as soon as the link is recognized; show()
+    // flips the state once the card exists, close() takes the whole set away.
+    this.hovercard.markTrigger(anchor);
     this.activeAnchorObserver.observe(this, { childList: true, subtree: true });
-    this.openTimer = window.setTimeout(() => {
-      this.openTimer = null;
-      this.show(anchor, target);
-    }, delay);
+    this.hovercard.scheduleOpen(delay, () => this.show(anchor, target));
   }
 
   private show(anchor: HTMLAnchorElement, target: GitHubLinkTarget): void {
     if (this.activeAnchor !== anchor || this.activeTarget?.href !== target.href) {
       return;
     }
-    const card = document.createElement("div");
     nextHovercardId += 1;
-    card.id = `openclaw-github-hovercard-${nextHovercardId}`;
-    card.className = "github-link-hovercard";
-    card.dataset.open = "true";
-    card.setAttribute("role", "tooltip");
-    card.setAttribute("aria-live", "polite");
-    this.renderedPreview = null;
-    this.renderedUnavailable = false;
-    renderLoading(card);
-    document.body.append(card);
-    this.card = card;
-    anchor.setAttribute(
-      "aria-describedby",
-      this.describedBy ? `${this.describedBy} ${card.id}` : card.id,
+    const card = createPortaledHovercard(
+      `openclaw-github-hovercard-${nextHovercardId}`,
+      "github-link-hovercard",
     );
-    this.listenForViewportChanges();
-    this.positionCard();
+    renderLoading(card);
+    // The card is portaled to document.body, so the provider's delegated pointer
+    // listeners never see it; it reports its own hover to keep intent shared.
+    card.addEventListener("pointerenter", this.handleCardPointerEnter);
+    card.addEventListener("pointerleave", this.handleCardPointerLeave);
+    card.addEventListener("focusin", this.handleCardFocusIn);
+    card.addEventListener("focusout", this.handleCardFocusOut);
+    card.addEventListener("keydown", this.handleCardKeyDown);
+    this.hovercard.mount(anchor, card, "vertical", true, () => render(nothing, card));
 
     void this.previewTask.run([target]);
   }
 
-  private loadPreview(target: GitHubLinkTarget, signal: AbortSignal): Promise<GitHubPreview> {
+  private loadPreview(
+    target: GitHubLinkTarget,
+    signal: AbortSignal,
+  ): Promise<ControlUiGitHubPreview> {
     const key = `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
     const now = Date.now();
     const cached = this.cache.get(key);
-    if (cached && cached.expiresAt > now) {
-      this.cache.delete(key);
+    this.cache.delete(key);
+    // Dismissal invalidates only that request, even before its rejection settles.
+    if (cached && !cached.signal.aborted && cached.expiresAt > now) {
       this.cache.set(key, cached);
       return cached.promise;
     }
-    if (cached) {
-      this.cache.delete(key);
-    }
 
-    const load = async (): Promise<GitHubPreview> => {
+    const load = async (): Promise<ControlUiGitHubPreview> => {
       if (!this.client) {
         throw new Error("GitHub preview requires a connected Gateway");
       }
       const response = await this.client.request<ControlUiGitHubPreview>(
         "controlUi.githubPreview",
         {
+          ...(this.agentId ? { agentId: this.agentId } : {}),
           kind: target.kind,
           number: target.number,
           owner: target.owner,
@@ -464,6 +608,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
 
     const entry: CacheEntry = {
       expiresAt: now + SUCCESS_CACHE_MS,
+      signal,
       promise: load().catch((error: unknown) => {
         // Keep short-lived failures cached so repeatedly crossing a broken or
         // private link does not burn GitHub's anonymous rate limit.
@@ -483,68 +628,11 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
   }
 
   private close(): void {
-    if (this.openTimer !== null) {
-      window.clearTimeout(this.openTimer);
-      this.openTimer = null;
-    }
+    this.hovercard.reset();
     this.activeAnchorObserver.disconnect();
     void this.previewTask.run([null]);
-    if (this.activeAnchor) {
-      if (this.describedBy === null) {
-        this.activeAnchor.removeAttribute("aria-describedby");
-      } else {
-        this.activeAnchor.setAttribute("aria-describedby", this.describedBy);
-      }
-    }
-    this.card?.remove();
-    this.card = null;
-    this.renderedPreview = null;
-    this.renderedUnavailable = false;
     this.activeAnchor = null;
     this.activeTarget = null;
-    this.describedBy = null;
-    this.focusInside = false;
-    this.pointerInside = false;
-    this.stopListeningForViewportChanges();
-  }
-
-  private readonly handleViewportChange = () => {
-    this.positionCard();
-  };
-
-  private listenForViewportChanges(): void {
-    window.addEventListener("resize", this.handleViewportChange);
-    window.addEventListener("scroll", this.handleViewportChange, true);
-    window.visualViewport?.addEventListener("resize", this.handleViewportChange);
-    window.visualViewport?.addEventListener("scroll", this.handleViewportChange);
-  }
-
-  private stopListeningForViewportChanges(): void {
-    window.removeEventListener("resize", this.handleViewportChange);
-    window.removeEventListener("scroll", this.handleViewportChange, true);
-    window.visualViewport?.removeEventListener("resize", this.handleViewportChange);
-    window.visualViewport?.removeEventListener("scroll", this.handleViewportChange);
-  }
-
-  private positionCard(): void {
-    const anchor = this.activeAnchor;
-    const card = this.card;
-    if (!anchor || !card) {
-      return;
-    }
-    const anchorRect = anchor.getBoundingClientRect();
-    const cardRect = card.getBoundingClientRect();
-    const fitsBelow =
-      anchorRect.bottom + CARD_GAP + cardRect.height + VIEWPORT_PADDING <= innerHeight;
-    const side = fitsBelow ? "bottom" : "top";
-    const top =
-      side === "bottom"
-        ? anchorRect.bottom + CARD_GAP
-        : anchorRect.top - cardRect.height - CARD_GAP;
-    const maxLeft = Math.max(VIEWPORT_PADDING, innerWidth - cardRect.width - VIEWPORT_PADDING);
-    const maxTop = Math.max(VIEWPORT_PADDING, innerHeight - cardRect.height - VIEWPORT_PADDING);
-    card.dataset.side = side;
-    card.style.left = `${Math.min(Math.max(VIEWPORT_PADDING, anchorRect.left), maxLeft)}px`;
-    card.style.top = `${Math.min(Math.max(VIEWPORT_PADDING, top), maxTop)}px`;
+    this.activeTrigger = null;
   }
 }

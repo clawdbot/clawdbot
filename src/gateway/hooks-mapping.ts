@@ -8,7 +8,9 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import type { HookMappingConfig, HooksConfig, HookSessionMode } from "../config/types.hooks.js";
+import { resolveGmailHookMaxBytes } from "../hooks/gmail.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
+import { isPathInside } from "../infra/path-guards.js";
 import type { HookMessageChannel } from "./hooks.types.js";
 
 export type HookMappingResolved = {
@@ -31,6 +33,9 @@ export type HookMappingResolved = {
   thinking?: string;
   timeoutSeconds?: number;
   transform?: HookMappingTransformResolved;
+  forEach?: string;
+  /** Path-scoped request body bound derived from the producer contract (e.g. gog gmail batches). */
+  maxBodyBytes?: number;
 };
 
 type HookMappingTransformResolved = {
@@ -48,6 +53,7 @@ type HookMappingContext = {
 type HookAction =
   | {
       kind: "wake";
+      mappingId: string;
       text: string;
       mode: "now" | "next-heartbeat";
       agentId?: string;
@@ -56,6 +62,7 @@ type HookAction =
     }
   | {
       kind: "agent";
+      mappingId: string;
       message: string;
       name?: string;
       agentId?: string;
@@ -75,9 +82,40 @@ type HookAction =
 type HookSessionKeyTemplateSource = "static" | "templated";
 
 type HookMappingResult =
-  | { ok: true; action: HookAction }
-  | { ok: true; action: null; skipped: true }
+  | { ok: true; actions: HookAction[]; fanout: boolean; dropped: number }
   | { ok: false; error: string };
+
+// Bounded fan-out: gog gmail watch serve batches at most ~100 messages per push
+// (gogcli defaultHistoryMaxResults); anything beyond 2x that contract is a
+// pathological payload whose tail is dropped with a recorded reason instead of
+// spawning unbounded agent runs from one authenticated request.
+export const HOOK_MAPPING_FAN_OUT_MAX_ITEMS = 200;
+
+// Body bound for gmail-path hooks, derived from the producer contract OpenClaw
+// itself provisions: gog posts up to 100 history records per push (gogcli
+// internal/cmd/gmail_watch_types.go defaultHistoryMaxResults) with each body
+// truncated to hooks.gmail.maxBytes. Reserve JSON-escaping (up to ~3x for
+// escaped control chars) plus header/snippet/label overhead per message. A
+// rejected batch is never retried smaller: gog rewinds its history cursor and
+// Pub/Sub redelivers the same batch forever, so undersizing this bound wedges
+// inbound mail permanently (#120278).
+const GMAIL_HOOK_BATCH_MAX_MESSAGES = 100;
+const GMAIL_HOOK_JSON_ESCAPING_FACTOR = 3;
+const GMAIL_HOOK_PER_MESSAGE_OVERHEAD_BYTES = 8 * 1024;
+// Hard ceiling on the derived allowance: hooks.gmail.maxBytes is
+// operator-controlled and unbounded, and the batch multiplier would otherwise
+// amplify a large-but-valid setting into a hundreds-of-megabytes in-memory
+// request buffer for authenticated callers. 32 MiB covers ~100 KB per-message
+// settings; larger configs fall back to this bound.
+const GMAIL_HOOK_MAX_BODY_BYTES_CEILING = 32 * 1024 * 1024;
+
+function resolveGmailHookMaxBodyBytes(maxBytes: number): number {
+  return Math.min(
+    GMAIL_HOOK_MAX_BODY_BYTES_CEILING,
+    GMAIL_HOOK_BATCH_MAX_MESSAGES *
+      (maxBytes * GMAIL_HOOK_JSON_ESCAPING_FACTOR + GMAIL_HOOK_PER_MESSAGE_OVERHEAD_BYTES),
+  );
+}
 
 const hookPresetMappings: Record<string, HookMappingConfig[]> = {
   gmail: [
@@ -87,6 +125,10 @@ const hookPresetMappings: Record<string, HookMappingConfig[]> = {
       action: "agent",
       wakeMode: "now",
       name: "Gmail",
+      // forEach dispatches one isolated run per pushed message; the templates
+      // below render against a payload holding only the current message, so
+      // messages[0] means "this message", not "the first of the batch".
+      forEach: "messages",
       sessionKey: "hook:gmail:{{messages[0].id}}",
       messageTemplate:
         "New email from {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}\n{{messages[0].body}}",
@@ -165,7 +207,19 @@ export function resolveHookMappings(
     "Hook transformsDir",
   );
 
-  return mappings.map((mapping, index) => normalizeHookMapping(mapping, index, transformsDir));
+  const gmailMaxBodyBytes = resolveGmailHookMaxBodyBytes(
+    resolveGmailHookMaxBytes(hooks?.gmail?.maxBytes),
+  );
+  return mappings.map((mapping, index) => {
+    const normalized = normalizeHookMapping(mapping, index, transformsDir);
+    // Every gmail-path mapping (preset or the documented custom restricted
+    // reader) receives gog's batch payloads, so all of them inherit the
+    // producer-derived body bound.
+    if (normalized.matchPath === "gmail") {
+      normalized.maxBodyBytes = gmailMaxBodyBytes;
+    }
+    return normalized;
+  });
 }
 
 export async function applyHookMappings(
@@ -179,31 +233,83 @@ export async function applyHookMappings(
     if (!mappingMatches(mapping, ctx)) {
       continue;
     }
-
-    const base = buildActionFromMapping(mapping, ctx);
-    if (!base.ok) {
-      return base;
+    if (mapping.forEach) {
+      return await applyFanOutMapping(mapping, mapping.forEach, ctx);
     }
-
-    let override: HookTransformResult = null;
-    if (mapping.transform) {
-      const transform = await loadTransform(mapping.transform);
-      override = await transform(ctx);
-      if (override === null) {
-        return { ok: true, action: null, skipped: true };
-      }
+    const single = await applyMappingToContext(mapping, ctx);
+    if (!single.ok) {
+      return single;
     }
-
-    if (!base.action) {
-      return { ok: true, action: null, skipped: true };
-    }
-    const merged = mergeAction(base.action, override, mapping.action);
-    if (!merged.ok) {
-      return merged;
-    }
-    return merged;
+    return {
+      ok: true,
+      actions: single.action ? [single.action] : [],
+      fanout: false,
+      dropped: 0,
+    };
   }
   return null;
+}
+
+type HookMappingItemResult = { ok: true; action: HookAction | null } | { ok: false; error: string };
+
+async function applyMappingToContext(
+  mapping: HookMappingResolved,
+  ctx: HookMappingContext,
+): Promise<HookMappingItemResult> {
+  const base = buildActionFromMapping(mapping, ctx);
+  if (!base.ok) {
+    return base;
+  }
+
+  let override: HookTransformResult = null;
+  if (mapping.transform) {
+    const transform = await loadTransform(mapping.transform);
+    override = await transform(ctx);
+    if (override === null) {
+      return { ok: true, action: null };
+    }
+  }
+
+  if (!base.action) {
+    return { ok: true, action: null };
+  }
+  return mergeAction(base.action, override, mapping.action);
+}
+
+async function applyFanOutMapping(
+  mapping: HookMappingResolved,
+  forEachKey: string,
+  ctx: HookMappingContext,
+): Promise<HookMappingResult> {
+  const raw = ctx.payload[forEachKey];
+  const allItems = Array.isArray(raw) ? raw : [];
+  const items = allItems.slice(0, HOOK_MAPPING_FAN_OUT_MAX_ITEMS);
+  const actions: HookAction[] = [];
+  for (const item of items) {
+    // Each item renders against a payload where the fan-out array holds only
+    // that item, so single-message templates like {{messages[0].id}} keep
+    // working per item and transforms see a per-item payload.
+    const itemCtx: HookMappingContext = {
+      ...ctx,
+      payload: { ...ctx.payload, [forEachKey]: [item] },
+    };
+    const result = await applyMappingToContext(mapping, itemCtx);
+    if (!result.ok) {
+      // A render/validation failure is a mapping bug affecting the whole
+      // batch; failing it keeps the producer retrying visibly instead of
+      // silently dropping the item.
+      return result;
+    }
+    if (result.action) {
+      actions.push(result.action);
+    }
+  }
+  return {
+    ok: true,
+    actions,
+    fanout: true,
+    dropped: allItems.length - items.length,
+  };
 }
 
 function normalizeHookMapping(
@@ -212,10 +318,11 @@ function normalizeHookMapping(
   transformsDir: string,
 ): HookMappingResolved {
   const id = normalizeOptionalString(mapping.id) || `mapping-${index + 1}`;
-  const matchPath = normalizeMatchPath(mapping.match?.path);
+  const matchPath = normalizeHookMatchPath(mapping.match?.path);
   const matchSource = mapping.match?.source?.trim();
   const action = mapping.action ?? "agent";
   const wakeMode = mapping.wakeMode ?? "now";
+  const forEach = normalizeForEachKey(mapping.forEach);
   const transform = mapping.transform
     ? {
         modulePath: resolveContainedPath(transformsDir, mapping.transform.module, "Hook transform"),
@@ -229,6 +336,7 @@ function normalizeHookMapping(
     matchSource,
     action,
     wakeMode,
+    forEach,
     name: mapping.name,
     agentId: normalizeOptionalString(mapping.agentId),
     sessionKey: mapping.sessionKey,
@@ -246,9 +354,22 @@ function normalizeHookMapping(
   };
 }
 
+function normalizeForEachKey(raw: string | undefined): string | undefined {
+  const key = normalizeOptionalString(raw);
+  if (!key) {
+    return undefined;
+  }
+  // Fan-out replaces one top-level payload key with a single-item array per
+  // dispatch; nested paths would require rebuilding arbitrary object graphs.
+  if (/[.[\]]/.test(key) || BLOCKED_PATH_KEYS.has(key)) {
+    throw new Error(`Hook mapping forEach must be a top-level payload key: ${raw}`);
+  }
+  return key;
+}
+
 function mappingMatches(mapping: HookMappingResolved, ctx: HookMappingContext) {
   if (mapping.matchPath) {
-    if (mapping.matchPath !== normalizeMatchPath(ctx.path)) {
+    if (mapping.matchPath !== normalizeHookMatchPath(ctx.path)) {
       return false;
     }
   }
@@ -264,13 +385,14 @@ function mappingMatches(mapping: HookMappingResolved, ctx: HookMappingContext) {
 function buildActionFromMapping(
   mapping: HookMappingResolved,
   ctx: HookMappingContext,
-): HookMappingResult {
+): HookMappingItemResult {
   if (mapping.action === "wake") {
     const text = renderTemplate(mapping.textTemplate ?? "", ctx);
     return {
       ok: true,
       action: {
         kind: "wake",
+        mappingId: mapping.id,
         text,
         mode: mapping.wakeMode ?? "now",
         agentId: mapping.agentId,
@@ -284,6 +406,7 @@ function buildActionFromMapping(
     ok: true,
     action: {
       kind: "agent",
+      mappingId: mapping.id,
       message,
       name: renderOptional(mapping.name, ctx),
       agentId: mapping.agentId,
@@ -306,7 +429,7 @@ function mergeAction(
   base: HookAction,
   override: HookTransformResult,
   defaultAction: "wake" | "agent",
-): HookMappingResult {
+): HookMappingItemResult {
   if (!override) {
     return validateAction(base);
   }
@@ -317,6 +440,7 @@ function mergeAction(
     const mode = override.mode === "next-heartbeat" ? "next-heartbeat" : (baseWake?.mode ?? "now");
     return validateAction({
       kind: "wake",
+      mappingId: base.mappingId,
       text,
       mode,
       agentId: override.agentId ?? baseWake?.agentId,
@@ -331,6 +455,7 @@ function mergeAction(
     override.wakeMode === "next-heartbeat" ? "next-heartbeat" : (baseAgent?.wakeMode ?? "now");
   return validateAction({
     kind: "agent",
+    mappingId: base.mappingId,
     message,
     wakeMode,
     name: override.name ?? baseAgent?.name,
@@ -351,7 +476,7 @@ function mergeAction(
   });
 }
 
-function validateAction(action: HookAction): HookMappingResult {
+function validateAction(action: HookAction): HookMappingItemResult {
   if (action.sessionKeySource === "templated" && !action.sessionKey?.trim()) {
     return { ok: false, error: "hook mapping sessionKey template rendered empty" };
   }
@@ -444,11 +569,6 @@ function resolvePath(baseDir: string, target: string): string {
   return path.isAbsolute(target) ? path.resolve(target) : path.resolve(baseDir, target);
 }
 
-function escapesBase(baseDir: string, candidate: string): boolean {
-  const relative = path.relative(baseDir, candidate);
-  return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
-}
-
 function safeRealpathSync(candidate: string): string | null {
   try {
     // Hook containment prefers native canonicalization when Node exposes it.
@@ -481,7 +601,7 @@ function resolveContainedPath(baseDir: string, target: string, label: string): s
     throw new Error(`${label} module path is required`);
   }
   const resolved = resolvePath(base, trimmed);
-  if (escapesBase(base, resolved)) {
+  if (!isPathInside(base, resolved)) {
     throw new Error(`${label} module path must be within ${base}: ${target}`);
   }
 
@@ -493,7 +613,7 @@ function resolveContainedPath(baseDir: string, target: string, label: string): s
   if (
     baseRealpath &&
     existingAncestorRealpath &&
-    escapesBase(baseRealpath, existingAncestorRealpath)
+    !isPathInside(baseRealpath, existingAncestorRealpath)
   ) {
     throw new Error(`${label} module path must be within ${base}: ${target}`);
   }
@@ -512,7 +632,7 @@ function resolveOptionalContainedPath(
   return resolveContainedPath(baseDir, trimmed, label);
 }
 
-function normalizeMatchPath(raw?: string): string | undefined {
+export function normalizeHookMatchPath(raw?: string): string | undefined {
   if (!raw) {
     return undefined;
   }

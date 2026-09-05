@@ -19,14 +19,8 @@ export function resolveReplyExecOverrides(params: {
     params.directives.execHost ??
     (params.sessionEntry?.execHost as ReplyExecOverrides["host"]) ??
     params.agentExecDefaults?.host;
-  const security =
-    params.directives.execSecurity ??
-    (params.sessionEntry?.execSecurity as ReplyExecOverrides["security"]) ??
-    params.agentExecDefaults?.security;
-  const ask =
-    params.directives.execAsk ??
-    (params.sessionEntry?.execAsk as ReplyExecOverrides["ask"]) ??
-    params.agentExecDefaults?.ask;
+  const security = params.directives.execSecurity ?? params.agentExecDefaults?.security;
+  const ask = params.directives.execAsk ?? params.agentExecDefaults?.ask;
   const node =
     params.directives.execNode ?? params.sessionEntry?.execNode ?? params.agentExecDefaults?.node;
   const nodeCwd =

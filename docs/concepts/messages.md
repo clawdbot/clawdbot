@@ -54,6 +54,13 @@ Rapid consecutive text messages from the same sender can be batched into one age
 - Disabled by default: `messages.inbound.debounceMs` has no built-in default, so debouncing only activates once you set it (globally or per channel).
 - iMessage follows the same generic debounce policy. `imsg` 0.13.1 and newer coalesces Apple URL-preview split-sends before OpenClaw receives them, so no iMessage-specific debounce setting is needed.
 
+Changes to `messages.inbound.debounceMs` and `messages.inbound.byChannel` apply without
+reconnecting Discord, Feishu, iMessage, Mattermost, Microsoft Teams, Signal, Slack,
+Telegram, or WhatsApp. Newly admitted inbound work uses the committed delay. A config change alone does not reschedule a pending batch;
+later messages can update its idle delay within the original maximum deadline.
+Explicit transport timing overrides remain fixed. Telegram's forwarded-message
+collection window remains separate.
+
 ## Sessions and devices
 
 Sessions are owned by the gateway, not by clients.
@@ -97,6 +104,8 @@ Tool result `content` is the model-visible result; `details` is runtime metadata
 - Persisted session transcripts keep only bounded `details`; oversized metadata is replaced with a compact summary marked `persistedDetailsTruncated: true`.
 - Plugins and tools should put text the model must read in `content`, not only in `details`.
 
+When a tool-error warning is the agent's only reply, WebChat displays and retains it. The warning does not by itself change a completed agent run into a runtime failure; the failed tool result remains recorded separately.
+
 ## Queueing and followups
 
 When a run is already active, inbound messages steer into it by default. `messages.queue` controls the mode:
@@ -115,6 +124,8 @@ Details: [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-s
 ## Channel run ownership
 
 Channel plugins may preserve ordering, debounce input, and apply transport backpressure before a message enters the session queue. They should not impose a separate timeout around the agent turn itself. Once a message is routed to a session, the session, tool, and runtime lifecycle govern long-running work so all channels report and recover from slow turns consistently.
+
+Once a turn is durably accepted, an unexpected failure before its answer produces a compact error reply in direct chats and explicitly addressed conversations where automatic replies are enabled. Progress acknowledgments do not replace that final outcome. The turn remains failed and is not replayed as a new inbound message; delivery policies and replies already sent through the message tool still apply.
 
 ## Streaming, chunking, and batching
 
@@ -139,7 +150,8 @@ Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/ref
 
 ## Prefixes, threading, and replies
 
-- Outbound prefixes live at `channels.<channel>.responsePrefix` and `channels.<channel>.accounts.<id>.responsePrefix`. Account values win. Doctor copies the global fallback into configured channel blocks when those canonical fields are unset; `messages.responsePrefix` remains as a fallback for implicit and custom channels.
+- Channels with reply-prefix support use `channels.<channel>.responsePrefix` and, when multi-account configuration is supported, `channels.<channel>.accounts.<id>.responsePrefix`. Account values win, including `""` to disable an inherited prefix. Use `"auto"` for the agent identity name or templates such as `"[{model}]"` for the selected model. Automatic-reply support is channel-specific. Doctor copies the global fallback into supported configured channel blocks when those canonical fields are unset; `messages.responsePrefix` remains as a fallback for implicit and custom channels.
+- Explicit `message` tool and CLI text sends also apply the resolved prefix, without duplicating a prefix already present. They resolve identity placeholders but do not select a model; a prefix containing unresolved model, provider, or thinking-level placeholders is omitted entirely.
 - Reply threading via `replyToMode` and per-channel defaults.
 
 Details: [Configuration](/gateway/config-agents#messages) and channel docs.
@@ -162,7 +174,8 @@ Bare silent replies are dropped on all surfaces, so parent sessions stay quiet i
 
 ## Related
 
-- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) - target durable send and receive design
+- [Channel inbound API](/plugins/sdk-channel-inbound) - receive orchestration and acknowledgment policy
+- [Channel outbound API](/plugins/sdk-channel-outbound) - durable sends and delivery receipts
 - [Streaming](/concepts/streaming) - real-time message delivery
 - [Retry](/concepts/retry) - message delivery retry behavior
 - [Queue](/concepts/queue) - message processing queue

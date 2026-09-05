@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.core.test.shard.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-services.tsbuildinfo"
+  },
+  "include": [
+    "../../src/cron/**/*.test.ts",
+    "../../src/cron/**/*.test.tsx",
+    "../../src/daemon/**/*.test.ts",
+    "../../src/daemon/**/*.test.tsx",
+    "../../src/plugin-sdk/**/*.test.ts",
+    "../../src/plugin-sdk/**/*.test.tsx",
+    "../../src/skills/**/*.test.ts",
+    "../../src/skills/**/*.test.tsx",
+    "../../src/logging/**/*.test.ts",
+    "../../src/logging/**/*.test.tsx",
+    "../../src/secrets/**/*.test.ts",
+    "../../src/secrets/**/*.test.tsx",
+    "../../src/shared/**/*.test.ts",
+    "../../src/shared/**/*.test.tsx"
+  ]
+}

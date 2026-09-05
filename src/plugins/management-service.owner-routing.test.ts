@@ -2,6 +2,10 @@ import { expect, it, vi } from "vitest";
 
 const metadata = vi.hoisted(() => vi.fn());
 
+vi.mock("./install.js", () => {
+  throw new Error("Plugin inventory must not load source installers");
+});
+
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (...args: unknown[]) => metadata(...args),
   resolvePluginMetadataSnapshot: (...args: unknown[]) => metadata(...args),
@@ -25,11 +29,39 @@ it("loads plugin metadata from the explicit system-owner workspace", async () =>
     normalizePluginId: (pluginId: string) => pluginId,
   });
 
-  await listManagedPlugins({ config, env, officialCatalog: { entries: [] } });
+  const catalog = await listManagedPlugins({ config, env, officialCatalog: { entries: [] } });
 
+  expect(catalog).toMatchObject({ plugins: [], diagnostics: [] });
   expect(metadata).toHaveBeenCalledWith({
     config,
     env,
     workspaceDir: "/tmp/openclaw-managed-plugin-home/research-workspace",
   });
+});
+
+it("reports partial managed inventory without selecting an explicit roster entry", async () => {
+  const config = {
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { workspace: "/tmp/unowned-workspace" },
+      entries: {
+        main: { workspace: "/tmp/main-workspace" },
+        gadget: { workspace: "/tmp/gadget-workspace" },
+      },
+    },
+  };
+  const env = { HOME: "/tmp/openclaw-managed-plugin-home" };
+  metadata.mockReturnValue({
+    index: { plugins: [], installRecords: {} },
+    byPluginId: new Map(),
+    diagnostics: [],
+    normalizePluginId: (pluginId: string) => pluginId,
+  });
+
+  const catalog = await listManagedPlugins({ config, env, officialCatalog: { entries: [] } });
+
+  expect(metadata).toHaveBeenCalledWith({ config, env });
+  expect(catalog.diagnostics).toContainEqual(
+    expect.objectContaining({ level: "warn", code: "workspace-scope-omitted" }),
+  );
 });

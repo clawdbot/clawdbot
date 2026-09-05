@@ -52,6 +52,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     contextSessionKey,
     sandboxSessionKey,
     sessionAgentId,
+    policyAgentId,
     sandbox,
     attemptClientFactory,
     runAbortController,
@@ -85,9 +86,10 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     : params.provider;
   const effectiveRuntimeModelId = usesSupervisionConnection
     ? (mutable.startupBinding?.model ?? "codex-native")
-    : params.modelId;
+    : (connection.options.runtimeModelId ?? params.modelId);
   const {
     authProfileId: _outerAuthProfileId,
+    authoredContextTokenCap: _outerAuthoredContextTokenCap,
     contextWindowInfo: _outerContextWindowInfo,
     contextTokenBudget: _outerContextTokenBudget,
     model: _outerModel,
@@ -170,6 +172,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   );
   const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
     workspaceDir: effectiveWorkspace,
+    agentId: sessionAgentId,
     cfg: params.config,
     toolsEnabled: usesSupervisionConnection || supportsModelTools(params.model),
     disableTools: params.disableTools,
@@ -181,7 +184,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     params.trigger === "cron" &&
     params.scheduledToolPolicy !== undefined &&
     Array.isArray(params.toolsAllow);
-  const ownsScheduledConfiguredMcpSurface =
+  const scheduledConfiguredMcpSurface =
     authenticatedScheduledMode &&
     (bundleMcpThreadConfig.staticServerNames.length > 0 ||
       mutable.startupBinding?.configuredMcpOwnershipVersion === 1);
@@ -190,6 +193,10 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   // capability; do not promote that fact to general sender ownership.
   const hasFreshCreatorAuthority =
     cronCreatorAuthorityCapability?.active === true &&
+    !(
+      cronCreatorAuthorityCapability.controlUiAdmin &&
+      cronCreatorAuthorityCapability.callerOrigin.kind === "unknown"
+    ) &&
     cronCreatorAuthorityCapability.runId === params.runId &&
     !cronCreatorAuthorityCapability.signal.aborted;
   const mayResolveScheduledConfiguredMcpCreatorAuthority =
@@ -215,12 +222,17 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       hasStaticConfiguredMcp: bundleMcpThreadConfig.staticServerNames.length > 0,
     });
   preDynamicStartupStages.mark("bundle-mcp");
-  const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);
+  const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig, sandbox);
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
     runtimeParams,
     sandbox,
-    { agentId: sessionAgentId, runtimeSessionKey: sandboxSessionKey, sandboxExecServerEnabled },
+    { agentId: policyAgentId, runtimeSessionKey: sandboxSessionKey, sandboxExecServerEnabled },
   );
+  const configuredMcpSurface = scheduledConfiguredMcpSurface
+    ? "scheduled"
+    : !nativeToolSurfaceEnabled && bundleMcpThreadConfig.staticServerNames.length > 0
+      ? "transient"
+      : undefined;
   preDynamicStartupStages.mark("native-tool-surface");
   const nativeProviderWebSearchSupport =
     resolveCodexWebSearchPlan({
@@ -279,7 +291,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     bundleMcpThreadConfig,
     bundleManifestRegistry,
     authenticatedScheduledMode,
-    ownsScheduledConfiguredMcpSurface,
+    configuredMcpSurface,
     canResolveScheduledConfiguredMcpCreatorAuthority:
       mayResolveScheduledConfiguredMcpCreatorAuthority,
     codexMcpToolOverrides,

@@ -2,6 +2,7 @@
 import type { Command } from "commander";
 import { reparseProgramFromActionCommand } from "./action-reparse.js";
 import { removeCommandByName } from "./command-tree.js";
+import { markCommanderLazyCommand } from "./commander-parse-facts.js";
 
 type RegisterLazyCommandParams = {
   program: Command;
@@ -25,6 +26,7 @@ export function registerLazyCommand({
   register,
 }: RegisterLazyCommandParams): void {
   const placeholder = program.command(name).description(description);
+  markCommanderLazyCommand(placeholder);
   for (const option of options ?? []) {
     placeholder.option(option.flags, option.description);
   }

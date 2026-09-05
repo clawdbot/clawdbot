@@ -1,12 +1,12 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import { splitAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
+import { iterateAnsiSegments } from "../../../packages/terminal-core/src/ansi-sequences.js";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { markdownTheme } from "../theme/theme.js";
 import { HyperlinkMarkdown } from "./hyperlink-markdown.js";
 
 function osc8Targets(raw: string) {
-  return splitAnsiSegments(raw).flatMap((segment) => {
+  return [...iterateAnsiSegments(raw)].flatMap((segment) => {
     if (segment.kind !== "ansi" || !segment.value.startsWith("\x1b]8;;")) {
       return [];
     }
@@ -17,6 +17,30 @@ function osc8Targets(raw: string) {
 }
 
 describe("HyperlinkMarkdown", () => {
+  it("does not reallocate prepared lines for an unchanged same-width redraw", () => {
+    const markdown = new HyperlinkMarkdown(
+      "مرحبا [docs](https://example.test/path)",
+      0,
+      0,
+      markdownTheme,
+    );
+
+    const first = markdown.render(80);
+    expect(markdown.render(80)).toBe(first);
+
+    const resized = markdown.render(40);
+    expect(resized).not.toBe(first);
+    expect(markdown.render(40)).toBe(resized);
+
+    markdown.setText("updated");
+    const updated = markdown.render(40);
+    expect(updated).not.toBe(resized);
+    expect(markdown.render(40)).toBe(updated);
+
+    markdown.invalidate();
+    expect(markdown.render(40)).not.toBe(updated);
+  });
+
   it("moves dunder identifiers intact across fenced code wrap boundaries", () => {
     const markdown = new HyperlinkMarkdown(
       ["```python", 'if __name__ == "__main__":', "```"].join("\n"),

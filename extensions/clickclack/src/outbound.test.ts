@@ -33,6 +33,8 @@ vi.mock("./accounts.js", () => ({
     apiEndpoint: "http://127.0.0.1:8484",
     token: "test-token-placeholder",
     workspace: "wsp_1",
+    accountId: "default",
+    config: {},
   }),
 }));
 
@@ -383,7 +385,7 @@ describe("sendClickClackMedia", () => {
     expect(attachUpload).toHaveBeenCalledWith("msg_out", "upl_1");
   });
 
-  it("rejects oversized media before creating a ClickClack client or upload", async () => {
+  it("rejects oversized media before creating an upload or message", async () => {
     loadOutboundMediaFromUrl.mockRejectedValueOnce(new Error("media exceeds 67108864 bytes"));
 
     await expect(
@@ -395,7 +397,6 @@ describe("sendClickClackMedia", () => {
       }),
     ).rejects.toThrow("media exceeds 67108864 bytes");
 
-    expect(createClientOptions).not.toHaveBeenCalled();
     expect(createUpload).not.toHaveBeenCalled();
     expect(createChannelMessage).not.toHaveBeenCalled();
   });

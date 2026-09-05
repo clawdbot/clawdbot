@@ -6,7 +6,6 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import {
-  detectGraphicalSession,
   resolveConnectedControlUiPresenceKeys,
   runBrowserHatchHandoff,
 } from "./onboard-browser-handoff.js";
@@ -15,6 +14,7 @@ const sharedMocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   waitForControlUiDocument: vi.fn(),
   issueControlUiBrowserHandoff: vi.fn(),
+  detectBrowserOpenSupport: vi.fn(),
   resolveAdvertisedLanHostCore: vi.fn(),
   resolveAdvertisedControlUiLinks: vi.fn(),
 }));
@@ -36,12 +36,13 @@ vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
 
 vi.mock("./onboard-helpers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./onboard-helpers.js")>()),
+  detectBrowserOpenSupport: sharedMocks.detectBrowserOpenSupport,
   resolveAdvertisedControlUiLinks: sharedMocks.resolveAdvertisedControlUiLinks,
 }));
 
 const target = {
   config: {},
-  dashboardUrl: "http://127.0.0.1:18789/",
+  links: { httpUrl: "http://127.0.0.1:18789/", wsUrl: "ws://127.0.0.1:18789" },
   documentUrl: "http://127.0.0.1:18789/",
   sshHint: "ssh -N -L 18789:127.0.0.1:18789 user@host",
   port: 18789,
@@ -53,37 +54,16 @@ beforeEach(() => {
   sharedMocks.waitForControlUiDocument.mockReset();
   sharedMocks.waitForControlUiDocument.mockResolvedValue({ ready: true });
   sharedMocks.issueControlUiBrowserHandoff.mockReset();
-  sharedMocks.issueControlUiBrowserHandoff.mockImplementation(async (url: string) => ({
-    browserUrl: `${url}#bootstrapToken=one-time-bootstrap`,
-    expiresAtMs: 123_456,
-  }));
+  sharedMocks.issueControlUiBrowserHandoff.mockImplementation(
+    async (links: typeof target.links) => ({
+      browserUrl: `${links.httpUrl}#bootstrapToken=one-time-bootstrap&gatewayUrl=${encodeURIComponent(links.wsUrl)}`,
+      expiresAtMs: 123_456,
+    }),
+  );
+  sharedMocks.detectBrowserOpenSupport.mockReset().mockResolvedValue({ ok: false });
   sharedMocks.resolveAdvertisedLanHostCore.mockReset();
   sharedMocks.resolveAdvertisedLanHostCore.mockResolvedValue(null);
   sharedMocks.resolveAdvertisedControlUiLinks.mockReset();
-});
-
-describe("detectGraphicalSession", () => {
-  it.each([
-    { platform: "darwin", env: {}, expected: true },
-    { platform: "darwin", env: { SSH_CONNECTION: "client server" }, expected: false },
-    { platform: "darwin", env: { SSH_TTY: "/dev/ttys001" }, expected: false },
-    { platform: "linux", env: {}, expected: false },
-    { platform: "linux", env: { DISPLAY: ":0" }, expected: true },
-    { platform: "linux", env: { WAYLAND_DISPLAY: "wayland-0" }, expected: true },
-    {
-      platform: "linux",
-      env: { DISPLAY: ":0", SSH_CONNECTION: "client server" },
-      expected: false,
-    },
-    { platform: "win32", env: {}, expected: true },
-    { platform: "win32", env: { SSH_TTY: "ssh" }, expected: false },
-  ] satisfies Array<{
-    platform: NodeJS.Platform;
-    env: NodeJS.ProcessEnv;
-    expected: boolean;
-  }>)("$platform with $env reports graphical=$expected", ({ platform, env, expected }) => {
-    expect(detectGraphicalSession(env, platform)).toBe(expected);
-  });
 });
 
 const connectedControlUiPresence = {
@@ -151,8 +131,10 @@ describe("runBrowserHatchHandoff", () => {
   it.each([
     { platform: "darwin" as const, env: {} },
     { platform: "linux" as const, env: { DISPLAY: ":0" } },
+    { platform: "linux" as const, env: { WSL_DISTRO_NAME: "Ubuntu" } },
     { platform: "win32" as const, env: {} },
   ])("opens once in a $platform GUI session", async ({ platform, env }) => {
+    sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true, command: "opener" });
     const prompter = createWizardPrompter();
     const openBrowser = vi.fn(async () => true);
     const probePresence = vi
@@ -173,10 +155,13 @@ describe("runBrowserHatchHandoff", () => {
 
     expect(result).toEqual({ handedOff: true });
     expect(openBrowser).toHaveBeenCalledOnce();
-    expect(openBrowser).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=one-time-bootstrap",
+    expect(sharedMocks.detectBrowserOpenSupport).toHaveBeenCalledWith(
+      expect.objectContaining({ env, platform }),
     );
-    expect(sharedMocks.issueControlUiBrowserHandoff).toHaveBeenCalledWith(target.dashboardUrl);
+    expect(openBrowser).toHaveBeenCalledWith(
+      "http://127.0.0.1:18789/#bootstrapToken=one-time-bootstrap&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
+    );
+    expect(sharedMocks.issueControlUiBrowserHandoff).toHaveBeenCalledWith(target.links);
     expect(probePresence).toHaveBeenCalledTimes(2);
     expect(prompter.note).toHaveBeenCalledWith(
       "Dashboard connected — continuing in your browser.",
@@ -190,7 +175,7 @@ describe("runBrowserHatchHandoff", () => {
       ...target,
       config,
       port: 19001,
-      dashboardUrl: "http://127.0.0.1:19001/",
+      links: { httpUrl: "http://127.0.0.1:19001/", wsUrl: "ws://127.0.0.1:19001" },
       documentUrl: "http://127.0.0.1:19001/",
     };
     sharedMocks.callGateway
@@ -220,10 +205,7 @@ describe("runBrowserHatchHandoff", () => {
     }
   });
 
-  it.each([
-    { name: "headless Linux", env: {} },
-    { name: "Linux SSH", env: { DISPLAY: ":0", SSH_CONNECTION: "client server" } },
-  ])("prints only the clean URL and waits longer in $name", async ({ env }) => {
+  it("prints a one-time pairing URL and waits longer in headless Linux", async () => {
     const prompter = createWizardPrompter();
     const openBrowser = vi.fn(async () => true);
     const probePresence = vi.fn(async () => ({ reachable: true as const, clientKeys: [] }));
@@ -235,7 +217,7 @@ describe("runBrowserHatchHandoff", () => {
     const result = await runBrowserHatchHandoff(
       { config: {}, prompter },
       {
-        env,
+        env: {},
         platform: "linux",
         openBrowser,
         resolveTarget: async () => target,
@@ -246,12 +228,12 @@ describe("runBrowserHatchHandoff", () => {
 
     expect(result).toEqual({ handedOff: true });
     expect(openBrowser).not.toHaveBeenCalled();
-    expect(sharedMocks.issueControlUiBrowserHandoff).not.toHaveBeenCalled();
+    expect(sharedMocks.issueControlUiBrowserHandoff).toHaveBeenCalledWith(target.links);
     expect(pollForClient).toHaveBeenCalledWith(
       expect.objectContaining({ target, timeoutMs: 300_000 }),
     );
     expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining(target.dashboardUrl),
+      expect.stringContaining(`${target.links.httpUrl}#bootstrapToken=one-time-bootstrap`),
       "Continue in your browser",
     );
     expect(prompter.note).toHaveBeenCalledWith(
@@ -264,10 +246,104 @@ describe("runBrowserHatchHandoff", () => {
       .join("\n");
     expect(displayed).not.toContain("test-token");
     expect(displayed).not.toContain("#token=");
-    expect(displayed).not.toContain("#bootstrapToken=");
+    expect(displayed).toContain("#bootstrapToken=one-time-bootstrap");
   });
 
-  it("prints the URL when browser launch fails", async () => {
+  it("prints an HTTPS tunnel destination for a headless loopback TLS Gateway", async () => {
+    const prompter = createWizardPrompter();
+    const config = {
+      gateway: {
+        port: 18789,
+        bind: "loopback" as const,
+        controlUi: { basePath: "/control" },
+        tls: { enabled: true },
+      },
+    };
+
+    await runBrowserHatchHandoff(
+      { config, prompter },
+      {
+        env: {},
+        platform: "linux",
+        waitForDocument: async () => ({ ready: true }),
+        verifyLoopbackAlias: async () => true,
+        probePresence: async () => ({ reachable: true, clientKeys: [] }),
+        pollForClient: async () => ({ connected: false, reason: "timeout" }),
+      },
+    );
+
+    const displayed = vi
+      .mocked(prompter.note)
+      .mock.calls.map(([message]) => message)
+      .join("\n");
+    expect(displayed).toContain("https://localhost:18789/control/");
+    expect(displayed).not.toContain("http://localhost:18789/control/");
+    expect(displayed).toContain("#bootstrapToken=one-time-bootstrap");
+  });
+
+  it.each([
+    {
+      openerOutcome: "returns false",
+      openBrowser: vi.fn(async () => false),
+    },
+    {
+      openerOutcome: "rejects",
+      openBrowser: vi.fn(async () => {
+        throw new Error("browser command failed");
+      }),
+    },
+  ])(
+    "falls back to the SSH hint and manual timeout when the browser opener $openerOutcome",
+    async ({ openBrowser }) => {
+      sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({
+        ok: true,
+        command: "xdg-open",
+      });
+      const prompter = createWizardPrompter();
+      const pollForClient = vi.fn(async () => ({
+        connected: false as const,
+        reason: "timeout" as const,
+      }));
+      const env = {
+        DISPLAY: "localhost:10.0",
+        SSH_CONNECTION: "192.0.2.1 12345 192.0.2.2 22",
+      };
+
+      const result = await runBrowserHatchHandoff(
+        { config: {}, prompter },
+        {
+          env,
+          platform: "linux",
+          openBrowser,
+          resolveTarget: async () => target,
+          probePresence: async () => ({ reachable: true, clientKeys: [] }),
+          pollForClient,
+        },
+      );
+
+      expect(result).toEqual({ handedOff: false, reason: "timeout" });
+      expect(sharedMocks.detectBrowserOpenSupport).toHaveBeenCalledWith(
+        expect.objectContaining({ env, platform: "linux" }),
+      );
+      expect(openBrowser).toHaveBeenCalledWith(
+        "http://127.0.0.1:18789/#bootstrapToken=one-time-bootstrap&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
+      );
+      expect(prompter.note).toHaveBeenCalledWith(
+        expect.stringContaining(target.sshHint),
+        "Continue in your browser",
+      );
+      expect(prompter.note).toHaveBeenCalledWith(
+        expect.stringContaining("#bootstrapToken=one-time-bootstrap"),
+        "Continue in your browser",
+      );
+      expect(pollForClient).toHaveBeenCalledWith(
+        expect.objectContaining({ target, timeoutMs: 300_000 }),
+      );
+    },
+  );
+
+  it("prints the one-time pairing URL when browser launch fails", async () => {
+    sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true, command: "open" });
     const prompter = createWizardPrompter();
 
     await runBrowserHatchHandoff(
@@ -283,7 +359,7 @@ describe("runBrowserHatchHandoff", () => {
     );
 
     expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining(target.dashboardUrl),
+      expect.stringContaining(`${target.links.httpUrl}#bootstrapToken=one-time-bootstrap`),
       "Continue in your browser",
     );
     const displayed = vi
@@ -291,7 +367,8 @@ describe("runBrowserHatchHandoff", () => {
       .mock.calls.map(([message]) => message)
       .join("\n");
     expect(displayed).not.toContain("test-token");
-    expect(displayed).not.toContain("#bootstrapToken=");
+    expect(displayed).not.toContain("#token=");
+    expect(displayed).toContain("#bootstrapToken=one-time-bootstrap");
     expect(prompter.note).not.toHaveBeenCalledWith(
       expect.stringContaining(target.sshHint),
       "Continue in your browser",
@@ -313,7 +390,10 @@ describe("runBrowserHatchHandoff", () => {
           controlUi: { basePath: "/dashboard" },
         },
       },
-      dashboardUrl: "http://127.0.0.1:18789/dashboard/",
+      links: {
+        httpUrl: "http://127.0.0.1:18789/dashboard/",
+        wsUrl: "ws://127.0.0.1:18789/dashboard",
+      },
       documentUrl: "http://127.0.0.1:18789/dashboard/",
       sshHint: undefined,
     };
@@ -340,9 +420,9 @@ describe("runBrowserHatchHandoff", () => {
     expect(displayed).not.toContain("openclaw devices approve <requestId>");
     expect(displayed).not.toContain("test-token");
     expect(displayed).not.toContain("#token=");
-    expect(displayed).not.toContain("#bootstrapToken=");
+    expect(displayed).toContain("#bootstrapToken=one-time-bootstrap");
     expect(sharedMocks.resolveAdvertisedControlUiLinks).not.toHaveBeenCalled();
-    expect(sharedMocks.issueControlUiBrowserHandoff).not.toHaveBeenCalled();
+    expect(sharedMocks.issueControlUiBrowserHandoff).toHaveBeenCalledWith(remoteTarget.links);
   });
 
   it.each([
@@ -361,7 +441,10 @@ describe("runBrowserHatchHandoff", () => {
           tls: { enabled: true },
         },
       },
-      dashboardUrl: `https://${bind === "lan" ? "127.0.0.1" : host}:18789/dashboard/`,
+      links: {
+        httpUrl: `https://${bind === "lan" ? "127.0.0.1" : host}:18789/dashboard/`,
+        wsUrl: `wss://${bind === "lan" ? "127.0.0.1" : host}:18789/dashboard`,
+      },
       documentUrl: "https://127.0.0.1:18789/dashboard/",
       tlsConfig: { enabled: true },
       sshHint: undefined,
@@ -386,12 +469,16 @@ describe("runBrowserHatchHandoff", () => {
       .mocked(prompter.note)
       .mock.calls.map(([message]) => message)
       .join("\n");
-    expect(displayed).toContain(`https://${host}:18789/dashboard/`);
-    expect(displayed).toContain("openclaw devices approve <requestId>");
+    expect(displayed).toContain(
+      `https://${host}:18789/dashboard/#bootstrapToken=one-time-bootstrap`,
+    );
+    expect(displayed).toContain(
+      `gatewayUrl=${encodeURIComponent(`wss://${host}:18789/dashboard`)}`,
+    );
     expect(displayed).not.toContain("ssh -N -L");
     expect(displayed).not.toContain("test-token");
     expect(displayed).not.toContain("#token=");
-    expect(displayed).not.toContain("#bootstrapToken=");
+    expect(displayed).not.toContain("openclaw devices approve <requestId>");
     expect(sharedMocks.resolveAdvertisedControlUiLinks).toHaveBeenCalledWith({
       bind,
       port: 18789,
@@ -399,7 +486,7 @@ describe("runBrowserHatchHandoff", () => {
       basePath: "/dashboard",
       tlsEnabled: true,
     });
-    expect(sharedMocks.issueControlUiBrowserHandoff).not.toHaveBeenCalled();
+    expect(sharedMocks.issueControlUiBrowserHandoff).toHaveBeenCalledWith(remoteTarget.links);
   });
 
   it("keeps headless TLS handoff available when all LAN discovery fails", async () => {
@@ -413,7 +500,10 @@ describe("runBrowserHatchHandoff", () => {
           tls: { enabled: true },
         },
       },
-      dashboardUrl: "https://127.0.0.1:18789/dashboard/",
+      links: {
+        httpUrl: "https://127.0.0.1:18789/dashboard/",
+        wsUrl: "wss://127.0.0.1:18789/dashboard",
+      },
       documentUrl: "https://127.0.0.1:18789/dashboard/",
       tlsConfig: { enabled: true },
       sshHint: undefined,
@@ -451,7 +541,7 @@ describe("runBrowserHatchHandoff", () => {
       expect(displayed).toContain("https://127.0.0.1:18789/dashboard/");
       expect(displayed).not.toContain("test-token");
       expect(displayed).not.toContain("#token=");
-      expect(displayed).not.toContain("#bootstrapToken=");
+      expect(displayed).toContain("#bootstrapToken=one-time-bootstrap");
     } finally {
       networkInterfaces.mockRestore();
     }
@@ -493,7 +583,8 @@ describe("runBrowserHatchHandoff", () => {
       .mock.calls.map(([message]) => message)
       .join("\n");
     expect(displayed).not.toContain(gatewayPassword);
-    expect(sharedMocks.issueControlUiBrowserHandoff).not.toHaveBeenCalled();
+    expect(displayed).toContain("#bootstrapToken=one-time-bootstrap");
+    expect(sharedMocks.issueControlUiBrowserHandoff).toHaveBeenCalledWith(target.links);
   });
 
   it("returns the poll timeout without claiming a handoff", async () => {
@@ -519,6 +610,7 @@ describe("runBrowserHatchHandoff", () => {
   });
 
   it("bounds the final presence probe by the remaining handoff time", async () => {
+    sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true, command: "open" });
     const prompter = createWizardPrompter();
     const probeTimeouts: number[] = [];
     let elapsedMs = 0;
@@ -644,7 +736,8 @@ describe("runBrowserHatchHandoff", () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
-  it("fails safely when a GUI browser bootstrap cannot be issued", async () => {
+  it("fails safely when a browser bootstrap cannot be issued", async () => {
+    sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true, command: "open" });
     const prompter = createWizardPrompter();
     sharedMocks.issueControlUiBrowserHandoff.mockRejectedValue(new Error("state unavailable"));
     const openBrowser = vi.fn();

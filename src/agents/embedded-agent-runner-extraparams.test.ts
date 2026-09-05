@@ -603,7 +603,8 @@ describe("applyExtraParamsToAgent", () => {
       | Model<"openai-responses">
       | Model<"openai-chatgpt-responses">
       | Model<"azure-openai-responses">
-      | Model<"anthropic-messages">;
+      | Model<"anthropic-messages">
+      | Model<"google-generative-ai">;
     cfg?: Record<string, unknown>;
     extraParamsOverride?: Record<string, unknown>;
     payload?: Record<string, unknown>;
@@ -698,6 +699,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "anthropic",
         id: "claude-sonnet-4-5",
         baseUrl: params.baseUrl ?? "https://api.anthropic.com",
+        contextWindow: 200_000,
       } as Model<"anthropic-messages">,
       payload: params.payload ?? {},
     });
@@ -1311,18 +1313,18 @@ describe("applyExtraParamsToAgent", () => {
 
   it("flattens pure text OpenAI completions message arrays for string-only compat models", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "inferrs",
-      applyModelId: "google/gemma-4-E2B-it",
+      applyProvider: "llmman",
+      applyModelId: "gemma4",
       model: {
         api: "openai-completions",
-        provider: "inferrs",
-        id: "google/gemma-4-E2B-it",
-        name: "Gemma 4 E2B (inferrs)",
-        baseUrl: "http://127.0.0.1:8080/v1",
+        provider: "llmman",
+        id: "gemma4",
+        name: "Gemma 4 (llmman)",
+        baseUrl: "http://127.0.0.1:17434/v1",
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 131072,
+        contextWindow: 65536,
         maxTokens: 4096,
         compat: {
           requiresStringContent: true,
@@ -1448,6 +1450,20 @@ describe("applyExtraParamsToAgent", () => {
         provider: "anthropic",
         id: "claude-sonnet-4-6",
       } as Model<"anthropic-messages">,
+    },
+    {
+      name: "does not inject parallel_tool_calls for google-generative-ai APIs",
+      applyProvider: "google",
+      applyModelId: "gemini-2.5-pro",
+      cfg: buildModelConfig("google/gemini-2.5-pro", {
+        parallel_tool_calls: false,
+      }),
+      extraParamsOverride: undefined,
+      model: {
+        api: "google-generative-ai",
+        provider: "google",
+        id: "gemini-2.5-pro",
+      } as Model<"google-generative-ai">,
     },
     {
       name: "lets null runtime override suppress inherited parallel_tool_calls injection",
@@ -1893,18 +1909,6 @@ describe("applyExtraParamsToAgent", () => {
   it.each([
     {
       name: "passes configured websocket transport through stream options",
-      cfg: buildModelConfig("openai/gpt-5.4", { transport: "websocket" }),
-      modelId: "gpt-5.4",
-      model: {
-        api: "openai-chatgpt-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-      } as Model<"openai-chatgpt-responses">,
-      options: {},
-      expected: "websocket",
-    },
-    {
-      name: "passes configured websocket transport through stream options for openai gpt-5.4",
       cfg: buildModelConfig("openai/gpt-5.4", { transport: "websocket" }),
       modelId: "gpt-5.4",
       model: {
@@ -3084,19 +3088,6 @@ describe("applyExtraParamsToAgent", () => {
   it.each([
     {
       name: "maps MiniMax /fast to the matching highspeed model",
-      applyProvider: "minimax",
-      applyModelId: "MiniMax-M2.7",
-      fastMode: true,
-      model: {
-        api: "anthropic-messages",
-        provider: "minimax",
-        id: "MiniMax-M2.7",
-        baseUrl: "https://api.minimax.io/anthropic",
-      } as Model<"anthropic-messages">,
-      expectedModelId: "MiniMax-M2.7-highspeed",
-    },
-    {
-      name: "maps MiniMax M2.7 /fast to the matching highspeed model",
       applyProvider: "minimax",
       applyModelId: "MiniMax-M2.7",
       fastMode: true,

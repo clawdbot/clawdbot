@@ -12,12 +12,15 @@ import {
   ensureCliExecutionBootstrap,
   resolveCliExecutionStartupContext,
 } from "../command-execution-startup.js";
+import { inheritOptionFromParent } from "../command-options.js";
+import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
 import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
+import { isModelsPlainMachineOutput } from "../models-output-mode.js";
 import {
   resolvePluginInstallInvalidConfigPolicy,
   resolvePluginInstallPreactionRequest,
 } from "../plugin-install-config-policy.js";
-import { getCommanderCommandPath, hasCommanderOptionValue } from "./commander-parse-facts.js";
+import { getCommanderCommandPath, hasCommanderOptionToken } from "./commander-parse-facts.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
 import { isParentDefaultHelpAction } from "./parent-default-help.js";
 
@@ -55,6 +58,17 @@ function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
   }
   const logLevel = actionCommand.optsWithGlobals<{ logLevel?: unknown }>().logLevel;
   return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
+}
+
+function getStateMigrationAgentId(actionCommand: Command): string | undefined {
+  if (!actionCommand.options.some((option) => option.attributeName() === "agent")) {
+    return undefined;
+  }
+  const value =
+    actionCommand.getOptionValueSource("agent") === "cli"
+      ? actionCommand.getOptionValue("agent")
+      : inheritOptionFromParent(actionCommand, "agent", "cli");
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[]): boolean {
@@ -100,15 +114,37 @@ function isGatewayRunAction(actionCommand: Command): boolean {
   );
 }
 
+async function runStateStoreGuard(commandPath: string[]): Promise<void> {
+  if (resolveCliCommandPathPolicy(commandPath).stateStoreGuard !== "run") {
+    return;
+  }
+  let outcome: import("../state-dir-gateway-check.js").CliGatewayStateDirOutcome;
+  try {
+    const { checkCliGatewayStateDir } = await import("../state-dir-gateway-check.js");
+    outcome = await checkCliGatewayStateDir({ command: `openclaw ${commandPath.join(" ")}` });
+  } catch (error) {
+    const { formatErrorMessage } = await import("../../infra/errors.js");
+    const { logDebug } = await import("../../logger.js");
+    logDebug(`state-store guard unavailable: ${formatErrorMessage(error)}`);
+    return;
+  }
+  if (outcome.kind === "warn") {
+    defaultRuntime.log(outcome.message);
+  } else if (outcome.kind === "refuse") {
+    throw new Error(outcome.message);
+  }
+}
+
 /** Register global pre-action bootstrap hooks for every non-help command invocation. */
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
     const argv = process.argv;
-    const helpOrVersionWasOptionValue = hasCommanderOptionValue(
+    const helpOrVersionWasOptionValue = hasCommanderOptionToken(
       actionCommand,
       argv,
       HELP_OR_VERSION_FLAGS,
+      "value",
     );
     if (
       (isHelpOrVersionInvocation(argv) && !helpOrVersionWasOptionValue) ||
@@ -117,11 +153,13 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       return;
     }
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
-    applyResolvedCommandOutputMode(jsonOutputMode);
+    const machineOutputMode = jsonOutputMode || isModelsPlainMachineOutput(argv, actionCommand);
+    applyResolvedCommandOutputMode(jsonOutputMode, machineOutputMode);
     const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
       argv,
       commandPath: getCommanderCommandPath(actionCommand),
       jsonOutputMode,
+      machineOutputMode,
       env: process.env,
     });
     await applyCliExecutionStartupPresentation({
@@ -140,6 +178,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (isGuidedConfigAction(actionCommand) || isGuidedConfigCommandPath(commandPath)) {
       return;
     }
+    await runStateStoreGuard(commandPath);
     if (startupPolicy.skipConfigGuard) {
       // Config validation and plugin activation are independent startup policies.
       // A cold config read must not suppress a plugin runtime explicitly required by the command.
@@ -182,6 +221,27 @@ export function registerPreActionHooks(program: Command, programVersion: string)
           ...(snapshot ? { snapshot } : {}),
         });
     }
+    const stateMigrationAgentId = getStateMigrationAgentId(actionCommand);
+    if (stateMigrationAgentId) {
+      const existingGuard = beforeStateMigrations;
+      beforeStateMigrations = async (snapshot) => {
+        if (snapshot) {
+          const { isValidAgentId, normalizeAgentId } =
+            await import("@openclaw/normalization-core/agent-id");
+          if (isValidAgentId(stateMigrationAgentId)) {
+            const [{ listAgentIds }, { retainLegacyDefaultAgentId }] = await Promise.all([
+              import("../../agents/agent-scope-config.js"),
+              import("../../config/legacy.default-agent-owner.js"),
+            ]);
+            const agentId = normalizeAgentId(stateMigrationAgentId);
+            if (listAgentIds(snapshot.sourceConfig).includes(agentId)) {
+              retainLegacyDefaultAgentId(snapshot.sourceConfig, agentId);
+            }
+          }
+        }
+        return (await existingGuard?.(snapshot)) ?? true;
+      };
+    }
     await ensureCliExecutionBootstrap({
       runtime: defaultRuntime,
       commandPath,
@@ -191,7 +251,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
       ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
     });
-    if (beforeStateMigrations) {
+    if (beforeStateMigrations && isGatewayRunAction(actionCommand)) {
       const { reloadTrustedGatewayRunEnvironment } =
         await import("../gateway-cli/pre-bootstrap.js");
       await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime });

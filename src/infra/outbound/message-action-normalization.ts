@@ -8,6 +8,7 @@ import type {
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   isDeliverableMessageChannel,
+  isInternalNonDeliveryChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { applyTargetToParams } from "./channel-target.js";
@@ -18,6 +19,7 @@ import {
   resolveActionDeliveryTargetAlias,
   type ActionDeliveryTargetAliasSpec,
 } from "./message-action-spec.js";
+import { missingMessageActionTargetError } from "./target-errors.js";
 
 export function resolveImplicitMessageActionTarget(
   toolContext: ChannelThreadingToolContext | undefined,
@@ -25,6 +27,9 @@ export function resolveImplicitMessageActionTarget(
   for (const value of [toolContext?.currentChannelId, toolContext?.currentMessagingTarget]) {
     const target = normalizeOptionalString(value);
     if (!target) {
+      continue;
+    }
+    if (isInternalNonDeliveryChannel(target)) {
       continue;
     }
     // A session can arrive bare or wrapped as a channel target; neither is
@@ -127,7 +132,7 @@ export function normalizeMessageActionInput(params: {
     (!actionHasTarget(action, normalizedArgs, { channel: inferredChannel }) ||
       (hasResourceReference && !hasCanonicalTarget && !params.allowResourceOnly))
   ) {
-    throw new Error(`Action ${action} requires a target.`);
+    throw missingMessageActionTargetError(action);
   }
 
   return normalizedArgs;

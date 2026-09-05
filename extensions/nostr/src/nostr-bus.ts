@@ -5,6 +5,7 @@ import {
   createDirectDmPreCryptoGuardPolicy,
   type DirectDmPreCryptoGuardPolicyOverrides,
 } from "openclaw/plugin-sdk/direct-dm-guard-policy";
+import { createFixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import {
@@ -23,7 +24,6 @@ import {
 } from "./nostr-ingress.js";
 import { validatePrivateKey } from "./nostr-key-utils.js";
 import { publishProfile as publishProfileFn, type ProfilePublishResult } from "./nostr-profile.js";
-import { createFixedWindowRateLimiter } from "./nostr-rate-limiter.js";
 import { createNostrRelaySubscriptionGroup } from "./nostr-relay-subscription.js";
 import {
   readNostrBusState,

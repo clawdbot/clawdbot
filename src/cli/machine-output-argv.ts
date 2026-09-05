@@ -1,7 +1,4 @@
-import {
-  consumeRootOptionToken,
-  getRootOptionAwareCommandPath,
-} from "../infra/cli-root-options.js";
+import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 
 export type MachineOutputResolverParams = {
   argv: readonly string[];
@@ -10,30 +7,14 @@ export type MachineOutputResolverParams = {
 
 export type MachineOutputResolver = (params: MachineOutputResolverParams) => boolean;
 
-/** Normalize Node's absent `isTTY` property to the public resolver's boolean contract. */
-export function isMachineOutputStdoutTTY(stdout: object = process.stdout): boolean {
-  return Reflect.get(stdout, "isTTY") === true;
-}
+export const MACHINE_OUTPUT_JSON_OPTION_DESCRIPTION =
+  "Explicit machine-output spelling (command results are JSON by default)";
 
-/** Locate the root command after supported root options without loading descriptor catalogs. */
-export function findMachineOutputRootCommandIndex(argv: readonly string[]): number | null {
-  const args = argv.slice(2);
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (!arg || arg === "--") {
-      return null;
-    }
-    const consumed = consumeRootOptionToken(args, index);
-    if (consumed > 0) {
-      index += consumed - 1;
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      continue;
-    }
-    return index + 2;
-  }
-  return null;
+/** Normalize Node's absent `isTTY` property to the public resolver's boolean contract. */
+export function isMachineOutputStdoutTTY(
+  stdout: { readonly isTTY?: boolean } = process.stdout,
+): boolean {
+  return stdout.isTTY === true;
 }
 
 /** Read positional command tokens after supported root options, without importing CLI catalogs. */

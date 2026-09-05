@@ -78,6 +78,7 @@ const {
     GuildPresences: 1 << 6,
     GuildMembers: 1 << 7,
     GuildVoiceStates: 1 << 8,
+    GuildExpressions: 1 << 9,
   } as const;
 
   class GatewayPluginLocal {
@@ -146,7 +147,7 @@ const {
 
 // Unit test: don't import the real gateway just to check the prototype chain.
 vi.mock("../internal/gateway.js", () => ({
-  DISCORD_GATEWAY_WS_CLIENT_OPTIONS: { maxPayload: 16 * 1024 * 1024 },
+  DISCORD_GATEWAY_WS_CLIENT_OPTIONS: { maxPayload: 16 * 1024 * 1024, handshakeTimeout: 30_000 },
   GatewayIntents,
   GatewayPlugin,
 }));

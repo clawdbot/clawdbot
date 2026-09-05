@@ -43,15 +43,19 @@ function searchPayload() {
         displayName: SLUG,
         summary: `Email skill by ${ownerHandle}`,
         version: "1.0.0",
+        source: "clawhub",
+        install: { kind: "clawhub", reference: `${ownerHandle}/${SLUG}` },
       })),
       // An external source that names its own reference instead of a registry publisher.
       {
         score: 6100,
         slug: SLUG,
-        installRef: `skills-sh:acme/tools/${SLUG}`,
+        ownerHandle: "acme",
         displayName: SLUG,
         summary: "Email skill from skills.sh",
         version: "1.0.0",
+        source: "skills-sh",
+        install: { kind: "skills-sh", reference: `skills-sh:acme/tools/${SLUG}` },
       },
     ],
   };
@@ -103,9 +107,15 @@ describe("ClawHub publisher identity across skills.search, skills.detail, and sk
     const { ok, response } = await callSkillsHandler("skills.search", { query: SLUG });
 
     expect(ok).toBe(true);
-    expect(
-      (response as { results: { installRef?: string }[] }).results.map((r) => r.installRef),
-    ).toEqual([`@gzlicanyi/${SLUG}`, `@wangchenyu8/${SLUG}`, `skills-sh:acme/tools/${SLUG}`]);
+    const results = (response as { results: { installRef?: string; installOnly?: true }[] })
+      .results;
+    expect(results.map((r) => r.installRef)).toEqual([
+      `@gzlicanyi/${SLUG}`,
+      `@wangchenyu8/${SLUG}`,
+      `skills-sh:acme/tools/${SLUG}`,
+    ]);
+    // Only the external row is install-only; the registry rows keep the review flow.
+    expect(results.map((r) => r.installOnly)).toEqual([undefined, undefined, true]);
   });
 
   it.each(PUBLISHERS)("reads detail for the selected publisher %s", async (ownerHandle) => {

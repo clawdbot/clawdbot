@@ -1,10 +1,7 @@
 // Shared parsing, diffing, and reporting helpers for inventory guard scripts.
-import { promises as fs } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
-const parsedTypeScriptSourceCache = new Map();
-const sourceTextCache = new Map();
 const require = createRequire(import.meta.url);
 let cachedTypeScript;
 
@@ -100,38 +97,20 @@ export function visitModuleSpecifiers(ts, sourceFile, visit, options = {}) {
   walk(sourceFile);
 }
 
-/** Diff expected and actual inventory entries using JSON identity. */
-export function diffInventoryEntries(expected, actual, compareEntries) {
-  const expectedKeys = new Set(expected.map((entry) => JSON.stringify(entry)));
-  const actualKeys = new Set(actual.map((entry) => JSON.stringify(entry)));
-  return {
-    missing: expected
-      .filter((entry) => !actualKeys.has(JSON.stringify(entry)))
-      .toSorted(compareEntries),
-    unexpected: actual
-      .filter((entry) => !expectedKeys.has(JSON.stringify(entry)))
-      .toSorted(compareEntries),
-  };
-}
-
 /** Write one line to a stream without each caller repeating newline handling. */
 export function writeLine(stream, text) {
   stream.write(`${text}\n`);
 }
 
 function hasSupplementalModuleReference(ts, source, acceptSpecifier) {
-  const checkUrl = source.includes("new") && source.includes("import") && source.includes("meta");
-  const interpolationStart = source.indexOf("${");
-  const checkRequire =
-    interpolationStart >= 0 &&
-    (source.includes("require") || source.indexOf("\\u", interpolationStart + 2) >= 0);
-  const interpolatedSlash =
-    interpolationStart < 0 ? -1 : source.indexOf("/", interpolationStart + 2);
-  const checkTemplateImport =
-    interpolatedSlash >= 0 && source.indexOf("import", interpolatedSlash + 1) >= 0;
-  const checkNamespaceExport =
-    source.includes("export") && source.includes("*") && source.includes("as");
-  if (!checkUrl && !checkRequire && !checkTemplateImport && !checkNamespaceExport) {
+  // Escaped names and regexp ambiguity must reach the scanner before rejecting the file.
+  if (
+    !source.includes("new") &&
+    !source.includes("${") &&
+    !source.includes("export") &&
+    !source.includes("/") &&
+    !source.includes("\\u")
+  ) {
     return false;
   }
 
@@ -153,7 +132,6 @@ function hasSupplementalModuleReference(ts, source, acceptSpecifier) {
 
   for (let token = scanner.scan(); token !== kinds.EndOfFileToken; token = scanner.scan()) {
     if (
-      checkUrl &&
       token === kinds.NewKeyword &&
       scanner.lookAhead(
         () =>
@@ -166,7 +144,6 @@ function hasSupplementalModuleReference(ts, source, acceptSpecifier) {
       return true;
     }
     if (
-      checkRequire &&
       (token === kinds.RequireKeyword ||
         (token === kinds.Identifier && scanner.getTokenValue() === "require")) &&
       scanner.lookAhead(() => scanner.scan() === kinds.OpenParenToken && scanAcceptedSpecifier())
@@ -174,7 +151,6 @@ function hasSupplementalModuleReference(ts, source, acceptSpecifier) {
       return true;
     }
     if (
-      checkNamespaceExport &&
       token === kinds.ExportKeyword &&
       scanner.lookAhead(() => {
         let next = scanner.scan();
@@ -187,11 +163,9 @@ function hasSupplementalModuleReference(ts, source, acceptSpecifier) {
       return true;
     }
 
-    // A context-free slash may start a regexp whose `}` would corrupt interpolation tracking.
-    if (
-      templateBraceDepths.length > 0 &&
-      (token === kinds.SlashToken || token === kinds.SlashEqualsToken)
-    ) {
+    // Only the parser distinguishes division from regexps, whose quotes or braces
+    // can hide later module references from a context-free scanner.
+    if (token === kinds.SlashToken || token === kinds.SlashEqualsToken) {
       return true;
     }
 
@@ -302,73 +276,4 @@ export function formatGroupedInventoryHuman(params, inventory) {
     lines.push(`    resolved: ${entry.resolvedPath}`);
   }
   return lines.join("\n");
-}
-
-/** Parse TypeScript files and collect sorted inventory entries from each source file. */
-export async function collectTypeScriptInventory(params) {
-  const inventory = [];
-
-  for (const filePath of params.files) {
-    const cacheKey = `${params.scriptKind ?? "auto"}:${filePath}`;
-    let sourceFile = parsedTypeScriptSourceCache.get(cacheKey);
-    if (!sourceFile) {
-      let source = sourceTextCache.get(filePath);
-      if (source === undefined) {
-        source = await fs.readFile(filePath, "utf8");
-        sourceTextCache.set(filePath, source);
-      }
-      if (params.shouldParseSource && !params.shouldParseSource(source, filePath)) {
-        continue;
-      }
-      sourceFile = params.ts.createSourceFile(
-        filePath,
-        source,
-        params.ts.ScriptTarget.Latest,
-        true,
-        params.scriptKind,
-      );
-      parsedTypeScriptSourceCache.set(cacheKey, sourceFile);
-    }
-    inventory.push(...params.collectEntries(sourceFile, filePath));
-  }
-
-  return inventory.toSorted(params.compareEntries);
-}
-
-/** Run a baseline inventory check and return the intended process exit code. */
-export async function runBaselineInventoryCheck(params) {
-  const streams = params.io ?? { stdout: process.stdout, stderr: process.stderr };
-  const json = params.argv.includes("--json");
-  const actual = await params.collectActual();
-  const expected = await params.readExpected();
-  const { missing, unexpected } = params.diffInventory(expected, actual);
-  const matchesBaseline = missing.length === 0 && unexpected.length === 0;
-
-  if (json) {
-    writeLine(streams.stdout, JSON.stringify(actual, null, 2));
-  } else {
-    writeLine(streams.stdout, params.formatInventoryHuman(actual));
-    writeLine(
-      streams.stdout,
-      matchesBaseline
-        ? `Baseline matches (${actual.length} entries).`
-        : `Baseline mismatch (${unexpected.length} unexpected, ${missing.length} missing).`,
-    );
-    if (!matchesBaseline) {
-      if (unexpected.length > 0) {
-        writeLine(streams.stderr, "Unexpected entries:");
-        for (const entry of unexpected) {
-          writeLine(streams.stderr, `- ${params.formatEntry(entry)}`);
-        }
-      }
-      if (missing.length > 0) {
-        writeLine(streams.stderr, "Missing baseline entries:");
-        for (const entry of missing) {
-          writeLine(streams.stderr, `- ${params.formatEntry(entry)}`);
-        }
-      }
-    }
-  }
-
-  return matchesBaseline ? 0 : 1;
 }

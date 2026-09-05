@@ -20,7 +20,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { PersistentDedupeEntry } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeMatrixStorageMetadata } from "../client/storage.js";
+import { normalizeMatrixStorageMetadata } from "../client/storage-metadata.js";
 
 const LEGACY_SQLITE_NAMESPACE = "inbound-dedupe";
 const LEGACY_MARKERS_NAMESPACE = "inbound-dedupe-migrations";

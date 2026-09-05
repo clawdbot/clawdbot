@@ -3,14 +3,18 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-function swapAsciiCase(value: string): string {
+export function swapAsciiCase(value: string): string {
   return value.replace(/[A-Za-z]/g, (char) => {
     const lower = char.toLowerCase();
     return char === lower ? char.toUpperCase() : lower;
   });
 }
 
-function sameFsObject(a: fs.Stats, b: fs.Stats): boolean {
+// Case probes compare dev and ino exactly; zero values are never wildcards.
+export function sameFsObject(
+  a: Pick<fs.Stats, "dev" | "ino">,
+  b: Pick<fs.Stats, "dev" | "ino">,
+): boolean {
   return a.dev === b.dev && a.ino === b.ino;
 }
 

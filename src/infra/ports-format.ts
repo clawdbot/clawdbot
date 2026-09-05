@@ -7,14 +7,17 @@ import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js
 
 /** Classifies a listener as OpenClaw Gateway, SSH tunnel, known non-gateway, or unknown. */
 export function classifyPortListener(listener: PortListener, _port: number): PortListenerKind {
-  const raw = normalizeLowercaseStringOrEmpty(
-    `${listener.commandLine ?? ""} ${listener.command ?? ""}`,
-  );
+  const command = normalizeLowercaseStringOrEmpty(listener.command ?? "");
+  const commandLine = normalizeLowercaseStringOrEmpty(listener.commandLine ?? "");
+  // The inspected command identifies the listener owner. Check it before argv,
+  // where a socat forward may name OpenClaw. Observed macOS output also uses `socat1`.
+  if (command === "socat" || command === "socat1" || command === "socat.exe") {
+    return "non_gateway";
+  }
+  const raw = `${commandLine} ${command}`;
   if (raw.includes("openclaw")) {
     return "gateway";
   }
-  const command = normalizeLowercaseStringOrEmpty(listener.command ?? "");
-  const commandLine = normalizeLowercaseStringOrEmpty(listener.commandLine ?? "");
   const hasSshCommand = /(?:^|[/\\])ssh(?:\.exe)?$/.test(command);
   const hasSshExecutable =
     hasSshCommand ||

@@ -1,0 +1,64 @@
+{
+  "id": "visitor-access",
+  "name": "Visitor Access",
+  "description": "Manage expiring visitor grants through one Cloudflare Access email policy.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["visitor_invite", "visitor_revoke", "visitor_list"]
+  },
+  "uiHints": {
+    "apiToken": {
+      "label": "Cloudflare API token",
+      "sensitive": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["accountId", "appId", "apiToken"],
+    "properties": {
+      "accountId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[a-zA-Z0-9_-]+$",
+        "description": "Cloudflare account containing the Access application."
+      },
+      "appId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[a-zA-Z0-9_-]+$",
+        "description": "Access application whose dedicated visitor policy is managed."
+      },
+      "apiToken": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Resolved Cloudflare API token with Access policy read and write permissions."
+      },
+      "policyName": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 200,
+        "default": "Visitors (openclaw-managed)",
+        "description": "Exact name of the only policy this plugin may manage."
+      },
+      "defaultTtlDays": {
+        "type": ["integer", "null"],
+        "minimum": 0,
+        "maximum": 3650,
+        "default": 14,
+        "description": "Default grant duration in days. Zero or null requires explicit days or forever on each invite."
+      },
+      "maxVisitors": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 500,
+        "default": 50,
+        "description": "Maximum number of visitor emails allowed by this plugin."
+      }
+    }
+  }
+}

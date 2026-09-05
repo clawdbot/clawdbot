@@ -44,6 +44,8 @@ export function projectSessionTree(params: {
     rowsByKey.set(row.key, row);
   }
   const childKeysByParent = new Map<string, string[]>();
+  const hasExplicitCategory = (row: GatewaySessionRow | undefined) =>
+    typeof row?.category === "string" && row.category.trim().length > 0;
   const appendChild = (parentKey: string, childKey: string) => {
     const keys = childKeysByParent.get(parentKey) ?? [];
     if (!keys.includes(childKey)) {
@@ -54,6 +56,12 @@ export function projectSessionTree(params: {
   for (const row of rowsByKey.values()) {
     for (const childKey of row.childSessions ?? []) {
       const child = rowsByKey.get(childKey);
+      // Manual category placement is a first-class sidebar destination. Once
+      // a child is explicitly categorized, render it as a section root rather
+      // than hiding it behind its lineage parent.
+      if (hasExplicitCategory(child)) {
+        continue;
+      }
       const navigationParentKey = resolveUiSessionNavigationParentKey(child);
       // Runtime control and sidebar navigation can have different parents;
       // known children belong to their explicit navigation parent only.
@@ -64,7 +72,7 @@ export function projectSessionTree(params: {
   }
   for (const row of rowsByKey.values()) {
     const parentKey = resolveUiSessionNavigationParentKey(row);
-    if (parentKey) {
+    if (parentKey && !hasExplicitCategory(row)) {
       appendChild(parentKey, row.key);
     }
   }
@@ -147,6 +155,9 @@ export function projectSessionTree(params: {
   const rootKeys = new Set(roots.map((row) => row.key));
   return roots
     .filter((row) => {
+      if (hasExplicitCategory(row)) {
+        return true;
+      }
       const parentKey = resolveUiSessionNavigationParentKey(row);
       return !parentKey || !rootKeys.has(parentKey);
     })

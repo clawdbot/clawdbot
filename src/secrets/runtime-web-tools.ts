@@ -4,18 +4,18 @@ import { sortUniqueStrings } from "@openclaw/normalization-core/string-normaliza
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
   WebFetchCredentialResolutionSource,
   WebSearchCredentialResolutionSource,
 } from "../plugins/types.js";
-import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
 import {
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "../plugins/web-provider-public-artifacts.explicit.js";
-import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
@@ -367,6 +367,7 @@ async function hasCustomWebProviderPluginRisk(params: {
   contract: WebProviderContract;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  manifestRecords?: readonly PluginManifestRecord[];
 }): Promise<boolean> {
   const installRecords = loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
   if (Object.keys(installRecords).length > 0) {
@@ -387,6 +388,7 @@ async function hasCustomWebProviderPluginRisk(params: {
       origin: "bundled",
       config: params.config,
       env: params.env,
+      manifestRecords: params.manifestRecords,
     }),
   );
   // Public artifacts are complete only for bundled providers. Any configured non-bundled
@@ -596,6 +598,7 @@ async function resolveBundledWebSearchProviders(params: {
       env,
       onlyPluginIds,
       origin: "bundled",
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
   }
   if (!params.hasCustomWebSearchPluginRisk) {
@@ -604,6 +607,7 @@ async function resolveBundledWebSearchProviders(params: {
     const bundled = resolveBundledWebSearchProvidersFromPublicArtifacts({
       config: params.sourceConfig,
       env,
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
     if (bundled && bundled.length > 0) {
       return bundled;
@@ -613,12 +617,14 @@ async function resolveBundledWebSearchProviders(params: {
       config: params.sourceConfig,
       env,
       origin: "bundled",
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
   }
   const { resolvePluginWebSearchProviders } = await loadRuntimeWebToolsFallbackProviders();
   return resolvePluginWebSearchProviders({
     config: params.sourceConfig,
     env,
+    manifestRecords: params.context.manifestRegistry?.plugins,
   });
 }
 
@@ -644,6 +650,7 @@ async function resolveBundledWebFetchProviders(params: {
       env,
       onlyPluginIds: [params.configuredBundledPluginId],
       origin: "bundled",
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
   }
   if (!params.hasCustomWebFetchPluginRisk) {
@@ -652,6 +659,7 @@ async function resolveBundledWebFetchProviders(params: {
     const bundled = resolveBundledWebFetchProvidersFromPublicArtifacts({
       config: params.sourceConfig,
       env,
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
     if (bundled && bundled.length > 0) {
       return bundled;
@@ -661,6 +669,7 @@ async function resolveBundledWebFetchProviders(params: {
       config: params.sourceConfig,
       env,
       origin: "bundled",
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
   }
   const { resolvePluginWebFetchProviders } = await loadRuntimeWebToolsFallbackProviders();
@@ -670,6 +679,7 @@ async function resolveBundledWebFetchProviders(params: {
     // Runtime credential resolution may load only bundled providers or verified
     // official installs. Arbitrary external providers must not gain SecretRef access.
     sandboxed: true,
+    manifestRecords: params.context.manifestRegistry?.plugins,
   });
 }
 
@@ -775,6 +785,7 @@ export async function resolveRuntimeWebTools(params: {
       contract: "webSearchProviders",
       config: params.sourceConfig,
       env,
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
     return hasCustomWebSearchRisk;
   };
@@ -784,6 +795,7 @@ export async function resolveRuntimeWebTools(params: {
       contract: "webFetchProviders",
       config: params.sourceConfig,
       env,
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
     return hasCustomWebFetchRisk;
   };
@@ -855,7 +867,7 @@ export async function resolveRuntimeWebTools(params: {
           configuredBundledPluginId,
           hasCustomWebSearchPluginRisk: await getHasCustomWebSearchRisk(),
         }),
-      sortProviders: sortWebSearchProvidersForAutoDetect,
+      sortProviders: sortPluginEntriesForAutoDetect,
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
         readConfiguredProviderCredential({
           provider,
@@ -999,7 +1011,7 @@ export async function resolveRuntimeWebTools(params: {
           configuredBundledPluginId,
           hasCustomWebFetchPluginRisk: await getHasCustomWebFetchRisk(),
         }),
-      sortProviders: sortWebFetchProvidersForAutoDetect,
+      sortProviders: sortPluginEntriesForAutoDetect,
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
         readConfiguredFetchProviderCredential({
           provider,

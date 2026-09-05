@@ -1,3 +1,4 @@
+import { readConfigMachineState, updateConfigMachineState } from "../state/config-machine-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -8,29 +9,30 @@ import {
   fetchClawHubPromotionsFeed,
   parseClawHubPromotionsFeed,
 } from "./clawhub-promotions.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
 // Passive-discovery cache for the ClawHub promotions feed. Deliberately a
-// separate store from `update_check_state`: promo discovery must never
+// separate key from `update.checkState`: promo discovery must never
 // delay, break, or contend with update checks. The cache is best-effort —
 // every reader falls back to "no promotions" on any storage or parse error,
 // and `promos claim` always revalidates against the live API.
 
-const PROMOTIONS_FEED_STATE_KEY = "default";
+const PROMOTIONS_FEED_STATE_KEY = "clawhub.promotionsFeed";
 const PROMOTIONS_FEED_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 // Refreshes run inline from interactive commands, so they get a short
 // timeout (matching the update check's 2.5s) instead of ClawHub's default
 // 30s — a blackholed connection must not stall `models list`.
 const PROMOTIONS_FEED_FETCH_TIMEOUT_MS = 2500;
 
-type PromotionsFeedDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "clawhub_promotions_feed_state" | "clawhub_promotion_claims"
->;
+type PromotionsFeedDatabase = Pick<OpenClawStateKyselyDatabase, "clawhub_promotion_claims">;
+
+type StoredPromotionsFeedState = {
+  etag: string | null;
+  sequence: number | null;
+  payloadJson: string | null;
+  lastCheckedAtMs: number | null;
+  notifiedSlugs: string[];
+};
 
 type PromotionsFeedState = {
   etag?: string;
@@ -56,35 +58,10 @@ type PromotionsFeedStateRead = {
   payloadInvalid: boolean;
 };
 
-function parseSlugListJson(raw: string | null): Set<string> {
-  if (!raw) {
-    return new Set();
-  }
-  const parsed = JSON.parse(raw) as unknown;
-  if (!Array.isArray(parsed)) {
-    return new Set();
-  }
-  return new Set(parsed.filter((entry): entry is string => typeof entry === "string"));
-}
-
 function readPromotionsFeedStateWithMetadata(): PromotionsFeedStateRead {
   try {
-    const database = openOpenClawStateDatabase();
-    const db = getNodeSqliteKysely<PromotionsFeedDatabase>(database.db);
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("clawhub_promotions_feed_state")
-        .select([
-          "etag",
-          "payload_json",
-          "feed_sequence",
-          "last_checked_at_ms",
-          "notified_slugs_json",
-        ])
-        .where("state_key", "=", PROMOTIONS_FEED_STATE_KEY),
-    );
-    if (!row) {
+    const stored = readConfigMachineState<StoredPromotionsFeedState>(PROMOTIONS_FEED_STATE_KEY);
+    if (!stored) {
       return {
         state: { ...EMPTY_STATE, notifiedSlugs: new Set() },
         payloadInvalid: false,
@@ -93,9 +70,9 @@ function readPromotionsFeedStateWithMetadata(): PromotionsFeedStateRead {
     let entries: ClawHubPromotionsFeedEntry[] = [];
     let expiresAtMs: number | undefined;
     let payloadInvalid = false;
-    if (row.payload_json) {
+    if (stored.payloadJson) {
       try {
-        const feed = parseClawHubPromotionsFeed(JSON.parse(row.payload_json));
+        const feed = parseClawHubPromotionsFeed(JSON.parse(stored.payloadJson));
         entries = feed.entries;
         expiresAtMs = Date.parse(feed.expiresAt);
       } catch {
@@ -104,16 +81,16 @@ function readPromotionsFeedStateWithMetadata(): PromotionsFeedStateRead {
     }
     return {
       state: {
-        ...(!payloadInvalid && row.etag ? { etag: row.etag } : {}),
-        ...(!payloadInvalid && typeof row.feed_sequence === "number"
-          ? { sequence: row.feed_sequence }
+        ...(!payloadInvalid && stored.etag ? { etag: stored.etag } : {}),
+        ...(!payloadInvalid && typeof stored.sequence === "number"
+          ? { sequence: stored.sequence }
           : {}),
         ...(!payloadInvalid && expiresAtMs !== undefined ? { expiresAtMs } : {}),
         entries,
-        ...(typeof row.last_checked_at_ms === "number"
-          ? { lastCheckedAtMs: row.last_checked_at_ms }
+        ...(typeof stored.lastCheckedAtMs === "number"
+          ? { lastCheckedAtMs: stored.lastCheckedAtMs }
           : {}),
-        notifiedSlugs: parseSlugListJson(row.notified_slugs_json),
+        notifiedSlugs: new Set(stored.notifiedSlugs),
       },
       payloadInvalid,
     };
@@ -138,41 +115,16 @@ type WritePromotionsFeedStateParams = {
 };
 
 function writePromotionsFeedState(params: WritePromotionsFeedStateParams): void {
-  runOpenClawStateWriteTransaction((database) => {
-    const db = getNodeSqliteKysely<PromotionsFeedDatabase>(database.db);
-    const existing = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("clawhub_promotions_feed_state")
-        .select([
-          "etag",
-          "payload_json",
-          "feed_sequence",
-          "last_checked_at_ms",
-          "notified_slugs_json",
-        ])
-        .where("state_key", "=", PROMOTIONS_FEED_STATE_KEY),
-    );
-    const next = {
-      etag: params.etag === undefined ? (existing?.etag ?? null) : params.etag,
-      payload_json:
-        params.payloadJson === undefined ? (existing?.payload_json ?? null) : params.payloadJson,
-      feed_sequence:
-        params.sequence === undefined ? (existing?.feed_sequence ?? null) : params.sequence,
-      last_checked_at_ms: params.lastCheckedAtMs ?? existing?.last_checked_at_ms ?? null,
-      notified_slugs_json: params.notifiedSlugs
-        ? JSON.stringify([...params.notifiedSlugs].toSorted())
-        : (existing?.notified_slugs_json ?? "[]"),
-      updated_at_ms: Date.now(),
-    };
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .insertInto("clawhub_promotions_feed_state")
-        .values({ state_key: PROMOTIONS_FEED_STATE_KEY, ...next })
-        .onConflict((conflict) => conflict.column("state_key").doUpdateSet(next)),
-    );
-  });
+  updateConfigMachineState<StoredPromotionsFeedState>(PROMOTIONS_FEED_STATE_KEY, (existing) => ({
+    etag: params.etag === undefined ? (existing?.etag ?? null) : params.etag,
+    payloadJson:
+      params.payloadJson === undefined ? (existing?.payloadJson ?? null) : params.payloadJson,
+    sequence: params.sequence === undefined ? (existing?.sequence ?? null) : params.sequence,
+    lastCheckedAtMs: params.lastCheckedAtMs ?? existing?.lastCheckedAtMs ?? null,
+    notifiedSlugs: params.notifiedSlugs
+      ? [...new Set([...(existing?.notifiedSlugs ?? []), ...params.notifiedSlugs])].toSorted()
+      : (existing?.notifiedSlugs ?? []),
+  }));
 }
 
 export function markPromotionSlugsNotified(slugs: Iterable<string>): void {

@@ -199,7 +199,7 @@
   font-size: var(--control-ui-text-sm);
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .portals-layout {
     grid-template-columns: minmax(0, 1fr);
     min-height: auto;

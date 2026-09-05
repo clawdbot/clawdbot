@@ -202,31 +202,37 @@ export function renderSkillWorkshopHistoryScan(params: {
         <div class="sw-history__eyebrow">${t("skillWorkshop.history.eyebrow")}</div>
         <h2>${t("skillWorkshop.history.title")}</h2>
         <p>${t("skillWorkshop.history.body")}</p>
-        ${result?.hasScanned
-          ? html`
-              <div class="sw-history__stats" role="status">
-                <span
-                  >${t("skillWorkshop.history.reviewed", {
-                    count: String(result.reviewedSessions),
-                  })}</span
-                >
-                ${coverage ? html`<span>${coverage}</span>` : nothing}
-                <span
-                  >${t("skillWorkshop.history.found", {
-                    count: String(result.ideasFound),
-                  })}</span
-                >
-              </div>
-              ${result.lastScanReviewed === 0
-                ? html`<div class="sw-history__empty-window">
-                    ${t("skillWorkshop.history.noSessions")}
-                  </div>`
-                : nothing}
-            `
-          : nothing}
-        ${params.state.error
-          ? html`<div class="sw-history__error" role="alert">${params.state.error}</div>`
-          : nothing}
+        ${
+          result?.hasScanned
+            ? html`
+                <div class="sw-history__stats" role="status">
+                  <span
+                    >${t("skillWorkshop.history.reviewed", {
+                      count: String(result.reviewedSessions),
+                    })}</span
+                  >
+                  ${coverage ? html`<span>${coverage}</span>` : nothing}
+                  <span
+                    >${t("skillWorkshop.history.found", {
+                      count: String(result.ideasFound),
+                    })}</span
+                  >
+                </div>
+                ${
+                  result.lastScanReviewed === 0
+                    ? html`<div class="sw-history__empty-window">
+                        ${t("skillWorkshop.history.noSessions")}
+                      </div>`
+                    : nothing
+                }
+              `
+            : nothing
+        }
+        ${
+          params.state.error
+            ? html`<div class="sw-history__error" role="alert">${params.state.error}</div>`
+            : nothing
+        }
       </div>
       <div class="sw-history__action">
         <button

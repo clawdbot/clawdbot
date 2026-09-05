@@ -1,0 +1,293 @@
+diff --git a/dist/chunks/cac.uFydS1Z4.js b/dist/chunks/cac.uFydS1Z4.js
+index bf394fb6f662f2eed77d066b45be9898ede971c4..9f38659e3fa65d6dee938ba6188a41472a118a74 100644
+--- a/dist/chunks/cac.uFydS1Z4.js
++++ b/dist/chunks/cac.uFydS1Z4.js
+@@ -2290,7 +2290,12 @@ function parseCLI(argv, config = {}) {
+ 	if (arrayArgs[0] !== "vitest") throw new Error(`Expected "vitest" as the first argument, received "${arrayArgs[0]}"`);
+ 	arrayArgs[0] = "/index.js";
+ 	arrayArgs.unshift("node");
+-	let { args, options } = createCLI(config).parse(arrayArgs, { run: false });
++	const cli = createCLI(config);
++	let { args, options } = cli.parse(arrayArgs, { run: false });
++	// Validate without executing; help/version clear the matched command in parse().
++	cli.matchedCommand?.checkUnknownOptions();
++	cli.matchedCommand?.checkOptionValue();
++	cli.matchedCommand?.checkRequiredArgs();
+ 	if (arrayArgs[2] === "watch" || arrayArgs[2] === "dev") options.watch = true;
+ 	if (arrayArgs[2] === "run" && !options.watch) options.run = true;
+ 	if (arrayArgs[2] === "related") {
+diff --git a/dist/chunks/cli-api.CnMVyzaz.js b/dist/chunks/cli-api.CnMVyzaz.js
+index 2b8bb8d9cb13dc89892f4983afd404c8594bdcc5..3b94359b39b4ffa7f466a7c9817d60997e536c68 100644
+--- a/dist/chunks/cli-api.CnMVyzaz.js
++++ b/dist/chunks/cli-api.CnMVyzaz.js
+@@ -628,6 +628,7 @@ class FileSystemModuleCache {
+ 	rootCache;
+ 	metadataFilePath;
+ 	version = "1.0.0-beta.4";
++	lockfileHash;
+ 	fsCacheRoots = /* @__PURE__ */ new WeakMap();
+ 	fsEnvironmentHashMap = /* @__PURE__ */ new WeakMap();
+ 	fsCacheKeyGenerators = /* @__PURE__ */ new Set();
+@@ -644,9 +645,12 @@ class FileSystemModuleCache {
+ 		this.fsCacheKeyGenerators.add(callback);
+ 	}
+ 	async clearCache(log = true) {
+-		const fsCachePaths = this.vitest.projects.map((r) => {
++		// Disk deletion also retires paths retained by live module graphs.
++		this.fsCacheRoots = /* @__PURE__ */ new WeakMap();
++		this.vitest.clearAllCachePaths();
++		const fsCachePaths = [this.rootCache, ...this.vitest.projects.map((r) => {
+ 			return r.config.experimental.fsModuleCachePath || this.rootCache;
+-		});
++		})];
+ 		const uniquePaths = Array.from(new Set(fsCachePaths));
+ 		await Promise.all(uniquePaths.map((directory) => rm(directory, {
+ 			force: true,
+@@ -715,6 +719,11 @@ class FileSystemModuleCache {
+ 	invalidateAllCachePaths(environment) {
+ 		debugFs?.(`the ${environment.name} environment cache is invalidated`);
+ 		this.fsCacheKeys.get(environment)?.clear();
++		for (const module of environment.moduleGraph.idToModuleMap.values()) {
++			for (const transform of [module.transformResult, module.invalidationState]) {
++				if (transform && typeof transform !== "string") delete transform.__vitestTmp;
++			}
++		}
+ 	}
+ 	getMemoryCachePath(environment, id) {
+ 		const result = this.fsCacheKeys.get(environment)?.get(id);
+@@ -766,7 +775,9 @@ class FileSystemModuleCache {
+ 			});
+ 			this.fsEnvironmentHashMap.set(environment, cacheConfig);
+ 		}
+-		hashString += id + fileContent + (process.env.NODE_ENV ?? "") + this.version + cacheConfig + coverageAffectsCache;
++		// Shared metadata cannot certify excluded or post-clear cache entries.
++		// Their keys must carry the generation prepared during initialization.
++		hashString += id + fileContent + (process.env.NODE_ENV ?? "") + this.version + this.lockfileHash + cacheConfig + coverageAffectsCache;
+ 		const cacheKey = hash("sha1", hashString, "hex");
+ 		let cacheRoot = this.fsCacheRoots.get(vitestConfig);
+ 		if (cacheRoot == null) {
+@@ -800,25 +811,24 @@ class FileSystemModuleCache {
+ 	// or a new version of vite/vitest is installed
+ 	// for the same reason we also cache config file content, but that won't catch changes made in external plugins
+ 	async ensureCacheIntegrity() {
+-		if (![this.vitest.getRootProject(), ...this.vitest.projects].some((p) => p.config.experimental.fsModuleCache)) return;
+-		const metadata = await this.readMetadata();
+-		const currentLockfileHash = getLockfileHash(this.vitest.vite.config.root);
+-		// no metadata found, just store a new one, don't reset the cache
+-		if (!metadata) {
+-			if (!existsSync(this.rootCache)) mkdirSync(this.rootCache, { recursive: true });
+-			debugFs?.(`fs metadata file was created with hash ${currentLockfileHash}`);
+-			await writeFile(this.metadataFilePath, JSON.stringify({ lockfileHash: currentLockfileHash }, null, 2), "utf-8");
+-			return;
++		if ([this.vitest.getRootProject(), ...this.vitest.projects].some((p) => p.config.experimental.fsModuleCache)) {
++			const metadata = await this.readMetadata();
++			const currentLockfileHash = getLockfileHash(this.vitest.vite.config.root);
++			if (metadata?.lockfileHash !== currentLockfileHash) {
++				if (metadata) {
++					await this.clearCache(false);
++					this.vitest.vite.config.logger.info(`fs cache was cleared because lockfile has changed`, {
++						timestamp: true,
++						environment: c.yellow("[vitest]")
++					});
++					debugFs?.(`fs cache was cleared because lockfile has changed`);
++				}
++				if (!existsSync(this.rootCache)) mkdirSync(this.rootCache, { recursive: true });
++				debugFs?.(`fs metadata file was created with hash ${currentLockfileHash}`);
++				await writeFile(this.metadataFilePath, JSON.stringify({ lockfileHash: currentLockfileHash }, null, 2), "utf-8");
++			}
++			this.lockfileHash = currentLockfileHash;
+ 		}
+-		// if lockfile didn't change, don't do anything
+-		if (metadata.lockfileHash === currentLockfileHash) return;
+-		// lockfile changed, let's clear all caches
+-		await this.clearCache(false);
+-		this.vitest.vite.config.logger.info(`fs cache was cleared because lockfile has changed`, {
+-			timestamp: true,
+-			environment: c.yellow("[vitest]")
+-		});
+-		debugFs?.(`fs cache was cleared because lockfile has changed`);
+ 	}
+ }
+ /**
+@@ -1068,7 +1078,9 @@ class ModuleFetcher {
+ 		if ("code" in result) trace.setAttribute("vitest.fetched_module.code_length", result.code.length);
+ 	}
+ 	async getCachePath(environment, moduleGraphModule) {
+-		if (!this.fsCacheEnabled) return null;
++		// VCS and configureVitest imports precede project/cache-key initialization.
++		// Use normal Vite transforms until persistent cache integrity is established.
++		if (!this.fsCacheEnabled || this.fsCache.lockfileHash === void 0) return null;
+ 		const moduleId = moduleGraphModule.id;
+ 		const memoryCacheKey = this.fsCache.getMemoryCachePath(environment, moduleId);
+ 		// undefined means there is no key in memory
+@@ -3031,7 +3043,8 @@ class PoolRunner {
+ 							stopSpan.recordException(response.error);
+ 							this.project.vitest.state.catchError(response.error, "Teardown Error");
+ 						}
+-						resolve();
++						// Only the responding transport can promise an explicit graceful exit.
++						resolve(response.willExit ? Promise.resolve().then(() => this.worker.waitForExit?.()) : undefined);
+ 						this.off("message", onStop);
+ 					}
+ 				};
+@@ -3046,21 +3059,21 @@ class PoolRunner {
+ 					__vitest_worker_request__: true,
+ 					otelCarrier: this.getOTELCarrier()
+ 				});
+-			}), STOP_TIMEOUT).finally(() => {
++			}), STOP_TIMEOUT).finally(async () => {
+ 				stopSpan.end();
++				// Deadline/error paths must also terminate and join the worker.
++				await this._traces.$(`vitest.${this.worker.name}.stop`, { context: this._otel?.workerContext }, () => this.worker.stop());
+ 			});
+-			this._eventEmitter.removeAllListeners();
+-			this._offCancel();
+-			this._rpc.$close(/* @__PURE__ */ new Error("[vitest-pool-runner]: Pending methods while closing rpc"));
+-			// Stop the worker process (this sets _fork/_thread to undefined)
+-			// Worker's event listeners (error, message) are implicitly removed when worker terminates
+-			await this._traces.$(`vitest.${this.worker.name}.stop`, { context: this._otel?.workerContext }, () => this.worker.stop());
+ 			this._state = RunnerState.STOPPED;
+ 		} catch (error) {
+-			// Ensure we transition to stopped state even on error
++			// Ensure failed graceful shutdown cannot report a successful test run.
++			this.project.vitest.state.catchError(error, "Teardown Error");
+ 			this._state = RunnerState.STOPPED;
+ 			throw error;
+ 		} finally {
++			this._eventEmitter.removeAllListeners();
++			this._offCancel();
++			this._rpc.$close(/* @__PURE__ */ new Error("[vitest-pool-runner]: Pending methods while closing rpc"));
+ 			this._operationLock.resolve();
+ 			this._operationLock = null;
+ 			this._otel?.span.end();
+@@ -3163,10 +3176,22 @@ class ForksPoolWorker {
+ 			this._fork.stderr.pipe(this.stderr);
+ 		}
+ 	}
+-	async stop() {
++	waitForExit() {
+ 		const fork = this.fork;
++		return new Promise((resolve, reject) => {
++			const onExit = (code, signal) => {
++				if (code === 0 && signal == null) resolve();
++				else reject(new Error(`Worker exited during graceful shutdown (code: ${code}, signal: ${signal})`));
++			};
++			if (fork.exitCode != null || fork.signalCode != null) onExit(fork.exitCode, fork.signalCode);
++			else fork.once("exit", onExit);
++		});
++	}
++	async stop() {
++		const fork = this._fork;
++		if (!fork) return;
+ 		const waitForExit = new Promise((resolve) => {
+-			if (fork.exitCode != null) resolve();
++			if (fork.exitCode != null || fork.signalCode != null) resolve();
+ 			else fork.once("exit", resolve);
+ 		});
+ 		/*
+@@ -3175,10 +3200,12 @@ class ForksPoolWorker {
+ 		* - https://github.com/jestjs/jest/blob/25a8785584c9d54a05887001ee7f498d489a5441/packages/jest-worker/src/workers/ChildProcessWorker.ts#L463-L477
+ 		* - https://github.com/tinylibs/tinypool/blob/40b4b3eb926dabfbfd3d0a7e3d1222d4dd1c0d2d/src/runtime/process-worker.ts#L56
+ 		*/
+-		const sigkillTimeout = setTimeout(() => fork.kill("SIGKILL"), SIGKILL_TIMEOUT);
+-		fork.kill();
+-		await waitForExit;
+-		clearTimeout(sigkillTimeout);
++		if (fork.exitCode == null && fork.signalCode == null) {
++			const sigkillTimeout = setTimeout(() => fork.kill("SIGKILL"), SIGKILL_TIMEOUT);
++			fork.kill();
++			await waitForExit;
++			clearTimeout(sigkillTimeout);
++		}
+ 		if (fork.stdout) {
+ 			fork.stdout?.unpipe(this.stdout);
+ 			this.stdout.setMaxListeners(this.stdout.getMaxListeners() - 1);
+@@ -3548,7 +3575,7 @@ class Pool {
+ 			// Runner termination can also already start from task cancellation.
+ 			if (!runner.isTerminated) {
+ 				const id = setTimeout(() => this.logger.error(`[vitest-pool]: Timeout terminating ${task.worker} worker for test files ${formatFiles(task)}.`), this.options.teardownTimeout);
+-				this.exitPromises.push(runner.stop({ force: resolver.isRejected }).then(() => clearTimeout(id)).catch((error) => this.logger.error(`[vitest-pool]: Failed to terminate ${task.worker} worker for test files ${formatFiles(task)}.`, error)));
++				this.exitPromises.push(runner.stop({ force: resolver.isRejected }).finally(() => clearTimeout(id)).catch((error) => this.logger.error(`[vitest-pool]: Failed to terminate ${task.worker} worker for test files ${formatFiles(task)}.`, error)));
+ 			}
+ 			this.freeWorkerId(poolId);
+ 		} 
+@@ -3779,6 +3806,8 @@ function createPool(ctx) {
+ 			const groupResults = await Promise.allSettled(promises);
+ 			results.push(...groupResults);
+ 		}
++		// Join worker teardown before reporters and the CLI compute the run result.
++		await pool.close();
+ 		const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+ 		if (errors.length > 0) throw new AggregateError(errors, "Errors occurred while running tests. For more information, see serialized error.");
+ 	}
+@@ -13241,8 +13270,8 @@ class Vitest {
+ 		// populate will merge all configs into every project,
+ 		// we don't want that when just listing tags
+ 		if (!this.config.listTags) populateProjectsTags(this.coreWorkspaceProject, this.projects);
+-		this.reporters = resolved.mode === "benchmark" ? await createBenchmarkReporters(toArray(resolved.benchmark?.reporters), this.runner) : await createReporters(resolved.reporters, this);
+ 		await this._fsCache.ensureCacheIntegrity();
++		this.reporters = resolved.mode === "benchmark" ? await createBenchmarkReporters(toArray(resolved.benchmark?.reporters), this.runner) : await createReporters(resolved.reporters, this);
+ 		await Promise.all([...this._onSetServer.map((fn) => fn()), this._traces.waitInit()]);
+ 	}
+ 	/** @internal */
+@@ -13283,7 +13312,7 @@ class Vitest {
+ 		if (this.coverageProvider?.onFileTransform) this.clearAllCachePaths();
+ 	}
+ 	clearAllCachePaths() {
+-		this.projects.forEach(({ vite, browser }) => {
++		new Set([this.getRootProject(), ...this.projects]).forEach(({ vite, browser }) => {
+ 			[...Object.values(vite.environments), ...Object.values(browser?.vite.environments || {})].forEach((environment) => this._fsCache.invalidateAllCachePaths(environment));
+ 		});
+ 	}
+diff --git a/dist/chunks/init-forks.H5ZuobOQ.js b/dist/chunks/init-forks.H5ZuobOQ.js
+index 3a3a5f671e3d503eae1af13c6068e4d18bb8f60b..5754b53fc412909f0697c043c7b29f3846e1e134 100644
+--- a/dist/chunks/init-forks.H5ZuobOQ.js
++++ b/dist/chunks/init-forks.H5ZuobOQ.js
+@@ -13,7 +13,12 @@ processOn("error", onError);
+ function workerInit(options) {
+ 	const { runTests } = options;
+ 	init({
+-		post: (v) => processSend(v),
++		// Flush the response, then exit explicitly while native profiler signal handlers
++		// are still installed. The parent joins actual exit within its stop deadline.
++		post: (v) => {
++			if (v.__vitest_worker_response__ && v.type === "stopped") return processSend({ ...v, willExit: true }, (error) => processExit(error ? 1 : process.exitCode));
++			return processSend(v);
++		},
+ 		on: (cb) => processOn("message", cb),
+ 		off: (cb) => processOff("message", cb),
+ 		teardown: () => {
+diff --git a/dist/chunks/reporters.d.DtoKVV2s.d.ts b/dist/chunks/reporters.d.DtoKVV2s.d.ts
+index fbe82be6ea7d5dd5e3fa6771c040f0a438f5717f..b60a1abbb785f588bdf04ec1e8ba29baa630d5b1 100644
+--- a/dist/chunks/reporters.d.DtoKVV2s.d.ts
++++ b/dist/chunks/reporters.d.DtoKVV2s.d.ts
+@@ -2073,6 +2073,8 @@ interface PoolWorker {
+ 	send: (message: WorkerRequest) => void;
+ 	deserialize: (data: unknown) => unknown;
+ 	start: () => Promise<void>;
++	/** Observe exit when a stopped response declares willExit; reject abnormal termination. */
++	waitForExit?: () => Promise<void>;
+ 	stop: () => Promise<void>;
+ 	/**
+ 	* This is called on workers that already satisfy certain constraints:
+@@ -2139,6 +2141,8 @@ type WorkerResponse = {
+ } | {
+ 	type: "stopped";
+ 	error?: unknown;
++	/** The transport will exit itself after sending this response. */
++	willExit?: true;
+ } | {
+ 	type: "testfileFinished";
+ 	usedMemory?: number;
+diff --git a/dist/node.d.ts b/dist/node.d.ts
+index 4af12597408d7f46a148003f4425e83272e3ccdd..529b9b837041ed73f3daa2cf810cbe60450611f6 100644
+--- a/dist/node.d.ts
++++ b/dist/node.d.ts
+@@ -172,6 +172,7 @@ declare class ForksPoolWorker implements PoolWorker {
+ 	off(event: string, callback: (arg: any) => void): void;
+ 	send(message: WorkerRequest): void;
+ 	start(): Promise<void>;
++	waitForExit(): Promise<void>;
+ 	stop(): Promise<void>;
+ 	deserialize(data: unknown): unknown;
+ 	private get fork();

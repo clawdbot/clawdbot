@@ -62,10 +62,50 @@ changelog_required_for_changed_files() {
 root_changelog_update_allowed_for_pr() {
   case "${OPENCLAW_ALLOW_ROOT_CHANGELOG_PR:-}" in
     1|true|TRUE|yes|YES|on|ON)
+      printf 'override\n'
       return 0
       ;;
   esac
-  return 1
+  local record="${1:-}" branch version base
+  branch=$(printf '%s\n' "$record" | jq -r '.headRefName // ""') || return 1
+  [[ "$branch" =~ ^release/([0-9]{4}\.[0-9]+\.[0-9]+(-[0-9]+)?)-main-closeout$ ]] || return 1
+  version="${BASH_REMATCH[1]}"
+  printf '%s\n' "$record" | jq -e --arg title "chore(release): close out $version on main" \
+    '.title == $title and .baseRefName == "main" and .isCrossRepository == false' >/dev/null || return 1
+  git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1 || return 1
+  base=$(git merge-base "$PR_MAIN_SHA" HEAD) || return 1
+  # Compare complete sections, not just added lines: a closeout must preserve
+  # every byte outside its released version, including removed historical text.
+  node - "$version" "$base" <<'EOF_NODE' || return 1
+const { execFileSync } = require("node:child_process");
+const [version, base] = process.argv.slice(2);
+const heading = `## ${version}\n`;
+function split(text, allowUnreleased = false) {
+  const parts = text.split(/(?=^## )/m);
+  let matches = parts.filter((part) => part.startsWith(heading));
+  if (!matches.length && allowUnreleased) {
+    // Older draft headings can be placeholders; newer trains remain outside this closeout.
+    matches = parts.filter((part) => {
+      const draft = /^## (?:Unreleased|([0-9]{4}\.[0-9]+\.[0-9]+(?:-[0-9]+)?) \(Unreleased\))\n/i.exec(part);
+      return draft && (!draft[1] || draft[1].localeCompare(version, "en", { numeric: true }) <= 0);
+    });
+  }
+  if (matches.length > 1) process.exit(1);
+  const index = parts.indexOf(matches[0]);
+  return index < 0 ? { rest: text } : {
+    prefix: parts.slice(0, index).join(""),
+    suffix: parts.slice(index + 1).join(""),
+  };
+}
+// Release history already exceeds execFileSync's default 1 MiB capture limit.
+const read = (ref) => execFileSync("git", ["show", `${ref}:CHANGELOG.md`], { encoding: "utf8", maxBuffer: Infinity });
+const before = split(read(base), true);
+const after = split(read("HEAD"));
+if (after.rest !== undefined || (before.rest !== undefined
+  ? before.rest !== after.prefix + after.suffix
+  : before.prefix !== after.prefix || before.suffix !== after.suffix)) process.exit(1);
+EOF_NODE
+  printf 'closeout\n'
 }
 
 print_review_stdout_summary() {
@@ -143,6 +183,60 @@ bootstrap_deps_if_needed() {
   if [ ! -x node_modules/.bin/vitest ]; then
     run_quiet_logged "pnpm install --frozen-lockfile" ".local/bootstrap-install.log" pnpm install --frozen-lockfile
   fi
+}
+
+read_pr_view_json() {
+  local pr="$1"
+  local fields="$2"
+  local max_attempts=3
+  local temp_dir
+  temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-view.XXXXXX") || {
+    echo "Unable to create temporary storage for GitHub PR metadata." >&2
+    return 1
+  }
+  local stdout_file="$temp_dir/stdout"
+  local stderr_file="$temp_dir/stderr"
+  local attempt exit_code reason
+
+  for attempt in $(seq 1 "$max_attempts"); do
+    exit_code=0
+    if gh pr view "$pr" --json "$fields" >"$stdout_file" 2>"$stderr_file"; then
+      if [ -s "$stdout_file" ] && jq -se 'length == 1 and (.[0] | type == "object")' "$stdout_file" >/dev/null 2>&1; then
+        cat "$stdout_file"
+        rm -rf "$temp_dir"
+        return 0
+      fi
+      if [ ! -s "$stdout_file" ]; then
+        reason="gh pr view returned empty stdout"
+      else
+        reason="gh pr view did not return one JSON object"
+      fi
+    else
+      exit_code=$?
+      reason="gh pr view exited with status $exit_code"
+    fi
+    [ "$attempt" -eq "$max_attempts" ] || sleep "$attempt"
+  done
+
+  echo "GitHub API failure while reading PR #$pr: $reason after $max_attempts attempts." >&2
+  [ ! -s "$stderr_file" ] || cat "$stderr_file" >&2
+  rm -rf "$temp_dir"
+  return 1
+}
+
+pr_view_string_field() {
+  local json="$1" field="$2" pr="$3" remedy="${4:-Retry the command.}" label value
+  case "$field" in
+    headRefOid) label="a head SHA" ;;
+    baseRefName) label="a base branch" ;;
+    headRefName) label="a head branch" ;;
+    *) label="a non-empty .$field string" ;;
+  esac
+  if ! value=$(printf '%s\n' "$json" | jq -er --arg field "$field" '.[$field] | if type == "string" and length > 0 then . else error("missing string field") end' 2>/dev/null); then
+    echo "GitHub PR metadata for #$pr did not include $label. $remedy" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
 }
 
 wait_for_pr_head_sha() {
@@ -274,6 +368,28 @@ is_repo_pr_worktree_dir() {
   return 1
 }
 
+has_worktree_merge_output() {
+  local path="$1" capture
+  for capture in "$path/.local/merge-output.log" "$path"/.local/merge-output.*.log; do
+    if [ -e "$capture" ] || [ -L "$capture" ]; then return 0; fi
+  done
+  return 1
+}
+
+require_worktree_cleanup_evidence() (
+  local path="$1" pr
+  has_worktree_merge_output "$path" || return 0
+  # Keep loader state separate from an uninterrupted merge's live outcome owner.
+  # Even an empty capture can be the only evidence of an earlier dispatch.
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/merge-outcome.sh" || return 1
+  if pr=$(pr_number_from_worktree_dir "$path") &&
+    merge_outcome_load_local "$pr" && [ -n "$MERGE_OUTCOME_OID" ]; then
+    return 0
+  fi
+  echo "Preserving $path: merge output has no valid retained merge outcome. Keep the worktree, metadata, and local branches; reconcile the earlier request manually before cleanup." >&2
+  return 1
+)
+
 remove_worktree_if_present() {
   local path="$1"
   local registered_path=""
@@ -299,6 +415,8 @@ remove_worktree_if_present() {
     echo "Warning: refusing to remove non-canonical PR-worktree path $path"
     return 0
   fi
+
+  require_worktree_cleanup_evidence "$path" || return 1
 
   if [ -n "$registered_path" ] && worktree_is_registered "$registered_path"; then
     local remove_error
@@ -365,4 +483,17 @@ delete_local_branch_if_safe() {
 
   echo "Warning: failed to delete local branch $branch"
   return 0
+}
+
+cleanup_pr_worktree() {
+  local path="$1" pr branch complete=true
+  pr=$(pr_number_from_worktree_dir "$path") || return 1
+  remove_worktree_if_present "$path" || return 1
+  # Refusal or incomplete removal preserves the branches with the worktree.
+  [ ! -e "$path" ] && [ ! -L "$path" ] || return 1
+  for branch in "temp/pr-$pr" "pr-$pr" "pr-$pr-prep"; do
+    delete_local_branch_if_safe "$branch" || return 1
+    if git show-ref --verify --quiet "refs/heads/$branch"; then complete=false; fi
+  done
+  [ "$complete" = true ]
 }

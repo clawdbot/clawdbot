@@ -19,6 +19,7 @@ import type {
 } from "./qa-channel-protocol.js";
 
 type QaRunnerTransportPolicy = {
+  directMessageOnly?: true;
   requireGroupMention?: true;
   senderAllowlist?: readonly string[];
   topLevelReplies?: true;
@@ -82,6 +83,7 @@ type QaRunnerCredentialHost = {
 };
 
 type QaRunnerTransportFlowPreparationInput = {
+  signal?: AbortSignal;
   config: Record<string, unknown>;
   scenarioId: string;
   scenarioTitle: string;
@@ -336,7 +338,7 @@ function registerLiveTransportQaCli(
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option("--scenario <id>", params.scenarioHelp, collectLiveTransportQaStringOption, [])
-    .option("--fast", "Enable provider fast mode where supported", false);
+    .option("--fast", "Enable provider fast mode where supported");
 
   if (params.allowFailuresHelp) {
     command.option("--allow-failures", params.allowFailuresHelp, false);
@@ -407,7 +409,13 @@ type QaRuntimeSurface = {
       preferredLiveModel?: string;
     },
   ) => string;
-  startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
+  createQaLiveLaneGateway: () => {
+    start: (...args: unknown[]) => Promise<unknown>;
+    stop: () => Promise<{
+      process: "never-spawned" | "confirmed-stopped" | "unconfirmed";
+      errors: unknown[];
+    }>;
+  };
   runLiveTransportQaSuiteCommand: (params: LiveTransportQaSuiteCommandOptions) => Promise<unknown>;
 };
 

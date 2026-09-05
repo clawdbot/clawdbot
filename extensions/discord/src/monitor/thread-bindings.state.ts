@@ -386,7 +386,7 @@ function toPersistedBindingRecord(record: ThreadBindingRecord): PersistedThreadB
   if (!serialized) {
     return { ...record };
   }
-  return JSON.parse(serialized) as unknown as PersistedThreadBindingRecord;
+  return normalizePersistedBinding(record.threadId, JSON.parse(serialized)) ?? { ...record };
 }
 
 export function saveBindingsToDisk(params: { force?: boolean; minIntervalMs?: number } = {}) {

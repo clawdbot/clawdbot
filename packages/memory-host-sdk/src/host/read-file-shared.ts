@@ -10,7 +10,7 @@ export const DEFAULT_MEMORY_READ_LINES = 120;
 /** Default max character budget for memory read helper output. */
 export const DEFAULT_MEMORY_READ_MAX_CHARS = 12_000;
 
-export type { MemoryReadResult } from "./types.js";
+export type { LegacyMemoryReadResult, MemoryReadResult } from "./types.js";
 
 /** Build the continuation notice appended to truncated memory excerpts. */
 function buildContinuationNotice(params: {
@@ -87,6 +87,7 @@ export function buildMemoryReadResultFromSlice(params: {
         })}`
       : fitted.text;
   return {
+    status: "ok",
     text,
     path: params.relPath,
     from: start,

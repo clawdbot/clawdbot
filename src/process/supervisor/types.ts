@@ -44,8 +44,10 @@ export type ManagedRun = {
   startedAtMs: number;
   stdin?: ManagedRunStdin;
   wait: () => Promise<RunExit>;
+  /** The root result may settle before its independently owned descendants exit. */
+  waitForExtinction?: () => Promise<void>;
   cancel: (reason?: TerminationReason) => void;
-  /** Stop delivering output callbacks before owner teardown kills the child. */
+  /** Stop every decoded, raw, captured, and output-clock update for this run. */
   detachOutput?: () => void;
 };
 
@@ -64,18 +66,30 @@ export type SpawnSecretInput = {
   createData: () => Buffer;
 };
 
+export type ProcessAdapterConstruction = {
+  assertCurrent?: () => void;
+  abortSignal?: AbortSignal;
+  /** Publish resource cleanup before readiness or private-input delivery can fail. */
+  onSpawnCleanup?: (cleanup: Promise<void>) => void;
+};
+
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   pid?: number;
   stdin?: ManagedRunStdin;
   oomScoreWrapperSelected?: boolean;
-  onStdout: (listener: (chunk: string) => void) => void;
-  onStderr: (listener: (chunk: string) => void) => void;
+  /** Both output subscriptions observe bytes separately from decoded text. */
+  supportsRawOutput: boolean;
+  onStdout: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => void;
+  onStderr: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => void;
   wait: () => Promise<{ code: number | null; signal: WaitSignal }>;
+  waitForExtinction?: () => Promise<void>;
   kill: (signal?: NodeJS.Signals) => void;
   dispose: () => void;
 };
 
 type SpawnBaseInput = {
+  /** Revalidate the caller at deferred spawn and private-input delivery boundaries. */
+  assertCurrent?: () => void;
   runId?: string;
   sessionId: string;
   backendId: string;
@@ -101,22 +115,34 @@ type SpawnBaseInput = {
 type SpawnChildInput = SpawnBaseInput & {
   mode: "child";
   argv: string[];
+  /** Preserve a distinct invocation name while executing argv[0]. */
+  argv0?: string;
+  /** Preserve a caller-prepared environment without environment-mutating spawn wrappers. */
+  exactEnv?: true;
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
+  onStdoutRaw?: (chunk: Buffer) => void;
+  onStderrRaw?: (chunk: Buffer) => void;
 };
 
 type SpawnPtyInput = SpawnBaseInput & {
   mode: "pty";
-  ptyCommand: string;
+  argv: string[];
 };
 
-export type SpawnInput = SpawnChildInput | SpawnPtyInput;
+type SpawnAnchoredShellInput = SpawnBaseInput & {
+  mode: "anchored-shell";
+  command: string;
+};
+
+export type SpawnInput = SpawnChildInput | SpawnPtyInput | SpawnAnchoredShellInput;
 
 export interface ProcessSupervisor {
   spawn(input: SpawnInput): Promise<ManagedRun>;
   cancel(runId: string, reason?: TerminationReason): void;
   cancelScope(scopeKey: string, reason?: TerminationReason): void;
+  waitForScope?: (scopeKey: string) => Promise<void>;
   getRecord(runId: string): RunRecord | undefined;
 }

@@ -6,6 +6,11 @@ import {
   saveAuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  capturePluginRegistration,
+  createRuntimeEnv,
+  resolveProviderPluginChoice,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
   requireFirstPostJsonRecordRequest as requireFirstPostJsonRequest,
@@ -17,6 +22,7 @@ import {
   mockSuccessfulDashscopeVideoTask,
 } from "openclaw/plugin-sdk/provider-test-contracts";
 // Alibaba tests cover video generation provider plugin behavior.
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import {
   DASHSCOPE_WAN_VIDEO_MODELS,
@@ -55,6 +61,49 @@ function clearAlibabaAuthEnvironment(): void {
 const requireRecord = createRequireRecord("record", "expected-label-record");
 
 describe("alibaba video generation provider", () => {
+  it("registers media-only API-key onboarding alongside video generation", async () => {
+    const { default: plugin } = await import("./index.js");
+    const captured = capturePluginRegistration(plugin);
+
+    expect(captured.videoGenerationProviders.map((provider) => provider.id)).toEqual(["alibaba"]);
+    expect(captured.modelCatalogProviders).toEqual([]);
+    expect(captured.providers).toHaveLength(1);
+    expect(captured.providers[0]).toMatchObject({
+      id: "alibaba",
+      docsPath: "/providers/alibaba",
+      envVars: ["MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY", "QWEN_API_KEY"],
+    });
+
+    const choice = resolveProviderPluginChoice({
+      providers: captured.providers,
+      choice: "alibaba-model-studio-api-key",
+    });
+    expect(choice?.method.id).toBe("api-key");
+    expect(choice?.method.starterModel).toBeUndefined();
+    expect(choice?.wizard?.onboardingScopes).toEqual(["image-generation"]);
+    if (!choice?.method.validateNonInteractive) {
+      throw new Error("expected Alibaba non-interactive API-key validation");
+    }
+
+    const resolveApiKey = vi.fn(async () => ({ key: "alibaba-test-key", source: "flag" as const }));
+    expect(
+      await choice.method.validateNonInteractive({
+        authChoice: "alibaba-model-studio-api-key",
+        config: {},
+        baseConfig: {},
+        opts: { alibabaModelStudioApiKey: "alibaba-test-key" },
+        runtime: createRuntimeEnv(),
+        resolveApiKey,
+      }),
+    ).toBe(true);
+    expect(resolveApiKey).toHaveBeenCalledWith({
+      provider: "alibaba",
+      flagValue: "alibaba-test-key",
+      flagName: "--alibaba-model-studio-api-key",
+      envVar: "MODELSTUDIO_API_KEY",
+    });
+  });
+
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(alibabaVideoGenerationProvider);
     expect(alibabaVideoGenerationProvider).toMatchObject({
@@ -228,6 +277,10 @@ describe("alibaba video generation provider", () => {
       expect(alibabaVideoGenerationProvider.isConfigured?.({ cfg: {}, agentDir })).toBe(expected);
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
+      // Saving the profile store opens the per-agent database under the temporary agent
+      // dir, and clearing the snapshots does not release it, so Windows fails the removal
+      // with EBUSY unless the cached handles are closed first.
+      closeOpenClawAgentDatabasesForTest();
       await fs.rm(agentDir, { force: true, recursive: true });
     }
   });

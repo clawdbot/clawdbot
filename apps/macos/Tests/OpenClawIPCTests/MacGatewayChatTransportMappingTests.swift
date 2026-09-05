@@ -6,10 +6,100 @@ import Testing
 @testable import OpenClaw
 
 struct MacGatewayChatTransportMappingTests {
+    private actor ProgressRequestRecorder {
+        var params: [Data] = []
+
+        func append(_ data: Data) {
+            self.params.append(data)
+        }
+
+        func snapshot() -> [Data] {
+            self.params
+        }
+    }
+
+    @Test(arguments: [false, true, nil] as [Bool?])
+    func `progress requests negotiate owner scope on the connected server`(supportsOwner: Bool?) async throws {
+        let recorder = ProgressRequestRecorder()
+        let socketSession = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                guard sendIndex > 0 else { return }
+                let data: Data = switch message {
+                case let .data(value): value
+                case let .string(value): Data(value.utf8)
+                @unknown default: throw URLError(.cannotParseResponse)
+                }
+                let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                let id = try #require(frame["id"] as? String)
+                var payload = "{}"
+                if frame["method"] as? String == "progressCard.get" {
+                    let params = try #require(frame["params"] as? [String: Any])
+                    try await recorder.append(JSONSerialization.data(withJSONObject: params))
+                    // A released server's closed schema rejects the extra owner field.
+                    #expect(supportsOwner == true || params["agentId"] == nil)
+                    let owner = params["agentId"] as? String ??
+                        OpenClawChatSessionKey.agentID(from: params["sessionKey"] as? String) ?? "main"
+                    payload = #"{"card":{"sessionKey":"agent:\#(owner):global","revision":1,"updatedAt":10,"markdown":"\#(owner)","steps":[]}}"#
+                }
+                socket
+                    .emitReceiveSuccess(.data(Data(#"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#
+                            .utf8)))
+            }, receiveHook: { socket, receiveIndex in
+                if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+                let hello = GatewayWebSocketTestSupport.connectOkData(
+                    id: socket.snapshotConnectRequestID() ?? "connect",
+                    methods: ["progressCard.get"],
+                    capabilities: supportsOwner == true ? ["progress-card-agent-scope-v1"] : [])
+                guard supportsOwner == nil else { return .data(hello) }
+                var frame = try #require(JSONSerialization.jsonObject(with: hello) as? [String: Any])
+                var payload = try #require(frame["payload"] as? [String: Any])
+                var features = try #require(payload["features"] as? [String: Any])
+                features.removeValue(forKey: "capabilities")
+                payload["features"] = features
+                frame["payload"] = payload
+                return try .data(JSONSerialization.data(withJSONObject: frame))
+            })
+        })
+        let gateway = GatewayConnection(
+            configProvider: { (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: socketSession))
+        do {
+            _ = try await gateway.request(method: "health", params: nil)
+            let transport = MacGatewayChatTransport(connection: gateway, defaultGlobalAgentID: "main")
+            let ordinary = try await transport.fetchProgressCard(
+                sessionKey: "agent:research:global",
+                agentID: "research")
+            #expect(ordinary?.markdown == "research")
+            if supportsOwner == true {
+                let global = try await transport.fetchProgressCard(sessionKey: "global", agentID: "research")
+                #expect(global?.markdown == "research")
+            } else {
+                do {
+                    _ = try await transport.fetchProgressCard(sessionKey: "global", agentID: "research")
+                    Issue.record("Unadvertised owner-scoped progress must not dispatch")
+                } catch let error as NSError {
+                    #expect(error.localizedDescription == OpenClawChatTransportUpgradeMessage.progressCardAgentScope)
+                }
+            }
+            let params = try await recorder.snapshot().map {
+                try #require(JSONSerialization.jsonObject(with: $0) as? [String: String])
+            }
+            #expect(params == (supportsOwner == true ? [
+                ["sessionKey": "agent:research:global"],
+                ["sessionKey": "global", "agentId": "research"],
+            ] : [["sessionKey": "agent:research:global"]]))
+            await gateway.shutdown()
+        } catch {
+            await gateway.shutdown()
+            throw error
+        }
+    }
+
     @Test func `mac chat advertises typed agent rosters and inline widgets`() {
         #expect(GatewayConnection.operatorClientCaps == [
             OpenClawGatewayClientCapability.agentKind,
             OpenClawGatewayClientCapability.inlineWidgets,
+            OpenClawGatewayClientCapability.usageRefreshing,
         ])
     }
 
@@ -39,6 +129,21 @@ struct MacGatewayChatTransportMappingTests {
         #expect(transport.sessionTarget(for: "global") == .init(
             sessionKey: "global",
             agentID: nil))
+    }
+
+    @Test func `session list request follows the current routing agent`() {
+        let transport = MacGatewayChatTransport(defaultGlobalAgentID: "  Agent-A  ")
+
+        let first = transport.sessionsListRequest(limit: 50, search: nil, archived: false)
+        #expect(first.params["agentId"]?.value as? String == "agent-a")
+
+        transport.updateDefaultGlobalAgentID("Agent-B")
+        let second = transport.sessionsListRequest(limit: nil, search: "recent", archived: true)
+        #expect(second.params["agentId"]?.value as? String == "agent-b")
+
+        let unowned = MacGatewayChatTransport()
+            .sessionsListRequest(limit: nil, search: nil, archived: false)
+        #expect(unowned.params["agentId"] == nil)
     }
 
     @Test func `fixed connection does not inherit app wide cache routing`() async throws {

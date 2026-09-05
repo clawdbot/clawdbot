@@ -43,7 +43,7 @@ A trio for product work: [Socratic Dialogue](https://clawhub.ai/monikazapisekstu
 Stops orchestrators from idling while sub-agents work: an async callback mechanism where results land in a mailbox instead of blocking the parent agent.
 </Card>
 
-<Card title="lite-mode for low-RAM machines" icon="feather" href="https://clawhub.ai/skills/lite-mode">
+<Card title="lite-mode for low-RAM machines" icon="feather" href="https://clawhub.ai/mirajmahmudul/skills/lite-mode">
   **@mirajmahmudul** • `performance` `skill`
 
 Keeps OpenClaw usable on 2-4 GB machines: checks free memory and trims heavy features before the box starts swapping. [Source on GitHub](https://github.com/mirajmahmudul/openclaw-lite-mode).

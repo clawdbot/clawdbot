@@ -1,4 +1,14 @@
+import type {
+  RuntimeTargetIssue,
+  WorkerSlotSummary,
+} from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
+import type { NodeHostStats } from "./node-host-stats.js";
+
+export type NodeWorkerBundleStatus =
+  | { status: "installed"; version: string }
+  | { status: "missing" };
 
 /** Node record returned by gateway node-list endpoints. */
 export type NodeListNode = {
@@ -18,8 +28,13 @@ export type NodeListNode = {
   pathEnv?: string;
   caps?: string[];
   commands?: string[];
-  /** Connected node currently advertises full worker session hosting. */
+  computerUse?: ComputerUseCapabilityDescriptor;
+  /** Node has explicitly enabled session hosting; live slots own current capacity. */
   sessionHost?: boolean;
+  workerSlots?: WorkerSlotSummary;
+  hostStats?: NodeHostStats;
+  workerBundle?: NodeWorkerBundleStatus;
+  issues?: readonly RuntimeTargetIssue[];
   nodePluginTools?: NodePluginToolDescriptor[];
   permissions?: Record<string, boolean>;
   approvalState?: "approved" | "pending-approval" | "pending-reapproval" | "unapproved";
@@ -30,6 +45,8 @@ export type NodeListNode = {
   paired?: boolean;
   connected?: boolean;
   connectedAtMs?: number;
+  lastConnectedAtMs?: number;
+  lastDisconnectedAtMs?: number;
   lastActiveAtMs?: number;
   presenceUpdatedAtMs?: number;
   active?: boolean;

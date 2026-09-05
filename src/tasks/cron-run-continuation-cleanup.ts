@@ -7,7 +7,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue.js";
+import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { hasPendingGeneratedMediaTaskForSessionKey } from "./task-status-access.js";

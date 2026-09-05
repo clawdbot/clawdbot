@@ -6,7 +6,8 @@ import Foundation
 enum DashboardFailurePage {
     static func html(title: String, message: String, detail: String?, url: URL?) -> String {
         let detailHTML = detail.map { "<p class=\"detail\">\(self.htmlEscape($0))</p>" } ?? ""
-        let urlHTML = url.map { "<code>\(self.htmlEscape($0.absoluteString))</code>" } ?? ""
+        let urlHTML = url
+            .map { "<code>\(self.htmlEscape(GatewayEndpointStore.diagnosticURLString(for: $0)))</code>" } ?? ""
         return """
         <!doctype html>
         <html>

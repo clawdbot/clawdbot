@@ -2,6 +2,7 @@
 summary: "macOS permission persistence (TCC) and signing requirements"
 read_when:
   - Debugging missing or stuck macOS permission prompts
+  - Screen Recording still appears missing after granting access
   - Deciding whether to grant Accessibility to node or a CLI runtime
   - Packaging or signing the macOS app
   - Changing bundle IDs or app install paths
@@ -13,11 +14,23 @@ macOS permission grants are fragile. TCC associates a permission grant with the 
 ## Requirements for stable permissions
 
 - Same path: run a release app from `/Applications/OpenClaw.app`; keep development builds at one fixed path such as `dist/OpenClaw.app`.
-- Same bundle identifier: OpenClaw's bundle ID is `ai.openclaw.mac`; changing it creates a new permission identity.
+- Same bundle identifier: release builds use `ai.openclaw.mac`; development builds default to `ai.openclaw.mac.debug`. Each has a separate permission identity.
 - Signed app: unsigned or ad-hoc signed builds do not persist permissions.
 - Consistent signature: use a real Apple Development or Developer ID certificate so the signature stays stable across rebuilds.
 
 Ad-hoc signatures generate a new identity every build. macOS forgets previous grants, and prompts can disappear entirely until the stale entries are cleared.
+
+## Screen Recording still appears missing after granting access
+
+If Quick Chat still shows **Needs additional permissions: Screen Recording**:
+
+1. Click **Grant** in OpenClaw.
+2. If macOS opens System Settings, enable the running OpenClaw app under **Privacy & Security -> Screen & System Audio Recording** (called **Screen Recording** on older macOS versions).
+3. Return to OpenClaw and retry the screenshot. You can also recheck access with **Settings -> Permissions -> Refresh**.
+
+After an explicit **Grant** request, OpenClaw checks ScreenCaptureKit as well as the macOS permission preflight. This lets it recognize access when the preflight still reports an old denial. Passive status checks do not initiate this probe before you request access.
+
+If access still appears missing, quit and reopen OpenClaw from the same app path. Some macOS permission changes require an app restart before capture works. If both release and development builds are installed, grant access to the build you are actually running: approving `/Applications/OpenClaw.app` does not grant access to a development build with a different bundle identifier.
 
 ## Accessibility grants for Node and CLI runtimes
 

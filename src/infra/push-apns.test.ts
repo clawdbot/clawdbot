@@ -7,7 +7,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 // Tests APNS push signing and request construction.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifecycle.js";
 import {
   appendApnsResponseBodyCapture,
@@ -560,10 +560,14 @@ describe("push APNs send semantics", () => {
       .spyOn(http2, "connect")
       .mockReturnValue(session as unknown as http2.ClientHttp2Session);
     const currentness = createDeferred<boolean>();
+    const checkingCurrentness = createDeferred();
     const isCurrent = vi
       .fn<() => Promise<boolean>>()
       .mockResolvedValueOnce(true)
-      .mockReturnValueOnce(currentness.promise);
+      .mockImplementationOnce(() => {
+        checkingCurrentness.resolve();
+        return currentness.promise;
+      });
     const { registration, auth } = createDirectApnsSendFixture({
       nodeId: "ios-node-session-error",
       environment: "production",
@@ -578,10 +582,13 @@ describe("push APNs send semantics", () => {
         auth,
         isCurrent,
       });
-      await vi.waitFor(() => {
-        expect(connect).toHaveBeenCalledTimes(1);
-        expect(isCurrent).toHaveBeenCalledTimes(2);
-      });
+      await withTestTimeout(
+        checkingCurrentness.promise,
+        1_000,
+        "APNs persistent currentness check did not start",
+      );
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(isCurrent).toHaveBeenCalledTimes(2);
 
       expect(session.listenerCount("error")).toBeGreaterThan(0);
       session.emit("error", new Error("APNs connection failed"));

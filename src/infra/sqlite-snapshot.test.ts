@@ -567,13 +567,13 @@ describe("createVerifiedSqliteSnapshot", () => {
   });
 
   it("rejects a target replaced after atomic publication", async () => {
-    const originalLink = fs.link.bind(fs);
-    vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
-      await originalLink(source, target);
-      if (path.resolve(String(target)) === targetPath) {
-        await fs.unlink(targetPath);
-        await fs.writeFile(targetPath, "racer");
-      }
+    __setFsSafeTestHooksForTest({
+      afterPublishTargetCreated: async (method, publishedPath) => {
+        if (method === "hardlink" && path.resolve(publishedPath) === targetPath) {
+          await fs.unlink(targetPath);
+          await fs.writeFile(targetPath, "racer");
+        }
+      },
     });
 
     await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(

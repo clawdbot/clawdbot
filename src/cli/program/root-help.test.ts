@@ -48,7 +48,7 @@ vi.mock("./subcli-descriptors.js", () => ({
   getSubCliCommandsWithSubcommands: () => ["config"],
 }));
 
-vi.mock("../../plugins/cli.js", () => ({
+vi.mock("../../plugins/cli-root-descriptors.js", () => ({
   getPluginCliCommandDescriptors: (...args: [unknown?, unknown?, unknown?]) =>
     getPluginCliCommandDescriptorsMock(...args),
 }));

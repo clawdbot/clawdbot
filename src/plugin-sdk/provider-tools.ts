@@ -16,6 +16,7 @@ import type {
 } from "./plugin-entry.js";
 
 export {
+  normalizeOpenAIStrictCompatSchema,
   cleanSchemaForGemini,
   cleanSchemaForLlamacppGbnf,
   findLlamacppGbnfSchemaViolations,

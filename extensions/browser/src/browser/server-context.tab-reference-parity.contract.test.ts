@@ -146,7 +146,8 @@ describe("tab reference parity contract", () => {
       expect(backendTargetIds(focusCtx.fetchMock, "/json/activate/")).toContain(expected);
 
       const closeCtx = await setupProfileWithLabels();
-      await closeCtx.openclaw.closeTab(input);
+      const closedTargetId = await closeCtx.openclaw.closeTab(input);
+      expect(closedTargetId).toBe(expected);
       expect(backendTargetIds(closeCtx.fetchMock, "/json/close/")).toContain(expected);
     });
   }

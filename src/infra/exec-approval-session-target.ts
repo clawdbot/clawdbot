@@ -7,9 +7,9 @@ import {
   doesApprovalRequestMatchChannelAccount,
   resolvePersistedApprovalRequestSessionEntry,
 } from "./approval-request-account-binding.js";
+import { normalizeApprovalRequest, type ApprovalRequestInput } from "./approval-types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
 /** Delivery target recovered from an approval request's live turn-source or stored session. */
 export type ExecApprovalSessionTarget = {
@@ -31,7 +31,7 @@ export type ApprovalRequestSessionConversation = {
   parentConversationCandidates: string[];
 };
 
-type ApprovalRequestLike = ExecApprovalRequest | PluginApprovalRequest;
+type ApprovalRequestLike = ApprovalRequestInput;
 type ApprovalRequestOriginTargetResolver<TTarget> = {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
@@ -56,26 +56,24 @@ function normalizeExecApprovalThreadValue(
   return normalized ? normalized : undefined;
 }
 
-function isExecApprovalRequest(request: ApprovalRequestLike): request is ExecApprovalRequest {
-  return "command" in request.request;
-}
-
 function toExecLikeApprovalRequest(request: ApprovalRequestLike): ExecApprovalRequest {
-  if (isExecApprovalRequest(request)) {
-    return request;
+  const normalizedRequest = normalizeApprovalRequest(request);
+  if (normalizedRequest.approvalKind === "exec") {
+    return normalizedRequest;
   }
   return {
-    id: request.id,
+    approvalKind: "exec",
+    id: normalizedRequest.id,
     request: {
-      command: request.request.title,
-      sessionKey: request.request.sessionKey ?? undefined,
-      turnSourceChannel: request.request.turnSourceChannel ?? undefined,
-      turnSourceTo: request.request.turnSourceTo ?? undefined,
-      turnSourceAccountId: request.request.turnSourceAccountId ?? undefined,
-      turnSourceThreadId: request.request.turnSourceThreadId ?? undefined,
+      command: normalizedRequest.request.title,
+      sessionKey: normalizedRequest.request.sessionKey ?? undefined,
+      turnSourceChannel: normalizedRequest.request.turnSourceChannel ?? undefined,
+      turnSourceTo: normalizedRequest.request.turnSourceTo ?? undefined,
+      turnSourceAccountId: normalizedRequest.request.turnSourceAccountId ?? undefined,
+      turnSourceThreadId: normalizedRequest.request.turnSourceThreadId ?? undefined,
     },
-    createdAtMs: request.createdAtMs,
-    expiresAtMs: request.expiresAtMs,
+    createdAtMs: normalizedRequest.createdAtMs,
+    expiresAtMs: normalizedRequest.expiresAtMs,
   };
 }
 

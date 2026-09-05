@@ -1,3 +1,4 @@
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
@@ -12,7 +13,6 @@ import {
 import { createModelObserver } from "./attempt.model-diagnostic-observation.js";
 
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
-
 function asyncIteratorFactory(value: unknown): (() => AsyncIterator<unknown>) | undefined {
   if (value === null || typeof value !== "object") {
     return undefined;
@@ -92,7 +92,7 @@ async function* observeModelCallIterator<T>(
       // the agent loop returns on the terminal event after awaiting result().
       // Close the underlying iterator for provider cleanup (idle-timeout abort
       // listeners, SSE readers) even when result() already emitted the terminal
-      // event; emitModelCallCompleted self-dedupes via state.terminalEventEmitted.
+      // event; lifecycle completion self-dedupes via state.terminalEventEmitted.
       await safeReturnIterator(iterator);
       lifecycle.emitCompleted();
     }
@@ -187,9 +187,13 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
   ctx: ModelCallDiagnosticContext,
 ): StreamFn {
   return ((model, streamContext, options) => {
+    const requestTimeoutMs = clampPositiveTimerTimeoutMs(
+      (isRecord(model) ? model.requestTimeoutMs : undefined) ?? ctx.requestTimeoutMs,
+    );
     const lifecycle = createModelLifecycle({
       ctx,
       options,
+      requestTimeoutMs,
       createObserver: (capturePromptStats) =>
         createModelObserver({
           streamContext,

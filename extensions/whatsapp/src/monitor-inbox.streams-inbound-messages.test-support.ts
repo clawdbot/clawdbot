@@ -16,8 +16,8 @@ import {
   installWebMonitorInboxUnitTestHooks,
   startInboxMonitor,
   waitForMessageCalls,
+  type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
-import type { InboxOnMessage } from "./monitor-inbox.test-harness.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 const { controllerContexts, imageOps, sleepWithAbortMock } = vi.hoisted(() => ({
@@ -80,14 +80,6 @@ export function inboundMessage(onMessage: ReturnType<typeof vi.fn>, index = 0): 
   const msg = onMessage.mock.calls[index]?.[0];
   expect(msg).toBeDefined();
   return msg as WebInboundMessage;
-}
-
-export function expectDeprecatedAdmissionAliases(inbound: WebInboundMessage) {
-  expect(inbound.from).toBe(inbound.admission?.conversation.id);
-  expect(inbound.conversationId).toBe(inbound.admission?.conversation.id);
-  expect(inbound.accountId).toBe(inbound.admission?.accountId);
-  expect(inbound.chatType).toBe(inbound.admission?.conversation.kind);
-  expect(inbound.accessControlPassed).toBe(inbound.admission?.ingress.decision === "allow");
 }
 
 export async function expectSocketOperationTimeout(

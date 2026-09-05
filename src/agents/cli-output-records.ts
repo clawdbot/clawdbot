@@ -1,6 +1,7 @@
 import { extractBalancedJsonFragments } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
 import type { CliOutput, CliTerminalFailure, CliUsage } from "./cli-output-contracts.js";
 import { normalizeUsage, type UsageLike } from "./usage.js";
@@ -57,6 +58,21 @@ export function isClaudeStreamJsonResult(params: {
   parsed: Record<string, unknown>;
 }): boolean {
   return supportsCliJsonlToolEvents(params) && params.parsed.type === "result";
+}
+
+export function isClaudeSyntheticNoResponse(parsed: Record<string, unknown>): boolean {
+  if (parsed.type !== "assistant" || !isRecord(parsed.message)) {
+    return false;
+  }
+  const message = parsed.message;
+  return (
+    message.model === "<synthetic>" &&
+    Array.isArray(message.content) &&
+    message.content.length === 1 &&
+    isRecord(message.content[0]) &&
+    message.content[0].type === "text" &&
+    message.content[0].text === "No response requested."
+  );
 }
 
 function extractJsonObjectCandidates(raw: string): string[] {
@@ -235,6 +251,7 @@ export function collectExplicitCliErrorText(parsed: Record<string, unknown>): st
     (parsed.type === "result" && (subtype.startsWith("error_") || parsed.status === "error"));
   if (isResultError) {
     const text =
+      readClaudeResultErrorsText(parsed) ||
       collectCliText(parsed.result) ||
       collectCliText(parsed.message) ||
       collectCliText(parsed.content);
@@ -275,14 +292,78 @@ export function collectExplicitCliErrorText(parsed: Record<string, unknown>): st
   return "";
 }
 
-function readClaudeMaxTurnsFailure(
+const CLI_TERMINAL_REASON_MAX_CHARS = 64;
+
+// The reason is a backend-controlled string repeated into operator- and
+// model-visible text, so collapse whitespace and control characters before it
+// can break that text apart, then bound its length.
+function normalizeCliTerminalReason(raw: string): string {
+  return truncateUtf16Safe(
+    raw.replace(/[\p{Cc}\p{Cf}\s]+/gu, " ").trim(),
+    CLI_TERMINAL_REASON_MAX_CHARS,
+  );
+}
+
+export function describeClaudeTurnStop(failure: {
+  terminalReason: string;
+  stopReason?: string;
+}): string {
+  const stopReason = failure.stopReason ? `, stop_reason: ${failure.stopReason}` : "";
+  return `Claude CLI ended the turn without a reply (terminal_reason: ${failure.terminalReason}${stopReason}).`;
+}
+
+// Reasons the CLI reports when it ended the turn on purpose after work may
+// already have run: a hook or an abort cut the turn short, or a budget ran
+// out. Replaying one of these on another model would re-run its tool effects.
+// Other reasons keep the existing retryable provider/setup path.
+const CLAUDE_TURN_STOP_REASONS = new Set([
+  "hook_stopped",
+  "stop_hook_prevented",
+  "aborted_tools",
+  "aborted_streaming",
+  "budget_exhausted",
+]);
+
+/** Reads a reply-less Claude result that the backend deliberately stopped. */
+function readClaudeTurnStop(
+  parsed: Record<string, unknown>,
+): { terminalReason: string; stopReason?: string } | undefined {
+  const terminalReason =
+    typeof parsed.terminal_reason === "string"
+      ? normalizeCliTerminalReason(parsed.terminal_reason)
+      : "";
+  // Only a reply-less result counts: a turn that still delivered text is a
+  // normal answer. A backgrounded turn continues and reports later, and a
+  // result that already carries an explicit CLI error keeps that error's own
+  // classification (an API failure must stay failover-able, not terminal).
+  if (
+    parsed.type !== "result" ||
+    !terminalReason ||
+    terminalReason === "completed" ||
+    terminalReason === "max_turns" ||
+    terminalReason === "background_requested" ||
+    !CLAUDE_TURN_STOP_REASONS.has(terminalReason) ||
+    unwrapNestedCliResultText(collectCliText(parsed.result)).trim() ||
+    collectExplicitCliErrorText(parsed)
+  ) {
+    return undefined;
+  }
+  const stopReason =
+    typeof parsed.stop_reason === "string" ? normalizeCliTerminalReason(parsed.stop_reason) : "";
+  // Both fields reach operator- and model-visible failure text, so cap the
+  // CLI-controlled strings here rather than injecting unbounded backend text.
+  return { terminalReason, ...(stopReason ? { stopReason } : {}) };
+}
+
+function readClaudeTerminalFailure(
   parsed: Record<string, unknown>,
 ): CliTerminalFailure | undefined {
   const subtype = typeof parsed.subtype === "string" ? parsed.subtype.trim() : "";
   const terminalReason =
     typeof parsed.terminal_reason === "string" ? parsed.terminal_reason.trim() : "";
   if (subtype !== "error_max_turns" && terminalReason !== "max_turns") {
-    return undefined;
+    const stop = readClaudeTurnStop(parsed);
+    return stop ? { reason: "turn_stopped", ...stop } : undefined;
   }
   const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
   for (const error of errors) {
@@ -303,13 +384,17 @@ function readClaudeMaxTurnsFailure(
   return { reason: "max_turns" };
 }
 
-function readClaudeMaxTurnsErrorText(parsed: Record<string, unknown>): string | undefined {
+// Claude Code error results carry the user-facing failure in `errors[]`;
+// `[ede_diagnostic] ...` entries are CLI-internal telemetry that the CLI hides
+// from its own UI, so they never become the operator-visible error.
+function readClaudeResultErrorsText(parsed: Record<string, unknown>): string | undefined {
   if (!Array.isArray(parsed.errors)) {
     return undefined;
   }
   for (const error of parsed.errors) {
-    if (typeof error === "string" && error.trim()) {
-      return error.trim();
+    const text = typeof error === "string" ? error.trim() : "";
+    if (text && !text.startsWith("[ede_diagnostic]")) {
+      return text;
     }
   }
   return undefined;
@@ -319,11 +404,13 @@ function resolveCliTerminalErrorText(
   parsed: Record<string, unknown>,
   terminalFailure: CliTerminalFailure | undefined,
 ): string {
-  const explicitErrorText = collectExplicitCliErrorText(parsed);
-  return (
-    ((terminalFailure ? readClaudeMaxTurnsErrorText(parsed) : undefined) ?? explicitErrorText) ||
-    (terminalFailure ? "Reached maximum number of turns." : "")
-  );
+  const explicit = collectExplicitCliErrorText(parsed);
+  if (explicit || !terminalFailure) {
+    return explicit;
+  }
+  return terminalFailure.reason === "turn_stopped"
+    ? describeClaudeTurnStop(terminalFailure)
+    : "Reached maximum number of turns.";
 }
 
 export function pickCliSessionId(
@@ -345,6 +432,14 @@ export function pickCliSessionId(
   return undefined;
 }
 
+// Claude Code forwards subagent (Agent tool) traffic with `parent_tool_use_id`
+// set to the spawning tool call; only records with a null/absent parent belong
+// to the parent conversation. Subagent output reaches the parent through the
+// Agent tool result, so parent-lane consumers must skip these records.
+export function isClaudeSubagentRecord(parsed: Record<string, unknown>): boolean {
+  return parsed.parent_tool_use_id != null;
+}
+
 export function pickCliResumeCheckpointId(params: {
   backend: CliBackendConfig;
   providerId: string;
@@ -353,7 +448,7 @@ export function pickCliResumeCheckpointId(params: {
   if (
     !isClaudeStreamJsonDialect(params) ||
     params.parsed.type !== "assistant" ||
-    params.parsed.parent_tool_use_id != null
+    isClaudeSubagentRecord(params.parsed)
   ) {
     return undefined;
   }
@@ -399,13 +494,9 @@ export function parseCliJson(
   for (const parsed of parsedRecords) {
     sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
     usage = readCliUsage(parsed) ?? usage;
-    const terminalFailure = isClaudeStreamJsonDialect({
-      backend,
-      providerId: providerId ?? "",
-    })
-      ? readClaudeMaxTurnsFailure(parsed)
-      : undefined;
-    if (terminalFailure) {
+    const claudeDialect = isClaudeStreamJsonDialect({ backend, providerId: providerId ?? "" });
+    const terminalFailure = claudeDialect ? readClaudeTerminalFailure(parsed) : undefined;
+    if (terminalFailure && !(terminalFailure.reason === "turn_stopped" && text.trim())) {
       return {
         text: "",
         sessionId,
@@ -465,7 +556,7 @@ export function parseClaudeCliJsonlResult(params: {
   }
   if (typeof params.parsed.type === "string" && params.parsed.type === "result") {
     const terminalFailure = isClaudeStreamJsonDialect(params)
-      ? readClaudeMaxTurnsFailure(params.parsed)
+      ? readClaudeTerminalFailure(params.parsed)
       : undefined;
     const errorText = resolveCliTerminalErrorText(params.parsed, terminalFailure);
     if (errorText) {
@@ -515,8 +606,8 @@ export function missingMessageBoundarySeparator(previousText: string, nextDelta:
   if (!previousText) {
     return "";
   }
-  const trailing = previousText.match(/\n*$/u)?.[0].length ?? 0;
-  const leading = nextDelta.match(/^\n*/u)?.[0].length ?? 0;
+  const trailing = previousText.slice(-2).match(/\n*$/u)?.[0].length ?? 0;
+  const leading = nextDelta.slice(0, 2).match(/^\n*/u)?.[0].length ?? 0;
   return "\n".repeat(Math.max(0, 2 - trailing - leading));
 }
 
@@ -524,25 +615,42 @@ export function parseClaudeCliStreamingDelta(params: {
   backend: CliBackendConfig;
   providerId: string;
   parsed: Record<string, unknown>;
+  previousText: string;
 }): string | null {
   if (!supportsCliJsonlToolEvents(params)) {
     return null;
   }
-  if (params.parsed.type !== "stream_event" || !isRecord(params.parsed.event)) {
+  if (params.parsed.type === "stream_event" && isRecord(params.parsed.event)) {
+    const event = params.parsed.event;
+    if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
+      return null;
+    }
+    const delta = event.delta;
+    return delta.type === "text_delta" && typeof delta.text === "string" && delta.text
+      ? delta.text
+      : null;
+  }
+  if (
+    // `--include-partial-messages` marks cumulative assistant snapshots with an explicit null.
+    !isClaudeStreamJsonDialect(params) ||
+    params.parsed.type !== "assistant" ||
+    isClaudeSubagentRecord(params.parsed) ||
+    !isRecord(params.parsed.message) ||
+    params.parsed.message.stop_reason !== null
+  ) {
     return null;
   }
-  const event = params.parsed.event;
-  if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
-    return null;
-  }
-  const delta = event.delta;
-  if (delta.type !== "text_delta" || typeof delta.text !== "string") {
-    return null;
-  }
-  if (!delta.text) {
-    return null;
-  }
-  return delta.text;
+  const content = Array.isArray(params.parsed.message.content) ? params.parsed.message.content : [];
+  const snapshot = content
+    .map((block) =>
+      isRecord(block) && block.type === "text" && typeof block.text === "string" ? block.text : "",
+    )
+    .join("");
+  // The delivery lane is append-only. Emit only cumulative suffixes and let
+  // a divergent revision defer to the terminal result instead of duplicating text.
+  return snapshot.startsWith(params.previousText)
+    ? snapshot.slice(params.previousText.length) || null
+    : null;
 }
 
 const GEMINI_CLI_ERROR_EVENT_FALLBACK = "Gemini CLI emitted an error event.";
@@ -573,6 +681,3 @@ export function readGeminiCliStreamJsonError(parsed: Record<string, unknown>): s
   }
   return undefined;
 }
-
-// A possible leading block stays buffered until visible prose or the message
-// boundary proves where private reasoning ends. Later tags remain literal.

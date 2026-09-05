@@ -3,8 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
  * Channel health monitor regression tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelId } from "../channels/plugins/types.public.js";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import type { ChannelId, ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import type { ChannelManager } from "./server-channels.js";
@@ -12,10 +11,11 @@ import type { ChannelManager } from "./server-channels.js";
 function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelManager {
   return {
     getRuntimeSnapshot: vi.fn(() => ({ channels: {}, channelAccounts: {} })),
-    getPluginCommandCatalogAccounts: vi.fn(() => new Map()),
+    pauseChannelStarts: vi.fn(() => () => {}),
     startChannels: vi.fn(async () => {}),
-    startChannel: vi.fn(async () => {}),
+    startChannel: vi.fn(async () => new Map()),
     stopChannel: vi.fn(async () => {}),
+    releaseChannelRouteHandoffs: vi.fn(),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
     recoverAutostartSuppression: vi.fn(async () => false),
@@ -71,6 +71,14 @@ function startDefaultMonitor(
     ...overrides,
     timing: { monitorStartupGraceMs: 0, ...overrides.timing },
   });
+}
+
+function markRestartPending(account: Partial<ChannelAccountSnapshot>) {
+  account.running = false;
+  account.connected = false;
+  account.restartPending = true;
+  account.reconnectAttempts = 0;
+  return new Map();
 }
 
 async function startAndRunCheck(
@@ -522,6 +530,29 @@ describe("channel-health-monitor", () => {
     await expectNoRestart(manager);
   });
 
+  it.each([false, true])("restarts stale future channels (connected: %s)", async (connected) => {
+    const now = Date.now();
+    const account = disconnectedAccount(now + 60_000, {
+      connected,
+      lifecycle: connected ? "ready" : "starting",
+      lastTransportActivityAt: connected ? now - 300_000 : undefined,
+    });
+    const manager = createSnapshotManager({ discord: { default: account } });
+
+    await expectRestartedChannel(manager, "discord");
+  });
+
+  it("does not restart a long-running channel during fresh reconnect grace", async () => {
+    const now = Date.now();
+    const manager = createSlackSnapshotManager(
+      disconnectedAccount(now - 300_000, {
+        lifecycle: "recovering",
+        lastDisconnect: { at: now - 5_000, error: "socket closed" },
+      }),
+    );
+    await expectNoRestart(manager);
+  });
+
   it("respects custom per-channel startup grace", async () => {
     const now = Date.now();
     const manager = createSnapshotManager({
@@ -610,12 +641,7 @@ describe("channel-health-monitor", () => {
         },
       },
       {
-        startChannel: vi.fn(async () => {
-          account.running = false;
-          account.connected = false;
-          account.restartPending = true;
-          account.reconnectAttempts = 0;
-        }),
+        startChannel: vi.fn(async () => markRestartPending(account)),
       },
     );
     const monitor = await startAndRunCheck(manager);
@@ -639,12 +665,7 @@ describe("channel-health-monitor", () => {
       },
       {
         // Every start attempt leaves the account stuck in pending restart.
-        startChannel: vi.fn(async () => {
-          account.running = false;
-          account.connected = false;
-          account.restartPending = true;
-          account.reconnectAttempts = 0;
-        }),
+        startChannel: vi.fn(async () => markRestartPending(account)),
       },
     );
     const monitor = startDefaultMonitor(manager, {
@@ -670,12 +691,7 @@ describe("channel-health-monitor", () => {
         },
       },
       {
-        startChannel: vi.fn(async () => {
-          account.running = false;
-          account.connected = false;
-          account.restartPending = true;
-          account.reconnectAttempts = 0;
-        }),
+        startChannel: vi.fn(async () => markRestartPending(account)),
       },
     );
     // The budgeted restart consumes the only hourly slot; the continuation that
@@ -696,12 +712,7 @@ describe("channel-health-monitor", () => {
         },
       },
       {
-        startChannel: vi.fn(async () => {
-          account.running = false;
-          account.connected = false;
-          account.restartPending = true;
-          account.reconnectAttempts = 0;
-        }),
+        startChannel: vi.fn(async () => markRestartPending(account)),
       },
     );
     const monitor = await startAndRunCheck(manager, { cooldownCycles: 10 });
@@ -741,6 +752,7 @@ describe("channel-health-monitor", () => {
             account.connected = true;
             account.restartPending = false;
           }
+          return new Map();
         }),
       },
     );
@@ -857,6 +869,7 @@ describe("channel-health-monitor", () => {
       {
         startChannel: vi.fn(async () => {
           await startGate;
+          return new Map();
         }),
       },
     );

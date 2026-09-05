@@ -36,7 +36,7 @@ function resolveDraftPartialText(
   return nextText === previous ? undefined : nextText;
 }
 
-export function renderStreamText(
+function renderStreamText(
   turn: Pick<Turn, "tableMode" | "telegramCfg">,
   text: string,
 ): TelegramDraftPreview {
@@ -326,7 +326,8 @@ export function splitTextIntoLaneSegments(
         ...(update.isReasoningSnapshot ? { isReasoningSnapshot: true } : {}),
       },
     })),
-    suppressedReasoningOnly: Boolean(split.reasoningText) && suppressReasoning && !split.answerText,
+    suppressedReasoningOnly:
+      isReasoning === true && !split.answerText && (suppressReasoning || !split.reasoningText),
   };
 }
 

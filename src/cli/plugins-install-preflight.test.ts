@@ -18,7 +18,6 @@ import {
   runtimeErrors,
   configWriteMock,
 } from "./plugins-cli-test-helpers.js";
-import { resolvePluginInstallPreflight } from "./plugins-install-preflight.js";
 
 const { withPluginLifecycleLeaseMock } = vi.hoisted(() => ({
   withPluginLifecycleLeaseMock: vi.fn(),
@@ -62,18 +61,16 @@ describe("plugin install mutation-free preflight", () => {
     });
 
     await expect(
-      resolvePluginInstallPreflight({
-        raw: "superpowers@claude-plugins-official",
-        opts: { force: true },
-      }),
-    ).resolves.toMatchObject({
-      ok: true,
-      raw: "superpowers",
-      marketplace: "claude-plugins-official",
-      sourcePlan: null,
-    });
+      runPluginsCommand(["plugins", "install", "superpowers@claude-plugins-official", "--force"]),
+    ).rejects.toThrow("__exit__:1");
 
-    expectNoPluginInstallSideEffects();
+    expect(installPluginFromMarketplaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        marketplace: "claude-plugins-official",
+        plugin: "superpowers",
+      }),
+    );
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
   });
 
   it.each([

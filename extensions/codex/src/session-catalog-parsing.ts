@@ -18,6 +18,7 @@ const DEFAULT_PAGE_LIMIT = 50;
 export const CODEX_APP_SERVER_THREADS_CAPABILITY = "codex-app-server-threads";
 export const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
 export const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
+export const CODEX_CATALOG_TRANSCRIPT_READ_COMMAND = "codex.sessionCatalog.transcript.read.v1";
 export const CODEX_LOCAL_SESSION_HOST_ID = "gateway:local";
 export const CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT = 100;
 // Cold Codex state scans can outlive the Mac node's native 60-second deadline.
@@ -37,7 +38,7 @@ const MAX_ACTIVE_FLAGS = 16;
 export const MAX_ACTION_CATALOG_PAGES = 100;
 export const DEFAULT_TRANSCRIPT_PAGE_LIMIT = 20;
 export const MAX_TRANSCRIPT_PAGE_LIMIT = 50;
-const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
+export const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_TITLE_SEARCH_CATALOG_PAGES = 20;
 
 export class CatalogParamsError extends Error {}
@@ -211,7 +212,7 @@ export function requireOnlyKeys(
   }
 }
 
-export function readPageParams(value: unknown): CodexSessionCatalogPageParams {
+export function readPageParams(value: unknown): CodexSessionCatalogPageParams & { limit: number } {
   if (!isRecord(value)) {
     throw new CatalogParamsError("Codex session catalog parameters must be an object");
   }
@@ -228,7 +229,9 @@ export function readPageParams(value: unknown): CodexSessionCatalogPageParams {
   };
 }
 
-export function readGatewayParams(value: unknown): CodexSessionCatalogParams {
+export function readGatewayParams(
+  value: unknown,
+): CodexSessionCatalogParams & { limitPerHost: number } {
   if (value !== undefined && !isRecord(value)) {
     throw new CatalogParamsError("Codex session catalog parameters must be an object");
   }
@@ -438,7 +441,9 @@ export function filterCatalogPageByTitle(
   return {
     ...page,
     sessions: page.sessions.filter((session) =>
-      session.name?.toLocaleLowerCase().includes(searchTerm.toLocaleLowerCase()),
+      (session.name ?? session.fallbackName)
+        ?.toLocaleLowerCase()
+        .includes(searchTerm.toLocaleLowerCase()),
     ),
   };
 }

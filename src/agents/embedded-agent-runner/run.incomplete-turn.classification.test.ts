@@ -1,25 +1,73 @@
 // Focused incomplete-turn behavior coverage.
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  REASONING_ONLY_RETRY_INSTRUCTION,
-  EMPTY_RESPONSE_RETRY_INSTRUCTION,
-  makeLastAssistant,
-  resolveIncompleteTurnPayloadText,
-  makeIncompleteTurnParams,
-  makeReasoningRetryParams,
-  makeEmptyResponseRetryParams,
-} from "./run.incomplete-turn.test-helpers.js";
-import { resetRunIncompleteTurnOwnerMocks } from "./run.incomplete-turn.test-support.js";
+  buildEmbeddedRunnerAssistant,
+  makeEmbeddedRunnerAttempt,
+} from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
   resolveEmptyResponseRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
 } from "./run/incomplete-turn-recovery.js";
+import { resolveIncompleteTurnPayloadText } from "./run/incomplete-turn-resolution.js";
+import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
-describe("runEmbeddedAgent incomplete-turn safety", () => {
-  beforeEach(() => {
-    resetRunIncompleteTurnOwnerMocks();
-  });
+const REASONING_ONLY_RETRY_INSTRUCTION =
+  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
+const EMPTY_RESPONSE_RETRY_INSTRUCTION =
+  "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
 
+type LastAssistant = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+
+function makeLastAssistant(overrides: Record<string, unknown> = {}): LastAssistant {
+  return { ...buildEmbeddedRunnerAssistant({}), ...overrides } as LastAssistant;
+}
+
+function makeReasoningRetryParams(
+  attemptOverrides: Partial<EmbeddedRunAttemptResult> = {},
+  overrides: Partial<
+    Omit<Parameters<typeof resolveReasoningOnlyRetryInstruction>[0], "attempt">
+  > = {},
+): Parameters<typeof resolveReasoningOnlyRetryInstruction>[0] {
+  return {
+    provider: "openai",
+    modelId: "gpt-5.6-luna",
+    aborted: false,
+    timedOut: false,
+    attempt: makeEmbeddedRunnerAttempt(attemptOverrides),
+    ...overrides,
+  };
+}
+
+function makeEmptyResponseRetryParams(
+  attemptOverrides: Partial<EmbeddedRunAttemptResult> = {},
+  overrides: Partial<
+    Omit<Parameters<typeof resolveEmptyResponseRetryInstruction>[0], "attempt">
+  > = {},
+): Parameters<typeof resolveEmptyResponseRetryInstruction>[0] {
+  return {
+    provider: "openai",
+    modelId: "gpt-5.6-luna",
+    payloadCount: 0,
+    aborted: false,
+    timedOut: false,
+    attempt: makeEmbeddedRunnerAttempt(attemptOverrides),
+    ...overrides,
+  };
+}
+
+function makeIncompleteTurnParams(
+  attemptOverrides: Partial<EmbeddedRunAttemptResult> = {},
+): Parameters<typeof resolveIncompleteTurnPayloadText>[0] {
+  return {
+    payloadCount: 0,
+    aborted: false,
+    externalAbort: false,
+    timedOut: false,
+    attempt: makeEmbeddedRunnerAttempt(attemptOverrides),
+  };
+}
+
+describe("incomplete-turn classification", () => {
   it("detects reasoning-only GPT turns from signed thinking blocks", () => {
     const retryInstruction = resolveReasoningOnlyRetryInstruction(
       makeReasoningRetryParams({

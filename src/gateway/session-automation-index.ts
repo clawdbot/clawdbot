@@ -67,6 +67,12 @@ export function bumpSessionAutomationVersion(): void {
   sourceVersion += 1;
 }
 
+/** sessions.list cache fence input: hasAutomation is projected per row from
+ * this index, so cached lists are stale the moment a binding changes. */
+export function readSessionAutomationVersion(): number {
+  return sourceVersion;
+}
+
 function buildAutomationKeys(
   jobs: readonly CronJob[],
   cfg: OpenClawConfig,

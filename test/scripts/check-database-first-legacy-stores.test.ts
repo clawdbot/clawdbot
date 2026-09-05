@@ -131,7 +131,7 @@ describe("check-database-first-legacy-stores", () => {
     }
   });
 
-  it("skips generated extension asset and dist bundles", async () => {
+  it("skips generated extension asset, renderer, and dist bundles", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-db-first-guard-"));
     try {
       await fs.mkdir(path.join(root, "extensions", "diffs", "assets"), { recursive: true });
@@ -139,6 +139,9 @@ describe("check-database-first-legacy-stores", () => {
         recursive: true,
       });
       await fs.mkdir(path.join(root, "extensions", "diffs", "src"), { recursive: true });
+      await fs.mkdir(path.join(root, "extensions", "canvas", "src", "host", "a2ui"), {
+        recursive: true,
+      });
       await fs.mkdir(path.join(root, "packages", "plugin-sdk", "dist"), { recursive: true });
       await fs.mkdir(path.join(root, "packages", "plugin-sdk", "src"), { recursive: true });
       await fs.writeFile(
@@ -151,6 +154,14 @@ describe("check-database-first-legacy-stores", () => {
       );
       await fs.writeFile(
         path.join(root, "extensions", "diffs", "src", "runtime.js"),
+        "export const runtime = true;\n",
+      );
+      await fs.writeFile(
+        path.join(root, "extensions", "canvas", "src", "host", "a2ui", "a2ui.bundle.js"),
+        "export const bundled = true;\n",
+      );
+      await fs.writeFile(
+        path.join(root, "extensions", "canvas", "src", "host", "a2ui", "bootstrap.js"),
         "export const runtime = true;\n",
       );
       await fs.writeFile(
@@ -171,6 +182,7 @@ describe("check-database-first-legacy-stores", () => {
         .toSorted();
 
       expect(relativeFiles).toEqual([
+        "extensions/canvas/src/host/a2ui/bootstrap.js",
         "extensions/diffs/src/runtime.js",
         "packages/plugin-sdk/src/index.js",
       ]);
@@ -3178,6 +3190,21 @@ describe("check-database-first-legacy-stores", () => {
       `("aliased-top-level-wrapper-closed-over-module-var.ts", []),
 
       // Object-backed wrapper discovery and alias tracking.
+      "keeps fs-safe store aliases copied into their own descendant": privateStoreCase`
+        const stores = { state: privateFileStore(stateDir) };
+        stores.child = { ...stores };
+        await stores.child.state.writeJson("thread-bindings.json", {});
+      `("descendant-fs-safe-store-spread.ts", filesystemWriteViolations(5)),
+      "keeps wrapper aliases copied into their own descendant": fsCase`
+        const writer = {
+          save(filePath) {
+            return fs.writeFile(filePath, "");
+          },
+        };
+        writer.child = { nested: writer };
+        await writer.child.nested.save("sessions.json");
+      `("descendant-wrapper-object-alias.ts", filesystemWriteViolations(9)),
+
       "flags object method wrappers": atomicCase`
         const writer = {
           persist(params: { filePath: string }) {

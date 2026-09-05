@@ -38,6 +38,26 @@ describe("agent roster ownership", () => {
     ).toBe(false);
   });
 
+  it("rejects entry keys that resolve to the same agent id", () => {
+    const result = AgentsSchema.safeParse({
+      ownership: "explicit",
+      entries: { Ops: {}, ops: {} },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]).toMatchObject({
+        path: ["entries", "ops"],
+        message:
+          'agents.entries keys "Ops" and "ops" resolve to the same agent id "ops"; rename one key so each agent has a unique id',
+      });
+    }
+  });
+
+  it("accepts one mixed-case entry key", () => {
+    expect(AgentsSchema.safeParse({ entries: { Ops: {} } }).success).toBe(true);
+  });
+
   it("rejects a legacy marker with explicit ownership", () => {
     expect(
       AgentsSchema.safeParse({

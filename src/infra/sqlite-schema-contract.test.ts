@@ -71,14 +71,41 @@ describe("assertSqliteSchemaContains", () => {
     }
   });
 
-  it("rejects an extra unique index on a canonical table", () => {
+  it("preserves index issue order when a missing index is allowlisted", () => {
     const database = createDatabase(CANONICAL_SCHEMA);
     try {
-      database.exec("CREATE UNIQUE INDEX idx_children_value_unique ON children(value);");
+      database.exec(`
+        CREATE INDEX idx_children_value ON children(value);
+        CREATE UNIQUE INDEX idx_children_value_unique ON children(value);
+      `);
+      const unexpectedUniqueIndex = {
+        code: "unexpected-unique-index",
+        objectName: "idx_children_value_unique",
+        message: "unexpected unique index idx_children_value_unique",
+      };
+      expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA)).toEqual([
+        unexpectedUniqueIndex,
+      ]);
 
       expect(() => assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA)).toThrow(
         "unexpected unique index idx_children_value_unique",
       );
+
+      database.exec("DROP INDEX idx_children_parent;");
+      const compatibility = { allowedMissingIndexes: ["idx_children_parent"] };
+      expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA, compatibility)).toEqual([
+        unexpectedUniqueIndex,
+      ]);
+
+      database.exec("CREATE INDEX idx_children_parent ON children(id, parent_id);");
+      expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA, compatibility)).toEqual([
+        {
+          code: "missing-or-drifted-index",
+          objectName: "idx_children_parent",
+          message: "missing or drifted index idx_children_parent",
+        },
+        unexpectedUniqueIndex,
+      ]);
     } finally {
       database.close();
     }

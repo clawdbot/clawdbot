@@ -22,23 +22,6 @@ import {
   sanitizeCodexToolArguments,
 } from "./tool-progress-normalization.js";
 
-export function nativeToolActionFingerprint(item: CodexThreadItem): string | undefined {
-  if (item.type === "commandExecution" && typeof item.command === "string") {
-    return JSON.stringify({
-      type: item.type,
-      command: item.command,
-      cwd: typeof item.cwd === "string" ? item.cwd : "",
-    });
-  }
-  if (item.type === "fileChange") {
-    return JSON.stringify({
-      type: item.type,
-      changes: itemFileChanges(item),
-    });
-  }
-  return undefined;
-}
-
 export function isNativePostToolUseRelayItem(item: CodexThreadItem): boolean {
   switch (item.type) {
     case "commandExecution":

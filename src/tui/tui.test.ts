@@ -3,7 +3,6 @@ import { EventEmitter } from "node:events";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
@@ -13,6 +12,7 @@ import {
   beginTuiShutdown,
   createBackspaceDeduper,
   createDeferredTuiFinish,
+  createTuiConnectionLineage,
   createTuiSignalHandlers,
   drainAndStopTuiSafely,
   installTuiTerminalLossExitHandler,
@@ -379,7 +379,7 @@ describe("resolveInitialTuiAgentId", () => {
 
   it("keeps an ownerless explicit fleet selection-required", () => {
     expect(() => resolveInitialTuiAgentId({ cfg, cwd: "/var/tmp/unrelated" })).toThrow(
-      AgentSelectionRequiredError,
+      "Multiple agents are configured, but TUI startup has no explicit owner. Pass an agent-scoped --session key (e.g., 'openclaw tui --session agent:agentname:main').",
     );
   });
 
@@ -462,6 +462,13 @@ describe("resolveTuiSessionSelection", () => {
 });
 
 describe("resolveGatewayDisconnectState", () => {
+  it("shows startup progress while the gateway keeps retrying", () => {
+    expect(resolveGatewayDisconnectState({ reason: "gateway starting" })).toEqual({
+      connectionStatus: "gateway starting",
+      activityStatus: "starting up",
+    });
+  });
+
   it("returns scope-upgrade recovery guidance when disconnect reason requires pairing", () => {
     const state = resolveGatewayDisconnectState({
       reason: "gateway closed (1008): pairing required",
@@ -506,6 +513,15 @@ describe("resolveGatewayDisconnectState", () => {
     expect(state.remediation).toContain("temporary authentication lockout");
     expect(state.remediation).not.toContain("gateway.remote.token");
     expect(state.remediation).not.toContain("devices rotate");
+  });
+
+  it("shows edge-auth guidance for an identity-proxy rejection", () => {
+    const state = resolveGatewayDisconnectState({
+      details: { reason: "websocket-upgrade-rejected", httpStatus: 302 },
+      reason: "gateway rejected websocket upgrade (HTTP 302)",
+    });
+    expect(state.activityStatus).toBe("identity-aware proxy rejected connection");
+    expect(state.remediation).toContain("gateway.remote.edgeAuth");
   });
 
   it("falls back to idle for generic disconnect reasons", () => {
@@ -725,6 +741,20 @@ describe("resolveTuiCtrlCAction", () => {
       action: "force-exit",
       nextLastCtrlCAt: 1000,
     });
+  });
+});
+
+describe("createTuiConnectionLineage", () => {
+  it("keeps a startup retry before the first hello out of reconnect recovery", () => {
+    const lineage = createTuiConnectionLineage();
+
+    lineage.disconnect();
+    expect(lineage.wasDisconnected()).toBe(false);
+    expect(lineage.connect()).toBe(false);
+
+    lineage.disconnect();
+    expect(lineage.wasDisconnected()).toBe(true);
+    expect(lineage.connect()).toBe(true);
   });
 });
 
@@ -953,13 +983,13 @@ describe("TUI shutdown safety", () => {
     vi.useFakeTimers();
     const calls: string[] = [];
     const forceExit = vi.fn();
+    const recordPhase = (phase: string) => async () => {
+      calls.push(phase);
+    };
     beginTestShutdown({
-      stopClient: async () => {
-        calls.push("client");
-      },
-      stopTui: async () => {
-        calls.push("tui");
-      },
+      stopCommandScopes: recordPhase("scopes"),
+      stopClient: recordPhase("client"),
+      stopTui: recordPhase("tui"),
       disposeStatus: () => {
         calls.push("status");
       },
@@ -970,7 +1000,7 @@ describe("TUI shutdown safety", () => {
     });
 
     await vi.advanceTimersByTimeAsync(0);
-    expect(calls).toEqual(["status", "client", "tui", "status", "finish"]);
+    expect(calls).toEqual(["status", "scopes", "client", "tui", "status", "finish"]);
     expect(forceExit).not.toHaveBeenCalled();
   });
 
@@ -1021,12 +1051,16 @@ describe("TUI shutdown safety", () => {
 
   it("reports transport and terminal shutdown errors in phase order", async () => {
     vi.useFakeTimers();
+    const scopeError = new Error("command scope stop failed");
     const transportError = new Error("transport stop failed");
     const terminalError = new Error("terminal stop failed");
     const onError = vi.fn();
     const requestFinish = vi.fn();
 
     beginTestShutdown({
+      stopCommandScopes: async () => {
+        throw scopeError;
+      },
       stopClient: async () => {
         throw transportError;
       },
@@ -1041,7 +1075,7 @@ describe("TUI shutdown safety", () => {
     expect(onError).toHaveBeenCalledOnce();
     const error = onError.mock.calls[0]?.[0];
     expect(error).toBeInstanceOf(AggregateError);
-    expect((error as AggregateError).errors).toEqual([transportError, terminalError]);
+    expect((error as AggregateError).errors).toEqual([scopeError, transportError, terminalError]);
     expect(requestFinish).toHaveBeenCalledOnce();
   });
 

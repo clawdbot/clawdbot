@@ -36,9 +36,8 @@ function createSetupDeps(home: string) {
     ),
     mkdir: vi.fn(async () => {}),
     resolveSessionTranscriptsDir: vi.fn(() => path.join(home, ".openclaw", "sessions")),
-    replaceConfigFile: vi.fn(async ({ nextConfig }: Parameters<typeof replaceConfigFile>[0]) => {
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, JSON.stringify(nextConfig, null, 2));
+    replaceConfigFile: vi.fn(async (params: Parameters<typeof replaceConfigFile>[0]) => {
+      await replaceConfigFile(params);
     }),
   };
 }
@@ -86,7 +85,7 @@ describe("setupCommand", () => {
       });
       expect(deps.replaceConfigFile).toHaveBeenCalledWith(
         expect.objectContaining({
-          snapshot: expect.objectContaining({ exists: false, path: configPath }),
+          baseHash: expect.any(String),
           writeOptions: expect.objectContaining({
             expectedConfigPath: configPath,
             ownedConfigPathForWrite: configPath,
@@ -156,7 +155,7 @@ describe("setupCommand", () => {
       ) as OpenClawConfig;
       expect(resolveAgentWorkspaceDir(config, "main")).toBe(nextWorkspace);
       expect(config.agents?.defaults?.workspace).toBe(nextWorkspace);
-      expect(config.agents?.entries?.main).toEqual({});
+      expect(config.agents?.entries?.main?.workspace).toBe(nextWorkspace);
     });
   });
 
@@ -430,67 +429,90 @@ describe("setupCommand", () => {
     });
   });
 
-  it("rejects a stale config snapshot before workspace or session mutation", async () => {
-    await withTempHome(async (home) => {
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
-      const configDir = path.join(home, ".openclaw");
-      const configPath = path.join(configDir, "openclaw.json");
-      const workspace = path.join(home, "custom-workspace");
-      const deps = createSetupDeps(home);
-      const externalRaw = `${JSON.stringify({ external: true }, null, 2)}\n`;
+  it.each([false, true])(
+    "rejects a foreign write before the final config commit (fresh: %s)",
+    async (fresh) => {
+      await withTempHome(async (home) => {
+        const runtime = {
+          log: vi.fn(),
+          error: vi.fn(),
+          exit: vi.fn(),
+        };
+        const configDir = path.join(home, ".openclaw");
+        const configPath = path.join(configDir, "openclaw.json");
+        const workspace = path.join(home, "custom-workspace");
+        const deps = createSetupDeps(home);
+        const externalRaw = `${JSON.stringify({ external: true }, null, 2)}\n`;
 
-      await fs.mkdir(configDir, { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ agents: { defaults: { workspace } } }),
-        "utf-8",
-      );
-      deps.replaceConfigFile.mockImplementationOnce(async (params) => {
-        await fs.writeFile(configPath, externalRaw, "utf-8");
-        await replaceConfigFile(params);
+        await fs.mkdir(configDir, { recursive: true });
+        if (!fresh) {
+          await fs.writeFile(
+            configPath,
+            JSON.stringify({ agents: { defaults: { workspace } } }),
+            "utf-8",
+          );
+        }
+        deps.replaceConfigFile.mockImplementationOnce(async (params) => {
+          await fs.writeFile(configPath, externalRaw, "utf-8");
+          await replaceConfigFile(params);
+        });
+
+        await expect(setupCommand(undefined, runtime, deps)).rejects.toThrow(
+          "config changed since last load",
+        );
+
+        expect(await fs.readFile(configPath, "utf-8")).toBe(externalRaw);
+        expect(deps.ensureAgentWorkspace).not.toHaveBeenCalled();
+        expect(deps.resolveSessionTranscriptsDir).not.toHaveBeenCalled();
+        expect(deps.mkdir).not.toHaveBeenCalled();
       });
+    },
+  );
 
-      await expect(setupCommand(undefined, runtime, deps)).rejects.toThrow(
-        "config changed since last load",
-      );
+  it.each([false, true])(
+    "preserves malformed config and reports failure (json: %s)",
+    async (json) => {
+      await withTempHome(async (home) => {
+        const runtime = {
+          log: vi.fn(),
+          error: vi.fn(),
+          exit: vi.fn(),
+        };
+        const configDir = path.join(home, ".openclaw");
+        const configPath = path.join(configDir, "openclaw.json");
+        const deps = createSetupDeps(home);
+        const original = Buffer.from('{ "gateway": ', "utf-8");
 
-      expect(await fs.readFile(configPath, "utf-8")).toBe(externalRaw);
-      expect(deps.ensureAgentWorkspace).not.toHaveBeenCalled();
-      expect(deps.resolveSessionTranscriptsDir).not.toHaveBeenCalled();
-      expect(deps.mkdir).not.toHaveBeenCalled();
-    });
-  });
+        await fs.mkdir(configDir, { recursive: true });
+        await fs.writeFile(configPath, original);
 
-  it("preserves malformed config and stops before setup mutations", async () => {
-    await withTempHome(async (home) => {
-      const runtime = {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      };
-      const configDir = path.join(home, ".openclaw");
-      const configPath = path.join(configDir, "openclaw.json");
-      const deps = createSetupDeps(home);
-      const original = Buffer.from('{ "gateway": ', "utf-8");
+        await setupCommand(json ? { json: true } : undefined, runtime, deps);
 
-      await fs.mkdir(configDir, { recursive: true });
-      await fs.writeFile(configPath, original);
-
-      await setupCommand(undefined, runtime, deps);
-
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor"));
-      expect(await fs.readFile(configPath)).toStrictEqual(original);
-      expect(deps.replaceConfigFile).not.toHaveBeenCalled();
-      expect(deps.ensureAgentWorkspace).not.toHaveBeenCalled();
-      expect(deps.resolveSessionTranscriptsDir).not.toHaveBeenCalled();
-      expect(deps.mkdir).not.toHaveBeenCalled();
-    });
-  });
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+        expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor"));
+        if (json) {
+          expect(runtime.log).toHaveBeenCalledOnce();
+          expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+            ok: false,
+            error: {
+              type: "cli_error",
+              message: "OpenClaw config is invalid: ~/.openclaw/openclaw.json",
+            },
+            issues: expect.arrayContaining([
+              expect.objectContaining({ path: "<root>", message: expect.any(String) }),
+            ]),
+          });
+        } else {
+          expect(runtime.log).not.toHaveBeenCalled();
+        }
+        expect(await fs.readFile(configPath)).toStrictEqual(original);
+        expect(deps.replaceConfigFile).not.toHaveBeenCalled();
+        expect(deps.ensureAgentWorkspace).not.toHaveBeenCalled();
+        expect(deps.resolveSessionTranscriptsDir).not.toHaveBeenCalled();
+        expect(deps.mkdir).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it.each([
     ["string", '"not-an-object"'],
@@ -524,4 +546,64 @@ describe("setupCommand", () => {
       });
     },
   );
+
+  it("uses systemAgent.agentId in multi-agent explicit mode", async () => {
+    await withTempHome(async (home) => {
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const deps = createSetupDeps(home);
+      const agentAWorkspace = path.join(home, "agent-a-workspace");
+      const agentBWorkspace = path.join(home, "agent-b-workspace");
+      const preexisting: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            "agent-a": { workspace: agentAWorkspace },
+            "agent-b": { workspace: agentBWorkspace },
+          },
+          defaults: { systemAgent: { agentId: "agent-a" } },
+        },
+        gateway: { mode: "local" },
+      };
+
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify(preexisting), "utf-8");
+
+      await setupCommand(undefined, runtime, deps);
+
+      expect(runtime.exit).not.toHaveBeenCalledWith(1);
+      expect(requireFirstWorkspaceParams(deps.ensureAgentWorkspace).dir).toBe(agentAWorkspace);
+      expect(deps.resolveSessionTranscriptsDir).toHaveBeenCalledWith("agent-a");
+    });
+  });
+
+  it("gives an actionable error when baseline setup has no ambient owner", async () => {
+    await withTempHome(async (home) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const configDir = path.join(home, ".openclaw");
+      const configPath = path.join(configDir, "openclaw.json");
+      const deps = createSetupDeps(home);
+      const preexisting: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: { "agent-a": {}, "agent-b": {} },
+        },
+        gateway: { mode: "local" },
+      };
+
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify(preexisting), "utf-8");
+
+      await expect(setupCommand(undefined, runtime, deps)).rejects.toThrow(
+        "Multiple agents are configured, but baseline setup has no explicit owner. Set agents.defaults.systemAgent.agentId.",
+      );
+      expect(deps.ensureAgentWorkspace).not.toHaveBeenCalled();
+      expect(deps.resolveSessionTranscriptsDir).not.toHaveBeenCalled();
+    });
+  });
 });

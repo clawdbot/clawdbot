@@ -48,6 +48,7 @@ export type MeetingRealtimeEngineConfig = {
   chrome: { audioFormat: MeetingRealtimeAudioFormat };
   realtime: {
     strategy: string;
+    agentId?: string;
     provider?: string;
     transcriptionProvider?: string;
     voiceProvider?: string;
@@ -485,6 +486,7 @@ export async function startMeetingRealtimeEngine(params: {
     bridge = harness.createBridge({
       provider: resolved.provider,
       cfg: params.fullConfig,
+      agentId: params.config.realtime.agentId,
       providerConfig: resolved.providerConfig,
       audioFormat: resolveMeetingRealtimeAudioFormat(params.config.chrome.audioFormat),
       instructions: params.config.realtime.instructions,
@@ -580,6 +582,7 @@ export async function startMeetingRealtimeEngine(params: {
           harness,
         }),
       onError: (error) => {
+        // Provider errors may be recoverable; onClose owns terminal teardown.
         harness.emit({
           type: "session.error",
           payload: { message: formatErrorMessage(error) },
@@ -588,7 +591,6 @@ export async function startMeetingRealtimeEngine(params: {
         params.logger.warn(
           `${params.platform.logScope} ${realtimeLogScope} voice bridge failed: ${formatErrorMessage(error)}`,
         );
-        stopAfterFailure("voice bridge");
       },
       onClose: (reason) => {
         outputGenerationActive = false;

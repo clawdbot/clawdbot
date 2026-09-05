@@ -203,8 +203,9 @@ describe("GatewayClient", () => {
   let httpsServer: ReturnType<typeof createHttpsServer> | null = null;
 
   afterEach(async () => {
-    vi.useRealTimers();
+    // Timer spies must restore their fake functions before the clock uninstalls them.
     vi.restoreAllMocks();
+    vi.useRealTimers();
     if (wss) {
       for (const client of wss.clients) {
         client.terminate();
@@ -1105,7 +1106,7 @@ r1USnb+wUdA7Zoj/mQ==
       client = new GatewayClient({
         url: `wss://127.0.0.1:${port}`,
         connectChallengeTimeoutMs: 0,
-        tlsFingerprint: "deadbeef",
+        tlsFingerprint: "ab".repeat(32),
         onConnectError: (err) => {
           clearTimeout(timeout);
           client?.stop();

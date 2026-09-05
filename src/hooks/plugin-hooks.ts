@@ -1,22 +1,18 @@
 // Plugin hook helpers discover hooks contributed by installed plugins.
-import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizePluginsConfigWithResolver,
   resolvePolicyPluginActivationState,
 } from "../plugins/config-policy.js";
 import { resolveMemorySlotDecision } from "../plugins/config-state.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { hasKind } from "../plugins/slots.js";
-import { isPathInsideWithRealpath } from "../security/scan-paths.js";
-
-const log = createSubsystemLogger("hooks");
 
 type PluginHookDirEntry = {
   dir: string;
   pluginId: string;
+  rootDir: string;
 };
 
 /** Resolve hook directories declared by active plugin manifests. */
@@ -28,9 +24,9 @@ export function resolvePluginHookDirs(params: {
   if (!workspaceDir) {
     return [];
   }
-  const metadataSnapshot = loadPluginMetadataSnapshot({
+  const metadataSnapshot = resolvePluginMetadataSnapshot({
     workspaceDir,
-    config: params.config ?? {},
+    config: params.config,
     env: process.env,
   });
   const registry = metadataSnapshot.manifestRegistry;
@@ -54,6 +50,7 @@ export function resolvePluginHookDirs(params: {
     const activationState = resolvePolicyPluginActivationState({
       id: record.id,
       origin: record.origin,
+      channelIds: record.channels,
       config: normalizedPlugins,
       rootConfig: params.config,
     });
@@ -82,16 +79,6 @@ export function resolvePluginHookDirs(params: {
         continue;
       }
       const candidate = path.resolve(record.rootDir, trimmed);
-      if (!fs.existsSync(candidate)) {
-        log.warn(`plugin hook path not found (${record.id}): ${candidate}`);
-        continue;
-      }
-      // Manifest hook paths are plugin-owned code. Require realpath containment
-      // so symlinks cannot register hook handlers outside the plugin root.
-      if (!isPathInsideWithRealpath(record.rootDir, candidate, { requireRealpath: true })) {
-        log.warn(`plugin hook path escapes plugin root (${record.id}): ${candidate}`);
-        continue;
-      }
       if (seen.has(candidate)) {
         continue;
       }
@@ -99,6 +86,7 @@ export function resolvePluginHookDirs(params: {
       resolved.push({
         dir: candidate,
         pluginId: record.id,
+        rootDir: record.rootDir,
       });
     }
   }

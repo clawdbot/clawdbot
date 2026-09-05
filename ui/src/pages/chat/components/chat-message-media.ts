@@ -1,23 +1,29 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
+import { formatBytes } from "../../../lib/agents/display.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
 import { readTranscriptMediaEntries } from "../../../lib/chat/message-extract.ts";
+import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import {
-  getMediaFileExtension,
-  hasVideoMediaFileExtension,
+  isAudioTranscriptMediaPath,
+  isImageMediaPath,
+  isSvgImageMediaPath,
+  isVideoTranscriptMediaPath,
+  labelForMediaPath,
 } from "../../../lib/media-file-extension.ts";
-
-export type PairingQrExpiryNotice = {
-  title: string;
-  reason: string;
-};
 
 export type ImageBlock = {
   url: string;
+  factIndex?: number;
   artifactId?: string;
+  fileName?: string;
   openUrl?: string;
   alt?: string;
+  sizeBytes?: number;
   width?: number;
   height?: number;
 };
@@ -28,8 +34,14 @@ export type ArtifactDownloadResolver = (params: {
 }) => Promise<{ url: string; expiresAt?: string } | null>;
 
 export type ImageRenderOptions = {
+  sessionKey?: string;
+  agentId?: string;
+  policyKey?: string;
+  canonicalMessageKey?: string;
+  localSubmission?: boolean;
+  connectionEpoch?: number;
   localMediaPreviewRoots?: readonly string[];
-  basePath?: string;
+  resourceBasePath?: string;
   authToken?: string | null;
   onRequestUpdate?: () => void;
   onRequestOpenImage?: () => number;
@@ -37,15 +49,33 @@ export type ImageRenderOptions = {
   resolveArtifactDownload?: ArtifactDownloadResolver;
 };
 
-export type RenderableImageBlock = ImageBlock & {
-  displayUrl: string;
-};
+export function assistantMediaPolicyKey(
+  session: GatewaySessionRow | undefined,
+  configEpoch = 0,
+): string | undefined {
+  if (!session && configEpoch === 0) {
+    return undefined;
+  }
+  // These facts invalidate previews; the Gateway still owns the permission decision.
+  return JSON.stringify([
+    configEpoch,
+    session?.permissionMode,
+    session?.permissionModePending,
+    session?.execNode,
+    session?.execCwd,
+    session?.sessionRoot,
+    session?.spawnedWorkspaceDir,
+    session?.spawnedCwd,
+    session?.worktree?.id,
+  ]);
+}
 
 export type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
+type AttachmentFailureItem = Extract<MessageContentItem, { type: "attachment_error" }>;
+export type AssistantAttachmentItem = AttachmentItem | AttachmentFailureItem;
 
 type ChatMediaResourceKind =
   | "assistant-attachment"
-  | "document-preview"
   | "managed-image"
   | "managed-media"
   | "pairing-qr";
@@ -322,241 +352,236 @@ export function cacheManagedImageBlobUrl(cacheKey: string, blobUrl: string) {
 }
 
 function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
-  if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
+  if (
+    !images.some((entry) =>
+      block.factIndex !== undefined
+        ? entry.factIndex === block.factIndex
+        : entry.factIndex === undefined && entry.url === block.url && entry.alt === block.alt,
+    )
+  ) {
     images.push(block);
   }
 }
 
-function buildBase64ImageUrl(params: { data: string; mediaType?: string }): string {
-  return params.data.startsWith("data:")
-    ? params.data
-    : `data:${params.mediaType ?? "image/png"};base64,${params.data}`;
+function buildBase64ImageUrl(data: string, mediaType: unknown): string {
+  return data.startsWith("data:")
+    ? data
+    : `data:${typeof mediaType === "string" ? mediaType : "image/png"};base64,${data}`;
 }
 
-function isImageTranscriptMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim()) {
-    const normalized = mediaType.trim().toLowerCase();
-    if (normalized.startsWith("image/")) {
-      return true;
+export function projectMessageMedia(
+  message: unknown,
+  content: readonly MessageContentItem[],
+  nowMs = Date.now(),
+) {
+  const record = asNonArrayRecord(message);
+  const blocks = Array.isArray(record.content) ? record.content : [];
+  const images: ImageBlock[] = [];
+  const attachments: AssistantAttachmentItem[] = [];
+  const attachmentUrls = new Set<string>();
+  let expiredPairingQrCount = 0;
+  let nextPairingQrExpiresAt: number | undefined;
+  const appendAttachment = (item: AssistantAttachmentItem) => {
+    if (item.type === "attachment_error" || !attachmentUrls.has(item.attachment.url)) {
+      attachments.push(item);
+      if (item.type === "attachment") {
+        attachmentUrls.add(item.attachment.url);
+      }
     }
-    if (normalized !== "application/octet-stream") {
+  };
+  for (const item of content) {
+    if (item.type === "attachment" || item.type === "attachment_error") {
+      appendAttachment(item);
+    }
+  }
+  const appendSvgAttachment = (
+    source: unknown,
+    mediaType?: unknown,
+    metadata?: Record<string, unknown>,
+  ): boolean => {
+    if (typeof source !== "string" || !isSvgImageMediaPath(source, mediaType)) {
       return false;
     }
-  }
-  const ext = getMediaFileExtension(path);
-  return (
-    ext !== undefined &&
-    ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "heic", "heif", "avif"].includes(ext)
-  );
-}
-
-function isAudioTranscriptMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("audio/")) {
-    return true;
-  }
-  const ext = getMediaFileExtension(path);
-  return (
-    ext !== undefined &&
-    ["aac", "flac", "m2a", "m4a", "mp3", "oga", "ogg", "opus", "wav"].includes(ext)
-  );
-}
-
-function isVideoTranscriptMediaPath(path: string, mediaType: unknown): boolean {
-  if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("video/")) {
-    return true;
-  }
-  return hasVideoMediaFileExtension(path);
-}
-
-// Collision-safe managed inbound URIs store the original filename plus a
-// terminal "---<uuid>" storage suffix in the basename
-// (e.g. media://inbound/report---<uuid>.pdf). Restore the original filename by
-// removing only that final generated segment, so an original name that itself
-// contains a "---<uuid>"-shaped part is preserved; the stored URI is unchanged.
-const MANAGED_INBOUND_MEDIA_PREFIX = "media://inbound/";
-const MANAGED_INBOUND_UUID_SUFFIX_PATTERN =
-  /---[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=\.[^./]*$|$)/i;
-
-function labelForMediaPath(mediaPath: string): string {
-  const trimmed = mediaPath.trim();
-  if (trimmed.startsWith(MANAGED_INBOUND_MEDIA_PREFIX)) {
-    const basename = trimmed.split("/").pop()?.trim() || trimmed;
-    return basename.replace(MANAGED_INBOUND_UUID_SUFFIX_PATTERN, "") || basename;
-  }
-  try {
-    if (/^https?:\/\//i.test(trimmed)) {
-      const parsed = new URL(trimmed);
-      return parsed.pathname.split("/").pop()?.trim() || parsed.hostname || trimmed;
-    }
-  } catch {}
-  return trimmed.split(/[\\/]/).pop()?.trim() || trimmed;
-}
-
-export function extractImages(message: unknown): ImageBlock[] {
-  const m = message as Record<string, unknown>;
-  const content = m.content;
-  const images: ImageBlock[] = [];
-
-  if (Array.isArray(content)) {
-    for (const block of content) {
-      if (typeof block !== "object" || block === null) {
-        continue;
+    try {
+      const url = new URL(source, window.location.href);
+      if (
+        (url.protocol !== "http:" && url.protocol !== "https:") ||
+        url.origin === window.location.origin
+      ) {
+        return false;
       }
-      const b = block as Record<string, unknown>;
+    } catch {
+      return false;
+    }
+    const sizeBytes = asFiniteNumber(metadata?.sizeBytes);
+    appendAttachment({
+      type: "attachment",
+      attachment: {
+        url: source,
+        kind: "image",
+        label:
+          (typeof metadata?.fileName === "string" && metadata.fileName.trim()) ||
+          (typeof metadata?.alt === "string" && metadata.alt.trim()) ||
+          labelForMediaPath(source),
+        mimeType: typeof mediaType === "string" ? mediaType : "image/svg+xml",
+        ...(typeof metadata?.artifactId === "string" ? { artifactId: metadata.artifactId } : {}),
+        ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+      },
+    });
+    return true;
+  };
+  const layout = asNonArrayRecord(asNonArrayRecord(record["__openclaw"]).mediaImageLayout);
+  const slots = Array.isArray(layout.slots) ? layout.slots.map(asNonArrayRecord) : [];
+  const factIndexes = slots.length > 0 ? new Set(slots.map((slot) => slot.factIndex)) : undefined;
+  // Reject ambiguous layouts before deduplication: fact positions, including
+  // holes and duplicate sources, are the persisted attachment identity.
+  const validLayout =
+    factIndexes !== undefined &&
+    !(Array.isArray(layout.suppressedFactIndexes) && layout.suppressedFactIndexes.length > 0) &&
+    slots.every(
+      (slot) =>
+        (slot.kind === "inline" || slot.kind === "offloaded") &&
+        typeof slot.factIndex === "number" &&
+        Number.isSafeInteger(slot.factIndex) &&
+        slot.factIndex >= 0,
+    ) &&
+    factIndexes.size === slots.length;
+  const inlineSlots = validLayout ? slots.filter((slot) => slot.kind === "inline") : [];
+  let inlineIndex = 0;
 
-      if (b.type === "image") {
-        // Handle source object format from optimistic user sends.
-        const source = b.source as Record<string, unknown> | undefined;
-        const imageMeta = {
-          artifactId: typeof b.artifactId === "string" ? b.artifactId : undefined,
-          alt: typeof b.alt === "string" ? b.alt : undefined,
-          openUrl: typeof b.openUrl === "string" ? b.openUrl : undefined,
-          width: typeof b.width === "number" ? b.width : undefined,
-          height: typeof b.height === "number" ? b.height : undefined,
-        };
-        if (source?.type === "base64" && typeof source.data === "string") {
-          appendImageBlock(images, {
-            url: buildBase64ImageUrl({
-              data: source.data,
-              mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
-            }),
-            ...imageMeta,
-          });
-        } else if (typeof b.data === "string") {
-          // Direct tool-result image block from imageResult() / read tool.
-          appendImageBlock(images, {
-            url: buildBase64ImageUrl({
-              data: b.data,
-              mediaType: typeof b.mimeType === "string" ? b.mimeType : undefined,
-            }),
-            ...imageMeta,
-          });
-        } else if (typeof b.url === "string") {
-          appendImageBlock(images, { url: b.url, ...imageMeta });
-        }
-      } else if (b.type === "image_url") {
-        // OpenAI format
-        const imageUrl = b.image_url as Record<string, unknown> | undefined;
-        if (typeof imageUrl?.url === "string") {
-          appendImageBlock(images, { url: imageUrl.url });
-        }
-      } else if (b.type === "input_image") {
-        const imageUrl = b.image_url;
-        if (typeof imageUrl === "string") {
-          appendImageBlock(images, { url: imageUrl });
-        } else if (imageUrl && typeof imageUrl === "object") {
-          const url = (imageUrl as Record<string, unknown>).url;
-          if (typeof url === "string") {
-            appendImageBlock(images, { url });
-          }
-        }
-        const source = b.source as Record<string, unknown> | undefined;
-        if (typeof source?.url === "string") {
-          appendImageBlock(images, { url: source.url });
-        } else if (typeof source?.data === "string") {
-          appendImageBlock(images, {
-            url: buildBase64ImageUrl({
-              data: source.data,
-              mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
-            }),
-          });
-        }
-      } else if (b.type === "openclaw_pairing_qr") {
-        if (isExpiredPairingQrBlock(b)) {
+  for (const value of blocks) {
+    const block = asOptionalRecord(value);
+    if (!block) {
+      continue;
+    }
+    const source = asOptionalRecord(block.source);
+    if (block.type === "image") {
+      const factIndex = inlineSlots[inlineIndex++]?.factIndex;
+      // The structured SVG reference is independent of inline data in the same block.
+      const imageUrl = normalizeOptionalString(block.url) ?? normalizeOptionalString(source?.url);
+      const svg = appendSvgAttachment(imageUrl, block.mimeType ?? source?.media_type, block);
+      const base64Source =
+        source?.type === "base64" && typeof source.data === "string" ? source : undefined;
+      const data = base64Source ? base64Source.data : block.data;
+      const url =
+        typeof data === "string"
+          ? buildBase64ImageUrl(data, base64Source ? base64Source.media_type : block.mimeType)
+          : !svg && imageUrl !== undefined
+            ? imageUrl
+            : undefined;
+      if (url !== undefined) {
+        images.push({
+          url,
+          ...(typeof factIndex === "number" ? { factIndex } : {}),
+          artifactId: typeof block.artifactId === "string" ? block.artifactId : undefined,
+          alt: typeof block.alt === "string" ? block.alt : undefined,
+          fileName: typeof block.fileName === "string" ? block.fileName : undefined,
+          openUrl: typeof block.openUrl === "string" ? block.openUrl : undefined,
+          sizeBytes: asFiniteNumber(block.sizeBytes),
+          width: typeof block.width === "number" ? block.width : undefined,
+          height: typeof block.height === "number" ? block.height : undefined,
+        });
+      }
+    } else if (block.type === "image_url") {
+      const url = normalizeOptionalString(asOptionalRecord(block.image_url)?.url);
+      if (url !== undefined && !appendSvgAttachment(url)) {
+        images.push({ url });
+      }
+    } else if (block.type === "input_image") {
+      const blockImages: ImageBlock[] = [];
+      const url =
+        normalizeOptionalString(block.image_url) ??
+        normalizeOptionalString(asOptionalRecord(block.image_url)?.url);
+      if (url !== undefined && !appendSvgAttachment(url)) {
+        blockImages.push({ url });
+      }
+      const sourceUrl = normalizeOptionalString(source?.url);
+      const svg = appendSvgAttachment(sourceUrl, source?.media_type);
+      if (sourceUrl !== undefined && !svg) {
+        appendImageBlock(blockImages, { url: sourceUrl });
+      } else if (typeof source?.data === "string") {
+        appendImageBlock(blockImages, {
+          url: buildBase64ImageUrl(source.data, source.media_type),
+        });
+      }
+      // Separate blocks are separate attachments, including identical uploads.
+      images.push(...blockImages);
+    } else if (block.type === "openclaw_pairing_qr") {
+      const expiresAt = asFiniteNumber(block.expiresAtMs);
+      if (expiresAt !== undefined) {
+        if (expiresAt <= nowMs) {
+          expiredPairingQrCount += 1;
           continue;
         }
-        const imageUrl = b.image_url;
-        if (typeof imageUrl === "string") {
-          appendImageBlock(images, {
-            url: imageUrl,
-            alt: typeof b.alt === "string" ? b.alt : undefined,
-          });
-        }
+        nextPairingQrExpiresAt = Math.min(nextPairingQrExpiresAt ?? expiresAt, expiresAt);
+      }
+      const imageUrl = normalizeOptionalString(block.image_url);
+      if (imageUrl !== undefined) {
+        images.push({
+          url: imageUrl,
+          alt: typeof block.alt === "string" ? block.alt : undefined,
+        });
       }
     }
   }
-
-  for (const { path: mediaPath, mediaType } of readTranscriptMediaEntries(message)) {
-    if (!isImageTranscriptMediaPath(mediaPath, mediaType)) {
-      continue;
+  // Only a complete inline layout may lend its fact positions to mounted previews.
+  if (inlineIndex !== inlineSlots.length) {
+    for (const image of images) {
+      delete image.factIndex;
     }
-    appendImageBlock(images, { url: mediaPath });
   }
-
-  return images;
-}
-
-function readPairingQrExpiresAtMs(block: Record<string, unknown>): number | undefined {
-  return asFiniteNumber(block.expiresAtMs);
-}
-
-function isExpiredPairingQrBlock(block: Record<string, unknown>, nowMs = Date.now()): boolean {
-  const expiresAtMs = readPairingQrExpiresAtMs(block);
-  return expiresAtMs !== undefined && expiresAtMs <= nowMs;
-}
-
-export function extractPairingQrExpiryNotices(
-  message: unknown,
-  nowMs = Date.now(),
-): PairingQrExpiryNotice[] {
-  const m = message as Record<string, unknown>;
-  const content = m.content;
-  if (!Array.isArray(content)) {
-    return [];
-  }
-  const notices: PairingQrExpiryNotice[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const b = block as Record<string, unknown>;
-    if (b.type === "openclaw_pairing_qr" && isExpiredPairingQrBlock(b, nowMs)) {
-      notices.push({
-        title: t("chat.pairingQrExpired.title"),
-        reason: t("chat.pairingQrExpired.reason"),
+  for (const {
+    path: mediaPath,
+    mediaType,
+    fileName,
+    sizeBytes,
+    durationMs,
+    width,
+    height,
+    factIndex,
+  } of readTranscriptMediaEntries(message)) {
+    const image = isImageMediaPath(mediaPath, mediaType);
+    const svg = image && isSvgImageMediaPath(mediaPath, mediaType);
+    if (image && !svg) {
+      appendImageBlock(images, {
+        url: mediaPath,
+        fileName,
+        sizeBytes,
+        ...(validLayout && factIndexes.has(factIndex) ? { factIndex } : {}),
+      });
+    } else {
+      appendAttachment({
+        type: "attachment",
+        attachment: {
+          url: mediaPath,
+          kind: svg
+            ? "image"
+            : isAudioTranscriptMediaPath(mediaPath, mediaType)
+              ? "audio"
+              : isVideoTranscriptMediaPath(mediaPath, mediaType)
+                ? "video"
+                : "document",
+          label: fileName?.trim() || labelForMediaPath(mediaPath),
+          ...(typeof mediaType === "string" ? { mimeType: mediaType } : {}),
+          ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+          ...(durationMs !== undefined ? { durationMs } : {}),
+          ...(width !== undefined ? { width } : {}),
+          ...(height !== undefined ? { height } : {}),
+        },
       });
     }
   }
-  return notices;
-}
-
-function resolveNearestFuturePairingQrExpiresAtMs(
-  message: unknown,
-  nowMs = Date.now(),
-): number | undefined {
-  const m = message as Record<string, unknown>;
-  const content = m.content;
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  let nearestExpiresAtMs: number | undefined;
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const b = block as Record<string, unknown>;
-    if (b.type !== "openclaw_pairing_qr") {
-      continue;
-    }
-    const expiresAtMs = readPairingQrExpiresAtMs(b);
-    if (expiresAtMs === undefined || expiresAtMs <= nowMs) {
-      continue;
-    }
-    nearestExpiresAtMs =
-      nearestExpiresAtMs === undefined ? expiresAtMs : Math.min(nearestExpiresAtMs, expiresAtMs);
-  }
-  return nearestExpiresAtMs;
+  return { images, attachments, expiredPairingQrCount, nextPairingQrExpiresAt };
 }
 
 export function schedulePairingQrExpiryRefresh(
   messageKey: string,
-  message: unknown,
+  refreshAt: number | undefined,
   onRequestUpdate: (() => void) | undefined,
 ) {
   if (!onRequestUpdate) {
     return;
   }
-  const refreshAt = resolveNearestFuturePairingQrExpiresAtMs(message);
   if (refreshAt === undefined) {
     const subscriber = chatMediaSubscribers.get(onRequestUpdate);
     const resourceKey = chatMediaResourceKey("pairing-qr", messageKey);
@@ -574,26 +599,30 @@ export function schedulePairingQrExpiryRefresh(
   );
 }
 
-export function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
-  const attachments: AttachmentItem[] = [];
-  for (const { path: mediaPath, mediaType, fileName } of readTranscriptMediaEntries(message)) {
-    if (isImageTranscriptMediaPath(mediaPath, mediaType)) {
-      continue;
-    }
-    const kind = isAudioTranscriptMediaPath(mediaPath, mediaType)
-      ? "audio"
-      : isVideoTranscriptMediaPath(mediaPath, mediaType)
-        ? "video"
-        : "document";
-    attachments.push({
-      type: "attachment",
-      attachment: {
-        url: mediaPath,
-        kind,
-        label: fileName?.trim() || labelForMediaPath(mediaPath),
-        ...(typeof mediaType === "string" ? { mimeType: mediaType } : {}),
-      },
-    });
-  }
-  return attachments;
+// Reply previews and completed-run actions describe the media the bubble renders.
+export function extractMessageMediaText(
+  message: unknown,
+  content = normalizeMessage(message).content,
+): string {
+  const { images, attachments } = projectMessageMedia(message, content);
+  return [
+    ...images.map(
+      (image) => image.fileName?.trim() || image.alt?.trim() || t("chat.imageLightbox.untitled"),
+    ),
+    ...content.flatMap((item) => {
+      if (item.type !== "omitted_media") {
+        return [];
+      }
+      const reason =
+        item.media.sizeBytes === undefined
+          ? t("chat.attachments.omittedFromHistory")
+          : t("chat.attachments.omittedFromHistoryWithSize", {
+              size: formatBytes(item.media.sizeBytes),
+            });
+      return [`${t("chat.attachments.image")} · ${reason}`];
+    }),
+    ...attachments.map(
+      (item) => item.attachment.label.trim() || t("chat.attachments.attachedFile"),
+    ),
+  ].join("\n");
 }

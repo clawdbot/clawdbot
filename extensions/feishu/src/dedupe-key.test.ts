@@ -87,4 +87,47 @@ describe("resolveFeishuMessageDedupeKey", () => {
       JSON.stringify(["om_media", "image_key:img_123"]),
     );
   });
+
+  it.each([
+    {
+      label: "interleaved image and file attachments",
+      content: [
+        { tag: "media", file_key: "file_first" },
+        { tag: "img", image_key: "img_middle" },
+        { tag: "media", file_key: "file_last" },
+      ],
+      expected: ["image_key:img_middle", "file_key:file_first", "file_key:file_last"],
+    },
+    {
+      label: "duplicate occurrences and the same key in both resource types",
+      content: [
+        { tag: "media", file_key: "shared" },
+        { tag: "img", image_key: "shared" },
+        { tag: "img", image_key: "shared" },
+        { tag: "media", file_key: "shared" },
+      ],
+      expected: ["image_key:shared", "image_key:shared", "file_key:shared", "file_key:shared"],
+    },
+    {
+      label: "invalid resource keys",
+      content: [
+        { tag: "img", image_key: "invalid/key" },
+        { tag: "media", file_key: "file_valid" },
+      ],
+      expected: ["file_key:file_valid"],
+    },
+  ])("preserves the persisted rich-post replay key for $label", ({ content, expected }) => {
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-user" } },
+      message: {
+        message_id: "om_post",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "post",
+        content: JSON.stringify({ title: "", content: [content] }),
+      },
+    };
+
+    expect(resolveFeishuMessageDedupeKey(event)).toBe(JSON.stringify(["om_post", ...expected]));
+  });
 });

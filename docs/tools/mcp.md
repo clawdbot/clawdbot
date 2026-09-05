@@ -29,7 +29,7 @@ Once the server is saved, verify it actually answers:
 openclaw mcp doctor <name> --probe
 ```
 
-Saving a definition proves nothing about reachability — the probe does. Note that already-running Gateway or agent processes may need a restart or runtime reload before they pick up the new definition.
+Saving a definition proves nothing about reachability — the probe does. With Gateway hot reload enabled, changed or removed servers retire immediately and the next turn's discovery uses the new definition. Unchanged servers keep their connections and cached tools, including for runs already in progress. Requester sign-in tools refresh on the next message after runtime replacement.
 
 ## Add a server from the composer
 
@@ -93,6 +93,21 @@ The same `docs` server, written straight into config:
 
 An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
 
+## Approvals
+
+Codex MCP tool approvals follow the session permission posture: the default full-permission posture does not prompt, while stricter modes check tools without safety annotations (`workspace` can use automatic review; `guarded` and `read-only` can prompt the operator).
+
+When durable persistence is offered, **Allow Always** saves a per-agent grant
+for the exact configured server and tool, even when its arguments change.
+This applies to Gateway-hosted Codex runs when OpenClaw can unambiguously match
+the approval to a live Gateway-owned tool call; missing or ambiguous matches retain
+Codex's native/session behavior. Codex apps, native plugin servers, and
+computer-use servers are excluded. Grants survive restarts and apply at the
+next thread configuration and hook registration, such as a new session or
+restart; the current session uses Codex's remembered decision.
+
+Override a server with `openclaw mcp configure <server> --approval approve|prompt|auto`; an explicit mode takes precedence over the posture-derived default. Stored grants apply only under `auto` or an unspecified server mode; explicit `prompt` keeps asking. Inspect or revoke grants through [MCP tool grants](/tools/exec-approvals#mcp-tool-grants). See [Codex tool approvals](/cli/mcp#codex-tool-approvals) for details and [Native approvals in Slack](/channels/slack#native-approvals-in-slack) for Slack button delivery.
+
 ## Troubleshooting
 
 ### The server appears in Settings but exposes no tools
@@ -102,6 +117,8 @@ Run `openclaw mcp doctor <name> --probe`. Doctor validates the saved definition 
 ### A stdio server does not start
 
 Confirm the `command` resolves in the Gateway process environment and that `cwd` exists. Arguments belong in `args`, and an explicit `transport: "stdio"` requires a non-empty command.
+
+For servers launched by OpenClaw's built-in MCP client, debug logs prefix stderr diagnostics with `bundle-mcp:<name>:`. Unicode characters survive split writes, and shutdown diagnostics are retained. Output without a newline is briefly buffered for up to 250 ms before being logged as progress fragments; this does not wait for the server to stop writing. A diagnostic exceeding the 8 KiB buffer retains its Unicode-safe tail with a `[stderr line truncated]` marker.
 
 ### An HTTP server needs authorization
 

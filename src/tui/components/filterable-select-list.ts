@@ -33,7 +33,6 @@ export class FilterableSelectList implements Component, Focusable {
   private allItems: FilterableSelectItem[];
   private maxVisible: number;
   private theme: FilterableSelectListTheme;
-  private filterText = "";
 
   onSelect?: (item: SelectItem) => void;
   onCancel?: () => void;
@@ -43,6 +42,14 @@ export class FilterableSelectList implements Component, Focusable {
     this.maxVisible = maxVisible;
     this.theme = theme;
     this.input = new Input();
+    // Input owns terminal key decoding; clearing follows the normal filter refresh.
+    this.input.onEscape = () => {
+      if (this.input.getValue()) {
+        this.input.setValue("");
+      } else {
+        this.onCancel?.();
+      }
+    };
     this.selectList = this.createSelectList(this.allItems);
   }
 
@@ -55,11 +62,12 @@ export class FilterableSelectList implements Component, Focusable {
   }
 
   private applyFilter(): void {
-    if (!this.filterText.trim()) {
+    const filterText = this.input.getValue();
+    if (!filterText.trim()) {
       this.selectList = this.createSelectList(this.allItems);
       return;
     }
-    const filtered = fuzzyFilter(this.allItems, this.filterText, (item) =>
+    const filtered = fuzzyFilter(this.allItems, filterText, (item) =>
       [item.label, item.description, item.searchText].filter(Boolean).join(" "),
     );
     this.selectList = this.createSelectList(filtered);
@@ -126,25 +134,12 @@ export class FilterableSelectList implements Component, Focusable {
       return;
     }
 
-    // Escape: clear filter or cancel
-    if (matchesKey(keyData, "escape") || keyData === "\u0003") {
-      if (this.filterText) {
-        this.filterText = "";
-        this.input.setValue("");
-        this.applyFilter();
-      } else {
-        this.onCancel?.();
-      }
-      return;
-    }
-
     // All other input goes to filter
     const prevValue = this.input.getValue();
     this.input.handleInput(keyData);
     const newValue = this.input.getValue();
 
     if (newValue !== prevValue) {
-      this.filterText = newValue;
       this.applyFilter();
     }
   }
@@ -154,6 +149,6 @@ export class FilterableSelectList implements Component, Focusable {
   }
 
   getFilterText(): string {
-    return this.filterText;
+    return this.input.getValue();
   }
 }

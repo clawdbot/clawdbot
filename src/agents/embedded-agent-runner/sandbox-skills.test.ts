@@ -39,7 +39,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
   it("keeps snapshots for non-sandboxed runs", () => {
     expect(
       resolveSandboxSkillRuntimeInputs({
-        effectiveWorkspace: "/workspace",
+        skillsAnchorWorkspace: "/workspace",
         skillsSnapshot: snapshot,
       }),
     ).toEqual({
@@ -69,7 +69,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
           skillsWorkspaceDir: "/state/sandbox-skills",
           workspaceAccess: "rw",
         },
-        effectiveWorkspace: "/workspace",
+        skillsAnchorWorkspace: "/workspace",
         skillsSnapshot: snapshot,
       }),
     ).toEqual({
@@ -81,11 +81,11 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     });
   });
 
-  it("falls back to the effective workspace for older sandbox contexts", () => {
+  it("uses the skills anchor for sandbox contexts without materialized skills", () => {
     expect(
       resolveSandboxSkillRuntimeInputs({
         sandbox: { enabled: true },
-        effectiveWorkspace: "/workspace",
+        skillsAnchorWorkspace: "/workspace",
         skillsSnapshot: snapshot,
       }),
     ).toEqual({
@@ -163,7 +163,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
           skillsWorkspaceDir: materializedWorkspace,
           workspaceAccess: "rw",
         },
-        effectiveWorkspace,
+        skillsAnchorWorkspace: effectiveWorkspace,
         skillsSnapshot: snapshot,
       });
       const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({

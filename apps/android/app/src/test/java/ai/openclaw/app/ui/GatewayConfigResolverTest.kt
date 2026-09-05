@@ -182,24 +182,6 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun parseGatewayEndpointAllowsPrivateLanCleartextWsUrls() {
-    assertParsedEndpoint(
-      input = "ws://192.168.1.20:18789",
-      host = "192.168.1.20",
-      displayUrl = "http://192.168.1.20:18789",
-    )
-  }
-
-  @Test
-  fun parseGatewayEndpointAllowsMdnsCleartextWsUrls() {
-    assertParsedEndpoint(
-      input = "ws://gateway.local:18789",
-      host = "gateway.local",
-      displayUrl = "http://gateway.local:18789",
-    )
-  }
-
-  @Test
   fun parseGatewayEndpointAllowsNormalizedMdnsCleartextWsUrls() {
     val parsed = parseGatewayEndpoint("ws://GATEWAY.LOCAL.:18789")
 
@@ -577,10 +559,12 @@ class GatewayConfigResolverTest {
     val plan =
       resolveConnectPlanFixture(
         manualHostInput = "127.0.0.2",
+        tokenInput = "replacement-token",
       )
 
     assertEquals(GatewaySavedAuthAction.REPLACE_ENDPOINT, plan?.savedAuthAction)
     assertEquals("127.0.0.2", plan?.config?.host)
+    assertEquals("replacement-token", plan?.config?.token)
   }
 
   @Test
@@ -596,15 +580,23 @@ class GatewayConfigResolverTest {
 
   @Test
   fun resolveGatewayConnectPlanMarksSetupCodeAsExplicitReplacement() {
+    val scanned = resolveScannedSetupCodeResult(setupCode("ws://10.0.2.2:18789"))
     val plan =
       resolveConnectPlanFixture(
         useSetupCode = true,
-        setupCode = setupCode("wss://gateway.example:18789"),
+        setupCode = requireNotNull(scanned.setupCode),
+        tokenInput = "stale-shared-token",
+        passwordInput = "stale-shared-password",
       )
 
     assertEquals(GatewaySavedAuthAction.REPLACE_SETUP, plan?.savedAuthAction)
+    assertEquals("10.0.2.2", plan?.config?.host)
+    assertEquals(18789, plan?.config?.port)
+    assertEquals(false, plan?.config?.tls)
     assertEquals("bootstrap-1", plan?.config?.bootstrapToken)
     assertEquals("", plan?.config?.token)
+    assertEquals("", plan?.config?.password)
+    assertNull(scanned.error)
   }
 
   @Test

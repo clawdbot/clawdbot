@@ -24,6 +24,7 @@ export function createFakeThreadStartResponse({ params, sessionId, threadId, ver
       forkedFromId: null,
       preview: "",
       ephemeral: false,
+      projectId: params?.projectId ?? null,
       modelProvider: "openai",
       createdAt: now,
       updatedAt: now,
@@ -99,6 +100,14 @@ export function runFakeCodexAppServer({ handlers, logMode = "requests", requestL
       typeof method === "string" && Object.hasOwn(handlers, method) ? handlers[method] : undefined;
     if (handler) {
       handler({ id, notify, params, sendResult });
+      return;
+    }
+    if (method === "config/read") {
+      sendResult({ config: {}, origins: {}, layers: [] });
+      return;
+    }
+    if (method === "configRequirements/read") {
+      sendResult({ requirements: null });
       return;
     }
     sendResult({});

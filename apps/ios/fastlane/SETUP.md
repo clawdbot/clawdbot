@@ -1,10 +1,32 @@
 # fastlane setup (OpenClaw iOS)
 
-Install:
+Install the pinned Ruby bundle:
 
 ```bash
-brew install fastlane
+cd apps/ios
+# Install Ruby 3.4.10 with mise or another .ruby-version-aware manager.
+ruby --version
+gem install bundler -v 2.6.9
+bundle _2.6.9_ install
+bundle _2.6.9_ check
 ```
+
+The expected runtime is recorded in `apps/ios/.ruby-version`, and the Gemfile
+enforces the same Ruby version. Fastlane and dependency checksums are pinned in
+`apps/ios/Gemfile.lock`.
+
+Repository commands use that bundle automatically:
+
+```bash
+pnpm ios:screenshots
+pnpm ios:release:plan -- --json
+pnpm ios:release:archive -- --version 2026.7.2 --revision 1 --build-number 3
+```
+
+An inherited `BUNDLE_GEMFILE` does not override the repository bundle.
+Repository commands require `apps/ios/Gemfile` and fail if it is missing.
+Restore a missing Gemfile from the repository checkout. If the locked bundle is
+unavailable, run the setup commands above and retry.
 
 Create an App Store Connect API key:
 
@@ -65,7 +87,7 @@ pnpm ios:release:signing:check
 pnpm ios:release:signing:setup
 ```
 
-`signing:setup` uses Fastlane `produce` and `modify_services` to create Developer Portal bundle IDs and enable required services before running `match`. The main app also requires App Attest, and the main app and share extension both require the shared App Group from `apps/ios/Config/AppStoreSigning.json`; associate that group with both bundle IDs in the Apple Developer Portal before regenerating profiles. If Fastlane does not already have a valid Apple Developer Portal session, run `fastlane spaceauth` for a release-owner Apple ID and export the resulting `FASTLANE_SESSION`.
+`signing:setup` uses Fastlane `produce` and `modify_services` to create Developer Portal bundle IDs and enable required services before running `match`. The main app also requires App Attest, and the main app and share extension both require the shared App Group from `apps/ios/Config/AppStoreSigning.json`; associate that group with both bundle IDs in the Apple Developer Portal before regenerating profiles. If Fastlane does not already have a valid Apple Developer Portal session, run `cd apps/ios && BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane spaceauth` for a release-owner Apple ID and export the resulting `FASTLANE_SESSION`.
 
 Shared encrypted signing storage:
 
@@ -82,7 +104,7 @@ Validate auth:
 
 ```bash
 cd apps/ios
-fastlane ios auth_check
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios auth_check
 ```
 
 App Store Connect API auth is required when:
@@ -109,15 +131,57 @@ The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters
 Upload to App Store Connect:
 
 ```bash
-pnpm ios:release:plan -- --json
-pnpm ios:release:cut
-# Review and commit apps/ios/CHANGELOG.md.
+node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
+pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
+node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
+# Review all five cutter outputs and commit every changed output.
 pnpm ios:release:upload
 ```
 
 Direct Fastlane upload is disabled. Use the package script so the release
 wrapper, App Store push mode, and exported-IPA validation gate all run in the
 same path.
+
+## Protected beta CI
+
+`iOS Beta Release` is a separate, manual workflow. Dispatch it from trusted
+`main` with a canonical `release/YYYY.M.PATCH-mobile` branch and that branch's
+exact full commit SHA. The workflow accepts only a candidate that descends from
+the workflow SHA and differs only in a nonempty subset of the five generated
+mobile release metadata files. All five target files must byte-match the trusted
+regenerated release plan. Approval of the `ios-beta-release` environment gates
+all access to signing assets, App Store Connect credentials, and immutable
+release-ref mutation.
+
+Repository/environment secrets required by name:
+
+- `GH_APP_PRIVATE_KEY`
+- `MATCH_PASSWORD`
+- `APP_STORE_CONNECT_ISSUER_ID`
+- `APP_STORE_CONNECT_KEY_ID`
+- `APP_STORE_CONNECT_KEY_CONTENT`
+
+Protected `ios-beta-release` environment variable required:
+
+- `TESTFLIGHT_INTERNAL_GROUP`: immutable App Store Connect beta-group ID
+
+The CI lane must distribute the processed build to one pre-approved internal
+TestFlight group. The value is ID-only and is never matched as a display name.
+The lane fails before upload when the ID is blank, unknown, external, duplicated,
+collides with another group's display name, or any other internal group does not
+explicitly disable automatic all-build access. After processing, it freshly
+resolves the exact group and uploaded build, then requires that build ID to be
+assigned only to the approved group. External distribution and Beta App Review
+submission remain disabled.
+
+After verified internal distribution, the workflow writes a bounded signed
+intent and records `refs/openclaw/mobile-releases/ios/<app-store-version>-<build>`
+at the exact candidate SHA. A failed post-upload recording step may be recovered
+with the workflow's `record-only` operation, the original failed run ID, and the
+same release ref/SHA tuple. Recovery enters `ios-beta-release`, executes only
+trusted workflow-SHA tooling, and fails on missing artifacts, replay, moved
+refs, mismatched digests, or a conflicting immutable ref. App Review and
+production promotion remain manual.
 
 Maintainer recovery path for a fresh clone on the same Mac:
 
@@ -135,17 +199,18 @@ APP_STORE_CONNECT_KEYCHAIN_ACCOUNT=YOUR_MAC_USERNAME
 
 ```bash
 cd apps/ios
-fastlane ios auth_check
+BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios auth_check
 ```
 
-4. Plan and cut the exact encoded-version changelog section:
+4. Prepare and finalize the shared mobile release:
 
 ```bash
-pnpm ios:release:plan -- --json
-pnpm ios:release:cut
+node --import tsx scripts/mobile-release-version.ts --prepare --version 2026.8.2 --write
+pnpm ios:release:plan -- --json > /tmp/ios-release-plan.json
+node --import tsx scripts/mobile-release-version.ts --finalize --version 2026.8.2 --plan /tmp/ios-release-plan.json --write
 ```
 
-5. Review and commit `apps/ios/CHANGELOG.md`, then upload:
+5. Review all five cutter outputs, commit every changed output, then upload:
 
 ```bash
 pnpm ios:release:upload
@@ -160,14 +225,14 @@ Quick verification after upload:
 
 Versioning rules:
 
-- App Store release uploads derive the gateway from root `package.json` and revision/build state from App Store Connect
+- App Store release uploads derive the gateway from `apps/mobile/version.json` and revision/build state from App Store Connect
 - explicit `--version`, `--revision`, and `--build-number` values are checked overrides
 - `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source
-- Gateway versions use CalVer: `YYYY.M.D`
-- Fastlane appends one unpadded revision digit: gateway `YYYY.M.D`, revision `R`, becomes `YYYY.M.DR`
+- Gateway versions use CalVer: `YYYY.M.PATCH`
+- Fastlane appends one unpadded revision digit: gateway `YYYY.M.PATCH`, revision `R`, becomes `YYYY.M.PATCHR`
 - Gateway `2026.7.2`, revision `1` sets `CFBundleShortVersionString` to `2026.7.21`
 - Fastlane resolves `CFBundleVersion` from the maximum awaiting, processing, failed, or complete build-upload record plus one
-- Run `pnpm ios:release:cut` after changing `## Unreleased`, then review and commit the exact encoded heading
+- Run the shared mobile cutter prepare/plan/finalize flow after changing `## Unreleased`, then review all five outputs and commit every changed output
 - `pnpm ios:version:check` validates that release notes can be generated from the iOS changelog
 - The release flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving
 - Local App Store signing uses a temporary generated xcconfig with profile names from `apps/ios/Config/AppStoreSigning.json` and leaves local development signing overrides untouched

@@ -30,17 +30,13 @@ type BrowserControlAuthSurface = {
   ) => Promise<EnsureBrowserControlAuthResult>;
 };
 
-let cachedBrowserControlAuthSurface: BrowserControlAuthSurface | undefined;
-
 function loadBrowserControlAuthSurface(): BrowserControlAuthSurface {
   // Browser owns auth generation and env precedence; this SDK wrapper only keeps
   // the lazy public facade stable for plugin authors.
-  cachedBrowserControlAuthSurface ??=
-    loadBundledPluginPublicSurfaceModuleSyncCore<BrowserControlAuthSurface>({
-      dirName: "browser",
-      artifactBasename: "browser-control-auth.js",
-    });
-  return cachedBrowserControlAuthSurface;
+  return loadBundledPluginPublicSurfaceModuleSyncCore<BrowserControlAuthSurface>({
+    dirName: "browser",
+    artifactBasename: "browser-control-auth.js",
+  });
 }
 
 /** Resolves browser control auth from config/env without generating new credentials. */

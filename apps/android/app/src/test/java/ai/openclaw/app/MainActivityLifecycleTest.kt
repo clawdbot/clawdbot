@@ -178,7 +178,9 @@ class MainActivityLifecycleTest {
     releaseResolver.countDown()
 
     assertTrue(waitUntil { app.chatShareDraftQueue.size() == 1 })
-    val draft = requireNotNull(app.chatShareDraftQueue.head.value)
+    val draft =
+      app.chatShareDraftQueue.queued.value
+        .single()
     assertEquals(listOf(sharedUri), draft.attachments.map(SharedAttachment::uri))
     assertEquals(expectedOwner, app.chatShareDraftQueue.ownerOf(draft.id))
   }
@@ -269,7 +271,7 @@ class MainActivityLifecycleTest {
 
     try {
       NodeForegroundService.stop(app)
-      assertEquals("ai.openclaw.app.action.STOP", appShadow.nextStartedService.action)
+      assertEquals(NodeForegroundService::class.java.name, appShadow.nextStoppedService.component?.className)
 
       repeat(2) {
         MainActivityRuntimeUiStarter().onRuntimeInitialized(

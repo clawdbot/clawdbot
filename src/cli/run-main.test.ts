@@ -1,5 +1,5 @@
 // Run main tests cover CLI main entrypoint behavior and process error handling.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import {
   resolveGatewayCatalogCommandPath,
@@ -14,7 +14,55 @@ import {
   shouldUseRootHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
-import { isGatewayRunFastPathArgv } from "./run-main.js";
+import { isGatewayRunFastPathArgv, runCli } from "./run-main.js";
+
+const runGatewayCommand = vi.hoisted(() => vi.fn());
+
+vi.mock("./gateway-cli/run.js", () => ({ runGatewayCommand }));
+vi.mock("./gateway-cli/pre-bootstrap.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-cli/pre-bootstrap.js")>()),
+  selectGatewayRunEnvironment: async () => true,
+  prepareGatewayRunBootstrap: async () => false,
+}));
+vi.mock("../logging.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging.js")>()),
+  enableConsoleCapture: vi.fn(),
+}));
+
+describe("Gateway fast-path Commander parsing", () => {
+  const previousExitCode = process.exitCode;
+
+  beforeEach(() => {
+    process.exitCode = undefined;
+    runGatewayCommand.mockClear();
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    process.exitCode = previousExitCode;
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    { flag: "--ambient-channels", key: "ambientChannels" },
+    { flag: "--dev-ambient-channels", key: "devAmbientChannels" },
+    { flag: "--verbose", key: "verbose" },
+  ])("accepts root no-color after $flag on parent and child", async ({ flag, key }) => {
+    for (const args of [
+      [flag, "--no-color", "run"],
+      ["run", flag, "--no-color"],
+    ]) {
+      runGatewayCommand.mockClear();
+      await runCli(["node", "openclaw", "gateway", ...args, "--token=--no-color"]);
+
+      expect(process.exitCode).toBeUndefined();
+      expect(runGatewayCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ [key]: true, token: "--no-color" }),
+        expect.any(Object),
+      );
+    }
+  });
+});
 
 const memoryWikiCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
   plugins: [
@@ -75,10 +123,10 @@ describe("isGatewayRunFastPathArgv", () => {
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "run"])).toBe(true);
     expect(
       isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--log-level", "debug", "run"]),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--log-level=debug", "run"]),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "run", "--raw-stream-path", "x"]),
     ).toBe(true);
@@ -348,7 +396,9 @@ describe("resolveMissingPluginCommandMessage", () => {
         },
         { registry: browserCommandAliasRegistry },
       ),
-    ).toContain('`plugins.allow` excludes "browser"');
+    ).toBe(
+      'The `openclaw browser` command is unavailable because `plugins.allow` excludes "browser". Add "browser" to `plugins.allow` if you want that bundled plugin CLI surface.',
+    );
   });
 
   it("explains explicit bundled plugin disablement", () => {
@@ -362,7 +412,9 @@ describe("resolveMissingPluginCommandMessage", () => {
           },
         },
       }),
-    ).toContain("plugins.entries.browser.enabled=false");
+    ).toBe(
+      "The `openclaw browser` command is unavailable because `plugins.entries.browser.enabled=false`. Re-enable that entry if you want the bundled plugin CLI surface.",
+    );
   });
 
   it("returns null when the bundled plugin command is already allowed", () => {
@@ -394,10 +446,9 @@ describe("resolveMissingPluginCommandMessage", () => {
         registry: memoryCoreCommandAliasRegistry,
       },
     );
-    expect(message).toContain("runtime slash command");
-    expect(message).toContain("/dreaming");
-    expect(message).toContain("memory-core");
-    expect(message).toContain("openclaw memory");
+    expect(message).toBe(
+      '"dreaming" is a runtime slash command (/dreaming), not a CLI command. It is provided by the "memory-core" plugin. Use `openclaw memory` for related CLI operations, or `/dreaming` in a chat session.',
+    );
   });
 
   it("returns the runtime command message even when plugins.allow is set", () => {
@@ -428,9 +479,9 @@ describe("resolveMissingPluginCommandMessage", () => {
         registry: memoryCoreCommandAliasRegistry,
       },
     );
-    expect(message).toContain('"dreaming" is not a plugin');
-    expect(message).toContain('"memory-core"');
-    expect(message).toContain("plugins.allow");
+    expect(message).toBe(
+      '"dreaming" is not a plugin; it is a command provided by the "memory-core" plugin. Add "memory-core" to `plugins.allow` instead of "dreaming".',
+    );
   });
 
   it("explains disabled-by-default parent plugins for CLI command aliases", () => {
@@ -461,10 +512,9 @@ describe("resolveMissingPluginCommandMessage", () => {
       { registry: workboardCommandAliasRegistry },
     );
 
-    expect(message).toContain('"workboard" plugin');
-    expect(message).toContain("disabled by default");
-    expect(message).toContain("openclaw plugins enable workboard");
-    expect(message).not.toContain("runtime slash command");
+    expect(message).toBe(
+      'The `openclaw workboard` command is provided by the "workboard" plugin, but that bundled plugin is disabled by default. Run `openclaw plugins enable workboard` to enable that CLI surface.',
+    );
   });
 
   it("returns null for CLI command aliases when disabled-by-default parent plugins are enabled", () => {
@@ -554,10 +604,9 @@ describe("resolveMissingPluginCommandMessage", () => {
     if (message === null) {
       throw new Error("expected missing plugin command message");
     }
-    expect(message).toContain('"lcm_recent"');
-    expect(message).toContain('"lossless-claw"');
-    expect(message).toContain("agent tool");
-    expect(message).not.toContain("plugins.allow");
+    expect(message).toBe(
+      '"lcm_recent" is an agent tool available from the "lossless-claw" plugin, not a CLI subcommand. Use it from an agent turn (model tool-use), not the CLI. Run `openclaw --help` to see available CLI subcommands.',
+    );
   });
 
   it("matches agent tool names case-insensitively", () => {
@@ -653,8 +702,8 @@ describe("resolveMissingPluginCommandMessage", () => {
     if (message === null) {
       throw new Error("expected missing plugin command message");
     }
-    expect(message).toContain("may be provided by");
-    expect(message).toContain('"feishu"');
-    expect(message).not.toContain("registered by");
+    expect(message).toBe(
+      '"feishu_chat" may be provided by the "feishu" plugin as an agent tool, not a CLI subcommand. Run `openclaw --help` to see available CLI subcommands.',
+    );
   });
 });

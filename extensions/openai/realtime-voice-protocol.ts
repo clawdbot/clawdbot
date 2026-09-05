@@ -2,9 +2,14 @@ import { randomUUID } from "node:crypto";
 import type {
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
+  RealtimeVoicePlaybackItem,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
+  realtimeVoiceAudioDurationMs,
+} from "openclaw/plugin-sdk/realtime-voice-provider";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   AZURE_OPENAI_REALTIME_TOOL_NAME_MAX_LENGTH,
   OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS,
@@ -37,11 +42,9 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected latestOutstandingMarkSequence: number | null = null;
 
-  protected responseStartTimestamp: number | null = null;
-
   protected responseActive = false;
 
-  protected responseCreateInFlight = false;
+  protected responseCreateState: "idle" | "preparing" | "in-flight" = "idle";
 
   protected manualResponseCreateEventId: string | null = null;
 
@@ -59,7 +62,15 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected latestMediaTimestamp = 0;
 
-  protected lastAssistantItemId: string | null = null;
+  protected outputAudioGeneration = 0;
+
+  protected interruptingPlayback = false;
+
+  protected assistantAudioItem: {
+    itemId: string;
+    bytes: number;
+    startTimestamp: number;
+  } | null = null;
 
   protected completedToolCallIds = new Set<string>();
 
@@ -71,7 +82,10 @@ export abstract class OpenAIRealtimeProtocol {
 
   private readonly audioFormat: RealtimeVoiceAudioFormat;
 
-  constructor(protected readonly config: OpenAIRealtimeVoiceBridgeConfig) {
+  constructor(
+    protected readonly config: OpenAIRealtimeVoiceBridgeConfig,
+    protected readonly runtime: OpenAIRealtimeHost,
+  ) {
     this.audioFormat = config.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ;
   }
 
@@ -130,7 +144,7 @@ export abstract class OpenAIRealtimeProtocol {
           prefixPaddingMs: cfg.prefixPaddingMs,
           reasoningEffort: cfg.reasoningEffort,
           silenceDurationMs: cfg.silenceDurationMs,
-          tools: normalizeOpenAIRealtimeTools(cfg.tools),
+          tools: normalizeOpenAIRealtimeTools(cfg.tools, this.runtime.warn),
           vadThreshold: cfg.vadThreshold,
           voice: cfg.voice ?? "alloy",
         }),
@@ -146,6 +160,7 @@ export abstract class OpenAIRealtimeProtocol {
     const format = this.resolveLegacyRealtimeAudioFormat();
     const tools = normalizeOpenAIRealtimeTools(
       cfg.tools,
+      this.runtime.warn,
       AZURE_OPENAI_REALTIME_TOOL_NAME_MAX_LENGTH,
     );
     return {
@@ -209,7 +224,7 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected releaseResponseState(options: { drain?: boolean } = {}): void {
     this.responseActive = false;
-    this.responseCreateInFlight = false;
+    this.responseCreateState = "idle";
     this.manualResponseCreateEventId = null;
     this.responseCancelInFlight = false;
     this.manualResponseCancelEventId = null;
@@ -217,7 +232,18 @@ export abstract class OpenAIRealtimeProtocol {
       this.standaloneSpeechActive = false;
       this.standaloneSpeechEventId = null;
     }
-    if (options.drain === false) {
+    if (options.drain !== false) {
+      this.drainResponseQueue();
+    }
+  }
+
+  private drainResponseQueue(): void {
+    if (
+      this.interruptingPlayback ||
+      this.responseActive ||
+      this.responseCreateState !== "idle" ||
+      this.responseCancelInFlight
+    ) {
       return;
     }
     if (this.standaloneSpeechQueue.length > 0) {
@@ -230,25 +256,51 @@ export abstract class OpenAIRealtimeProtocol {
   }
 
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void {
-    const assistantItemId = this.lastAssistantItemId;
-    const responseStartTimestamp = this.responseStartTimestamp;
+    // Wire observers can synchronously reenter while the sink still owns its snapshot.
+    if (this.interruptingPlayback) {
+      return;
+    }
+    this.interruptingPlayback = true;
+    try {
+      this.interruptPlayback(options);
+    } finally {
+      this.interruptingPlayback = false;
+    }
+    this.drainResponseQueue();
+  }
+
+  private interruptPlayback(options?: RealtimeVoiceBargeInOptions): void {
+    const assistantAudioItem = this.assistantAudioItem;
     const force = options?.force === true;
     const shouldInterruptProvider =
-      assistantItemId !== null &&
-      ((responseStartTimestamp !== null &&
-        (this.oldestOutstandingMarkSequence !== null || options?.audioPlaybackActive === true)) ||
+      assistantAudioItem !== null &&
+      (this.oldestOutstandingMarkSequence !== null ||
+        options?.audioPlaybackActive === true ||
         force);
-    const audioEndMs = shouldInterruptProvider
-      ? Math.max(
-          0,
-          responseStartTimestamp === null
-            ? this.latestMediaTimestamp
-            : this.latestMediaTimestamp - responseStartTimestamp,
-        )
-      : null;
+    // Timestamp/mark-only transports retain their shipped clock contract. An
+    // authoritative empty sink snapshot must never fall back to an already-heard item.
+    const playbackState: readonly RealtimeVoicePlaybackItem[] = this.config.getPlaybackState
+      ? this.config.getPlaybackState()
+      : shouldInterruptProvider && assistantAudioItem
+        ? [
+            {
+              itemId: assistantAudioItem.itemId,
+              audioEndMs: Math.min(
+                Math.floor(
+                  realtimeVoiceAudioDurationMs(this.audioFormat, assistantAudioItem.bytes),
+                ),
+                Math.max(0, this.latestMediaTimestamp - assistantAudioItem.startTimestamp),
+              ),
+            },
+          ]
+        : [];
+    const playbackItems = playbackState.map(({ itemId, audioEndMs }) => ({ itemId, audioEndMs }));
+    // Short prefixes stay retained while a response generates; they must not pin
+    // the echo guard below its threshold after later audio has played.
+    const audioEndMs = playbackItems.reduce((played, item) => played + item.audioEndMs, 0);
     const minBargeInAudioEndMs =
       this.config.minBargeInAudioEndMs ?? OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS;
-    if (!force && audioEndMs !== null && audioEndMs < minBargeInAudioEndMs) {
+    if (!force && playbackItems.length > 0 && audioEndMs < minBargeInAudioEndMs) {
       this.config.onEvent?.({
         direction: "client",
         type: "conversation.item.truncate.skipped",
@@ -256,39 +308,47 @@ export abstract class OpenAIRealtimeProtocol {
       });
       return;
     }
-    if (
-      options?.audioPlaybackActive === true &&
-      this.responseActive &&
-      !this.responseCancelInFlight
-    ) {
+    // VAD suppression can notify observers before create is sent. Retire that
+    // local reservation without awaiting a native terminal that cannot arrive.
+    if (this.responseCreateState === "preparing") {
+      this.releaseResponseState({ drain: false });
+    }
+    const cancelResponse =
+      (options?.audioPlaybackActive === true || force) &&
+      (this.responseActive || this.responseCreateState === "in-flight") &&
+      !this.responseCancelInFlight;
+    // Retire playback before callbacks can admit replacement output or reenter control.
+    this.outputAudioGeneration += 1;
+    this.assistantAudioItem = null;
+    this.clearOutstandingMarks();
+    if (this.responseActive || this.responseCreateState === "in-flight") {
+      this.responseCancelInFlight = true;
+    }
+    if (cancelResponse) {
       const eventId = `openclaw-response-cancel-${randomUUID()}`;
       this.manualResponseCancelEventId = eventId;
       this.sendEvent({ type: "response.cancel", event_id: eventId }, "reason=barge-in");
-      this.responseCancelInFlight = true;
     }
-    if (shouldInterruptProvider) {
+    for (const item of playbackItems) {
       this.sendEvent(
         {
           type: "conversation.item.truncate",
-          item_id: assistantItemId,
+          item_id: item.itemId,
           content_index: 0,
-          audio_end_ms: audioEndMs,
+          audio_end_ms: item.audioEndMs,
         },
-        `reason=barge-in audioEndMs=${audioEndMs}`,
+        `reason=barge-in audioEndMs=${item.audioEndMs}`,
       );
-      this.config.onClearAudio("barge-in");
-      this.clearOutstandingMarks();
-      this.lastAssistantItemId = null;
-      this.responseStartTimestamp = null;
-      return;
     }
+    // The sink can request replacement generation when cleared; trim its history first.
     this.config.onClearAudio("barge-in");
   }
 
   protected requestResponseCreate(options?: OpenAIRealtimeUserMessageOptions): void {
     if (
+      this.interruptingPlayback ||
       this.responseActive ||
-      this.responseCreateInFlight ||
+      this.responseCreateState !== "idle" ||
       this.responseCancelInFlight ||
       this.continuingToolCallIds.size > 0 ||
       this.pendingToolCallIds.size > 0
@@ -297,8 +357,12 @@ export abstract class OpenAIRealtimeProtocol {
       return;
     }
     this.responseCreatePending = false;
-    this.responseCreateInFlight = true;
+    this.responseCreateState = "preparing";
     this.suppressAutoRespondForManualResponse();
+    if (this.responseCreateState !== "preparing") {
+      return;
+    }
+    this.responseCreateState = "in-flight";
     const eventId = `openclaw-response-create-${randomUUID()}`;
     // Realtime errors can describe unrelated client events. Keep this id until
     // the manual turn settles so only its rejection may release VAD suppression.
@@ -314,9 +378,10 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected flushStandaloneSpeech(): void {
     if (
+      this.interruptingPlayback ||
       this.standaloneSpeechActive ||
       this.responseActive ||
-      this.responseCreateInFlight ||
+      this.responseCreateState !== "idle" ||
       this.responseCancelInFlight
     ) {
       return;
@@ -328,7 +393,7 @@ export abstract class OpenAIRealtimeProtocol {
     const eventId = `openclaw-standalone-speech-${randomUUID()}`;
     this.standaloneSpeechActive = true;
     this.standaloneSpeechEventId = eventId;
-    this.responseCreateInFlight = true;
+    this.responseCreateState = "in-flight";
     this.sendEvent({
       type: "response.create",
       event_id: eventId,
@@ -373,10 +438,11 @@ export abstract class OpenAIRealtimeProtocol {
   }
 
   protected resetRealtimeSessionState(): void {
+    this.outputAudioGeneration += 1;
     this.clearOutstandingMarks();
-    this.responseStartTimestamp = null;
+    this.assistantAudioItem = null;
     this.responseActive = false;
-    this.responseCreateInFlight = false;
+    this.responseCreateState = "idle";
     this.manualResponseCreateEventId = null;
     this.responseCancelInFlight = false;
     this.manualResponseCancelEventId = null;
@@ -384,22 +450,20 @@ export abstract class OpenAIRealtimeProtocol {
     this.autoRespondSuppressedForManualResponse = false;
     this.continuingToolCallIds.clear();
     this.pendingToolCallIds.clear();
-    this.lastAssistantItemId = null;
     this.completedToolCallIds.clear();
     this.standaloneSpeechQueue = [];
     this.standaloneSpeechActive = false;
     this.standaloneSpeechEventId = null;
   }
 
-  protected sendMark(): void {
+  protected createPlaybackMark(): string {
     const sequence = this.nextMarkSequence;
     this.nextMarkSequence += 1;
     if (this.oldestOutstandingMarkSequence === null) {
       this.oldestOutstandingMarkSequence = sequence;
     }
     this.latestOutstandingMarkSequence = sequence;
-    const markName = `audio-${sequence}`;
-    this.config.onMark?.(markName);
+    return `audio-${sequence}`;
   }
 
   protected clearOutstandingMarks(): void {

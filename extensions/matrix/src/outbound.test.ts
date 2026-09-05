@@ -157,7 +157,7 @@ describe("matrixOutbound cfg threading", () => {
       expect(result).toMatchObject({
         channel: "matrix",
         messageId: "$last",
-        roomId: "!room:example",
+        target: { kind: "room", id: "!room:example" },
         primaryMessageId: "$first",
         content: "first\nlast",
       });
@@ -739,7 +739,7 @@ describe("matrixOutbound cfg threading", () => {
     expect(result).toEqual({
       channel: "matrix",
       messageId: "evt-1",
-      roomId: "!room:example",
+      target: { kind: "room", id: "!room:example" },
     });
   });
 

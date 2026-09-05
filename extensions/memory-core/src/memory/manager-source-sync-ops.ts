@@ -6,15 +6,17 @@ import {
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
-  buildFileEntry,
-  listMemoryFiles,
   MEMORY_INDEX_FTS_TABLE,
   runWithConcurrency,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
-import { resolveMemorySessionSyncPlan } from "./manager-session-sync-state.js";
+import {
+  isMemorySessionIndexable,
+  resolveMemorySessionSyncPlan,
+} from "./manager-session-sync-state.js";
 import {
   loadMemorySourceFileState,
+  resolveMemorySourceFileEntries,
   resolveMemorySourceExistingHash,
 } from "./manager-source-state.js";
 import type {
@@ -58,32 +60,22 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
         : null;
 
-    const files = await listMemoryFiles(
-      this.workspaceDir,
-      this.settings.extraPaths,
-      this.settings.multimodal,
-    );
-    const fileEntries = (
-      await runWithConcurrency(
-        files.map(
-          (file) => async () =>
-            await buildFileEntry(file, this.workspaceDir, this.settings.multimodal),
-        ),
-        this.getIndexConcurrency(),
-      )
-    ).filter((entry): entry is MemoryIndexEntry => entry !== null);
+    const fileEntries = await resolveMemorySourceFileEntries({
+      workspaceDir: this.workspaceDir,
+      settings: this.settings,
+      concurrency: this.getIndexConcurrency(),
+    });
     log.debug("memory sync: indexing memory files", {
       files: fileEntries.length,
       needsFullReindex: params.needsFullReindex,
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
     });
-    const existingState = loadMemorySourceFileState({
+    const existingRows = loadMemorySourceFileState({
       db: this.db,
       source: "memory",
     });
-    const existingRows = existingState.rows;
-    const existingHashes = existingState.hashes;
+    const existingHashes = new Map(existingRows.map((row) => [row.path, row.hash]));
     const activePaths = new Set(fileEntries.map((entry) => entry.path));
     if (params.progress) {
       params.progress.total += fileEntries.length;
@@ -119,9 +111,10 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         }
         dirtyEntries.push(entry);
       }
-      const indexItems = dirtyEntries.map(
-        (entry): MemoryIndexWorkItem => ({ entry, source: "memory" }),
-      );
+      const indexItems = dirtyEntries.map((entry): MemoryIndexWorkItem => ({
+        entry,
+        source: "memory",
+      }));
       if (params.deferIndex) {
         return { indexItems, finalize: deleteStaleRows };
       }
@@ -210,7 +203,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         : loadMemorySourceFileState({
             db: this.db,
             source: "sessions",
-          }).rows,
+          }),
       sessionPathForFile: (file) => this.sessionPathForCorpusEntry(corpusEntryForPath(file)),
     });
     const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
@@ -269,25 +262,26 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           .filter((entry) => entry.artifactKind === "active-session")
           .map((entry) => this.sessionPathForCorpusEntry(entry)),
       );
+      const staleLivePaths = Array.from(targetArchiveFiles).flatMap((file) => {
+        const { agentId, sessionId } = corpusEntryForPath(file);
+        return [
+          sessionPathForSessionIdentity(agentId, sessionId),
+          this.legacyExtensionlessSessionPathForIdentity(agentId, sessionId),
+        ];
+      });
+      // Resolve membership after indexing, in one snapshot regardless of target count.
       const existingSessionPaths = new Set(
         loadMemorySourceFileState({
           db: this.db,
           source: "sessions",
-        }).rows.map((row) => row.path),
+          paths: staleLivePaths,
+        }).map((row) => row.path),
       );
-      for (const file of targetArchiveFiles) {
-        const corpusEntry = corpusEntryForPath(file);
-        const staleAgentId = corpusEntry.agentId;
-        const staleLivePaths = [
-          sessionPathForSessionIdentity(staleAgentId, corpusEntry.sessionId),
-          this.legacyExtensionlessSessionPathForIdentity(staleAgentId, corpusEntry.sessionId),
-        ];
-        for (const staleLivePath of staleLivePaths) {
-          if (activeCorpusPaths.has(staleLivePath) || !existingSessionPaths.has(staleLivePath)) {
-            continue;
-          }
-          deleteIndexedSessionPath(staleLivePath);
+      for (const staleLivePath of staleLivePaths) {
+        if (activeCorpusPaths.has(staleLivePath) || !existingSessionPaths.has(staleLivePath)) {
+          continue;
         }
+        deleteIndexedSessionPath(staleLivePath);
       }
     };
     const resolveSessionIndexEntry = async (absPath: string): Promise<MemoryIndexEntry | null> => {
@@ -303,6 +297,13 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         this.advanceSyncProgress(params.progress);
         return null;
       }
+      if (!isMemorySessionIndexable(entry)) {
+        // Archived runs may reveal their internal origin only while parsing.
+        // Remove earlier index artifacts before excluding that transcript.
+        deleteIndexedSessionPath(entry.path);
+        this.advanceSyncProgress(params.progress);
+        return null;
+      }
       const existingHash = resolveMemorySourceExistingHash({
         db: this.db,
         source: "sessions",
@@ -313,7 +314,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         this.advanceSyncProgress(params.progress);
         return null;
       }
-      return entry;
+      return { ...entry, sessionId: corpusEntryForPath(absPath).sessionId };
     };
 
     if (params.deferIndex) {
@@ -348,12 +349,10 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           )
         ).filter((entry): entry is MemoryIndexEntry => entry !== null);
         pendingIndexItems.push(
-          ...dirtyEntries.map(
-            (entry): MemoryIndexWorkItem => ({
-              entry,
-              source: "sessions",
-            }),
-          ),
+          ...dirtyEntries.map((entry): MemoryIndexWorkItem => ({
+            entry,
+            source: "sessions",
+          })),
         );
         if (pendingIndexItems.length >= SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES) {
           await flushPendingIndexItems();

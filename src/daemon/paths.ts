@@ -25,7 +25,7 @@ function resolveUserPathWithHome(input: string, home?: string): string {
     if (!home) {
       throw new Error("Missing HOME");
     }
-    const expanded = trimmed.replace(/^~(?=$|[\\/])/, home);
+    const expanded = trimmed.replace(/^~(?=$|[\\/])/, () => home);
     return path.resolve(expanded);
   }
   if (windowsAbsolutePath.test(trimmed) || windowsUncPath.test(trimmed)) {

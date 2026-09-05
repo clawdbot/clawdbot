@@ -112,15 +112,15 @@ export function collectDiskSpaceHealthFindings(
   }
 
   const [message, ...details] = result.warnings;
+  const critical = result.availableBytes < CRITICAL_BYTES;
   return [
     {
       checkId: DISK_SPACE_CHECK_ID,
-      severity: "warning",
+      severity: critical ? "error" : "warning",
       message: expectDefined(message, "disk-space warning message").replace(/^- /, ""),
       path: result.stateDir,
       target: formatBytes(result.availableBytes),
-      requirement:
-        result.availableBytes < CRITICAL_BYTES ? "critical-free-space" : "low-free-space",
+      requirement: critical ? "critical-free-space" : "low-free-space",
       fixHint: details.map((line) => line.replace(/^- /, "")).join(" "),
     },
   ];

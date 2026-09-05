@@ -46,8 +46,7 @@ describe("openai completions params", () => {
         id: "qwen3.6-plus",
         name: "Qwen 3.6 Plus",
         provider: "qwen",
-        baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-        compat: { supportsUsageInStreaming: true },
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
       }),
       emptyContext(),
       undefined,
@@ -66,8 +65,7 @@ describe("openai completions params", () => {
         id: "glm-5",
         name: "GLM-5",
         provider: "generic",
-        baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
-        compat: { supportsUsageInStreaming: true },
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
       }),
       emptyContext(),
       undefined,
@@ -76,6 +74,20 @@ describe("openai completions params", () => {
     };
 
     expect(params.stream_options?.include_usage).toBe(true);
+  });
+
+  it("honors an explicit streaming usage opt-out on a native provider", () => {
+    const params = buildOpenAICompletionsParams(
+      makeCompletionsModel({
+        provider: "moonshot",
+        baseUrl: "https://api.moonshot.ai/v1",
+        compat: { supportsUsageInStreaming: false },
+      }),
+      emptyContext(),
+      undefined,
+    );
+
+    expect(params).not.toHaveProperty("stream_options");
   });
 
   it("honors explicit streaming usage compat for configured custom providers", () => {
@@ -320,12 +332,12 @@ describe("openai completions params", () => {
   it("flattens pure text content arrays for string-only completions backends when opted in", () => {
     const params = buildOpenAICompletionsParams(
       makeCompletionsModel({
-        id: "google/gemma-4-E2B-it",
-        name: "Gemma 4 E2B",
-        provider: "inferrs",
-        baseUrl: "http://127.0.0.1:8080/v1",
+        id: "gemma4",
+        name: "Gemma 4",
+        provider: "llmman",
+        baseUrl: "http://127.0.0.1:17434/v1",
         reasoning: false,
-        contextWindow: 131072,
+        contextWindow: 65536,
         maxTokens: 4096,
         compat: {
           requiresStringContent: true,
