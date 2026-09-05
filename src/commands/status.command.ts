@@ -11,8 +11,6 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { withProgress } from "../cli/progress.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { readRestartSentinelReadOnly } from "../infra/restart-sentinel.js";
-import { findActiveUpdateRun, listUpdateRuns } from "../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json-command.ts";
@@ -23,7 +21,7 @@ import {
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
-import { formatUpdateRestartStatusValue } from "./status-update-restart.ts";
+import { buildStatusUpdateRows } from "./status-update-restart.ts";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.ts";
 
 const statusScanModuleLoader = createLazyImportLoader(() => import("./status.scan.js"));
@@ -314,7 +312,7 @@ export async function statusCommand(
     nodeService: nodeDaemon,
     nodeOnlyGateway,
   });
-  const updateRestartValue = formatUpdateRestartStatusValue(
+  const updateRows = buildStatusUpdateRows(
     (await readRestartSentinelReadOnly().catch(() => null))?.payload,
     {
       ok,
@@ -322,8 +320,6 @@ export async function statusCommand(
       muted,
     },
   );
-  const lastRun = findActiveUpdateRun() ?? listUpdateRuns({ limit: 1 })[0];
-  const updateReport = lastRun ? renderUpdateRunReport(lastRun) : undefined;
   const lines = await buildStatusCommandReportLines(
     await buildStatusCommandReportData({
       env: env ?? {},
@@ -343,12 +339,10 @@ export async function statusCommand(
       pluginCompatibility,
       pairingRecovery,
       tableWidth,
-      updateValue:
-        updateReport?.headline ??
-        (updateSurface.updateAvailable
-          ? warn(`available · ${updateSurface.updateLine}`)
-          : updateSurface.updateLine),
-      updateRestartValue,
+      updateValue: updateSurface.updateAvailable
+        ? warn(`available · ${updateSurface.updateLine}`)
+        : updateSurface.updateLine,
+      updateRows,
     }),
   );
   runtime.log(lines.join("\n"));
