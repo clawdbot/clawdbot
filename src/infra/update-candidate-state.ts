@@ -16,7 +16,6 @@ import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
-import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 
 export const UpdateStateSchemaVersionsSchema = z.array(
@@ -207,10 +206,11 @@ export function resolveUpdateCandidateStatePath(
   return path.join(targetRoot, relative);
 }
 
-/** Every registry path is rebound, including supported registrations outside the state directory. */
+/** Keep snapshot dependencies out of schema inspection; rebind registry paths to private copies. */
 export async function snapshotUpdateCandidateState(
   input: StateInput & { targetStateDir: string },
 ): Promise<UpdateStateSchemaVersion[]> {
+  const { createVerifiedSqliteSnapshot } = await import("./sqlite-snapshot.js");
   const sourceRoot = path.resolve(input.stateDir);
   const shared = path.join(sourceRoot, "state", "openclaw.sqlite");
   const targetPath = (source: string) =>
