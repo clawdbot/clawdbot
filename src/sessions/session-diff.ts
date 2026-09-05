@@ -10,6 +10,7 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { gitEnvironment, runGit } from "../agents/worktrees/git.js";
 import type { SessionDiffBaseline } from "../config/sessions/types.js";
+import { GIT_TIMEOUT_MS } from "../infra/git-exec.js";
 import { runCommandBuffered } from "../process/exec.js";
 import {
   loadSessionDiffBranchMetadata,
@@ -119,7 +120,8 @@ export function parseNumstatZ(text: string): Map<string, NumstatEntry> {
     if (!token) {
       continue;
     }
-    const [added, deleted, inlinePath] = token.split("\t");
+    const [added, deleted, ...pathParts] = token.split("\t");
+    const inlinePath = pathParts.join("\t");
     if (added === undefined || deleted === undefined) {
       continue;
     }
@@ -185,23 +187,6 @@ function isBinaryChunk(chunk: string): boolean {
   return /^Binary files .* differ$/m.test(chunk) || chunk.includes("\nGIT binary patch\n");
 }
 
-function countPatchAdditions(chunk: string): number {
-  let additions = 0;
-  let inHunk = false;
-  for (const line of chunk.split("\n")) {
-    if (line.startsWith("@@")) {
-      inHunk = true;
-      continue;
-    }
-    // Count only hunk-body additions so a `+++foo` content line is not mistaken
-    // for the `+++ b/path` header (which always precedes the first hunk).
-    if (inHunk && line.startsWith("+")) {
-      additions += 1;
-    }
-  }
-  return additions;
-}
-
 /**
  * A patch-producing `git diff` reads working-tree file contents, so a
  * checkout-planted hardlink to an out-of-tree secret would otherwise leak
@@ -253,25 +238,36 @@ async function collectUntrackedFiles(
   const truncated = paths.length > MAX_UNTRACKED_FILES;
   const files: SessionDiffFile[] = [];
   for (const filePath of paths.slice(0, MAX_UNTRACKED_FILES)) {
+    const file: SessionDiffFile = {
+      path: filePath,
+      status: "added",
+      additions: 0,
+      deletions: 0,
+      untracked: true,
+    };
+    files.push(file);
     // Hardlink/escape guard before git reads the file contents.
     if (!(await isPatchableWorkingTreePath(realRoot, filePath))) {
-      files.push({
-        path: filePath,
-        status: "added",
-        additions: 0,
-        deletions: 0,
-        untracked: true,
-        truncated: true,
-      });
+      file.truncated = true;
       continue;
     }
-    // Exit code 1 is git's "files differ" for --no-index, not a failure.
+    const patchLimit = Math.min(MAX_PATCH_BYTES_PER_FILE, budget.remaining);
+    // Git converts working-tree contents before diffing, so raw file size
+    // cannot establish whether its patch fits the remaining preview budget.
+    const includePatch = patchLimit > 0;
     // --no-textconv: checkout-configurable textconv drivers must never run
     // from this read-scoped RPC (same reason as --no-ext-diff).
-    const patch = await gitOut(
-      root,
+    const result = await runCommandBuffered(
       [
+        "git",
+        "-C",
+        root,
+        "-c",
+        "core.quotePath=false",
         "diff",
+        "--numstat",
+        "-z",
+        ...(includePatch ? ["--patch"] : []),
         "--no-color",
         "--no-ext-diff",
         "--no-textconv",
@@ -280,39 +276,48 @@ async function collectUntrackedFiles(
         "/dev/null",
         filePath,
       ],
-      [0, 1],
+      {
+        timeoutMs: GIT_TIMEOUT_MS,
+        env: gitEnvironment(),
+        maxOutputBytes: MAX_PATCH_BYTES_PER_FILE + patchLimit,
+        // This RPC does not consume Git diagnostics. Verbose converters must
+        // not abort otherwise valid diff output by filling an unused stream.
+        discardOutput: { stderr: true },
+      },
     );
-    if (patch === null) {
-      files.push({
-        path: filePath,
-        status: "added",
-        additions: 0,
-        deletions: 0,
-        untracked: true,
-        truncated: true,
-      });
+    const patchTruncated =
+      includePatch &&
+      result.termination === "output-limit" &&
+      result.outputLimitStream === "stdout";
+    // --no-index exits 1 for differences, but also for missing input. Require
+    // complete numstat metadata before retaining counts from a capped patch.
+    if (
+      !patchTruncated &&
+      (result.termination !== "exit" || (result.code !== 0 && result.code !== 1))
+    ) {
+      file.truncated = true;
       continue;
     }
-    if (isBinaryChunk(patch)) {
-      files.push({
-        path: filePath,
-        status: "added",
-        additions: 0,
-        deletions: 0,
-        untracked: true,
-        binary: true,
-      });
+    const output = result.stdout.toString("utf8");
+    // Git separates NUL-delimited numstat records from the patch with an
+    // additional NUL; pathnames cannot contain this boundary.
+    const metadataEnd = includePatch
+      ? output.indexOf("\0\0") + 1
+      : output.endsWith("\0")
+        ? output.length
+        : 0;
+    const stat = parseNumstatZ(output.slice(0, metadataEnd)).get(filePath);
+    if (!stat) {
+      file.truncated = true;
       continue;
     }
-    const additions = countPatchAdditions(patch);
-    files.push({
-      path: filePath,
-      status: "added",
-      additions,
-      deletions: 0,
-      untracked: true,
-      ...takePatch(patch, budget),
-    });
+    file.additions = stat.additions;
+    if (stat.binary) {
+      file.binary = true;
+      continue;
+    }
+    const patch = includePatch && !patchTruncated ? output.slice(metadataEnd + 1) : undefined;
+    Object.assign(file, takePatch(patch, budget));
   }
   return { files, truncated };
 }

@@ -618,19 +618,129 @@ describe("loadSessionDiff", () => {
     expect(result.files.map((file) => file.path)).toEqual(["AGENTS.md"]);
   });
 
-  it("counts untracked additions whose content begins with plus signs", async () => {
+  it("keeps exact large-file counts and later previews when untracked patches are omitted", async () => {
+    initRepo(repoRoot);
+    const additions = 140_000;
+    fs.writeFileSync(path.join(repoRoot, "a-large.txt"), `${"x".repeat(127)}\n`.repeat(additions));
+    fs.writeFileSync(path.join(repoRoot, "b-large.bin"), Buffer.alloc(4 * 1024 * 1024 + 1));
+    // Each added line's prefix can push a small input beyond the output cap.
+    fs.writeFileSync(path.join(repoRoot, "c-expanded.txt"), "\n".repeat(100_000));
+    fs.writeFileSync(path.join(repoRoot, "z-small.txt"), "small addition\n");
+    mockSession(repoRoot);
+
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+    expect(result.files[0]).toEqual({
+      path: "a-large.txt",
+      status: "added",
+      additions,
+      deletions: 0,
+      untracked: true,
+      truncated: true,
+    });
+    expect(result.files[1]).toEqual({
+      path: "b-large.bin",
+      status: "added",
+      additions: 0,
+      deletions: 0,
+      untracked: true,
+      binary: true,
+    });
+    expect(result.files[2]).toEqual({
+      path: "c-expanded.txt",
+      status: "added",
+      additions: 100_000,
+      deletions: 0,
+      untracked: true,
+      truncated: true,
+    });
+    expect(result.files[3]?.patch).toContain("+small addition");
+    expect(result.additions).toBe(additions + 100_000 + 1);
+    expect(result.deletions).toBe(0);
+    expect(result.truncated).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "preserves tab, newline, and non-ASCII filenames in tracked and untracked statistics",
+    async () => {
+      initRepo(repoRoot);
+      const trackedPath = "tracked\tname\ncafé.txt";
+      const untrackedPath = "untracked\tname\ncafé.txt";
+      fs.writeFileSync(path.join(repoRoot, trackedPath), "initial\n");
+      git(repoRoot, "add", ".");
+      git(repoRoot, "commit", "-qm", "init");
+      fs.appendFileSync(path.join(repoRoot, trackedPath), "later\n");
+      fs.writeFileSync(path.join(repoRoot, untrackedPath), "one\ntwo\n");
+      mockSession(repoRoot);
+
+      const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+      expect(result.files.map((file) => [file.path, file.additions, file.deletions])).toEqual([
+        [trackedPath, 1, 0],
+        [untrackedPath, 2, 0],
+      ]);
+      expect(result.additions).toBe(3);
+    },
+  );
+
+  it.each([
+    {
+      name: "ident contraction",
+      attribute: "ident",
+      content: Buffer.from(`$Id: ${"x".repeat(150_000)}$\n`),
+      normalized: "$Id$\n",
+    },
+    {
+      name: "working-tree encoding",
+      attribute: "working-tree-encoding=UTF-16LE",
+      content: Buffer.from(`${"A".repeat(60_000)}\n`, "utf16le"),
+      normalized: `${"A".repeat(60_000)}\n`,
+    },
+  ])(
+    "keeps fitting untracked previews after $name with verbose diagnostics",
+    async ({ attribute, content, normalized }) => {
+      initRepo(repoRoot);
+      fs.writeFileSync(
+        path.join(repoRoot, ".git", "verbose-filter.mjs"),
+        'process.stderr.write("diagnostic\\n".repeat(10_000)); process.stdin.pipe(process.stdout);\n',
+      );
+      git(repoRoot, "config", "filter.verbose.clean", "node .git/verbose-filter.mjs");
+      fs.writeFileSync(
+        path.join(repoRoot, ".gitattributes"),
+        `converted.txt ${attribute} filter=verbose\n`,
+      );
+      git(repoRoot, "add", ".gitattributes");
+      git(repoRoot, "commit", "-qm", "attributes");
+      fs.writeFileSync(path.join(repoRoot, "converted.txt"), content);
+      mockSession(repoRoot);
+
+      const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+      expect(result.files).toHaveLength(1);
+      expect(result.files[0]?.additions).toBe(1);
+      expect(result.files[0]?.patch?.includes(`+${normalized}`)).toBe(true);
+      expect(result.files[0]?.truncated).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { name: "plus-prefixed content", content: "++i\n+++more\nplain\n", additions: 3 },
+    { name: "an empty file", content: "", additions: 0 },
+    { name: "an unterminated last line", content: "one\nlast", additions: 2 },
+  ])("counts untracked additions for $name", async ({ content, additions }) => {
     initRepo(repoRoot);
     fs.writeFileSync(path.join(repoRoot, "seed.txt"), "seed\n");
     git(repoRoot, "add", ".");
     git(repoRoot, "commit", "-qm", "init");
-    // Content lines rendered as `+++more`/`++i` must not be read as the header.
-    fs.writeFileSync(path.join(repoRoot, "diffish.txt"), "++i\n+++more\nplain\n");
+    fs.writeFileSync(path.join(repoRoot, "diffish.txt"), content);
     mockSession(repoRoot);
 
     const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
 
     const file = result.files.find((entry) => entry.path === "diffish.txt");
-    expect(file?.additions).toBe(3);
+    expect(file?.additions).toBe(additions);
+    expect(file?.patch).toBeDefined();
+    expect(file?.truncated).toBeUndefined();
   });
 
   it("rejects invalid params through the handler", async () => {
