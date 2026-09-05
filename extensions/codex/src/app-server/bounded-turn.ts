@@ -249,15 +249,23 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     const inheritedMcpServerNames = params.requireNoExternalCapabilities
       ? await readCodexInheritedMcpServerNames(client, workspace.cwd, abortController.signal)
       : [];
-    if (params.requireNoExternalCapabilities) {
-      await assertCodexManagedRequirementsDoNotOverrideToolPolicy(
-        client,
-        { restrictedToolSurface: true },
-        abortController.signal,
-      );
-    }
+    const managedHooks = params.requireNoExternalCapabilities
+      ? await assertCodexManagedRequirementsDoNotOverrideToolPolicy(
+          client,
+          {
+            cwd: workspace.cwd,
+            protectedNativeContext: workspace.codexHome !== undefined,
+            restrictedToolSurface: true,
+            allowConfiguredManagedHooks: workspace.codexHome !== undefined,
+          },
+          abortController.signal,
+        )
+      : undefined;
     const threadConfig = buildCodexRuntimeThreadConfig(
-      resolveBoundedThreadConfig(params, workspace, inheritedMcpServerNames),
+      mergeCodexThreadConfigs(
+        resolveBoundedThreadConfig(params, workspace, inheritedMcpServerNames),
+        managedHooks?.config,
+      ),
       { nativeCodeModeEnabled: false },
     );
     params.assertCurrent?.();

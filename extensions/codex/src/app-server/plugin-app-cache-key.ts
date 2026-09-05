@@ -20,6 +20,7 @@ import {
   type CodexAppServerRuntimeOptions,
   type CodexAppServerStartOptions,
 } from "./config.js";
+import type { CodexSandboxPolicy } from "./protocol.js";
 
 const require = createRequire(import.meta.url);
 const CODEX_PLUGIN_VERSION = readPluginPackageVersion({ require });
@@ -89,6 +90,7 @@ export function buildCodexAppServerRuntimeFingerprint(params: {
   >;
   appServerVersion?: string;
   runtimeIdentity?: CodexAppServerRuntimeIdentity;
+  protectedNativeContext?: { cwd: string; sandboxPolicy: CodexSandboxPolicy };
 }): string {
   return JSON.stringify({
     endpoint: resolveCodexPluginAppCacheEndpoint(params.appServer),
@@ -96,6 +98,14 @@ export function buildCodexAppServerRuntimeFingerprint(params: {
     remoteWorkspaceRoot: params.appServer.remoteWorkspaceRoot ?? null,
     appServerVersion: params.appServerVersion ?? params.runtimeIdentity?.serverVersion ?? null,
     runtimeIdentity: params.runtimeIdentity ?? null,
+    ...(params.protectedNativeContext
+      ? {
+          protectedNativeContext: {
+            cwd: params.protectedNativeContext.cwd,
+            sandboxPolicy: params.protectedNativeContext.sandboxPolicy,
+          },
+        }
+      : {}),
   });
 }
 

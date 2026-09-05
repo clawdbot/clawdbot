@@ -23,6 +23,7 @@ function createInput(params?: {
   attemptClientFactory?: () => Promise<never>;
   clientFactory?: () => Promise<never>;
   runtimeArtifactRequest?: { expected?: { id: string; fingerprint: string } };
+  sandboxEnabled?: boolean;
 }) {
   return {
     authProfileStore: { kind: "test-store" },
@@ -41,6 +42,8 @@ function createInput(params?: {
       pluginConfig: { appServer: { enabled: true } },
       runAbortController: new AbortController(),
       runtimeArtifactRequest: params?.runtimeArtifactRequest,
+      sandbox:
+        params?.sandboxEnabled === undefined ? undefined : { enabled: params.sandboxEnabled },
       startupAuthRequirement: "subscription",
       startupClientAuthProfileId: "profile-1",
       startupPreparedAuth: undefined,
@@ -55,24 +58,36 @@ describe("Codex attempt client prewarm", () => {
     mocks.getSharedCodexAppServerClient.mockResolvedValue({});
   });
 
-  it("starts the shared client before the attempt needs its lease", () => {
-    const input = createInput();
+  it.each([undefined, false])(
+    "starts the shared client before the attempt needs its lease with sandbox enabled=%s",
+    (sandboxEnabled) => {
+      const input = createInput({ sandboxEnabled });
+
+      prewarmCodexAttemptClient(input);
+
+      expect(mocks.getSharedCodexAppServerClient).toHaveBeenCalledWith({
+        assertCurrent: input.connection.assertCurrent,
+        startOptions: { command: "codex", args: ["app-server"] },
+        pluginConfig: { appServer: { enabled: true } },
+        authProfileId: "profile-1",
+        authRequirement: "subscription",
+        authProfileStore: { kind: "test-store" },
+        authBindingFingerprint: "auth-fingerprint",
+        agentDir: "/tmp/openclaw-agent",
+        config: { agents: { defaults: { workspace: "/tmp/workspace" } } },
+        timeoutMs: 12_345,
+        abandonSignal: input.connection.runAbortController.signal,
+      });
+    },
+  );
+
+  it("does not acquire a sandboxed client before protected startup resolves its native context", () => {
+    const input = createInput({ sandboxEnabled: true });
+    input.connection.appServer.start.cwd = "/tmp/workspace";
 
     prewarmCodexAttemptClient(input);
 
-    expect(mocks.getSharedCodexAppServerClient).toHaveBeenCalledWith({
-      assertCurrent: input.connection.assertCurrent,
-      startOptions: { command: "codex", args: ["app-server"] },
-      pluginConfig: { appServer: { enabled: true } },
-      authProfileId: "profile-1",
-      authRequirement: "subscription",
-      authProfileStore: { kind: "test-store" },
-      authBindingFingerprint: "auth-fingerprint",
-      agentDir: "/tmp/openclaw-agent",
-      config: { agents: { defaults: { workspace: "/tmp/workspace" } } },
-      timeoutMs: 12_345,
-      abandonSignal: input.connection.runAbortController.signal,
-    });
+    expect(mocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it.each([

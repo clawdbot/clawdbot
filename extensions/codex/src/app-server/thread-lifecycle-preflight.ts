@@ -18,6 +18,7 @@ import {
 } from "./dynamic-tool-profile.js";
 import { assertCodexNativeHookRelayAllowed } from "./native-hook-relay.js";
 import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
+import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import { readScheduledCodexAppManagedRequirementsFingerprint } from "./scheduled-app-authority.js";
@@ -139,8 +140,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     messageOnlySourceReply ||
     params.params.pluginHarnessToolPolicyRestricted === true;
   const allowConfiguredManagedHooks =
-    params.params.pluginHarnessToolPolicyRestricted === true &&
-    !ringZeroActive &&
+    (ringZeroActive || params.params.pluginHarnessToolPolicyRestricted === true) &&
     !messageOnlySourceReply &&
     params.params.scheduledRuntimeAuthority === undefined;
   const imageGenerationDenied =
@@ -148,30 +148,47 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   if (restrictedToolSurface && params.nativeCodeModeEnabled !== false) {
     throw new Error("Codex restricted tool surfaces require native code mode to be disabled");
   }
-  if ((restrictedToolSurface || params.nativeCodeModeEnabled !== false) && !effectiveConfig) {
+  if (
+    (restrictedToolSurface ||
+      params.requireProtectedNativeContext ||
+      params.nativeCodeModeEnabled !== false) &&
+    !effectiveConfig
+  ) {
     effectiveConfig = await lifecycleTiming.measure("tool-policy-config-read", () =>
       readCodexEffectiveConfig(params.client, params.cwd, params.signal),
     );
   }
-  const restrictedToolSurfaceInheritedMcpServerNames = restrictedToolSurface
-    ? await lifecycleTiming.measure("restricted-tool-surface-mcp-policy", () =>
-        readCodexInheritedMcpServerNames(params.client, params.cwd, params.signal, effectiveConfig),
-      )
-    : [];
+  const restrictedToolSurfaceInheritedMcpServerNames =
+    restrictedToolSurface || params.requireProtectedNativeContext
+      ? await lifecycleTiming.measure("restricted-tool-surface-mcp-policy", () =>
+          readCodexInheritedMcpServerNames(params.client, params.cwd, params.signal, {
+            effectiveConfig,
+            requireProtectedNativeContext: params.requireProtectedNativeContext,
+          }),
+        )
+      : [];
+  let managedHooks: Awaited<
+    ReturnType<typeof assertCodexManagedRequirementsDoNotOverrideToolPolicy>
+  >;
   if (restrictedToolSurface || imageGenerationDenied || params.nativeCodeModeEnabled !== false) {
-    await lifecycleTiming.measure("tool-policy-config-requirements-read", () =>
+    managedHooks = await lifecycleTiming.measure("tool-policy-config-requirements-read", () =>
       assertCodexManagedRequirementsDoNotOverrideToolPolicy(
         params.client,
         {
+          cwd: params.cwd,
+          protectedNativeContext: params.requireProtectedNativeContext,
           restrictedToolSurface,
           requiredNativeShell: params.nativeCodeModeEnabled !== false,
-          additionalDeniedFeatures: imageGenerationDenied ? ["image_generation"] : undefined,
+          additionalDeniedFeatures: [
+            ...(imageGenerationDenied ? ["image_generation"] : []),
+            ...(messageOnlySourceReply ? ["hooks"] : []),
+          ],
           allowedManagedRequirementsFingerprint:
             readScheduledCodexAppManagedRequirementsFingerprint(
               params.params.scheduledRuntimeAuthority,
             ),
-          // Plugin policy restricts model-visible tools, while configured hooks are
-          // administrator policy. Stricter and detached surfaces remain fail closed.
+          // Managed hooks enforce administrator policy while model-visible tools
+          // remain restricted. Message-only and scheduled authority stay separate.
           allowConfiguredManagedHooks,
         },
         params.signal,
@@ -197,10 +214,13 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     ? fingerprintJsonObject({
         version: 1,
         baseInstructions: CODEX_RING_ZERO_BASE_INSTRUCTIONS,
-        config: buildCodexRingZeroThreadConfigPatch(
-          params.params,
-          true,
-          restrictedToolSurfaceInheritedMcpServerNames,
+        config: mergeCodexThreadConfigs(
+          buildCodexRingZeroThreadConfigPatch(
+            params.params,
+            true,
+            restrictedToolSurfaceInheritedMcpServerNames,
+          ),
+          managedHooks?.config,
         )!,
       })
     : undefined;
@@ -216,6 +236,8 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
     legacyDynamicToolsFingerprint,
     legacyUserMcpServersFingerprint,
     lifecycleTiming,
+    managedHooksConfig: managedHooks?.config,
+    managedHooksFingerprint: managedHooks?.fingerprint,
     nativeSkillIsolation,
     nativeSkillIsolationFingerprint,
     networkProxyConfigFingerprint,

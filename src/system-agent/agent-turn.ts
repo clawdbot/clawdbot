@@ -1,6 +1,5 @@
 // OpenClaw agent turns run the real embedded agent loop with the ring-zero tool.
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import {
@@ -11,11 +10,11 @@ import {
 import { resolveCliBackendConfig, type ResolvedCliBackend } from "../agents/cli-backends.js";
 import { normalizeCliModel } from "../agents/cli-runner/helpers.js";
 import { SessionManager } from "../agents/sessions/index.js";
-import { resolveStateDir } from "../config/paths.js";
 import type { CliSessionBinding } from "../config/sessions.js";
-import { buildAgentMainSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
+import { toAgentStoreSessionKey } from "../routing/session-key.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SYSTEM_AGENT_SYSTEM_PROMPT } from "./assistant-prompts.js";
+import { prepareSystemAgentExecutionContext } from "./execution-context.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import type { SystemAgentProposalRef } from "./operator-approval.js";
@@ -117,13 +116,6 @@ type EmbeddedRunResult = AgentRunResultView & {
     };
   };
 };
-
-async function ensureSystemAgentDirs(): Promise<{ workspaceDir: string }> {
-  const base = path.join(resolveStateDir(), "openclaw");
-  const workspaceDir = path.join(base, "workspace");
-  await fs.mkdir(workspaceDir, { recursive: true });
-  return { workspaceDir };
-}
 
 export async function cleanupSystemAgentSession(session: SystemAgentSession): Promise<void> {
   delete session.cliSession;
@@ -297,9 +289,9 @@ async function runSystemAgentTurnWithDeps(
   } catch (error) {
     return throwSystemAgentInferenceUnavailable({ session: params.session, failures: [error] });
   }
-  let workspaceDir: string;
+  let executionContext: Awaited<ReturnType<typeof prepareSystemAgentExecutionContext>>;
   try {
-    ({ workspaceDir } = await ensureSystemAgentDirs());
+    executionContext = await prepareSystemAgentExecutionContext();
   } catch (error) {
     return throwSystemAgentInferenceUnavailable({
       session: params.session,
@@ -307,6 +299,7 @@ async function runSystemAgentTurnWithDeps(
     });
   }
 
+  const { workspaceDir, agentId, policySessionKey } = executionContext;
   const runId = `openclaw-turn-${randomUUID()}`;
   const sessionManager = params.session.sessionManager ?? SessionManager.inMemory(workspaceDir);
   params.session.sessionManager = sessionManager;
@@ -318,14 +311,13 @@ async function runSystemAgentTurnWithDeps(
   );
   // Conversation identity owns runner continuity; the main key remains policy-only.
   // Sharing the runner key lets another conversation replace its generation.
-  const policySessionKey = buildAgentMainSessionKey({ agentId: SYSTEM_AGENT_ID });
   const shared = {
     sessionId: params.session.sessionId,
     sessionKey: toAgentStoreSessionKey({
-      agentId: SYSTEM_AGENT_ID,
+      agentId,
       requestKey: params.session.sessionId,
     }),
-    agentId: SYSTEM_AGENT_ID,
+    agentId,
     trigger: "manual" as const,
     sessionFile: `in-memory:${params.session.sessionId}`,
     sessionManager,

@@ -511,6 +511,9 @@ export function codexAppServerStartOptionsKey(
     managedCommandOrder: options.managedCommandOrder ?? "package-first",
     managedComputerUsePluginNames: [...(options.managedComputerUsePluginNames ?? [])].toSorted(),
     managedFallbackCommandPaths: [...(options.managedFallbackCommandPaths ?? [])],
+    protectedLaunchRoots: options.protectedLaunchRoots
+      ? [...options.protectedLaunchRoots].toSorted()
+      : null,
     args: options.args,
     cwd: options.cwd ?? null,
     url: options.url ?? null,

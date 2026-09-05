@@ -227,7 +227,6 @@ extensions/codex/src/app-server/tool-progress-normalization.ts	1
 extensions/codex/src/app-server/transcript-history-projection.ts	2
 extensions/codex/src/app-server/transcript-mirror-attestation.ts	2
 extensions/codex/src/app-server/transcript-mirror.ts	4
-extensions/codex/src/app-server/transport-stdio.ts	1
 extensions/codex/src/app-server/upstream-fork-boundary.ts	1
 extensions/codex/src/app-server/usage-limit-error.ts	2
 extensions/codex/src/app-server/user-prompt-message.ts	1

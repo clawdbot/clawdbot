@@ -9,10 +9,10 @@ import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgram,
 } from "openclaw/plugin-sdk/windows-spawn";
-import type { CodexAppServerClient, CodexAppServerRuntimeIdentity } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { resolvePackagedCodexNativeCommand } from "./managed-binary.js";
-import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
+import type { CodexAppServerRuntimeIdentity } from "./protocol.js";
+import { resolveCodexAppServerSpawnEnv } from "./transport-spawn-env.js";
 
 const ARTIFACT_ID_PREFIX = "codex-app-server:v1:";
 const ARTIFACT_HASH_DOMAIN = "openclaw-codex-app-server-runtime-artifact-v1\0";
@@ -96,12 +96,10 @@ type ArtifactHashBudget = {
   totalBytes: bigint;
 };
 
-function getRuntimeArtifactBindings(): WeakMap<
-  CodexAppServerClient,
-  AgentHarnessRuntimeArtifactBinding
-> {
+/** Bindings use client object identity without depending on the transport client. */
+function getRuntimeArtifactBindings(): WeakMap<object, AgentHarnessRuntimeArtifactBinding> {
   const globalState = globalThis as typeof globalThis & {
-    [ARTIFACT_BINDINGS_SYMBOL]?: WeakMap<CodexAppServerClient, AgentHarnessRuntimeArtifactBinding>;
+    [ARTIFACT_BINDINGS_SYMBOL]?: WeakMap<object, AgentHarnessRuntimeArtifactBinding>;
   };
   globalState[ARTIFACT_BINDINGS_SYMBOL] ??= new WeakMap();
   return globalState[ARTIFACT_BINDINGS_SYMBOL];
@@ -404,7 +402,7 @@ async function hashSelectedArtifactFiles(
   return hash.digest("hex");
 }
 
-async function resolveCommandPath(
+export async function resolveCodexAppServerCommandPath(
   command: string,
   env: NodeJS.ProcessEnv,
   cwd: string,
@@ -479,7 +477,7 @@ async function resolvePosixInvocationPaths(params: {
       "Codex runtime cannot attest a custom script launcher without its native target",
     );
   }
-  const interpreter = await resolveCommandPath(shebang[0]!, params.env, params.cwd);
+  const interpreter = await resolveCodexAppServerCommandPath(shebang[0]!, params.env, params.cwd);
   paths.push(await fs.realpath(interpreter));
   if (path.basename(interpreter) !== "env") {
     if (shebang.length !== 1) {
@@ -493,7 +491,7 @@ async function resolvePosixInvocationPaths(params: {
   if (!target || target.startsWith("-") || envArgs.length !== commandIndex + 1) {
     throw new Error("Codex runtime launcher uses unsupported env arguments");
   }
-  const targetPath = await resolveCommandPath(target, params.env, params.cwd);
+  const targetPath = await resolveCodexAppServerCommandPath(target, params.env, params.cwd);
   paths.push(await fs.realpath(targetPath));
   return paths;
 }
@@ -544,7 +542,8 @@ function readEffectiveSpawnEnvironmentValue(
   return effectiveKey ? env[effectiveKey] : undefined;
 }
 
-async function captureFilesystemDescriptor(params: {
+export async function resolveCodexRuntimeFilesystemDescriptor(params: {
+  env?: NodeJS.ProcessEnv;
   startOptions: CodexAppServerStartOptions;
   spawnIdentity: CodexRuntimeArtifactSpawnIdentity;
   signal?: AbortSignal;
@@ -555,12 +554,16 @@ async function captureFilesystemDescriptor(params: {
       "Verified Codex inference requires a local stdio runtime artifact; WebSocket attestation is unsupported",
     );
   }
-  const env = resolveCodexAppServerSpawnEnv(params.startOptions);
+  const env = params.env ?? resolveCodexAppServerSpawnEnv(params.startOptions);
   assertSafeNodeOptions(env);
   // child_process resolves relative launchers and PATH entries after applying cwd.
   // Attestation must use the same base or it can bind bytes that spawn never executes.
   const spawnCwd = path.resolve(params.startOptions.cwd ?? process.cwd());
-  const commandPath = await resolveCommandPath(params.startOptions.command, env, spawnCwd);
+  const commandPath = await resolveCodexAppServerCommandPath(
+    params.startOptions.command,
+    env,
+    spawnCwd,
+  );
   const commandRealPath = await fs.realpath(commandPath);
   let nativeCommand = params.spawnIdentity.nativeCommand;
   let nativeCandidate = commandRealPath;
@@ -586,7 +589,7 @@ async function captureFilesystemDescriptor(params: {
     const invocationCandidates = [commandRealPath, program.command, ...program.leadingArgv];
     invocationPaths = [];
     for (const candidate of invocationCandidates) {
-      const resolved = await resolveCommandPath(candidate, env, spawnCwd);
+      const resolved = await resolveCodexAppServerCommandPath(candidate, env, spawnCwd);
       invocationPaths.push(await fs.realpath(resolved));
     }
   } else {
@@ -603,7 +606,7 @@ async function captureFilesystemDescriptor(params: {
     throw new Error("Codex runtime launcher exceeds the bounded invocation file count");
   }
   const nativePath = await fs.realpath(
-    await resolveCommandPath(nativeCommand ?? nativeCandidate, env, spawnCwd),
+    await resolveCodexAppServerCommandPath(nativeCommand ?? nativeCandidate, env, spawnCwd),
   );
   const packageRoot = await resolvePackageRoot(nativePath);
   const configuredCodeModeHost = readEffectiveSpawnEnvironmentValue(
@@ -789,7 +792,7 @@ export async function captureCodexAppServerRuntimeArtifactBeforeStart(params: {
   spawnIdentity: CodexRuntimeArtifactSpawnIdentity;
   signal?: AbortSignal;
 }): Promise<CodexAppServerRuntimeArtifactCapture> {
-  const descriptor = await captureFilesystemDescriptor(params);
+  const descriptor = await resolveCodexRuntimeFilesystemDescriptor(params);
   const contentFingerprint = await hashSelectedArtifactFiles(descriptor, params.signal);
   return { descriptor, contentFingerprint };
 }
@@ -802,7 +805,7 @@ export async function finalizeCodexAppServerRuntimeArtifact(params: {
   runtimeIdentity: CodexAppServerRuntimeIdentity | undefined;
   signal?: AbortSignal;
 }): Promise<AgentHarnessRuntimeArtifactBinding> {
-  const afterDescriptor = await captureFilesystemDescriptor(params);
+  const afterDescriptor = await resolveCodexRuntimeFilesystemDescriptor(params);
   const afterContentFingerprint = await hashSelectedArtifactFiles(afterDescriptor, params.signal);
   if (
     JSON.stringify(afterDescriptor) !== JSON.stringify(params.before.descriptor) ||
@@ -853,7 +856,7 @@ export function validateCodexAppServerRuntimeArtifactCapture(
 
 /** Commits a verified binding only after the client has completed auth setup. */
 export function bindCodexAppServerRuntimeArtifact(
-  client: CodexAppServerClient,
+  client: object,
   binding: AgentHarnessRuntimeArtifactBinding,
 ): void {
   const bindings = getRuntimeArtifactBindings();
@@ -866,7 +869,7 @@ export function bindCodexAppServerRuntimeArtifact(
 
 /** Reads the immutable artifact attached to one successfully initialized client. */
 export function readCodexAppServerClientRuntimeArtifact(
-  client: CodexAppServerClient,
+  client: object,
 ): AgentHarnessRuntimeArtifactBinding | undefined {
   return getRuntimeArtifactBindings().get(client);
 }

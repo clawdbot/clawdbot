@@ -10,15 +10,12 @@ import {
 import type { CodexAppServerStartOptions } from "./config.js";
 import { normalizeCodexAppServerArgs } from "./launch-args.js";
 import { prepareCodexAppServerProcessRegistration } from "./transport-process-registration.js";
+import { resolveProtectedCodexSpawnCommand } from "./transport-protected-launch.js";
+import { resolveCodexAppServerSpawnEnv } from "./transport-spawn-env.js";
 import { closeCodexAppServerTransportAndWait } from "./transport.js";
 
-const UNSAFE_ENVIRONMENT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-const RUNTIME_INJECTION_ENVIRONMENT_KEYS = new Set([
-  "NODE_PATH",
-  "LD_AUDIT",
-  "LD_LIBRARY_PATH",
-  "LD_PRELOAD",
-]);
+export { resolveCodexAppServerSpawnEnv } from "./transport-spawn-env.js";
+
 const QA_PARENT_PID_ENV = "OPENCLAW_QA_PARENT_PID";
 
 type CodexAppServerSpawnRuntime = {
@@ -37,7 +34,13 @@ const DEFAULT_SPAWN_RUNTIME: CodexAppServerSpawnRuntime = {
 function resolveCodexAppServerSpawnInvocation(
   options: CodexAppServerStartOptions,
   runtime: CodexAppServerSpawnRuntime = DEFAULT_SPAWN_RUNTIME,
-): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
+): {
+  command: string;
+  args: string[];
+  entrypointPaths: string[];
+  shell?: boolean;
+  windowsHide?: boolean;
+} {
   if (options.commandSource === "managed") {
     throw new Error("Managed Codex app-server start options must be resolved before spawn.");
   }
@@ -53,46 +56,10 @@ function resolveCodexAppServerSpawnInvocation(
   return {
     command: resolved.command,
     args: resolved.argv,
+    entrypointPaths: program.leadingArgv,
     shell: resolved.shell,
     windowsHide: resolved.windowsHide,
   };
-}
-
-/** Merges app-server environment overrides while honoring clearEnv and unsafe key filtering. */
-export function resolveCodexAppServerSpawnEnv(
-  options: Pick<CodexAppServerStartOptions, "env" | "clearEnv">,
-  baseEnv: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
-): NodeJS.ProcessEnv {
-  const env = Object.create(null) as NodeJS.ProcessEnv;
-  copySafeEnvironmentEntries(env, baseEnv);
-  copySafeEnvironmentEntries(env, options.env ?? {});
-  const keysToClear = normalizedEnvironmentKeys(options.clearEnv ?? []);
-  if (platform === "win32") {
-    const lowerCaseKeysToClear = new Set(keysToClear.map((key) => key.toLowerCase()));
-    for (const candidate of Object.keys(env)) {
-      if (lowerCaseKeysToClear.has(candidate.toLowerCase())) {
-        delete env[candidate];
-      }
-    }
-  } else {
-    for (const key of keysToClear) {
-      delete env[key];
-    }
-  }
-  for (const key of Object.keys(env)) {
-    if (isCodexRuntimeInjectionEnvironmentKey(key)) {
-      // Package managers and agent hosts may inject loader paths into their children. Codex does
-      // not need them, so strip them before attestation and spawn instead of self-failing setup.
-      delete env[key];
-    }
-  }
-  return env;
-}
-
-function isCodexRuntimeInjectionEnvironmentKey(rawKey: string): boolean {
-  const key = rawKey.toUpperCase();
-  return RUNTIME_INJECTION_ENVIRONMENT_KEYS.has(key) || key.startsWith("DYLD_");
 }
 
 /** Keeps QA-owned app-server processes inside the gateway process-group cleanup boundary. */
@@ -101,29 +68,6 @@ function resolveCodexAppServerDetachedMode(
   platform: NodeJS.Platform = process.platform,
 ): boolean {
   return platform !== "win32" && !env[QA_PARENT_PID_ENV]?.trim();
-}
-
-function normalizedEnvironmentKeys(rawKeys: readonly string[]): string[] {
-  const keys: string[] = [];
-  for (const rawKey of rawKeys) {
-    const key = rawKey.trim();
-    if (key.length > 0) {
-      keys.push(key);
-    }
-  }
-  return keys;
-}
-
-function copySafeEnvironmentEntries(
-  target: NodeJS.ProcessEnv,
-  source: NodeJS.ProcessEnv | Record<string, string | undefined>,
-): void {
-  for (const [key, value] of Object.entries(source)) {
-    if (UNSAFE_ENVIRONMENT_KEYS.has(key)) {
-      continue;
-    }
-    target[key] = value;
-  }
 }
 
 /** Spawns the Codex app-server process and returns the shared transport interface. */
@@ -140,8 +84,16 @@ export async function createStdioTransport(
     execPath: process.execPath,
   });
   const register = await prepareCodexAppServerProcessRegistration();
+  const command = options.protectedLaunchRoots
+    ? await resolveProtectedCodexSpawnCommand(
+        options,
+        env,
+        invocation.command,
+        invocation.entrypointPaths,
+      )
+    : invocation.command;
   assertCurrent?.();
-  const child = spawn(invocation.command, invocation.args, {
+  const child = spawn(command, invocation.args, {
     // Preserve the shipped Supervisor endpoint contract: relative commands and
     // config discovery may depend on the endpoint's process working directory.
     ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),

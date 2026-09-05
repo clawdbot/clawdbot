@@ -10,6 +10,7 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { prepareSystemAgentExecutionContext } from "./execution-context.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
@@ -373,6 +374,12 @@ export async function verifySetupInferenceConfig(params: {
         };
       }
     }
+    // Only a reusable chat proof needs the consumer's workspace and sandbox scope.
+    // Staged onboarding, credentials, and tool fixtures retain their temporary storage.
+    const executionContext =
+      params.onVerifiedExecution && plan.runner === "embedded"
+        ? await prepareSystemAgentExecutionContext()
+        : undefined;
     let test = await runSetupInferenceTest({
       plan,
       tempDir,
@@ -380,6 +387,7 @@ export async function verifySetupInferenceConfig(params: {
       authProfileStateMode: "read-only",
       requireExecutionOwner: requiresExecutionOwner,
       verifyAgentTools: params.verifyAgentTools,
+      executionContext,
     });
     let retained = retainStagedAuthProfiles();
     if (!retained.ok) {
@@ -407,6 +415,7 @@ export async function verifySetupInferenceConfig(params: {
           authProfileStateMode: "read-only",
           requireExecutionOwner: true,
           verifyAgentTools: params.verifyAgentTools,
+          executionContext,
         });
         retained = retainStagedAuthProfiles();
         if (!retained.ok) {

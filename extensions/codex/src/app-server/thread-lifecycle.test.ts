@@ -4186,10 +4186,17 @@ describe("Codex app-server supervised branch lifecycle", () => {
     });
     const dynamicTools = [
       {
-        type: "function" as const,
-        name: "message",
-        description: "Send a message",
-        inputSchema: { type: "object", properties: {} },
+        type: "namespace" as const,
+        name: "openclaw_direct",
+        description: "Direct-only tools",
+        tools: [
+          {
+            type: "function" as const,
+            name: "message",
+            description: "Send a message",
+            inputSchema: { type: "object", properties: {} },
+          },
+        ],
       },
     ];
     const commonParams = {
@@ -4202,7 +4209,11 @@ describe("Codex app-server supervised branch lifecycle", () => {
       environmentSelection: [{ environmentId: "local", cwd: workspaceDir }],
       shellEnvironment: { GH_TOKEN: "", GITHUB_TOKEN: "" },
       disableLoginShell: true,
-      appServer: createThreadLifecycleAppServerOptions(),
+      appServer: {
+        ...createThreadLifecycleAppServerOptions(),
+        sessionRoot: workspaceDir,
+      },
+      nativeCodeModeOnlyEnabled: true,
       appServerRuntimeFingerprint: "codex-runtime-v1",
     };
 
@@ -4227,7 +4238,9 @@ describe("Codex app-server supervised branch lifecycle", () => {
       lastTurnId,
       excludeTurns: true,
       developerInstructions: agentWorkspaceDeveloperInstructions,
+      runtimeWorkspaceRoots: [workspaceDir],
       config: {
+        "features.code_mode": { direct_only_tool_namespaces: ["openclaw_direct"] },
         project_doc_max_bytes: 131_072,
         allow_login_shell: false,
         shell_environment_policy: {
@@ -4249,7 +4262,9 @@ describe("Codex app-server supervised branch lifecycle", () => {
       developerInstructions: agentWorkspaceDeveloperInstructions,
       dynamicTools,
       environments: [{ environmentId: "local", cwd: workspaceDir }],
+      runtimeWorkspaceRoots: [workspaceDir],
       config: {
+        "features.code_mode": { direct_only_tool_namespaces: ["openclaw_direct"] },
         project_doc_max_bytes: 131_072,
         allow_login_shell: false,
         shell_environment_policy: {
@@ -4348,158 +4363,222 @@ describe("Codex app-server supervised branch lifecycle", () => {
     });
   });
 
-  it("isolates both supervised threads and restores native MCP config on the next unrestricted turn", async () => {
-    const sourceThreadId = "thread-source";
-    const probeThreadId = "thread-probe";
-    const finalThreadId = "thread-final";
-    const workspaceDir = path.join(tempDir, "workspace");
-    const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    attempt.agentDir = path.join(tempDir, "agent");
-    const rolloutPath = path.join(
-      resolveCodexAppServerHomeDir(attempt.agentDir),
-      "sessions",
-      `rollout-${finalThreadId}.jsonl`,
-    );
-    attempt.pluginHarnessToolPolicyRestricted = true;
-    attempt.toolsAllow = ["openclaw"];
-    const identity = await seedPendingSupervisionBinding({
-      attempt,
-      cwd: workspaceDir,
-      pending: { sourceThreadId },
-    });
-    const request = vi.fn(async (method: string, requestParams?: unknown) => {
-      if (method === "config/read") {
-        return {
-          config: { mcp_servers: { inherited: { command: "inherited-mcp" } } },
-          layers: [{ name: { type: "user" } }],
-        };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/read") {
-        const threadId = (requestParams as { threadId?: string }).threadId;
-        return {
-          thread:
-            threadId === sourceThreadId
-              ? sourceThread({ threadId: sourceThreadId })
-              : {
-                  ...sourceThread({ threadId: finalThreadId, status: "notLoaded" }),
-                  path: rolloutPath,
-                },
-        };
-      }
-      if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/start" || method === "thread/resume") {
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-      }
-      if (method === "mcpServerStatus/list") {
-        return {
-          data: [disabledMcpServerStatus("inherited"), disabledMcpServerStatus("request-only")],
-          nextCursor: null,
-        };
-      }
-      if (
-        method === "thread/archive" ||
-        method === "thread/unsubscribe" ||
-        method === "thread/inject_items"
-      ) {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const common = {
-      client: { request } as never,
-      params: attempt,
-      cwd: workspaceDir,
-      dynamicTools: [],
-      config: { mcp_servers: { "request-only": { command: "request-mcp" } } },
-      appServer: createThreadLifecycleAppServerOptions(),
-      nativeCodeModeEnabled: false,
-      userMcpServersEnabled: false,
-      hostSystemAgentActive: true,
-    };
-
-    await expect(startOrResumeThread(common)).resolves.toMatchObject({
-      threadId: finalThreadId,
-      lifecycle: { action: "forked" },
-    });
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/read",
-      "thread/fork",
-      "mcpServerStatus/list",
-      "thread/unsubscribe",
-      "thread/start",
-      "mcpServerStatus/list",
-    ]);
-    for (const method of ["thread/fork", "thread/start"]) {
-      const threadRequest = request.mock.calls.find(([candidate]) => candidate === method)?.[1] as
-        | { config?: Record<string, unknown> }
-        | undefined;
-      expect(threadRequest?.config).toMatchObject({
-        project_doc_max_bytes: 0,
-        mcp_servers: {
-          inherited: { enabled: false },
-          "request-only": { command: "request-mcp", enabled: false },
-        },
+  it.each([false, true])(
+    "isolates supervised threads with managed-hooks=%s and preserves subsequent policy",
+    async (managedHooks) => {
+      const sourceThreadId = "thread-source";
+      const probeThreadId = "thread-probe";
+      const finalThreadId = "thread-final";
+      const workspaceDir = path.join(tempDir, "workspace");
+      const attempt = createThreadLifecycleParams(
+        path.join(tempDir, "session.jsonl"),
+        workspaceDir,
+      );
+      attempt.agentDir = path.join(tempDir, "agent");
+      const rolloutPath = path.join(
+        resolveCodexAppServerHomeDir(attempt.agentDir),
+        "sessions",
+        `rollout-${finalThreadId}.jsonl`,
+      );
+      attempt.pluginHarnessToolPolicyRestricted = true;
+      attempt.toolsAllow = ["openclaw"];
+      const identity = await seedPendingSupervisionBinding({
+        attempt,
+        cwd: workspaceDir,
+        pending: { sourceThreadId },
       });
-    }
-    expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toMatchObject({
-      baseInstructions: "",
-    });
-    expect(
-      request.mock.calls
-        .filter(([method]) => method === "mcpServerStatus/list")
-        .map(([, requestParams]) => requestParams),
-    ).toEqual([
-      { threadId: probeThreadId, detail: "toolsAndAuthOnly" },
-      { threadId: finalThreadId, detail: "toolsAndAuthOnly" },
-    ]);
+      let managedCommand = "synthetic-managed-first";
+      const request = vi.fn(async (method: string, requestParams?: unknown) => {
+        if (method === "config/read") {
+          return {
+            config: { mcp_servers: { inherited: { command: "inherited-mcp" } } },
+            layers: [{ name: { type: "user" } }],
+          };
+        }
+        if (method === "configRequirements/read") {
+          return {
+            requirements: managedHooks
+              ? {
+                  allowManagedHooksOnly: true,
+                  hooks: {
+                    PreToolUse: [
+                      { matcher: "*", hooks: [{ type: "command", command: managedCommand }] },
+                    ],
+                  },
+                  featureRequirements: { hooks: true },
+                }
+              : null,
+          };
+        }
+        if (method === "hooks/list") {
+          return {
+            data: [
+              {
+                cwd: workspaceDir,
+                warnings: [],
+                errors: [],
+                hooks: [
+                  {
+                    key: "managed-policy",
+                    isManaged: true,
+                    enabled: true,
+                    trustStatus: "managed",
+                    handler: { type: "command", command: managedCommand },
+                  },
+                ],
+              },
+            ],
+          };
+        }
+        if (method === "thread/read") {
+          const threadId = (requestParams as { threadId?: string }).threadId;
+          return {
+            thread:
+              threadId === sourceThreadId
+                ? sourceThread({ threadId: sourceThreadId })
+                : {
+                    ...sourceThread({ threadId: finalThreadId, status: "notLoaded" }),
+                    path: rolloutPath,
+                  },
+          };
+        }
+        if (method === "thread/fork") {
+          return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+        }
+        if (method === "thread/start" || method === "thread/resume") {
+          return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+        }
+        if (method === "mcpServerStatus/list") {
+          return {
+            data: [disabledMcpServerStatus("inherited"), disabledMcpServerStatus("request-only")],
+            nextCursor: null,
+          };
+        }
+        if (
+          method === "thread/archive" ||
+          method === "thread/unsubscribe" ||
+          method === "thread/inject_items"
+        ) {
+          return {};
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const common = {
+        client: { request } as never,
+        params: attempt,
+        cwd: workspaceDir,
+        dynamicTools: [],
+        config: { mcp_servers: { "request-only": { command: "request-mcp" } } },
+        appServer: createThreadLifecycleAppServerOptions(),
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+        hostSystemAgentActive: true,
+      };
 
-    attempt.pluginHarnessToolPolicyRestricted = false;
-    attempt.toolsAllow = undefined;
-    await writeNativeCatalogFixture(rolloutPath, finalThreadId, common.dynamicTools);
-    request.mockClear();
-    await expect(
-      withLeasedCodexTestClient({
-        agentDir: path.join(tempDir, "agent"),
-        request,
-        run: (client) =>
-          startOrResumeThread({
-            ...common,
-            client,
-            signal: AbortSignal.timeout(10_000),
-            hostSystemAgentActive: false,
-            nativeCodeModeEnabled: true,
+      await expect(startOrResumeThread(common)).resolves.toMatchObject({
+        threadId: finalThreadId,
+        lifecycle: { action: "forked" },
+      });
+
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "config/read",
+        "configRequirements/read",
+        ...(managedHooks ? ["hooks/list"] : []),
+        "thread/read",
+        "thread/fork",
+        "mcpServerStatus/list",
+        "thread/unsubscribe",
+        "thread/start",
+        "mcpServerStatus/list",
+      ]);
+      for (const method of ["thread/fork", "thread/start"]) {
+        const threadRequest = request.mock.calls.find(
+          ([candidate]) => candidate === method,
+        )?.[1] as { config?: Record<string, unknown> } | undefined;
+        expect(threadRequest?.config).toMatchObject({
+          ...(managedHooks ? { "features.hooks": true, hooks: { state: {} } } : {}),
+          project_doc_max_bytes: 0,
+          mcp_servers: {
+            inherited: { enabled: false },
+            "request-only": { command: "request-mcp", enabled: false },
+          },
+        });
+      }
+      expect(request.mock.calls.find(([method]) => method === "thread/start")?.[1]).toMatchObject({
+        baseInstructions: "",
+      });
+      expect(
+        request.mock.calls
+          .filter(([method]) => method === "mcpServerStatus/list")
+          .map(([, requestParams]) => requestParams),
+      ).toEqual([
+        { threadId: probeThreadId, detail: "toolsAndAuthOnly" },
+        { threadId: finalThreadId, detail: "toolsAndAuthOnly" },
+      ]);
+
+      if (managedHooks) {
+        const materialized = testCodexAppServerBindingStore.read(identity);
+        expect(materialized?.managedHooksFingerprint).toMatch(/^[a-f0-9]{64}$/);
+        expect(materialized?.pendingSupervisionBranch).toBeUndefined();
+        await writeNativeCatalogFixture(rolloutPath, finalThreadId, common.dynamicTools);
+        managedCommand = "synthetic-managed-next";
+        request.mockClear();
+        await expect(
+          withLeasedCodexTestClient({
+            agentDir: attempt.agentDir,
+            request,
+            run: (client) => startOrResumeThread({ ...common, client }),
           }),
-      }),
-    ).resolves.toMatchObject({
-      threadId: finalThreadId,
-      lifecycle: { action: "resumed" },
-    });
+        ).rejects.toThrow("rotating changed managed hook policy");
+        expect(
+          request.mock.calls.some(([method]) =>
+            ["thread/fork", "thread/start", "thread/resume"].includes(method),
+          ),
+        ).toBe(false);
+        expect(testCodexAppServerBindingStore.read(identity)).toEqual(materialized);
+        return;
+      }
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "thread/read",
-      "config/read",
-      "configRequirements/read",
-      "thread/read",
-      "thread/resume",
-      "thread/inject_items",
-    ]);
-    const resumeParams = request.mock.calls[4]?.[1] as { config?: Record<string, unknown> };
-    expect(resumeParams.config).toMatchObject({
-      mcp_servers: { "request-only": { command: "request-mcp" } },
-    });
-    expect(resumeParams.config).not.toHaveProperty("mcp_servers.inherited");
-    const restoredBinding = testCodexAppServerBindingStore.read(identity);
-    expect(restoredBinding?.pendingSupervisionBranch).toBeUndefined();
-    expect(restoredBinding).not.toHaveProperty("restrictedToolSurface");
-  });
+      attempt.pluginHarnessToolPolicyRestricted = false;
+      attempt.toolsAllow = undefined;
+      await writeNativeCatalogFixture(rolloutPath, finalThreadId, common.dynamicTools);
+      request.mockClear();
+      await expect(
+        withLeasedCodexTestClient({
+          agentDir: path.join(tempDir, "agent"),
+          request,
+          run: (client) =>
+            startOrResumeThread({
+              ...common,
+              client,
+              signal: AbortSignal.timeout(10_000),
+              hostSystemAgentActive: false,
+              nativeCodeModeEnabled: true,
+            }),
+        }),
+      ).resolves.toMatchObject({
+        threadId: finalThreadId,
+        lifecycle: { action: "resumed" },
+      });
+
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "thread/read",
+        "config/read",
+        "configRequirements/read",
+        "thread/read",
+        "thread/resume",
+        "thread/inject_items",
+      ]);
+      const resumeParams = request.mock.calls[4]?.[1] as { config?: Record<string, unknown> };
+      expect(resumeParams.config).toMatchObject({
+        mcp_servers: { "request-only": { command: "request-mcp" } },
+      });
+      expect(resumeParams.config).not.toHaveProperty("mcp_servers.inherited");
+      const restoredBinding = testCodexAppServerBindingStore.read(identity);
+      expect(restoredBinding?.pendingSupervisionBranch).toBeUndefined();
+      expect(restoredBinding).not.toHaveProperty("restrictedToolSurface");
+    },
+  );
 
   it.each(["probe", "final"] as const)(
     "cleans tracked threads and preserves the pending binding when the %s MCP attestation fails",

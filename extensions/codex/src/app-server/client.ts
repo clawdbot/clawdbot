@@ -17,6 +17,7 @@ import {
   type CodexAppServerRequestMethod,
   type CodexAppServerRequestParams,
   type CodexAppServerRequestResult,
+  type CodexAppServerRuntimeIdentity,
   type CodexInitializeParams,
   type CodexInitializeResponse,
   isRpcResponse,
@@ -79,6 +80,7 @@ export function resolveCodexAppServerClientInstanceId(client: object): string {
 }
 
 export { CodexAppServerRpcError } from "./rpc-error.js";
+export type { CodexAppServerRuntimeIdentity } from "./protocol.js";
 
 /** Codex rejects this exact code before enqueueing, including mutating requests. */
 export function isCodexAppServerOverloadError(error: unknown): error is CodexAppServerRpcError {
@@ -196,15 +198,6 @@ type CodexServerRequestHandler = (
 type CodexServerNotificationHandler = (
   notification: CodexServerNotification,
 ) => Promise<void> | void;
-
-/** Runtime identity returned by the Codex app-server initialize handshake. */
-export type CodexAppServerRuntimeIdentity = {
-  serverVersion: string;
-  userAgent?: string;
-  codexHome?: string;
-  platformFamily?: string;
-  platformOs?: string;
-};
 
 /** Stateful app-server JSON-RPC client over stdio or websocket transport. */
 export class CodexAppServerClient {

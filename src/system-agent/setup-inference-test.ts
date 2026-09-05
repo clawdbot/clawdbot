@@ -13,6 +13,7 @@ import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding
 import { describeFailoverError } from "../agents/failover-error.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
 import { SessionManager } from "../agents/sessions/index.js";
+import type { prepareSystemAgentExecutionContext } from "./execution-context.js";
 import {
   type ActivateSetupInferenceDeps,
   SETUP_INFERENCE_TEST_PROMPT,
@@ -37,6 +38,8 @@ type SetupInferenceTestParams = {
   deps: ActivateSetupInferenceDeps;
   authProfileStateMode: "read-write" | "read-only";
   requireExecutionOwner: boolean;
+  /** Reusable chat proofs use the consumer's startup context, separate from probe storage. */
+  executionContext?: Awaited<ReturnType<typeof prepareSystemAgentExecutionContext>>;
   /** Explicit setup activation may verify tool use before committing its selected managed route. */
   verifyAgentTools?: boolean;
   signal?: AbortSignal;
@@ -153,7 +156,9 @@ async function runSetupInferenceProbe(
   const sessionId = runId;
   const sessionFile = `in-memory:${sessionId}`;
   const sessionManager = SessionManager.inMemory(tempDir);
-  const effectiveAgentId = plan.routeAgentId ?? plan.agentId ?? "openclaw";
+  const executionContext = agentProbe ? undefined : params.executionContext;
+  const effectiveAgentId =
+    executionContext?.agentId ?? plan.routeAgentId ?? plan.agentId ?? "openclaw";
   const sessionKey = `agent:${effectiveAgentId}:setup-inference:incognito-${runId}`;
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
   const started = Date.now();
@@ -247,7 +252,13 @@ async function runSetupInferenceProbe(
         agentId: effectiveAgentId,
         trigger: "manual",
         sessionFile,
-        workspaceDir: tempDir,
+        workspaceDir: executionContext?.workspaceDir ?? tempDir,
+        ...(executionContext
+          ? {
+              sandboxAgentId: executionContext.agentId,
+              sandboxSessionKey: executionContext.policySessionKey,
+            }
+          : {}),
         ...(plan.agentDir ? { agentDir: plan.agentDir } : {}),
         // Bootstrap follows the configured agent workspace, independently of workspaceDir.
         // Keep this private check from importing the selected agent's ambient instructions.

@@ -65,6 +65,7 @@ function inProgressTurnResult() {
 function createClientFactory(
   options: {
     mcpServers?: unknown[];
+    managedHooks?: boolean;
     errorBeforeCompletion?: { message: string; willRetry: boolean };
     terminalStatus?: "completed" | "interrupted";
     assistantDelta?: string;
@@ -96,7 +97,38 @@ function createClientFactory(
       };
     }
     if (method === "configRequirements/read") {
-      return { requirements: null };
+      return {
+        requirements: options.managedHooks
+          ? {
+              hooks: { PreToolUse: [{ hooks: [{ type: "command", command: "managed-hook" }] }] },
+              featureRequirements: { hooks: true },
+            }
+          : null,
+      };
+    }
+    if (method === "hooks/list" && isRecord(params)) {
+      return {
+        data: [
+          {
+            cwd: (params.cwds as string[])[0],
+            warnings: [],
+            errors: [],
+            hooks: [
+              {
+                key: "managed:pre_tool_use:0:0",
+                isManaged: true,
+                enabled: true,
+                trustStatus: "managed",
+              },
+              {
+                key: "/protected/with.dots/hooks.json:session_start:0:0",
+                isManaged: false,
+                enabled: true,
+              },
+            ],
+          },
+        ],
+      };
     }
     if (method === "thread/start" && isRecord(params) && typeof params.model === "string") {
       return threadStartResult(params.model, options.modelProvider);
@@ -772,9 +804,14 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     expect(fake.methods).toEqual(["model/list"]);
   });
 
-  it.each([false, true])(
-    "attests ring-zero and totals response usage (missing final usage: %s)",
-    async (missingFinalUsage) => {
+  it.each([
+    { managedHooks: false, missingFinalUsage: false },
+    { managedHooks: false, missingFinalUsage: true },
+    { managedHooks: true, missingFinalUsage: false },
+    { managedHooks: true, missingFinalUsage: true },
+  ])(
+    "attests ring-zero and totals response usage with managedHooks=$managedHooks and missingFinalUsage=$missingFinalUsage",
+    async ({ managedHooks, missingFinalUsage }) => {
       const firstResponse = {
         responseId: "response-first",
         usage: {
@@ -787,6 +824,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         },
       };
       const fake = createClientFactory({
+        managedHooks,
         responseCompletions: [
           firstResponse,
           {
@@ -842,6 +880,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         "model/list",
         "config/read",
         "configRequirements/read",
+        ...(managedHooks ? ["hooks/list"] : []),
         "thread/start",
         "mcpServerStatus/list",
         "thread/inject_items",
@@ -857,7 +896,7 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         ephemeral: true,
         config: {
           "agents.enabled": false,
-          "features.hooks": false,
+          "features.hooks": managedHooks,
           "features.multi_agent": false,
           "features.multi_agent_v2": false,
           "features.code_mode": false,
@@ -869,6 +908,17 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
           "tools.update_plan.enabled": false,
         },
       });
+      if (managedHooks) {
+        expect(startParams).toMatchObject({
+          config: {
+            hooks: {
+              state: {
+                "/protected/with.dots/hooks.json:session_start:0:0": { enabled: false },
+              },
+            },
+          },
+        });
+      }
       const turnParams = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
       expect(turnParams).not.toHaveProperty("cwd");
       expect(turnParams).not.toHaveProperty("environments");
@@ -879,6 +929,24 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       );
     },
   );
+
+  it("rejects managed hooks for strict bounded turns without a private home", async () => {
+    const fake = createClientFactory({ managedHooks: true });
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "settled-turn finalization",
+        developerInstructions: "Finalize only.",
+        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "configured-transport",
+        requireNoExternalCapabilities: true,
+      }),
+    ).rejects.toThrow("cannot override managed hooks");
+    expect(fake.methods).toEqual(["model/list", "config/read", "configRequirements/read"]);
+  });
 
   it("fails before history injection when the started thread exposes an MCP server", async () => {
     const fake = createClientFactory({

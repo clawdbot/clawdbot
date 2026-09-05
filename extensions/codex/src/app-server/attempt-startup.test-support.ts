@@ -261,7 +261,7 @@ export function createAttemptParams(paths: AttemptPaths): EmbeddedRunAttemptPara
   } as EmbeddedRunAttemptParams;
 }
 
-const bundleMcpThreadConfig = {
+export const bundleMcpThreadConfig = {
   configPatch: undefined,
   diagnostics: [],
   evaluated: false,

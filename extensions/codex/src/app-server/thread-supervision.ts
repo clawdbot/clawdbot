@@ -42,13 +42,10 @@ import {
 } from "./thread-lifecycle-errors.js";
 import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
-import { buildDeveloperInstructions } from "./thread-prompt.js";
 import {
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
-  buildCodexRuntimeThreadConfigForRun,
+  buildCodexThreadConfiguration,
   buildThreadStartParams,
-  codexThreadSandboxOrPermissions,
-  resolveCodexThreadApprovalsReviewer,
 } from "./thread-requests.js";
 import { projectBoundedCodexThreadHistory } from "./transcript-mirror.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
@@ -67,6 +64,7 @@ type PendingSupervisionMaterializationParams = {
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
   config?: JsonObject;
+  managedHooksConfig?: JsonObject;
   shellEnvironment?: Readonly<Record<string, string>>;
   disableLoginShell?: boolean;
   nativeCodeModeEnabled?: boolean;
@@ -235,6 +233,7 @@ export async function materializePendingSupervisionBranch(
       appServer: params.appServer,
       developerInstructions: params.developerInstructions,
       config: params.config,
+      managedHooksConfig: params.managedHooksConfig,
       nativeCodeModeEnabled: params.nativeCodeModeEnabled,
       nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
       nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
@@ -471,32 +470,10 @@ function buildPendingSupervisionProbeForkParams(
   params: PendingSupervisionMaterializationParams,
   pending: CodexAppServerPendingSupervisionBranch,
 ): CodexThreadForkParams {
-  const runtimeConfig = buildCodexRuntimeThreadConfigForRun(params.attempt, params.config, {
-    nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-    nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
-    nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
-    webSearchAllowed: params.webSearchAllowed,
-    appServer: params.appServer,
-    hostSystemAgentActive: params.hostSystemAgentActive,
-    restrictedToolSurfaceInheritedMcpServerNames:
-      params.restrictedToolSurfaceInheritedMcpServerNames,
-    shellEnvironment: params.shellEnvironment,
-    disableLoginShell: params.disableLoginShell,
-  });
   return {
+    ...buildCodexThreadConfiguration(params.attempt, params),
     threadId: pending.sourceThreadId,
     ...(pending.lastTurnId ? { lastTurnId: pending.lastTurnId } : {}),
-    cwd: params.cwd,
-    approvalPolicy: params.appServer.approvalPolicy,
-    approvalsReviewer: resolveCodexThreadApprovalsReviewer(params.appServer, runtimeConfig),
-    ...codexThreadSandboxOrPermissions(params.appServer),
-    ...(params.appServer.serviceTier !== undefined
-      ? { serviceTier: params.appServer.serviceTier }
-      : {}),
-    config: runtimeConfig,
-    developerInstructions:
-      params.developerInstructions ??
-      buildDeveloperInstructions(params.attempt, { dynamicTools: params.dynamicTools }),
     ephemeral: true,
     threadSource: "appServer",
     excludeTurns: true,

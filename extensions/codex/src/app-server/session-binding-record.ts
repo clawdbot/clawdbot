@@ -172,6 +172,7 @@ const threadBindingSchema = z
     dynamicToolsContainDeferred: optionalBooleanSchema,
     webSearchThreadConfigFingerprint: optionalStringSchema,
     nativeSkillIsolationFingerprint: optionalStringSchema,
+    managedHooksFingerprint: optionalStringSchema,
     userMcpServersFingerprint: optionalStringSchema,
     mcpServersFingerprint: optionalStringSchema,
     configuredMcpOwnershipVersion: z.literal(1).optional().catch(undefined),

@@ -473,6 +473,8 @@ type SuccessfulRunParams = {
   reportedModel?: string;
 };
 
+type SetupRunParams = Parameters<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>[0];
+
 function successfulAgentHarnessBinding(params?: SuccessfulRunParams): AgentExecutionAuthBinding {
   const requestedHarnessId = params?.agentHarnessRuntimeOverride?.trim();
   const agentHarnessId =
@@ -6356,7 +6358,7 @@ describe("verifySetupInference", () => {
         };
       },
     );
-    const runEmbeddedAgent = vi.fn(async (params: SuccessfulRunParams) => {
+    const runEmbeddedAgent = vi.fn(async (params: SetupRunParams) => {
       params.onSuccessfulAuthBinding?.({
         authProfileId: profileId,
         ...successfulAgentHarnessBinding(params),
@@ -6445,6 +6447,18 @@ describe("verifySetupInference", () => {
       });
       const systemAgentTurnParams = runEmbeddedAgent.mock.calls[2]?.[0];
       expect(systemAgentTurnParams).toBeDefined();
+      const verifiedRunParams = runEmbeddedAgent.mock.calls[1]?.[0];
+      expect(verifiedRunParams).toMatchObject({
+        workspaceDir: systemAgentTurnParams?.workspaceDir,
+        agentId: systemAgentTurnParams?.agentId,
+        sandboxAgentId: systemAgentTurnParams?.agentId,
+        sandboxSessionKey: systemAgentTurnParams?.sandboxSessionKey,
+        sessionPersistence: "detached",
+        disableTools: true,
+        modelRun: true,
+      });
+      expect(verifiedRunParams?.sessionKey).not.toBe(systemAgentTurnParams?.sessionKey);
+      expect(verifiedRunParams?.sessionFile).toMatch(/^in-memory:/u);
       expect((systemAgentTurnParams as { config?: OpenClawConfig }).config).toBe(
         verification.binding.execution.runConfig,
       );

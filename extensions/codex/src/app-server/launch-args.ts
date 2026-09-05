@@ -74,6 +74,35 @@ export function readCodexAppServerConfigOptions(args: readonly string[]) {
   );
 }
 
+/** Protected startup accepts native app-server arguments without a wrapper prefix. */
+export function assertCodexDirectLaunchArgs(args: readonly string[]): void {
+  const tokens = readCodexArgs(args);
+  const directOptions = new Set([
+    "-c",
+    "--config",
+    "-p",
+    "--profile",
+    "--enable",
+    "--disable",
+    "--listen",
+  ]);
+  if (
+    tokens.filter(({ name }) => name === "app-server").length !== 1 ||
+    tokens.some(
+      ({ name, value }) =>
+        name !== "app-server" &&
+        name !== "--analytics-default-enabled" &&
+        name !== "--stdio" &&
+        name !== "--strict-config" &&
+        !(directOptions.has(name) && value !== undefined),
+    )
+  ) {
+    throw new Error(
+      "Protected Codex startup requires direct app-server arguments without script or wrapper prefixes",
+    );
+  }
+}
+
 /** The stdio proxy forwards to an external server; it does not own that runtime. */
 export function isCodexAppServerProxyLaunch(args: readonly string[]): boolean {
   const tokens = readCodexArgs(args);

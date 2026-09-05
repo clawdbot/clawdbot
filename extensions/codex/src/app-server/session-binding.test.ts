@@ -272,6 +272,45 @@ describe("Codex app-server binding store", () => {
     });
   });
 
+  it("upgrades a legacy binding with managed hook identity across SQLite reopen", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-binding-upgrade-"));
+    const identity = { kind: "conversation" as const, bindingId: "managed-hook-upgrade" };
+    const binding = { threadId: "thread-existing", cwd: "/repo" };
+    const managedHooksFingerprint = "a".repeat(64);
+    const openState = () =>
+      createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+        namespace: "managed-hook-upgrade-test",
+        maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+        env: { ...process.env, OPENCLAW_STATE_DIR: root },
+      });
+    try {
+      openState().register(bindingStoreKey(identity), { version: 1, state: "active", binding });
+      resetPluginStateStoreForTests();
+      const store = createCodexAppServerBindingStore(openState());
+      expect(store.read(identity)).toEqual(binding);
+      await store.mutate(identity, {
+        kind: "patch",
+        threadId: binding.threadId,
+        patch: { managedHooksFingerprint },
+      });
+      resetPluginStateStoreForTests();
+      const reopenedState = openState();
+      expect(createCodexAppServerBindingStore(reopenedState).read(identity)).toEqual({
+        ...binding,
+        managedHooksFingerprint,
+      });
+      expect(reopenedState.lookup(bindingStoreKey(identity))).toMatchObject({
+        version: 1,
+        state: "active",
+        binding: { ...binding, managedHooksFingerprint },
+      });
+    } finally {
+      resetPluginStateStoreForTests();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("stores domain data under the canonical session identity", async () => {
     const { state, values } = createStateStore();
     const store = createCodexAppServerBindingStore(state);

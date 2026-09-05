@@ -165,12 +165,14 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
 
   const samples: number[] = [];
   let previous = performance.now();
+  const heartbeatStartedAt = previous;
   const heartbeat = setInterval(() => {
     const current = performance.now();
     samples.push(current - previous);
     previous = current;
   }, 10);
   const { ws } = await openClient();
+  const clientReadyAt = performance.now();
   let deleted: Awaited<
     ReturnType<
       typeof rpcReq<{
@@ -182,21 +184,46 @@ test("sessions.delete keeps the Gateway responsive while reclaiming a large sess
     >
   >;
   let deleteMs = 0;
+  let deleteStartedAt: number;
+  let deleteFinishedAt: number;
   try {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 25);
     });
-    const deleteStartedAt = performance.now();
+    deleteStartedAt = performance.now();
     // The 200k-row fixture can take longer than the generic RPC helper's 10s
     // wall-clock budget on slower CI hosts. Responsiveness is asserted
     // independently below via the event-loop heartbeat.
     deleted = await rpcReq(ws, "sessions.delete", { key: SESSION_KEY }, 60_000);
-    deleteMs = performance.now() - deleteStartedAt;
+    deleteFinishedAt = performance.now();
+    deleteMs = deleteFinishedAt - deleteStartedAt;
   } finally {
     clearInterval(heartbeat);
     ws.close();
   }
   const maxGatewayGapMs = Math.max(...samples);
+  if (maxGatewayGapMs >= 500) {
+    // Preserve the sampler; reconstruct its worst interval after measurement.
+    // Raw endpoints expose intervals that overlap more than one phase.
+    const worstGapStartedAt = samples
+      .slice(0, samples.indexOf(maxGatewayGapMs))
+      .reduce((elapsed, gap) => elapsed + gap, heartbeatStartedAt);
+    process.stdout.write(
+      `${JSON.stringify({
+        event: "session-reclamation-timing",
+        heartbeatStartedAt,
+        clientReadyAt,
+        deleteStartedAt,
+        deleteFinishedAt,
+        deleteMs,
+        maxGatewayGapMs,
+        worstGapStartedAt,
+        worstGapFinishedAt: worstGapStartedAt + maxGatewayGapMs,
+        sampleCount: samples.length,
+        unsampledTailMs: deleteFinishedAt - previous,
+      })}\n`,
+    );
+  }
 
   const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
   if (!target.path) {

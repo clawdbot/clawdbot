@@ -113,6 +113,15 @@ export type CodexInitializeResponse = {
   platformOs?: string;
 };
 
+/** Normalized runtime identity returned by the app-server initialize handshake. */
+export type CodexAppServerRuntimeIdentity = {
+  serverVersion: string;
+  userAgent?: string;
+  codexHome?: string;
+  platformFamily?: string;
+  platformOs?: string;
+};
+
 export type CodexUserInput =
   | {
       type: "text";

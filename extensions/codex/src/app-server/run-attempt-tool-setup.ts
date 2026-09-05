@@ -271,6 +271,11 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   };
   let nativeSpecs: CodexDynamicToolSpec[] | undefined;
   if (hasCodexNativeToolCatalog(mutable.startupBinding)) {
+    if (sandbox?.enabled && !nativeToolSurfaceEnabled) {
+      throw new Error(
+        "Sandboxed Codex sessions with native tools disabled cannot use a supervised native tool catalog",
+      );
+    }
     runAbortController.signal.throwIfAborted();
     connection.assertCurrent();
     const client = await connection.attemptClientFactory({

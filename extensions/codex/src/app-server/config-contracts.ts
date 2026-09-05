@@ -185,6 +185,8 @@ export type CodexAppServerStartOptions = {
   /** Native plugin names checked at the final managed spawn boundary. */
   managedComputerUsePluginNames?: string[];
   managedFallbackCommandPaths?: string[];
+  /** Internal protected-startup boundary; never read from plugin configuration. */
+  protectedLaunchRoots?: readonly string[];
   args: string[];
   /** Process working directory for shipped Supervisor stdio endpoint compatibility. */
   cwd?: string;

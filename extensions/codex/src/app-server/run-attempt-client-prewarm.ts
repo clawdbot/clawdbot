@@ -26,6 +26,11 @@ export function prewarmCodexAttemptClient(params: {
     params: runParams,
     runAbortController,
   } = connection;
+  // Sandboxed startup resolves its native context and authority later. These
+  // original options must not start a process before that boundary is prepared.
+  if (connection.sandbox?.enabled) {
+    return;
+  }
   if (
     options.clientFactory ||
     attemptClientFactory !== getLeasedSharedCodexAppServerClient ||

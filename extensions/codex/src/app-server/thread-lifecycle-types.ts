@@ -94,6 +94,8 @@ export type CodexStartOrResumeThreadParams = {
   configuredMcpOwnershipVersion?: 1;
   environmentSelection?: CodexTurnEnvironmentParams[];
   appServerRuntimeFingerprint?: string;
+  /** Protected native cwd and runtime identity must survive every binding reuse. */
+  requireProtectedNativeContext?: boolean;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
   signal?: AbortSignal;
@@ -106,6 +108,8 @@ export type CodexThreadRequestContext = {
   startModelSelection: ReturnType<typeof resolveCodexAppServerThreadModelSelection>;
   startModelProvider?: string;
   userMcpServersConfigPatch?: JsonObject;
+  managedHooksConfig?: JsonObject;
+  managedHooksFingerprint?: string;
   dynamicToolsFingerprint: string;
   dynamicToolsContainDeferred: boolean;
   webSearchThreadConfigFingerprint?: string;

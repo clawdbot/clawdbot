@@ -50,6 +50,15 @@ import { CodexThreadPolicyHandoffError, refreshCodexThreadPolicy } from "./threa
 import { buildThreadResumeParams, buildThreadStartParams } from "./thread-requests.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
 
+function assertCodexProtectedNativeCwd(
+  params: CodexStartOrResumeThreadParams,
+  thread: CodexThread,
+): void {
+  if (params.requireProtectedNativeContext && thread.cwd !== params.cwd) {
+    throw new Error("Codex thread did not use the protected native working directory");
+  }
+}
+
 function resolveCodexThreadRolloutPath(thread: CodexThread): string | undefined {
   const rolloutPath = thread.path?.trim();
   if (
@@ -140,6 +149,7 @@ export async function resumeExistingCodexThread(
       buildThreadResumeParams(params.params, {
         threadId: resumeBinding.threadId,
         cwd: params.cwd,
+        requireProtectedNativeContext: params.requireProtectedNativeContext,
         authProfileId,
         model: startModelSelection.model,
         modelProvider: startModelProvider,
@@ -154,6 +164,7 @@ export async function resumeExistingCodexThread(
         webSearchAllowed: params.webSearchAllowed,
         hostSystemAgentActive,
         restrictedToolSurfaceInheritedMcpServerNames,
+        managedHooksConfig: context.managedHooksConfig,
         shellEnvironment: params.shellEnvironment,
         disableLoginShell: params.disableLoginShell,
       }),
@@ -179,6 +190,7 @@ export async function resumeExistingCodexThread(
     );
     acceptedConfiguration = configuration;
     assertCodexThreadAcceptsDirectInput(response.thread);
+    assertCodexProtectedNativeCwd(params, response.thread);
     configuration.assertConfigured();
     // Current-policy denial must release this subscription and stop, not retry
     // as a fresh thread. A confirmed config change still follows normal rotation.
@@ -234,6 +246,7 @@ export async function resumeExistingCodexThread(
       dynamicToolsContainDeferred,
       webSearchThreadConfigFingerprint,
       nativeSkillIsolationFingerprint,
+      managedHooksFingerprint: context.managedHooksFingerprint,
       userMcpServersFingerprint,
       mcpServersFingerprint:
         params.mcpServersFingerprintEvaluated === true
@@ -455,6 +468,7 @@ export async function startFreshCodexThread(
   const startParams = lifecycleTiming.measureSync("thread-start-params", () =>
     buildThreadStartParams(params.params, {
       cwd: params.cwd,
+      requireProtectedNativeContext: params.requireProtectedNativeContext,
       dynamicTools: params.dynamicTools,
       appServer: params.appServer,
       developerInstructions: params.developerInstructions,
@@ -468,6 +482,7 @@ export async function startFreshCodexThread(
       modelProvider: startModelProvider,
       hostSystemAgentActive,
       restrictedToolSurfaceInheritedMcpServerNames,
+      managedHooksConfig: context.managedHooksConfig,
       shellEnvironment: params.shellEnvironment,
       disableLoginShell: params.disableLoginShell,
     }),
@@ -514,6 +529,7 @@ export async function startFreshCodexThread(
   // A deny-by-default app becomes callable only under this exact thread's
   // allowlist. Never persist or run the thread before Codex confirms it.
   try {
+    assertCodexProtectedNativeCwd(params, response.thread);
     await attestCodexThreadToolSurface({
       client: params.client,
       threadId: response.thread.id,
@@ -554,6 +570,7 @@ export async function startFreshCodexThread(
     dynamicToolsFingerprint,
     dynamicToolsContainDeferred,
     nativeSkillIsolationFingerprint,
+    managedHooksFingerprint: context.managedHooksFingerprint,
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
     configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,

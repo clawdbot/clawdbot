@@ -1213,9 +1213,23 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
           contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-1" },
         })),
       });
-      const harness = createStartedThreadHarness(async (method) => {
-        if (method === "thread/start") {
-          return threadStartResult("thread-transient");
+      const harness = createStartedThreadHarness(async (method, requestParams) => {
+        if (method === "config/read" || method === "thread/start") {
+          const cwd = readStringValue(requireRecord(requestParams, `${method} params`).cwd);
+          if (!cwd) {
+            throw new Error(`Expected protected cwd for ${method}`);
+          }
+          if (method === "config/read") {
+            return {
+              config: {
+                project_root_markers: [],
+                projects: { [cwd]: { trust_level: "untrusted" } },
+              },
+              origins: {},
+              layers: [],
+            };
+          }
+          return threadStartResult("thread-transient", { cwd });
         }
         if (method === "thread/resume") {
           throw new Error("native-disabled turns should not resume the previous Codex thread");
@@ -1247,6 +1261,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       ]);
 
       expect(harness.requests.map((request) => request.method)).toEqual([
+        "config/read",
         "thread/start",
         "turn/start",
       ]);
