@@ -3,8 +3,13 @@ import type { ModelRegistry as CoreModelRegistry } from "../../llm/model-registr
 import type { Model } from "../../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  isConfiguredAwsSdkAuthProfileForProvider,
+  resolveAuthProfileOrder,
+} from "../auth-profiles.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
+import { FailoverError } from "../failover/error.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { normalizeProviderId } from "../model-selection.js";
@@ -239,6 +244,25 @@ export function resolveDynamicModelAuthProfile(params: {
     return {};
   }
   const credential = store.profiles[profileId];
+  if (
+    explicitProfileId &&
+    !credential &&
+    !isConfiguredAwsSdkAuthProfileForProvider({
+      cfg: params.cfg,
+      provider: params.provider,
+      profileId,
+    })
+  ) {
+    // Credential-scoped discovery cannot distinguish a missing model after its profile is removed.
+    throw new FailoverError(`Selected auth profile "${profileId}" is unavailable.`, {
+      reason: "auth",
+      status: 401,
+      code: "selected_auth_profile_unavailable",
+      provider: params.provider,
+      model: params.modelId,
+      profileId,
+    });
+  }
   const configuredMode = params.cfg?.auth?.profiles?.[profileId]?.mode;
   return {
     authProfileId: profileId,
