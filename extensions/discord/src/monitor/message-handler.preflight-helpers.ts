@@ -1,8 +1,8 @@
 // Discord helper module supports message handler.preflight helpers behavior.
 import {
   implicitMentionKindWhen,
-  matchesMentionPatterns,
   matchesMentionWithExplicit,
+  normalizeMentionText,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
@@ -145,18 +145,28 @@ export function matchesActiveDiscordMentionPatterns(
   if (mentionRegexes.length === 0) {
     return false;
   }
-  const codeRegions = findCodeRegions(text);
-  if (codeRegions.length === 0) {
-    return matchesMentionPatterns(text, mentionRegexes);
-  }
-  let offset = 0;
-  for (const region of codeRegions) {
-    if (matchesMentionPatterns(text.slice(offset, region.start), mentionRegexes)) {
-      return true;
+  const cleaned = normalizeMentionText(text);
+  // Keep raw Markdown ownership, then project offsets through the same normalization.
+  // The final NUL prevents prefix trimEnd from moving a boundary across whitespace.
+  const normalizedOffset = (offset: number) =>
+    Math.min(cleaned.length, normalizeMentionText(`${text.slice(0, offset)}\0`).length - 1);
+  const codeRegions = findCodeRegions(text).map(({ start, end }) => ({
+    start: normalizedOffset(start),
+    end: normalizedOffset(end),
+  }));
+  for (const regex of mentionRegexes) {
+    // Match whole documents so anchors and lookarounds keep their original context.
+    for (const match of cleaned.matchAll(new RegExp(regex.source, `${regex.flags}g`))) {
+      const overlapsCode = codeRegions.some(
+        ({ start, end }) =>
+          match.index < end && (match.index >= start || match.index + match[0].length > start),
+      );
+      if (!overlapsCode) {
+        return true;
+      }
     }
-    offset = region.end;
   }
-  return matchesMentionPatterns(text.slice(offset), mentionRegexes);
+  return false;
 }
 
 export function resolvePreflightMentionRequirement(params: {

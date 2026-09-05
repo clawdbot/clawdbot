@@ -29,12 +29,11 @@ export function resolveDiscordMessageText(
   message: Message,
   options?: { fallbackText?: string; includeForwarded?: boolean },
 ): string {
-  const embedText = resolveDiscordEmbedText(message.embeds);
-  const componentText = extractDiscordComponentsV2Text(resolveDiscordMessageComponents(message));
   const rawText =
-    normalizeOptionalString(message.content) ||
-    embedText ||
-    componentText ||
+    resolveDiscordMessageMentionDocuments(message)
+      .map((text) => normalizeOptionalString(text))
+      .filter(Boolean)
+      .join("\n") ||
     normalizeOptionalString(options?.fallbackText) ||
     "";
   const baseText = resolveDiscordMentions(rawText, message);
@@ -67,6 +66,36 @@ export function resolveDiscordMessageMentionDocuments(message: Message): string[
   const componentDocuments: string[] = [];
   collectDiscordTextDisplayDocuments(resolveDiscordMessageComponents(message), componentDocuments);
   return componentDocuments;
+}
+
+export function resolveDiscordMessageBatch(last: Message, preceding: readonly Message[]): Message {
+  if (preceding.length === 0) {
+    return last;
+  }
+  const content = [...preceding, last]
+    .map((message) => resolveDiscordMessageText(message, { includeForwarded: false }))
+    .filter(Boolean)
+    .join("\n");
+  return Object.create(Object.getPrototypeOf(last), {
+    ...Object.getOwnPropertyDescriptors(last),
+    content: { value: content, enumerable: true, configurable: true },
+    attachments: { value: [], enumerable: true, configurable: true },
+    message_snapshots: {
+      value: (last as { message_snapshots?: unknown }).message_snapshots,
+      enumerable: true,
+      configurable: true,
+    },
+    messageSnapshots: {
+      value: (last as { messageSnapshots?: unknown }).messageSnapshots,
+      enumerable: true,
+      configurable: true,
+    },
+    rawData: {
+      value: { ...(last as { rawData?: Record<string, unknown> }).rawData },
+      enumerable: true,
+      configurable: true,
+    },
+  }) as Message;
 }
 
 /** Adds native media text only for history surfaces that cannot carry structured facts. */
