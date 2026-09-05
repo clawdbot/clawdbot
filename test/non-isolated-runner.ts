@@ -447,9 +447,12 @@ export async function drainMockerResolveMocks(
   mocker: SerializableMocker | undefined,
 ): Promise<void> {
   const state = (mocker as SerializedMocker | undefined)?.[SERIALIZED_RESOLVE_MOCKS];
-  if (!state) {
+  if (!state || !mocker?.resolveMocks) {
     return;
   }
+  // An unused vi.mock leaves BareModuleMocker's static queue idle; schedule one
+  // pass so file cleanup cannot lend that registration to the next file.
+  void mocker.resolveMocks();
   while (true) {
     const tail = state.tail;
     await tail;
@@ -493,8 +496,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
   // the next file's vi.mock factories silently never applied. The worker loop
   // calls startTests per file, so this hook runs after every file regardless
   // of its collect/run outcome.
+  // oxlint-disable-next-line typescript/no-misused-promises -- Vitest awaits this hook but its concrete TestRunner declaration returns void.
   override async onAfterRunFiles() {
-    await super.onAfterRunFiles();
+    super.onAfterRunFiles();
     if (this.config.isolate) {
       return;
     }

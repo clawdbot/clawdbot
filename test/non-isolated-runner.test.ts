@@ -342,6 +342,22 @@ it("restores real imports after the partial mock", () => {
   expect(untouched).toBe("original");
 });
 `,
+    "07-e-idle-mock.test.ts": `import { expect, it, vi } from "vitest";
+vi.mock("./07-manual-dep.js", () => ({
+  flavor: () => "queued",
+  untouched: "queued",
+}));
+it("queues a mock without importing its target", () => {
+  expect(true).toBe(true);
+});
+`,
+    "07-f-idle-real.test.ts": `import { expect, it } from "vitest";
+import { flavor, untouched } from "./07-manual-dep.js";
+it("discards an unconsumed mock after its owning file", () => {
+  expect(flavor()).toBe("real");
+  expect(untouched).toBe("original");
+});
+`,
     "08-auto-dep.ts": `import { createRequire } from "node:module";
 const { AutoPayload } = createRequire(import.meta.url)("./mock-payloads.cjs");
 export const payload = new AutoPayload(1234);
@@ -431,8 +447,8 @@ async function assertCompletion(
   const report: JsonTestResults = JSON.parse(await fs.readFile(expected.reportPath, "utf8"));
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 46,
-    numPassedTests: 45,
+    numTotalTests: 48,
+    numPassedTests: 47,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,
