@@ -1,4 +1,4 @@
-import { expectDefined } from "@openclaw/normalization-core/expect";
+import { expectDefined } from "@openclaw/normalization-core";
 import { escapeRegExp } from "../regexp.js";
 import { findCodeRegions } from "./code-regions.js";
 
