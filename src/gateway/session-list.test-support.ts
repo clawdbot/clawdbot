@@ -28,16 +28,16 @@ export function buildSessionRowFixture(
 
 /** Synthetic stores have no loader; declare their unqualified row owner in the fixture. */
 export function listSessionFixture(
-  params: Omit<Parameters<typeof listSessionsFromStoreAsync>[0], "agentIdBySessionKey"> & {
+  params: Omit<Parameters<typeof listSessionsFromStoreAsync>[0], "targetsBySessionKey"> & {
     fixtureAgentId?: string;
   },
 ) {
   const { fixtureAgentId, ...input } = params;
-  const agentIdBySessionKey = new Map(
-    Object.keys(input.store).map((key) => [
-      key,
-      fixtureOwner(input.cfg, key, input.opts.agentId ?? fixtureAgentId),
-    ]),
+  const targetsBySessionKey = new Map(
+    Object.keys(input.store).map((key) => {
+      const agentId = fixtureOwner(input.cfg, key, input.opts.agentId ?? fixtureAgentId);
+      return [key, { agentId, storeTarget: { agentId, storePath: input.storePath } }] as const;
+    }),
   );
-  return listSessionsFromStoreAsync({ ...input, agentIdBySessionKey });
+  return listSessionsFromStoreAsync({ ...input, targetsBySessionKey });
 }

@@ -217,7 +217,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     const exactKey = sameAgent
       ? resolveSessionStoreKey({ cfg, sessionKey: referenceKey, storeAgentId: p.agentId })
       : referenceKey;
-    const { store, agentIdBySessionKey } = loadCombinedSessionStoreForGatewayCore(cfg, {
+    const { store, targetsBySessionKey } = loadCombinedSessionStoreForGatewayCore(cfg, {
       agentId: p.agentId,
       configuredAgentsOnly: true,
       projection: "list",
@@ -238,7 +238,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
       sessionResolveCandidate(
         candidateKey,
         entry,
-        expectDefined(agentIdBySessionKey.get(candidateKey), "reference session agent"),
+        expectDefined(targetsBySessionKey.get(candidateKey), "reference session agent").agentId,
       );
     const exact = entries.find(
       ([candidateKey]) => normalizeSessionKeyPreservingOpaquePeerIds(candidateKey) === exactKey,
@@ -452,7 +452,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const { store, agentIdBySessionKey } = loadCombinedSessionStoreForGatewayCore(cfg, {
+  const { store, targetsBySessionKey } = loadCombinedSessionStoreForGatewayCore(cfg, {
     agentId: p.agentId,
   });
   const now = Date.now();
@@ -495,6 +495,6 @@ export async function resolveSessionKeyFromResolveParams(params: {
   return {
     ok: true,
     key: labelKey,
-    agentId: expectDefined(agentIdBySessionKey.get(labelKey), "label session agent"),
+    agentId: expectDefined(targetsBySessionKey.get(labelKey), "label session agent").agentId,
   };
 }

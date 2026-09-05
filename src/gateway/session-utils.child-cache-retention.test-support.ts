@@ -27,9 +27,9 @@ async function populate() {
   retired.push(new WeakRef(parent), new WeakRef(child));
   return listSessionsFromStoreAsync({
     cfg,
-    agentIdBySessionKey: new Map([
-      [parentKey, "main"],
-      [childKey, "main"],
+    targetsBySessionKey: new Map([
+      [parentKey, { agentId: "main", storeTarget: { agentId: "main", storePath: "retired" } }],
+      [childKey, { agentId: "main", storeTarget: { agentId: "main", storePath: "retired" } }],
     ]),
     storePath: "retired",
     store: { [parentKey]: parent, [childKey]: child },

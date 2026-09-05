@@ -45,7 +45,7 @@ async function handleSessionsList(params: Record<string, unknown>) {
   const rt = await getRuntime();
   const cfg = rt.getRuntimeConfig();
   const opts = params as SessionsListParams;
-  const { storePath, store, agentIdBySessionKey } = rt.loadCombinedSessionStoreForGatewayCore(cfg, {
+  const { storePath, store, targetsBySessionKey } = rt.loadCombinedSessionStoreForGatewayCore(cfg, {
     agentId: opts.agentId,
     projection: "list",
   });
@@ -53,7 +53,7 @@ async function handleSessionsList(params: Record<string, unknown>) {
     cfg,
     storePath,
     store,
-    agentIdBySessionKey,
+    targetsBySessionKey,
     opts,
   });
 }

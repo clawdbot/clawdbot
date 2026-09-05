@@ -9,6 +9,7 @@ import {
 } from "../agents/session-model-ref.js";
 import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
+import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
 import { resolveConcreteSessionStorePath } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -213,7 +214,7 @@ export function resolveTranscriptUsageFallback(params: {
 export function populateSessionListAcpMetadata(params: {
   cfg: OpenClawConfig;
   entries: readonly SessionEntryPair[];
-  agentIdBySessionKey: ReadonlyMap<string, string>;
+  targetsBySessionKey: GatewayStoredSessionTargets;
   rowContext?: SessionListRowContext;
 }): void {
   const metadataByEntry = params.rowContext?.acpSessionMetaByEntry;
@@ -223,7 +224,7 @@ export function populateSessionListAcpMetadata(params: {
   const entries = params.entries
     .filter(([, entry]) => !metadataByEntry.has(entry))
     .map(([key, entry]) => {
-      const agentId = expectDefined(params.agentIdBySessionKey.get(key), "ACP row owner");
+      const agentId = expectDefined(params.targetsBySessionKey.get(key), "ACP row owner").agentId;
       return {
         sessionKey: resolveStoredSessionKeyForAgentStore({
           cfg: params.cfg,

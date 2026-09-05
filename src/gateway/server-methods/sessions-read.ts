@@ -20,7 +20,10 @@ import {
   runSessionsCleanup,
   serializeSessionCleanupResult,
 } from "../../config/sessions.js";
-import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesReadOnly,
+  loadExactSessionEntryCandidatesReadOnlyBatch,
+} from "../../config/sessions/session-accessor.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -43,13 +46,11 @@ import {
   isGatewayAdmin,
   prepareSessionSharing,
   resolveSessionSharingTarget,
-  resolveSessionSharingTargets,
   resolveSessionVisibility,
 } from "../session-sharing.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionPreviewItemsFromTranscript } from "../session-transcript-readers.js";
 import { projectGatewaySessionActiveRun } from "../session-utils-display.js";
-import { createGatewaySessionStoreDiscoveryCache } from "../session-utils-store-lookup.js";
 import {
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGatewayCore,
@@ -270,14 +271,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             );
             loaded = { ...loadedStore, modelCatalogByAgent: preparedModelCatalogByAgent };
           }
-          const {
-            agentIdBySessionKey,
-            durableStorePath,
-            durableTargets,
-            modelCatalogByAgent,
-            storePath,
-          } = loaded;
-          const entryFilter = listFilter({ p, loaded, defaultsAgentId, client, cfg, options });
+          const { targetsBySessionKey, durableStorePath, modelCatalogByAgent, storePath } = loaded;
+          const entryFilter = listFilter({ p, loaded, client, cfg, options });
           const selectionRuns = p.search?.trim()
             ? createVisibleActiveSessionRunProjector(context)
             : undefined;
@@ -290,7 +285,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 ...(entryFilter ? { entryFilter } : {}),
                 storePath,
                 store: loaded.store,
-                agentIdBySessionKey,
+                targetsBySessionKey,
                 modelCatalog: modelCatalogByAgent,
                 opts: p,
                 ...(selectionRuns
@@ -320,18 +315,33 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               // Recheck only this page after row projection yields; unrelated sessions
               // must not be materialized again to refresh visibility and membership.
               const targets = result.sessions.map(({ key }) => ({
-                sessionKey: key,
-                agentId: expectDefined(agentIdBySessionKey.get(key), "sharing row owner"),
+                key,
+                ...expectDefined(targetsBySessionKey.get(key), "sharing row target"),
               }));
-              const resolvedSharingTargets = resolveSessionSharingTargets({
-                cfg,
-                // Preserve the listing's registered stores, including alternate agent paths.
-                targetDiscoveryCache: createGatewaySessionStoreDiscoveryCache({
-                  cfg,
-                  targets: durableTargets,
-                  agentIds: targets.map(({ agentId }) => agentId),
-                }),
-                targets,
+              // Logical owners can share a physical database. Keep that exact store
+              // through the fresh read; public aliases may reject or redirect these rows.
+              const entries = loadExactSessionEntryCandidatesReadOnlyBatch(
+                targets.map(({ key, storeTarget }) => ({
+                  ...storeTarget,
+                  sessionKeys: [key],
+                  projection: "list",
+                  clone: false,
+                })),
+              );
+              const resolvedSharingTargets = targets.map(({ key, agentId, storeTarget }, index) => {
+                const current = expectDefined(entries[index], "sharing row read");
+                const entry = current.ok ? current.value[0]?.entry : undefined;
+                return entry
+                  ? {
+                      agentId,
+                      canonicalKey: key,
+                      entry,
+                      storeKey: key,
+                      storeKeys: [key],
+                      storePath: storeTarget.storePath,
+                      storeTarget,
+                    }
+                  : null;
               });
               const resolvedMembershipKeys = new Set<string>();
               if (identityId && !isGatewayAdmin(client)) {
@@ -347,9 +357,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                   if (!target) {
                     continue;
                   }
-                  const groupKey = `${target.agentId}\0${target.storePath}`;
+                  const groupKey = `${target.storeTarget.agentId}\0${target.storePath}`;
                   const group = groups.get(groupKey) ?? {
-                    agentId: target.agentId,
+                    agentId: target.storeTarget.agentId,
                     sessionKeys: [],
                     storePath: target.storePath,
                   };
@@ -415,7 +425,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                         sharingRole: sharing.roleForTarget(
                           sharingTarget,
                           membershipKeys.has(
-                            `${sharingTarget.agentId}\0${sharingTarget.storePath}\0${sharingTarget.storeKey}`,
+                            `${sharingTarget.storeTarget.agentId}\0${sharingTarget.storePath}\0${sharingTarget.storeKey}`,
                           ),
                         ),
                       }

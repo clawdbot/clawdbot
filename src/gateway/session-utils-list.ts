@@ -14,6 +14,7 @@ import {
 import { shouldKeepSubagentRunChildLink } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
 import { MAX_SESSION_PARTICIPANTS } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
@@ -74,10 +75,10 @@ const SESSIONS_LIST_DEFAULT_LIMIT = 100;
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
 
 type SessionSelectionScope =
-  | { opts: SessionsListParams; agentIdBySessionKey: ReadonlyMap<string, string> }
+  | { opts: SessionsListParams; targetsBySessionKey: GatewayStoredSessionTargets }
   | {
       opts: Omit<SessionsListParams, "search"> & { search?: never };
-      agentIdBySessionKey?: never;
+      targetsBySessionKey?: never;
     };
 
 type ListSessionsFromStoreParams = {
@@ -87,7 +88,7 @@ type ListSessionsFromStoreParams = {
   storePath: string;
   store: Record<string, SessionEntry>;
   // Sentinels retain the first projected store's owner; their raw key cannot recover it.
-  agentIdBySessionKey: ReadonlyMap<string, string>;
+  targetsBySessionKey: GatewayStoredSessionTargets;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   opts: SessionsListParams;
   involvingActorId?: string;
@@ -138,7 +139,7 @@ function resolveSessionsListWindowLimit(limit: number | undefined, offset: numbe
 function filterSessionEntries(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
-  agentIdBySessionKey?: ReadonlyMap<string, string>;
+  targetsBySessionKey?: GatewayStoredSessionTargets;
   opts: SessionsListParams;
   now: number;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
@@ -281,7 +282,7 @@ function filterSessionEntries(params: {
         search,
         now,
         visibleEntries: candidateEntries,
-        agentIdBySessionKey: expectDefined(params.agentIdBySessionKey, "search row owners"),
+        targetsBySessionKey: expectDefined(params.targetsBySessionKey, "search row owners"),
         getRowContext: params.getRowContext,
         projectActiveRun: params.projectActiveRun,
       })
@@ -375,7 +376,7 @@ function isPhantomAgentStoreListEntry(key: string, entry: SessionEntry | undefin
 function selectSessionEntries(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
-  agentIdBySessionKey?: ReadonlyMap<string, string>;
+  targetsBySessionKey?: GatewayStoredSessionTargets;
   opts: SessionsListParams;
   now: number;
   getRowContext?: SessionListRowContextProvider;
@@ -445,7 +446,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
   const selection = selectSessionEntries({
     cfg,
     store,
-    agentIdBySessionKey: params.agentIdBySessionKey,
+    targetsBySessionKey: params.targetsBySessionKey,
     opts,
     now,
     entryFilter,
@@ -483,7 +484,7 @@ function prepareSessionList(params: ListSessionsFromStoreParams) {
   populateSessionListAcpMetadata({
     cfg,
     entries: selection.entries,
-    agentIdBySessionKey: params.agentIdBySessionKey,
+    targetsBySessionKey: params.targetsBySessionKey,
     rowContext: sharedRowContext,
   });
   return {
@@ -579,7 +580,7 @@ export async function listSessionsFromStoreAsync(
   // loadPluginMetadataSnapshot scan (~100 ms).
   return withPinnedActivePluginRegistryWorkspaceDir(async () => {
     let workStartedAt = performance.now();
-    const { cfg, store, agentIdBySessionKey } = params;
+    const { cfg, store, targetsBySessionKey } = params;
     const list = prepareSessionList(params);
     const sessions: GatewaySessionRow[] = [];
     const transcriptScopes = list.entries
@@ -590,11 +591,10 @@ export async function listSessionsFromStoreAsync(
         }
         return [
           {
-            agentId: expectDefined(agentIdBySessionKey.get(key), "transcript row owner"),
+            ...expectDefined(targetsBySessionKey.get(key), "transcript row target").storeTarget,
             sessionEntry: entry,
             sessionId: entry.sessionId,
             sessionKey: key,
-            storePath: list.storePath,
           },
         ];
       });
@@ -609,7 +609,7 @@ export async function listSessionsFromStoreAsync(
         store,
         key,
         entry,
-        agentId: expectDefined(agentIdBySessionKey.get(key), "session row owner"),
+        agentId: expectDefined(targetsBySessionKey.get(key), "session row owner").agentId,
         modelCatalog: params.modelCatalog,
         now: list.now,
         includeDerivedTitles: false,

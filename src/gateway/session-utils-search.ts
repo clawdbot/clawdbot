@@ -11,6 +11,7 @@ import {
   type InternalSessionEntry,
   type SessionEntry,
 } from "../config/sessions.js";
+import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { formatGoalSummary } from "../shared/session-goal-display.js";
@@ -150,7 +151,7 @@ function resolveSessionListSearchModelFields(params: {
 export function createSessionListSearchMatcher(params: {
   cfg: OpenClawConfig;
   search: string;
-  agentIdBySessionKey: ReadonlyMap<string, string>;
+  targetsBySessionKey: GatewayStoredSessionTargets;
   now: number;
   visibleEntries: readonly SessionEntryPair[];
   getRowContext?: SessionListRowContextProvider;
@@ -177,7 +178,7 @@ export function createSessionListSearchMatcher(params: {
     if (matchesSessionListSearch(fields, search)) {
       return true;
     }
-    const agentId = expectDefined(params.agentIdBySessionKey.get(key), "search row owner");
+    const agentId = expectDefined(params.targetsBySessionKey.get(key), "search row owner").agentId;
     const run = projectGatewaySessionRunState({ key, entry, now, rowContext: context() }).fields;
     const active = params.projectActiveRun?.(key, entry, agentId);
     const state = projectGatewaySessionActiveRun(active, run.status);
@@ -234,7 +235,7 @@ export function createSessionListSearchMatcher(params: {
       populateSessionListAcpMetadata({
         cfg,
         entries: params.visibleEntries,
-        agentIdBySessionKey: params.agentIdBySessionKey,
+        targetsBySessionKey: params.targetsBySessionKey,
         rowContext: context(),
       });
       acpPrepared = true;

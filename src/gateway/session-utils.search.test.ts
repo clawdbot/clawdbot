@@ -64,7 +64,12 @@ function selectSessionKeys(params: {
   return filterAndSortSessionEntries({
     cfg: params.cfg ?? baseCfg,
     store,
-    agentIdBySessionKey: new Map(Object.keys(store).map((key) => [key, "main"])),
+    targetsBySessionKey: new Map(
+      Object.keys(store).map((key) => [
+        key,
+        { agentId: "main", storeTarget: { agentId: "main", storePath: "" } },
+      ]),
+    ),
     opts: params.opts,
     now,
   }).map(([key]) => key);
