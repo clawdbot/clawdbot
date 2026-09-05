@@ -3,10 +3,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import {
-  createSubsystemLogger,
-  type ResolvedMemorySearchConfig,
-} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   isFileMissingError,
   matchesExtraMemoryPathEntry,
@@ -21,6 +18,7 @@ import {
   resolveMemoryNativeWatchFactory,
   resolveMemoryWatchFactory,
 } from "./watch-factories.js";
+import { shouldIgnoreMemoryWatchPath } from "./watch-path-ignore.js";
 import {
   countChokidarWatchedEntries,
   type MemoryWatchPressureUnit,
@@ -34,15 +32,6 @@ import {
 } from "./watch-settle.js";
 
 const MEMORY_WATCH_PRESSURE_STARTUP_CHECK_DELAY_MS = 10_000;
-const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
-  ".git",
-  "node_modules",
-  ".pnpm-store",
-  ".venv",
-  "venv",
-  ".tox",
-  "__pycache__",
-]);
 const log = createSubsystemLogger("memory");
 
 type NativeMemoryWatchPair = {
@@ -58,34 +47,6 @@ type LinuxMemoryDirectoryWatcher = {
   watcher: fsSync.FSWatcher;
   ino: number;
 };
-
-function shouldIgnoreMemoryWatchPath(
-  watchPath: string,
-  stats?: { isDirectory?: () => boolean },
-  multimodalSettings?: ResolvedMemorySearchConfig["multimodal"],
-): boolean {
-  const normalized = path.normalize(watchPath);
-  const parts = normalized
-    .split(path.sep)
-    .map((segment) => normalizeLowercaseStringOrEmpty(segment));
-  if (parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment))) {
-    return true;
-  }
-  if (stats?.isDirectory?.()) {
-    return false;
-  }
-  if (!stats) {
-    return false;
-  }
-  const extension = normalizeLowercaseStringOrEmpty(path.extname(normalized));
-  if (extension.length === 0 || extension === ".md") {
-    return false;
-  }
-  if (!multimodalSettings) {
-    return true;
-  }
-  return classifyMemoryMultimodalPath(normalized, multimodalSettings) === null;
-}
 
 function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
   void sync().catch((err: unknown) => {
