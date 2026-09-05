@@ -87,4 +87,31 @@ describe("ChatGPT Responses tool request controls", () => {
       parallel_tool_calls: true,
     });
   });
+
+  it("preserves optional tool properties in the provider payload", async () => {
+    const payload = await capturePayload({
+      ...context,
+      tools: [
+        {
+          name: "sessions_history",
+          description: "Read session history.",
+          parameters: {
+            type: "object",
+            properties: {
+              sessionKey: { type: "string" },
+              limit: { type: "integer", minimum: 1 },
+              offset: { type: "integer", minimum: 0 },
+              messageId: { type: "string", minLength: 1 },
+              sessionId: { type: "string", minLength: 1 },
+              includeTools: { type: "boolean" },
+            },
+            required: ["sessionKey"],
+          },
+        },
+      ],
+    });
+
+    const tools = payload.tools as Array<{ parameters?: { required?: string[] } }>;
+    expect(tools[0]?.parameters?.required).toEqual(["sessionKey"]);
+  });
 });

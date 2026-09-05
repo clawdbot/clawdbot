@@ -342,6 +342,9 @@ describe("sessions tools", () => {
       return Object.hasOwn(schema.properties ?? {}, prop);
     };
 
+    const historyRequired =
+      (byName("sessions_history").parameters as { required?: string[] }).required ?? [];
+    expect(historyRequired).toEqual(["sessionKey"]);
     expect(schemaProp("sessions_history", "limit").type).toBe("integer");
     expect(schemaProp("sessions_history", "messageId").type).toBe("string");
     expect(schemaProp("sessions_history", "sessionId").type).toBe("string");
