@@ -41,7 +41,7 @@ describe("createTelegramSendChatActionHandler", () => {
     expect(handler.isSuspended()).toBe(false);
   });
 
-  it("coalesces duplicate chat actions while one for the chat is pending", async () => {
+  it("coalesces duplicate chat actions in the same forum topic while one is pending", async () => {
     let resolveSend: ((value: true) => void) | undefined;
     const send = new Promise<true>((resolve) => {
       resolveSend = resolve;
@@ -55,13 +55,33 @@ describe("createTelegramSendChatActionHandler", () => {
     });
 
     const first = handler.sendChatAction(-100, "typing", { message_thread_id: 1 });
-    await handler.sendChatAction(-100, "typing", { message_thread_id: 2 });
+    await handler.sendChatAction(-100, "typing", { message_thread_id: 1 });
 
     expect(fn).toHaveBeenCalledTimes(1);
     expect(fn).toHaveBeenCalledWith(-100, "typing", { message_thread_id: 1 });
 
     resolveSend?.(true);
     await first;
+  });
+
+  it("does not coalesce typing actions in different forum topics of the same supergroup (#138763)", async () => {
+    const fn = vi.fn().mockResolvedValue(true);
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      minIntervalMs: 4000,
+    });
+
+    await handler.sendChatAction(-100, "typing", { message_thread_id: 1 });
+    await handler.sendChatAction(-100, "typing", { message_thread_id: 2 });
+
+    // Different message_thread_id → independent coalescing keys, so both
+    // underlying sendChatActionFn calls fire instead of one suppressing the
+    // other's forum-topic typing indicator.
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(fn).toHaveBeenNthCalledWith(1, -100, "typing", { message_thread_id: 1 });
+    expect(fn).toHaveBeenNthCalledWith(2, -100, "typing", { message_thread_id: 2 });
   });
 
   it("coalesces recent same-chat actions after the pending send resolves", async () => {
