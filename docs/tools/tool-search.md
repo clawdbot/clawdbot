@@ -202,6 +202,11 @@ local models. It preserves target fields such as `id` and `name`, and rejects
 ambiguous tool selectors instead of calling the wrong tool. Nest target
 arguments under `args` when a target field matches another cataloged tool.
 
+The structured control's model-facing text includes only the tool's `id`,
+`name`, and `source` alongside the unchanged target `result`; it does not repeat
+the description and input signature. Its structured `details` retain the full
+call envelope for runtime consumers. Use `tool_describe` for full tool metadata.
+
 ```js
 await openclaw.tools.call(calendarCreate.id, {
   summary: "Planning",
@@ -220,6 +225,12 @@ The structured fallback mode exposes the same operations as tools:
 - `tool_search`
 - `tool_describe`
 - `tool_call`
+
+Deferred names are catalog entries, not directly callable functions in this
+mode. Put the result ID or name in `tool_call.id` and all target parameters in
+`tool_call.args`, including when other instructions refer to the deferred tool
+by name. A compact search signature may be enough to call it; use
+`tool_describe` when the full schema is needed.
 
 `tool_search` accepts either the existing single-query shape or a batch of
 independent queries:
