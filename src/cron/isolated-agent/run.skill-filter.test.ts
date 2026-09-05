@@ -12,7 +12,7 @@ import {
   dispatchCronDeliveryMock,
   getCliSessionBindingMock,
   isCliProviderMock,
-  resolveContextTokensForModelMock,
+  resolveContextTokenBudgetForModelMock,
   loadRunCronIsolatedAgentTurn,
   logWarnMock,
   makeCronSession,
@@ -460,7 +460,10 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
-      resolveContextTokensForModelMock.mockReturnValue(512_000);
+      resolveContextTokenBudgetForModelMock.mockResolvedValue({
+        contextTokens: 512_000,
+        source: "model",
+      });
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
           payloads: [{ text: "test output" }],
@@ -497,7 +500,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
-      resolveContextTokensForModelMock.mockReturnValue(undefined);
+      resolveContextTokenBudgetForModelMock.mockResolvedValue(undefined);
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
           payloads: [{ text: "test output" }],
@@ -531,7 +534,10 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
-      resolveContextTokensForModelMock.mockReturnValue(512_000);
+      resolveContextTokenBudgetForModelMock.mockResolvedValue({
+        contextTokens: 512_000,
+        source: "model",
+      });
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
           payloads: [{ text: "test output" }],
@@ -565,7 +571,10 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
-      resolveContextTokensForModelMock.mockReturnValue(512_000);
+      resolveContextTokenBudgetForModelMock.mockResolvedValue({
+        contextTokens: 512_000,
+        source: "model",
+      });
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
           payloads: [{ text: "test output" }],
@@ -599,7 +608,10 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
-      resolveContextTokensForModelMock.mockReturnValue(512_000);
+      resolveContextTokenBudgetForModelMock.mockResolvedValue({
+        contextTokens: 512_000,
+        source: "configured",
+      });
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
           payloads: [{ text: "test output" }],
@@ -646,7 +658,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
-      resolveContextTokensForModelMock.mockReturnValue(undefined);
+      resolveContextTokenBudgetForModelMock.mockResolvedValue(undefined);
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
           payloads: [{ text: "test output" }],
@@ -685,7 +697,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
-      resolveContextTokensForModelMock.mockReturnValue(undefined);
+      resolveContextTokenBudgetForModelMock.mockResolvedValue(undefined);
       runWithModelFallbackMock.mockResolvedValueOnce({
         result: {
           payloads: [{ text: "test output" }],
@@ -718,18 +730,22 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         }),
       });
       resolveCronSessionMock.mockReturnValue(session);
-      resolveContextTokensForModelMock.mockReturnValue(512_000);
+      resolveContextTokenBudgetForModelMock.mockResolvedValue({
+        contextTokens: 512_000,
+        source: "configured",
+      });
 
       const result = await runSkillFilterCase();
 
       expect(result.status).toBe("ok");
       expect(session.sessionEntry.contextTokens).toBe(512_000);
       expect(session.sessionEntry.contextTokensSource).toBe("resolved");
-      expect(resolveContextTokensForModelMock).toHaveBeenCalledWith({
+      expect(resolveContextTokenBudgetForModelMock).toHaveBeenCalledWith({
         cfg: expect.any(Object),
         provider: "openai",
         model: "gpt-5.4",
         allowAsyncLoad: false,
+        allowUnscopedModelLookup: false,
       });
     });
   });

@@ -19,10 +19,7 @@ import {
 import { deriveContextPromptTokens, hasBillableUsage } from "../../agents/usage.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
-import {
-  resolveProjectedSessionContextTokens,
-  resolveTrustedSessionContextTokens,
-} from "../../config/sessions/context-token-provenance.js";
+import { resolveProjectedSessionContextTokenBudget } from "../../config/sessions/context-token-provenance.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -121,67 +118,44 @@ export async function finalizeCronRun(params: {
     finalRunResult.meta?.agentMeta?.contextTokens,
   );
   const cronContextRuntime = await cronContextRuntimeLoader.load();
-  const staticCatalogContext = await cronContextRuntime.resolveBundledStaticCatalogContext({
-    cfg: prepared.cfgWithAgentDefaults,
-    provider: providerUsed,
-    model: modelUsed,
-  });
-  const contextResolutionParams = {
-    cfg: prepared.cfgWithAgentDefaults,
-    provider: providerUsed,
-    model: modelUsed,
-    allowAsyncLoad: false,
-  } as const;
-  const configOnlyTokens = cronContextRuntime.resolveContextTokensForModel(contextResolutionParams);
-  const modelContextTokens = cronContextRuntime.resolveContextTokensForModel({
-    ...contextResolutionParams,
-    ...staticCatalogContext,
-  });
-  // Only a bundled catalog row that owns the effective window is a trusted
-  // persisted resolution; config-only clamps and the generic default stay
-  // legacy so removed caps cannot stick.
-  const catalogOwnedResolution = cronContextRuntime.isCatalogOwnedContextResolution({
-    staticCatalogContext,
-    resolvedTokens: modelContextTokens,
-    configOnlyTokens,
-  });
+  const contextResolution =
+    runtimeContextTokens === undefined
+      ? await cronContextRuntime.resolveContextTokenBudgetForModel({
+          cfg: prepared.cfgWithAgentDefaults,
+          provider: providerUsed,
+          model: modelUsed,
+          allowAsyncLoad: false,
+          allowUnscopedModelLookup: false,
+        })
+      : undefined;
   const agentHarnessId = normalizeOptionalString(finalRunResult.meta?.agentMeta?.agentHarnessId);
   const authoredContextTokens = resolveAuthoredModelContextTokens({
     cfg: prepared.cfgWithAgentDefaults,
     provider: providerUsed,
     model: modelUsed,
   });
-  const retainedRuntimeContextTokens = resolveTrustedSessionContextTokens({
+  const projectedContextBudget = resolveProjectedSessionContextTokenBudget({
     entry: prepared.cronSession.sessionEntry,
     provider: providerUsed,
     model: modelUsed,
     agentHarnessId,
-  });
-  const projectedContextTokens = resolveProjectedSessionContextTokens({
-    entry: prepared.cronSession.sessionEntry,
-    provider: providerUsed,
-    model: modelUsed,
-    agentHarnessId,
-    resolvedContextTokens: modelContextTokens,
+    resolvedContextTokens: contextResolution?.contextTokens,
+    resolvedContextTokensSource:
+      contextResolution?.source === "model"
+        ? "resolved-v1"
+        : contextResolution
+          ? "resolved"
+          : undefined,
     authoredContextTokens,
   });
-  const contextTokens = runtimeContextTokens ?? projectedContextTokens ?? DEFAULT_CONTEXT_TOKENS;
-  // Preserve persisted provenance only when the projector selected that owner;
-  // a current/authored clamp stays resolved so removed caps cannot stick. The
-  // projection owner only trusts persisted resolutions tagged "resolved-v1".
-  const projectedUsesPersistedContext =
-    retainedRuntimeContextTokens !== undefined &&
-    (prepared.cronSession.sessionEntry.modelSelectionLocked === true ||
-      (authoredContextTokens === undefined &&
-        projectedContextTokens === retainedRuntimeContextTokens));
+  const contextTokens =
+    runtimeContextTokens ?? projectedContextBudget?.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
   const contextTokensSource =
     runtimeContextTokens !== undefined
       ? (finalRunResult.meta?.agentMeta?.contextTokensSource ?? "resolved")
-      : projectedUsesPersistedContext
-        ? prepared.cronSession.sessionEntry.contextTokensSource
-        : catalogOwnedResolution
-          ? "resolved-v1"
-          : "resolved";
+      : projectedContextBudget
+        ? projectedContextBudget.contextTokensSource
+        : "resolved";
 
   if (!params.isAborted()) {
     setCronSessionRuntimeModel({

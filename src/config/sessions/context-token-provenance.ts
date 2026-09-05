@@ -56,7 +56,7 @@ function resolveMatchingPersistedResolution(params: {
 }
 
 /** Returns persisted telemetry only when it belongs to the current producing selection. */
-export function resolveTrustedSessionContextTokens(params: {
+function resolveTrustedSessionContextTokens(params: {
   entry: SessionContextTokenOwner | undefined;
   provider: string | null | undefined;
   model: string | null | undefined;
@@ -88,35 +88,78 @@ export function resolveTrustedSessionContextTokens(params: {
   return isExactProducerSelection(params) ? contextTokens : undefined;
 }
 
-/** Projects the context window owned by the current session selection. */
-export function resolveProjectedSessionContextTokens(params: {
+type SessionContextTokenProjectionParams = {
   entry: SessionContextTokenOwner | undefined;
   provider: string | null | undefined;
   model: string | null | undefined;
   agentHarnessId: string | null | undefined;
   resolvedContextTokens: number | null | undefined;
+  resolvedContextTokensSource?: "resolved" | "resolved-v1";
   authoredContextTokens?: number | null | undefined;
-}): number | undefined {
+};
+
+export type ProjectedSessionContextTokenBudget = {
+  contextTokens: number;
+  contextTokensSource: SessionEntry["contextTokensSource"];
+};
+
+/** Projects the context budget and its owner for the current session selection. */
+export function resolveProjectedSessionContextTokenBudget(
+  params: SessionContextTokenProjectionParams,
+): ProjectedSessionContextTokenBudget | undefined {
   const resolvedContextTokens = resolvePositiveContextTokens(params.resolvedContextTokens);
   const authoredContextTokens = resolvePositiveContextTokens(params.authoredContextTokens);
   const trustedContextTokens = resolveTrustedSessionContextTokens(params);
-  const persistedResolution =
-    resolvedContextTokens === undefined && authoredContextTokens === undefined
-      ? resolveMatchingPersistedResolution(params)
-      : undefined;
-  // An authored effective cap owns the current selection. Otherwise current
-  // model capacity only constrains telemetry from that exact producer tuple.
-  // When synchronous model resolution is unavailable, preserve the last
-  // matching effective resolution instead of publishing an unknown window.
-  const currentContextTokens =
-    authoredContextTokens !== undefined
-      ? resolvedContextTokens === undefined
-        ? authoredContextTokens
-        : Math.min(authoredContextTokens, resolvedContextTokens)
-      : trustedContextTokens !== undefined && resolvedContextTokens !== undefined
-        ? Math.min(trustedContextTokens, resolvedContextTokens)
-        : (trustedContextTokens ?? resolvedContextTokens ?? persistedResolution);
-  return params.entry?.modelSelectionLocked === true
-    ? (trustedContextTokens ?? currentContextTokens)
-    : currentContextTokens;
+  if (params.entry?.modelSelectionLocked === true && trustedContextTokens !== undefined) {
+    return {
+      contextTokens: trustedContextTokens,
+      contextTokensSource: params.entry.contextTokensSource,
+    };
+  }
+
+  const resolvedContextTokensSource = params.resolvedContextTokensSource ?? "resolved";
+  if (authoredContextTokens !== undefined) {
+    if (resolvedContextTokens === undefined) {
+      return { contextTokens: authoredContextTokens, contextTokensSource: "resolved" };
+    }
+    return {
+      contextTokens: Math.min(authoredContextTokens, resolvedContextTokens),
+      contextTokensSource:
+        authoredContextTokens < resolvedContextTokens ? "resolved" : resolvedContextTokensSource,
+    };
+  }
+  if (trustedContextTokens !== undefined && resolvedContextTokens !== undefined) {
+    return trustedContextTokens <= resolvedContextTokens
+      ? {
+          contextTokens: trustedContextTokens,
+          contextTokensSource: params.entry?.contextTokensSource,
+        }
+      : {
+          contextTokens: resolvedContextTokens,
+          contextTokensSource: resolvedContextTokensSource,
+        };
+  }
+  if (trustedContextTokens !== undefined) {
+    return {
+      contextTokens: trustedContextTokens,
+      contextTokensSource: params.entry?.contextTokensSource,
+    };
+  }
+  if (resolvedContextTokens !== undefined) {
+    return {
+      contextTokens: resolvedContextTokens,
+      contextTokensSource: resolvedContextTokensSource,
+    };
+  }
+  const persistedResolution = resolveMatchingPersistedResolution(params);
+  return persistedResolution === undefined
+    ? undefined
+    : { contextTokens: persistedResolution, contextTokensSource: "resolved-v1" };
+}
+
+/** Projects the context window owned by the current session selection. */
+export function resolveProjectedSessionContextTokens(
+  params: SessionContextTokenProjectionParams,
+): number | undefined {
+  return resolveProjectedSessionContextTokenBudget(params)?.contextTokens;
 }

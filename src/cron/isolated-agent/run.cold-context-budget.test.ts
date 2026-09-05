@@ -8,8 +8,9 @@ import {
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   mockRunCronFallbackPassthrough,
-  resolveBundledStaticCatalogContextMock,
-  resolveContextTokensForModelMock,
+  resolveAllowedModelRefMock,
+  resolveConfiguredModelRefMock,
+  resolveContextTokenBudgetForModelMock,
   resolveCronSessionMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
@@ -33,12 +34,10 @@ describe("runCronIsolatedAgentTurn — cold context budget finalization", () => 
         },
       },
     });
-    resolveBundledStaticCatalogContextMock.mockResolvedValue({ modelContextWindow: 1_000_000 });
-    // Mirror the real resolver for a catalog-only model: the injected bundled
-    // window is the resolution result.
-    resolveContextTokensForModelMock.mockImplementation(
-      (params: { modelContextWindow?: number }) => params.modelContextWindow,
-    );
+    resolveContextTokenBudgetForModelMock.mockResolvedValue({
+      contextTokens: 1_000_000,
+      source: "model",
+    });
 
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentParamsFixture({
@@ -49,22 +48,56 @@ describe("runCronIsolatedAgentTurn — cold context budget finalization", () => 
     );
 
     expect(result.status).toBe("ok");
-    expect(resolveBundledStaticCatalogContextMock).toHaveBeenCalledWith(
+    expect(resolveContextTokenBudgetForModelMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "deepseek",
         model: "deepseek-v4-flash",
-      }),
-    );
-    expect(resolveContextTokensForModelMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "deepseek",
-        model: "deepseek-v4-flash",
-        modelContextWindow: 1_000_000,
         allowAsyncLoad: false,
       }),
     );
     expect(cronSession.sessionEntry.contextTokens).toBe(1_000_000);
     expect(cronSession.sessionEntry.contextTokensSource).toBe("resolved-v1");
+  });
+
+  it("preserves an exact persisted resolution when current model resolution is unavailable", async () => {
+    mockRunCronFallbackPassthrough();
+    const selection = { provider: "deepseek", model: "deepseek-v4-flash" };
+    resolveConfiguredModelRefMock.mockReturnValue(selection);
+    resolveAllowedModelRefMock.mockReturnValue({ ref: selection });
+    const cronSession = makeCronSession();
+    cronSession.sessionEntry.modelProvider = "deepseek";
+    cronSession.sessionEntry.model = "deepseek-v4-flash";
+    cronSession.sessionEntry.agentHarnessId = "openclaw";
+    cronSession.sessionEntry.contextTokens = 654_321;
+    cronSession.sessionEntry.contextTokensSource = "resolved-v1";
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "cron output" }],
+      meta: {
+        agentMeta: {
+          sessionId: cronSession.sessionEntry.sessionId,
+          provider: "deepseek",
+          model: "deepseek-v4-flash",
+          agentHarnessId: "openclaw",
+        },
+      },
+    });
+    resolveContextTokenBudgetForModelMock.mockResolvedValue(undefined);
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
+          payload: { kind: "agentTurn", message: "Run the nightly task." },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(cronSession.sessionEntry.contextTokens).toBe(654_321);
+    expect(cronSession.sessionEntry.contextTokensSource).toBe("resolved-v1");
+    expect(resolveContextTokenBudgetForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allowUnscopedModelLookup: false }),
+    );
   });
 
   it("keeps the generic default when neither the catalog nor config resolve the model", async () => {
@@ -81,8 +114,7 @@ describe("runCronIsolatedAgentTurn — cold context budget finalization", () => 
         },
       },
     });
-    resolveBundledStaticCatalogContextMock.mockResolvedValue(undefined);
-    resolveContextTokensForModelMock.mockReturnValue(undefined);
+    resolveContextTokenBudgetForModelMock.mockResolvedValue(undefined);
 
     const result = await runCronIsolatedAgentTurn(
       makeIsolatedAgentParamsFixture({

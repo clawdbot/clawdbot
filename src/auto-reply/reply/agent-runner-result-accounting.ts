@@ -1,12 +1,9 @@
-import {
-  isCatalogOwnedContextResolution,
-  resolveBundledStaticCatalogContext,
-  resolveContextTokensForModel,
-} from "../../agents/context.js";
+import { resolveContextTokenBudgetForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveProjectedSessionContextTokenBudget } from "../../config/sessions/context-token-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -267,51 +264,42 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     runResult.meta.agentMeta.contextTokens > 0
       ? Math.floor(runResult.meta.agentMeta.contextTokens)
       : undefined;
-  const resolutionParams = {
-    cfg,
-    provider: sessionModel.provider,
-    model: sessionModel.model,
-    allowAsyncLoad: false,
-  } as const;
-  const staticCatalogContext =
+  const agentHarnessId = runResult.meta?.agentMeta?.agentHarnessId;
+  const contextResolution =
     runtimeContextTokens === undefined
-      ? await resolveBundledStaticCatalogContext({
+      ? await resolveContextTokenBudgetForModel({
           cfg,
           provider: sessionModel.provider,
           model: sessionModel.model,
+          allowAsyncLoad: false,
+          allowUnscopedModelLookup: false,
         })
       : undefined;
-  const configOnlyTokens =
-    runtimeContextTokens === undefined ? resolveContextTokensForModel(resolutionParams) : undefined;
-  const resolvedContextTokens =
-    runtimeContextTokens === undefined
-      ? resolveContextTokensForModel({
-          ...resolutionParams,
-          ...staticCatalogContext,
+  const persistedContextBudget =
+    runtimeContextTokens === undefined && contextResolution === undefined
+      ? resolveProjectedSessionContextTokenBudget({
+          entry: activeSessionEntry,
+          provider: sessionModel.provider,
+          model: sessionModel.model,
+          agentHarnessId,
+          resolvedContextTokens: undefined,
         })
       : undefined;
-  // Only a bundled catalog row that owns the effective window earns the
-  // trusted persisted-resolution tag; config-only resolutions keep the legacy
-  // tag so removed caps cannot stick.
-  const catalogOwnedResolution = isCatalogOwnedContextResolution({
-    staticCatalogContext,
-    resolvedTokens: resolvedContextTokens,
-    configOnlyTokens,
-  });
   const contextTokensUsed =
     runtimeContextTokens ??
-    resolvedContextTokens ??
+    contextResolution?.contextTokens ??
+    persistedContextBudget?.contextTokens ??
     activeSessionEntry?.contextTokens ??
     DEFAULT_CONTEXT_TOKENS;
   const contextTokensSource =
     runResult.meta?.agentMeta?.contextTokensSource ??
     (runtimeContextTokens !== undefined
       ? "runtime"
-      : resolvedContextTokens !== undefined
-        ? catalogOwnedResolution
+      : contextResolution
+        ? contextResolution.source === "model"
           ? "resolved-v1"
           : "resolved"
-        : undefined);
+        : persistedContextBudget?.contextTokensSource);
 
   // Count first: terminal usage restores billing buckets without guessing context chronology.
   const compactionCount = await accountAgentTurnCompaction({
@@ -345,7 +333,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       compactionCount === undefined ? runResult.meta?.agentMeta?.contextBudgetStatus : undefined,
     systemPromptReport: runResult.meta?.systemPromptReport,
     preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
-    agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
+    agentHarnessId,
   });
   if (!isHeartbeat && !preserveUserFacingSessionState && !fallbackExhausted) {
     // A completed run that executed the persisted selection consumes the

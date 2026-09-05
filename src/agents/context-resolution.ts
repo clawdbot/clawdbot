@@ -35,6 +35,11 @@ export type ContextTokenResolutionParams = {
   allowUnscopedModelLookup?: boolean;
 };
 
+export type ContextTokenResolution = {
+  contextTokens: number;
+  source: "model" | "configured" | "fallback";
+};
+
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_000_000;
 export const ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS = 1_000_000;
 export const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
@@ -181,11 +186,11 @@ export function resolveAnthropicFixedContextWindow(
     : ANTHROPIC_CONTEXT_1M_TOKENS;
 }
 
-export function resolveContextTokensForModelFromCache(
+export function resolveContextTokenResolutionFromCache(
   params: ContextTokenResolutionParams,
   lookupContextTokens: (modelId?: string) => number | undefined = lookupCachedContextTokens,
   lookupContextWindow: (modelId?: string) => number | undefined = lookupCachedContextWindow,
-): number | undefined {
+): ContextTokenResolution | undefined {
   const ref = resolveProviderModelRef(params);
   const explicitProvider = params.provider?.trim();
 
@@ -217,12 +222,20 @@ export function resolveContextTokensForModelFromCache(
     // Other runtimes must still keep an authored effective cap below its native window.
     const configuredTokenLimit = fixedContextWindow ?? configuredContextWindow;
     if (configuredContextTokens !== undefined) {
-      return configuredTokenLimit === undefined
-        ? configuredContextTokens
-        : Math.min(configuredContextTokens, configuredTokenLimit);
+      const contextTokens =
+        configuredTokenLimit === undefined
+          ? configuredContextTokens
+          : Math.min(configuredContextTokens, configuredTokenLimit);
+      return {
+        contextTokens,
+        source:
+          fixedContextWindow !== undefined && configuredContextTokens >= fixedContextWindow
+            ? "model"
+            : "configured",
+      };
     }
     if (fixedContextWindow !== undefined) {
-      return fixedContextWindow;
+      return { contextTokens: fixedContextWindow, source: "model" };
     }
     const providerResult = lookupContextTokens(
       providerContextTokenCacheKey(normalizeProviderId(ref.provider), ref.model),
@@ -245,17 +258,22 @@ export function resolveContextTokensForModelFromCache(
       modelContextWindow,
     );
     if (discoveredCap !== undefined) {
-      return configuredContextWindow === undefined
-        ? discoveredCap
-        : Math.min(discoveredCap, configuredContextWindow);
+      const configuredCapOwnsResolution =
+        configuredContextWindow !== undefined && configuredContextWindow < discoveredCap;
+      return {
+        contextTokens: configuredCapOwnsResolution ? configuredContextWindow : discoveredCap,
+        source: configuredCapOwnsResolution ? "configured" : "model",
+      };
     }
     if (configuredContextWindow !== undefined) {
-      return configuredContextWindow;
+      return { contextTokens: configuredContextWindow, source: "configured" };
     }
   }
 
   if (params.allowUnscopedModelLookup === false) {
-    return params.fallbackContextTokens;
+    return params.fallbackContextTokens === undefined
+      ? undefined
+      : { contextTokens: params.fallbackContextTokens, source: "fallback" };
   }
 
   // Model-only calls use the raw discovery key.
@@ -263,8 +281,19 @@ export function resolveContextTokensForModelFromCache(
   const bareWindow = lookupContextWindow(params.model);
   const bareCap = minPositiveContextTokens(bareResult, bareWindow);
   if (bareCap !== undefined) {
-    return bareCap;
+    return { contextTokens: bareCap, source: "model" };
   }
 
-  return params.fallbackContextTokens;
+  return params.fallbackContextTokens === undefined
+    ? undefined
+    : { contextTokens: params.fallbackContextTokens, source: "fallback" };
+}
+
+export function resolveContextTokensForModelFromCache(
+  params: ContextTokenResolutionParams,
+  lookupContextTokens: (modelId?: string) => number | undefined = lookupCachedContextTokens,
+  lookupContextWindow: (modelId?: string) => number | undefined = lookupCachedContextWindow,
+): number | undefined {
+  return resolveContextTokenResolutionFromCache(params, lookupContextTokens, lookupContextWindow)
+    ?.contextTokens;
 }

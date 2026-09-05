@@ -6,38 +6,25 @@ import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 const mocks = vi.hoisted(() => ({
   persistSessionUsageUpdate: vi.fn(async (_params: unknown) => undefined),
   refreshQueuedFollowupSession: vi.fn(),
-  resolveContextTokensForModel: vi.fn<
-    (params?: { modelContextWindow?: number }) => number | undefined
-  >(() => 200_000),
-  resolveBundledStaticCatalogContext: vi.fn<
+  resolveContextTokenBudgetForModel: vi.fn<
     (params?: {
       cfg?: unknown;
       provider?: string;
       model?: string;
-    }) => Promise<{ modelContextWindow?: number; modelContextTokens?: number } | undefined>
-  >(async () => undefined),
-  isCatalogOwnedContextResolution: vi.fn<
-    (params?: {
-      staticCatalogContext?: { modelContextWindow?: number; modelContextTokens?: number };
-      resolvedTokens?: number;
-      configOnlyTokens?: number;
-    }) => boolean
-  >((params) => params?.staticCatalogContext !== undefined && params?.resolvedTokens !== undefined),
+      allowAsyncLoad?: boolean;
+      allowUnscopedModelLookup?: boolean;
+    }) => Promise<
+      { contextTokens: number; source: "model" | "configured" | "fallback" } | undefined
+    >
+  >(async () => ({ contextTokens: 200_000, source: "configured" })),
 }));
 
 vi.mock("../../agents/context.js", () => ({
-  resolveContextTokensForModel: (params?: { modelContextWindow?: number }) =>
-    mocks.resolveContextTokensForModel(params),
-  resolveBundledStaticCatalogContext: (params?: {
+  resolveContextTokenBudgetForModel: (params?: {
     cfg?: unknown;
     provider?: string;
     model?: string;
-  }) => mocks.resolveBundledStaticCatalogContext(params),
-  isCatalogOwnedContextResolution: (params?: {
-    staticCatalogContext?: { modelContextWindow?: number; modelContextTokens?: number };
-    resolvedTokens?: number;
-    configOnlyTokens?: number;
-  }) => mocks.isCatalogOwnedContextResolution(params),
+  }) => mocks.resolveContextTokenBudgetForModel(params),
 }));
 
 vi.mock("../../agents/fast-mode.js", () => ({
@@ -197,12 +184,10 @@ function createParams(
 describe("accountFollowupTurn", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolveContextTokensForModel.mockReturnValue(200_000);
-    mocks.resolveBundledStaticCatalogContext.mockResolvedValue(undefined);
-    mocks.isCatalogOwnedContextResolution.mockImplementation(
-      (params) =>
-        params?.staticCatalogContext !== undefined && params?.resolvedTokens !== undefined,
-    );
+    mocks.resolveContextTokenBudgetForModel.mockResolvedValue({
+      contextTokens: 200_000,
+      source: "configured",
+    });
   });
 
   it("forwards typed runtime context provenance to session persistence", async () => {
@@ -256,15 +241,11 @@ describe("accountFollowupTurn", () => {
     );
   });
 
-  it("marks a bundled catalog resolution with versioned resolved provenance", async () => {
-    // The bundled catalog row tightens the effective window below the
-    // config-only resolution, so the persisted value is a trusted resolution.
-    mocks.resolveBundledStaticCatalogContext.mockResolvedValue({
-      modelContextWindow: 120_000,
+  it("marks a model-owned resolution with versioned resolved provenance", async () => {
+    mocks.resolveContextTokenBudgetForModel.mockResolvedValue({
+      contextTokens: 120_000,
+      source: "model",
     });
-    mocks.resolveContextTokensForModel.mockImplementation(
-      (params?: { modelContextWindow?: number }) => params?.modelContextWindow ?? 200_000,
-    );
     const runParams = createParams();
 
     await accountFollowupTurn(runParams);
@@ -290,8 +271,47 @@ describe("accountFollowupTurn", () => {
     );
   });
 
+  it("preserves an exact persisted resolution when current model resolution is unavailable", async () => {
+    mocks.resolveContextTokenBudgetForModel.mockResolvedValue(undefined);
+    const params = createParams();
+    const session = params.turn.session as unknown as {
+      current: () => SessionEntry;
+      adopt: (entry: SessionEntry) => void;
+    };
+    session.adopt({
+      ...session.current(),
+      modelProvider: "openai",
+      model: "gpt-4o",
+      agentHarnessId: "openclaw",
+      contextTokens: 272_000,
+      contextTokensSource: "resolved-v1",
+    });
+    const result = params.execution.execution.outcome;
+    if (result.kind !== "settled") {
+      throw new Error("expected settled test execution");
+    }
+    result.result.meta.agentMeta = {
+      sessionId: "session-1",
+      provider: "openai",
+      model: "gpt-4o",
+      agentHarnessId: "openclaw",
+    };
+
+    await accountFollowupTurn(params);
+
+    expect(mocks.persistSessionUsageUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextTokensUsed: 272_000,
+        contextTokensSource: "resolved-v1",
+      }),
+    );
+    expect(mocks.resolveContextTokenBudgetForModel).toHaveBeenCalledWith(
+      expect.objectContaining({ allowUnscopedModelLookup: false }),
+    );
+  });
+
   it("does not label a prior context fallback as a current resolution after a model switch", async () => {
-    mocks.resolveContextTokensForModel.mockReturnValue(undefined);
+    mocks.resolveContextTokenBudgetForModel.mockResolvedValue(undefined);
     const params = createParams();
     const session = params.turn.session as unknown as {
       current: () => SessionEntry;

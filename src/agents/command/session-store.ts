@@ -95,34 +95,16 @@ export async function updateSessionStoreAfterAgentRun(params: {
     result.meta.agentMeta?.contextTokensSource;
   if (contextTokens === undefined) {
     const contextModule = await getContextModule();
-    const staticCatalogContext = await contextModule.resolveBundledStaticCatalogContext({
-      cfg,
-      provider: providerUsed,
-      model: modelUsed,
-    });
-    const resolutionParams = {
+    const resolution = await contextModule.resolveContextTokenBudgetForModel({
       cfg,
       provider: providerUsed,
       model: modelUsed,
       allowAsyncLoad: false,
-    } as const;
-    const configOnlyTokens = contextModule.resolveContextTokensForModel(resolutionParams);
-    const resolvedTokens = contextModule.resolveContextTokensForModel({
-      ...resolutionParams,
-      ...staticCatalogContext,
+      allowUnscopedModelLookup: false,
     });
-    if (resolvedTokens !== undefined) {
-      contextTokens = resolvedTokens;
-      // Only a bundled catalog row that owns the effective window is a trusted
-      // persisted resolution; config-only clamps and the generic default stay
-      // legacy so removed caps cannot stick.
-      contextTokensSource ??= contextModule.isCatalogOwnedContextResolution({
-        staticCatalogContext,
-        resolvedTokens,
-        configOnlyTokens,
-      })
-        ? "resolved-v1"
-        : "resolved";
+    if (resolution) {
+      contextTokens = resolution.contextTokens;
+      contextTokensSource ??= resolution.source === "model" ? "resolved-v1" : "resolved";
     } else {
       contextTokens = DEFAULT_CONTEXT_TOKENS;
     }

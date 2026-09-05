@@ -19,8 +19,10 @@ import {
   replaceDiscoveredContextTokenCache,
 } from "./context-cache.js";
 import {
+  type ContextTokenResolution,
   type ContextTokenResolutionParams,
   type ModelsConfig,
+  resolveContextTokenResolutionFromCache,
   resolveContextTokensForModelFromCache,
 } from "./context-resolution.js";
 import {
@@ -349,38 +351,6 @@ function toContextParams(context: BundledStaticCatalogContext | undefined) {
 }
 
 /**
- * True when the bundled catalog row owns the effective resolution: a catalog
- * cap exists and the config-inclusive resolution was not pushed below it by an
- * authored cap. Warm processes resolve the same catalog value through the
- * discovered cache, so numeric ordering alone cannot distinguish owners — the
- * catalog cap must be the binding (or equal) bound.
- */
-export function isCatalogOwnedContextResolution(params: {
-  staticCatalogContext:
-    | Pick<ContextTokenResolutionParams, "modelContextTokens" | "modelContextWindow">
-    | undefined;
-  resolvedTokens: number | undefined;
-  configOnlyTokens: number | undefined;
-}): boolean {
-  if (params.resolvedTokens === undefined || params.staticCatalogContext === undefined) {
-    return false;
-  }
-  const catalogCap = minPositiveContextTokens(
-    params.staticCatalogContext.modelContextTokens,
-    params.staticCatalogContext.modelContextWindow,
-  );
-  if (catalogCap === undefined) {
-    return false;
-  }
-  if (params.configOnlyTokens !== undefined && params.configOnlyTokens < catalogCap) {
-    // An authored/config cap binds below the catalog row; the value is not
-    // catalog-owned and must not persist as a trusted resolution.
-    return false;
-  }
-  return params.resolvedTokens <= catalogCap;
-}
-
-/**
  * Resolves the offline bundled static catalog context for one provider/model
  * pair. Read-only callers (no config authored row, no async catalog load)
  * inject the returned `modelContextTokens`/`modelContextWindow` into
@@ -436,4 +406,20 @@ export async function resolveBundledStaticCatalogContext(
     // Enrichment must never break the caller's fallback chain.
     return undefined;
   }
+}
+
+export async function resolveContextTokenBudgetForModel(
+  params: Omit<ContextTokenResolutionParams, "modelContextTokens" | "modelContextWindow">,
+): Promise<ContextTokenResolution | undefined> {
+  const staticCatalogContext = await resolveBundledStaticCatalogContext(params);
+  const lookupOptions = {
+    allowAsyncLoad: params.allowAsyncLoad,
+    skipRuntimeConfigLoad: Boolean(params.cfg),
+  };
+  prepareContextWindowCache(lookupOptions);
+  return resolveContextTokenResolutionFromCache(
+    { ...params, ...staticCatalogContext },
+    (modelId) => lookupCachedContextTokens(modelId),
+    (modelId) => lookupCachedContextWindow(modelId),
+  );
 }
