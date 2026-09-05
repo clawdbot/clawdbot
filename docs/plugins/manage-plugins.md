@@ -10,10 +10,10 @@ sidebarTitle: "Manage plugins"
 doc-schema-version: 1
 ---
 
-The Control UI covers installed-plugin inventory, details, enablement, and
-disablement. The CLI adds discovery, install, update, uninstall, advanced
-configuration, and explicit install-source controls. For its full command
-contract, flags, source-selection rules, and edge cases, see
+The Control UI covers installed-plugin inventory, schema-backed configuration,
+effective access, enablement, and lifecycle actions. The CLI adds discovery,
+install, update, advanced maintenance, and explicit install-source controls.
+For its full command contract, flags, source-selection rules, and edge cases, see
 [`openclaw plugins`](/cli/plugins).
 
 Typical CLI workflow: find a package, install it from ClawHub, npm, git, or a
@@ -32,17 +32,22 @@ the full inventory or choose **Show all** to browse every installed plugin. Each
 card shows the plugin description. Choose a card to open its settings, where
 administrators can enable or disable it and read-only operators can inspect it.
 
-Choose a card to open that plugin's details. Use the settings action beside
-**Installed plugins**, or open `/settings/plugins`, for
-the complete plugin inventory. The settings page also lists configured
-[MCP servers](/cli/mcp), editing `mcp.servers` in the Gateway configuration.
+Choose a card to open `/settings/plugins/<plugin-id>`.
+That routed page uses the plugin's declared schema for configuration, explains
+effective access in plain language, and keeps raw capability declarations and
+grants under **Advanced**. Its **Lifecycle** section shows source and version
+details and lets administrators uninstall removable plugins after confirmation.
+Open `/settings/plugins` for the searchable installed inventory. Its
+**Advanced** tab owns global plugin loading policy, allow and deny lists, load
+paths, and capability slots.
 
 Included plugins do not need a package install. Workboard, for example, is
 included with OpenClaw and disabled by default. Bundled plugins can be disabled
 but not removed.
 
-Inventory access requires `operator.read`. Enable, disable, and MCP server
-changes require `operator.admin`. Enabling an installed plugin as an
+Inventory, configuration, and access inspection require `operator.read`.
+Configuration, enable, disable, and uninstall changes require `operator.admin`.
+Enabling an installed plugin as an
 administrator also records that explicit trust by adding the selected plugin to
 an existing restrictive `plugins.allow` list. An explicit `plugins.deny` entry
 remains authoritative and must be removed before enabling the plugin.
@@ -51,12 +56,8 @@ Installing, updating, or removing plugin code requires a Gateway restart.
 Enablement changes for plugins in the startup inventory can be applied without
 a restart when the plugin and current Gateway runtime support it; otherwise
 the UI tells you a restart is required.
-OAuth-backed MCP connectors still need a one-time `openclaw mcp login <name>`
-from the CLI after they are added.
-
 The Control UI does not install from arbitrary npm, git, or local-path sources,
-update plugins, or expose rich plugin configuration. Use the CLI workflows
-below for those operations.
+or update plugin packages. Use the CLI workflows below for those operations.
 
 ## List and search plugins
 

@@ -11,7 +11,6 @@ import type {
   PluginCatalogItem,
   PluginListResult,
   PluginMutationResult,
-  PluginSearchResult,
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import {
@@ -19,9 +18,9 @@ import {
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import type { PluginRowMessage } from "./plugin-row-message.ts";
 import type { PluginsConsentController } from "./plugins-consent-controller.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
-import type { PluginRowMessage } from "./view.ts";
 import "./plugins-page.ts";
 
 type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
@@ -31,7 +30,6 @@ const PLUGINS_GATEWAY_HELLO = gatewayHelloForMethods([
   "plugins.inspect",
   "plugins.install",
   "plugins.list",
-  "plugins.search",
   "plugins.setEnabled",
   "plugins.uninstall",
 ]);
@@ -49,8 +47,6 @@ type TestPluginsPage = HTMLElement & {
   loading: boolean;
   busy: Record<string, boolean>;
   messages: Record<string, PluginRowMessage>;
-  activeTab: "installed" | "discover";
-  searchResults: PluginSearchResult[] | null;
   applyMutationResult: (result: PluginMutationResult) => void;
   consentController: Pick<PluginsConsentController, "install">;
   refreshCatalog: () => Promise<void>;
@@ -79,8 +75,14 @@ export function createPlugin(overrides: Partial<PluginCatalogItem> = {}): Plugin
   };
 }
 
-export function createResult(plugin = createPlugin()): PluginListResult {
-  return { plugins: [plugin], diagnostics: [], mutationAllowed: true };
+export function createResult(
+  pluginOrPlugins: PluginCatalogItem | PluginCatalogItem[] = createPlugin(),
+): PluginListResult {
+  return {
+    plugins: Array.isArray(pluginOrPlugins) ? pluginOrPlugins : [pluginOrPlugins],
+    diagnostics: [],
+    mutationAllowed: true,
+  };
 }
 
 export function createInspectResult(
@@ -199,6 +201,7 @@ type RuntimeConfigTestHarness = {
     state: RuntimeConfigTestState;
     refresh: ApplicationContext["runtimeConfig"]["refresh"];
     ensureLoaded: ReturnType<typeof vi.fn<() => Promise<undefined>>>;
+    ensureSchemaLoaded: ReturnType<typeof vi.fn<() => Promise<undefined>>>;
     patch: ReturnType<
       typeof vi.fn<(options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>>
     >;
@@ -222,6 +225,7 @@ export function createRuntimeConfigHarness(
     state: runtimeConfigState,
     refresh: refreshConfig,
     ensureLoaded: vi.fn(async () => undefined),
+    ensureSchemaLoaded: vi.fn(async () => undefined),
     patch,
     patchFromSnapshot: vi.fn(async (build) => {
       const config = runtimeConfigState.configSnapshot?.sourceConfig ?? {};
@@ -308,6 +312,9 @@ export async function mountPage(
 ): Promise<{ page: TestPluginsPage; provider: ApplicationContextProvider }> {
   const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-plugins-page") as unknown as TestPluginsPage;
+  page.surface = routeData?.location.pathname.includes("/settings/plugins")
+    ? "settings"
+    : "discovery";
   page.routeData = routeData;
   provider.append(page);
   document.body.append(provider);
@@ -325,11 +332,28 @@ export function deferred<T>() {
   return { promise, reject, resolve };
 }
 
-export async function clickRowAction(page: TestPluginsPage, pluginSelector: string, label: string) {
-  const button = [...page.querySelectorAll<HTMLButtonElement>(`${pluginSelector} button`)].find(
-    (element) => (element.getAttribute("aria-label") ?? element.textContent ?? "").includes(label),
-  );
-  button?.click();
+export async function activatePluginControl(
+  page: TestPluginsPage,
+  pluginSelector: string,
+  label: string,
+) {
+  const controls = [
+    ...page.querySelectorAll<HTMLElement>(`${pluginSelector} button, ${pluginSelector} wa-switch`),
+  ];
+  const control =
+    controls.find((element) =>
+      (element.getAttribute("aria-label") ?? element.textContent ?? "").includes(label),
+    ) ?? controls.find((element) => element.tagName.toLowerCase() === "wa-switch");
+  if (!control) {
+    throw new Error(`No plugin control matching ${label} under ${pluginSelector}`);
+  }
+  if (control.tagName.toLowerCase() === "wa-switch") {
+    const toggle = control as HTMLElement & { checked: boolean };
+    toggle.checked = !toggle.checked;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+  } else {
+    control.click();
+  }
   await page.updateComplete;
 }
 

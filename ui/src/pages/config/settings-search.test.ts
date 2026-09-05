@@ -371,6 +371,36 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("routes global plugin policy to Plugin Settings without indexing plugin entries", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        plugins: {
+          type: "object",
+          title: "Plugin policy",
+          properties: {
+            enabled: { type: "boolean", title: "Enable plugins" },
+            entries: { type: "object", title: "Plugin entries" },
+          },
+        },
+      },
+    };
+    const common = {
+      schema,
+      value: { plugins: { enabled: true, entries: { workboard: {} } } },
+      uiHints: {},
+    };
+
+    expect(findSettingsSearchBlocks({ query: "Enable plugins", ...common })).toEqual([
+      expect.objectContaining({
+        routeId: "plugin-settings",
+        search: "?tab=advanced",
+        hash: "#plugin-settings-advanced",
+      }),
+    ]);
+    expect(findSettingsSearchBlocks({ query: "Plugin entries", ...common })).toEqual([]);
+  });
+
   it("maps a nested schema field to its owning settings page", () => {
     const matches = findSettingsSearchBlocks({
       query: "sandbox access",

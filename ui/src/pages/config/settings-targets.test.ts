@@ -126,7 +126,7 @@ describe("settings config section ownership", () => {
     ["appearance", ["__appearance__", "ui"]],
     ["notifications", ["__notifications__"]],
     ["security", ["security", "approvals"]],
-    ["automation", ["commands", "hooks", "bindings", "cron", "plugins"]],
+    ["automation", ["commands", "hooks", "bindings", "cron"]],
     ["mcp", ["mcp"]],
     ["memory", ["memory"]],
     ["talk", ["talk"]],
@@ -147,7 +147,7 @@ describe("settings config section ownership", () => {
     const sections = pages.flatMap(([, pageSections]) => pageSections);
 
     expect(new Set(sections).size).toBe(sections.length);
-    expect([...SCOPED_CONFIG_SECTION_KEYS].toSorted()).toEqual(sections.toSorted());
+    expect([...SCOPED_CONFIG_SECTION_KEYS].toSorted()).toEqual([...sections, "plugins"].toSorted());
   });
 
   it("keeps uncurated sections on Advanced", () => {
@@ -155,6 +155,11 @@ describe("settings config section ownership", () => {
     expect(configPageForSection("secrets")).toBe("advanced");
     expect(configPageForSection("broadcast")).toBe("advanced");
     expect(configPageForSection("models")).toBe("advanced");
+  });
+
+  it("routes plugin policy to the dedicated plugin settings page", () => {
+    expect(configPageForSection("plugins")).toBe("plugin-settings");
+    expect(SCOPED_CONFIG_SECTION_KEYS.has("plugins")).toBe(true);
   });
 
   it("keeps Advanced free of a curated include list", () => {

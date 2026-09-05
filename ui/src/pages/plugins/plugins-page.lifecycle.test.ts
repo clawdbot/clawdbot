@@ -16,7 +16,6 @@ import {
   createGateway,
   createPlugin,
   createPluginsRouteData,
-  createPluginsRouteLocation,
   createResult,
   createRuntimeConfigHarness,
   deferred,
@@ -304,11 +303,7 @@ describe("PluginsPage lifecycle confirmation", () => {
     const harness = createGateway(client);
     const { page } = await mountPage(
       createContext(harness.gateway),
-      createPluginsRouteData(
-        harness.gateway,
-        createResult(available),
-        createPluginsRouteLocation("/settings/plugins/discover"),
-      ),
+      createPluginsRouteData(harness.gateway, createResult(available)),
     );
     const request = {
       source: "official",

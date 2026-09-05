@@ -21,7 +21,7 @@ import type { GatewayPageController } from "../../lit/gateway-page-controller.ts
 import type { PluginConsentIntent, PluginConsentState } from "./consent-dialog.ts";
 import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
 import { confirmPluginInstall } from "./plugin-lifecycle-confirmation.ts";
-import { pluginRowKey, type PluginRowMessage } from "./view.ts";
+import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.ts";
 
 type PluginMutationSuccess<Result> = (
   result: Result,

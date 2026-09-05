@@ -1239,9 +1239,186 @@ h3.plugins-subheader {
   justify-content: flex-end;
 }
 
+/* ---------- plugin settings ---------- */
+
+.plugins-settings-title {
+  margin: 0;
+  font: inherit;
+}
+
+/* The inventory header is already inside the padded settings page. Remove the
+   shared outer-header inset so its title aligns with this page's rows. */
+.settings-page.oc-app-surface:has(> .plugins-settings-content) > .content-header--settings {
+  width: 100%;
+  max-width: none;
+  margin-inline: 0;
+  padding-inline: 0;
+}
+
+.plugins-settings-content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.plugins-settings-tabs {
+  width: max-content;
+  max-width: 100%;
+  align-self: flex-start;
+  --track-color: transparent;
+  --indicator-color: transparent;
+}
+
+.plugins-settings-search {
+  position: relative;
+  display: block;
+  margin-bottom: var(--space-5);
+}
+
+.plugins-settings-search > span[aria-hidden="true"] {
+  position: absolute;
+  top: 50%;
+  left: var(--space-3);
+  display: inline-flex;
+  width: 16px;
+  color: var(--muted);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.plugins-settings-search > span[aria-hidden="true"] svg {
+  width: 16px;
+  height: 16px;
+}
+
+.plugins-settings-search .settings-input {
+  width: 100%;
+  padding-left: calc(var(--space-3) + 24px);
+}
+
+.plugins-settings-row__link {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  text-decoration: none;
+}
+
+.plugins-settings-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+}
+
+.plugins-settings-breadcrumb__parent,
+.plugins-settings-breadcrumb__current {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plugins-settings-breadcrumb__parent:hover {
+  color: var(--text);
+}
+
+.plugins-settings-breadcrumb__chevron {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.plugins-settings-breadcrumb__chevron svg {
+  width: 13px;
+  height: 13px;
+}
+
+.plugins-settings-detail-header {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.plugins-settings-detail-hero {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-3);
+}
+
+.plugins-settings-detail-identity {
+  min-width: 0;
+}
+
+.plugins-settings-detail-title,
+.plugins-settings-detail-description {
+  margin: 0;
+}
+
+.plugins-settings-detail-title {
+  color: var(--text-strong);
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.plugins-settings-detail-description {
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+}
+
+.plugins-settings-detail-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  align-self: start;
+}
+
+.plugins-settings-advanced-access {
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.plugins-settings-advanced-access summary {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.plugins-settings-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.plugins-settings-advanced-access[open] summary {
+  margin-bottom: var(--space-3);
+}
+
 /* ---------- responsive ---------- */
 
 @media (max-width: 560px) {
+  .plugins-settings-detail-hero {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .plugins-settings-detail-actions {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
+
   .plugins-toolbar--fields > .settings-segmented {
     height: auto;
   }

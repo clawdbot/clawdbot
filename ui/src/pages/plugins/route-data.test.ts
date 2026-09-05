@@ -16,7 +16,9 @@ describe("Plugins route data", () => {
   it.each([
     ["/plugins", null],
     ["/settings/plugins", null],
+    ["/settings/plugins?tab=advanced", null],
     ["/settings/plugins/discover", "/plugins"],
+    ["/plugins?tab=advanced", "/plugins"],
     ["/plugins?tab=discover", "/plugins"],
     ["/settings/plugins?tab=discover", "/plugins"],
     ["/settings/plugins?tab=installed", "/settings/plugins"],

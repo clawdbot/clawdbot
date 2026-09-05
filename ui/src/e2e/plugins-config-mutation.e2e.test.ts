@@ -120,7 +120,11 @@ suite.define(() => {
         }
 
         await gateway.deferNext("plugins.setEnabled");
-        await workboardRow.getByRole("button", { name: "Enable", exact: true }).click();
+        const enabledSwitch = workboardRow.getByRole("switch", {
+          name: "Enable or disable Workboard",
+          exact: true,
+        });
+        await workboardRow.locator("wa-switch").click();
         expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
 
         const pendingDraft = await gateway.waitForRequest("config.set");
@@ -144,7 +148,7 @@ suite.define(() => {
           restartRequired: true,
         });
 
-        await workboardRow.getByRole("button", { name: "Disable", exact: true }).waitFor();
+        await expect.poll(() => enabledSwitch.isChecked()).toBe(true);
         expect(await gateway.getRequests("plugins.inspect")).toHaveLength(0);
         expect(await page.locator("[data-plugin-consent]").count()).toBe(0);
         await expect

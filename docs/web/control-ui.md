@@ -282,9 +282,12 @@ choose the card to open that plugin's settings and enable or
 disable it there. Read-only operators can use the same page to inspect it.
 
 Use the settings action beside **Installed plugins**, or open `/settings/plugins`, to
-see the complete plugin inventory grouped by category. It also lists
-configured [MCP servers](/cli/mcp) and supports adding, disabling, and removing
-them inline. The same server controls live on **Settings → MCP**.
+see the searchable installed inventory. Each `/settings/plugins/<plugin-id>`
+page uses the plugin's declared schema for configuration, summarizes effective
+access in plain language, keeps raw declarations and grants under **Advanced**,
+and groups source, version, trust, and confirmed uninstall controls under
+**Lifecycle**. The root **Advanced** tab owns global plugin loading policy,
+allow and deny lists, load paths, and capability slots.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent.
@@ -300,18 +303,16 @@ Included plugins are already present on the Gateway. For example, Workboard is
 included with OpenClaw but disabled by default. Bundled plugins can be disabled
 but not removed.
 
-Reading the inventory requires `operator.read`. Enabling or disabling a plugin
-and changing MCP servers require `operator.admin`; those actions stay disabled
-for read-only operators.
+Reading inventory, configuration, and access details requires `operator.read`.
+Configuration, enablement, and uninstall actions require `operator.admin`; they
+remain visible with an access explanation for read-only operators.
 
 Enabling or disabling an installed plugin can apply without a restart when the
 plugin and current Gateway runtime support it; otherwise the UI reports that a
-restart is required. OAuth-backed MCP connectors need a one-time
-`openclaw mcp login <name>` from the CLI after they are added.
+restart is required.
 
-The page intentionally focuses on the installed inventory, plugin details, and
-enablement. Use [`openclaw plugins`](/cli/plugins) for install sources, updates,
-removal, and advanced plugin configuration.
+The page does not install from arbitrary npm, git, or local-path sources or
+update plugin packages. Use [`openclaw plugins`](/cli/plugins) for those flows.
 
 ## Updates
 
@@ -527,7 +528,7 @@ are Gateway settings and remain available in every browser.
   <Accordion title="Cron, tasks, plugins, skills, devices, exec approvals">
     - Automations (cron jobs): stat cards (automation count, failing count, scheduler state, next wake) above an Automations/Run history tab switch; the Automations tab lists jobs in a filterable table (All/Active/Paused, search, schedule and last-run filters, per-row action menu) with starter suggestions below, and the Run history tab shows recent runs across all automations (`cron.*`).
     - Tasks: live active and recent background task ledger with linked sessions and cancellation (`tasks.*`). Chat's Background tasks rail groups running and finished work; selecting a rail row opens that task's live status and transcript or prompt/output inspector in the detail sidebar.
-    - Plugins: browse and search the installed inventory, open plugin settings, and enable or disable installed plugins (`plugins.*`); MCP server rows in settings edit `mcp.servers` through the config methods.
+    - Plugins: browse and search the installed inventory, edit schema-backed plugin configuration and global policy, inspect effective access and lifecycle data, and enable, disable, or uninstall supported plugins (`plugins.*`, `config.*`).
     - Skills: status, enable/disable, install, API key updates (`skills.*`).
     - Devices: one inventory joins paired device records, the node catalog, and live presence (`device.pair.list`, `node.list`, `system-presence`). The Gateway host is pinned first; paired clients show connection status, roles, tokens, capabilities, and commands. Duplicate pairings collapse into an expandable group, and **Clean up N stale** bulk-removes admin-confirmed offline duplicates that were auto-approved (silent local, trusted-CIDR, or SSH-verified) or predate approval provenance. Paired rows have an **Actions** menu to copy its device ID, remove its pairing (`node.pair.remove`, `device.pair.remove`), or approve/reject a pending node re-approval (`node.pair.approve`/`reject`). Device pairing requests retain their visible **Approve** and **Reject** buttons (`device.pair.*`), and mobile setup codes can be created from the same card. **Details** groups device identity, IP, scopes, token rotation/revocation, and commands into labeled facts.
       Resource meters show Gateway host load, memory, disk, and uptime from `system.info`, and node meters appear when the node reports `hostStats`. Offline nodes with a retained snapshot show muted last-known meters with the snapshot age. The connected page refreshes host stats every 60 seconds and alongside quiet node reloads; node stats also refresh on `node.hostStats` events. Capability chips explain each capability on hover. **Desktop** opens that machine in a standalone desktop window (the docked Desktop panel stays hidden on Settings routes) and appears only when the Gateway reports an available desktop environment. For a node, enable `desktop.host.enabled: true` in its config, add `desktop.stream` to `gateway.nodes.commands.allow`, and restart the node. Gateway command-policy changes hot-apply under the default reload mode. The node reconnects with a pending reapproval for the new command, which you approve from the row’s **Actions** menu or with `openclaw nodes approve <requestId>`. A dashed Desktop chip explains this setup when only the command is advertised.
@@ -537,13 +538,13 @@ are Gateway settings and remain available in every browser.
   </Accordion>
   <Accordion title="Config">
     - View/edit `~/.openclaw/openclaw.json` (`config.get`, `config.set`).
-    - Settings navigation starts with Ask OpenClaw, Profile, Appearance, and Notifications up top; Connections (Connection, Channels, Communications, Talk, Devices); Agents & Tools (Agents, Labs, Models, MCP, Memory, Automation); Privacy & Security (Security, Secrets, Approvals); and System (Infrastructure, Advanced, Debug, Logs, About). Language leads the Appearance page, model defaults live on Models, and Gateway host details live on Connection.
+    - Settings navigation starts with Ask OpenClaw, Profile, Appearance, and Notifications up top; Connections (Connection, Channels, Communications, Talk, Devices); Agents & Tools (Agents, Labs, Models, Plugins, MCP, Memory, Automation); Privacy & Security (Security, Secrets, Approvals); and System (Infrastructure, Advanced, Debug, Logs, About). Language leads the Appearance page, model defaults live on Models, and Gateway host details live on Connection.
     - Privacy & Security: curated rows for gateway auth, exec policy, browser enablement, tool profile, device auth, and mobile pairing, above the schema-backed `security`/`approvals` sections.
     - Secrets (`/settings/secrets`) manages team-scoped secret and environment entries through `secrets.store.*`. Environment values remain visible, secret values are never returned after saving, Bulk Add accepts quoted multiline dotenv values, and mutation actions are hidden when the connected Gateway does not advertise them.
     - Approvals includes newest-first, 30-day history for resolved exec, plugin, and system-agent requests. Filter by kind or page through older rows to review the decision, reason, source session, and resolver attribution recorded by the Gateway.
     - Labs exposes shipped experimental switches. Code Mode defaults off; turning it on writes `tools.codeMode.enabled: "auto"`, which engages only for models marked as preferred Code Mode performers. Swarm defaults on; turn it off to write `tools.swarm.enabled: false`. Swarm does not enable Code Mode or grant tools denied by policy. Code Mode and Swarm changes save immediately and apply to future runs without restarting; unshipped experiments do not appear or write speculative config keys.
     - Notifications: browser web-push status, subscribe/unsubscribe, and a test send.
-    - Advanced: every config section without a curated home, plus the raw JSON5 editor (previously the General page's Advanced mode).
+    - Advanced: every config section without a curated home, plus the raw JSON5 editor (previously the General page's Advanced mode). Global plugin policy has a curated home under **Plugins → Advanced** and is excluded here.
     - **Advanced → Setup** is collapsed by default. Expand it to edit discovery access and app recommendation consent or inspect read-only setup history. Internal bookkeeping fields are absent from the form; the raw JSON5 editor remains unchanged.
     - In **Advanced → Communication → Channels**, use **Channel settings** to show one messaging channel at a time, including custom channel plugins. **Other** groups shared channel defaults and model overrides. Switching groups does not change the saved configuration.
     - Model Setup (`/settings/model-setup`) is a subpage of Model Providers, launched from its header. Detection runs on the page without holding navigation open: **Back to app** remains available while checks finish, and returning to setup starts a fresh check. Activation waits for the Gateway to apply the verified configuration; if it cannot apply it in place, setup shows that a restart is required. Verification stays unavailable until the saved configuration is active and pending restart work has finished, including after reconnecting or reopening the page. Setup keeps your selected model and displays the Gateway's reason; after the restart, use **Try again** or **Verify & use selected model** if the page has not continued automatically.

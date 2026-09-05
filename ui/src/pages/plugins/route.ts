@@ -52,6 +52,12 @@ function definePluginsPage(routeId: "plugins" | "plugin-settings", surface: Plug
       if (canonical) {
         return redirect(canonical);
       }
+      if (surface === "settings") {
+        const configLoad = context.runtimeConfig.ensureLoaded();
+        void configLoad
+          .then(() => context.runtimeConfig.ensureSchemaLoaded())
+          .catch(() => undefined);
+      }
       return loadPluginsRouteData(context, options);
     },
     component: () =>

@@ -1,20 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import type {
-  PluginInstallRequest,
-  PluginListResult,
-  PluginMutationResult,
-} from "../../lib/plugins/index.ts";
+import type { PluginInstallRequest, PluginMutationResult } from "../../lib/plugins/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
-  clickRowAction,
+  activatePluginControl,
   createClient,
   createContext,
   createGateway,
@@ -22,7 +17,6 @@ import {
   createPluginsRouteData,
   createPluginsRouteLocation,
   createResult,
-  createRuntimeConfigHarness,
   deferred,
   mountPage,
   resetPluginsPageTestState,
@@ -80,13 +74,9 @@ describe("PluginsPage", () => {
     });
 
     await waitForFast(() =>
-      expect(page.querySelector(".plugins-page-error")?.textContent).toContain(
-        "catalog unavailable",
-      ),
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain("catalog unavailable"),
     );
-    expect(
-      page.querySelector(".plugins-page-error")?.textContent?.match(/catalog unavailable/gu),
-    ).toHaveLength(1);
+    expect(page.textContent?.match(/catalog unavailable/gu)).toHaveLength(1);
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -224,7 +214,7 @@ describe("PluginsPage", () => {
       createPluginsRouteData(harness.gateway),
     );
 
-    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
+    await activatePluginControl(page, '[data-plugin-id="workboard"]', "Enable or disable");
 
     await waitForFast(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
     await waitForFast(() => expect(refreshConfig).toHaveBeenCalledOnce());
@@ -364,12 +354,12 @@ describe("PluginsPage", () => {
       createPluginsRouteData(harness.gateway),
     );
 
-    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
+    await activatePluginControl(page, '[data-plugin-id="workboard"]', "Enable or disable");
     await waitForFast(() =>
       expect(page.querySelector('[role="alert"]')?.textContent).toContain("Enable failed"),
     );
 
-    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
+    await activatePluginControl(page, '[data-plugin-id="workboard"]', "Enable or disable");
     await waitForFast(() => {
       const calls = request.mock.calls.filter(([method]) => method === "plugins.setEnabled");
       expect(calls).toHaveLength(2);
@@ -378,40 +368,6 @@ describe("PluginsPage", () => {
         { pluginId: "workboard", enabled: true },
       ]);
     });
-  });
-
-  it("clears visible catalog loading when a mutation supersedes a manual refresh", async () => {
-    const manualRefresh = deferred<PluginListResult>();
-    const enabledPlugin = createPlugin({ enabled: true, state: "enabled" });
-    const refreshed = createResult(enabledPlugin);
-    let listCalls = 0;
-    const { client } = createClient(async (method) => {
-      if (method === "plugins.list") {
-        listCalls += 1;
-        return listCalls === 1 ? manualRefresh.promise : refreshed;
-      }
-      if (method === "plugins.setEnabled") {
-        return { ok: true, plugin: enabledPlugin, restartRequired: false };
-      }
-      throw new Error(`Unexpected method ${method}`);
-    });
-    const harness = createGateway(client);
-    const { page } = await mountPage(
-      createContext(harness.gateway),
-      createPluginsRouteData(harness.gateway),
-    );
-
-    page.querySelector<HTMLButtonElement>(".plugins-refresh")?.click();
-    await page.updateComplete;
-    expect(page.loading).toBe(true);
-    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
-
-    await waitForFast(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
-    expect(page.loading).toBe(false);
-    expect(page.querySelector<HTMLButtonElement>(".plugins-refresh")?.disabled).toBe(false);
-    manualRefresh.resolve(createResult());
-    await Promise.resolve();
-    expect(page.loading).toBe(false);
   });
 
   it("keeps a committed enable successful when its config refresh fails", async () => {
@@ -438,7 +394,7 @@ describe("PluginsPage", () => {
       createPluginsRouteData(harness.gateway),
     );
 
-    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
+    await activatePluginControl(page, '[data-plugin-id="workboard"]', "Enable or disable");
     await waitForFast(() =>
       expect(page.querySelector('[role="status"]')?.textContent).toContain(
         "config.get failed after plugin commit",
@@ -485,13 +441,13 @@ describe("PluginsPage", () => {
       createPluginsRouteData(harness.gateway, disabledResult),
     );
 
-    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
+    await activatePluginControl(page, '[data-plugin-id="workboard"]', "Enable or disable");
     expect(page.busy["plugin:workboard"]).toBe(true);
 
     harness.emit(replacementClient, true);
     await waitForFast(() => expect(replacementListCount).toBe(1));
     await page.updateComplete;
-    await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
+    await activatePluginControl(page, '[data-plugin-id="workboard"]', "Enable or disable");
     expect(page.busy["plugin:workboard"]).toBe(true);
 
     staleMutation.resolve({ ok: true, plugin: enabledPlugin, restartRequired: false });
@@ -538,7 +494,7 @@ describe("PluginsPage", () => {
 
     const confirmation = deferred<boolean>();
     vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
-    await clickRowAction(page, '[data-plugin-id="community-thing"]', "Remove");
+    const cancelledUninstall = page.uninstall("community-thing", "plugin:community-thing");
     await waitForFast(() => expect(showConfirmDialog).toHaveBeenCalledOnce());
     expect(showConfirmDialog).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -552,19 +508,17 @@ describe("PluginsPage", () => {
     expect(calls).not.toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]);
 
     confirmation.resolve(false);
-    await confirmation.promise;
+    await cancelledUninstall;
     expect(calls).not.toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]);
 
-    await clickRowAction(page, '[data-plugin-id="community-thing"]', "Remove");
+    await page.uninstall("community-thing", "plugin:community-thing");
 
     await waitForFast(() =>
-      expect(calls).toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]),
-    );
-    await waitForFast(() =>
-      expect(page.querySelector(".plugins-page-notice")?.textContent).toContain(
-        "Removed community-thing",
+      expect(page.querySelector('[role="status"]')?.textContent).toContain(
+        "Removed Community Thing",
       ),
     );
+    expect(calls).toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]);
     expect(calls).toContainEqual(["plugins.list", {}]);
   });
 
@@ -615,232 +569,7 @@ describe("PluginsPage", () => {
     await uninstall;
     await page.updateComplete;
 
-    expect(page.querySelector(".plugins-page-notice")).toBeNull();
+    expect(page.textContent).not.toContain("Removed Community Thing");
     expect(page.messages["plugin:workboard"]?.text).toContain("Enabled Workboard");
-  });
-
-  it("adds an MCP server through the shared config seam", async () => {
-    const { client } = createClient(async (method) => {
-      if (method === "plugins.list") {
-        return createResult();
-      }
-      throw new Error(`Unexpected method ${method}`);
-    });
-    const gatewayHarness = createGateway(client);
-    const runtimeConfigState: RuntimeConfigTestState = {
-      configFormDirty: false,
-      lastError: null,
-      configSnapshot: { sourceConfig: { mcp: { servers: {} } }, hash: "base" },
-    };
-    const configHarness = createRuntimeConfigHarness(
-      vi.fn(async () => undefined),
-      runtimeConfigState,
-    );
-    const { page } = await mountPage(
-      createContext(
-        gatewayHarness.gateway,
-        configHarness.runtimeConfig.refresh,
-        runtimeConfigState,
-        configHarness,
-      ),
-      {
-        gateway: gatewayHarness.gateway,
-        gatewaySnapshot: gatewayHarness.gateway.snapshot,
-        location: createPluginsRouteLocation(),
-        result: createResult(),
-        error: null,
-      },
-    );
-
-    const addButton = [
-      ...page.querySelectorAll<HTMLButtonElement>(".settings-section__actions .btn"),
-    ].find((button) => button.textContent?.includes("Add server"));
-    addButton?.click();
-    await page.updateComplete;
-
-    const form = page.querySelector<HTMLFormElement>(".mcp-server-form")!;
-    form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "context7";
-    form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value =
-      "https://mcp.context7.com/mcp";
-    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-
-    await waitForFast(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
-    const patchArgs = expectDefined(
-      expectDefined(configHarness.runtimeConfig.patch.mock.calls[0], "MCP add patch call")[0],
-      "MCP add patch payload",
-    ) as {
-      raw: Record<string, unknown>;
-      note: string;
-    };
-    expect(patchArgs.note).toContain("context7");
-    expect(patchArgs.raw).toEqual({
-      mcp: {
-        servers: {
-          context7: { url: "https://mcp.context7.com/mcp", transport: "streamable-http" },
-        },
-      },
-    });
-    await waitForFast(() =>
-      expect(page.querySelector('[role="status"].plugins-row-message')?.textContent).toContain(
-        "Added MCP server context7",
-      ),
-    );
-  });
-
-  it("removes an MCP server with an explicit merge-patch null", async () => {
-    const { client } = createClient(async () => createResult());
-    const gatewayHarness = createGateway(client);
-    const configHarness = createRuntimeConfigHarness(
-      vi.fn(async () => undefined),
-      {
-        configFormDirty: false,
-        lastError: null,
-        configSnapshot: {
-          sourceConfig: {
-            mcp: {
-              servers: {
-                github: { url: "https://api.githubcopilot.com/mcp/" },
-                local: { command: "npx", args: ["some-mcp", "--token", "tok-test-1234"] },
-              },
-            },
-          },
-          hash: "base",
-        },
-      },
-    );
-    const { page } = await mountPage(
-      createContext(
-        gatewayHarness.gateway,
-        configHarness.runtimeConfig.refresh,
-        configHarness.runtimeConfig.state,
-        configHarness,
-      ),
-      {
-        gateway: gatewayHarness.gateway,
-        gatewaySnapshot: gatewayHarness.gateway.snapshot,
-        location: createPluginsRouteLocation(),
-        result: createResult(),
-        error: null,
-      },
-    );
-
-    expect(page.querySelector('[data-mcp-name="github"]')).not.toBeNull();
-    await clickRowAction(page, '[data-mcp-name="github"]', "Remove");
-
-    await waitForFast(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
-    const patchArgs = expectDefined(
-      expectDefined(configHarness.runtimeConfig.patch.mock.calls[0], "MCP remove patch call")[0],
-      "MCP remove patch payload",
-    ) as {
-      raw: Record<string, unknown>;
-    };
-    // RFC 7396 merge semantics: deletion must be an explicit null, not omission.
-    expect(patchArgs.raw).toEqual({ mcp: { servers: { github: null } } });
-  });
-
-  it("retires pending MCP feedback before a retained page enters a new context", async () => {
-    const pending = deferred<boolean>();
-    const { client } = createClient(async () => createResult());
-    const gatewayHarness = createGateway(client);
-    const refresh = vi.fn(async () => undefined);
-    const configHarness = createRuntimeConfigHarness(refresh, {
-      configFormDirty: false,
-      lastError: null,
-      configSnapshot: {
-        sourceConfig: { mcp: { servers: { docs: { command: "node" } } } },
-        hash: "initial",
-      },
-    });
-    configHarness.runtimeConfig.patch.mockReturnValueOnce(pending.promise);
-    const { page, provider } = await mountPage(
-      createContext(
-        gatewayHarness.gateway,
-        configHarness.runtimeConfig.refresh,
-        configHarness.runtimeConfig.state,
-        configHarness,
-      ),
-      createPluginsRouteData(gatewayHarness.gateway),
-    );
-
-    await clickRowAction(page, '[data-mcp-name="docs"]', "Disable");
-    await waitForFast(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
-
-    const replacement = createRuntimeConfigHarness(
-      vi.fn(async () => undefined),
-      {
-        configFormDirty: false,
-        lastError: null,
-        configSnapshot: {
-          sourceConfig: { mcp: { servers: { local: { command: "node" } } } },
-          hash: "replacement",
-        },
-      },
-    );
-    page.remove();
-    provider.setContext(
-      createContext(
-        gatewayHarness.gateway,
-        replacement.runtimeConfig.refresh,
-        replacement.runtimeConfig.state,
-        replacement,
-      ),
-    );
-    provider.append(page);
-    await waitForFast(() => expect(page.querySelector('[data-mcp-name="local"]')).not.toBeNull());
-    const currentToggle = expectDefined(
-      [...page.querySelectorAll<HTMLButtonElement>('[data-mcp-name="local"] button')].find(
-        (button) => button.textContent?.includes("Disable"),
-      ),
-      "replacement MCP toggle",
-    );
-    expect(currentToggle.disabled).toBe(false);
-
-    pending.resolve(true);
-    await waitForFast(() => expect(refresh).toHaveBeenCalledOnce());
-    await page.updateComplete;
-
-    expect(page.querySelector(".plugins-group-message")).toBeNull();
-    expect(currentToggle.disabled).toBe(false);
-  });
-
-  it("rejects invalid MCP server names before touching config", async () => {
-    const { client } = createClient(async () => createResult());
-    const gatewayHarness = createGateway(client);
-    const configHarness = createRuntimeConfigHarness(
-      vi.fn(async () => undefined),
-      { configFormDirty: false, lastError: null, configSnapshot: { sourceConfig: {}, hash: "h" } },
-    );
-    const { page } = await mountPage(
-      createContext(
-        gatewayHarness.gateway,
-        configHarness.runtimeConfig.refresh,
-        configHarness.runtimeConfig.state,
-        configHarness,
-      ),
-      {
-        gateway: gatewayHarness.gateway,
-        gatewaySnapshot: gatewayHarness.gateway.snapshot,
-        location: createPluginsRouteLocation(),
-        result: createResult(),
-        error: null,
-      },
-    );
-
-    const addButton = [
-      ...page.querySelectorAll<HTMLButtonElement>(".settings-section__actions .btn"),
-    ].find((button) => button.textContent?.includes("Add server"));
-    addButton?.click();
-    await page.updateComplete;
-    const form = page.querySelector<HTMLFormElement>(".mcp-server-form")!;
-    form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "bad name!";
-    form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value = "https://x.example/mcp";
-    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-
-    await waitForFast(() =>
-      expect(page.querySelector('[role="alert"].plugins-row-message')?.textContent).toContain(
-        "Server names use",
-      ),
-    );
-    expect(configHarness.runtimeConfig.patch).not.toHaveBeenCalled();
   });
 });
