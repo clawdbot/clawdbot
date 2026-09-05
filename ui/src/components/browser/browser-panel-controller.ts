@@ -557,11 +557,11 @@ export class BrowserPanelController implements ReactiveController {
         // Listing can observe stopped or blocked tabs; focus needs a running,
         // accessible tab. A historical target cannot survive a browser restart.
         await this.refreshTabsOnly(actionClient, () => this.operations.isLive(epoch, actionClient));
-        if (!this.operations.isLive(epoch, actionClient) || this.running === false) {
+        if (!this.operations.isLive(epoch, actionClient)) {
           return;
         }
         const selected = this.tabs.find((tab) => tab.id === targetId || tab.targetId === targetId);
-        this.setState("activeTargetId", selected?.id ?? targetId);
+        this.setState("activeTargetId", this.running === false ? null : (selected?.id ?? targetId));
         if (this.clearUnavailableView()) {
           return;
         }

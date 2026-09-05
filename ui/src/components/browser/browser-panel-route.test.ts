@@ -252,6 +252,10 @@ describe("browser panel route handoff", () => {
     expect(controllerFor(panel).errorText).toBeNull();
     const start = panel.shadowRoot?.querySelector<HTMLButtonElement>(".bp-btn");
     expect(start?.textContent?.trim()).toBe("Start browser");
+    const reload = panel.shadowRoot?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Reload"]',
+    );
+    expect(reload?.disabled).toBe(true);
 
     start?.click();
     await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
