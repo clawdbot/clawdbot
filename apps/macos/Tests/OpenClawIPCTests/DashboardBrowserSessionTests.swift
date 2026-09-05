@@ -220,36 +220,39 @@ struct DashboardBrowserSessionTests {
     }
 
     @Test func `browser-only setup reopens its Gateway without configuring machine integrations`() async throws {
-        let server = try await DashboardHTTPFixture.start()
-        defer { server.stop() }
-        let state = AppStateStore.shared
-        let previousMode = state.connectionMode
-        state.connectionMode = .unconfigured
-        defer { state.connectionMode = previousMode }
-        for _ in 0..<2 {
-            let manager = DashboardManager._testMake(
-                primaryEndpointProvider: { _ in throw URLError(.cannotConnectToHost) },
-                profileEndpointProvider: { _ in .init(
-                    config: (url: server.websocketURL(), token: "personal-route", password: nil), routeAuthority: nil)
-                },
-                gatewayEntriesProvider: { [.init(
-                    id: "profile:only",
-                    name: "Saved",
-                    kind: "remote",
-                    isPrimary: false,
-                    canPromote: false,
-                    health: .unknown)] })
-            defer { manager.close() }
-            try await manager.show()
-            let first = try #require(manager._testController())
-            #expect(manager._testMainTarget() == .profile("only"))
-            #expect(first.auth.token == "personal-route")
-            first.closeDashboard()
-            try await manager.show()
-            #expect(manager._testController()?.isWindowOpen == true)
-            #expect(manager._testMainTarget() == .profile("only"))
-            #expect(state.connectionMode == .unconfigured)
-            manager.close()
+        try await TestIsolation.withIsolatedState(defaults: [connectionModeKey: "unconfigured"]) {
+            let server = try await DashboardHTTPFixture.start()
+            defer { server.stop() }
+            let state = AppStateStore.shared
+            let previousMode = state.connectionMode
+            state.connectionMode = .unconfigured
+            defer { state.connectionMode = previousMode }
+            for _ in 0..<2 {
+                let manager = DashboardManager._testMake(
+                    primaryEndpointProvider: { _ in throw URLError(.cannotConnectToHost) },
+                    profileEndpointProvider: { _ in .init(
+                        config: (url: server.websocketURL(), token: "personal-route", password: nil),
+                        routeAuthority: nil)
+                    },
+                    gatewayEntriesProvider: { [.init(
+                        id: "profile:only",
+                        name: "Saved",
+                        kind: "remote",
+                        isPrimary: false,
+                        canPromote: false,
+                        health: .unknown)] })
+                defer { manager.close() }
+                try await manager.show()
+                let first = try #require(manager._testController())
+                #expect(manager._testMainTarget() == .profile("only"))
+                #expect(first.auth.token == "personal-route")
+                first.closeDashboard()
+                try await manager.show()
+                #expect(manager._testController()?.isWindowOpen == true)
+                #expect(manager._testMainTarget() == .profile("only"))
+                #expect(state.connectionMode == .unconfigured)
+                manager.close()
+            }
         }
     }
 
@@ -287,22 +290,32 @@ struct DashboardBrowserSessionTests {
     @Test func `removal clears a persisted browser session before any window opens in this process`() async throws {
         let profileID = "forgotten-\(UUID().uuidString)"
         let identifier = DashboardBrowserSessionStore.identifier(profileID: profileID)
+
+        do {
+            try await self.verifyPersistedSessionRemoval(profileID: profileID, identifier: identifier)
+        } catch {
+            do {
+                try await WKWebsiteDataStore.remove(forIdentifier: identifier)
+            } catch {
+                Issue.record(error, "Could not remove the test's persistent WebKit store")
+            }
+            throw error
+        }
+        try await WKWebsiteDataStore.remove(forIdentifier: identifier)
+    }
+
+    private func verifyPersistedSessionRemoval(profileID: String, identifier: UUID) async throws {
+        // Release both owners before removing the store directory: WebKit rejects
+        // removal while a live data store still owns its network session.
         let store = WKWebsiteDataStore(forIdentifier: identifier)
         let session = try self.session("previous-process")
         try await store.httpCookieStore.setCookie(session.cookie())
         let manager = DashboardManager._testMake(websiteDataStore: .default())
-        do {
-            try await manager.closeGatewayWindows(profileID: profileID)
-            #expect(await store.httpCookieStore.allCookies().isEmpty)
-            #expect(manager._testController() == nil)
-            #expect(manager._testAuxiliaryWindows().isEmpty)
-        } catch {
-            manager.close()
-            try? await WKWebsiteDataStore.remove(forIdentifier: identifier)
-            throw error
-        }
-        manager.close()
-        try await WKWebsiteDataStore.remove(forIdentifier: identifier)
+        defer { manager.close() }
+        try await manager.closeGatewayWindows(profileID: profileID)
+        #expect(await store.httpCookieStore.allCookies().isEmpty)
+        #expect(manager._testController() == nil)
+        #expect(manager._testAuxiliaryWindows().isEmpty)
     }
 
     @Test func `expired browser sign-in is terminal and explains how to reconnect`() async throws {
