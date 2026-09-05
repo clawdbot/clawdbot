@@ -1012,6 +1012,9 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     "missing",
     "empty",
     "symlink-root",
+    "ancestor",
+    "outside-symlink",
+    "hoisted",
     "deferred",
     "healthy",
     "optional",
@@ -1030,7 +1033,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     "attributes %s dependency health to the active npm install only",
     async (scenario) => {
       const parent = tempDirs.make("openclaw-doctor-dependency-health-");
-      const rootDir = path.join(parent, "node_modules", "dependency-plugin");
+      const projectRoot = path.join(parent, "project");
+      const rootDir = path.join(projectRoot, "node_modules", "dependency-plugin");
       const dependencyDir = path.join(rootDir, "node_modules", "required-runtime");
       const packageName = "dependency-plugin";
       const pluginId = "dependency-plugin";
@@ -1069,6 +1073,19 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             path.join(dependencyDir, "package.json"),
             JSON.stringify({ name: "required-runtime", version: "1.0.0" }),
           );
+        }
+      }
+      if (scenario === "ancestor" || scenario === "outside-symlink" || scenario === "hoisted") {
+        const dependencyRoot = scenario === "hoisted" ? projectRoot : parent;
+        const availableDir = path.join(dependencyRoot, "node_modules", "required-runtime");
+        fs.mkdirSync(availableDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(availableDir, "package.json"),
+          JSON.stringify({ name: "required-runtime", version: "1.0.0" }),
+        );
+        if (scenario === "outside-symlink") {
+          fs.mkdirSync(path.dirname(dependencyDir), { recursive: true });
+          fs.symlinkSync(availableDir, dependencyDir, "junction");
         }
       }
       if (scenario === "disabled") {
@@ -1116,7 +1133,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           : testEnv;
       const issues = await detectConfiguredPluginInstallHealthIssues({ cfg, env });
 
-      if (scenario === "missing" || scenario === "empty" || scenario === "symlink-root") {
+      if (
+        scenario === "missing" ||
+        scenario === "empty" ||
+        scenario === "symlink-root" ||
+        scenario === "ancestor" ||
+        scenario === "outside-symlink"
+      ) {
         expect(issues).toEqual([
           {
             kind: "missing-required-dependencies",
