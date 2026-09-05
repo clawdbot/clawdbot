@@ -35,6 +35,38 @@ audio, and PDF input for these models. OpenClaw's model catalog directly represe
 text and image input only; the other upstream modalities are not model-manifest input
 values. Meta does not publish an exact maximum-output figure for these catalog rows.
 
+## Image generation (muse-image)
+
+The plugin also registers a Meta **image-generation** provider backed by the
+OpenAI-compatible `POST /v1/images/generations` endpoint (base64 WebP output).
+
+- **Provider id:** `meta`
+- **Model:** `muse-image-1.0` (text-to-image + single-reference image editing)
+- **Auth:** the same `MODEL_API_KEY` used by the text provider
+
+Select it as the image-generation model:
+
+```json5
+// ~/.openclaw/openclaw.json
+{
+  agents: {
+    defaults: {
+      imageGenerationModel: { primary: "meta/muse-image-1.0" },
+    },
+  },
+}
+```
+
+Editing works by passing a reference image to the `image_generate` tool, which
+routes to the OpenAI-compatible `POST /v1/images/edits` endpoint.
+
+> [!NOTE]
+> Meta also supports conversational multi-turn image editing through the
+> Responses API (`previous_response_id`). That is a stateful session concept
+> that does not map onto OpenClaw's stateless `image_generate` tool, so the
+> plugin exposes editing through single-reference `POST /v1/images/edits`
+> instead — which achieves the same "alter the previous image" outcome.
+
 ## Usage
 
 Install the plugin and restart Gateway:
