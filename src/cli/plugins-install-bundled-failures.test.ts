@@ -12,8 +12,8 @@ const { installManagedPluginSourceMock } = vi.hoisted(() => ({
   installManagedPluginSourceMock: vi.fn(),
 }));
 
-vi.mock("../plugins/management-service.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/management-service.js")>()),
+vi.mock("../plugins/management-install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/management-install.js")>()),
   installManagedPluginSource: installManagedPluginSourceMock,
 }));
 

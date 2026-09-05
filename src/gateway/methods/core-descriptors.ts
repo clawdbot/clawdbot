@@ -416,9 +416,9 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["tts.speak", "tts", "operator.write", "2026.7"],
   ["plugins.list", "plugins", "operator.read", "<=2026.7"],
   ["plugins.search", "plugins", "operator.read", "<=2026.7"],
-  ["plugins.install", "plugins", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
-  ["plugins.setEnabled", "plugins", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
-  ["plugins.uninstall", "plugins", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  ["plugins.install", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  ["plugins.setEnabled", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
+  ["plugins.uninstall", "plugins-mutations", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["plugins.refresh", "plugins", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   // Session PR chips read the session's own checkout metadata, matching the
   // sessions.files.* trusted-operator read domain.
