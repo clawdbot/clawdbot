@@ -804,7 +804,7 @@ jobs:
                   exit_code = error.code
               except Exception as error:
                   exit_code, terminal_error = 125, error
-              # Leave the handler before diagnostics or exit can raise: older Python's
+              # Leave the handler before diagnostics or exit can raise: older Python'\''s
               # implicit exception chaining can loop on an already-cyclic context.
               if terminal_error is not None:
                   name, diagnostic = "unknown", "unavailable"
