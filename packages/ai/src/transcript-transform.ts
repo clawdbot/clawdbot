@@ -102,9 +102,20 @@ function transformAssistant<TApi extends Api>(
     if (block.type === "text") {
       return sameModel ? block : { type: "text" as const, text: block.text };
     }
+    if (block.type !== "toolCall") {
+      // Persisted transcripts can carry malformed assistant blocks that are
+      // neither text, thinking, nor a tool call (for example attachment-like
+      // entries written by an older or buggy writer). Providers lower every
+      // non-text/non-thinking assistant block into a tool call, so forwarding
+      // such a block would present a bogus tool call at the provider boundary;
+      // drop it instead (#137729).
+      return [];
+    }
     const { thoughtSignature: _, async: _async, ...unsigned } = block;
     // Pairing uses these IDs as shared keys, before model-specific normalization runs.
-    const trimmedId = block.id.trim();
+    // Persisted transcripts may carry tool-call blocks without an id; normalize those to
+    // the empty string instead of crashing replay.
+    const trimmedId = typeof block.id === "string" ? block.id.trim() : "";
     if (sameModel) {
       return trimmedId === block.id ? block : Object.assign({}, block, { id: trimmedId });
     }
@@ -172,8 +183,10 @@ export function transformMessages<TApi extends Api>(
     if (message.role !== "toolResult") {
       return message;
     }
-    const trimmedId = message.toolCallId.trim();
-    const toolCallId = toolCallIdMap.get(trimmedId) ?? trimmedId;
+    // Persisted tool-result messages may be missing toolCallId; normalize to the
+    // empty string instead of crashing replay.
+    const rawToolCallId = typeof message.toolCallId === "string" ? message.toolCallId.trim() : "";
+    const toolCallId = toolCallIdMap.get(rawToolCallId) ?? rawToolCallId;
     return toolCallId === message.toolCallId ? message : Object.assign({}, message, { toolCallId });
   });
 

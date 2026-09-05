@@ -84,4 +84,10 @@ describe("live model error helpers", () => {
     );
     expect(isModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(false);
   });
+
+  it("treats non-string error payloads as not-model-not-found", () => {
+    // Provider wrappers may forward raw payloads whose message field is undefined.
+    expect(isModelNotFoundErrorMessage(undefined as unknown as string)).toBe(false);
+    expect(isModelNotFoundErrorMessage(null as unknown as string)).toBe(false);
+  });
 });

@@ -6,7 +6,8 @@
  */
 /** Returns whether a provider error message indicates a missing or retired model id. */
 export function isModelNotFoundErrorMessage(raw: string): boolean {
-  const msg = raw.trim();
+  // Callers may forward raw provider payloads where the message field is undefined.
+  const msg = typeof raw === "string" ? raw.trim() : "";
   if (!msg) {
     return false;
   }
