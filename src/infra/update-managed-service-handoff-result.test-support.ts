@@ -199,7 +199,7 @@ export function registerManagedRecoveryOutcomeTests(
         triageObservedRestored: true,
       });
       expect(state.triageRecoveryAllowance).toBeUndefined();
-      expect(run).toMatchObject({
+      expect(run, log).toMatchObject({
         status: gatewayHealth === "ready" ? "rolled-back" : "failed",
         reason:
           gatewayHealth === "ready"
