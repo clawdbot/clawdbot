@@ -417,13 +417,17 @@ private class OpenedAndroidClientDatabases private constructor(
   ) {
     val gateway = scopedGatewayId(gatewayId) ?: return
     withContext(NonCancellable) {
-      // State deletion and its phase advance are atomic. A rollback leaves no irreversible marker;
-      // after commit, startup may clear only disposable cache and must preserve any newer outbox rows.
-      clientState.withWriteTransaction {
-        clientState.controlDao().upsertGatewayRemoval(GatewayRemovalEntity(gateway, GATEWAY_REMOVAL_COMMITTING))
-        commandOutbox.clearGateway(gateway)
-        readerPositionStore.clearGateway(gateway)
-        clientState.controlDao().upsertGatewayRemoval(GatewayRemovalEntity(gateway, GATEWAY_REMOVAL_CACHE_PENDING))
+      // Fence reader writes before acquiring Room's writer. Every save uses the same
+      // fence-before-database order, so an active viewport save cannot deadlock removal.
+      readerPositionStore.clearGateway(gateway) { state ->
+        // State deletion and its phase advance are atomic. A rollback leaves no irreversible marker;
+        // after commit, startup may clear only disposable cache and must preserve any newer outbox rows.
+        state.withWriteTransaction {
+          state.controlDao().upsertGatewayRemoval(GatewayRemovalEntity(gateway, GATEWAY_REMOVAL_COMMITTING))
+          commandOutbox.clearGateway(gateway)
+          state.readerPositionDao().clearGateway(gateway)
+          state.controlDao().upsertGatewayRemoval(GatewayRemovalEntity(gateway, GATEWAY_REMOVAL_CACHE_PENDING))
+        }
       }
       completeCacheRemoval(gateway, propagateFailure = requireCacheRemoval)
     }

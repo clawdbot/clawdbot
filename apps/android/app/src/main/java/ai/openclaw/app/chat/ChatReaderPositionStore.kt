@@ -92,13 +92,14 @@ internal class ChatReaderPositionFence {
     delete()
   }
 
-  suspend fun clearGateway(
+  suspend fun <T> clearGateway(
     gatewayId: String,
-    clear: suspend () -> Unit,
-  ) = mutex.withLock {
-    generations.keys.removeAll { it.gatewayId == gatewayId }
-    clear()
-  }
+    clear: suspend () -> T,
+  ): T =
+    mutex.withLock {
+      generations.keys.removeAll { it.gatewayId == gatewayId }
+      clear()
+    }
 }
 
 internal class ChatReaderPositionStore(
@@ -141,5 +142,8 @@ internal class ChatReaderPositionStore(
     sessionKey: String,
   ) = fence.deleteSession(gatewayId, sessionKey) { database().readerPositionDao().deleteSession(gatewayId, sessionKey) }
 
-  suspend fun clearGateway(gatewayId: String) = fence.clearGateway(gatewayId) { database().readerPositionDao().clearGateway(gatewayId) }
+  suspend fun <T> clearGateway(
+    gatewayId: String,
+    clear: suspend (ClientStateDatabase) -> T,
+  ): T = fence.clearGateway(gatewayId) { clear(database()) }
 }
