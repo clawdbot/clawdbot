@@ -13,8 +13,23 @@ function sha256(content) {
 async function main() {
   const lock = JSON.parse(await readFile(lockPath, "utf8"));
   const failures = [];
+  const digestPattern = /^[0-9a-f]{64}$/;
 
   for (const file of lock.files) {
+    if (!digestPattern.test(file.sourceSha256) || !digestPattern.test(file.vendoredSha256)) {
+      failures.push(
+        `${file.destination}: source and vendored SHA-256 digests must be lowercase hex`,
+      );
+      continue;
+    }
+
+    const adapted = file.sourceSha256 !== file.vendoredSha256;
+    if (adapted && (typeof file.adaptation !== "string" || file.adaptation.trim() === "")) {
+      failures.push(`${file.destination}: adapted vendor files must explain their local changes`);
+    } else if (!adapted && file.adaptation !== undefined) {
+      failures.push(`${file.destination}: unmodified vendor files must not declare an adaptation`);
+    }
+
     const path = join(pluginRoot, file.destination);
     try {
       const actual = sha256(await readFile(path));

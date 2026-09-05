@@ -20,7 +20,10 @@ A notification with context and Approve/Reject buttons.
     },
     {
       "type": "section",
-      "text": { "type": "mrkdwn", "text": "*Requester:* <@U0123456789>\n*Type:* Access request\n*Details:* Production database read access" }
+      "text": {
+        "type": "mrkdwn",
+        "text": "*Requester:* <@U0123456789>\n*Type:* Access request\n*Details:* Production database read access"
+      }
     },
     { "type": "divider" },
     {
@@ -128,12 +131,18 @@ An alert banner with description and timestamp context.
     },
     {
       "type": "section",
-      "text": { "type": "mrkdwn", "text": "The deployment to *production* failed during the health check phase.\n\n*Error:* `Connection timeout after 30s`\n*Commit:* `a1b2c3d`" }
+      "text": {
+        "type": "mrkdwn",
+        "text": "The deployment to *production* failed during the health check phase.\n\n*Error:* `Connection timeout after 30s`\n*Commit:* `a1b2c3d`"
+      }
     },
     {
       "type": "context",
       "elements": [
-        { "type": "mrkdwn", "text": "Triggered by <@U0123456789> | <!date^1700000000^{date_short} at {time}|Nov 14, 2023>" }
+        {
+          "type": "mrkdwn",
+          "text": "Triggered by <@U0123456789> | <!date^1700000000^{date_short} at {time}|Nov 14, 2023>"
+        }
       ]
     },
     {
@@ -240,7 +249,10 @@ An action button with a confirmation dialog attached (prevents accidental clicks
           "value": "prod-server-01",
           "confirm": {
             "title": { "type": "plain_text", "text": "Confirm Shutdown" },
-            "text": { "type": "plain_text", "text": "This will immediately terminate the server. Active connections will be dropped." },
+            "text": {
+              "type": "plain_text",
+              "text": "This will immediately terminate the server. Active connections will be dropped."
+            },
             "confirm": { "type": "plain_text", "text": "Shut Down" },
             "deny": { "type": "plain_text", "text": "Cancel" },
             "style": "danger"
@@ -271,11 +283,7 @@ A structured table for displaying tabular data. Only one table block per message
     },
     {
       "type": "table",
-      "column_settings": [
-        { "is_wrapped": true },
-        { "align": "center" },
-        { "align": "right" }
-      ],
+      "column_settings": [{ "is_wrapped": true }, { "align": "center" }, { "align": "right" }],
       "rows": [
         [
           { "type": "raw_text", "text": "Name" },

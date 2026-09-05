@@ -17,14 +17,15 @@
       "source": "skills/block-kit/SKILL.md",
       "destination": "skills/block-kit/references/official-block-kit.md",
       "sourceSha256": "255f2ef5be5a6b5363b57931d5549227f375fe02fc2be7ce98226b33ed18f097",
-      "vendoredSha256": "255f2ef5be5a6b5363b57931d5549227f375fe02fc2be7ce98226b33ed18f097"
+      "vendoredSha256": "aa5e40e4878774c8a61c1ac2ffc4b91cfc473dbef430fd5c177552071c1ffe4d",
+      "adaptation": "Replaces unavailable Slack CLI, Slack API skill, and named tool handoffs with capability-gated OpenClaw guidance; corrects the relocated common-pattern reference."
     },
     {
       "source": "skills/block-kit/references/common-patterns.md",
       "destination": "skills/block-kit/references/official-common-patterns.md",
       "sourceSha256": "b372af9aa4367fbfc6561f6629db720595e0552711d83c7208fdba512443c05e",
-      "vendoredSha256": "b372af9aa4367fbfc6561f6629db720595e0552711d83c7208fdba512443c05e"
+      "vendoredSha256": "b106cdeaf9a76dee386f489e37f709a3e56610c26e18246066a7ec540c90ca55",
+      "adaptation": "Formatted with the repository's Markdown formatter; content and examples are unchanged."
     }
   ]
 }
-

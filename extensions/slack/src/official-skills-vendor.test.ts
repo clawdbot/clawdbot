@@ -22,7 +22,7 @@ function listPublishedSkills() {
 }
 
 describe("official Slack skill vendor", () => {
-  it("matches the pinned upstream inventory", async () => {
+  it("preserves pinned vendor bytes and declared adaptations", async () => {
     const { stdout } = await execFileAsync(process.execPath, [
       path.join(pluginRoot, "scripts", "verify-official-skills.mjs"),
     ]);
@@ -39,14 +39,6 @@ describe("official Slack skill vendor", () => {
 
     expect(manifest.skills).toEqual(["./skills"]);
     expect(published).toEqual(["block-kit", "slack"]);
-    expect(
-      fs.existsSync(path.join(skillsRoot, "block-kit", "references", "official-block-kit.md")),
-    ).toBe(true);
-    expect(
-      fs.existsSync(
-        path.join(skillsRoot, "block-kit", "references", "official-common-patterns.md"),
-      ),
-    ).toBe(true);
   });
 
   it("keeps published skill metadata and local references valid", () => {
@@ -73,5 +65,18 @@ describe("official Slack skill vendor", () => {
         expect(fs.existsSync(path.resolve(path.dirname(skillPath), target)), target).toBe(true);
       }
     }
+  });
+
+  it("keeps the official guide adapted to OpenClaw's available capabilities", () => {
+    const guide = fs.readFileSync(
+      path.join(skillsRoot, "block-kit", "references", "official-block-kit.md"),
+      "utf8",
+    );
+
+    expect(guide).toContain("official-common-patterns.md");
+    expect(guide).toContain("blocks.validate");
+    expect(guide).not.toMatch(
+      /slack:slack-(?:api|cli)|AskUserQuestion|WebFetch|Bash tool|`references\/common-patterns\.md`/,
+    );
   });
 });

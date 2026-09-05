@@ -1,6 +1,6 @@
 ---
 name: block-kit
-description: "Use proactively for Slack replies that benefit from structure or interaction: decisions, choices, status summaries, comparisons, reports, plans, charts, tables, or next actions. Also use when asked to author or validate native Slack Block Kit JSON."
+description: "Use proactively for structured or interactive Slack replies, and when asked to author or validate native Slack Block Kit JSON."
 metadata: { "openclaw": { "emoji": "🧱", "requires": { "config": ["channels.slack"] } } }
 allowed-tools: ["message"]
 ---
@@ -32,6 +32,6 @@ A control is complete only when its value is self-contained enough for the next 
 
 ## Native Block Kit authoring
 
-When the user is building a Slack app or explicitly requests raw Block Kit JSON, read [Slack's official Block Kit skill](references/official-block-kit.md) in full. For common message, modal, and App Home layouts, also read [the official patterns](references/official-common-patterns.md).
+When the user is building a Slack app or explicitly requests raw Block Kit JSON, read [the adapted official Block Kit guide](references/official-block-kit.md) in full. For common message, modal, and App Home layouts, also read [the official patterns](references/official-common-patterns.md).
 
-Follow the official skill's live-documentation and `blocks.validate` workflow for native JSON. Do not pass native Slack blocks to OpenClaw's `presentation` field; the plugin owns that conversion.
+Follow the adapted guide's live-documentation and `blocks.validate` workflow for native JSON. Do not pass native Slack blocks to OpenClaw's `presentation` field; the plugin owns that conversion.

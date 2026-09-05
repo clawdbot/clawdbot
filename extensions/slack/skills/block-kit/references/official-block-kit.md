@@ -10,6 +10,8 @@ Help the developer build a rich Block Kit layout. If `$0` is provided, it specif
 
 This skill walks through surface selection, layout planning, JSON generation, and validation. Block types, elements, and fields come from the live docs (see **Source of Truth** below) — discover them and read each component's schema there, never from memory.
 
+> **OpenClaw adaptation:** This copy keeps Slack's authoring guidance while using capabilities available in the current agent session. Native Block Kit JSON is developer output; ordinary Slack replies use OpenClaw's portable `presentation` field.
+
 > **Common Block Kit mistakes (and why):** A few errors recur often enough to flag up front. Most others are caught by `blocks.validate` in Step 5, so lean on validation rather than memorizing rules.
 >
 > - **`"type": "text"` is not a thing.** Text is a composition object: `{ "type": "plain_text", "text": "..." }` or `{ "type": "mrkdwn", "text": "..." }`.
@@ -20,9 +22,9 @@ This skill walks through surface selection, layout planning, JSON generation, an
 
 ## Source of Truth: the Live Docs
 
-Every block, element, and composition object is documented on `docs.slack.dev`. Append `.md` to any reference URL to fetch it as markdown with WebFetch (no auth required).
+Every block, element, and composition object is documented on `docs.slack.dev`. Append `.md` to any reference URL to fetch it as markdown with an available web-documentation capability (no auth required).
 
-- **Master index**: the authoritative list of every block, block element, and composition object, each linking to its own page: `https://docs.slack.dev/reference/block-kit.md`. WebFetch it to confirm a type exists and to get the link to its page.
+- **Master index**: the authoritative list of every block, block element, and composition object, each linking to its own page: `https://docs.slack.dev/reference/block-kit.md`. Fetch it with an available web-documentation capability to confirm a type exists and to get the link to its page.
 - **Per-component pages** carry the full field schema (a fields table with required/optional flags and constraints, plus JSON examples):
   - Blocks: `https://docs.slack.dev/reference/block-kit/blocks/<slug>-block.md`
   - Block elements: `https://docs.slack.dev/reference/block-kit/block-elements/<slug>-element.md`
@@ -88,7 +90,7 @@ If the developer provides existing Block Kit JSON (pasted inline, in a file, or 
 
 If `$0` is provided and matches one of `message`, `modal`, or `home-tab`, use it directly.
 
-Otherwise, ask the developer using AskUserQuestion:
+Otherwise, ask the developer:
 
 - **Message**: Conversational content posted to a channel or DM. Max 50 blocks.
 - **Modal**: A dialog or form opened by a user action. Max 100 blocks.
@@ -106,7 +108,7 @@ Once the surface is determined, use the correct payload structure for it:
 
 Ask the developer to describe what they want their layout to look like or accomplish.
 
-If they need inspiration, suggest examples — several map directly onto a ready-made template in `references/common-patterns.md` (named in parentheses), which you can start from in Step 3:
+If they need inspiration, suggest examples — several map directly onto a ready-made template in `official-common-patterns.md` (named in parentheses), which you can start from in Step 3:
 
 - "A feedback form with a text input and a category selector" (Simple Form Modal)
 - "A notification message with an alert banner, description, and Approve/Reject buttons" (Notification Alert / Approval Message)
@@ -123,8 +125,8 @@ Get enough detail to plan the layout before generating any JSON.
 Based on the developer's description:
 
 1. **Fetch only what you need** from the live docs:
-   - WebFetch the master index (`https://docs.slack.dev/reference/block-kit.md`) to confirm the block and element types you plan to use exist and to grab links to their pages.
-   - Check `references/common-patterns.md` (the one local reference file) if the request matches a common pattern; start from the template instead of building from scratch.
+   - Fetch the master index (`https://docs.slack.dev/reference/block-kit.md`) with an available web-documentation capability to confirm the block and element types you plan to use exist and to grab links to their pages.
+   - Check `official-common-patterns.md` (the one local reference file) if the request matches a common pattern; start from the template instead of building from scratch.
    - Defer reading individual component pages until Step 4, when you build each block's fields.
 2. Propose a numbered block outline. For example:
 
@@ -149,7 +151,7 @@ Based on the developer's description:
 
 ## Step 4: Generate the Block Kit JSON
 
-Once the layout is approved, build each block from its live doc page, fetching each page's fields table (required vs optional, constraints) and JSON example with WebFetch. The URL patterns are in **Source of Truth** above; the one slug to remember is that every `*_select` menu (`static_select`, `users_select`, `multi_channels_select`, …) lives on `select-menu-element.md`. Fetch pages as you need them and reuse what you have already fetched — don't re-fetch the same page for every block of the same type. Then build the payload block-by-block and wrap it in the surface structure from Step 1.
+Once the layout is approved, build each block from its live doc page, fetching each page's fields table (required vs optional, constraints) and JSON example with an available web-documentation capability. The URL patterns are in **Source of Truth** above; the one slug to remember is that every `*_select` menu (`static_select`, `users_select`, `multi_channels_select`, …) lives on `select-menu-element.md`. Fetch pages as you need them and reuse what you have already fetched — don't re-fetch the same page for every block of the same type. Then build the payload block-by-block and wrap it in the surface structure from Step 1.
 
 **Guidelines:**
 
@@ -174,21 +176,11 @@ Present the complete payload to the developer in the Step 1 surface structure.
 
 **Always validate.** `blocks.validate` is a public Web API method, so no auth token is required.
 
-The authoritative reference for this method (its parameters, auth requirements, and response/error shape) is the live doc. WebFetch it before relying on any detail here: `https://docs.slack.dev/reference/methods/blocks.validate.md`. It documents the accepted parameters (`blocks` for a message's blocks array, `view` for a modal/home-tab view, `message` for a full message payload; send exactly one) and the response shape.
+The authoritative reference for this method (its parameters, auth requirements, and response/error shape) is the live doc. Fetch it before relying on any detail here: `https://docs.slack.dev/reference/methods/blocks.validate.md`. It documents the accepted parameters (`blocks` for a message's blocks array, `view` for a modal/home-tab view, `message` for a full message payload; send exactly one) and the response shape.
 
 ### 5a. Build the validation request
 
-Prefer the Slack CLI when it's available, since it reuses the slack-cli skill's CLI detection and needs no token wrangling. If the CLI isn't installed, fall back to curl. Both call the same public method and return the same response, so Step 5b applies either way.
-
-**Path A: Slack CLI (preferred).**
-
-Use the `slack:slack-cli` skill, **Step 1: Detect the Slack CLI**, to check whether the public CLI is installed and resolve its command (`SLACK_CMD`).
-
-If the CLI is available, use the `slack:slack-cli` skill, **Step 4: Calling Web API Methods (`slack api`)**, to invoke it. That step covers the `SLACK_CMD api <method> key=value …` syntax. Run `SLACK_CMD api --help` first to confirm the syntax **and the flag that skips authentication**. `blocks.validate` needs no token, so call it without authentication. Don't hard-code that flag from memory; read it from the help output so this stays correct if it's ever renamed. Pass the payload as a positional `key=value` argument: `blocks=<JSON array>` for messages, or `view=<JSON view object>` for modals and home tabs.
-
-**Path B: curl (fallback, when the CLI isn't installed).**
-
-POST to the endpoint with the **Bash tool**. The API uses form-urlencoded encoding, so pass the JSON directly as the parameter value.
+Use an available HTTP capability to POST to `https://slack.com/api/blocks.validate`. The API uses form-urlencoded encoding, so pass the JSON directly as the parameter value. If the current session has no HTTP capability, deliver the payload with a clear note that live validation remains pending.
 
 **For messages**, send the `blocks` array as a form-encoded parameter:
 
@@ -245,23 +237,11 @@ Present the validated payload, then help the developer put it to use.
 
 ### Send it
 
-Building the payload is this skill's job; sending it (`chat.postMessage`, `views.open`, `views.publish`, and the token/scope handling around them) belongs to the Web API layer. To call the right method — via the Slack CLI, raw curl, or a Bolt SDK — use the `slack:slack-api` skill, **Step 4: Call the Method (Manage)**, passing this payload as the method's `blocks` argument (messages) or `view` argument (modals and home tabs). That skill matches the argument names to the SDK or HTTP call so we don't duplicate them here.
+Building the native payload is this skill's job. Return it for the developer's Slack app integration. Do not pass native Slack blocks to OpenClaw's `presentation` field; translate the result into the portable presentation schema when the user instead wants the current OpenClaw agent to post it.
 
 ### Preview it
 
-Help the developer view their layout with the **Block Kit Builder**. Prefer the Slack CLI if it is installed. The CLI automatically loads the blocks, saving the developer from copying and pasting. If the CLI is not available, provide the standard Builder link instead.
-
-**Path A: Slack CLI (preferred).**
-
-Use the `slack:slack-cli` skill, **Step 1: Detect the Slack CLI**, to check whether the public CLI is installed and resolve its command (`SLACK_CMD`).
-
-If the CLI is available, run `SLACK_CMD blocks preview --help` to see how to pass the blocks and open the preview. The command loads the blocks into the Block Kit Builder in the developer's browser.
-
-Because you run the CLI non-interactively, this command also needs a `--team` flag. Resolve the team ID with the `slack:slack-cli` skill, **Step 2: Command Discovery via Help**, whose "Resolving `--app` and `--team` values" guidance covers running `SLACK_CMD auth list`; Any authenticated workspace works for a preview, if several are available, pick one and mention which you used rather than blocking on the choice.
-
-**Path B: Block Kit Builder link (fallback, when the CLI isn't installed).**
-
-Offer the Block Kit Builder link so the developer can paste the JSON in and tweak visually: `https://app.slack.com/block-kit-builder`. Builder needs an object (`{ "blocks": [...] }` or a full view object), not a bare array.
+Help the developer view their layout with the **Block Kit Builder**. Offer `https://app.slack.com/block-kit-builder` so they can paste the JSON in and tweak visually. Builder needs an object (`{ "blocks": [...] }` or a full view object), not a bare array.
 
 ---
 
@@ -273,5 +253,5 @@ Ask whether the developer wants to add, modify, remove, or reorder blocks, or bu
 
 ## Notes
 
-- **Scope:** this skill owns building and validating the Block Kit payload — choosing the surface, composing the JSON from the live docs, and confirming it with `blocks.validate`. Sending it lives in the Web API layer (`slack:slack-api`), and CLI detection/auth in `slack:slack-cli`.
-- **`blocks.validate` needs no auth** — it's a public method, so it works without a token whether you call it via the CLI or curl. Always validate before finalizing (Step 5).
+- **Scope:** this skill owns building and validating native Block Kit payloads for a developer. OpenClaw conversation delivery uses portable `presentation` instead.
+- **`blocks.validate` needs no auth** — it's a public method. Always validate before finalizing when the current session has an HTTP capability (Step 5).
