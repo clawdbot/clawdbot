@@ -401,7 +401,6 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       let pinnedWidgetName: string | undefined;
       let capabilityState: BoardWidgetPutResult["widgets"][number]["grantState"] | undefined;
       if (pinSessionKey) {
-        const sessionKey = pinSessionKey;
         const explicitName = readToolStringParam(params, "name");
         const name = explicitName ?? slugWidgetName(title);
         const tab = readToolStringParam(params, "tab");
@@ -417,7 +416,8 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           );
         }
         const snapshot = await gatewayCall<BoardWidgetPutResult>("board.widget.put", {
-          sessionKey,
+          sessionKey: pinSessionKey,
+          agentId: options.agentId,
           name,
           ...(pinnedTitle ? { title: pinnedTitle } : {}),
           // The Gateway owns the board document shell so agent-authored bytes
