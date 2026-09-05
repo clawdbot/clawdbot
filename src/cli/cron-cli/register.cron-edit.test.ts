@@ -513,19 +513,16 @@ describe("cron edit command", () => {
 
   it.each([
     {
-      kind: "script",
       payload: { kind: "script", script: "return { notify: 'hello' }", timeoutSeconds: 5 },
       args: ["--timeout-seconds", "12"],
       error: "Use --script-timeout-seconds for script jobs",
     },
     {
-      kind: "systemEvent",
       payload: { kind: "systemEvent", text: "hello" },
       args: ["--timeout-seconds", "12"],
       error: "--timeout-seconds is not supported for systemEvent jobs",
     },
     {
-      kind: "heartbeat",
       payload: { kind: "heartbeat" },
       args: ["--timeout-seconds", "12"],
       error: "--timeout-seconds is not supported for heartbeat jobs",
@@ -537,37 +534,34 @@ describe("cron edit command", () => {
       },
       { args: ["--tools", "read"], error: "Tool allowlists are not supported for wake jobs" },
       { args: ["--clear-tools"], error: "Tool allowlists are not supported for wake jobs" },
-    ].map(({ args, error }) => ({ kind: "wake", payload: { kind: "wake" }, args, error })),
-  ])(
-    "rejects unsupported $args edits for stored $kind payloads before cron.update",
-    async ({ payload, error, args }) => {
-      callGatewayFromCli.mockImplementation(async (method: string) => {
-        if (method === "cron.get") {
-          return { id: "job-1", payload };
-        }
-        return { ok: true };
-      });
-      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-
-      try {
-        await expect(
-          createCronProgram().parseAsync(["edit", "job-1", ...args], {
-            from: "user",
-          }),
-        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-
-        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(error));
-        expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
-          id: "job-1",
-        });
-        expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.update")).toBe(
-          false,
-        );
-      } finally {
-        errorSpy.mockRestore();
+    ].map(({ args, error }) => ({ payload: { kind: "wake" }, args, error })),
+  ])("rejects unsupported edits before cron.update (%j)", async ({ payload, error, args }) => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return { id: "job-1", payload };
       }
-    },
-  );
+      return { ok: true };
+    });
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+
+    try {
+      await expect(
+        createCronProgram().parseAsync(["edit", "job-1", ...args], {
+          from: "user",
+        }),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(error));
+      expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+        id: "job-1",
+      });
+      expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.update")).toBe(
+        false,
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
 
   it("rejects generic timeout combined with an explicit systemEvent before cron.update", async () => {
     const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
