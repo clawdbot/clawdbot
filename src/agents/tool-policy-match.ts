@@ -264,9 +264,10 @@ function globLayersAdmitSomeName(params: {
   if (initial.layers.some(globRunIsDead) || globRunAcceptsForever(initial.deny)) {
     return false;
   }
-  // Positions decide the future; the suffix matters only through "started yet",
-  // since a shorter suffix reaching the same positions can do anything a longer
-  // one can within the same name budget.
+  // Positions decide the future; the suffix matters only through "started yet"
+  // and the name budget it leaves. A shorter suffix reaching the same positions
+  // can do anything a longer one can, and depth-first may arrive through the
+  // longer name first, so a state is revisited when a shorter name reaches it.
   const keyOf = (state: SearchState) =>
     [state.suffix.length === 0 ? "" : "+", ...state.layers, state.deny]
       .map((run) =>
@@ -274,7 +275,7 @@ function globLayersAdmitSomeName(params: {
       )
       .join("|");
 
-  const visited = new Set<string>([keyOf(initial)]);
+  const shortestVisit = new Map<string, number>([[keyOf(initial), 0]]);
   const stack: SearchState[] = [initial];
   let extensions = 0;
   for (let state = stack.pop(); state; state = stack.pop()) {
@@ -318,10 +319,11 @@ function globLayersAdmitSomeName(params: {
         continue;
       }
       const key = keyOf(next);
-      if (visited.has(key)) {
+      const seenAt = shortestVisit.get(key);
+      if (seenAt !== undefined && seenAt <= next.suffix.length) {
         continue;
       }
-      visited.add(key);
+      shortestVisit.set(key, next.suffix.length);
       stack.push(next);
     }
   }

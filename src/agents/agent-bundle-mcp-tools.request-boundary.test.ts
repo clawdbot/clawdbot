@@ -593,6 +593,15 @@ describe("failed MCP server outages follow the same policy as that server's tool
       visible: true,
     },
     {
+      // Depth-first walks `b` first and reaches the post-`ab` positions through
+      // `bab`; only the shorter `ab` leaves room for the 56 trailing `b`s.
+      label: "a config allow literal the walk first reaches through a longer name",
+      tools: { allow: [`memos__*${"b".repeat(56)}`], deny: ["memos__*b*z"] },
+      toolsAllow: ["memos__*ab*"],
+      toolNames: [`a${"b".repeat(56)}`],
+      visible: true,
+    },
+    {
       label: "an allow needing a digit every letter denies before it",
       tools: {
         allow: ["memos__*0"],
