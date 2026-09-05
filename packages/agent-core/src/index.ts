@@ -36,6 +36,7 @@ export {
   findTurnStartIndex,
   generateSummary,
   getLastAssistantUsage,
+  IMAGE_BLOCK_TOKENS,
   prepareCompaction,
   serializeConversation,
   shouldCompact,

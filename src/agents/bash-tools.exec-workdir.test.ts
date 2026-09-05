@@ -3,7 +3,7 @@
  * Verifies cwd selection and validation before exec launches or remote node
  * forwarding.
  */
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +13,7 @@ import type { BashSandboxConfig } from "./bash-tools.shared.js";
 async function withTempDir(run: (dir: string) => Promise<void>) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-exec-workdir-"));
   try {
-    await run(dir);
+    await run(await realpath(dir));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -33,6 +33,7 @@ function backendSandboxConfig(
     containerWorkdir?: string;
     workdirRoots?: readonly string[];
     validateWorkdir?: BashSandboxConfig["validateWorkdir"];
+    readOnlyWorkspaceSkillMounts?: BashSandboxConfig["readOnlyWorkspaceSkillMounts"];
   },
 ): BashSandboxConfig {
   return {
@@ -41,6 +42,7 @@ function backendSandboxConfig(
     workdirValidation: "backend",
     workdirRoots: params?.workdirRoots,
     validateWorkdir: params?.validateWorkdir ?? (async (workdir) => workdir),
+    readOnlyWorkspaceSkillMounts: params?.readOnlyWorkspaceSkillMounts,
   };
 }
 
@@ -95,12 +97,53 @@ describe("resolveExecWorkdir", () => {
     });
   });
 
+  it("canonicalizes local workdirs before approval and execution", async () => {
+    await withTempDir(async (workspaceDir) => {
+      const target = path.join(workspaceDir, "target");
+      const link = path.join(workspaceDir, "link");
+      await mkdir(target);
+      await symlink(target, link, "dir");
+
+      await expect(
+        resolveExecWorkdir({
+          host: "gateway",
+          workdir: link,
+        }),
+      ).resolves.toEqual({ kind: "local", hostCwd: target });
+    });
+  });
+
   it("uses configured local cwd when workdir is omitted", async () => {
     await withTempDir(async (workspaceDir) => {
       await expect(
         resolveExecWorkdir({
           host: "gateway",
           defaultCwd: workspaceDir,
+        }),
+      ).resolves.toEqual({ kind: "local", hostCwd: workspaceDir });
+    });
+  });
+
+  it("treats exact empty workdir as omitted when a local cwd default exists", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await expect(
+        resolveExecWorkdir({
+          host: "gateway",
+          workdir: "",
+          defaultCwd: workspaceDir,
+        }),
+      ).resolves.toEqual({ kind: "local", hostCwd: workspaceDir });
+    });
+  });
+
+  it("treats exact empty workdir as omitted when no local cwd default exists", async () => {
+    await withTempDir(async (workspaceDir) => {
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await expect(
+        resolveExecWorkdir({
+          host: "gateway",
+          workdir: "",
         }),
       ).resolves.toEqual({ kind: "local", hostCwd: workspaceDir });
     });
@@ -149,6 +192,23 @@ describe("resolveExecWorkdir", () => {
       await expect(
         resolveExecWorkdir({
           host: "sandbox",
+          sandbox: sandboxConfig(workspaceDir),
+        }),
+      ).resolves.toEqual({
+        kind: "sandbox",
+        hostCwd: workspaceDir,
+        containerCwd: "/workspace",
+        scriptPreflightCwd: workspaceDir,
+      });
+    });
+  });
+
+  it("treats exact empty workdir as omitted for sandbox hosts", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await expect(
+        resolveExecWorkdir({
+          host: "sandbox",
+          workdir: "",
           sandbox: sandboxConfig(workspaceDir),
         }),
       ).resolves.toEqual({
@@ -291,6 +351,297 @@ describe("resolveExecWorkdir", () => {
     });
   });
 
+  it("resolves sandbox-skills workdirs via approved read-only mounts", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await withTempDir(async (skillsMountDir) => {
+        const skillDir = path.join(skillsMountDir, "test-repro-skill");
+        await mkdir(skillDir);
+        await mkdir(
+          path.join(workspaceDir, ".openclaw", "sandbox-skills", "skills", "test-repro-skill"),
+          { recursive: true },
+        );
+
+        await expect(
+          resolveExecWorkdir({
+            host: "sandbox",
+            workdir: "/workspace/.openclaw/sandbox-skills/skills/test-repro-skill",
+            sandbox: {
+              ...sandboxConfig(workspaceDir),
+              readOnlyWorkspaceSkillMounts: [
+                {
+                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                  hostPath: skillsMountDir,
+                },
+              ],
+            },
+          }),
+        ).resolves.toEqual({
+          kind: "sandbox",
+          hostCwd: skillDir,
+          containerCwd: "/workspace/.openclaw/sandbox-skills/skills/test-repro-skill",
+          scriptPreflightCwd: skillDir,
+        });
+      });
+    });
+  });
+
+  it("resolves sandbox-skills subdirectories via approved read-only mounts", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await withTempDir(async (skillsMountDir) => {
+        const toolsDir = path.join(skillsMountDir, "test-repro-skill", "tools");
+        await mkdir(toolsDir, { recursive: true });
+
+        await expect(
+          resolveExecWorkdir({
+            host: "sandbox",
+            workdir: "/workspace/.openclaw/sandbox-skills/skills/test-repro-skill/tools",
+            sandbox: {
+              ...sandboxConfig(workspaceDir),
+              readOnlyWorkspaceSkillMounts: [
+                {
+                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                  hostPath: skillsMountDir,
+                },
+              ],
+            },
+          }),
+        ).resolves.toEqual({
+          kind: "sandbox",
+          hostCwd: toolsDir,
+          containerCwd: "/workspace/.openclaw/sandbox-skills/skills/test-repro-skill/tools",
+          scriptPreflightCwd: toolsDir,
+        });
+      });
+    });
+  });
+
+  it("uses the most specific approved mount regardless of input order", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await withTempDir(async (broadMountDir) => {
+        await withTempDir(async (skillsMountDir) => {
+          const skillDir = path.join(skillsMountDir, "demo");
+          await mkdir(skillDir);
+          await mkdir(path.join(broadMountDir, "sandbox-skills", "skills", "demo"), {
+            recursive: true,
+          });
+
+          await expect(
+            resolveExecWorkdir({
+              host: "sandbox",
+              workdir: "/workspace/.openclaw/sandbox-skills/skills/demo",
+              sandbox: {
+                ...sandboxConfig(workspaceDir),
+                readOnlyWorkspaceSkillMounts: [
+                  {
+                    containerPath: "/workspace/.openclaw",
+                    hostPath: broadMountDir,
+                  },
+                  {
+                    containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                    hostPath: skillsMountDir,
+                  },
+                ],
+              },
+            }),
+          ).resolves.toEqual({
+            kind: "sandbox",
+            hostCwd: skillDir,
+            containerCwd: "/workspace/.openclaw/sandbox-skills/skills/demo",
+            scriptPreflightCwd: skillDir,
+          });
+        });
+      });
+    });
+  });
+
+  it("resolves the exact approved mount root", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await withTempDir(async (skillsMountDir) => {
+        await expect(
+          resolveExecWorkdir({
+            host: "sandbox",
+            workdir: "/workspace/.openclaw/sandbox-skills/skills/",
+            sandbox: {
+              ...sandboxConfig(workspaceDir),
+              readOnlyWorkspaceSkillMounts: [
+                {
+                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                  hostPath: skillsMountDir,
+                },
+              ],
+            },
+          }),
+        ).resolves.toEqual({
+          kind: "sandbox",
+          hostCwd: skillsMountDir,
+          containerCwd: "/workspace/.openclaw/sandbox-skills/skills",
+          scriptPreflightCwd: skillsMountDir,
+        });
+      });
+    });
+  });
+
+  it("rejects sandbox-skills workdirs when the mount host path is missing", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await withTempDir(async (skillsMountDir) => {
+        // No subdirectory created under skillsMountDir — path doesn't exist
+
+        await expect(
+          resolveExecWorkdir({
+            host: "sandbox",
+            workdir: "/workspace/.openclaw/sandbox-skills/skills/missing-skill",
+            sandbox: {
+              ...sandboxConfig(workspaceDir),
+              readOnlyWorkspaceSkillMounts: [
+                {
+                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                  hostPath: skillsMountDir,
+                },
+              ],
+            },
+          }),
+        ).resolves.toEqual({
+          kind: "unavailable",
+          requestedCwd: "/workspace/.openclaw/sandbox-skills/skills/missing-skill",
+        });
+      });
+    });
+  });
+
+  it("still resolves primary workspace paths when approved mounts don't match", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await withTempDir(async (skillsMountDir) => {
+        const srcDir = path.join(workspaceDir, "src");
+        await mkdir(srcDir);
+        const projectDir = path.join(workspaceDir, "project");
+        await mkdir(projectDir);
+
+        // Primary workspace subdirectory
+        await expect(
+          resolveExecWorkdir({
+            host: "sandbox",
+            workdir: "/workspace/src",
+            sandbox: {
+              ...sandboxConfig(workspaceDir),
+              readOnlyWorkspaceSkillMounts: [
+                {
+                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                  hostPath: skillsMountDir,
+                },
+              ],
+            },
+          }),
+        ).resolves.toEqual({
+          kind: "sandbox",
+          hostCwd: srcDir,
+          containerCwd: "/workspace/src",
+          scriptPreflightCwd: srcDir,
+        });
+
+        // Container root still works
+        await expect(
+          resolveExecWorkdir({
+            host: "sandbox",
+            workdir: "/workspace",
+            sandbox: {
+              ...sandboxConfig(workspaceDir),
+              readOnlyWorkspaceSkillMounts: [
+                {
+                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                  hostPath: skillsMountDir,
+                },
+              ],
+            },
+          }),
+        ).resolves.toEqual({
+          kind: "sandbox",
+          hostCwd: workspaceDir,
+          containerCwd: "/workspace",
+          scriptPreflightCwd: workspaceDir,
+        });
+      });
+    });
+  });
+
+  it("falls back to primary mapping when no approved mounts are defined", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await withTempDir(async (skillsMountDir) => {
+        const skillDir = path.join(skillsMountDir, "test-skill");
+        await mkdir(skillDir);
+
+        await expect(
+          resolveExecWorkdir({
+            host: "sandbox",
+            workdir: "/workspace/.openclaw/sandbox-skills/skills/test-skill",
+            sandbox: sandboxConfig(workspaceDir),
+          }),
+        ).resolves.toEqual({
+          kind: "unavailable",
+          requestedCwd: "/workspace/.openclaw/sandbox-skills/skills/test-skill",
+        });
+      });
+    });
+  });
+
+  it("does not match sibling paths outside an approved mount prefix", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await withTempDir(async (skillsMountDir) => {
+        await mkdir(path.join(skillsMountDir, "demo"));
+
+        await expect(
+          resolveExecWorkdir({
+            host: "sandbox",
+            workdir: "/workspace/.openclaw/sandbox-skills/skills-shadow/demo",
+            sandbox: {
+              ...sandboxConfig(workspaceDir),
+              readOnlyWorkspaceSkillMounts: [
+                {
+                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                  hostPath: skillsMountDir,
+                },
+              ],
+            },
+          }),
+        ).resolves.toEqual({
+          kind: "unavailable",
+          requestedCwd: "/workspace/.openclaw/sandbox-skills/skills-shadow/demo",
+        });
+      });
+    });
+  });
+
+  it("rejects symlink escape from containerMount host root", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await withTempDir(async (skillsMountDir) => {
+        await withTempDir(async (outsideDir) => {
+          const skillDir = path.join(skillsMountDir, "test-skill");
+          await mkdir(skillDir);
+          // Symlink under skills mount pointing outside
+          await symlink(outsideDir, path.join(skillsMountDir, "test-skill", "escape"), "dir");
+
+          await expect(
+            resolveExecWorkdir({
+              host: "sandbox",
+              workdir: "/workspace/.openclaw/sandbox-skills/skills/test-skill/escape",
+              sandbox: {
+                ...sandboxConfig(workspaceDir),
+                readOnlyWorkspaceSkillMounts: [
+                  {
+                    containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+                    hostPath: skillsMountDir,
+                  },
+                ],
+              },
+            }),
+          ).resolves.toEqual({
+            kind: "unavailable",
+            requestedCwd: "/workspace/.openclaw/sandbox-skills/skills/test-skill/escape",
+          });
+        });
+      });
+    });
+  });
+
   it("lets backend-validated sandboxes use remote-only container workdirs", async () => {
     await withTempDir(async (workspaceDir) => {
       await expect(
@@ -386,6 +737,79 @@ describe("resolveExecWorkdir", () => {
         scriptPreflightCwd: localDir,
       });
       expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/src");
+    });
+  });
+
+  it("maps backend-validated skill workdirs to their mounted host root", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await withTempDir(async (skillsMountDir) => {
+        const containerRoot = "/remote/workspace/.openclaw/sandbox-skills/skills";
+        const mountedSkillDir = path.join(skillsMountDir, "test-skill");
+        const shadowSkillDir = path.join(
+          workspaceDir,
+          ".openclaw",
+          "sandbox-skills",
+          "skills",
+          "test-skill",
+        );
+        await mkdir(mountedSkillDir, { recursive: true });
+        await mkdir(shadowSkillDir, { recursive: true });
+        const validateWorkdir = vi.fn(async (workdir: string) => workdir);
+
+        await expect(
+          resolveExecWorkdir({
+            host: "sandbox",
+            workdir: `${containerRoot}/test-skill`,
+            sandbox: backendSandboxConfig(workspaceDir, {
+              validateWorkdir,
+              readOnlyWorkspaceSkillMounts: [
+                {
+                  containerPath: containerRoot,
+                  hostPath: skillsMountDir,
+                },
+              ],
+            }),
+          }),
+        ).resolves.toEqual({
+          kind: "sandbox",
+          hostCwd: mountedSkillDir,
+          containerCwd: `${containerRoot}/test-skill`,
+          scriptPreflightCwd: mountedSkillDir,
+        });
+        expect(validateWorkdir).toHaveBeenCalledWith(`${containerRoot}/test-skill`);
+      });
+    });
+  });
+
+  it("prefers backend skill mounts over an overlapping host workspace path", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await withTempDir(async (skillsMountDir) => {
+        const containerRoot = path.join(workspaceDir, ".openclaw", "sandbox-skills", "skills");
+        const mountedSkillDir = path.join(skillsMountDir, "test-skill");
+        const shadowSkillDir = path.join(containerRoot, "test-skill");
+        await mkdir(mountedSkillDir, { recursive: true });
+        await mkdir(shadowSkillDir, { recursive: true });
+
+        await expect(
+          resolveExecWorkdir({
+            host: "sandbox",
+            workdir: `${containerRoot}/test-skill`,
+            sandbox: backendSandboxConfig(workspaceDir, {
+              readOnlyWorkspaceSkillMounts: [
+                {
+                  containerPath: containerRoot,
+                  hostPath: skillsMountDir,
+                },
+              ],
+            }),
+          }),
+        ).resolves.toEqual({
+          kind: "sandbox",
+          hostCwd: mountedSkillDir,
+          containerCwd: `${containerRoot}/test-skill`,
+          scriptPreflightCwd: mountedSkillDir,
+        });
+      });
     });
   });
 
@@ -614,6 +1038,26 @@ describe("resolveExecWorkdir", () => {
         nodeCwd: "/remote/node/default",
       }),
     ).resolves.toEqual({ kind: "node", remoteCwd: "/remote/node/workspace" });
+  });
+
+  it("treats exact empty workdir as omitted for node hosts with a node cwd", async () => {
+    await expect(
+      resolveExecWorkdir({
+        host: "node",
+        workdir: "",
+        nodeCwd: "/remote/node/default",
+      }),
+    ).resolves.toEqual({ kind: "node", remoteCwd: "/remote/node/default" });
+  });
+
+  it("treats exact empty workdir as omitted for node hosts without a node cwd", async () => {
+    await expect(
+      resolveExecWorkdir({
+        host: "node",
+        workdir: "",
+        defaultCwd: "/gateway/default",
+      }),
+    ).resolves.toEqual({ kind: "node" });
   });
 
   it("rejects blank explicit node workdirs", async () => {

@@ -6,6 +6,7 @@ import {
 import { resolveLoadedSessionThreadInfo } from "../../channels/plugins/session-thread-info-loaded.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
+import type { SessionResetType } from "./reset-policy.js";
 /** Public reset policy exports plus helpers that classify direct, group, and thread sessions. */
 export {
   evaluateSessionFreshness,
@@ -15,7 +16,6 @@ export {
   type SessionResetPolicy,
   type SessionResetType,
 } from "./reset-policy.js";
-import type { SessionResetType } from "./reset-policy.js";
 
 const GROUP_SESSION_MARKERS = [":group:", ":channel:"];
 

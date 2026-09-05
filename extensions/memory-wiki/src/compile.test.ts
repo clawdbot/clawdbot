@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { compileMemoryWikiVault } from "./compile.js";
-import { loadMemoryWikiCompiledCache } from "./compiled-cache.js";
+import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
+import { loadMemoryWikiCompiledCache, readMemoryWikiDashboardState } from "./compiled-cache.js";
 import { renderWikiMarkdown, WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
 import { writeMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -113,6 +113,113 @@ describe("compileMemoryWikiVault", () => {
       "Alpha is the canonical source page.",
     ]);
     expect(claims.map((claim) => claim.text)).toContain("Alpha is the canonical source page.");
+  });
+
+  it("keeps changed imports compile-required when auto-compile is disabled", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      config: {
+        ingest: { autoCompile: false },
+        render: { createBacklinks: false, createDashboards: false },
+      },
+      initialize: true,
+    });
+    const sourcePath = path.join(rootDir, "sources", "cache-only.md");
+    const renderSource = (value: string) =>
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          sourceType: "chatgpt-export",
+          title: "Cache only",
+        },
+        body: `# Cache only\n\n## Auto Digest\n- First user line: ${value}\n`,
+      });
+    await fs.writeFile(sourcePath, renderSource("before"), "utf8");
+    await compileMemoryWikiVault(config);
+    const snapshotBefore = await loadMemoryWikiCompiledCache(config);
+    const indexBefore = await fs.readFile(path.join(rootDir, "index.md"), "utf8");
+
+    await fs.writeFile(sourcePath, renderSource("after"), "utf8");
+    const refresh = await refreshMemoryWikiIndexesAfterImport({
+      config,
+      syncResult: { importedCount: 0, updatedCount: 1, removedCount: 0 },
+    });
+    const snapshotAfter = await loadMemoryWikiCompiledCache(config);
+
+    expect(refresh).toMatchObject({ refreshed: false, reason: "auto-compile-disabled" });
+    expect(JSON.stringify(snapshotBefore?.dashboards)).toContain("before");
+    expect(snapshotAfter).toEqual(snapshotBefore);
+    expect(JSON.stringify(snapshotAfter?.dashboards)).not.toContain("after");
+    await expect(readMemoryWikiDashboardState(config)).resolves.toEqual({
+      state: "compile-required",
+    });
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toBe(indexBefore);
+  });
+
+  it("serves an unchanged compiled cache without reading the vault", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "stable.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          sourceType: "chatgpt-export",
+          title: "Stable",
+        },
+        body: "# Stable\n\n## Auto Digest\n- First user line: cached\n",
+      }),
+      "utf8",
+    );
+    await compileMemoryWikiVault(config);
+    const readFile = vi.spyOn(fs, "readFile");
+
+    const result = await refreshMemoryWikiIndexesAfterImport({
+      config,
+      syncResult: { importedCount: 0, updatedCount: 0, removedCount: 0 },
+    });
+
+    expect(result).toMatchObject({ refreshed: false, reason: "no-import-changes" });
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it("preserves source page bytes while rebuilding derived artifacts", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+      config: { render: { createDashboards: false } },
+    });
+    const sourcePath = path.join(rootDir, "sources", "preserved.md");
+    const source = renderWikiMarkdown({
+      frontmatter: {
+        pageType: "source",
+        id: "source.preserved",
+        title: "Preserved",
+      },
+      body: "# Preserved\n",
+    });
+    await fs.writeFile(sourcePath, source, "utf8");
+
+    const preserved = await compileMemoryWikiVault(config, {
+      sourcePageWrites: "preserve",
+    });
+
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(source);
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
+      "[Preserved](sources/preserved.md)",
+    );
+    expect(preserved.updatedFiles).not.toContain(sourcePath);
+    expect((await expectCompiledCache(config)).digest.pages.map((page) => page.path)).toContain(
+      "sources/preserved.md",
+    );
+
+    const normal = await compileMemoryWikiVault(config);
+    expect(normal.updatedFiles).toContain(sourcePath);
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain(
+      "<!-- openclaw:wiki:related:start -->",
+    );
   });
 
   it("excludes malformed pages from indexes, digests, counts, and page writes (#96125)", async () => {
@@ -308,7 +415,7 @@ describe("compileMemoryWikiVault", () => {
     ).resolves.toContain("[Alpha Synthesis](alpha-synthesis.md)");
   });
 
-  it("bounds concurrent page reads while compiling", async () => {
+  it("bounds concurrent page reads and stops the queue after abort", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
       initialize: true,
@@ -330,6 +437,8 @@ describe("compileMemoryWikiVault", () => {
     }
 
     const originalReadFile = fs.readFile.bind(fs);
+    const abortController = new AbortController();
+    let pageReads = 0;
     let activePageReads = 0;
     let maxActivePageReads = 0;
     const readFileSpy = vi
@@ -344,7 +453,11 @@ describe("compileMemoryWikiVault", () => {
         }
 
         activePageReads += 1;
+        pageReads += 1;
         maxActivePageReads = Math.max(maxActivePageReads, activePageReads);
+        if (pageReads === 16) {
+          abortController.abort();
+        }
         try {
           await Promise.resolve();
           return await originalReadFile(...args);
@@ -354,12 +467,14 @@ describe("compileMemoryWikiVault", () => {
       });
 
     try {
-      await compileMemoryWikiVault(config);
+      await expect(
+        compileMemoryWikiVault(config, { signal: abortController.signal }),
+      ).rejects.toThrow();
     } finally {
       readFileSpy.mockRestore();
     }
 
-    expect(maxActivePageReads).toBeGreaterThan(0);
+    expect(pageReads).toBe(16);
     expect(maxActivePageReads).toBeLessThanOrEqual(16);
   });
 

@@ -1,14 +1,19 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
+import ai.openclaw.app.gateway.GatewayRequestRejected
+import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -16,40 +21,93 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 /**
  * Reconnect recovery scenarios: after a gateway disconnect, the next health event
  * refetches chat.history and re-adopts the run the gateway still reports in flight
  * (`inFlightRun`), matching the reconnect snapshot contract the TUI consumes.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerReconnectRestoreTest {
-  private val json = Json { ignoreUnknownKeys = true }
+  private val json = chatControllerTestJson
+  private val ChatController.messageTexts: List<String?>
+    get() = messages.value.map { it.content.single().text }
 
   // The controller runs on backgroundScope: while a restored run stays in flight the
   // pending-run watchdog keeps re-arming, so its timer must be cancelled by runTest
   // instead of counting as an uncompleted test coroutine.
-  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = ChatController(scope = backgroundScope, json = json, requestGateway = gateway::request)
+  private fun TestScope.newController(gateway: ScriptedGateway): ChatController = backgroundScope.createChatController(requestGateway = gateway::request)
 
   private fun TestScope.newScopedController(gateway: ScriptedGateway): ChatController =
-    ChatController(
-      scope = backgroundScope,
-      json = json,
+    backgroundScope.createChatController(
       requestGateway = gateway::request,
       requestGatewayForGateway = { _, method, paramsJson -> gateway.request(method, paramsJson) },
       cacheScope = { ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1) },
     )
 
+  private fun TestScope.loadController(gateway: ScriptedGateway): ChatController =
+    newController(gateway).also {
+      it.load("main")
+      runCurrent()
+    }
+
+  private fun TestScope.loadController(
+    gateway: ScriptedGateway,
+    history: String,
+  ): ChatController {
+    gateway.respondWith("chat.history", history)
+    return loadController(gateway)
+  }
+
+  private suspend fun TestScope.awaitStartedRun(
+    controller: ChatController,
+    runId: String,
+  ) {
+    controller.outboxItems.first { items -> items.any { it.id == runId && it.status == ChatOutboxStatus.Accepted } }
+    controller.selectedActiveRunPresentation.first { it.runId == runId }
+    runCurrent()
+  }
+
+  private fun TestScope.recoverSeqGap(controller: ChatController) {
+    controller.handleGatewayEvent("seqGap", null)
+    runCurrent()
+  }
+
+  private fun TestScope.connect(controller: ChatController) {
+    controller.onGatewayConnected()
+    runCurrent()
+  }
+
+  private fun TestScope.reconnect(controller: ChatController) {
+    controller.onDisconnected("Reconnecting…")
+    connect(controller)
+  }
+
+  private fun TestScope.advanceRecoveryRetry() {
+    advanceTimeBy(750)
+    runCurrent()
+  }
+
+  private fun history(
+    messages: List<ReplayHistoryMessage>,
+    inFlightRun: Pair<String, String>? = null,
+    hasActiveRun: Boolean? = inFlightRun?.let { true },
+    activeRunIds: List<String>? = inFlightRun?.let { listOf(it.first) },
+  ): String = historyResponse("session-1", messages, inFlightRun, hasActiveRun, activeRunIds)
+
   private val userTurn = ReplayHistoryMessage("user", "keep working", 1_000)
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun connectedRefreshUpsertsDeviceSessionBeforeLoadingHistory() =
     runTest {
       val sessionKey = "agent:main:node-device"
       val gateway = ScriptedGateway(json)
       gateway.respondWith("sessions.describe", """{"session":null}""")
       gateway.respondWith("sessions.patch", """{"ok":true,"key":"$sessionKey"}""")
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       val controller = newScopedController(gateway)
 
       controller.load("agent:main:custom")
@@ -72,14 +130,13 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun connectedRefreshContinuesWhenSessionAdoptionFails() =
     runTest {
       val sessionKey = "agent:main:node-device"
       val gateway = ScriptedGateway(json)
       gateway.respondWith("sessions.describe", """{"session":null}""")
       gateway.respond("sessions.patch") { error("patch unavailable") }
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       val controller = newScopedController(gateway)
 
       controller.prepareMainSessionKey(sessionKey)
@@ -93,7 +150,6 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun connectedRefreshLabelsExistingSessionWithoutRecreatingIt() =
     runTest {
       val sessionKey = "agent:main:node-device"
@@ -119,7 +175,6 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun agentSelectionAcknowledgesUnreadDeviceSession() =
     runTest {
       val sessionKey = "agent:main:node-device"
@@ -129,7 +184,7 @@ class ChatControllerReconnectRestoreTest {
         """{"session":{"key":"$sessionKey","label":"OpenClaw App · Pixel · device"}}""",
       )
       gateway.respondWith("sessions.patch", """{"ok":true,"key":"$sessionKey"}""")
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       val controller = newScopedController(gateway)
       controller.handleGatewayEvent(
         "sessions.changed",
@@ -150,7 +205,6 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun reconnectRevalidatesWithoutOverwritingExistingLabel() =
     runTest {
       val sessionKey = "agent:main:node-device"
@@ -169,7 +223,7 @@ class ChatControllerReconnectRestoreTest {
             ?.content
         """{"ok":true,"key":"$sessionKey"}"""
       }
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       val controller = newScopedController(gateway)
       val binding = MainSessionBinding(sessionKey, "OpenClaw App · Pixel · device")
 
@@ -195,7 +249,6 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun agentSwitchWaitsForTheLatestSessionAdoption() =
     runTest {
       val firstDescribe = CompletableDeferred<String>()
@@ -218,7 +271,7 @@ class ChatControllerReconnectRestoreTest {
             ?.content
         """{"ok":true,"key":"$key"}"""
       }
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       val controller = newScopedController(gateway)
 
       controller.prepareAndSelectMainSessionKey("agent:first:node-device")
@@ -258,7 +311,6 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun reconnectRecoveryWaitsForSessionReadiness() =
     runTest {
       val sessionKey = "agent:main:node-device"
@@ -272,7 +324,7 @@ class ChatControllerReconnectRestoreTest {
           """{"session":{"key":"$sessionKey","label":"OpenClaw App · Pixel · device"}}"""
         }
       }
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       val controller = newScopedController(gateway)
       val binding = MainSessionBinding(sessionKey, "OpenClaw App · Pixel · device")
 
@@ -295,7 +347,6 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun reconnectCancelsStaleAdoptionAndRetriesOnTheNewTransport() =
     runTest {
       val sessionKey = "agent:main:node-device"
@@ -310,7 +361,7 @@ class ChatControllerReconnectRestoreTest {
           """{"session":{"key":"$sessionKey","label":"OpenClaw App · Pixel · device"}}"""
         }
       }
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       val controller = newScopedController(gateway)
       val binding = MainSessionBinding(sessionKey, "OpenClaw App · Pixel · device")
 
@@ -329,7 +380,6 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun reconnectUpsertsSessionDeletedWhileDisconnected() =
     runTest {
       val sessionKey = "agent:main:node-device"
@@ -346,7 +396,7 @@ class ChatControllerReconnectRestoreTest {
         sessionExists = true
         """{"ok":true,"key":"$sessionKey"}"""
       }
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       val controller = newScopedController(gateway)
       val binding = MainSessionBinding(sessionKey, "OpenClaw App · Pixel · device")
 
@@ -363,23 +413,18 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun reconnectAdoptsInFlightRunAndConsumesLiveEvents() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", listOf(userTurn)))
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway, history(listOf(userTurn)))
       assertEquals(0, controller.pendingRunCount.value)
 
       controller.onDisconnected("Reconnecting…")
       gateway.respondWith(
         "chat.history",
-        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "partial reply"),
+        history(listOf(userTurn), inFlightRun = "run-active" to "partial reply"),
       )
-      controller.onGatewayConnected()
-      runCurrent()
+      connect(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
       assertEquals("partial reply", controller.streamingAssistantText.value)
@@ -393,8 +438,7 @@ class ChatControllerReconnectRestoreTest {
       assertEquals("partial reply more", controller.streamingAssistantText.value)
       gateway.respondWith(
         "chat.history",
-        historyResponse(
-          "session-1",
+        history(
           listOf(userTurn, ReplayHistoryMessage("assistant", "partial reply more", 2_000)),
         ),
       )
@@ -410,263 +454,41 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
-  fun reconnectRestoresInFlightPlanSnapshot() =
+  fun reconnectHealthRefetchesProgressCard() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
-
+      val controller = loadController(gateway, history(emptyList()))
       gateway.respondWith(
-        "chat.history",
-        historyResponse(
-          "session-1",
-          emptyList(),
-          inFlightRun = "run-active" to "working",
-          inFlightPlan =
-            ChatPlanSnapshot(
-              steps =
-                listOf(
-                  ChatPlanStep("Inspect", ChatPlanStepStatus.Completed),
-                  ChatPlanStep("Reconnect", ChatPlanStepStatus.InProgress),
-                ),
-              explanation = "Restore checklist",
-            ),
-        ),
+        "progressCard.get",
+        """{"card":{"sessionKey":"agent:main:main","revision":1,"updatedAt":10,"markdown":"First"}}""",
       )
+      controller.handleGatewayEvent("progressCard.changed", """{"sessionKey":"main","revision":1}""")
+      runCurrent()
+      assertEquals("First", controller.progressCard.value?.markdown)
+
       controller.onDisconnected("Reconnecting…")
-      controller.onGatewayConnected()
+      gateway.respondWith(
+        "progressCard.get",
+        """{"card":{"sessionKey":"agent:main:main","revision":2,"updatedAt":20,"markdown":"Restored"}}""",
+      )
+      val cardRequestsBeforeHealth = gateway.callCount("progressCard.get")
+      controller.handleGatewayEvent("health", null)
       runCurrent()
 
-      assertEquals(
-        listOf(
-          ChatPlanStep("Inspect", ChatPlanStepStatus.Completed),
-          ChatPlanStep("Reconnect", ChatPlanStepStatus.InProgress),
-        ),
-        controller.planSteps.value,
-      )
+      assertEquals(cardRequestsBeforeHealth + 1, gateway.callCount("progressCard.get"))
+      assertEquals("Restored", controller.progressCard.value?.markdown)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
-  fun historyPlanReconciliationContract() =
-    runTest {
-      val retainedSteps = listOf(ChatPlanStep("Retained", ChatPlanStepStatus.InProgress))
-
-      data class Case(
-        val name: String,
-        val history: String,
-        val expectedSteps: List<ChatPlanStep>,
-        val staleAfterLivePlan: Boolean = false,
-        val snapshotForNewLiveRun: ChatPlanSnapshot? = null,
-        val gatewayScopeChange: Boolean = false,
-      )
-
-      val cases =
-        listOf(
-          Case(
-            name = "replace",
-            history =
-              historyResponse(
-                "session-1",
-                emptyList(),
-                inFlightRun = "run-retained" to "working",
-                inFlightPlan =
-                  ChatPlanSnapshot(
-                    steps = listOf(ChatPlanStep("Replacement", ChatPlanStepStatus.Completed)),
-                  ),
-              ),
-            expectedSteps = listOf(ChatPlanStep("Replacement", ChatPlanStepStatus.Completed)),
-          ),
-          Case(
-            name = "legacy-preserve",
-            history =
-              historyResponse(
-                "session-1",
-                emptyList(),
-                inFlightRun = "run-retained" to "working",
-              ),
-            expectedSteps = retainedSteps,
-          ),
-          Case(
-            name = "superseded",
-            history =
-              historyResponse(
-                "session-1",
-                emptyList(),
-                inFlightRun = "run-next" to "next",
-                inFlightPlan =
-                  ChatPlanSnapshot(
-                    steps = listOf(ChatPlanStep("Next run", ChatPlanStepStatus.InProgress)),
-                  ),
-              ),
-            expectedSteps = listOf(ChatPlanStep("Next run", ChatPlanStepStatus.InProgress)),
-          ),
-          Case(
-            name = "active-preserve",
-            history =
-              historyResponse(
-                "session-1",
-                emptyList(),
-                hasActiveRun = true,
-                activeRunIds = listOf("run-retained"),
-              ),
-            expectedSteps = retainedSteps,
-          ),
-          Case(
-            name = "terminal-clear",
-            history =
-              historyResponse(
-                "session-1",
-                emptyList(),
-                hasActiveRun = false,
-                activeRunIds = emptyList(),
-              ),
-            expectedSteps = emptyList(),
-          ),
-          Case(
-            name = "no-evidence-preserve",
-            history =
-              historyResponse(
-                "session-1",
-                emptyList(),
-                hasActiveRun = null,
-                activeRunIds = null,
-              ),
-            expectedSteps = retainedSteps,
-          ),
-          Case(
-            name = "stale-response-does-not-clobber-newer-live-plan",
-            history =
-              historyResponse(
-                "session-1",
-                emptyList(),
-                hasActiveRun = false,
-                activeRunIds = emptyList(),
-              ),
-            expectedSteps = listOf(ChatPlanStep("New live plan", ChatPlanStepStatus.InProgress)),
-            staleAfterLivePlan = true,
-          ),
-          Case(
-            name = "stale-previous-run-snapshot-does-not-clobber-newer-live-plan",
-            history =
-              historyResponse(
-                "session-1",
-                emptyList(),
-                inFlightRun = "run-previous" to "stale",
-                inFlightPlan = ChatPlanSnapshot(steps = emptyList()),
-              ),
-            expectedSteps = listOf(ChatPlanStep("New live plan", ChatPlanStepStatus.InProgress)),
-            staleAfterLivePlan = true,
-          ),
-          Case(
-            name = "snapshot-for-newer-owned-run-is-accepted",
-            history = historyResponse("session-1", emptyList()),
-            expectedSteps = listOf(ChatPlanStep("Matching snapshot", ChatPlanStepStatus.Completed)),
-            staleAfterLivePlan = true,
-            snapshotForNewLiveRun =
-              ChatPlanSnapshot(
-                steps = listOf(ChatPlanStep("Matching snapshot", ChatPlanStepStatus.Completed)),
-              ),
-          ),
-          Case(
-            name = "explicit-empty-clears",
-            history =
-              historyResponse(
-                "session-1",
-                emptyList(),
-                inFlightRun = "run-retained" to "working",
-                inFlightPlan = ChatPlanSnapshot(steps = emptyList()),
-              ),
-            expectedSteps = emptyList(),
-          ),
-          Case(
-            name = "gateway-scope-change-clears",
-            history = historyResponse("session-1", emptyList()),
-            expectedSteps = emptyList(),
-            gatewayScopeChange = true,
-          ),
-        )
-
-      for (testCase in cases) {
-        val gateway = ScriptedGateway(json)
-        if (testCase.staleAfterLivePlan) {
-          gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
-        } else {
-          gateway.respondWith(
-            "chat.history",
-            historyResponse(
-              "session-1",
-              emptyList(),
-              inFlightRun = "run-retained" to "working",
-              inFlightPlan = ChatPlanSnapshot(steps = retainedSteps),
-            ),
-          )
-        }
-        val controller = newController(gateway)
-        controller.load("main")
-        runCurrent()
-
-        if (testCase.staleAfterLivePlan) {
-          val historyStarted = CompletableDeferred<Unit>()
-          val releaseHistory = CompletableDeferred<String>()
-          gateway.respond("chat.history") {
-            historyStarted.complete(Unit)
-            releaseHistory.await()
-          }
-          gateway.respondChatSend(status = "started")
-          controller.refresh()
-          runCurrent()
-          historyStarted.await()
-          assertTrue(controller.sendMessageAwaitAcceptance("new work", "off", emptyList()))
-          val runId = requireNotNull(gateway.lastRunId)
-          controller.handleGatewayEvent(
-            "agent",
-            """{"sessionKey":"main","runId":"$runId","seq":1,"ts":10,"stream":"plan","data":{"phase":"update","steps":[{"step":"New live plan","status":"in_progress"}]}}""",
-          )
-          releaseHistory.complete(
-            testCase.snapshotForNewLiveRun?.let { plan ->
-              historyResponse(
-                "session-1",
-                emptyList(),
-                inFlightRun = runId to "matching",
-                inFlightPlan = plan,
-              )
-            } ?: testCase.history,
-          )
-          runCurrent()
-          assertEquals(testCase.name, 1, controller.pendingRunCount.value)
-        } else if (testCase.gatewayScopeChange) {
-          controller.onGatewayScopeChanging()
-          runCurrent()
-        } else {
-          gateway.respondWith("chat.history", testCase.history)
-          controller.onDisconnected("Reconnecting…")
-          controller.onGatewayConnected()
-          runCurrent()
-        }
-
-        assertEquals(testCase.name, testCase.expectedSteps, controller.planSteps.value)
-      }
-    }
-
-  @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun reconnectWithoutInFlightRunStaysClean() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", listOf(userTurn)))
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway, history(listOf(userTurn)))
       val historyCallsAfterLoad = gateway.callCount("chat.history")
       val metadataCallsAfterLoad = gateway.callCount("chat.metadata")
 
       controller.onDisconnected("Offline")
-      controller.onGatewayConnected()
-      runCurrent()
+      connect(controller)
 
       // Reconnect refetched history once and restored nothing.
       assertEquals(historyCallsAfterLoad + 1, gateway.callCount("chat.history"))
@@ -679,20 +501,37 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
+  fun reconnectHistoryOmissionClearsStaleExactRunIds() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway, history(emptyList()))
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"patch","session":{"key":"main","agentId":"main","hasActiveRun":true,"activeRunIds":["run-stale"]}}""",
+      )
+      assertEquals("run-stale", controller.selectedActiveRunPresentation.value.runId)
+
+      gateway.respondWith(
+        "chat.history",
+        history(emptyList(), hasActiveRun = true, activeRunIds = null),
+      )
+      val pendingSessionList = CompletableDeferred<String>()
+      gateway.respond("sessions.list") { pendingSessionList.await() }
+      reconnect(controller)
+
+      assertEquals(1, controller.selectedActiveRunPresentation.value.count)
+      assertNull(controller.selectedActiveRunPresentation.value.runId)
+    }
+
+  @Test
   fun reconnectStaysUnhealthyUntilRecoveryHistoryApplies() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway, history(emptyList()))
 
       val recoveryHistory = CompletableDeferred<String>()
       gateway.respond("chat.history") { recoveryHistory.await() }
-      controller.onDisconnected("Reconnecting…")
-      controller.onGatewayConnected()
-      runCurrent()
+      reconnect(controller)
 
       assertFalse(controller.healthOk.value)
       val healthCallsDuringRecovery = gateway.callCount("health")
@@ -703,23 +542,20 @@ class ChatControllerReconnectRestoreTest {
       assertEquals(healthCallsDuringRecovery, gateway.callCount("health"))
       assertEquals(historyCallsDuringRecovery + 1, gateway.callCount("chat.history"))
 
-      recoveryHistory.complete(historyResponse("session-1", emptyList()))
+      recoveryHistory.complete(history(emptyList()))
       runCurrent()
       assertTrue(controller.healthOk.value)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun newerSameGenerationHistoryRequestCompletesReconnectHealth() =
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondWith(
         "chat.history",
-        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "working"),
+        history(listOf(userTurn), inFlightRun = "run-active" to "working"),
       )
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
 
       val reconnectHistoryStarted = CompletableDeferred<Unit>()
       val releaseReconnectHistory = CompletableDeferred<String>()
@@ -730,16 +566,13 @@ class ChatControllerReconnectRestoreTest {
           reconnectHistoryStarted.complete(Unit)
           releaseReconnectHistory.await()
         } else {
-          historyResponse(
-            "session-1",
+          history(
             listOf(userTurn, ReplayHistoryMessage("assistant", "done", 2_000)),
           )
         }
       }
 
-      controller.onDisconnected("Reconnecting…")
-      controller.onGatewayConnected()
-      runCurrent()
+      reconnect(controller)
       reconnectHistoryStarted.await()
       assertFalse(controller.healthOk.value)
 
@@ -750,25 +583,409 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
 
       assertTrue(controller.healthOk.value)
-      assertEquals(listOf("keep working", "done"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("keep working", "done"), controller.messageTexts)
 
-      releaseReconnectHistory.complete(historyResponse("session-1", emptyList()))
+      releaseReconnectHistory.complete(history(emptyList()))
       runCurrent()
       assertTrue(controller.healthOk.value)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
+  fun transcriptInvalidationCanFinishPendingRecoveryWithoutReplayingItsOlderSnapshot() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway, history(emptyList()))
+      val olderHistory = CompletableDeferred<String>()
+      gateway.respond("chat.history") { olderHistory.await() }
+      reconnect(controller)
+      assertFalse(controller.healthOk.value)
+
+      gateway.respondWith("chat.history", history(listOf(userTurn), inFlightRun = "run-active" to "working"))
+      controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
+      runCurrent()
+
+      assertTrue(controller.healthOk.value)
+      assertEquals(1, controller.pendingRunCount.value)
+      assertEquals("working", controller.streamingAssistantText.value)
+      olderHistory.complete(history(emptyList()))
+      runCurrent()
+      assertEquals(listOf("keep working"), controller.messageTexts)
+      assertEquals(1, controller.pendingRunCount.value)
+    }
+
+  @Test
+  fun delayedTranscriptCannotRestoreAnEndedRecoveredRun() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway, history(emptyList()))
+      val recoveryHistory = CompletableDeferred<String>()
+      gateway.respond("chat.history") { recoveryHistory.await() }
+      reconnect(controller)
+
+      val transcriptHistory = CompletableDeferred<String>()
+      gateway.respond("chat.history") { transcriptHistory.await() }
+      controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
+      runCurrent()
+      val recoveryHealth = CompletableDeferred<String>()
+      gateway.respond("health") { recoveryHealth.await() }
+      recoveryHistory.complete(history(listOf(userTurn), inFlightRun = "run-active" to "working"))
+      runCurrent()
+      assertFalse(controller.healthOk.value)
+      assertEquals(1, controller.pendingRunCount.value)
+
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"main","runId":"run-active","seq":2,"stream":"lifecycle","data":{"phase":"end"}}""",
+      )
+      val messages = listOf(userTurn, ReplayHistoryMessage("assistant", "transcript update", 2_000))
+      transcriptHistory.complete(history(messages, inFlightRun = "run-active" to "stale working"))
+      runCurrent()
+
+      assertEquals(listOf("keep working", "transcript update"), controller.messageTexts)
+      assertEquals(0, controller.pendingRunCount.value)
+      assertNull(controller.streamingAssistantText.value)
+      recoveryHealth.complete("{}")
+      runCurrent()
+      assertTrue(controller.healthOk.value)
+    }
+
+  @Test
+  fun transcriptRefreshCannotConfirmWatchdogRunState() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway, history(listOf(userTurn), inFlightRun = "run-active" to "working"))
+      val watchdogHistory = CompletableDeferred<String>()
+      gateway.respond("chat.history") { watchdogHistory.await() }
+      advanceTimeBy(120_000)
+      runCurrent()
+
+      gateway.respondWith("chat.history", history(listOf(userTurn)))
+      controller.handleGatewayEvent("sessions.changed", """{"sessionKey":"main","agentId":"main","phase":"message"}""")
+      runCurrent()
+      watchdogHistory.complete(history(listOf(userTurn), inFlightRun = "run-active" to "working"))
+      runCurrent()
+
+      assertEquals(1, controller.pendingRunCount.value)
+      assertEquals("working", controller.streamingAssistantText.value)
+      assertNull(controller.errorText.value)
+    }
+
+  @Test
+  fun lateHealthSuccessCannotOverrideNewerSelectionFailure() = runTest { verifyLateHealthAfterSelection(cancelOlder = false) }
+
+  @Test
+  fun forcedRefreshSurvivesNewerNonforcedRecovery() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = loadController(gateway, history(emptyList()))
+      val healthRequests = gateway.callCount("health")
+      gateway.respond("health") { error("health unavailable") }
+      val refreshStarted = CompletableDeferred<Unit>()
+      val releaseRefresh = CompletableDeferred<String>()
+      var historyRequests = 0
+      gateway.respond("chat.history") {
+        if (historyRequests++ == 0) {
+          refreshStarted.complete(Unit)
+          releaseRefresh.await()
+        } else {
+          history(listOf(ReplayHistoryMessage("assistant", "newer history", 2)))
+        }
+      }
+      controller.refresh()
+      runCurrent()
+      refreshStarted.await()
+      recoverSeqGap(controller)
+
+      assertEquals(listOf("newer history"), controller.messageTexts)
+      assertEquals("Nonforced recovery must retain Refresh's forced health check", healthRequests + 1, gateway.callCount("health"))
+      assertFalse(controller.healthOk.value)
+      releaseRefresh.complete(history(listOf(ReplayHistoryMessage("assistant", "older history", 1))))
+      runCurrent()
+      assertEquals(listOf("newer history"), controller.messageTexts)
+      assertEquals(healthRequests + 1, gateway.callCount("health"))
+      assertFalse(controller.healthOk.value)
+    }
+
+  @Test
+  fun failedSupersedingHistoryDoesNotStrandPeriodicHealth() = runTest { verifyHealthAfterSupersedingHistoryEnds(cancelHistory = false) }
+
+  @Test
+  fun cancelledSupersedingHistoryDoesNotStrandPeriodicHealth() = runTest { verifyHealthAfterSupersedingHistoryEnds(cancelHistory = true) }
+
+  private suspend fun TestScope.verifyHealthAfterSupersedingHistoryEnds(cancelHistory: Boolean) {
+    val gateway = ScriptedGateway(json)
+    val releaseRefresh = CompletableDeferred<String>()
+    val releaseMutationHistory = CompletableDeferred<String>()
+    val mutationHistoryStarted = CompletableDeferred<Job>()
+    var historyRequests = 0
+    gateway.respond("chat.history") {
+      if (historyRequests++ == 0) {
+        releaseRefresh.await()
+      } else {
+        mutationHistoryStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
+        releaseMutationHistory.await()
+      }
+    }
+    val controller = newScopedController(gateway)
+    controller.handleGatewayEvent("health", null)
+    runCurrent()
+    controller.handleGatewayEvent("tick", null)
+    runCurrent()
+    assertEquals(1, gateway.callCount("health"))
+    gateway.respond("health") { error("health unavailable") }
+    controller.refresh()
+    runCurrent()
+    assertEquals(1, gateway.callCount("chat.history"))
+
+    controller.handleGatewayEvent(
+      "sessions.changed",
+      """{"reason":"branch-switch","sessionKey":"main","agentId":"main"}""",
+    )
+    runCurrent()
+    val mutationHistoryJob = mutationHistoryStarted.await()
+    if (cancelHistory) {
+      mutationHistoryJob.cancelAndJoin()
+    } else {
+      releaseMutationHistory.completeExceptionally(
+        GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "history unavailable")),
+      )
+      mutationHistoryJob.join()
+    }
+    releaseRefresh.complete(history(listOf(ReplayHistoryMessage("assistant", "superseded", 1))))
+    runCurrent()
+
+    assertEquals(2, gateway.callCount("chat.history"))
+    assertTrue(controller.messages.value.isEmpty())
+    assertTrue("History failure or cancellation is not a health result", controller.healthOk.value)
+    controller.handleGatewayEvent("tick", null)
+    runCurrent()
+
+    assertEquals("A finished history request must retain Refresh's forced health poll", 2, gateway.callCount("health"))
+    assertFalse(controller.healthOk.value)
+  }
+
+  @Test
+  fun failedOlderHistoryDoesNotReleaseHealthWhileSameGenerationHistoryIsPending() = runTest { verifyPendingSiblingHistoryHealth(olderFails = true) }
+
+  @Test
+  fun failedNewerHistoryKeepsOlderHistoryHealthGate() = runTest { verifyPendingSiblingHistoryHealth(olderFails = false) }
+
+  private fun TestScope.verifyPendingSiblingHistoryHealth(olderFails: Boolean) {
+    val gateway = ScriptedGateway(json)
+    val releaseRefresh = CompletableDeferred<String>()
+    val releaseTerminalHistory = CompletableDeferred<String>()
+    var historyRequests = 0
+    gateway.respond("chat.history") {
+      if (historyRequests++ == 0) releaseRefresh.await() else releaseTerminalHistory.await()
+    }
+    gateway.respondWith("sessions.branches.list", """{"branches":[]}""")
+    gateway.respond("health") { error("health unavailable") }
+    val controller = newScopedController(gateway)
+    controller.handleGatewayEvent("health", null)
+    runCurrent()
+    controller.refresh()
+    runCurrent()
+    controller.handleGatewayEvent("chat", chatTerminalPayload("main", "external-run", seq = 1, assistantText = "newer history"))
+    runCurrent()
+    assertEquals(2, gateway.callCount("chat.history"))
+
+    val failedHistory = if (olderFails) releaseRefresh else releaseTerminalHistory
+    val pendingHistory = if (olderFails) releaseTerminalHistory else releaseRefresh
+    failedHistory.completeExceptionally(IllegalStateException("history failed"))
+    runCurrent()
+    controller.handleGatewayEvent("tick", null)
+    runCurrent()
+
+    assertEquals("A failed request must not release its held sibling's health gate", 0, gateway.callCount("health"))
+    assertTrue(controller.healthOk.value)
+    pendingHistory.complete(history(listOf(ReplayHistoryMessage("assistant", "accepted history", 2))))
+    runCurrent()
+
+    assertEquals(listOf("accepted history"), controller.messageTexts)
+    assertEquals(1, gateway.callCount("health"))
+    assertFalse(controller.healthOk.value)
+  }
+
+  @Test
+  fun cancelledNewChatHealthRecoversWithoutManualRefresh() = runTest { verifyCancelledNewRecovery(holdHistory = false) }
+
+  @Test
+  fun cancelledNewChatHistoryRecoversWithoutManualRefresh() = runTest { verifyCancelledNewRecovery(holdHistory = true) }
+
+  private suspend fun TestScope.verifyCancelledNewRecovery(holdHistory: Boolean) {
+    val key = "agent:main:health-fresh"
+    val gateway = ScriptedGateway(json)
+    val entered = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+    gateway.respondWith("sessions.create", """{"ok":true,"key":"$key"}""")
+    gateway.respond("chat.history") {
+      if (holdHistory) {
+        entered.complete(Unit)
+        release.await()
+      }
+      historyResponse("fresh-session", emptyList())
+    }
+    gateway.respondWith("sessions.branches.list", """{"branches":[]}""")
+    gateway.respond("health") {
+      if (!holdHistory) {
+        entered.complete(Unit)
+        release.await()
+      }
+      "{}"
+    }
+    val controller = newScopedController(gateway)
+    val create = async { controller.startNewChatAwait() }
+    try {
+      entered.await()
+      assertEquals(key, controller.sessionKey.value)
+      assertEquals(holdHistory, controller.historyLoading.value)
+      assertFalse(controller.healthOk.value)
+
+      create.cancelAndJoin()
+      release.complete(Unit)
+      controller.handleGatewayEvent("tick", null)
+      runCurrent()
+
+      assertTrue("Cancelled New must not strand the selected chat's recovery", controller.healthOk.value)
+      assertEquals(key, controller.sessionKey.value)
+      assertEquals("fresh-session", controller.sessionId.value)
+      assertFalse(controller.historyLoading.value)
+      assertEquals(1, gateway.callCount("sessions.create"))
+    } finally {
+      release.complete(Unit)
+      create.cancelAndJoin()
+    }
+  }
+
+  @Test
+  fun cancelledHealthPollCannotOverrideNewerSelectionSuccess() = runTest { verifyLateHealthAfterSelection(cancelOlder = true) }
+
+  private suspend fun TestScope.verifyLateHealthAfterSelection(cancelOlder: Boolean) {
+    val gateway = ScriptedGateway(json)
+    gateway.respond("chat.history") { params ->
+      val key = requireNotNull(gateway.sessionKeyOf(params))
+      historyResponse(key, listOf(ReplayHistoryMessage("assistant", key, 1)))
+    }
+    val controller = newScopedController(gateway)
+    controller.load("main")
+    runCurrent()
+    assertTrue(controller.healthOk.value)
+
+    val oldHealthStarted = CompletableDeferred<Job>()
+    val releaseOldHealth = CompletableDeferred<String>()
+    var healthRequests = 0
+    gateway.respond("health") {
+      if (healthRequests++ == 0) {
+        oldHealthStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
+        releaseOldHealth.await()
+      } else {
+        check(cancelOlder) { "new selection health unavailable" }
+        "{}"
+      }
+    }
+    controller.refresh()
+    runCurrent()
+    val oldHealthJob = oldHealthStarted.await()
+    val selectedKey = "agent:main:other"
+    controller.switchSession(selectedKey)
+    runCurrent()
+    assertEquals(cancelOlder, controller.healthOk.value)
+
+    if (cancelOlder) oldHealthJob.cancel()
+    releaseOldHealth.complete("{}")
+    oldHealthJob.join()
+    runCurrent()
+    assertEquals(selectedKey, controller.sessionKey.value)
+    assertEquals(listOf(selectedKey), controller.messageTexts)
+    assertEquals("A retired health request must not replace the new selection's result", cancelOlder, controller.healthOk.value)
+  }
+
+  @Test
+  fun lateHealthSuccessAfterDisconnectDoesNotRestoreReadiness() = runTest { verifyLateHealthAfterDisconnect(periodic = false) }
+
+  @Test
+  fun latePeriodicHealthSuccessAfterDisconnectDoesNotRestoreReadiness() = runTest { verifyLateHealthAfterDisconnect(periodic = true) }
+
+  private suspend fun TestScope.verifyLateHealthAfterDisconnect(periodic: Boolean) {
+    val gateway = ScriptedGateway(json)
+    gateway.respondWith("chat.history", history(emptyList()))
+    val controller = newScopedController(gateway)
+    if (periodic) controller.handleGatewayEvent("health", null) else controller.load("main")
+    runCurrent()
+    assertTrue(controller.healthOk.value)
+
+    val healthStarted = CompletableDeferred<Unit>()
+    val releaseHealth = CompletableDeferred<String>()
+    gateway.respond("health") {
+      healthStarted.complete(Unit)
+      releaseHealth.await()
+    }
+    if (periodic) controller.handleGatewayEvent("tick", null) else controller.refresh()
+    runCurrent()
+    healthStarted.await()
+    controller.onDisconnected("Offline")
+    val metadataRequests = gateway.callCount("chat.metadata")
+    releaseHealth.complete("{}")
+    runCurrent()
+
+    assertFalse(controller.healthOk.value)
+    assertNull(controller.sessionId.value)
+    assertEquals("Disconnected health must not trigger metadata requests", metadataRequests, gateway.callCount("chat.metadata"))
+  }
+
+  @Test
+  fun healthFromRetiredConnectionCannotPublishBeforeDisconnectCallback() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("chat.history", history(emptyList()))
+      gateway.respondWith("sessions.branches.list", """{"branches":[]}""")
+      val healthStarted = CompletableDeferred<Unit>()
+      val releaseHealth = CompletableDeferred<String>()
+      gateway.respond("health") {
+        healthStarted.complete(Unit)
+        releaseHealth.await()
+      }
+      val gatewayScope = ChatCacheScope("gateway-a", 1)
+      var physicalConnection = 1
+      val controller =
+        backgroundScope.createChatController(
+          cacheScope = { gatewayScope },
+          captureRequestLease = { capturedScope ->
+            val connection = physicalConnection
+            GatewaySession.RequestLease(
+              endpointStableId = requireNotNull(capturedScope).gatewayId,
+              isCurrentImpl = { physicalConnection == connection },
+            ) { method, params, _, withEnqueue ->
+              withEnqueue {}
+              gateway.request(method, params)
+            }
+          },
+          requestGateway = gateway::request,
+        )
+      controller.load("main")
+      runCurrent()
+      healthStarted.await()
+      assertFalse(controller.healthOk.value)
+
+      // The socket owner retires first; the controller has not received its disconnect callback.
+      physicalConnection += 1
+      val metadataRequests = gateway.callCount("chat.metadata")
+      releaseHealth.complete("{}")
+      runCurrent()
+
+      assertFalse("Health from a replaced socket must stay inert before the logical callback", controller.healthOk.value)
+      assertEquals(metadataRequests, gateway.callCount("chat.metadata"))
+    }
+
+  @Test
   fun recoveredPendingRunRefreshesHistoryBeforeTimingOut() =
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondWith(
         "chat.history",
-        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "working"),
+        history(listOf(userTurn), inFlightRun = "run-active" to "working"),
       )
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
       assertEquals(1, controller.pendingRunCount.value)
       controller.handleGatewayEvent(
         "agent",
@@ -777,8 +994,7 @@ class ChatControllerReconnectRestoreTest {
 
       gateway.respondWith(
         "chat.history",
-        historyResponse(
-          "session-1",
+        history(
           listOf(userTurn, ReplayHistoryMessage("assistant", "completed while offline", 2_000)),
         ),
       )
@@ -786,27 +1002,21 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
 
       assertEquals(0, controller.pendingRunCount.value)
-      assertEquals(
-        listOf("keep working", "completed while offline"),
-        controller.messages.value.map { it.content.single().text },
-      )
+      assertEquals(listOf("keep working", "completed while offline"), controller.messageTexts)
       assertNull(controller.errorText.value)
       assertNull(controller.streamingAssistantText.value)
       assertTrue(controller.pendingToolCalls.value.isEmpty())
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun recoveredPendingRunStopsWatchdogWhenRefreshFails() =
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondWith(
         "chat.history",
-        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "working"),
+        history(listOf(userTurn), inFlightRun = "run-active" to "working"),
       )
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
       assertEquals(1, controller.pendingRunCount.value)
 
       gateway.respond("chat.history") { error("history unavailable") }
@@ -823,17 +1033,14 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun newerRecoverySnapshotCanSupersedePendingRunWatchdogRefresh() =
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondWith(
         "chat.history",
-        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "working"),
+        history(listOf(userTurn), inFlightRun = "run-active" to "working"),
       )
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
 
       val watchdogRefreshStarted = CompletableDeferred<Unit>()
       val releaseWatchdogRefresh = CompletableDeferred<String>()
@@ -858,7 +1065,7 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
       newerRefreshStarted.await()
       releaseWatchdogRefresh.complete(
-        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "stale working"),
+        history(listOf(userTurn), inFlightRun = "run-active" to "stale working"),
       )
       runCurrent()
 
@@ -867,7 +1074,7 @@ class ChatControllerReconnectRestoreTest {
       assertNull(controller.errorText.value)
 
       releaseNewerRefresh.complete(
-        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "still working"),
+        history(listOf(userTurn), inFlightRun = "run-active" to "still working"),
       )
       runCurrent()
 
@@ -878,36 +1085,35 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun explicitRefreshClearsPriorHistoryError() =
     runTest {
-      val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      for (automaticLoad in listOf(false, true)) {
+        val gateway = ScriptedGateway(json)
+        val controller = loadController(gateway, history(emptyList()))
 
-      gateway.respond("chat.history") { error("history unavailable") }
-      controller.refresh()
-      runCurrent()
-      assertEquals("history unavailable", controller.errorText.value)
+        gateway.respond("chat.history") { error("history unavailable") }
+        controller.refresh()
+        runCurrent()
+        assertEquals("history unavailable", controller.errorText.value)
 
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
-      controller.refresh()
-      assertNull(controller.errorText.value)
-      runCurrent()
-      assertNull(controller.errorText.value)
+        gateway.respondWith("chat.history", history(emptyList()))
+        if (automaticLoad) {
+          controller.load("main")
+        } else {
+          controller.refresh()
+        }
+        assertNull(controller.errorText.value)
+        runCurrent()
+        assertNull(controller.errorText.value)
+        assertEquals(3, gateway.callCount("chat.history"))
+      }
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun disconnectInvalidatesLateHistoryError() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway, history(emptyList()))
 
       val pendingHistory = CompletableDeferred<String>()
       gateway.respond("chat.history") { pendingHistory.await() }
@@ -918,7 +1124,7 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
       assertNull(controller.errorText.value)
 
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       controller.onGatewayConnected()
       assertNull(controller.errorText.value)
       runCurrent()
@@ -926,15 +1132,12 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun disconnectInvalidatesOlderHistorySnapshotBeforeOwnershipRestore() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
       assertTrue(controller.sendMessageAwaitAcceptance("keep ownership", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
 
@@ -943,30 +1146,25 @@ class ChatControllerReconnectRestoreTest {
       controller.refresh()
       runCurrent()
       controller.onDisconnected("Reconnecting…")
-      staleHistory.complete(historyResponse("session-1", emptyList()))
+      staleHistory.complete(history(emptyList()))
       runCurrent()
 
       gateway.respondWith(
         "chat.history",
-        historyResponse("session-1", emptyList(), inFlightRun = runId to "working"),
+        history(emptyList(), inFlightRun = runId to "working"),
       )
-      controller.onGatewayConnected()
-      runCurrent()
+      connect(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
       assertEquals("working", controller.streamingAssistantText.value)
-      assertEquals(listOf("keep ownership"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("keep ownership"), controller.messageTexts)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun disconnectAfterGatewayAcceptancePreservesSendWhenAckIsLost() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway, history(emptyList()))
 
       val sendStarted = CompletableDeferred<Unit>()
       val releaseSend = CompletableDeferred<String>()
@@ -987,39 +1185,30 @@ class ChatControllerReconnectRestoreTest {
       controller.onDisconnected("Reconnecting…")
       releaseSend.completeExceptionally(GatewayRequestOutcomeUnknown("socket closed before ACK"))
       assertTrue(sendResult.await())
-      assertEquals(listOf("accepted before drop"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("accepted before drop"), controller.messageTexts)
       assertNull(controller.errorText.value)
 
       gateway.respondWith(
         "chat.history",
-        historyResponse(
-          "session-1",
+        history(
           listOf(
             ReplayHistoryMessage("user", "accepted before drop", 1_000, idempotencyKey = "$runId:user"),
             ReplayHistoryMessage("assistant", "completed once", 2_000),
           ),
         ),
       )
-      controller.onGatewayConnected()
-      runCurrent()
+      connect(controller)
 
       assertEquals(0, controller.pendingRunCount.value)
-      assertEquals(
-        listOf("accepted before drop", "completed once"),
-        controller.messages.value.map { it.content.single().text },
-      )
+      assertEquals(listOf("accepted before drop", "completed once"), controller.messageTexts)
       assertNull(controller.errorText.value)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun lostAckAdoptsCanonicalRunWhilePreservingClientHistoryIdentity() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway, history(emptyList()))
 
       gateway.respond("chat.send") { throw GatewayRequestOutcomeUnknown("ACK lost") }
       var clientRunId: String? = null
@@ -1034,10 +1223,9 @@ class ChatControllerReconnectRestoreTest {
             .jsonPrimitive
             .content
         if (recoveryHistoryCalls == 1) {
-          historyResponse("session-1", emptyList())
+          history(emptyList())
         } else {
-          historyResponse(
-            "session-1",
+          history(
             listOf(ReplayHistoryMessage("user", "canonical recovery", 1_000, idempotencyKey = "$clientRunId:user")),
             inFlightRun = "canonical-run" to "working",
           )
@@ -1049,8 +1237,7 @@ class ChatControllerReconnectRestoreTest {
       assertEquals(1, controller.pendingRunCount.value)
       assertNull(controller.streamingAssistantText.value)
 
-      advanceTimeBy(750)
-      runCurrent()
+      advanceRecoveryRetry()
 
       assertEquals(1, controller.pendingRunCount.value)
       assertEquals("working", controller.streamingAssistantText.value)
@@ -1068,17 +1255,14 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun repeatedReconnectsDoNotDuplicateRunOrRows() =
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondWith(
         "chat.history",
-        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "partial"),
+        history(listOf(userTurn), inFlightRun = "run-active" to "partial"),
       )
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
       assertEquals(1, controller.pendingRunCount.value)
 
       repeat(2) {
@@ -1094,55 +1278,47 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun reconnectKeepsOptimisticUserWhileHistoryPersistenceLags() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("survive reconnect", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, runId)
       controller.onDisconnected("Reconnecting…")
       gateway.respondWith(
         "chat.history",
-        historyResponse("session-1", emptyList(), inFlightRun = runId to "working"),
+        history(emptyList(), inFlightRun = runId to "working"),
       )
-      controller.onGatewayConnected()
-      runCurrent()
+      connect(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
       assertEquals("working", controller.streamingAssistantText.value)
-      assertEquals(listOf("survive reconnect"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("survive reconnect"), controller.messageTexts)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun reconnectStaleSnapshotCannotReplaceDisconnectedLocalRun() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("local work", "off", emptyList()))
       val localRunId = requireNotNull(gateway.lastRunId)
       controller.onDisconnected("Reconnecting…")
       gateway.respondWith(
         "chat.history",
-        historyResponse(
-          "session-1",
+        history(
           listOf(ReplayHistoryMessage("user", "local work", 1_000, idempotencyKey = "$localRunId:user")),
           inFlightRun = "run-stale" to "old text",
         ),
       )
-      controller.onGatewayConnected()
-      runCurrent()
+      connect(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
       assertNull(controller.streamingAssistantText.value)
@@ -1167,27 +1343,23 @@ class ChatControllerReconnectRestoreTest {
       assertEquals("ours", controller.streamingAssistantText.value)
       assertTrue(controller.pendingToolCalls.value.isEmpty())
       assertNull(controller.errorText.value)
-      assertEquals(listOf("local work"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("local work"), controller.messageTexts)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun reconnectRetiresPersistedLocalRunBeforeAdoptingOtherRun() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("local work", "off", emptyList()))
       val localRunId = requireNotNull(gateway.lastRunId)
       controller.onDisconnected("Reconnecting…")
       gateway.respondWith(
         "chat.history",
-        historyResponse(
-          "session-1",
+        history(
           listOf(
             ReplayHistoryMessage("user", "local work", 1_000, idempotencyKey = "$localRunId:user"),
             ReplayHistoryMessage("assistant", "local done", 2_000),
@@ -1195,12 +1367,11 @@ class ChatControllerReconnectRestoreTest {
           inFlightRun = "run-other" to "other working",
         ),
       )
-      controller.onGatewayConnected()
-      runCurrent()
+      connect(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
       assertEquals("other working", controller.streamingAssistantText.value)
-      assertEquals(listOf("local work", "local done"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("local work", "local done"), controller.messageTexts)
       controller.handleGatewayEvent(
         "chat",
         chatDeltaPayload("main", localRunId, 1, "stale", "stale local"),
@@ -1209,27 +1380,23 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun reconnectReplacesPreviouslyAdoptedRunWithAuthoritativeSnapshotRun() =
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondWith(
         "chat.history",
-        historyResponse("session-1", emptyList(), inFlightRun = "run-a" to "old work"),
+        history(emptyList(), inFlightRun = "run-a" to "old work"),
       )
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
       assertEquals(1, controller.pendingRunCount.value)
       assertEquals("old work", controller.streamingAssistantText.value)
 
       controller.onDisconnected("Reconnecting…")
       gateway.respondWith(
         "chat.history",
-        historyResponse("session-1", emptyList(), inFlightRun = "run-b" to "current work"),
+        history(emptyList(), inFlightRun = "run-b" to "current work"),
       )
-      controller.onGatewayConnected()
-      runCurrent()
+      connect(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
       assertEquals("current work", controller.streamingAssistantText.value)
@@ -1240,67 +1407,59 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun seqGapKeepsOptimisticUserWhileHistoryPersistenceLags() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("survive gap", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, runId)
       gateway.respondWith(
         "chat.history",
-        historyResponse("session-1", emptyList(), inFlightRun = runId to "working"),
+        history(emptyList(), inFlightRun = runId to "working"),
       )
-      controller.handleGatewayEvent("seqGap", null)
-      runCurrent()
+      recoverSeqGap(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
       assertEquals("working", controller.streamingAssistantText.value)
-      assertEquals(listOf("survive gap"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("survive gap"), controller.messageTexts)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun sameSessionRefreshKeepsOptimisticRunOwnership() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("survive refresh", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, runId)
       gateway.respondWith(
         "chat.history",
-        historyResponse("session-1", emptyList(), inFlightRun = runId to "working"),
+        history(emptyList(), inFlightRun = runId to "working"),
       )
       controller.refresh()
       runCurrent()
 
       assertEquals(1, controller.pendingRunCount.value)
       assertEquals("working", controller.streamingAssistantText.value)
-      assertEquals(listOf("survive refresh"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("survive refresh"), controller.messageTexts)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun sameSessionRefreshClearsTransientUiForResolvedRun() =
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondWith(
         "chat.history",
-        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "partial"),
+        history(listOf(userTurn), inFlightRun = "run-active" to "partial"),
       )
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
       controller.handleGatewayEvent(
         "agent",
         """{"sessionKey":"main","runId":"run-active","seq":2,"ts":10,"stream":"tool","data":{"phase":"start","name":"exec","toolCallId":"tool-1"}}""",
@@ -1310,8 +1469,7 @@ class ChatControllerReconnectRestoreTest {
 
       gateway.respondWith(
         "chat.history",
-        historyResponse(
-          "session-1",
+        history(
           listOf(userTurn, ReplayHistoryMessage("assistant", "complete", 2_000)),
         ),
       )
@@ -1321,98 +1479,85 @@ class ChatControllerReconnectRestoreTest {
       assertEquals(0, controller.pendingRunCount.value)
       assertNull(controller.streamingAssistantText.value)
       assertTrue(controller.pendingToolCalls.value.isEmpty())
-      assertEquals(listOf("keep working", "complete"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("keep working", "complete"), controller.messageTexts)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun seqGapMissingRunClearsPendingButKeepsOptimisticUser() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("finished during gap", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
-      controller.handleGatewayEvent("seqGap", null)
-      runCurrent()
+      awaitStartedRun(controller, runId)
+      gateway.respondWith("chat.history", history(emptyList()))
+      recoverSeqGap(controller)
 
       assertEquals(0, controller.pendingRunCount.value)
       assertNull(controller.streamingAssistantText.value)
-      assertEquals(listOf("finished during gap"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("finished during gap"), controller.messageTexts)
 
       gateway.respondWith(
         "chat.history",
-        historyResponse(
-          "session-1",
+        history(
           listOf(
             ReplayHistoryMessage("user", "finished during gap", 1_000, idempotencyKey = "$runId:user"),
             ReplayHistoryMessage("assistant", "done", 2_000),
           ),
         ),
       )
-      advanceTimeBy(750)
-      runCurrent()
+      advanceRecoveryRetry()
 
-      assertEquals(listOf("finished during gap", "done"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("finished during gap", "done"), controller.messageTexts)
       assertNull(controller.errorText.value)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun recoveryRetriesWhenUserPersistsBeforeAssistantReply() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("await reply", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, runId)
       val persistedUser = ReplayHistoryMessage("user", "await reply", 1_000, idempotencyKey = "$runId:user")
-      gateway.respondWith("chat.history", historyResponse("session-1", listOf(persistedUser)))
-      controller.handleGatewayEvent("seqGap", null)
-      runCurrent()
-      assertEquals(listOf("await reply"), controller.messages.value.map { it.content.single().text })
+      gateway.respondWith("chat.history", history(listOf(persistedUser)))
+      recoverSeqGap(controller)
+      assertEquals(listOf("await reply"), controller.messageTexts)
 
       gateway.respondWith(
         "chat.history",
-        historyResponse(
-          "session-1",
+        history(
           listOf(persistedUser, ReplayHistoryMessage("assistant", "done", 2_000)),
         ),
       )
-      advanceTimeBy(750)
-      runCurrent()
+      advanceRecoveryRetry()
 
-      assertEquals(listOf("await reply", "done"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("await reply", "done"), controller.messageTexts)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun recoveryPerformsFinalRefreshWhenAssistantPersistsAfterFirstRetry() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("late reply", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, runId)
       val persistedUser = ReplayHistoryMessage("user", "late reply", 1_000, idempotencyKey = "$runId:user")
       var historyCall = 0
       gateway.respond("chat.history") {
         historyCall += 1
-        historyResponse(
-          "session-1",
+        history(
           if (historyCall < 3) {
             listOf(persistedUser)
           } else {
@@ -1421,33 +1566,28 @@ class ChatControllerReconnectRestoreTest {
         )
       }
 
-      controller.handleGatewayEvent("seqGap", null)
-      runCurrent()
-      advanceTimeBy(750)
-      runCurrent()
-      assertEquals(listOf("late reply"), controller.messages.value.map { it.content.single().text })
+      recoverSeqGap(controller)
+      advanceRecoveryRetry()
+      assertEquals(listOf("late reply"), controller.messageTexts)
 
       advanceTimeBy(119_250)
       runCurrent()
-      assertEquals(listOf("late reply", "eventually done"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("late reply", "eventually done"), controller.messageTexts)
       assertNull(controller.errorText.value)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun newerRunReconciliationKeepsOlderUnresolvedReply() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("first", "off", emptyList()))
       val firstRunId = requireNotNull(gateway.lastRunId)
       val firstUser = ReplayHistoryMessage("user", "first", 1_000, idempotencyKey = "$firstRunId:user")
-      gateway.respondWith("chat.history", historyResponse("session-1", listOf(firstUser)))
+      gateway.respondWith("chat.history", history(listOf(firstUser)))
       controller.handleGatewayEvent(
         "chat",
         chatTerminalPayload("main", firstRunId, seq = 2, assistantText = "first done"),
@@ -1464,7 +1604,7 @@ class ChatControllerReconnectRestoreTest {
       val secondReply = ReplayHistoryMessage("assistant", "second done", 3_000)
       gateway.respondWith(
         "chat.history",
-        historyResponse("session-1", listOf(firstUser, secondUser, secondReply)),
+        history(listOf(firstUser, secondUser, secondReply)),
       )
       controller.handleGatewayEvent("chat", chatTerminalPayload("main", firstRunId, seq = 3, state = "error"))
       runCurrent()
@@ -1475,12 +1615,11 @@ class ChatControllerReconnectRestoreTest {
         chatTerminalPayload("main", secondRunId, seq = 2, assistantText = "second done"),
       )
       runCurrent()
-      assertEquals(listOf("first", "second", "second done"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("first", "second", "second done"), controller.messageTexts)
 
       gateway.respondWith(
         "chat.history",
-        historyResponse(
-          "session-1",
+        history(
           listOf(
             firstUser,
             ReplayHistoryMessage("assistant", "first done", 1_500),
@@ -1489,26 +1628,19 @@ class ChatControllerReconnectRestoreTest {
           ),
         ),
       )
-      advanceTimeBy(750)
-      runCurrent()
+      advanceRecoveryRetry()
 
-      assertEquals(
-        listOf("first", "first done", "second", "second done"),
-        controller.messages.value.map { it.content.single().text },
-      )
+      assertEquals(listOf("first", "first done", "second", "second done"), controller.messageTexts)
       assertNull(controller.errorText.value)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun newerRefreshCarriesUnresolvedReplyReconciliation() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("carry reply", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
@@ -1516,8 +1648,7 @@ class ChatControllerReconnectRestoreTest {
       var historyCall = 0
       gateway.respond("chat.history") {
         historyCall += 1
-        historyResponse(
-          "session-1",
+        history(
           if (historyCall < 4) {
             listOf(persistedUser)
           } else {
@@ -1526,40 +1657,34 @@ class ChatControllerReconnectRestoreTest {
         )
       }
 
-      controller.handleGatewayEvent("seqGap", null)
-      runCurrent()
-      advanceTimeBy(750)
-      runCurrent()
+      recoverSeqGap(controller)
+      advanceRecoveryRetry()
       controller.refresh()
       runCurrent()
-      advanceTimeBy(750)
-      runCurrent()
+      advanceRecoveryRetry()
 
-      assertEquals(listOf("carry reply", "carried done"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("carry reply", "carried done"), controller.messageTexts)
       assertNull(controller.errorText.value)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun successfulRecoveryRetryClearsHistoryError() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("recover error", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, runId)
       var historyCall = 0
       gateway.respond("chat.history") {
         historyCall += 1
         if (historyCall == 1) {
           error("history unavailable")
         }
-        historyResponse(
-          "session-1",
+        history(
           listOf(
             ReplayHistoryMessage("user", "recover error", 1_000, idempotencyKey = "$runId:user"),
             ReplayHistoryMessage("assistant", "recovered", 2_000),
@@ -1567,34 +1692,28 @@ class ChatControllerReconnectRestoreTest {
         )
       }
 
-      controller.handleGatewayEvent("seqGap", null)
-      runCurrent()
+      recoverSeqGap(controller)
       assertEquals("history unavailable", controller.errorText.value)
-      advanceTimeBy(750)
-      runCurrent()
+      advanceRecoveryRetry()
 
       assertNull(controller.errorText.value)
-      assertEquals(listOf("recover error", "recovered"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("recover error", "recovered"), controller.messageTexts)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun reconnectFailureStillExpiresUnconfirmedUser() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("never persisted", "off", emptyList()))
       controller.onDisconnected("Reconnecting…")
       gateway.respond("chat.history") { error("history unavailable") }
-      controller.onGatewayConnected()
-      runCurrent()
+      connect(controller)
 
-      assertEquals(listOf("never persisted"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("never persisted"), controller.messageTexts)
 
       advanceTimeBy(120_000)
       runCurrent()
@@ -1604,32 +1723,30 @@ class ChatControllerReconnectRestoreTest {
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun lateTerminalAfterTimeoutRefreshesHistoryWithoutClearingNewerRun() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("slow first", "off", emptyList()))
       val firstRunId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, firstRunId)
       advanceTimeBy(120_000)
       runCurrent()
       assertEquals("Timed out waiting for a reply; try again or refresh.", controller.errorText.value)
 
       assertTrue(controller.sendMessageAwaitAcceptance("newer work", "off", emptyList()))
       val secondRunId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, secondRunId)
       controller.handleGatewayEvent(
         "chat",
         chatDeltaPayload("main", secondRunId, 1, "new", "new reply"),
       )
       gateway.respondWith(
         "chat.history",
-        historyResponse(
-          "session-1",
+        history(
           listOf(
             ReplayHistoryMessage("user", "slow first", 1_000, idempotencyKey = "$firstRunId:user"),
             ReplayHistoryMessage("assistant", "slow done", 2_000),
@@ -1646,22 +1763,16 @@ class ChatControllerReconnectRestoreTest {
       assertEquals(1, controller.pendingRunCount.value)
       assertEquals("new reply", controller.streamingAssistantText.value)
       assertNull(controller.errorText.value)
-      assertEquals(
-        listOf("slow first", "slow done", "newer work"),
-        controller.messages.value.map { it.content.single().text },
-      )
+      assertEquals(listOf("slow first", "slow done", "newer work"), controller.messageTexts)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun staleRecoveryCompletionCannotCancelNewerReconciliation() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
       assertTrue(controller.sendMessageAwaitAcceptance("ordered recovery", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
 
@@ -1675,48 +1786,45 @@ class ChatControllerReconnectRestoreTest {
             firstRecoveryStarted.complete(Unit)
             releaseFirstRecovery.await()
           }
-          2 -> historyResponse("session-1", emptyList())
-          else ->
-            historyResponse(
-              "session-1",
+
+          2 -> {
+            history(emptyList())
+          }
+
+          else -> {
+            history(
               listOf(
                 ReplayHistoryMessage("user", "ordered recovery", 1_000, idempotencyKey = "$runId:user"),
                 ReplayHistoryMessage("assistant", "done", 2_000),
               ),
             )
+          }
         }
       }
 
-      controller.handleGatewayEvent("seqGap", null)
-      runCurrent()
+      recoverSeqGap(controller)
       firstRecoveryStarted.await()
-      controller.handleGatewayEvent("seqGap", null)
+      recoverSeqGap(controller)
+      releaseFirstRecovery.complete(history(emptyList()))
       runCurrent()
-      releaseFirstRecovery.complete(historyResponse("session-1", emptyList()))
-      runCurrent()
-      advanceTimeBy(750)
-      runCurrent()
+      advanceRecoveryRetry()
 
-      assertEquals(listOf("ordered recovery", "done"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("ordered recovery", "done"), controller.messageTexts)
       assertNull(controller.errorText.value)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun olderSameGenerationRetryCannotOverwriteTerminalHistory() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
       assertTrue(controller.sendMessageAwaitAcceptance("ordered result", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
 
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
-      controller.handleGatewayEvent("seqGap", null)
-      runCurrent()
+      gateway.respondWith("chat.history", history(emptyList()))
+      recoverSeqGap(controller)
 
       val retryStarted = CompletableDeferred<Unit>()
       val releaseRetry = CompletableDeferred<String>()
@@ -1727,8 +1835,7 @@ class ChatControllerReconnectRestoreTest {
           retryStarted.complete(Unit)
           releaseRetry.await()
         } else {
-          historyResponse(
-            "session-1",
+          history(
             listOf(
               ReplayHistoryMessage("user", "ordered result", 1_000, idempotencyKey = "$runId:user"),
               ReplayHistoryMessage("assistant", "done", 2_000),
@@ -1736,32 +1843,29 @@ class ChatControllerReconnectRestoreTest {
           )
         }
       }
-      advanceTimeBy(750)
-      runCurrent()
+      advanceRecoveryRetry()
       retryStarted.await()
       controller.handleGatewayEvent(
         "chat",
         chatTerminalPayload("main", runId, seq = 2, assistantText = "done"),
       )
       runCurrent()
-      releaseRetry.complete(historyResponse("session-1", emptyList()))
+      releaseRetry.complete(history(emptyList()))
       runCurrent()
 
-      assertEquals(listOf("ordered result", "done"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("ordered result", "done"), controller.messageTexts)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun newerSameGenerationHistoryCompletionSuppressesOlderFailureAndClearsLoading() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
       assertTrue(controller.sendMessageAwaitAcceptance("ordered loading", "off", emptyList()))
       val runId = requireNotNull(gateway.lastRunId)
+      awaitStartedRun(controller, runId)
 
       val recoveryStarted = CompletableDeferred<Unit>()
       val releaseRecovery = CompletableDeferred<String>()
@@ -1772,8 +1876,7 @@ class ChatControllerReconnectRestoreTest {
           recoveryStarted.complete(Unit)
           releaseRecovery.await()
         } else {
-          historyResponse(
-            "session-1",
+          history(
             listOf(
               ReplayHistoryMessage("user", "ordered loading", 1_000, idempotencyKey = "$runId:user"),
               ReplayHistoryMessage("assistant", "done", 2_000),
@@ -1782,8 +1885,7 @@ class ChatControllerReconnectRestoreTest {
         }
       }
 
-      controller.handleGatewayEvent("seqGap", null)
-      runCurrent()
+      recoverSeqGap(controller)
       recoveryStarted.await()
       assertTrue(controller.historyLoading.value)
       controller.handleGatewayEvent(
@@ -1793,34 +1895,30 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
 
       assertFalse(controller.historyLoading.value)
-      assertEquals(listOf("ordered loading", "done"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("ordered loading", "done"), controller.messageTexts)
 
       releaseRecovery.completeExceptionally(IllegalStateException("older history failed"))
       runCurrent()
       assertFalse(controller.historyLoading.value)
-      assertEquals(listOf("ordered loading", "done"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("ordered loading", "done"), controller.messageTexts)
       assertNull(controller.errorText.value)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun seqGapStaleSnapshotCannotReplaceLocallyOwnedRun() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
+      gateway.respondWith("chat.history", history(emptyList()))
       gateway.respondChatSend(status = "started")
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
 
       assertTrue(controller.sendMessageAwaitAcceptance("new work", "off", emptyList()))
       val localRunId = requireNotNull(gateway.lastRunId)
       gateway.respondWith(
         "chat.history",
-        historyResponse("session-1", emptyList(), inFlightRun = "run-stale" to "old text"),
+        history(emptyList(), inFlightRun = "run-stale" to "old text"),
       )
-      controller.handleGatewayEvent("seqGap", null)
-      runCurrent()
+      recoverSeqGap(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
       assertNull(controller.streamingAssistantText.value)
@@ -1829,25 +1927,21 @@ class ChatControllerReconnectRestoreTest {
         chatDeltaPayload("main", localRunId, 1, "ours", "ours"),
       )
       assertEquals("ours", controller.streamingAssistantText.value)
-      assertEquals(listOf("new work"), controller.messages.value.map { it.content.single().text })
+      assertEquals(listOf("new work"), controller.messageTexts)
     }
 
   @Test
-  @OptIn(ExperimentalCoroutinesApi::class)
   fun seqGapRefetchesHistoryAndRestoresInFlightRun() =
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondWith(
         "chat.history",
-        historyResponse("session-1", listOf(userTurn), inFlightRun = "run-active" to "still going"),
+        history(listOf(userTurn), inFlightRun = "run-active" to "still going"),
       )
-      val controller = newController(gateway)
-      controller.load("main")
-      runCurrent()
+      val controller = loadController(gateway)
       assertEquals(1, controller.pendingRunCount.value)
 
-      controller.handleGatewayEvent("seqGap", null)
-      runCurrent()
+      recoverSeqGap(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
       assertEquals("still going", controller.streamingAssistantText.value)

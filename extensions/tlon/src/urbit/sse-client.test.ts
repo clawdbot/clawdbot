@@ -172,13 +172,16 @@ describe("UrbitSSEClient", () => {
         const cancel = vi.fn(() => {
           throw new Error(`${label} cancel failed`);
         });
-        const release = vi.fn().mockResolvedValue(undefined);
+        const response = new Response(new ReadableStream<Uint8Array>({ cancel }));
+        const release = vi.fn(async () => {
+          void response.body?.cancel().catch(() => undefined);
+        });
         return {
           method,
           cancel,
           release,
           result: {
-            response: new Response(new ReadableStream<Uint8Array>({ cancel })),
+            response,
             finalUrl: "https://example.com",
             release,
           },
@@ -546,6 +549,29 @@ describe("UrbitSSEClient", () => {
         client.processEvent('id: 20\ndata: {"id":1,"json":{"ok":true}}'),
       ).rejects.toThrow("sqlite unavailable");
       expect(mockUrbitFetch).not.toHaveBeenCalled();
+    });
+
+    it("accepts data and id lines without a space after the colon", async () => {
+      const mockUrbitFetch = vi.mocked(urbitFetch);
+      mockUrbitFetch.mockResolvedValue({
+        response: { ok: true, status: 204 } as unknown as Response,
+        finalUrl: "https://example.com",
+        release: vi.fn().mockResolvedValue(undefined),
+      });
+      const handler = vi.fn();
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+      client.eventHandlers.set(1, { event: handler });
+
+      await expect(
+        client.processEvent('id:20\ndata:{"id":1,"json":{"ok":true}}'),
+      ).resolves.toBeUndefined();
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0]?.[0]).toEqual({ ok: true });
+      const body = mockUrbitFetch.mock.calls[0]?.[0].init?.body;
+      if (typeof body !== "string") {
+        throw new Error("Expected string ACK request body");
+      }
+      expect(JSON.parse(body)).toEqual([{ id: expect.any(Number), action: "ack", "event-id": 20 }]);
     });
 
     it("does not advance the ack watermark when the ack request fails", async () => {

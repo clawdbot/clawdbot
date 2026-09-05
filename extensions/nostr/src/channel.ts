@@ -33,7 +33,7 @@ import {
 import { normalizePubkey } from "./nostr-key-utils.js";
 import type { ProfilePublishResult } from "./nostr-profile.js";
 import { resolveNostrOutboundSessionRoute } from "./session-route.js";
-import { nostrSetupAdapter, nostrSetupContract, nostrSetupWizard } from "./setup-surface.js";
+import { nostrSetupContract, nostrSetupWizard } from "./setup-surface.js";
 import {
   listNostrAccountIds,
   resolveDefaultNostrAccountId,
@@ -54,6 +54,15 @@ function normalizeNostrTarget(target: string): string {
   } catch {
     // Invalid prefixed tokens must stay distinct from "*" so formatting cannot widen access.
     return target.trim();
+  }
+}
+
+function inferNostrTargetChatType(target: string): "direct" | undefined {
+  try {
+    normalizePubkey(stripNostrTargetPrefix(target));
+    return "direct";
+  } catch {
+    return undefined;
   }
 }
 
@@ -139,7 +148,6 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
     },
     reload: { configPrefixes: ["channels.nostr"] },
     configSchema: buildChannelConfigSchema(NostrConfigSchema),
-    setup: nostrSetupAdapter,
     setupContract: nostrSetupContract,
     setupWizard: nostrSetupWizard,
     config: {
@@ -157,6 +165,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
     messaging: {
       targetPrefixes: ["nostr"],
       normalizeTarget: normalizeNostrTarget,
+      inferTargetChatType: ({ to }) => inferNostrTargetChatType(to),
       targetResolver: {
         looksLikeId: (input, normalized) => {
           const trimmed = normalized?.trim() || stripNostrTargetPrefix(input);

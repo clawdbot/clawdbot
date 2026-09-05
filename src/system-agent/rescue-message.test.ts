@@ -23,6 +23,8 @@ function readLastAuditEntry(): Record<string, unknown> {
   return (listSystemAgentAuditEntriesForTests().at(-1)?.value ?? {}) as Record<string, unknown>;
 }
 
+const runPluginInstallCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
+
 const mockConfig = vi.hoisted(() => {
   const state = {
     path: "/tmp/openclaw.json",
@@ -82,6 +84,10 @@ const mockConfig = vi.hoisted(() => {
     ),
   };
 });
+
+vi.mock("../cli/plugins-install-command.js", () => ({
+  runPluginInstallCommand: runPluginInstallCommandMock,
+}));
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -203,6 +209,7 @@ describe("OpenClaw rescue message", () => {
 
   beforeEach(() => {
     mockConfig.reset();
+    runPluginInstallCommandMock.mockClear();
   });
 
   afterAll(async () => {
@@ -289,9 +296,10 @@ describe("OpenClaw rescue message", () => {
         }),
       };
 
-      await expect(
-        runRescue("/openclaw doctor fix", cfg, commandContext(), deps),
-      ).resolves.toContain("run `openclaw doctor --fix` in a terminal");
+      const reply = await runRescue("/openclaw doctor fix", cfg, commandContext(), deps);
+      expect(reply).toContain("machine running OpenClaw");
+      expect(reply).toContain("with OpenClaw stopped");
+      expect(reply).toContain("run `openclaw doctor --fix`");
       await expect(runRescue("/openclaw yes", cfg, commandContext(), deps)).resolves.toBe(
         "No pending OpenClaw rescue change is waiting for approval.",
       );
@@ -495,16 +503,11 @@ describe("OpenClaw rescue message", () => {
 
   it("refuses plugin install from remote rescue", async () => {
     const cfg: OpenClawConfig = {};
-    const deps = {
-      runPluginInstall: vi.fn(async () => {
-        throw new Error("remote rescue must not install plugins");
-      }),
-    };
 
     await expect(
-      runRescue("/openclaw plugin install clawhub:openclaw-demo", cfg, commandContext(), deps),
+      runRescue("/openclaw plugin install clawhub:openclaw-demo", cfg),
     ).resolves.toContain("cannot install plugins from a message channel");
-    expect(deps.runPluginInstall).not.toHaveBeenCalled();
+    expect(runPluginInstallCommandMock).not.toHaveBeenCalled();
   });
 
   it("allows plugin list and search from remote rescue", async () => {
@@ -665,6 +668,7 @@ describe("OpenClaw rescue message", () => {
           workspace: "/tmp/work",
           agentDir: "/tmp/agent-work",
           bootstrapPending: true,
+          config: cfg,
         })),
       };
 
@@ -679,11 +683,16 @@ describe("OpenClaw rescue message", () => {
 
       expect(deps.createAgent).toHaveBeenCalledTimes(1);
       const [agentParams] = requireFirstMockCall(deps.createAgent, "agents add") as unknown as [
-        { name: string; workspace: string },
+        {
+          name: string;
+          workspace: string;
+          provenance: { createdVia: string; creatorAgentId: string };
+        },
       ];
       expect(agentParams).toEqual({
         name: "work",
         workspace: "/tmp/work",
+        provenance: { createdVia: "agent", creatorAgentId: "openclaw" },
       });
       const audit = readLastAuditEntry() as {
         operation?: string;

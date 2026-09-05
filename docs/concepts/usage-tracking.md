@@ -25,6 +25,20 @@ title: "Usage tracking"
 
 `openclaw channels list` no longer prints provider usage; it points users to `openclaw status` or `openclaw models list` instead.
 
+## Usage date ranges
+
+The Gateway methods `usage.cost` and `sessions.usage` interpret date ranges in
+UTC by default. In `mode: "specific"`, use a valid IANA `timeZone`, such as
+`Europe/Vienna`, to follow local calendar days and daylight saving changes.
+It takes precedence over the legacy `utcOffset` field.
+
+Without a `timeZone`, a fixed `utcOffset` must be between `UTC-12:00` and
+`UTC+14:00`, inclusive (for example, `UTC+5:30`). An invalid, nonblank offset
+returns `INVALID_REQUEST` instead of silently using UTC. Omitting both fields
+uses UTC. `usage.cost` also treats a blank offset as omitted; `sessions.usage`
+requires any supplied offset to match the UTC offset format, so omit the field
+instead of sending a blank value.
+
 ## Anthropic and OpenAI cost history
 
 Subscription quota and API billing are different provider surfaces:
@@ -315,7 +329,6 @@ provider-neutral for CLI, app, and Control UI consumers.
 - **DeepSeek**: API key via env/config/auth store (`DEEPSEEK_API_KEY`).
   Shows each provider-reported currency balance.
 - **GitHub Copilot**: OAuth tokens in auth profiles.
-- **Gemini CLI**: OAuth tokens in auth profiles.
 - **MiniMax**: API key or MiniMax OAuth auth profile. OpenClaw treats
   `minimax`, `minimax-cn`, and `minimax-portal` as the same MiniMax quota
   surface, prefers stored MiniMax OAuth when present, and otherwise falls back

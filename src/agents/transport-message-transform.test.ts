@@ -55,6 +55,60 @@ function assistantToolCall(
 }
 
 describe("transformTransportMessages synthetic tool-result policy", () => {
+  it("preserves unframed tool results only for a selected compaction replay window", () => {
+    const model = makeModel("openai-responses", "openai", "gpt-5.4");
+    const messages = [
+      assistantToolCall("call_early"),
+      { role: "user", content: "continue", timestamp: Date.now() },
+      assistantToolCall("call_after"),
+      {
+        role: "toolResult",
+        toolCallId: "call_early",
+        toolName: "read",
+        content: [{ type: "text", text: "displaced retained result" }],
+        isError: false,
+        timestamp: Date.now(),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_before",
+        toolName: "read",
+        content: [{ type: "text", text: "real result after compaction" }],
+        isError: false,
+        timestamp: Date.now(),
+      },
+    ] as Context["messages"];
+
+    const normal = transformTransportMessages(messages, model);
+    const compactionReplay = transformTransportMessages(messages, model, undefined, {
+      preserveUnframedToolResults: true,
+    });
+
+    expect(normal.filter((message) => message.role === "toolResult")).toMatchObject([
+      {
+        toolCallId: "call_early",
+        content: [{ type: "text", text: "displaced retained result" }],
+      },
+      { toolCallId: "call_after", content: [{ type: "text", text: "aborted" }] },
+    ]);
+    expect(compactionReplay.filter((message) => message.role === "toolResult")).toMatchObject([
+      {
+        toolCallId: "call_early",
+        content: [{ type: "text", text: "displaced retained result" }],
+      },
+      { toolCallId: "call_after", content: [{ type: "text", text: "aborted" }] },
+      {
+        toolCallId: "call_before",
+        content: [{ type: "text", text: "real result after compaction" }],
+      },
+    ]);
+    expect(
+      compactionReplay.filter(
+        (message) => message.role === "toolResult" && message.toolCallId === "call_early",
+      ),
+    ).toHaveLength(1);
+  });
+
   it.each([
     {
       source: { provider: "anthropic", model: "claude-fable-5" },
@@ -112,6 +166,28 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
         canonicalModelId: "claude-fable-5",
       },
     },
+    // Fable 5.1 binding is one-way: nothing else reads its blocks (live: model_binding_mismatch).
+    {
+      source: { provider: "anthropic", model: "claude-fable-5-1" },
+      target: { provider: "anthropic", model: "claude-opus-5" },
+    },
+    {
+      source: { provider: "anthropic", model: "claude-fable-5-1" },
+      target: { provider: "anthropic", model: "claude-sonnet-5" },
+    },
+    {
+      source: { provider: "anthropic", model: "claude-fable-5-1" },
+      target: { provider: "anthropic", model: "claude-fable-5" },
+    },
+    {
+      source: { provider: "anthropic", model: "claude-opus-5" },
+      target: { provider: "anthropic", model: "claude-sonnet-5" },
+    },
+    // Non-Claude Anthropic-compatible sources never ride the Fable 5.1 read path.
+    {
+      source: { provider: "kimi-coding", model: "kimi-k2-thinking" },
+      target: { provider: "anthropic", model: "claude-fable-5-1" },
+    },
   ])("drops model-bound thinking for Fable/Mythos switches", ({ source, target }) => {
     const result = transformTransportMessages(
       [
@@ -139,6 +215,53 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(result[0]).toMatchObject({
       role: "assistant",
       content: [{ type: "text", text: "visible answer" }],
+    });
+  });
+
+  // Live-verified 2026-09-02 with thinking-binding-controls: these replays return
+  // input_transformations: [] on claude-fable-5-1, so the earlier reasoning stays usable.
+  it.each([
+    { source: { provider: "anthropic", model: "claude-opus-5" } },
+    { source: { provider: "anthropic", model: "claude-sonnet-5" } },
+    { source: { provider: "anthropic", model: "claude-opus-4-8" } },
+    { source: { provider: "anthropic", model: "claude-fable-5" } },
+    {
+      source: {
+        provider: "microsoft-foundry",
+        model: "prod-primary",
+        responseModel: "claude-opus-5",
+      },
+    },
+  ])("keeps readable Claude thinking when moving onto Fable 5.1", ({ source }) => {
+    const result = transformTransportMessages(
+      [
+        {
+          role: "assistant",
+          provider: source.provider,
+          api: "anthropic-messages",
+          model: source.model,
+          responseModel: source.responseModel,
+          stopReason: "stop",
+          timestamp: Date.now(),
+          content: [
+            {
+              type: "thinking",
+              thinking: "earlier reasoning",
+              thinkingSignature: "sig_readable",
+            },
+            { type: "text", text: "visible answer" },
+          ],
+        },
+      ] as Context["messages"],
+      makeModel("anthropic-messages", "anthropic", "claude-fable-5-1"),
+    );
+
+    expect(result[0]).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "earlier reasoning", thinkingSignature: "sig_readable" },
+        { type: "text", text: "visible answer" },
+      ],
     });
   });
 

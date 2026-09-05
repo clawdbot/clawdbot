@@ -1,6 +1,8 @@
+import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 // Cron scratch CLI: private per-job prompt context reads and compare-and-swap writes.
 import type { Command } from "commander";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
+import { createCronOutputCommand } from "./output-mode.js";
 import { handleCronCliError, printCronJson } from "./shared.js";
 import { readCronScratchContent } from "./trigger-options.js";
 
@@ -18,8 +20,8 @@ function parseExpectedRevision(value: string | undefined): number | undefined {
   if (value === undefined) {
     return undefined;
   }
-  const revision = Number(value);
-  if (!Number.isSafeInteger(revision) || revision < 0) {
+  const revision = parseStrictNonNegativeInteger(value);
+  if (revision === undefined) {
     throw new Error("--expected-revision must be a non-negative integer");
   }
   return revision;
@@ -27,15 +29,13 @@ function parseExpectedRevision(value: string | undefined): number | undefined {
 
 export function registerCronScratchCommand(cron: Command) {
   addGatewayClientOptions(
-    cron
-      .command("scratch")
-      .description("Read or replace a cron job's private scratch")
+    createCronOutputCommand(cron, "scratch")
+      .description("Read or replace an automation's private scratch")
       .argument("<id>", "Job id")
       .option("--set <text>", "Replace scratch with exact text")
       .option("--file <path>", "Replace scratch from a file, or - for stdin")
       .option("--unset", "Remove the scratch row", false)
       .option("--expected-revision <n>", "Require the current scratch revision")
-      .option("--json", "Output JSON", false)
       .action(async (id, opts) => {
         try {
           const mutations = [

@@ -21,7 +21,10 @@ import {
   type JsonSchemaValidationError,
   type JsonSchemaValue,
 } from "../../plugins/schema-validator.js";
-import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
+import { authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
+import { WRITE_SCOPE } from "../operator-scopes.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -96,7 +99,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     }
     respond(true, result, undefined);
   },
-  "plugins.sessionAction": async ({ params, client, respond }) => {
+  "plugins.sessionAction": async ({ params, client, respond, context }) => {
     if (
       !assertValidParams(
         params,
@@ -109,7 +112,26 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     }
     const pluginId = normalizeOptionalString(params.pluginId);
     const actionId = normalizeOptionalString(params.actionId);
-    const sessionKey = normalizeOptionalString(params.sessionKey);
+    const rawSessionKey = normalizeOptionalString(params.sessionKey);
+    const sessionOwner = rawSessionKey
+      ? resolveRequestedSessionAgentId(
+          context.getRuntimeConfig(),
+          rawSessionKey,
+          normalizeOptionalString(params.agentId),
+        )
+      : undefined;
+    if (sessionOwner && !sessionOwner.ok) {
+      respond(false, undefined, sessionOwner.error);
+      return;
+    }
+    const sessionKey =
+      rawSessionKey && sessionOwner?.ok
+        ? resolveStoredSessionKeyForAgentStore({
+            cfg: context.getRuntimeConfig(),
+            agentId: sessionOwner.agentId,
+            sessionKey: rawSessionKey,
+          })
+        : undefined;
     if (!pluginId || !actionId) {
       respond(
         false,
@@ -140,18 +162,14 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       return;
     }
     const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-    const hasAdmin = scopes.includes(ADMIN_SCOPE);
     const requiredScopes =
       registration.action.requiredScopes && registration.action.requiredScopes.length > 0
         ? registration.action.requiredScopes
         : [WRITE_SCOPE];
-    // Plugin actions default to write access, while read-only actions can opt
-    // down. Admin bypasses all checks and write includes read for UI callers.
+    // Recheck the selected registration after async router admission, using the same
+    // scope implications so the two authorization gates cannot diverge.
     const missingScope = requiredScopes.find(
-      (scope) =>
-        !hasAdmin &&
-        !scopes.includes(scope) &&
-        !(scope === READ_SCOPE && scopes.includes(WRITE_SCOPE)),
+      (scope) => !authorizeOperatorScopesForRequiredScope(scope, scopes).allowed,
     );
     if (missingScope) {
       respond(false, undefined, missingScopeErrorShape({ missingScope, requiredScopes }));
@@ -207,6 +225,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         pluginId,
         actionId,
         ...(sessionKey ? { sessionKey } : {}),
+        ...(sessionOwner?.ok ? { agentId: sessionOwner.agentId } : {}),
         ...(params.payload !== undefined ? { payload: params.payload } : {}),
         client: {
           ...(client?.connId ? { connId: client.connId } : {}),

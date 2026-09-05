@@ -7,8 +7,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createTelegramMessageCache, resolveTelegramMessageCacheScope } from "./message-cache.js";
+import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
+import { createTelegramMessageCache } from "./message-cache.js";
 import { resolveTelegramMessageMutationChatId } from "./message-topic-binding.js";
+import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
   clearTelegramRuntimeForTest,
@@ -76,7 +78,9 @@ async function recordMessage(params: {
     chatId: -1001,
     msg: topicMessage(params.messageId, params.threadId),
     threadId: params.threadId,
-    ...(params.providerObserved ? { providerObservedThreadId: params.threadId } : {}),
+    ...(params.providerObserved
+      ? { providerObservedThread: { scope: "forum" as const, id: params.threadId } }
+      : {}),
   });
 }
 
@@ -246,6 +250,39 @@ describe("Telegram message topic binding", () => {
         cfg,
         accountId: "default",
         context: delegatedContext(),
+      }),
+    ).resolves.toBe("-1001");
+  });
+
+  it("reads an outbound topic binding from the routed account owner's cache after restart", async () => {
+    const multiAgentCfg = {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, ops: {}, research: {} },
+      },
+      channels: {
+        telegram: { accounts: { alerts: { botToken: "123456:alerts" } } },
+      },
+      bindings: [{ agentId: "ops", match: { channel: "telegram", accountId: "alerts" } }],
+      session: { store: "/tmp/openclaw-telegram-topic-owner/{agentId}/sessions.json" },
+    } as OpenClawConfig;
+    await recordOutboundMessageForPromptContext({
+      cfg: multiAgentCfg,
+      account: { accountId: "alerts", name: "Alerts" },
+      chatId: -1001,
+      message: topicMessage(902, 77),
+      messageId: 902,
+      successfulSendThread: { scope: "forum", id: 77 },
+    });
+    resetTelegramMessageCacheForTest();
+
+    await expect(
+      resolveTelegramMessageMutationChatId({
+        chatId: "-1001:topic:77",
+        messageId: 902,
+        cfg: multiAgentCfg,
+        accountId: "alerts",
+        context: delegatedContext({ requesterAccountId: "alerts" }),
       }),
     ).resolves.toBe("-1001");
   });

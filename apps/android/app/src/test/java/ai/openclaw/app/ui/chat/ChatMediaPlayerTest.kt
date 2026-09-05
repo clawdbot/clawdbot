@@ -1,6 +1,5 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -140,14 +139,23 @@ class ChatMediaPlayerTest {
     var loadCount = 0
 
     composeRule.setContent {
-      ChatMessageBubble(
-        message =
-          ChatMessage(
-            id = "legacy-media",
-            role = "assistant",
-            content = listOf(audio, video),
-            timestampMs = 1,
-          ),
+      ChatBubble(
+        messageId = "legacy-media",
+        entryId = null,
+        role = "assistant",
+        live = false,
+        content = listOf(audio, video),
+        timestampMs = null,
+        onReplyMessage = {},
+        sessionActionsEnabled = false,
+        onRewindMessage = {},
+        onForkMessage = {},
+        speechState = null,
+        onToggleListen = { _, _ -> },
+        inlineMediaPlaybackBlocked = false,
+        inlineWidgetResolverReady = false,
+        resolveInlineWidgetResource = { _, _ -> null },
+        loadImageArtifact = { null },
         loadMediaArtifact = { _, _, _ ->
           loadCount += 1
           null

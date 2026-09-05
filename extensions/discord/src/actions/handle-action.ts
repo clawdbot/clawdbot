@@ -1,4 +1,3 @@
-// Discord plugin module implements handle action behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   readPositiveIntegerParam,
@@ -20,7 +19,8 @@ import {
   notifyDiscordActiveTurnThreadCreated,
   notifyDiscordActiveTurnThreadReplyDelivered,
 } from "../active-turn-thread-route.js";
-import { notifyDiscordInboundEventOutboundSuccess } from "../inbound-event-delivery.js";
+import { coerceDiscordComponentParam } from "../components.js";
+import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
 import {
   DISCORD_PRESENTATION_CAPABILITIES,
   isDiscordComponentSpecWithinMessageLimit,
@@ -29,7 +29,7 @@ import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
 } from "../shared-interactive.js";
-import { resolveDiscordChannelId } from "../targets.js";
+import { parseDiscordTarget, resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
 import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
@@ -75,6 +75,7 @@ export async function handleDiscordMessageAction(
     | "sessionKey"
     | "inboundEventKind"
     | "conversationReadOrigin"
+    | "reply"
   >,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
@@ -102,15 +103,64 @@ export async function handleDiscordMessageAction(
     mediaAccess: ctx.mediaAccess,
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
+    ...(ctx.reply ? { reply: ctx.reply } : {}),
     ...readPolicyOptions,
   } as const;
-  const notifyVisibleOutbound = (to: string, fallbackSessionKey?: string) =>
-    notifyDiscordInboundEventOutboundSuccess({
+  const notifyVisibleOutbound = (
+    result: AgentToolResult<unknown>,
+    to: string,
+    fallbackSessionKey?: string,
+  ) => {
+    const details =
+      result.details && typeof result.details === "object" && !Array.isArray(result.details)
+        ? (result.details as { ok?: unknown })
+        : undefined;
+    // Resolved failures are not delivery receipts; clearing room history would
+    // otherwise permanently discard context without any visible reply.
+    if (details?.ok !== true) {
+      return;
+    }
+    discordInboundEventDelivery.notify({
       sessionKey: ctx.sessionKey ?? fallbackSessionKey ?? undefined,
       to,
       accountId,
       inboundEventKind: ctx.inboundEventKind,
     });
+  };
+  const withAdoptedThreadReplyRoute = (
+    result: AgentToolResult<unknown>,
+    to: string,
+    fallbackSessionKey?: string,
+  ) => {
+    const details =
+      result.details && typeof result.details === "object" && !Array.isArray(result.details)
+        ? (result.details as { ok?: unknown })
+        : undefined;
+    // Only a positive runtime receipt may suppress the source fallback. A
+    // resolved failure must leave the turn eligible for visible error delivery.
+    if (details?.ok !== true) {
+      return result;
+    }
+    let target;
+    try {
+      target = parseDiscordTarget(to, { defaultKind: "channel" });
+    } catch {
+      // Route classification runs after delivery and must not turn a
+      // successfully resolved Discord target into a failed tool result.
+      return result;
+    }
+    if (
+      target?.kind === "channel" &&
+      notifyDiscordActiveTurnThreadReplyDelivered({
+        sessionKey: ctx.sessionKey ?? fallbackSessionKey,
+        accountId,
+        threadId: target.id,
+      })
+    ) {
+      return withCurrentSourceReplyRoute(result);
+    }
+    return result;
+  };
 
   const readTarget = () => {
     const target =
@@ -142,9 +192,10 @@ export async function handleDiscordMessageAction(
       readStringParam(params, "media", { trim: false }) ??
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "filePath", { trim: false });
-    const requestedContent = readStringParam(params, "message", { allowEmpty: true });
+    const content = readStringParam(params, "message", { allowEmpty: true, trim: false });
+    const explicitComponents = coerceDiscordComponentParam(params.components);
     const presentation =
-      params.components == null ? normalizeMessagePresentation(params.presentation) : undefined;
+      explicitComponents == null ? normalizeMessagePresentation(params.presentation) : undefined;
     const adaptedPresentation = presentation
       ? adaptMessagePresentationForChannel({
           presentation,
@@ -156,7 +207,7 @@ export async function handleDiscordMessageAction(
       generatedPresentationComponents &&
       isDiscordComponentSpecWithinMessageLimit({
         spec: generatedPresentationComponents,
-        fallbackText: requestedContent,
+        fallbackText: content,
         includesMedia: Boolean(mediaUrl),
       })
         ? generatedPresentationComponents
@@ -166,28 +217,24 @@ export async function handleDiscordMessageAction(
     );
     const rawComponents = presentationFellBack
       ? undefined
-      : (params.components ??
+      : (explicitComponents ??
         presentationComponents ??
         buildDiscordInteractiveComponents(normalizeLegacyInteractiveReply(params.interactive)));
     const hasComponents =
       Boolean(rawComponents) &&
       (typeof rawComponents === "function" || typeof rawComponents === "object");
     const components = hasComponents ? rawComponents : undefined;
-    const content = readStringParam(params, "message", {
-      required: !asVoice && !hasComponents && !mediaUrl && !presentationFellBack,
-      allowEmpty: true,
-    });
+    const rawEmbeds = params.embeds;
+    const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
     const deliveryContent =
-      presentationFellBack && adaptedPresentation
+      presentationFellBack && presentation
         ? renderMessagePresentationFallbackText({
             text: content,
-            presentation: adaptedPresentation,
+            presentation,
           })
         : content;
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
-    const rawEmbeds = params.embeds;
-    const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
     const silent = readBooleanParam(params, "silent") === true;
     const suppressEmbeds = readBooleanParam(params, "suppressEmbeds");
     const sessionKey = readStringParam(params, "__sessionKey");
@@ -198,7 +245,7 @@ export async function handleDiscordMessageAction(
         action: "sendMessage",
         accountId: accountId ?? undefined,
         to,
-        content: deliveryContent ?? "",
+        content: deliveryContent,
         ...(threadName ? { threadName } : {}),
         mediaUrl: mediaUrl ?? undefined,
         filename: filename ?? undefined,
@@ -214,8 +261,8 @@ export async function handleDiscordMessageAction(
       cfg,
       actionOptions,
     );
-    notifyVisibleOutbound(to, sessionKey);
-    return result;
+    notifyVisibleOutbound(result, to, sessionKey);
+    return withAdoptedThreadReplyRoute(result, to, sessionKey);
   }
 
   if (action === "upload-file") {
@@ -225,11 +272,21 @@ export async function handleDiscordMessageAction(
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "media", { trim: false });
     if (!mediaUrl) {
+      // Buffer attachments are send-only; upload-file covers existing file/media sources.
+      if (readStringParam(params, "buffer", { trim: false })) {
+        throw new Error(
+          'Use action: "send" for base64 buffer attachments; upload-file requires filePath, path, or media.',
+        );
+      }
       throw new Error("upload-file requires filePath, path, or media.");
     }
     const content =
-      readStringParam(params, "message", { allowEmpty: true }) ??
-      readStringParam(params, "content", { allowEmpty: true });
+      readStringParam(params, "message", { allowEmpty: true, trim: false }) ??
+      readStringParam(params, "content", { allowEmpty: true, trim: false }) ??
+      // `media` is accepted as an alias for the file, so a send-shaped call
+      // arrives with its text in `caption`; without this alias that text is
+      // silently dropped instead of becoming the uploaded message's content.
+      readStringParam(params, "caption", { allowEmpty: true, trim: false });
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
     const silent = readBooleanParam(params, "silent") === true;
@@ -253,34 +310,8 @@ export async function handleDiscordMessageAction(
       cfg,
       actionOptions,
     );
-    notifyVisibleOutbound(to, sessionKey);
-    return result;
-  }
-
-  if (action === "poll") {
-    const to = readStringParam(params, "to", { required: true });
-    const question = readStringParam(params, "pollQuestion", {
-      required: true,
-    });
-    const answers = readStringArrayParam(params, "pollOption", { required: true });
-    const allowMultiselect = readBooleanParam(params, "pollMulti");
-    const durationHours = readPositiveIntegerParam(params, "pollDurationHours");
-    const result = await handleDiscordAction(
-      {
-        action: "poll",
-        accountId: accountId ?? undefined,
-        to,
-        question,
-        answers,
-        allowMultiselect,
-        durationHours: durationHours ?? undefined,
-        content: readStringParam(params, "message"),
-      },
-      cfg,
-      actionOptions,
-    );
-    notifyVisibleOutbound(to);
-    return result;
+    notifyVisibleOutbound(result, to, sessionKey);
+    return withAdoptedThreadReplyRoute(result, to, sessionKey);
   }
 
   if (action === "react") {
@@ -340,30 +371,15 @@ export async function handleDiscordMessageAction(
     );
   }
 
-  if (action === "edit") {
-    const messageId = readStringParam(params, "messageId", { required: true });
-    const content = readStringParam(params, "message", { required: true });
-    return await handleDiscordAction(
-      {
-        action: "editMessage",
-        accountId: accountId ?? undefined,
-        channelId: resolveChannelId(),
-        messageId,
-        content,
-      },
-      cfg,
-      actionOptions,
-    );
-  }
-
-  if (action === "delete") {
+  if (action === "edit" || action === "delete") {
     const messageId = readStringParam(params, "messageId", { required: true });
     return await handleDiscordAction(
       {
-        action: "deleteMessage",
+        action: action === "edit" ? "editMessage" : "deleteMessage",
         accountId: accountId ?? undefined,
         channelId: resolveChannelId(),
         messageId,
+        ...(action === "edit" ? { content: params.message } : {}),
       },
       cfg,
       actionOptions,
@@ -400,7 +416,7 @@ export async function handleDiscordMessageAction(
   if (action === "thread-create") {
     const name = readStringParam(params, "threadName", { required: true });
     const messageId = readStringParam(params, "messageId");
-    const content = readStringParam(params, "message");
+    const content = readStringParam(params, "message", { trim: false });
     const autoArchiveMinutes = readDiscordAutoArchiveDurationParam(params, "autoArchiveMin");
     const appliedTags = readStringArrayParam(params, "appliedTags");
     const result = await handleDiscordAction(
@@ -419,17 +435,19 @@ export async function handleDiscordMessageAction(
     );
     const details =
       result.details && typeof result.details === "object" && !Array.isArray(result.details)
-        ? (result.details as { thread?: { id?: unknown } })
+        ? (result.details as { ok?: unknown; thread?: { id?: unknown } })
         : undefined;
-    const threadId = typeof details?.thread?.id === "string" ? details.thread.id : undefined;
-    await notifyDiscordActiveTurnThreadCreated({
-      sessionKey: ctx.sessionKey,
-      accountId,
-      sourceChannelId: resolveChannelId(),
-      sourceMessageId: messageId,
-      threadId,
-    });
-    notifyVisibleOutbound(resolveChannelId());
+    if (details?.ok === true) {
+      const threadId = typeof details.thread?.id === "string" ? details.thread.id : undefined;
+      await notifyDiscordActiveTurnThreadCreated({
+        sessionKey: ctx.sessionKey,
+        accountId,
+        sourceChannelId: resolveChannelId(),
+        sourceMessageId: messageId,
+        threadId,
+      });
+    }
+    notifyVisibleOutbound(result, resolveChannelId());
     return result;
   }
 
@@ -446,12 +464,13 @@ export async function handleDiscordMessageAction(
         accountId: accountId ?? undefined,
         to,
         stickerIds,
-        content: readStringParam(params, "message"),
+        content: readStringParam(params, "message", { trim: false }),
+        ...(readBooleanParam(params, "silent") === true ? { silent: true } : {}),
       },
       cfg,
       actionOptions,
     );
-    notifyVisibleOutbound(to);
+    notifyVisibleOutbound(result, to);
     return result;
   }
 
@@ -475,20 +494,13 @@ export async function handleDiscordMessageAction(
     ctx,
     resolveChannelId,
     readPolicyOptions,
+    actionOptions,
   });
   if (adminResult !== undefined) {
     if (action === "thread-reply") {
       const threadId = readStringParam(params, "threadId") ?? readTarget();
-      notifyVisibleOutbound(threadId);
-      if (
-        notifyDiscordActiveTurnThreadReplyDelivered({
-          sessionKey: ctx.sessionKey,
-          accountId,
-          threadId,
-        })
-      ) {
-        return withCurrentSourceReplyRoute(adminResult);
-      }
+      notifyVisibleOutbound(adminResult, threadId);
+      return withAdoptedThreadReplyRoute(adminResult, threadId);
     }
     return adminResult;
   }

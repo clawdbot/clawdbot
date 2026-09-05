@@ -1,17 +1,24 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveTrustedGroupId } from "../../agents/agent-tools.policy.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
-import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery-clear.js";
+import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
 import {
   evaluateSessionFreshness,
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   resolveSessionLifecycleTimestamps,
-  type SessionEntry,
   type SessionFreshness,
 } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
+import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -20,7 +27,7 @@ import {
   sessionDeliveryRoute,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { canonicalizeSpawnedByForAgent, loadSessionEntryReadOnly } from "../session-utils.js";
+import { resolveSessionStoreKey } from "../session-store-key.js";
 import {
   normalizeTrustedGroupMetadata,
   requestGroupMatchesTrusted,
@@ -51,6 +58,7 @@ export function buildAgentSessionPatch(params: {
   normalizedSpawned: { groupId?: string; groupChannel?: string; groupSpace?: string };
   requestDeliveryHint: DeliveryContext | undefined;
   requestLabel?: string;
+  explicitSessionKey?: string;
   pluginOwnerId?: string;
   expectedExistingSessionId?: string;
   hasRestoredCronContinuation: boolean;
@@ -63,11 +71,14 @@ export function buildAgentSessionPatch(params: {
   touchInteraction: boolean;
   failedSessionTranscriptMissing: (entry: SessionEntry | undefined) => boolean;
 }): AgentSessionPatchBuild {
-  const freshSpawnedBy = canonicalizeSpawnedByForAgent(
-    params.cfg,
-    params.sessionAgentId,
-    params.freshEntry?.spawnedBy,
-  );
+  const storedSpawnedBy = normalizeOptionalString(params.freshEntry?.spawnedBy);
+  const freshSpawnedBy = storedSpawnedBy
+    ? resolveSessionStoreKey({
+        cfg: params.cfg,
+        sessionKey: storedSpawnedBy,
+        storeAgentId: params.sessionAgentId,
+      })
+    : undefined;
   const storedGroup = normalizeTrustedGroupMetadata(params.freshEntry);
   let inheritedGroup: TrustedGroupMetadata | undefined;
   if (
@@ -75,13 +86,19 @@ export function buildAgentSessionPatch(params: {
     (!storedGroup.groupId || !storedGroup.groupChannel || !storedGroup.groupSpace)
   ) {
     try {
-      const parentEntry = loadSessionEntryReadOnly(freshSpawnedBy)?.entry;
+      const parentEntry = resolveSessionEntryAccessTarget({
+        cfg: params.cfg,
+        sessionKey: freshSpawnedBy,
+      }).entry;
       inheritedGroup = normalizeTrustedGroupMetadata({
         groupId: parentEntry?.groupId,
         groupChannel: parentEntry?.groupChannel,
         groupSpace: parentEntry?.space,
       });
-    } catch {
+    } catch (error) {
+      if ((error as { code?: unknown })?.code === "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED") {
+        throw error;
+      }
       inheritedGroup = undefined;
     }
   }
@@ -126,6 +143,16 @@ export function buildAgentSessionPatch(params: {
     origin: sessionDeliveryOrigin(params.freshEntry),
   });
   const labelValue = normalizeOptionalString(params.requestLabel) || params.freshEntry?.label;
+  const explicitSessionDisplayName =
+    params.freshEntry === undefined &&
+    params.visibleRequest &&
+    normalizeOptionalString(params.explicitSessionKey) &&
+    !labelValue &&
+    !isCronSessionKey(params.canonicalSessionKey) &&
+    !isSubagentSessionKey(params.canonicalSessionKey) &&
+    !isAcpSessionKey(params.canonicalSessionKey)
+      ? parseAgentSessionKey(params.canonicalSessionKey)?.rest.trim()
+      : undefined;
   const freshSessionRotatedSinceLoad = Boolean(
     params.initialEntry?.sessionId &&
     params.freshEntry?.sessionId &&
@@ -222,6 +249,9 @@ export function buildAgentSessionPatch(params: {
     ...automaticRecoveryClearPatch,
     delivery,
     ...(labelValue ? { label: labelValue } : {}),
+    // An operator-supplied key is an explicit name: keep it instead of generating
+    // a dashboard title later, matching the semantics of a Control UI rename.
+    ...(explicitSessionDisplayName ? { displayName: explicitSessionDisplayName } : {}),
     ...(freshSpawnedBy ? { spawnedBy: freshSpawnedBy } : {}),
     groupId: nextGroup.groupId,
     groupChannel: nextGroup.groupChannel,
@@ -233,6 +263,8 @@ export function buildAgentSessionPatch(params: {
     ...(shouldClearRotatedState || shouldClearTerminalState
       ? {
           status: undefined,
+          lifecycleRunId: undefined,
+          lastRunId: undefined,
           startedAt: undefined,
           endedAt: undefined,
           runtimeMs: undefined,

@@ -178,6 +178,22 @@ export function selectProviderModelAuthSources(params: {
       ...(profiles.kind === "all-unavailable" ? { source: profiles.first } : {}),
     };
   }
+  // An ambient credential — one config names nowhere — may serve a provider the
+  // operator left entirely unconfigured (the documented zero-config
+  // `PROVIDER_API_KEY` path), but it must never *succeed* a credential the
+  // operator did declare. Those can bill different accounts, so that transition
+  // needs a declaration, not a discovery. `auth.order` filtering already refuses
+  // to silently try a declared profile the operator omitted from an explicit
+  // order (docs/auth-credential-semantics.md, "Explicit auth order filtering");
+  // an undeclared credential cannot rank above that.
+  //
+  // `declaredProfileCount` rather than `profiles.kind`: route filtering rebuilds
+  // this plan from a narrowed profile list, so an operator who declared only
+  // route-incompatible profiles must not be treated as zero-config.
+  const authorizedFallback =
+    fallback?.authorization === "ambient" && params.plan.declaredProfileCount > 0
+      ? undefined
+      : fallback;
   if (profiles.kind === "usable") {
     const winner = selectReadyProfile(profiles.profiles);
     return {
@@ -185,15 +201,15 @@ export function selectProviderModelAuthSources(params: {
       selection: winner ? { kind: "selected", source: winner } : { kind: "none" },
       attempts: [
         ...profiles.profiles.map((source) => ({ kind: "profile" as const, source })),
-        ...(fallback ? [directAttempt(fallback)] : []),
+        ...(authorizedFallback ? [directAttempt(authorizedFallback)] : []),
       ],
     };
   }
-  if (fallback) {
+  if (authorizedFallback) {
     return {
       kind: "selected",
-      selection: { kind: "selected", source: fallback },
-      attempts: [directAttempt(fallback)],
+      selection: { kind: "selected", source: authorizedFallback },
+      attempts: [directAttempt(authorizedFallback)],
     };
   }
   return {
@@ -269,6 +285,8 @@ export function selectProviderModelRouteAuth(params: {
   configuredAuthMode?: string;
   /** Explicit native auth owner allowed to defer an otherwise unowned route. */
   runtimeAuthOwner?: { id: string };
+  /** True only when no provider transport or credentials were authored. */
+  allowNativeAuthOnSingleRoute?: boolean;
 }): ProviderModelRouteAuthDecision {
   const requiredProfile =
     params.sourcePlan.kind === "required" && params.sourcePlan.source.kind === "profile"
@@ -306,6 +324,10 @@ export function selectProviderModelRouteAuth(params: {
           ),
           explicitOrder: params.sourcePlan.profiles.explicitOrder,
           allowCooldown: params.sourcePlan.allowCooldown,
+          // Preserve what the operator actually declared. Filtering to a
+          // route-compatible subset must not make a configured provider look
+          // zero-config and thereby re-admit an ambient credential.
+          declaredProfileCount: params.sourcePlan.declaredProfileCount,
           ...(params.sourcePlan.fallback ? { fallback: params.sourcePlan.fallback } : {}),
         })
       : params.sourcePlan;
@@ -392,7 +414,16 @@ export function selectProviderModelRouteAuth(params: {
     const runtimeAuthOwnerIsCompatible =
       Boolean(normalizedRuntimeAuthOwner) &&
       routeSupport.runtimePolicy.compatibleIds.includes(normalizedRuntimeAuthOwner ?? "");
-    if (params.resolution.routes.length > 1 && runtimeAuthOwnerIsCompatible && !configuredRoute) {
+    const hostHasNoCredentialToHonor =
+      params.allowNativeAuthOnSingleRoute === true &&
+      params.sourcePlan.kind === "automatic" &&
+      params.sourcePlan.orderedProfiles.length === 0 &&
+      params.sourcePlan.fallback === undefined;
+    if (
+      runtimeAuthOwnerIsCompatible &&
+      !configuredRoute &&
+      (params.resolution.routes.length > 1 || hostHasNoCredentialToHonor)
+    ) {
       return { kind: "deferred", reason: "runtime-auth-owner", routeSupport };
     }
     return reject(

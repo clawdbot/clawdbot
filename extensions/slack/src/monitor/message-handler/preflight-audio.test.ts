@@ -10,18 +10,26 @@ import {
   findCaptionlessSlackAudioFile,
   formatSlackAudioTranscriptForAgent,
   resolveSlackPreflightAudioTranscript,
-  sendSlackPreflightAudioTranscriptEcho,
 } from "./preflight-audio.js";
 
-const { sendDurableMessageBatchMock, transcribeFirstAudioMock } = vi.hoisted(() => ({
-  sendDurableMessageBatchMock: vi.fn(),
+const { transcribeFirstAudioMock } = vi.hoisted(() => ({
   transcribeFirstAudioMock: vi.fn(),
 }));
 
-vi.mock("./preflight-audio.runtime.js", () => ({
-  sendDurableMessageBatch: sendDurableMessageBatchMock,
-  transcribeFirstAudio: transcribeFirstAudioMock,
-}));
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/media-understanding-runtime")>();
+  return {
+    ...actual,
+    createChannelPreflightAudio: (
+      params: Parameters<typeof actual.createChannelPreflightAudio>[0],
+    ) =>
+      actual.createChannelPreflightAudio({
+        ...params,
+        transcribeFirstAudio: transcribeFirstAudioMock,
+      }),
+  };
+});
 
 function createSlackMessage(overrides: Partial<SlackMessageEvent>): SlackMessageEvent {
   return {
@@ -35,24 +43,8 @@ function createSlackMessage(overrides: Partial<SlackMessageEvent>): SlackMessage
   } as SlackMessageEvent;
 }
 
-function createAudioConfig(overrides: Record<string, unknown> = {}): OpenClawConfig {
-  return {
-    tools: {
-      media: {
-        audio: {
-          enabled: true,
-          echoTranscript: true,
-          ...overrides,
-        },
-      },
-    },
-  } as OpenClawConfig;
-}
-
 describe("Slack captionless audio preflight", () => {
   beforeEach(() => {
-    sendDurableMessageBatchMock.mockReset();
-    sendDurableMessageBatchMock.mockResolvedValue({ status: "sent", messageIds: ["1"] });
     transcribeFirstAudioMock.mockReset();
   });
 
@@ -91,9 +83,9 @@ describe("Slack captionless audio preflight", () => {
     );
   });
 
-  it("transcribes the first audio attachment once and suppresses speculative echo", async () => {
+  it("transcribes the first audio attachment and returns its ordered media index", async () => {
     transcribeFirstAudioMock.mockResolvedValue("Bill please review this");
-    const cfg = createAudioConfig();
+    const cfg = {} as OpenClawConfig;
     const media: SlackMediaResult[] = [
       { path: "/tmp/image.png", contentType: "image/png", placeholder: "[image]" },
       { path: "/tmp/voice.mp4", contentType: "audio/mp4", placeholder: "[voice]" },
@@ -120,45 +112,8 @@ describe("Slack captionless audio preflight", () => {
         MessageThreadId: "1.000",
         SessionKey: "agent:main:slack:channel:c1",
       }),
-      cfg: expect.objectContaining({
-        tools: expect.objectContaining({
-          media: expect.objectContaining({
-            audio: expect.objectContaining({ echoTranscript: false }),
-          }),
-        }),
-      }),
+      cfg,
     });
-    expect(cfg.tools?.media?.audio?.echoTranscript).toBe(true);
-  });
-
-  it("echoes only an admitted transcript and preserves literal replacement tokens", async () => {
-    await sendSlackPreflightAudioTranscriptEcho({
-      transcript: "cost is $& and $1",
-      cfg: createAudioConfig({ echoFormat: "heard: {transcript}" }),
-      accountId: "work",
-      originatingTo: "channel:C1",
-      messageThreadId: "1.000",
-    });
-
-    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith({
-      cfg: expect.any(Object),
-      channel: "slack",
-      to: "channel:C1",
-      accountId: "work",
-      threadId: "1.000",
-      payloads: [{ text: "heard: cost is $& and $1" }],
-      bestEffort: true,
-      durability: "best_effort",
-    });
-
-    sendDurableMessageBatchMock.mockClear();
-    await sendSlackPreflightAudioTranscriptEcho({
-      transcript: "not echoed",
-      cfg: createAudioConfig({ echoTranscript: false }),
-      accountId: "work",
-      originatingTo: "channel:C1",
-    });
-    expect(sendDurableMessageBatchMock).not.toHaveBeenCalled();
   });
 
   it("removes preflight downloads when the transcript does not admit the message", async () => {

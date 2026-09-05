@@ -1,6 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ConfigUiHints } from "../api/types.ts";
-import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
-import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
+import { hintForPath, humanize, schemaType, type JsonSchema } from "../lib/config-form-utils.ts";
+import { arrayItemSchema, arrayItemSchemaIndexes } from "./config-form.array-items.ts";
 
 export type ConfigSearchCriteria = {
   text: string;
@@ -67,7 +68,8 @@ export function resolveConfigFieldMeta(
   hints: ConfigUiHints,
 ): ConfigFieldMeta {
   const hint = hintForPath(path, hints);
-  const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
+  const fallbackSegment = path.findLast((segment) => typeof segment === "string") ?? path.at(-1);
+  const label = hint?.label ?? schema.title ?? humanize(String(fallbackSegment));
   const help = hint?.help ?? schema.description;
   const schemaTags = normalizeTags(schema["x-tags"] ?? schema.tags);
   const hintTags = normalizeTags(hint?.tags);
@@ -204,31 +206,25 @@ export function matchesNodeSearch(params: {
   if (type !== "array") {
     return false;
   }
-  const itemsSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
-  if (!itemsSchema) {
-    return false;
-  }
   const values = Array.isArray(value) ? value : Array.isArray(schema.default) ? schema.default : [];
-  if (values.length === 0) {
-    return matchesNodeSearch({
-      schema: itemsSchema,
-      value: undefined,
-      path: [...path, 0],
-      hints,
-      criteria,
-      textMatcher,
-    });
+  const searchLength = Math.max(values.length, arrayItemSchemaIndexes(schema).length);
+  for (let index = 0; index < searchLength; index += 1) {
+    const itemSchema = arrayItemSchema(schema, index);
+    if (
+      itemSchema &&
+      matchesNodeSearch({
+        schema: itemSchema,
+        value: values[index],
+        path: [...path, index],
+        hints,
+        criteria,
+        textMatcher,
+      })
+    ) {
+      return true;
+    }
   }
-  return values.some((entry, index) =>
-    matchesNodeSearch({
-      schema: itemsSchema,
-      value: entry,
-      path: [...path, index],
-      hints,
-      criteria,
-      textMatcher,
-    }),
-  );
+  return false;
 }
 
 export function matchesConfigSectionSearch(params: {

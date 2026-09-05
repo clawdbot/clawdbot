@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { resolveLiveTransportQaScenarioIds } from "./live-transports/shared/scenario-selection.js";
-import { resolveQaProfileScenarios } from "./profile-planning.js";
-import { readQaScenarioPack } from "./scenario-catalog.js";
+import {
+  resolveQaProfileScenarios,
+  resolveQaRunProfileExecutionSelection,
+} from "./profile-planning.js";
+import { readQaScenarioById, readQaScenarioPack } from "./scenario-catalog.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
 describe("taxonomy profile scenario selection", () => {
@@ -49,6 +52,28 @@ describe("taxonomy profile scenario selection", () => {
     ).not.toContainEqual(expect.objectContaining({ sourcePath: unrelatedRefs[0] }));
   });
 
+  it("selects the packaged first-run journey for release container setup", () => {
+    const catalog = readQaScenarioPack().scenarios;
+    const report = readQaScorecardTaxonomyReport(catalog);
+    const onboarding = catalog.find(
+      (scenario) => scenario.id === "docker-npm-onboard-channel-agent",
+    );
+    const systemAgent = catalog.find((scenario) => scenario.id === "docker-system-agent-first-run");
+
+    expect(onboarding?.coverage?.primary).toContain("containers.first-run-onboarding");
+    expect(systemAgent?.coverage?.primary).not.toContain("containers.first-run-onboarding");
+    expect(systemAgent?.coverage?.secondary).toContain("containers.first-run-onboarding");
+    expect(report.validationIssues).not.toContainEqual(
+      expect.objectContaining({
+        code: "coverage-id-missing-primary-inventory",
+        ref: "containers.first-run-onboarding",
+      }),
+    );
+    expect(report.profiles.find((profile) => profile.id === "release")?.scenarioRefs).toContain(
+      onboarding?.sourcePath,
+    );
+  });
+
   it("derives channel defaults from catalog metadata and lane constraints", () => {
     const liveTelegram = resolveLiveTransportQaScenarioIds({
       channelId: "telegram",
@@ -61,7 +86,23 @@ describe("taxonomy profile scenario selection", () => {
 
     expect(liveTelegram).toContain("telegram-help-command");
     expect(liveTelegram).not.toContain("telegram-assistant-transcript-role-boundary");
-    expect(mockTelegram).toContain("telegram-assistant-transcript-role-boundary");
+    expect(mockTelegram).not.toContain("telegram-assistant-transcript-role-boundary");
     expect(mockTelegram).not.toContain("discord-canary");
+  });
+
+  it("lets flow-only consumers exclude a channel-declared script without changing membership", () => {
+    const scenario = readQaScenarioById("telegram-startup-getme-live");
+    const lane = {
+      scenarios: [scenario],
+      providerMode: "mock-openai" as const,
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      channelDriver: "live" as const,
+      channel: "telegram",
+    };
+
+    expect(resolveQaRunProfileExecutionSelection(lane).selectedScenarios).toEqual([scenario]);
+    expect(
+      resolveQaRunProfileExecutionSelection({ ...lane, executionKind: "flow" }).excludedScenarios,
+    ).toEqual([{ scenario, reasons: ["execution.kind=flow"] }]);
   });
 });

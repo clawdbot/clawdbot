@@ -72,27 +72,4 @@ describe("collectDiscordStatusIssues", () => {
       },
     ]);
   });
-
-  it("reports degraded runtime transport state", () => {
-    const issues = collectDiscordStatusIssues([
-      {
-        accountId: "ops",
-        enabled: true,
-        configured: true,
-        running: true,
-        connected: true,
-        healthState: "stale-socket",
-      } as ChannelAccountSnapshot,
-    ]);
-
-    expect(issues).toEqual([
-      {
-        channel: "discord",
-        accountId: "ops",
-        kind: "runtime",
-        message: "Discord gateway transport is degraded (stale-socket; account is running).",
-        fix: "Check gateway event-loop health and Discord connectivity, then restart the Discord channel or gateway if the transport does not recover.",
-      },
-    ]);
-  });
 });

@@ -1,9 +1,9 @@
 // Proxy CLI runtime tests cover proxy runtime process handling and lifecycle events.
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 
 const { getRuntimeConfigMock, runProxyValidationMock, serverStopSpy, spawnMock } = vi.hoisted(
   () => ({
@@ -37,6 +37,21 @@ vi.mock("../infra/net/proxy/proxy-validation.js", () => ({
   runProxyValidation: runProxyValidationMock,
 }));
 
+vi.mock("../../packages/terminal-core/src/theme.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../packages/terminal-core/src/theme.js")>();
+  return {
+    ...actual,
+    isRich: () => false,
+  };
+});
+
+import {
+  closeDebugProxyCaptureStore,
+  getDebugProxyCaptureStore,
+} from "../proxy-capture/store.sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import * as proxyCliRuntime from "./proxy-cli.runtime.js";
+
 describe("proxy cli runtime", () => {
   const envKeys = [
     "OPENCLAW_STATE_DIR",
@@ -47,10 +62,13 @@ describe("proxy cli runtime", () => {
     "NO_COLOR",
   ] as const;
   const savedEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
-  let tempDir = "";
+  const tempDirs = new Set<string>();
+  const tempDir = makeTempDir(tempDirs, "openclaw-proxy-cli-runtime-");
 
   beforeEach(() => {
-    tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-cli-runtime-"));
+    // Reuse the path so missing store/DB cleanup is observable as sessions leaking across cases.
+    mkdirSync(tempDir, { recursive: true });
+    tempDirs.add(tempDir);
     process.env.OPENCLAW_STATE_DIR = tempDir;
     process.env.OPENCLAW_DEBUG_PROXY_CERT_DIR = path.join(tempDir, "certs");
     delete process.env.OPENCLAW_DEBUG_PROXY_ENABLED;
@@ -88,13 +106,10 @@ describe("proxy cli runtime", () => {
     spawnMock.mockReset();
   });
 
-  afterEach(async () => {
-    const { closeDebugProxyCaptureStore } = await import("../proxy-capture/store.sqlite.js");
-    const { closeOpenClawStateDatabaseForTest } = await import("../state/openclaw-state-db.js");
+  afterEach(() => {
     closeDebugProxyCaptureStore();
     closeOpenClawStateDatabaseForTest();
     vi.restoreAllMocks();
-    vi.resetModules();
     process.exitCode = undefined;
     for (const key of envKeys) {
       const value = savedEnv[key];
@@ -104,13 +119,11 @@ describe("proxy cli runtime", () => {
         process.env[key] = value;
       }
     }
-    rmSync(tempDir, { recursive: true, force: true });
+    cleanupTempDirs(tempDirs);
   });
 
   it("prints proxy validation text and leaves exit code unset on success", async () => {
-    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
-
-    await runProxyValidateCommand({
+    await proxyCliRuntime.runProxyValidateCommand({
       proxyUrl: "http://override.example:3128",
       proxyCaFile: "./ca.pem",
       allowedUrls: ["https://allowed.example/"],
@@ -157,9 +170,7 @@ describe("proxy cli runtime", () => {
       },
       checks: [],
     });
-    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
-
-    await runProxyValidateCommand({});
+    await proxyCliRuntime.runProxyValidateCommand({});
 
     expect(process.stdout["write"]).toHaveBeenCalledWith(
       "Proxy validation passed\n\n" +
@@ -180,9 +191,7 @@ describe("proxy cli runtime", () => {
       },
       checks: [],
     });
-    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
-
-    await runProxyValidateCommand({ json: true });
+    await proxyCliRuntime.runProxyValidateCommand({ json: true });
 
     expect(process.stdout["write"]).toHaveBeenCalledWith(
       `${JSON.stringify(
@@ -213,9 +222,7 @@ describe("proxy cli runtime", () => {
       },
       checks: [],
     });
-    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
-
-    await runProxyValidateCommand({});
+    await proxyCliRuntime.runProxyValidateCommand({});
 
     expect(process.stdout["write"]).toHaveBeenCalledWith(
       "Proxy validation failed\n\n" +
@@ -241,9 +248,7 @@ describe("proxy cli runtime", () => {
       },
       checks: [],
     });
-    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
-
-    await runProxyValidateCommand({});
+    await proxyCliRuntime.runProxyValidateCommand({});
 
     expect(process.stdout["write"]).toHaveBeenCalledWith(
       "Proxy validation failed\n\n" +
@@ -269,9 +274,7 @@ describe("proxy cli runtime", () => {
       },
       checks: [],
     });
-    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
-
-    await runProxyValidateCommand({});
+    await proxyCliRuntime.runProxyValidateCommand({});
 
     expect(process.stdout["write"]).toHaveBeenCalledWith(
       "Proxy validation failed\n\n" +
@@ -296,9 +299,7 @@ describe("proxy cli runtime", () => {
       },
       checks: [],
     });
-    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
-
-    await runProxyValidateCommand({});
+    await proxyCliRuntime.runProxyValidateCommand({});
 
     expect(process.stdout["write"]).toHaveBeenCalledWith(
       "Proxy validation failed\n\n" +
@@ -323,9 +324,7 @@ describe("proxy cli runtime", () => {
       },
       checks: [],
     });
-    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
-
-    await runProxyValidateCommand({ json: true });
+    await proxyCliRuntime.runProxyValidateCommand({ json: true });
 
     expect(process.stdout["write"]).toHaveBeenCalledWith(
       `${JSON.stringify(
@@ -363,9 +362,7 @@ describe("proxy cli runtime", () => {
         },
       ],
     });
-    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
-
-    await runProxyValidateCommand({});
+    await proxyCliRuntime.runProxyValidateCommand({});
 
     expect(process.stdout["write"]).toHaveBeenCalledWith(
       "Proxy validation passed\n\n" +
@@ -375,34 +372,6 @@ describe("proxy cli runtime", () => {
         "Checks\n" +
         "  ✓ denied  http://127.0.0.1:12345/ — fetch failed\n",
     );
-  });
-
-  it("applies the terminal color theme when rich output is enabled", async () => {
-    vi.resetModules();
-    vi.doMock("../../packages/terminal-core/src/theme.js", () => ({
-      colorize: (rich: boolean, color: (value: string) => string, value: string) =>
-        rich ? color(value) : value,
-      isRich: () => true,
-      theme: {
-        heading: (value: string) => `<heading>${value}</heading>`,
-        success: (value: string) => `<success>${value}</success>`,
-        error: (value: string) => `<error>${value}</error>`,
-        muted: (value: string) => `<muted>${value}</muted>`,
-        warn: (value: string) => `<warn>${value}</warn>`,
-      },
-    }));
-    try {
-      const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
-
-      await runProxyValidateCommand({});
-
-      const output = String(vi.mocked(process.stdout["write"]).mock.calls.at(0)?.[0] ?? "");
-      expect(output).toContain("<success>Proxy validation passed</success>");
-      expect(output).toContain("<heading>Checks</heading>");
-      expect(output).toContain("<success>✓</success>");
-    } finally {
-      vi.doUnmock("../../packages/terminal-core/src/theme.js");
-    }
   });
 
   it("prints actionable check failure output", async () => {
@@ -430,9 +399,7 @@ describe("proxy cli runtime", () => {
         },
       ],
     });
-    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
-
-    await runProxyValidateCommand({});
+    await proxyCliRuntime.runProxyValidateCommand({});
 
     expect(process.stdout["write"]).toHaveBeenCalledWith(
       "Proxy validation failed\n\n" +
@@ -458,9 +425,7 @@ describe("proxy cli runtime", () => {
       },
       checks: [],
     });
-    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
-
-    await runProxyValidateCommand({ json: true });
+    await proxyCliRuntime.runProxyValidateCommand({ json: true });
 
     expect(process.stdout["write"]).toHaveBeenCalledWith(
       `${JSON.stringify(
@@ -496,9 +461,7 @@ describe("proxy cli runtime", () => {
         return child;
       });
 
-      const { runDebugProxyRunCommand } = await import("./proxy-cli.runtime.js");
-
-      await runDebugProxyRunCommand({ commandArgs: ["example-command"] });
+      await proxyCliRuntime.runDebugProxyRunCommand({ commandArgs: ["example-command"] });
 
       expect(process.exitCode).toBe(testCase.exitCode);
       expect(serverStopSpy).toHaveBeenCalledOnce();
@@ -514,12 +477,9 @@ describe("proxy cli runtime", () => {
       return child;
     });
 
-    const { runDebugProxyRunCommand } = await import("./proxy-cli.runtime.js");
-    const { getDebugProxyCaptureStore } = await import("../proxy-capture/store.sqlite.js");
-
     const beforeRun = Date.now();
     await expect(
-      runDebugProxyRunCommand({
+      proxyCliRuntime.runDebugProxyRunCommand({
         commandArgs: ["does-not-exist"],
       }),
     ).rejects.toThrow("spawn failed");
@@ -530,5 +490,55 @@ describe("proxy cli runtime", () => {
     const [session] = store.listSessions(5);
     expect(session?.mode).toBe("proxy-run");
     expect(session?.endedAt).toBeGreaterThanOrEqual(beforeRun);
+  });
+
+  it.each([
+    {
+      name: "coverage",
+      run: async (runtime: typeof import("./proxy-cli.runtime.js")) =>
+        await runtime.runDebugProxyCoverageCommand(),
+      assertShape: (value: unknown) =>
+        expect(value).toEqual({
+          summary: expect.objectContaining({ total: expect.any(Number) }),
+          entries: expect.any(Array),
+        }),
+    },
+    {
+      name: "sessions",
+      run: async (runtime: typeof import("./proxy-cli.runtime.js")) =>
+        await runtime.runDebugProxySessionsCommand({ json: true }),
+      assertShape: (value: unknown) => expect(value).toEqual({ sessions: [] }),
+    },
+    {
+      name: "query",
+      run: async (runtime: typeof import("./proxy-cli.runtime.js")) =>
+        await runtime.runDebugProxyQueryCommand({ json: true, preset: "double-sends" }),
+      assertShape: (value: unknown) => expect(value).toEqual({ rows: [] }),
+    },
+  ])("prints one undecorated JSON object for proxy $name --json", async ({ run, assertShape }) => {
+    await run(proxyCliRuntime);
+
+    expect(process.stdout["write"]).toHaveBeenCalledOnce();
+    const output = String(vi.mocked(process.stdout["write"]).mock.calls[0]?.[0] ?? "");
+    const parsed = JSON.parse(output) as unknown;
+    assertShape(parsed);
+  });
+
+  it.each([
+    {
+      name: "sessions",
+      run: async (runtime: typeof import("./proxy-cli.runtime.js")) =>
+        await runtime.runDebugProxySessionsCommand({}),
+    },
+    {
+      name: "query",
+      run: async (runtime: typeof import("./proxy-cli.runtime.js")) =>
+        await runtime.runDebugProxyQueryCommand({ preset: "double-sends" }),
+    },
+  ])("preserves the legacy bare-array proxy $name output without --json", async ({ run }) => {
+    await run(proxyCliRuntime);
+
+    const output = String(vi.mocked(process.stdout["write"]).mock.calls[0]?.[0] ?? "");
+    expect(JSON.parse(output)).toEqual([]);
   });
 });

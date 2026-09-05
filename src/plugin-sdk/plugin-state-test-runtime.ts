@@ -8,18 +8,20 @@ export {
   importPluginStateEntriesForDoctor as importPluginStateEntriesForDoctorForTests,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
+export { setMaxPluginStateEntriesPerPluginForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 export { setMaxMemoryHostEventsForTests } from "../memory-host-sdk/event-store.js";
 export {
   createPluginBlobStoreForTests,
   resetPluginBlobStoreForTests,
 } from "../plugin-state/plugin-blob-store.js";
-export { createChannelIngressQueue as createChannelIngressQueueForTests } from "../channels/message/ingress-queue.js";
-export { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-export type { DB as OpenClawStateKyselyDatabaseForTests } from "../state/openclaw-state-db.generated.js";
 export {
   closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+  createChannelIngressQueueForTests,
+  listChannelIngressQueueAccountIdsForTests,
+} from "./channel-ingress-test-runtime.js";
+export { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+export type { DB as OpenClawStateKyselyDatabaseForTests } from "../state/openclaw-state-db.generated.js";
+export { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 // Test-only ingress reliability helpers: core predicates polling/webhook tests
 // assert directly; excluded from the public SDK surface (private-local subpath).
 export {

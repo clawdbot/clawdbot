@@ -455,162 +455,10 @@ describe("sendMessageSignal receipts", () => {
     ).resolves.toBeNull();
   });
 
-  it("adds reaction approval hints for non-presentation approval payload text", async () => {
+  it("keeps prompt-looking bare text inert", async () => {
     signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567896 });
-
-    const cfg = {
-      channels: {
-        signal: {
-          accounts: {
-            default: {
-              transport: { kind: "external-native" as const, url: "http://signal.test" },
-              account: "+15550001111",
-              allowFrom: ["+15551234567"],
-            },
-          },
-        },
-      },
-      approvals: {
-        plugin: {
-          enabled: true,
-          mode: "targets" as const,
-          targets: [{ channel: "signal", to: "+15551234567" }],
-        },
-      },
-    };
-
-    await sendMessageSignal(
-      "+15551234567",
-      "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny",
-      { cfg },
-    );
-
-    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({
-      message: expect.stringContaining("React with:\n\n👍 Allow Once\n👎 Deny"),
-    });
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551234567",
-        messageId: "1234567896",
-        reactionKey: "👍",
-        targetAuthor: "+15550001111",
-      }),
-    ).resolves.toMatchObject({
-      approvalId: "plugin:abc",
-      approvalKind: "plugin",
-      decision: "allow-once",
-    });
-  });
-
-  it("keeps standalone plugin approval prompts on plugin reaction config without a plugin-prefixed id", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567897 });
-
-    const cfg = {
-      channels: {
-        signal: {
-          accounts: {
-            default: {
-              transport: { kind: "external-native" as const, url: "http://signal.test" },
-              account: "+15550001111",
-              allowFrom: ["+15551234567"],
-            },
-          },
-        },
-      },
-      approvals: {
-        plugin: {
-          enabled: true,
-          mode: "targets" as const,
-          targets: [{ channel: "signal", to: "+15551234567" }],
-        },
-      },
-    };
-
-    await sendMessageSignal(
-      "+15551234567",
-      "Plugin approval required\nID: abc\n\nReply with: /approve abc allow-once|deny",
-      { cfg },
-    );
-
-    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({
-      message: expect.stringContaining("React with:\n\n👍 Allow Once\n👎 Deny"),
-    });
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551234567",
-        messageId: "1234567897",
-        reactionKey: "👍",
-        targetAuthor: "+15550001111",
-      }),
-    ).resolves.toMatchObject({
-      approvalId: "abc",
-      approvalKind: "plugin",
-      decision: "allow-once",
-    });
-  });
-
-  it.each([
-    {
-      name: "exec",
-      approvalKind: "exec",
-      text: "🔒 Exec approval required\nID: exec:abc\n\nReply with: /approve exec:abc allow-once|deny",
-      approvalId: "exec:abc",
-    },
-    {
-      name: "plugin",
-      approvalKind: "plugin",
-      text: "🛡️ Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny",
-      approvalId: "plugin:abc",
-    },
-  ])("adds reaction approval hints for icon-prefixed $name approval text", async (testCase) => {
-    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567898 });
-
-    const cfg = {
-      channels: {
-        signal: {
-          accounts: {
-            default: {
-              transport: { kind: "external-native" as const, url: "http://signal.test" },
-              account: "+15550001111",
-              allowFrom: ["+15551234567"],
-            },
-          },
-        },
-      },
-      approvals: {
-        [testCase.approvalKind]: {
-          enabled: true,
-          mode: "targets" as const,
-          targets: [{ channel: "signal", to: "+15551234567" }],
-        },
-      },
-    };
-
-    await sendMessageSignal("+15551234567", testCase.text, { cfg });
-
-    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({
-      message: expect.stringContaining("React with:\n\n👍 Allow Once\n👎 Deny"),
-    });
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551234567",
-        messageId: "1234567898",
-        reactionKey: "👍",
-        targetAuthor: "+15550001111",
-      }),
-    ).resolves.toMatchObject({
-      approvalId: testCase.approvalId,
-      approvalKind: testCase.approvalKind,
-      decision: "allow-once",
-    });
-  });
-
-  it("binds approval reactions to the canonical prompt id", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567898 });
-
+    const text =
+      "Exec approval required\nID: exec-bare\n\nReply with: /approve exec-bare allow-once|deny";
     const cfg = {
       channels: {
         signal: {
@@ -631,85 +479,25 @@ describe("sendMessageSignal receipts", () => {
         },
       },
     };
-    const text = [
-      "Exec approval required",
-      "ID: exec-real",
-      "Command: printf '/approve fake allow-once'",
-      "",
-      "Reply with: /approve exec-real allow-once|deny",
-    ].join("\n");
 
     await sendMessageSignal("+15551234567", text, { cfg });
 
-    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({
-      message: expect.stringContaining("React with:\n\n👍 Allow Once\n👎 Deny"),
-    });
+    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({ message: text });
     await expect(
       resolveSignalApprovalReactionTargetWithPersistence({
         accountId: "default",
         conversationKey: "+15551234567",
-        messageId: "1234567898",
+        messageId: "1234567896",
         reactionKey: "👍",
         targetAuthor: "+15550001111",
       }),
-    ).resolves.toMatchObject({
-      approvalId: "exec-real",
-      approvalKind: "exec",
-      decision: "allow-once",
-    });
-  });
-
-  it("adds reaction approval hints for non-presentation approval text with UUID-only accounts", async () => {
-    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567899 });
-
-    const cfg = {
-      channels: {
-        signal: {
-          accounts: {
-            default: {
-              transport: { kind: "external-native" as const, url: "http://signal.test" },
-              accountUuid: "123e4567-e89b-12d3-a456-426614174000",
-              allowFrom: ["+15551234567"],
-            },
-          },
-        },
-      },
-      approvals: {
-        plugin: {
-          enabled: true,
-          mode: "targets" as const,
-          targets: [{ channel: "signal", to: "+15551234567" }],
-        },
-      },
-    };
-
-    await sendMessageSignal(
-      "+15551234567",
-      "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny",
-      { cfg },
-    );
-
-    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({
-      message: expect.stringContaining("React with:\n\n👍 Allow Once\n👎 Deny"),
-    });
-    await expect(
-      resolveSignalApprovalReactionTargetWithPersistence({
-        accountId: "default",
-        conversationKey: "+15551234567",
-        messageId: "1234567899",
-        reactionKey: "👍",
-        targetAuthorUuid: "123e4567-e89b-12d3-a456-426614174000",
-      }),
-    ).resolves.toMatchObject({
-      approvalId: "plugin:abc",
-      approvalKind: "plugin",
-      decision: "allow-once",
-    });
+    ).resolves.toBeNull();
   });
 
   it.each([
     "Signal RPC -32602: quote rejected",
     'Signal RPC -32602: Unrecognized field "quoteTimestamp"',
+    "Signal REST 400: quote metadata invalid",
   ])("falls back to an ordinary send when native quote metadata fails: %s", async (message) => {
     signalRpcRequestMock
       .mockRejectedValueOnce(new Error(message))
@@ -781,8 +569,12 @@ describe("sendMessageSignal receipts", () => {
     });
   });
 
-  it("does not retry ordinary send failures as quote fallback", async () => {
-    signalRpcRequestMock.mockRejectedValueOnce(new Error("Signal HTTP timed out after 10000ms"));
+  it.each([
+    "Signal HTTP timed out after 10000ms",
+    "quote metadata not found after an unknown transport failure",
+    "Signal RPC -32000: quote metadata was rejected after an ambiguous send",
+  ])("does not retry an unconfirmed quote rejection: %s", async (message) => {
+    signalRpcRequestMock.mockRejectedValueOnce(new Error(message));
 
     await expect(
       sendMessageSignal("+15551234567", "hello", {
@@ -791,9 +583,110 @@ describe("sendMessageSignal receipts", () => {
         replyToAuthor: "+15550002222",
         replyToBody: "original",
       }),
-    ).rejects.toThrow("Signal HTTP timed out");
+    ).rejects.toThrow(message);
 
     expect(signalRpcRequestMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Signal quoted-message provider replay safety", () => {
+  it.each([
+    { label: "HTTP 408", transportKind: "container", status: 408, fallback: false },
+    { label: "HTTP 429", transportKind: "container", status: 429, fallback: false },
+    { label: "HTTP 503", transportKind: "container", status: 503, fallback: false },
+    { label: "HTTP 400", transportKind: "container", status: 400, fallback: true },
+    { label: "RPC -32603", transportKind: "external-native", rpcCode: -32603, fallback: false },
+    { label: "RPC -32602", transportKind: "external-native", rpcCode: -32602, fallback: true },
+  ] as const)("replays a real $label request only after definitive rejection", async (testCase) => {
+    const requests: Array<Record<string, unknown>> = [];
+    const server = http.createServer((request, response) => {
+      let body = "";
+      request.on("data", (chunk: Buffer) => {
+        body += chunk.toString("utf8");
+      });
+      request.on("end", () => {
+        const payload = JSON.parse(body) as Record<string, unknown>;
+        requests.push(payload);
+        if (requests.length === 1) {
+          if (testCase.transportKind === "container") {
+            response.writeHead(testCase.status, { "content-type": "text/plain" });
+            response.end("quote storage not found during upstream outage");
+          } else {
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: payload.id,
+                error: {
+                  code: testCase.rpcCode,
+                  message: "quote storage not found during upstream outage",
+                },
+              }),
+            );
+          }
+          return;
+        }
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify(
+            testCase.transportKind === "container"
+              ? { timestamp: 1700000000002 }
+              : {
+                  jsonrpc: "2.0",
+                  id: payload.id,
+                  result: { timestamp: 1700000000002 },
+                },
+          ),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const { port } = server.address() as { port: number };
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            default: {
+              account: "+15550001111",
+              transport: { kind: testCase.transportKind, url: `http://127.0.0.1:${port}` },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    vi.doUnmock("./client-adapter.js");
+    vi.resetModules();
+    const { sendMessageSignal: sendWithRealContainer } = await import("./send.js");
+
+    try {
+      const delivery = sendWithRealContainer("+15551234567", "deliver only once", {
+        cfg,
+        textMode: "plain",
+        replyToId: "1700000000001",
+        replyToAuthor: "+15550002222",
+        replyToBody: "original",
+      });
+      if (testCase.fallback) {
+        await expect(delivery).resolves.toMatchObject({ messageId: "1700000000002" });
+      } else {
+        const expectedError =
+          testCase.transportKind === "container"
+            ? `Signal REST ${testCase.status}`
+            : `Signal RPC ${testCase.rpcCode}`;
+        await expect(delivery).rejects.toThrow(expectedError);
+      }
+      expect(requests).toHaveLength(testCase.fallback ? 2 : 1);
+      const quoteTimestampPath =
+        testCase.transportKind === "container" ? "quote_timestamp" : "params.quoteTimestamp";
+      expect(requests[0]).toHaveProperty(quoteTimestampPath, 1700000000001);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 });
 

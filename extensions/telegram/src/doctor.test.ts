@@ -120,6 +120,61 @@ describe("telegram doctor", () => {
     expect(result.changes).toContain("Removed retired Telegram tuning knobs.");
   });
 
+  it("preserves account identifiers while removing retired tuning only at config scopes", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig!;
+    const accountIds = [
+      "retry",
+      "timeoutSeconds",
+      "mediaGroupFlushMs",
+      "pollingStallThresholdMs",
+      "errorCooldownMs",
+    ];
+    const account = {
+      botToken: "123:synthetic",
+      retry: { attempts: 2 },
+      groups: {
+        "-100": {
+          errorCooldownMs: 3,
+          toolsBySender: { retry: { allow: ["read"] } },
+          topics: { "1": { errorCooldownMs: 4, requireMention: true } },
+        },
+      },
+      direct: {
+        "123": {
+          errorCooldownMs: 5,
+          topics: { "2": { errorCooldownMs: 6, enabled: true } },
+        },
+      },
+    };
+    const cfg = {
+      channels: {
+        telegram: {
+          ...account,
+          accounts: Object.fromEntries(accountIds.map((id) => [id, account])),
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const before = structuredClone(cfg);
+    const expected = {
+      botToken: "123:synthetic",
+      groups: {
+        "-100": {
+          toolsBySender: { retry: { allow: ["read"] } },
+          topics: { "1": { requireMention: true } },
+        },
+      },
+      direct: { "123": { topics: { "2": { enabled: true } } } },
+    };
+
+    const result = normalize({ cfg });
+    expect(result.config.channels?.telegram).toEqual({
+      ...expected,
+      accounts: Object.fromEntries(accountIds.map((id) => [id, expected])),
+    });
+    expect(cfg).toEqual(before);
+    expect(normalize({ cfg: result.config })).toEqual({ config: result.config, changes: [] });
+  });
+
   it("normalizes legacy telegram streaming aliases into the nested streaming shape", () => {
     const normalize = telegramDoctor.normalizeCompatibilityConfig;
     if (!normalize) {
@@ -534,6 +589,62 @@ describe("telegram doctor", () => {
     expect(warnings[1]).toContain(DOCTOR_FIX_COMMAND);
   });
 
+  it("warns only when a selected webhook account uses the reserved health path", async () => {
+    listTelegramAccountIdsMock.mockReturnValue(["ops"]);
+    const cfg = {
+      channels: {
+        telegram: {
+          enabled: true,
+          webhookUrl: "https://example.test/healthz",
+          webhookPath: "/healthz",
+          accounts: {
+            ops: {
+              botToken: "123:abc",
+              webhookUrl: "https://example.test/ops",
+              webhookPath: "/ops",
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect((await collectPreviewWarnings(cfg)).join("\n")).not.toContain("reserved");
+
+    cfg.channels.telegram.accounts.ops.webhookUrl = "https://example.test/healthz";
+    cfg.channels.telegram.accounts.ops.webhookPath = "/healthz";
+
+    expect((await collectPreviewWarnings(cfg)).join("\n")).toContain(
+      'Telegram account "ops" resolves webhookPath to /healthz, which is reserved',
+    );
+
+    const disabledCfg = {
+      ...cfg,
+      channels: { telegram: { ...cfg.channels.telegram, enabled: false } },
+    } satisfies OpenClawConfig;
+    expect((await collectPreviewWarnings(disabledCfg)).join("\n")).not.toContain("reserved");
+  });
+
+  it("identifies an explicit default account in the webhook path warning", async () => {
+    listTelegramAccountIdsMock.mockReturnValue(["default"]);
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            default: {
+              botToken: "123:abc",
+              webhookUrl: "https://example.test/healthz",
+              webhookPath: "/healthz",
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect((await collectPreviewWarnings(cfg)).join("\n")).toContain(
+      'Telegram account "default" resolves webhookPath to /healthz, which is reserved',
+    );
+  });
+
   it("warns and repairs Telegram apiRoot values that include the bot endpoint", async () => {
     const cfg = {
       channels: {
@@ -563,27 +674,47 @@ describe("telegram doctor", () => {
     ]);
   });
 
-  it("warns when selected quote replies can suppress Telegram tool-progress preview", async () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          replyToMode: "first",
+  it.each([
+    [undefined, "progress"],
+    ["progress", "progress"],
+    ["partial", "preview"],
+    ["block", "preview"],
+  ] as const)(
+    "gives actionable selected-quote tool-progress advice for mode %s",
+    async (mode, toolProgressSection) => {
+      const streaming = {
+        mode,
+        progress: { toolProgress: true },
+        preview: { toolProgress: true },
+      };
+      const cfg = {
+        channels: {
+          telegram: {
+            replyToMode: "first",
+            streaming,
+          },
         },
-      },
-    } as unknown as OpenClawConfig;
+      } satisfies OpenClawConfig;
 
-    const warnings = await collectPreviewWarnings(cfg);
-    expect(warnings[0]).toContain("selected quote replies");
-    expect(warnings[0]).toContain('"Working" tool-progress preview');
-    expect(warnings[0]).toContain("Current-message replies without selected quote text");
-    expect(warnings[1]).toContain("streaming.preview.toolProgress: false");
-  });
+      const warnings = await collectPreviewWarnings(cfg);
+      expect(warnings[0]).toContain("selected quote replies");
+      expect(warnings[0]).toContain('"Working" tool-progress preview');
+      expect(warnings[0]).toContain("Current-message replies without selected quote text");
+      expect(warnings[1]).toContain(`streaming.${toolProgressSection}.toolProgress: false`);
+
+      streaming[toolProgressSection].toolProgress = false;
+      expect((await collectPreviewWarnings(cfg)).join("\n")).not.toContain(
+        "selected quote replies",
+      );
+    },
+  );
 
   it("warns for the implicit default Telegram account when accounts is empty", async () => {
     const cfg = {
       channels: {
         telegram: {
           replyToMode: "all",
+          streaming: { progress: { toolProgress: true } },
           accounts: {},
         },
       },
@@ -600,6 +731,7 @@ describe("telegram doctor", () => {
       channels: {
         telegram: {
           replyToMode: "batched",
+          streaming: { progress: { toolProgress: true } },
           accounts: {
             work: {},
             quiet: {
@@ -662,6 +794,24 @@ describe("telegram doctor", () => {
         } as unknown as OpenClawConfig)
       ).join("\n"),
     ).not.toContain("selected quote replies");
+  });
+
+  it("warns for selected quotes when explicit preview overrides inherited block delivery", async () => {
+    const warnings = await collectPreviewWarnings({
+      channels: {
+        telegram: {
+          replyToMode: "first",
+          streaming: { mode: "partial" },
+        },
+      },
+      agents: {
+        defaults: {
+          blockStreamingDefault: "on",
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(warnings.join("\n")).toContain("selected quote replies");
   });
 
   it("wires apiRoot preview warnings and repair through the doctor adapter", async () => {

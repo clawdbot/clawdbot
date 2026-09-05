@@ -47,7 +47,7 @@ vi.mock("../io.js", () => ({
 }));
 
 vi.mock("./paths.js", () => ({
-  resolveStorePath: (_store?: string, opts?: { agentId?: string }) =>
+  resolveSessionStorePathCore: (_store?: string, opts?: { agentId?: string }) =>
     opts?.agentId === "worker" ? "/tmp/worker-sessions.json" : "/tmp/sessions.json",
 }));
 
@@ -70,6 +70,14 @@ const buildEntry = (deliveryContext: DeliveryContext): SessionEntryFixture => ({
   updatedAt: Date.now(),
   deliveryContext,
 });
+
+function createMixedCaseMatrixDelivery(): DeliveryContext {
+  return { channel: "matrix", to: "room:!MixedCase:Example.Org", accountId: "matrix-account" };
+}
+
+function createTelegramUserDelivery(): DeliveryContext {
+  return { channel: "telegram", to: "telegram:user-123", accountId: "default" };
+}
 
 beforeAll(async () => {
   ({ extractDeliveryInfo } = await import("./delivery-info.js"));
@@ -121,11 +129,7 @@ describe("extractDeliveryInfo", () => {
 
   it("reads borrowed accessor views for direct session keys", () => {
     const sessionKey = "agent:main:telegram:dm:user-123";
-    storeState.store[sessionKey] = buildEntry({
-      channel: "telegram",
-      to: "telegram:user-123",
-      accountId: "default",
-    });
+    storeState.store[sessionKey] = buildEntry(createTelegramUserDelivery());
 
     const result = extractDeliveryInfo(sessionKey);
 
@@ -142,11 +146,7 @@ describe("extractDeliveryInfo", () => {
     // extractDeliveryInfo would return no delivery context.
     storeState.store = new Proxy(
       {
-        [sessionKey]: buildEntry({
-          channel: "telegram",
-          to: "telegram:user-123",
-          accountId: "default",
-        }),
+        [sessionKey]: buildEntry(createTelegramUserDelivery()),
       },
       {
         ownKeys() {
@@ -158,31 +158,19 @@ describe("extractDeliveryInfo", () => {
     const result = extractDeliveryInfo(sessionKey);
 
     expect(result).toEqual({
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:user-123",
-        accountId: "default",
-      },
+      deliveryContext: createTelegramUserDelivery(),
       threadId: undefined,
     });
   });
 
   it("returns deliveryContext for direct session keys", () => {
     const sessionKey = "agent:main:telegram:dm:user-123";
-    storeState.store[sessionKey] = buildEntry({
-      channel: "telegram",
-      to: "telegram:user-123",
-      accountId: "default",
-    });
+    storeState.store[sessionKey] = buildEntry(createTelegramUserDelivery());
 
     const result = extractDeliveryInfo(sessionKey);
 
     expect(result).toEqual({
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:user-123",
-        accountId: "default",
-      },
+      deliveryContext: createTelegramUserDelivery(),
       threadId: undefined,
     });
   });
@@ -366,11 +354,7 @@ describe("extractDeliveryInfo", () => {
     storeState.store[sessionKey] = {
       sessionId: "direct-routable-session",
       updatedAt: Date.now() - 1_000,
-      deliveryContext: {
-        channel: "matrix",
-        to: "room:!MixedCase:Example.Org",
-        accountId: "matrix-account",
-      },
+      deliveryContext: createMixedCaseMatrixDelivery(),
     };
     storeState.store[canonicalKey] = {
       sessionId: "fresh-normalized-session",
@@ -383,11 +367,7 @@ describe("extractDeliveryInfo", () => {
     const result = extractDeliveryInfo(sessionKey);
 
     expect(result).toEqual({
-      deliveryContext: {
-        channel: "matrix",
-        to: "room:!MixedCase:Example.Org",
-        accountId: "matrix-account",
-      },
+      deliveryContext: createMixedCaseMatrixDelivery(),
       threadId: undefined,
     });
   });
@@ -492,11 +472,7 @@ describe("extractDeliveryInfo", () => {
     storeState.store[queriedKey] = {
       sessionId: "exact-mixedcase-session",
       updatedAt: Date.now() - 1_000,
-      deliveryContext: {
-        channel: "matrix",
-        to: "room:!MixedCase:Example.Org",
-        accountId: "matrix-account",
-      },
+      deliveryContext: createMixedCaseMatrixDelivery(),
     };
     storeState.store[legacyFoldedKey] = {
       sessionId: "fresher-legacy-folded-session",
@@ -511,11 +487,7 @@ describe("extractDeliveryInfo", () => {
     const result = extractDeliveryInfo(queriedKey);
 
     expect(result).toEqual({
-      deliveryContext: {
-        channel: "matrix",
-        to: "room:!MixedCase:Example.Org",
-        accountId: "matrix-account",
-      },
+      deliveryContext: createMixedCaseMatrixDelivery(),
       threadId: undefined,
     });
   });
@@ -569,11 +541,7 @@ describe("extractDeliveryInfo", () => {
   it("does not return a mixed-case Matrix sibling for a lowercase room query", () => {
     const queriedKey = "agent:main:matrix:channel:!mixedcase:example.org";
     const mixedSiblingKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
-    storeState.store[mixedSiblingKey] = buildEntry({
-      channel: "matrix",
-      to: "room:!MixedCase:Example.Org",
-      accountId: "matrix-account",
-    });
+    storeState.store[mixedSiblingKey] = buildEntry(createMixedCaseMatrixDelivery());
 
     const result = extractDeliveryInfo(queriedKey);
 
@@ -585,11 +553,7 @@ describe("extractDeliveryInfo", () => {
 
   it("does not return an exact lowercase Matrix key with mixed-case delivery metadata", () => {
     const queriedKey = "agent:main:matrix:channel:!mixedcase:example.org";
-    storeState.store[queriedKey] = buildEntry({
-      channel: "matrix",
-      to: "room:!MixedCase:Example.Org",
-      accountId: "matrix-account",
-    });
+    storeState.store[queriedKey] = buildEntry(createMixedCaseMatrixDelivery());
 
     const result = extractDeliveryInfo(queriedKey);
 
@@ -602,20 +566,12 @@ describe("extractDeliveryInfo", () => {
   it("returns a confirmed lowercased Matrix legacy artifact for a mixed-case key", () => {
     const queriedKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
     const legacyArtifactKey = "agent:main:matrix:channel:!mixedcase:example.org";
-    storeState.store[legacyArtifactKey] = buildEntry({
-      channel: "matrix",
-      to: "room:!MixedCase:Example.Org",
-      accountId: "matrix-account",
-    });
+    storeState.store[legacyArtifactKey] = buildEntry(createMixedCaseMatrixDelivery());
 
     const result = extractDeliveryInfo(queriedKey);
 
     expect(result).toEqual({
-      deliveryContext: {
-        channel: "matrix",
-        to: "room:!MixedCase:Example.Org",
-        accountId: "matrix-account",
-      },
+      deliveryContext: createMixedCaseMatrixDelivery(),
       threadId: undefined,
     });
   });

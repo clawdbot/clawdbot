@@ -1,9 +1,7 @@
 // Gateway boot lifecycle tests cover restart-loop breaker accounting.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   formatLegacyAgentMediaMigrationRequiredMessage,
   GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
@@ -21,6 +19,7 @@ import {
   formatGatewayCrashLoopManualChannelStartHint,
   inspectGatewayCrashLoopBreaker,
   recordGatewayBootStart,
+  recordGatewayCrashLoopRecovery,
   repairGatewayAgentMediaMigrationStartupFailures,
 } from "./gateway-boot-lifecycle.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -32,12 +31,16 @@ const GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD = 3;
 const GATEWAY_BOOT_LOOP_WINDOW_MS = 5 * 60_000;
 const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
 
+const tempDirs = createTempDirTracker();
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  tempDirs.cleanup();
+  vi.unstubAllEnvs();
 });
 
 function createLifecycleDb() {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-boot-"));
+  const stateDir = tempDirs.make("openclaw-gateway-boot-");
   const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
   const { db } = openOpenClawStateDatabase({ env });
   const kysely = getNodeSqliteKysely<GatewayBootLifecycleTestDatabase>(db);
@@ -176,6 +179,59 @@ describe("gateway crash-loop breaker", () => {
 
     expect(firstDecision).toMatchObject({ tripped: false, recovered: true });
     expect(secondDecision).toMatchObject({ tripped: false, recovered: false });
+  });
+
+  it("records a fresh lifecycle segment before recovered channel startup", () => {
+    const db = createLifecycleDb();
+    const nowMs = 1_000_000;
+    const safeModeBootId = recordGatewayBootStart(
+      db.env,
+      nowMs - GATEWAY_BOOT_LOOP_WINDOW_MS - 1,
+      GATEWAY_CRASH_LOOP_BREAKER_REASON,
+    );
+
+    expect(inspectGatewayCrashLoopBreaker(db.env, nowMs)).toMatchObject({
+      recovered: true,
+      uncleanBoots: 0,
+    });
+
+    const recoveredBootId = recordGatewayCrashLoopRecovery(safeModeBootId, db.env, nowMs);
+
+    expect(recoveredBootId).toBeDefined();
+    expect(
+      executeSqliteQuerySync(
+        db.db,
+        db.kysely
+          .selectFrom("gateway_boot_lifecycle")
+          .select(["boot_id", "completed_at_ms", "outcome", "startup_reason"])
+          .orderBy("started_at_ms"),
+      ).rows,
+    ).toEqual([
+      {
+        boot_id: safeModeBootId,
+        completed_at_ms: nowMs,
+        outcome: "safe_mode_stable",
+        startup_reason: GATEWAY_CRASH_LOOP_BREAKER_REASON,
+      },
+      {
+        boot_id: recoveredBootId,
+        completed_at_ms: null,
+        outcome: null,
+        startup_reason: GATEWAY_CRASH_LOOP_RECOVERED_REASON,
+      },
+    ]);
+    expect(inspectGatewayCrashLoopBreaker(db.env, nowMs + 1)).toMatchObject({
+      recovered: false,
+      uncleanBoots: 1,
+    });
+    insertBootRows(db, [
+      { bootId: "post-recovery-crash-a", startedAtMs: nowMs + 2 },
+      { bootId: "post-recovery-crash-b", startedAtMs: nowMs + 3 },
+    ]);
+    expect(inspectGatewayCrashLoopBreaker(db.env, nowMs + 4)).toMatchObject({
+      tripped: true,
+      uncleanBoots: GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD,
+    });
   });
 
   it("records forced stops without tripping the breaker", () => {
@@ -331,5 +387,26 @@ describe("formatGatewayCrashLoopManualChannelStartHint", () => {
     expect(
       formatGatewayCrashLoopManualChannelStartHint({ channelId: "telegram", accountId: "work" }),
     ).toContain(`--params '{"channel":"telegram","accountId":"work"}'`);
+  });
+
+  it.each([
+    { name: "default", profile: "", container: "", command: "openclaw" },
+    { name: "named profile", profile: "work", container: "", command: "openclaw --profile work" },
+    { name: "container", profile: "", container: "demo", command: "openclaw --container demo" },
+    {
+      name: "container and profile",
+      profile: "work",
+      container: "demo",
+      command: "openclaw --container demo",
+    },
+  ])("targets the active gateway for $name", ({ profile, container, command }) => {
+    vi.stubEnv("OPENCLAW_PROFILE", profile);
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
+
+    expect(
+      formatGatewayCrashLoopManualChannelStartHint({ channelId: "telegram", accountId: "work" }),
+    ).toBe(
+      `Start a channel manually with: ${command} gateway call channels.start --params '{"channel":"telegram","accountId":"work"}'`,
+    );
   });
 });

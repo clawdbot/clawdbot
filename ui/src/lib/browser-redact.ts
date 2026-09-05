@@ -1,53 +1,42 @@
 // Browser-safe redaction for tool details rendered by the Control UI.
+import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { DEFAULT_REDACT_PATTERNS } from "../../../src/logging/redact-patterns.js";
 
-const PAYMENT_CREDENTIAL_KEYS =
-  "card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|securityCode|payment[-_]?credential|paymentCredential|shared[-_]?payment[-_]?token|sharedPaymentToken";
-
-const SECRET_DETAIL_PATTERNS: RegExp[] = [
-  /\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN)\b\s*[=:]\s*(["']?)([^\s"'\\&<>]+)\1/gi,
-  /\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN)\b\s*[=:]\s*\\+(["'])([^\s"'\\&<>]+)\\+\1/gi,
-  new RegExp(
-    `[?&](?:access[-_]?token|auth[-_]?token|hook[-_]?token|refresh[-_]?token|api[-_]?key|client[-_]?secret|token|key|secret|password|pass|passwd|auth|signature|${PAYMENT_CREDENTIAL_KEYS})=([^&\\s"'<>]+)`,
-    "gi",
-  ),
-  /"(?:apiKey|token|secret|password|passwd|accessToken|refreshToken|cardNumber|card_number|cardCvc|card_cvc|cardCvv|card_cvv|cvc|cvv|securityCode|security_code|paymentCredential|payment_credential|sharedPaymentToken|shared_payment_token)"\s*:\s*"([^"]+)"/gi,
-  /(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2/gi,
-  /(^|[\s,{])["']?(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2/gi,
-  new RegExp(
-    `--(?:api[-_]?key|hook[-_]?token|token|secret|password|passwd|${PAYMENT_CREDENTIAL_KEYS})\\s+(["']?)([^\\s"']+)\\1`,
-    "gi",
-  ),
-  /Authorization\s*[:=]\s*Bearer\s+([A-Za-z0-9._\-+=]+)/gi,
-  /Authorization\s*[:=]\s*Basic\s+([A-Za-z0-9+/=]+)/gi,
-  /(?:X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token)\s*[:=]\s*([^\s"',;]+)/gi,
-  /\bBearer\s+([A-Za-z0-9._\-+=]{18,})\b/gi,
-  new RegExp(
-    `(^|[\\s,;])(?:access_token|refresh_token|auth[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|token|secret|password|passwd|${PAYMENT_CREDENTIAL_KEYS})=([^\\s&#]+)`,
-    "gi",
-  ),
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----/g,
-  /\b(sk-[A-Za-z0-9_-]{8,})\b/g,
-  /\b(ghp_[A-Za-z0-9]{20,})\b/g,
-  /\b(github_pat_[A-Za-z0-9_]{20,})\b/g,
-  /\b(xox[baprs]-[A-Za-z0-9-]{10,})\b/g,
-  /\b(xapp-[A-Za-z0-9-]{10,})\b/g,
-  /\b(gsk_[A-Za-z0-9_-]{10,})\b/g,
-  /\b(AIza[0-9A-Za-z\-_]{20,})\b/g,
-  /\b(ya29\.[0-9A-Za-z_\-./+=]{10,})\b/g,
-  /\b(1\/\/0[0-9A-Za-z_\-./+=]{10,})\b/g,
-  /\b(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b/g,
-  /\b(pplx-[A-Za-z0-9_-]{10,})\b/g,
-  /(^|[^A-Za-z0-9_])(fw-[A-Za-z0-9]{30,})/g,
-  /(^|[^A-Za-z0-9_])(fw_[A-Za-z0-9]{30,})/g,
-  /(^|[^A-Za-z0-9_])(fpk_[A-Za-z0-9]{30,})/g,
-  /\b(npm_[A-Za-z0-9]{10,})\b/g,
-  /\b(AKID[A-Za-z0-9]{10,})\b/g,
-  /\b(LTAI[A-Za-z0-9]{10,})\b/g,
-  /\b(hf_[A-Za-z0-9]{10,})\b/g,
-  /\b(r8_[A-Za-z0-9]{10,})\b/g,
-  /\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b/g,
-  /\b(\d{6,}:[A-Za-z0-9_-]{20,})\b/g,
+const URL_QUERY_PAIR_RE = /([?&])([^=&#\s]+)=([^&#\s"'<>]+)/gu;
+const SECRET_DETAIL_PATTERNS = DEFAULT_REDACT_PATTERNS.map((source) => {
+  const literal = source.match(/^\/(.+)\/([gimsuy]*)$/);
+  if (!literal) {
+    return new RegExp(source, "gi");
+  }
+  const patternSource = literal[1] ?? "";
+  const patternFlags = literal[2] ?? "";
+  const flags = patternFlags.includes("g") ? patternFlags : `${patternFlags}g`;
+  return new RegExp(patternSource, flags);
+});
+const SENSITIVE_TEXT_PATTERNS: Array<[RegExp, string]> = [
+  [/\b(Authorization|Cookie|Set-Cookie)\s*:\s*[^\n\r]+/gi, "$1: [redacted]"],
+  [/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]"],
+  [
+    /\b(api[_.-]?key|token|secret|password|passwd|authorization)\b(["'])(\s*:\s*)"(?:\\.|[^"\\\r\n])*"/gi,
+    '$1$2$3"[redacted]"',
+  ],
+  [
+    /\b(api[_.-]?key|token|secret|password|passwd|authorization)\b(["'])(\s*:\s*)'(?:\\.|[^'\\\r\n])*'/gi,
+    "$1$2$3'[redacted]'",
+  ],
+  [
+    /\b(api[_.-]?key|token|secret|password|passwd|authorization)\b(\s*[:=]\s*)["']?[^"',\s}]+/gi,
+    "$1$2[redacted]",
+  ],
+  [
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+    "[redacted private key]",
+  ],
+  [
+    /(^|[\s"'`=])(?:\/Users\/|\/home\/|\/var\/folders\/|[A-Za-z]:\\)[^\s"'`,;]+/g,
+    "$1[redacted path]",
+  ],
 ];
 
 function redactToken(value: string): string {
@@ -67,11 +56,20 @@ function redactPemBlock(block: string): string {
   return `${lines[0]}\n...redacted...\n${lines[lines.length - 1]}`;
 }
 
-function redactMatch(match: string, groups: Array<string | undefined>): string {
+function redactMatch(
+  match: string,
+  groups: Array<string | undefined>,
+  followingText: string,
+): string {
   if (match.includes("PRIVATE KEY-----")) {
     return redactPemBlock(match);
   }
   const token = groups.findLast((group) => typeof group === "string" && group.length > 0) ?? match;
+  // Replacement-template syntax can make a later pattern see only the leading `$` after an
+  // earlier pattern has already masked the value. Preserve that literal shell marker.
+  if (token === "$" && followingText.startsWith("`")) {
+    return match;
+  }
   const masked = redactToken(token);
   if (token === match) {
     return masked;
@@ -83,14 +81,31 @@ function redactMatch(match: string, groups: Array<string | undefined>): string {
   return `${match.slice(0, tokenOffset)}${masked}${match.slice(tokenOffset + token.length)}`;
 }
 
+function redactUrlQueryPairs(detail: string): string {
+  return detail.replace(URL_QUERY_PAIR_RE, (match, boundary: string, key: string, value: string) =>
+    isSensitiveUrlQueryParamName(key) ? `${boundary}${key}=${redactToken(value)}` : match,
+  );
+}
+
 export function redactToolDetail(detail: string): string {
-  let redacted = detail;
+  let redacted = redactUrlQueryPairs(detail);
   for (const pattern of SECRET_DETAIL_PATTERNS) {
-    redacted = redacted.replace(pattern, (...args: string[]) =>
-      redactMatch(args[0] ?? "", args.slice(1, -2)),
-    );
+    redacted = redacted.replace(pattern, (...args: unknown[]) => {
+      const match = typeof args[0] === "string" ? args[0] : "";
+      const offsetCandidate = args[args.length - 2];
+      const inputCandidate = args[args.length - 1];
+      const offset = typeof offsetCandidate === "number" ? offsetCandidate : -1;
+      const input = typeof inputCandidate === "string" ? inputCandidate : "";
+      const groups = args
+        .slice(1, -2)
+        .map((value) => (typeof value === "string" ? value : undefined));
+      return redactMatch(match, groups, offset < 0 ? "" : input.slice(offset + match.length));
+    });
   }
-  return redacted;
+  return SENSITIVE_TEXT_PATTERNS.reduce(
+    (text, [pattern, replacement]) => text.replace(pattern, replacement),
+    redacted,
+  );
 }
 
 export const redactToolPayloadText = redactToolDetail;

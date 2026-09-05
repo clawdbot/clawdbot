@@ -25,7 +25,7 @@ metadata:
 
 # imsg
 
-Use `imsg` when an OpenClaw agent must act through the user's local macOS Messages.app account: inspect iMessage/SMS history, choose the correct DM or group, send messages/files, reply, react, vote in polls, or use private-API iMessage features.
+Use the generic `message` tool first for actions that its current iMessage schema exposes. Use `imsg` when the task needs local Messages.app history, target discovery, watching, or an administrative/private-API capability that is not exposed by `message`.
 
 Do not use this skill for Telegram, Signal, WhatsApp, Discord, Slack, or for replying inside the current OpenClaw conversation when the configured channel already routes the reply.
 
@@ -33,7 +33,7 @@ Do not use this skill for Telegram, Signal, WhatsApp, Discord, Slack, or for rep
 
 1. Resolve the conversation first.
 2. Choose DM, existing group, or new group.
-3. Pick the lowest-capability command that can do the requested action.
+3. Prefer an available `message` action; otherwise pick the lowest-capability `imsg` command that preserves the requested semantics.
 4. Confirm any send or visible state change unless the user already gave exact recipient, content, and action.
 5. Execute with stable identifiers: prefer `--chat-id` for normal sends/watch/history and `--chat` chat GUID for bridge actions.
 
@@ -74,7 +74,7 @@ Do not make `jq` a hard prerequisite for the skill; it is only a convenient form
 
 ## Capability Choice
 
-Use standard commands for reads, target resolution, and plain sends:
+Use `imsg` standard commands when the current `message` schema does not cover the operation or when local history is needed:
 
 - Read/list/search/watch: `chats`, `group`, `history`, `search`, `watch`
 - Basic text/file send: `send`

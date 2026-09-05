@@ -55,7 +55,6 @@ const CommandCategorySchema = Type.Union([
   Type.Literal("management"),
   Type.Literal("media"),
   Type.Literal("tools"),
-  Type.Literal("docks"),
 ]);
 
 /** Static argument choice shown to clients. */
@@ -76,6 +75,15 @@ const CommandArgSchema = closedObject({
   dynamic: Type.Optional(Type.Boolean()),
 });
 
+const CommandClientPresentationActionSchema = Type.Union([
+  closedObject({ kind: Type.Literal("device-pairing") }),
+]);
+
+const CommandClientPresentationSchema = closedObject({
+  when: Type.Literal("no-arguments"),
+  action: CommandClientPresentationActionSchema,
+});
+
 /** One command catalog entry visible to clients. */
 export const CommandEntrySchema = closedObject({
   name: BoundedNonEmptyString(COMMAND_NAME_MAX_LENGTH),
@@ -88,13 +96,19 @@ export const CommandEntrySchema = closedObject({
   description: Type.String({ maxLength: COMMAND_DESCRIPTION_MAX_LENGTH }),
   category: Type.Optional(CommandCategorySchema),
   source: CommandSourceSchema,
+  /** Human-readable skill title used by client display surfaces. */
+  skillDisplayName: Type.Optional(BoundedNonEmptyString(COMMAND_NAME_MAX_LENGTH)),
+  /** Whether a skill command is also present in the model-visible skill catalog. */
+  skillModelVisible: Type.Optional(Type.Boolean()),
   scope: CommandScopeSchema,
   acceptsArgs: Type.Boolean(),
   args: Type.Optional(Type.Array(CommandArgSchema, { maxItems: COMMAND_ARGS_MAX_ITEMS })),
+  clientPresentation: Type.Optional(CommandClientPresentationSchema),
 });
 
 /** Command catalog request filters. */
 export const CommandsListParamsSchema = closedObject({
+  sessionKey: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   provider: Type.Optional(NonEmptyString),
   scope: Type.Optional(CommandScopeSchema),

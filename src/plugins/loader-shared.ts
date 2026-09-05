@@ -1,18 +1,18 @@
-import fs from "node:fs";
-import path from "node:path";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { clearAgentHarnesses } from "../agents/harness/registry.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { activateContextEngineRegistrations } from "../context-engine/registry.js";
+import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
-import { clearDetachedTaskLifecycleRuntimeRegistration } from "../tasks/detached-task-runtime-state.js";
-import { clearPluginCommands } from "./command-registry-state.js";
-import { clearCompactionProviders } from "./compaction-provider.js";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import {
   resolveEffectiveEnableState,
   type NormalizedPluginsConfig,
@@ -21,22 +21,29 @@ import {
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
-import { clearEmbeddingProviders } from "./embedding-providers.js";
-import { initializeGlobalHookRunner } from "./hook-runner-global.js";
+import {
+  getGlobalPluginRegistry,
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "./hook-runner-global.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
-import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
-import { clearLegacyPluginInternalHooks } from "./legacy-internal-hook-state.js";
 import { createPluginRecord } from "./loader-records.js";
 import type { PluginLoadOptions, PluginRuntimeSubagentMode } from "./loader-types.js";
+import {
+  isPluginManifestInstallOwnerAmbiguous,
+  resolvePluginManifestInstallOwner,
+} from "./manifest-install-owner.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import { clearMemoryEmbeddingProviders } from "./memory-embedding-providers.js";
-import { clearMemoryPluginState } from "./memory-state.js";
-import { clearPluginRuntimeArtifactResolutionMemo } from "./plugin-runtime-artifact-resolution.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
-import { setActivePluginRegistry } from "./runtime.js";
-import { validateJsonSchemaValue } from "./schema-validator.js";
-import { clearSessionDiscussionProvider } from "./session-discussion-registry.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  commitStagedPluginRegistry,
+  rollbackStagedPluginRegistry,
+  stageActivePluginRegistry,
+} from "./runtime.js";
+import { validatePluginSchemaValue } from "./schema-validator.js";
 import { hasKind } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { PluginLogger } from "./types.js";
@@ -153,34 +160,28 @@ export function matchesScopedPluginOrDreamingSidecar(params: {
 export function createPluginCandidatesFromManifestRegistry(
   manifestRegistry: PluginManifestRegistry,
 ): PluginCandidate[] {
-  return manifestRegistry.plugins.map((record) => ({
-    idHint: record.id,
-    rootDir: record.rootDir,
-    source: record.source,
-    ...(record.setupSource !== undefined ? { setupSource: record.setupSource } : {}),
-    origin: record.origin,
-    ...(record.workspaceDir !== undefined ? { workspaceDir: record.workspaceDir } : {}),
-    ...(record.format !== undefined ? { format: record.format } : {}),
-    ...(record.bundleFormat !== undefined ? { bundleFormat: record.bundleFormat } : {}),
-    ...(record.packageManifest !== undefined ? { packageManifest: record.packageManifest } : {}),
-  }));
-}
-
-export function clearActivatedPluginRuntimeState(): void {
-  clearPluginRuntimeArtifactResolutionMemo();
-  clearAgentHarnesses();
-  clearPluginCommands();
-  clearCompactionProviders();
-  clearDetachedTaskLifecycleRuntimeRegistration();
-  clearPluginInteractiveHandlers();
-  // Legacy api.registerHook callbacks are process-global compatibility state.
-  // Retire them with the active registry so disabled or removed plugins cannot
-  // keep running.
-  clearLegacyPluginInternalHooks();
-  clearEmbeddingProviders();
-  clearMemoryEmbeddingProviders();
-  clearMemoryPluginState();
-  clearSessionDiscussionProvider();
+  return manifestRegistry.plugins.map((record) => {
+    const installOwner = resolvePluginManifestInstallOwner(record);
+    return recordPluginCandidateInstallOwner(
+      {
+        idHint: record.id,
+        effectivePluginId: record.id,
+        rootDir: record.rootDir,
+        source: record.source,
+        ...(record.setupSource !== undefined ? { setupSource: record.setupSource } : {}),
+        origin: record.origin,
+        ...(record.sourcePreferred ? { sourcePreferred: true as const } : {}),
+        ...(record.workspaceDir !== undefined ? { workspaceDir: record.workspaceDir } : {}),
+        ...(record.format !== undefined ? { format: record.format } : {}),
+        ...(record.bundleFormat !== undefined ? { bundleFormat: record.bundleFormat } : {}),
+        ...(record.packageManifest !== undefined
+          ? { packageManifest: record.packageManifest }
+          : {}),
+      },
+      installOwner,
+      isPluginManifestInstallOwnerAmbiguous(record),
+    );
+  });
 }
 
 class PluginLoadFailureError extends Error {
@@ -200,15 +201,17 @@ class PluginLoadFailureError extends Error {
 }
 
 export function validatePluginConfig(params: {
+  origin: PluginOrigin;
   schema?: Record<string, unknown>;
   cacheKey?: string;
   value?: unknown;
+  sourceValue?: unknown;
 }): Result<Record<string, unknown> | undefined, string[]> {
   const { schema, value } = params;
   if (!schema) {
     return ok(value as Record<string, unknown> | undefined);
   }
-  if (isEmptyPluginConfigJsonSchema(schema)) {
+  if (params.sourceValue === undefined && isEmptyPluginConfigJsonSchema(schema)) {
     if (
       value === undefined ||
       (value &&
@@ -223,16 +226,36 @@ export function validatePluginConfig(params: {
     }
     return resultError(["<root>: config must be empty"]);
   }
-  const result = validateJsonSchemaValue({
+  const result = validatePluginSchemaValue({
+    origin: params.origin,
     schema,
     cacheKey: params.cacheKey ?? JSON.stringify(schema),
     value: value ?? {},
+    sourceValue: params.sourceValue,
     applyDefaults: true,
   });
   return result.ok
     ? ok(result.value as Record<string, unknown> | undefined)
     : resultError(result.errors.map((error) => error.text));
 }
+
+// The empty-config shortcut answers without compiling the schema, so it is only sound for
+// schemas built purely from keywords it accounts for. An allowlist holds that invariant where
+// a denylist leaked every new keyword: an extra constraint, an unresolvable `$ref`, or an
+// unknown keyword now falls through to validatePluginSchemaValue, which owns the diagnostic.
+const EMPTY_PLUGIN_CONFIG_SHORTCUT_KEYWORDS = new Set([
+  "type",
+  "additionalProperties",
+  "properties",
+  "title",
+  "description",
+  "$schema",
+  "$id",
+  "$comment",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+]);
 
 function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean {
   if (schema.type !== "object" || schema.additionalProperties !== false) {
@@ -247,20 +270,7 @@ function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean
   ) {
     return false;
   }
-  const hasConditional = "if" in schema && ("then" in schema || "else" in schema);
-  return !(
-    "required" in schema ||
-    "dependentRequired" in schema ||
-    "dependentSchemas" in schema ||
-    "dependencies" in schema ||
-    "minProperties" in schema ||
-    "allOf" in schema ||
-    "anyOf" in schema ||
-    "oneOf" in schema ||
-    "not" in schema ||
-    "patternProperties" in schema ||
-    hasConditional
-  );
+  return Object.keys(schema).every((keyword) => EMPTY_PLUGIN_CONFIG_SHORTCUT_KEYWORDS.has(keyword));
 }
 
 export function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnostic[]): void {
@@ -303,7 +313,9 @@ export function createManifestPluginRecord(params: {
     description: manifestRecord.description,
     packageVersion: manifestRecord.packageVersion,
     version: manifestRecord.version,
-    builtWithOpenClawVersion: candidate.packageManifest?.build?.openclawVersion?.trim(),
+    builtWithOpenClawVersion: normalizeOptionalString(
+      candidate.packageManifest?.build?.openclawVersion,
+    ),
     packageName: manifestRecord.packageName,
     format: manifestRecord.format,
     bundleFormat: manifestRecord.bundleFormat,
@@ -322,6 +334,7 @@ export function createManifestPluginRecord(params: {
     configSchema: Boolean(manifestRecord.configSchema),
     contracts: manifestRecord.contracts,
     dashboard: manifestRecord.dashboard,
+    controlUi: manifestRecord.controlUi,
     mcpServers: manifestRecord.mcpServers,
   });
 }
@@ -333,6 +346,8 @@ export function applyPluginManifestRecordDetails(
   record.kind = manifestRecord.kind;
   record.configUiHints = manifestRecord.configUiHints;
   record.configJsonSchema = manifestRecord.configSchema;
+  // Manifest ownership survives rollback of executable registrations.
+  record.commandAliases = manifestRecord.commandAliases;
 }
 
 export function applyManifestSnapshotMetadata(
@@ -359,20 +374,30 @@ export function maybeThrowOnPluginLoadError(
 
 export function activatePluginRegistry(
   registry: PluginRegistry,
-  cacheKey: string,
+  cacheKey: string | null,
   runtimeSubagentMode: PluginRuntimeSubagentMode,
   workspaceDir?: string,
 ): void {
-  // Reinitialize from the live registry set so activation order and scope cannot
-  // drop hooks through a stale runner (#91918).
-  setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
-  initializeGlobalHookRunner(registry);
+  const activeSnapshot = captureActivePluginRegistrySnapshot();
+  const previousHookRegistry = getGlobalPluginRegistry();
+  try {
+    // Install the complete bundle before hook-runner initialization so hook composition never
+    // observes contributions from two loads. Activation failure restores the prior selection.
+    stageActivePluginRegistry(registry, cacheKey, runtimeSubagentMode, workspaceDir);
+    initializeGlobalHookRunner(registry);
+    activateContextEngineRegistrations(registry);
+    commitStagedPluginRegistry(activeSnapshot.activeRegistry, registry);
+  } catch (error) {
+    rollbackStagedPluginRegistry(activeSnapshot);
+    if (previousHookRegistry) {
+      initializeGlobalHookRunner(previousHookRegistry);
+    } else {
+      resetGlobalHookRunner();
+    }
+    throw error;
+  }
 }
 
 export function safeRealpathOrResolve(value: string): string {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return path.resolve(value);
-  }
+  return resolveRealpathOrAbsolute(value);
 }

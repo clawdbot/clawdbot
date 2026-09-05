@@ -5,17 +5,18 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";
-import * as skillsWorkspaceModule from "../loading/workspace.js";
-import type { SkillSnapshot } from "../types.js";
+import * as skillsLoaderModule from "../loading/workspace-skill-loader.js";
+import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
+import type { SkillEntry, SkillSnapshot } from "../types.js";
 import { resolveEmbeddedRunSkillEntries } from "./embedded-run-entries.js";
 
 describe("resolveEmbeddedRunSkillEntries", () => {
-  const loadWorkspaceSkillEntriesSpy = vi.spyOn(skillsWorkspaceModule, "loadWorkspaceSkillEntries");
+  const loadWorkspaceSkillsSpy = vi.spyOn(skillsLoaderModule, "loadWorkspaceSkills");
 
   beforeEach(() => {
     clearRuntimeConfigSnapshot();
-    loadWorkspaceSkillEntriesSpy.mockReset();
-    loadWorkspaceSkillEntriesSpy.mockReturnValue([]);
+    loadWorkspaceSkillsSpy.mockReset();
+    loadWorkspaceSkillsSpy.mockReturnValue([]);
   });
 
   it("loads skill entries with config when no resolved snapshot skills exist", () => {
@@ -37,8 +38,8 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     });
 
     expect(result.shouldLoadSkillEntries).toBe(true);
-    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledTimes(1);
-    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/tmp/workspace", { config });
+    expect(loadWorkspaceSkillsSpy).toHaveBeenCalledTimes(1);
+    expect(loadWorkspaceSkillsSpy).toHaveBeenCalledWith("/tmp/workspace", { config });
   });
 
   it("threads agentId through live skill loading", () => {
@@ -52,7 +53,7 @@ describe("resolveEmbeddedRunSkillEntries", () => {
       },
     });
 
-    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/tmp/workspace", {
+    expect(loadWorkspaceSkillsSpy).toHaveBeenCalledWith("/tmp/workspace", {
       config: {},
       agentId: "writer",
     });
@@ -79,14 +80,11 @@ describe("resolveEmbeddedRunSkillEntries", () => {
       workspaceOnly: true,
     });
 
-    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith(
-      "/tmp/workspace/.openclaw/sandbox-skills",
-      {
-        config: {},
-        eligibility,
-        workspaceOnly: true,
-      },
-    );
+    expect(loadWorkspaceSkillsSpy).toHaveBeenCalledWith("/tmp/workspace/.openclaw/sandbox-skills", {
+      config: {},
+      eligibility,
+      workspaceOnly: true,
+    });
   });
 
   it("prefers the active runtime snapshot when caller config still contains SecretRefs", () => {
@@ -123,7 +121,7 @@ describe("resolveEmbeddedRunSkillEntries", () => {
       },
     });
 
-    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/tmp/workspace", {
+    expect(loadWorkspaceSkillsSpy).toHaveBeenCalledWith("/tmp/workspace", {
       config: runtimeConfig,
     });
   });
@@ -163,7 +161,7 @@ describe("resolveEmbeddedRunSkillEntries", () => {
       },
     });
 
-    expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/tmp/workspace", {
+    expect(loadWorkspaceSkillsSpy).toHaveBeenCalledWith("/tmp/workspace", {
       config: callerConfig,
     });
   });
@@ -181,10 +179,38 @@ describe("resolveEmbeddedRunSkillEntries", () => {
       skillsSnapshot: snapshot,
     });
 
-    expect(result).toEqual({
-      shouldLoadSkillEntries: false,
-      skillEntries: [],
+    expect(result.shouldLoadSkillEntries).toBe(false);
+    expect(result.skillEntries).toEqual([]);
+    expect(loadWorkspaceSkillsSpy).not.toHaveBeenCalled();
+  });
+
+  it("exposes a cached lazy loader without eagerly loading a modern snapshot", () => {
+    const loadedEntries: SkillEntry[] = [
+      {
+        skill: createCanonicalFixtureSkill({
+          name: "healthy",
+          description: "healthy",
+          filePath: "/tmp/workspace/skills/healthy/SKILL.md",
+          baseDir: "/tmp/workspace/skills/healthy",
+          source: "test",
+        }),
+        frontmatter: {},
+      },
+    ];
+    loadWorkspaceSkillsSpy.mockReturnValue(loadedEntries);
+    const result = resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/tmp/workspace",
+      config: {},
+      skillsSnapshot: {
+        prompt: "skills prompt",
+        skills: [{ name: "healthy", skillKey: "healthy" }],
+        resolvedSkills: [],
+      },
     });
-    expect(loadWorkspaceSkillEntriesSpy).not.toHaveBeenCalled();
+
+    expect(loadWorkspaceSkillsSpy).not.toHaveBeenCalled();
+    expect(result.loadSkillEntries()).toBe(loadedEntries);
+    expect(result.loadSkillEntries()).toBe(loadedEntries);
+    expect(loadWorkspaceSkillsSpy).toHaveBeenCalledOnce();
   });
 });

@@ -2,7 +2,106 @@
 import { describe, expect, it } from "vitest";
 import { normalizeCredentialPayloadForKind } from "../qa/convex-credential-broker/convex/payload_validation.js";
 
+const BUZZ_DRIVER_PRIVATE_KEY = "01".repeat(32);
+const BUZZ_SUT_PRIVATE_KEY = "02".repeat(32);
+const BUZZ_DRIVER_NSEC = "nsec1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqstywftw";
+
 describe("QA Convex credential payload validation", () => {
+  it("normalizes Buzz credential payloads", () => {
+    expect(
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: " wss://relay.qa.example ",
+        roomId: " 123E4567-E89B-42D3-A456-426614174000 ",
+        driverPrivateKey: ` ${BUZZ_DRIVER_PRIVATE_KEY} `,
+        sutPrivateKey: ` ${BUZZ_SUT_PRIVATE_KEY} `,
+        driverAuthTag: ' ["auth","driver","conditions","signature"] ',
+        ignored: true,
+      }),
+    ).toEqual({
+      relayUrl: "wss://relay.qa.example",
+      roomId: "123e4567-e89b-42d3-a456-426614174000",
+      driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
+      sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
+      driverAuthTag: '["auth","driver","conditions","signature"]',
+    });
+  });
+
+  it.each(["ws://localhost:8080", "ws://127.0.0.1:8080", "ws://[::1]:8080"])(
+    "allows plaintext loopback Buzz relay URL %s",
+    (relayUrl) => {
+      expect(
+        normalizeCredentialPayloadForKind("buzz", {
+          relayUrl,
+          roomId: "123e4567-e89b-42d3-a456-426614174000",
+          driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
+          sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
+        }),
+      ).toMatchObject({ relayUrl });
+    },
+  );
+
+  it("rejects plaintext remote Buzz relay URLs", () => {
+    expect(() =>
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: "ws://relay.qa.example",
+        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
+        sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
+      }),
+    ).toThrow(/wss:\/\//u);
+  });
+
+  it("rejects malformed Buzz credential payloads without echoing values", () => {
+    const privateKey = BUZZ_DRIVER_PRIVATE_KEY;
+    const invalidRelay = "https://relay.qa.example/private-path";
+    expect(() =>
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: invalidRelay,
+        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        driverPrivateKey: privateKey,
+        sutPrivateKey: privateKey,
+      }),
+    ).toThrow(/wss:\/\//u);
+    try {
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: "wss://relay.qa.example",
+        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        driverPrivateKey: privateKey,
+        sutPrivateKey: privateKey,
+      });
+    } catch (error) {
+      expect(String(error)).not.toContain(privateKey);
+    }
+  });
+
+  it("rejects runtime-invalid Buzz secrets and equivalent key encodings", () => {
+    expect(() =>
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: "wss://relay.qa.example",
+        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
+        sutPrivateKey: BUZZ_DRIVER_NSEC,
+      }),
+    ).toThrow(/distinct driver and SUT identities/u);
+    expect(() =>
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: "wss://relay.qa.example",
+        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        driverPrivateKey: "not-a-private-key",
+        sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
+      }),
+    ).toThrow(/nsec or 64-character hex private key/u);
+    expect(() =>
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: "wss://relay.qa.example",
+        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
+        sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
+        driverAuthTag: "not-an-auth-tag",
+      }),
+    ).toThrow(/auth tag JSON array/u);
+  });
+
   it("normalizes Discord credential payloads", () => {
     expect(
       normalizeCredentialPayloadForKind("discord", {
@@ -67,66 +166,56 @@ describe("QA Convex credential payload validation", () => {
     expect(normalizeCredentialPayloadForKind("future-kind", payload)).toBe(payload);
   });
 
-  it("normalizes Telegram user credential payloads", () => {
-    const sha256 = "a".repeat(64);
-
+  it("normalizes Telegram Test Server userbot credentials", () => {
     expect(
-      normalizeCredentialPayloadForKind("telegram-user", {
+      normalizeCredentialPayloadForKind("telegram-test-userbot", {
+        schemaVersion: 1,
+        environment: "test",
         groupId: " -100123 ",
-        sutToken: " sut-token ",
-        testerUserId: " 8709353529 ",
-        testerUsername: " OpenClawTestUser ",
-        telegramApiId: " 123456 ",
-        telegramApiHash: " api-hash ",
-        tdlibDatabaseEncryptionKey: " db-key ",
-        tdlibArchiveBase64: " tdlib-archive ",
-        tdlibArchiveSha256: sha256.toUpperCase(),
-        desktopTdataArchiveBase64: " desktop-archive ",
-        desktopTdataArchiveSha256: sha256,
+        sutToken: " test-token ",
+        sutUsername: " @test_bot ",
+        sutBotId: " 123 ",
+        testerUserId: " 456 ",
+        tdlibArchiveBase64: "dGVzdA==",
+        tdlibArchiveSha256: "A".repeat(64),
+        tdlibVersion: " 1.8.67 ",
         ignored: true,
       }),
     ).toEqual({
+      schemaVersion: 1,
+      environment: "test",
       groupId: "-100123",
-      sutToken: "sut-token",
-      testerUserId: "8709353529",
-      testerUsername: "OpenClawTestUser",
-      telegramApiId: "123456",
-      telegramApiHash: "api-hash",
-      tdlibDatabaseEncryptionKey: "db-key",
-      tdlibArchiveBase64: "tdlib-archive",
-      tdlibArchiveSha256: sha256,
-      desktopTdataArchiveBase64: "desktop-archive",
-      desktopTdataArchiveSha256: sha256,
+      sutToken: "test-token",
+      sutUsername: "test_bot",
+      sutBotId: "123",
+      testerUserId: "456",
+      tdlibArchiveBase64: "dGVzdA==",
+      tdlibArchiveSha256: "a".repeat(64),
+      tdlibVersion: "1.8.67",
     });
   });
 
-  it("rejects malformed Telegram user credential payloads", () => {
-    const validPayload = {
-      groupId: "-100123",
-      sutToken: "sut-token",
-      testerUserId: "8709353529",
-      testerUsername: "OpenClawTestUser",
-      telegramApiId: "123456",
-      telegramApiHash: "api-hash",
-      tdlibDatabaseEncryptionKey: "db-key",
-      tdlibArchiveBase64: "tdlib-archive",
-      tdlibArchiveSha256: "a".repeat(64),
-      desktopTdataArchiveBase64: "desktop-archive",
-      desktopTdataArchiveSha256: "b".repeat(64),
-    };
-
+  it.each([
+    ["environment", { environment: "production" }],
+    ["bot identity", { sutBotId: "bot" }],
+    ["archive encoding", { tdlibArchiveBase64: "not-base64" }],
+    ["archive hash", { tdlibArchiveSha256: "not-a-hash" }],
+  ])("rejects malformed Telegram Test Server userbot %s", (_label, patch) => {
     expect(() =>
-      normalizeCredentialPayloadForKind("telegram-user", {
-        ...validPayload,
-        testerUserId: "tester",
+      normalizeCredentialPayloadForKind("telegram-test-userbot", {
+        schemaVersion: 1,
+        environment: "test",
+        groupId: "-100123",
+        sutToken: "test-token",
+        sutUsername: "test_bot",
+        sutBotId: "123",
+        testerUserId: "456",
+        tdlibArchiveBase64: "dGVzdA==",
+        tdlibArchiveSha256: "a".repeat(64),
+        tdlibVersion: "1.8.67",
+        ...patch,
       }),
-    ).toThrow(/testerUserId/u);
-    expect(() =>
-      normalizeCredentialPayloadForKind("telegram-user", {
-        ...validPayload,
-        tdlibArchiveSha256: "not-sha",
-      }),
-    ).toThrow(/tdlibArchiveSha256/u);
+    ).toThrow(/telegram-test-userbot/u);
   });
 
   it("normalizes WhatsApp credential payloads", () => {

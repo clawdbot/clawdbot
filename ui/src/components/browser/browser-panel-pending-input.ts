@@ -1,6 +1,7 @@
 /** Owns cancellable refreshes and input that must not outlive its browser document. */
 export class BrowserPanelPendingInput {
   private refreshTimer: number | null = null;
+  private viewportResizeTimer: number | null = null;
   private wheelTimer: number | null = null;
   private inspectTimer: number | null = null;
   private wheelDeltaX = 0;
@@ -11,6 +12,10 @@ export class BrowserPanelPendingInput {
     if (this.refreshTimer !== null) {
       clearTimeout(this.refreshTimer);
       this.refreshTimer = null;
+    }
+    if (this.viewportResizeTimer !== null) {
+      clearTimeout(this.viewportResizeTimer);
+      this.viewportResizeTimer = null;
     }
     this.clearInput();
   }
@@ -36,6 +41,16 @@ export class BrowserPanelPendingInput {
     this.refreshTimer = window.setTimeout(() => {
       this.refreshTimer = null;
       refresh();
+    }, delayMs);
+  }
+
+  scheduleViewportResize(delayMs: number, resize: () => void): void {
+    if (this.viewportResizeTimer !== null) {
+      clearTimeout(this.viewportResizeTimer);
+    }
+    this.viewportResizeTimer = window.setTimeout(() => {
+      this.viewportResizeTimer = null;
+      resize();
     }, delayMs);
   }
 

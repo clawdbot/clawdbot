@@ -1,8 +1,11 @@
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveExecApprovalsFromFile,
   type ExecApprovalsFile,
 } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type {
   CodexAppServerApprovalPolicy,
   CodexAppServerApprovalsReviewer,
@@ -63,10 +66,15 @@ export function selectGuardianSandbox(
 }
 
 export function resolveApprovalPolicy(value: unknown): CodexAppServerApprovalPolicy | undefined {
+  if (value === "untrusted") {
+    throw new Error(
+      'Codex app-server approval policy "untrusted" is retired; run "openclaw doctor --fix" and use "on-request".',
+    );
+  }
   if (value === "on-failure") {
     return "on-request";
   }
-  return value === "on-request" || value === "untrusted" || value === "never" ? value : undefined;
+  return value === "on-request" || value === "never" ? value : undefined;
 }
 
 export function resolveSandbox(value: unknown): CodexAppServerSandboxMode | undefined {
@@ -84,36 +92,32 @@ export function resolveApprovalsReviewer(
 }
 
 function resolveOpenClawExecPolicyFromConfig(params: {
-  config?: unknown;
+  config?: OpenClawConfig;
   agentId?: string;
 }): OpenClawExecPolicy {
-  const root = readRecord(params.config);
-  const globalExec = readRecord(readRecord(root?.tools)?.exec);
+  const globalExec = readRecord(params.config?.tools?.exec);
   const globalPolicy = applyOpenClawExecPolicyLayer(createDefaultOpenClawExecPolicy(), globalExec);
   const agentId = params.agentId?.trim();
-  if (!agentId) {
-    return globalPolicy;
-  }
-  const agents = readRecord(root?.agents);
-  const agentList = Array.isArray(agents?.list) ? agents.list : [];
-  const normalizedAgentId = normalizeAgentId(agentId);
-  const agentEntry = agentList.find((entry) => {
-    const id = readRecord(entry)?.id;
-    return typeof id === "string" && normalizeAgentId(id) === normalizedAgentId;
-  });
-  const agentExec = readRecord(readRecord(readRecord(agentEntry)?.tools)?.exec);
+  const agentExec = agentId
+    ? readRecord(resolveAgentConfig(params.config ?? {}, agentId)?.tools?.exec)
+    : undefined;
   return applyOpenClawExecPolicyLayer(globalPolicy, agentExec);
 }
 
 export function resolveOpenClawExecPolicyForCodexAppServer(params: {
+  permissionMode?: EmbeddedRunAttemptParamsV2["permissionMode"];
   execOverrides?: {
+    mode?: unknown;
     security?: unknown;
     ask?: unknown;
   };
   approvals?: ExecApprovalsFile;
-  config?: unknown;
+  config?: OpenClawConfig;
   agentId?: string;
 }): OpenClawExecPolicyForCodexAppServer {
+  if (params.permissionMode === "full") {
+    return { ...resolveOpenClawExecPolicyForMode("full"), touched: true };
+  }
   const basePolicy = resolveOpenClawExecPolicyFromConfig({
     config: params.config,
     agentId: params.agentId,
@@ -150,16 +154,17 @@ export function assertCodexAppServerAllowedForOpenClawExecMode(
   mode: OpenClawExecMode | undefined,
 ): void {
   if (mode === "deny" || mode === "allowlist") {
-    throw new Error(
-      `Codex app-server local execution is not available when tools.exec.mode=${mode}`,
+    throw new AgentHarnessPreflightError(
+      `Codex app-server local execution is unavailable because effective tools.exec.mode=${mode}. ` +
+        "Execution-host approvals are authoritative. For gateway turns, inspect them with `openclaw approvals get --gateway` and update that same target with `openclaw approvals set --gateway --stdin`; for local `agent exec`, omit `--gateway`. Intentionally align that host policy before retrying.",
+      { scope: "harness" },
     );
   }
 }
 
 function createDefaultOpenClawExecPolicy(): OpenClawExecPolicy {
   return {
-    security: "full",
-    ask: "off",
+    ...resolveOpenClawExecPolicyForMode("full"),
     touched: false,
   };
 }

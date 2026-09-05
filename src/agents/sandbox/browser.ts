@@ -9,6 +9,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js";
+import { withContainerEnvFile } from "../../infra/container-env-file.js";
 import { isSameSsrFPolicy, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { startBrowserBridgeServer } from "../../plugin-sdk/browser-bridge.js";
 import {
@@ -61,8 +62,10 @@ import { validateNetworkMode } from "./validate-sandbox-security.js";
 import {
   appendReadOnlyWorkspaceSkillMountArgs,
   appendWorkspaceMountArgs,
+  filterBindsConflictingWithProtectedMounts,
   formatReadOnlyWorkspaceSkillMountHashState,
   resolveReadOnlyWorkspaceSkillMounts,
+  resolveProtectedSkillMountContainerPaths,
   SANDBOX_MOUNT_FORMAT_VERSION,
 } from "./workspace-mounts.js";
 
@@ -379,7 +382,7 @@ async function ensureSandboxBrowserContainer(
       allowContainerNamespaceJoin: browserDockerCfg.dangerouslyAllowContainerNamespaceJoin === true,
     });
     await ensureSandboxBrowserImage(browserImage);
-    const args = buildSandboxCreateArgs({
+    const { argv: args, env } = buildSandboxCreateArgs({
       name: containerName,
       cfg: browserDockerCfg,
       scopeKey: params.scopeKey,
@@ -402,7 +405,21 @@ async function ensureSandboxBrowserContainer(
       includeReadOnlyWorkspaceSkillMounts: false,
     });
     if (browserDockerCfg.binds?.length) {
+      // Skip user binds that conflict with protected skill mount container paths so
+      // the read-only skill overlay remains authoritative.
+      const protectedPaths = resolveProtectedSkillMountContainerPaths(readOnlyWorkspaceSkillMounts);
+      const safeBinds =
+        protectedPaths.size > 0
+          ? filterBindsConflictingWithProtectedMounts(browserDockerCfg.binds, protectedPaths)
+          : browserDockerCfg.binds;
       for (const bind of browserDockerCfg.binds) {
+        if (!safeBinds.includes(bind)) {
+          defaultRuntime.log(
+            `sandbox browser: skipping user bind "${bind}" — container path conflicts with a protected read-only skill mount`,
+          );
+        }
+      }
+      for (const bind of safeBinds) {
         args.push("-v", bind);
       }
     }
@@ -414,25 +431,26 @@ async function ensureSandboxBrowserContainer(
     if (noVncEnabled) {
       args.push("-p", `127.0.0.1::${params.cfg.browser.noVncPort}`);
     }
-    args.push("-e", `OPENCLAW_BROWSER_HEADLESS=${params.cfg.browser.headless ? "1" : "0"}`);
-    args.push("-e", `OPENCLAW_BROWSER_ENABLE_NOVNC=${params.cfg.browser.noVncEnabled ? "1" : "0"}`);
-    args.push("-e", `OPENCLAW_BROWSER_CDP_PORT=${params.cfg.browser.cdpPort}`);
-    args.push("-e", `${CDP_AUTH_TOKEN_ENV_KEY}=${cdpAuthToken}`);
-    args.push(
-      "-e",
-      `OPENCLAW_BROWSER_AUTO_START_TIMEOUT_MS=${params.cfg.browser.autoStartTimeoutMs}`,
-    );
+    Object.assign(env, {
+      OPENCLAW_BROWSER_HEADLESS: params.cfg.browser.headless ? "1" : "0",
+      OPENCLAW_BROWSER_ENABLE_NOVNC: params.cfg.browser.noVncEnabled ? "1" : "0",
+      OPENCLAW_BROWSER_CDP_PORT: String(params.cfg.browser.cdpPort),
+      [CDP_AUTH_TOKEN_ENV_KEY]: cdpAuthToken,
+      OPENCLAW_BROWSER_AUTO_START_TIMEOUT_MS: String(params.cfg.browser.autoStartTimeoutMs),
+      OPENCLAW_BROWSER_VNC_PORT: String(params.cfg.browser.vncPort),
+      OPENCLAW_BROWSER_NOVNC_PORT: String(params.cfg.browser.noVncPort),
+      OPENCLAW_BROWSER_NO_SANDBOX: "1",
+    });
     if (cdpSourceRange) {
-      args.push("-e", `${CDP_SOURCE_RANGE_ENV_KEY}=${cdpSourceRange}`);
+      env[CDP_SOURCE_RANGE_ENV_KEY] = cdpSourceRange;
     }
-    args.push("-e", `OPENCLAW_BROWSER_VNC_PORT=${params.cfg.browser.vncPort}`);
-    args.push("-e", `OPENCLAW_BROWSER_NOVNC_PORT=${params.cfg.browser.noVncPort}`);
-    args.push("-e", "OPENCLAW_BROWSER_NO_SANDBOX=1");
     if (noVncEnabled && noVncPassword) {
-      args.push("-e", `${NOVNC_PASSWORD_ENV_KEY}=${noVncPassword}`);
+      env[NOVNC_PASSWORD_ENV_KEY] = noVncPassword;
     }
-    args.push(browserImage);
-    await execDocker(args);
+    await withContainerEnvFile(env, async (envFile) => {
+      args.push("--env-file", envFile, browserImage);
+      await execDocker(args);
+    });
     await execDocker(["start", containerName]);
   } else if (!running) {
     await execDocker(["start", containerName]);

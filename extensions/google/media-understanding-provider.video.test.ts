@@ -158,6 +158,48 @@ describe("describeGeminiVideo", () => {
     );
   });
 
+  it("uses the canonical endpoint for an empty configured base URL", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
+      candidates: [{ content: { parts: [{ text: "video ok" }] } }],
+    });
+
+    await describeGeminiVideo({
+      buffer: Buffer.from("video-bytes"),
+      fileName: "clip.mp4",
+      apiKey: "test-key",
+      baseUrl: "",
+      timeoutMs: 1500,
+      fetchFn,
+    });
+
+    const { url, init } = getRequest();
+    expect(url).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent",
+    );
+    expect(new Headers(init?.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
+  });
+
+  it("uses the canonical endpoint for blank audio base URLs", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
+      candidates: [{ content: { parts: [{ text: "audio ok" }] } }],
+    });
+
+    await transcribeGeminiAudio({
+      buffer: Buffer.from("audio-bytes"),
+      fileName: "clip.wav",
+      apiKey: "test-key",
+      baseUrl: "   ",
+      timeoutMs: 1500,
+      fetchFn,
+    });
+
+    const { url, init } = getRequest();
+    expect(url).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent",
+    );
+    expect(new Headers(init?.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
+  });
+
   it("bounds oversized video JSON responses and closes the stream early", async () => {
     const { server, closed } = createOversizedJsonServer();
     const port = await listenLoopbackServer(server);

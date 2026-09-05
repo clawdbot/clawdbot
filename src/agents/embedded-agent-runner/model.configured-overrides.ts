@@ -1,14 +1,23 @@
+import { normalizeResolvedPricing } from "@openclaw/llm-core";
+import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { asOptionalRecord as readModelParams } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
+import { mergeModelCost } from "../../config/model-cost.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Model } from "../../llm/types.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveCatalogOwnedModelCompat } from "../model-compat-catalog.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
-import { shouldSuppressBuiltInModel, shouldUnconditionallySuppress } from "../model-suppression.js";
+import {
+  shouldSuppressBuiltInModelCore,
+  shouldUnconditionallySuppress,
+} from "../model-suppression.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
+  attachModelProviderRequestRouteFacts,
   attachModelProviderRequestTransport,
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
@@ -32,17 +41,9 @@ import {
   resolveProviderRequestTimeoutMs,
   resolveProviderTransport,
 } from "./model.provider-hooks.js";
-import {
-  resolveBundledStaticCatalogModel,
-  type ManifestModelCatalogProviderAliasMetadata,
-} from "./model.static-catalog.js";
+import type { ManifestModelCatalogProviderAliasMetadata } from "./model.static-catalog.js";
 
-export type StaticCatalogFallbackModel = Model & {
-  compat?: ModelCompatConfig;
-  contextTokens?: number;
-  params?: Record<string, unknown>;
-  mediaInput?: ModelMediaInputConfig;
-};
+export type StaticCatalogFallbackModel = ProviderRuntimeModel;
 
 export function shouldSuppressConfiguredModel(params: {
   provider: string;
@@ -67,7 +68,7 @@ export function shouldSuppressConfiguredModel(params: {
   ) {
     return false;
   }
-  return shouldSuppressBuiltInModel({
+  return shouldSuppressBuiltInModelCore({
     provider: params.provider,
     id: params.modelId,
     ...(params.cfg ? { config: params.cfg } : {}),
@@ -180,6 +181,43 @@ export function findConfiguredProviderModel(
   );
 }
 
+/** Merge authored rates after discovery; runtime defaults must not become price pins. */
+export function mergeConfiguredModelCost(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  configuredModel?: NonNullable<InlineProviderConfig["models"]>[number];
+  catalogCost?: Model["cost"];
+}): Model["cost"] {
+  let authoredCost = params.configuredModel?.cost;
+  if (params.cfg && params.configuredModel) {
+    const source = projectConfigOntoRuntimeSourceSnapshot(params.cfg);
+    if (source !== params.cfg) {
+      const modelId = normalizeConfiguredProviderCatalogModelId(
+        params.provider,
+        params.configuredModel.id,
+      ).trim();
+      const sourceModels = resolveConfiguredProviderConfig(source, params.provider)?.models?.filter(
+        (model) =>
+          matchesProviderScopedModelId({
+            candidateId: normalizeConfiguredProviderCatalogModelId(
+              params.provider,
+              model.id,
+            ).trim(),
+            provider: params.provider,
+            modelId,
+          }),
+      );
+      if (sourceModels?.length) {
+        authoredCost = sourceModels.reduce<Model["cost"] | undefined>(
+          (cost, model) => mergeModelCost(model.cost, cost),
+          undefined,
+        );
+      }
+    }
+  }
+  return normalizeResolvedPricing(mergeModelCost(params.catalogCost, authoredCost) ?? {});
+}
+
 export function mergeStaticCatalogInlineModel(
   staticCatalogModel: StaticCatalogFallbackModel | undefined,
   inlineModel: Model,
@@ -224,13 +262,6 @@ export function hasConfiguredFallbackSurface(params: {
     return true;
   }
   return Boolean(params.providerConfig?.baseUrl?.trim());
-}
-
-function readModelParams(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
 }
 
 function mergeModelParams(
@@ -328,14 +359,19 @@ export function applyConfiguredProviderOverrides(params: {
   modelId: string;
   cfg?: OpenClawConfig;
   manifestAlias: ManifestModelCatalogProviderAliasMetadata;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
   runtimeHooks?: ProviderRuntimeHooks;
   preferDiscoveredModelMetadata?: boolean;
   preferDiscoveredTransport?: boolean;
   staticCatalogModel?: StaticCatalogFallbackModel;
+  getStaticCatalogModel?: () => ProviderRuntimeModel | undefined;
   workspaceDir?: string;
 }): ProviderRuntimeModel {
   const { providerConfig, modelId } = params;
-  const discoveredModel = markDiscoveredMaxTokensSource(params.discoveredModel);
+  const discoveredModel = attachModelProviderRequestRouteFacts(
+    markDiscoveredMaxTokensSource(params.discoveredModel),
+    params.providerMetadataOwners,
+  );
   const manifestAliasTransport = params.manifestAlias.transport;
   const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
   const defaultModelParams = findConfiguredAgentModelParams({
@@ -367,6 +403,9 @@ export function applyConfiguredProviderOverrides(params: {
       provider: params.provider,
       api: aliasTransport?.api ?? discoveredModel.api,
       baseUrl: aliasTransport?.baseUrl ?? discoveredModel.baseUrl,
+      ...(params.providerMetadataOwners
+        ? { providerMetadataOwners: params.providerMetadataOwners }
+        : {}),
       discoveredHeaders,
       capability: "llm",
       transport: "stream",
@@ -391,15 +430,7 @@ export function applyConfiguredProviderOverrides(params: {
       ? findConfiguredProviderModel(providerConfig, params.provider, discoveredModel.id)
       : undefined);
   const configuredStaticCatalogModel =
-    configuredModel &&
-    (params.staticCatalogModel ??
-      (resolveBundledStaticCatalogModel({
-        provider: params.provider,
-        modelId,
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        includeRuntimeDiscovery: true,
-      }) as StaticCatalogFallbackModel | undefined));
+    configuredModel && (params.staticCatalogModel ?? params.getStaticCatalogModel?.());
   const metadataOverrideModel =
     params.preferDiscoveredModelMetadata && isModelsAddMetadataModel({ model: configuredModel })
       ? undefined
@@ -419,6 +450,9 @@ export function applyConfiguredProviderOverrides(params: {
     provider: params.provider,
     api: discoveredModel.api,
     baseUrl: discoveredModel.baseUrl,
+    ...(params.providerMetadataOwners
+      ? { providerMetadataOwners: params.providerMetadataOwners }
+      : {}),
     discoveredHeaders,
     providerHeaders,
     modelHeaders: configuredHeaders,
@@ -431,8 +465,6 @@ export function applyConfiguredProviderOverrides(params: {
     !configuredModel &&
     !providerConfig.baseUrl &&
     !providerConfig.api &&
-    providerConfig.contextWindow === undefined &&
-    providerConfig.contextTokens === undefined &&
     providerConfig.maxTokens === undefined &&
     requestTimeoutMs === undefined &&
     !providerHeaders &&
@@ -515,8 +547,7 @@ export function applyConfiguredProviderOverrides(params: {
     workspaceDir: params.workspaceDir,
     runtimeHooks: params.runtimeHooks,
   });
-  const resolvedContextWindow =
-    metadataOverrideModel?.contextWindow ?? providerConfig.contextWindow;
+  const resolvedContextWindow = metadataOverrideModel?.contextWindow;
   const configuredMaxTokens = metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens;
   const resolvedMaxTokens = configuredMaxTokens ?? discoveredModel.maxTokens;
   const normalizedResolvedMaxTokens = clampModelMaxTokensToContextWindow(
@@ -562,6 +593,9 @@ export function applyConfiguredProviderOverrides(params: {
       "openai-responses",
     baseUrl:
       resolvedTransport.baseUrl ?? configuredStaticCatalogModel?.baseUrl ?? discoveredModel.baseUrl,
+    ...(params.providerMetadataOwners
+      ? { providerMetadataOwners: params.providerMetadataOwners }
+      : {}),
     discoveredHeaders,
     providerHeaders,
     modelHeaders: configuredHeaders,
@@ -570,47 +604,52 @@ export function applyConfiguredProviderOverrides(params: {
     capability: "llm",
     transport: "stream",
   });
-  return attachModelProviderLocalService(
-    attachModelProviderRequestTransport(
-      {
-        ...discoveredModel,
-        provider: params.provider,
-        api: requestConfig.api ?? "openai-responses",
-        baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
-        reasoning: resolvedReasoning,
-        input: normalizedInput,
-        cost: metadataOverrideModel?.cost ?? discoveredModel.cost,
-        contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
-        contextTokens:
-          metadataOverrideModel?.contextTokens ??
-          providerConfig.contextTokens ??
-          discoveredModel.contextTokens,
-        ...(normalizedResolvedMaxTokens !== undefined
-          ? {
-              maxTokens: normalizedResolvedMaxTokens,
-              maxTokensSource:
-                configuredMaxTokens !== undefined
-                  ? "configured"
-                  : (discoveredModel.maxTokensSource ?? "discovered"),
-            }
-          : {}),
-        ...(resolvedParams ? { params: resolvedParams } : {}),
-        ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
-        headers: requestConfig.headers,
-        ...(providerConfig.authHeader !== undefined
-          ? { authHeader: providerConfig.authHeader }
-          : {}),
-        compat: resolvedCompat,
-        mediaInput: mergeModelMediaInput(
-          mergeModelMediaInput(
-            configuredStaticCatalogModel?.mediaInput,
-            discoveredModel.mediaInput,
+  return attachModelProviderRequestRouteFacts(
+    attachModelProviderLocalService(
+      attachModelProviderRequestTransport(
+        {
+          ...discoveredModel,
+          provider: params.provider,
+          api: requestConfig.api ?? "openai-responses",
+          baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
+          reasoning: resolvedReasoning,
+          input: normalizedInput,
+          cost: mergeConfiguredModelCost({
+            provider: params.provider,
+            cfg: params.cfg,
+            configuredModel: metadataOverrideModel,
+            catalogCost: discoveredModel.cost,
+          }),
+          contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
+          contextTokens: metadataOverrideModel?.contextTokens ?? discoveredModel.contextTokens,
+          ...(normalizedResolvedMaxTokens !== undefined
+            ? {
+                maxTokens: normalizedResolvedMaxTokens,
+                maxTokensSource:
+                  configuredMaxTokens !== undefined
+                    ? "configured"
+                    : (discoveredModel.maxTokensSource ?? "discovered"),
+              }
+            : {}),
+          ...(resolvedParams ? { params: resolvedParams } : {}),
+          ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+          headers: requestConfig.headers,
+          ...(providerConfig.authHeader !== undefined
+            ? { authHeader: providerConfig.authHeader }
+            : {}),
+          compat: resolvedCompat,
+          mediaInput: mergeModelMediaInput(
+            mergeModelMediaInput(
+              configuredStaticCatalogModel?.mediaInput,
+              discoveredModel.mediaInput,
+            ),
+            metadataOverrideModel?.mediaInput,
           ),
-          metadataOverrideModel?.mediaInput,
-        ),
-      },
-      providerRequest,
+        },
+        providerRequest,
+      ),
+      providerConfig.localService,
     ),
-    providerConfig.localService,
+    params.providerMetadataOwners,
   );
 }

@@ -9,13 +9,14 @@ import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-m
 // per-load salt, so the palette (and with it sprite geometry like the sleeping
 // eye peek) varies per test process. Pin a canonical look so pose assertions
 // stay deterministic.
-vi.mock("../../components/lobster-pet.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../components/lobster-pet.ts")>();
+vi.mock("../../components/lobster-pet-look.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../components/lobster-pet-look.ts")>();
+  const { LOBSTER_PET_PALETTES } = await import("../../components/lobster-pet-palettes.ts");
   return {
     ...actual,
     createLobsterPetLook: () =>
       actual.canonicalLobsterLook(
-        expectDefined(actual.LOBSTER_PET_PALETTES[0], "canonical lobster palette"),
+        expectDefined(LOBSTER_PET_PALETTES[0], "canonical lobster palette"),
       ),
   };
 });
@@ -39,7 +40,14 @@ function fixturePayload(): DoctorMemoryStatusPayload {
       engine: "llama.cpp",
       state: "ready",
       backend: "metal",
-      deviceNames: ["Apple GPU"],
+      buildInfo: "b10357 (689e227db)",
+      model: { id: "embeddinggemma-300m-qat-q8_0" },
+      endpoints: {
+        health: "ready",
+        models: "ready",
+        props: "ready",
+        metrics: "ready",
+      },
     },
     dreaming: {
       enabled: true,
@@ -113,7 +121,8 @@ describe("renderMemoryOverview", () => {
     expect(container.textContent).toContain("Europe/Vienna");
     expect(container.textContent).toContain("Promoted today");
     expect(container.textContent).toContain("21");
-    expect(container.textContent).toContain("Apple GPU");
+    expect(container.textContent).toContain("b10357 (689e227db)");
+    expect(container.textContent).toContain("metrics=ready");
   });
 
   it("renders a grumpy error hero with retry and no book", () => {

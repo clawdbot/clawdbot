@@ -15,6 +15,7 @@ import {
   resolveRequestClientIp,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import * as synologyClient from "./client.js";
 import {
   validateToken,
@@ -152,19 +153,23 @@ function getSynologyWebhookInFlightKey(account: ResolvedSynologyChatAccount): st
 /** Read the full request body as a string. */
 async function readBody(
   req: IncomingMessage,
-  timeoutMs = PREAUTH_BODY_TIMEOUT_MS,
+  timeoutMs: number = PREAUTH_BODY_TIMEOUT_MS,
 ): Promise<
   | { ok: true; body: string }
   | {
       ok: false;
       statusCode: number;
       error: string;
+      /** Limit rejections own the connection, so their answer goes through the transport. */
+      closeAfterResponse: boolean;
     }
 > {
   try {
     const body = await readRequestBodyWithLimit(req, {
       maxBytes: PREAUTH_MAX_BODY_BYTES,
       timeoutMs,
+      // Defer destruction so the caller can answer before the connection closes.
+      destroyOnLimit: false,
     });
     return { ok: true, body };
   } catch (err) {
@@ -173,12 +178,14 @@ async function readBody(
         ok: false,
         statusCode: err.statusCode,
         error: requestBodyErrorToText(err.code),
+        closeAfterResponse: true,
       };
     }
     return {
       ok: false,
       statusCode: 400,
       error: "Invalid request body",
+      closeAfterResponse: false,
     };
   }
 }
@@ -410,6 +417,16 @@ async function parseWebhookPayloadRequest(params: {
   const bodyResult = await readBody(params.req, params.bodyTimeoutMs);
   if (!bodyResult.ok) {
     params.log?.error("Failed to read request body", bodyResult.error);
+    if (bodyResult.closeAfterResponse) {
+      await sendHttpRequestRejection(
+        params.req,
+        params.res,
+        bodyResult.statusCode,
+        JSON.stringify({ error: bodyResult.error }),
+        "application/json",
+      );
+      return { ok: false };
+    }
     respondJson(params.res, bodyResult.statusCode, { error: bodyResult.error });
     return { ok: false };
   }
@@ -568,12 +585,14 @@ async function resolveSynologyReplyDeliveryUserId(params: {
 async function authorizeClaimedSynologyWebhook(params: {
   account: ResolvedSynologyChatAccount;
   payload: SynologyWebhookPayload;
-}): Promise<boolean> {
+  contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding;
+}) {
   const auth = await authorizeUserForDmWithIngress({
     accountId: params.account.accountId,
     userId: params.payload.user_id,
     dmPolicy: params.account.dmPolicy,
     allowedUserIds: params.account.allowedUserIds,
+    contextBinding: params.contextBinding,
   });
   if (!auth.senderAccess.allowed) {
     throw new SynologyIngressPermanentError(
@@ -581,7 +600,7 @@ async function authorizeClaimedSynologyWebhook(params: {
       `Synology Chat user ${params.payload.user_id} is no longer authorized.`,
     );
   }
-  return auth.senderAccess.allowed;
+  return auth;
 }
 
 export async function processSynologyWebhookIngressEvent(params: {
@@ -601,10 +620,15 @@ export async function processSynologyWebhookIngressEvent(params: {
       "Synology Chat claimed webhook cannot be normalized.",
     );
   }
-  const commandAuthorized = await authorizeClaimedSynologyWebhook({
-    account: params.account,
-    payload,
-  });
+  const resolveChannelIngress = async (
+    contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
+  ) =>
+    await authorizeClaimedSynologyWebhook({
+      account: params.account,
+      payload,
+      contextBinding,
+    });
+  const channelIngress = await resolveChannelIngress();
   const body = sanitizeSynologyWebhookText(payload);
   if (!body) {
     return;
@@ -621,12 +645,15 @@ export async function processSynologyWebhookIngressEvent(params: {
   await params.deliver(
     {
       body,
+      channelIngress,
+      resolveChannelIngress,
+      messageId: payload.post_id,
       from: authorizedWebhookUserId,
       senderName: payload.username,
       provider: "synology-chat",
       chatType: "direct",
       accountId: params.account.accountId,
-      commandAuthorized,
+      commandAuthorized: channelIngress.senderAccess.allowed,
       chatUserId: deliveryUserId,
     },
     params.lifecycle,

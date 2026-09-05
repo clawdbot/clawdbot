@@ -33,20 +33,6 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
 
-vi.mock("../channels/plugins/read-only.js", () => ({
-  resolveReadOnlyChannelPluginsForConfig: vi.fn(() => ({
-    plugins: [
-      { id: "discord" },
-      { id: "imessage" },
-      { id: "signal" },
-      { id: "slack" },
-      { id: "telegram" },
-      { id: "whatsapp" },
-    ],
-    missingConfiguredChannelIds: [],
-  })),
-}));
-
 vi.mock("./status.daemon.js", () => ({
   getDaemonStatusSummary: mocks.getDaemonStatusSummary,
   getNodeDaemonStatusSummary: mocks.getNodeDaemonStatusSummary,
@@ -144,37 +130,29 @@ describe("statusJsonCommand", () => {
     expect(payload).not.toHaveProperty("securityAudit");
   });
 
-  it("includes security audit details only when --all is requested", async () => {
+  it("includes security audit and plugin compatibility details when --all is requested", async () => {
     const { runtime, logs } = createRuntimeCapture();
+    const compatibilityNotice = {
+      pluginId: "legacy-plugin",
+      code: "hook-only",
+      severity: "warn",
+      message: "plugin registers only legacy hooks",
+    };
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({
+      ...createScanResult(),
+      pluginCompatibility: [compatibilityNotice],
+    });
 
     await statusJsonCommand({ all: true }, runtime);
 
-    expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
-    const auditInput = mocks.runSecurityAudit.mock.calls[0]?.[0] as
-      | {
-          config?: unknown;
-          sourceConfig?: unknown;
-          deep?: unknown;
-          includeFilesystem?: unknown;
-          includeChannelSecurity?: unknown;
-          loadPluginSecurityCollectors?: unknown;
-          plugins?: Array<{ id: string }>;
-        }
-      | undefined;
-    expect(auditInput?.config).toStrictEqual({ update: { channel: "stable" } });
-    expect(auditInput?.sourceConfig).toStrictEqual({});
-    expect(auditInput?.deep).toBe(false);
-    expect(auditInput?.includeFilesystem).toBe(true);
-    expect(auditInput?.includeChannelSecurity).toBe(true);
-    expect(auditInput?.loadPluginSecurityCollectors).toBe(false);
-    expect(auditInput?.plugins?.map((plugin) => plugin.id)).toStrictEqual([
-      "discord",
-      "imessage",
-      "signal",
-      "slack",
-      "telegram",
-      "whatsapp",
-    ]);
+    expect(mocks.runSecurityAudit).toHaveBeenCalledExactlyOnceWith({
+      config: { update: { channel: "stable" } },
+      sourceConfig: {},
+      deep: false,
+      includeFilesystem: true,
+      includeChannelSecurity: true,
+      loadPluginSecurityCollectors: false,
+    });
     expect(logs).toStrictEqual([expect.any(String)]);
     const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
     expect(payload).toEqual({
@@ -183,6 +161,34 @@ describe("statusJsonCommand", () => {
         summary: { critical: 1, warn: 0, info: 0 },
         findings: [],
       },
+      pluginCompatibility: {
+        count: 1,
+        warnings: [compatibilityNotice],
+      },
     });
+  });
+
+  it("reports deep gateway probe failures and runs the documented security audit", async () => {
+    const { runtime, logs } = createRuntimeCapture();
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({
+      ...createScanResult(),
+      gatewayReachable: true,
+    });
+    mocks.callGateway.mockImplementation(async (params: { method?: string }) => {
+      if (params.method === "health") {
+        throw new Error("gateway health probe timed out");
+      }
+      return null;
+    });
+
+    await statusJsonCommand({ deep: true }, runtime);
+
+    expect(mocks.runSecurityAudit).toHaveBeenCalledOnce();
+    const payload = JSON.parse(logs[0] ?? "{}") as {
+      health?: { error?: string };
+      securityAudit?: { summary?: { critical?: number } };
+    };
+    expect(payload.health).toEqual({ error: "Error: gateway health probe timed out" });
+    expect(payload.securityAudit?.summary?.critical).toBe(1);
   });
 });

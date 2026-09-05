@@ -21,8 +21,11 @@ export type BuzzRoomMembership = {
   roles: ReadonlyMap<string, string>;
 };
 
-export function parseBuzzRoomMembershipEvent(event: Event): BuzzRoomMembership | undefined {
-  if (event.kind !== BUZZ_ROOM_MEMBERSHIP_KIND) {
+export function parseBuzzRoomMembershipEvent(
+  event: Event,
+  relayPublicKey: string,
+): BuzzRoomMembership | undefined {
+  if (event.kind !== BUZZ_ROOM_MEMBERSHIP_KIND || event.pubkey.toLowerCase() !== relayPublicKey) {
     return undefined;
   }
   const roomId = event.tags
@@ -58,17 +61,6 @@ export function parseBuzzRoomMembershipEvent(event: Event): BuzzRoomMembership |
     members,
     roles,
   };
-}
-
-export function isNewerBuzzRoomMembership(
-  candidate: BuzzRoomMembership,
-  current: BuzzRoomMembership | undefined,
-): boolean {
-  return (
-    !current ||
-    candidate.createdAt > current.createdAt ||
-    (candidate.createdAt === current.createdAt && candidate.eventId < current.eventId)
-  );
 }
 
 export function parseBuzzRoomMembershipChangeEvent(

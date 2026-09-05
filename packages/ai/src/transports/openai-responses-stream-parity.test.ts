@@ -1,165 +1,9 @@
-import type { AssistantMessage, AssistantMessageEvent, Model } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import {
-  processResponsesStream as processTransportStream,
-  type OpenAIResponsesStreamEvent,
-} from "./openai-responses-stream-internal.js";
-
-type ProjectedEvent = {
-  type: string;
-  contentIndex?: number;
-  delta?: string;
-  content?: string;
-};
-
-type ProjectedBlock =
-  | { type: "thinking"; thinking: string; encrypted: boolean }
-  | { type: "text"; text: string }
-  | {
-      type: "toolCall";
-      id: string;
-      name: string;
-      arguments: unknown;
-      partialJson: boolean;
-    };
-
-type ProcessResult = {
-  events: ProjectedEvent[];
-  content: ProjectedBlock[];
-  responseId: string | null;
-  stopReason: string;
-  error: string | null;
-};
-
-type ParityFixture = {
-  name: string;
-  events: Record<string, unknown>[];
-  canonical: ProcessResult;
-};
-
-const model = {
-  id: "gpt-5.6-luna",
-  name: "GPT-5.6 Luna",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 200_000,
-  maxTokens: 8192,
-} satisfies Model<"openai-responses">;
-
-function createOutput(): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-    timestamp: 0,
-  };
-}
-
-async function* eventStream(
-  events: readonly Record<string, unknown>[],
-): AsyncGenerator<OpenAIResponsesStreamEvent> {
-  for (const event of events) {
-    yield event as OpenAIResponsesStreamEvent;
-  }
-}
-
-function projectEvent(event: AssistantMessageEvent): ProjectedEvent | undefined {
-  if (
-    event.type !== "thinking_start" &&
-    event.type !== "thinking_delta" &&
-    event.type !== "thinking_end" &&
-    event.type !== "text_start" &&
-    event.type !== "text_delta" &&
-    event.type !== "text_end" &&
-    event.type !== "toolcall_start" &&
-    event.type !== "toolcall_delta" &&
-    event.type !== "toolcall_end"
-  ) {
-    return undefined;
-  }
-  return {
-    type: event.type,
-    contentIndex: event.contentIndex,
-    ...(event.type === "thinking_delta" ||
-    event.type === "text_delta" ||
-    event.type === "toolcall_delta"
-      ? { delta: event.delta }
-      : {}),
-    ...(event.type === "thinking_end" || event.type === "text_end"
-      ? { content: event.content }
-      : {}),
-  };
-}
-
-function projectBlock(block: AssistantMessage["content"][number]): ProjectedBlock {
-  if (block.type === "thinking") {
-    let encrypted = false;
-    if (block.thinkingSignature) {
-      try {
-        const item = JSON.parse(block.thinkingSignature) as { encrypted_content?: unknown };
-        encrypted = typeof item.encrypted_content === "string" && item.encrypted_content.length > 0;
-      } catch {
-        encrypted = false;
-      }
-    }
-    return { type: "thinking", thinking: block.thinking, encrypted };
-  }
-  if (block.type === "text") {
-    return { type: "text", text: block.text };
-  }
-  const toolCall = block as typeof block & { partialJson?: string };
-  return {
-    type: "toolCall",
-    id: toolCall.id.replace(/^call_[a-f0-9]{24}/, "call_<generated>"),
-    name: toolCall.name,
-    arguments: toolCall.arguments,
-    partialJson: "partialJson" in toolCall,
-  };
-}
-
-async function runFixture(events: readonly Record<string, unknown>[]): Promise<ProcessResult> {
-  const output = createOutput();
-  const captured: AssistantMessageEvent[] = [];
-  let error: string | null = null;
-  try {
-    await processTransportStream(
-      eventStream(events),
-      output,
-      { push: (event) => captured.push(event as AssistantMessageEvent) },
-      model,
-    );
-  } catch (cause) {
-    error = cause instanceof Error ? cause.message : String(cause);
-  }
-  return {
-    events: captured.map(projectEvent).filter((event) => event !== undefined),
-    content: output.content.map(projectBlock),
-    responseId: output.responseId ?? null,
-    stopReason: output.stopReason,
-    error,
-  };
-}
-
-const completed = (id: string, output: unknown[] = []) => ({
-  type: "response.completed",
-  sequence_number: 99,
-  response: { id, status: "completed", output },
-});
+  completed,
+  runFixture,
+  type ParityFixture,
+} from "./openai-responses-stream-parity.test-helpers.js";
 
 const fixtures: ParityFixture[] = [
   {
@@ -236,6 +80,60 @@ const fixtures: ParityFixture[] = [
       ],
       content: [{ type: "thinking", thinking: "raw thought", encrypted: false }],
       responseId: "resp_raw",
+      stopReason: "stop",
+      error: null,
+    },
+  },
+  {
+    name: "reasoning summary text and part completion preserve delta order",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { id: "rs_summary", type: "reasoning", summary: [], content: [] },
+      },
+      {
+        type: "response.reasoning_summary_part.added",
+        output_index: 0,
+        item_id: "rs_summary",
+        summary_index: 0,
+        part: { type: "summary_text", text: "" },
+      },
+      {
+        type: "response.reasoning_summary_text.delta",
+        output_index: 0,
+        item_id: "rs_summary",
+        summary_index: 0,
+        delta: "summary",
+      },
+      {
+        type: "response.reasoning_summary_part.done",
+        output_index: 0,
+        item_id: "rs_summary",
+        summary_index: 0,
+        part: { type: "summary_text", text: "summary" },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "rs_summary",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "summary" }],
+          content: [],
+        },
+      },
+      completed("resp_summary"),
+    ],
+    canonical: {
+      events: [
+        { type: "thinking_start", contentIndex: 0 },
+        { type: "thinking_delta", contentIndex: 0, delta: "summary" },
+        { type: "thinking_delta", contentIndex: 0, delta: "\n\n" },
+        { type: "thinking_end", contentIndex: 0, content: "summary" },
+      ],
+      content: [{ type: "thinking", thinking: "summary", encrypted: false }],
+      responseId: "resp_summary",
       stopReason: "stop",
       error: null,
     },
@@ -770,6 +668,67 @@ const fixtures: ParityFixture[] = [
         { type: "text", text: "I cannot help with that." },
       ],
       responseId: "resp_reasoning_terminal_refusal",
+      stopReason: "stop",
+      error: null,
+    },
+  },
+  {
+    name: "streamed refusal uses the text delta lifecycle",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: {
+          id: "msg_refusal",
+          type: "message",
+          role: "assistant",
+          status: "in_progress",
+          content: [],
+        },
+      },
+      {
+        type: "response.content_part.added",
+        output_index: 0,
+        item_id: "msg_refusal",
+        content_index: 0,
+        part: { type: "refusal", refusal: "" },
+      },
+      {
+        type: "response.refusal.delta",
+        output_index: 0,
+        item_id: "msg_refusal",
+        content_index: 0,
+        delta: "I cannot",
+      },
+      {
+        type: "response.refusal.delta",
+        output_index: 0,
+        item_id: "msg_refusal",
+        content_index: 0,
+        delta: " help.",
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "msg_refusal",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "refusal", refusal: "I cannot help." }],
+        },
+      },
+      completed("resp_refusal"),
+    ],
+    canonical: {
+      events: [
+        { type: "text_start", contentIndex: 0 },
+        { type: "text_delta", contentIndex: 0, delta: "I cannot" },
+        { type: "text_delta", contentIndex: 0, delta: " help." },
+        { type: "text_end", contentIndex: 0, content: "I cannot help." },
+      ],
+      content: [{ type: "text", text: "I cannot help." }],
+      responseId: "resp_refusal",
       stopReason: "stop",
       error: null,
     },

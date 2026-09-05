@@ -13,8 +13,7 @@ import {
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
 } from "./accounts.js";
-import { promptTelegramAllowFromForAccount } from "./setup-core.js";
-import { telegramSetupAdapter } from "./setup-core.js";
+import { promptTelegramAllowFromForAccount, telegramSetupAdapter } from "./setup-core.js";
 
 const channel = "telegram" as const;
 

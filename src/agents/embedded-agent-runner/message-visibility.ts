@@ -1,8 +1,15 @@
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import {
+  isReplyPayloadTerminalContent,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import {
   isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
 } from "../../auto-reply/tokens.js";
+import { resolveAssistantMessagePhase } from "../../shared/chat-message-content.js";
+import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
 
 type AgentPayloadLike = {
   text?: unknown;
@@ -21,15 +28,8 @@ type PayloadVisibilityOptions = {
   includeErrorPayloads?: boolean;
   includeReasoningPayloads?: boolean;
   includeSilentReplyPayloads?: boolean;
+  requireTerminalContent?: boolean;
 };
-
-function hasNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function hasNonEmptyStringArray(value: unknown): boolean {
-  return Array.isArray(value) && value.some(hasNonEmptyString);
-}
 
 function collectStringValues(value: unknown, output: Set<string>) {
   if (typeof value === "string" && value.trim()) {
@@ -108,7 +108,13 @@ export function hasVisibleAgentPayload(
       if (!payload || typeof payload !== "object") {
         return false;
       }
-      const record = payload as AgentPayloadLike;
+      const record = payload as AgentPayloadLike & ReplyPayload;
+      if (
+        options.requireTerminalContent &&
+        (record.visible === false || !isReplyPayloadTerminalContent(record))
+      ) {
+        return false;
+      }
       if (options.includeErrorPayloads === false && record.isError === true) {
         return false;
       }
@@ -130,6 +136,19 @@ export function hasVisibleAgentPayload(
         record.channelData,
       );
     })
+  );
+}
+
+/** Honors recorded visibility before deriving it from the payload's visible content. */
+export function hasExplicitlyVisibleAgentPayload(payload: unknown): boolean {
+  if (payload && typeof payload === "object" && !Array.isArray(payload) && "visible" in payload) {
+    if (typeof payload.visible === "boolean") {
+      return payload.visible;
+    }
+  }
+  return hasVisibleAgentPayload(
+    { payloads: [payload] },
+    { includeErrorPayloads: false, includeReasoningPayloads: false },
   );
 }
 
@@ -182,6 +201,41 @@ export function readTerminalSourceReplyDeliveryMirror(
 export function isMeaningfulTranscriptMessage(message: unknown): boolean {
   const role = getTranscriptMessageRole(message);
   return Boolean(role && role !== "system");
+}
+
+/** Recognizes persisted progress without mistaking an ordinary assistant answer for completion. */
+export function isIntermediateAssistantTranscriptMessage(message: unknown): boolean {
+  if (
+    !message ||
+    typeof message !== "object" ||
+    getTranscriptMessageRole(message) !== "assistant"
+  ) {
+    return false;
+  }
+  const record = message as Record<string, unknown>;
+  if (record.stopReason !== undefined && record.stopReason !== "stop") {
+    return false;
+  }
+  const asyncDelivery = record.openclawAsyncDelivery;
+  if (asyncDelivery && typeof asyncDelivery === "object" && !Array.isArray(asyncDelivery)) {
+    // SAFETY: the object/non-array guard permits reading an optional itemId as unknown.
+    const itemId = (asyncDelivery as { itemId?: unknown }).itemId;
+    if (typeof itemId === "string" && itemId.trim().length > 0) {
+      return true;
+    }
+  }
+  const phase = resolveAssistantMessagePhase(message);
+  if (phase !== undefined) {
+    return phase === "commentary";
+  }
+  const fallback = record.openclawStreamFallback;
+  if (!fallback || typeof fallback !== "object" || Array.isArray(fallback)) {
+    return false;
+  }
+  const { itemId, source } = fallback as { itemId?: unknown; source?: unknown };
+  // Keyed segments are durable progress items; unkeyed/current fallbacks can
+  // become the final answer and must never bypass restart completion checks.
+  return source === "segment" && typeof itemId === "string" && itemId.trim().length > 0;
 }
 
 /** Returns whether a stopped assistant turn contains only reasoning and a silent marker. */

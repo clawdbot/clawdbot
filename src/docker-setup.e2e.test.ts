@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import {
   cleanupDockerSetupSandboxRoot,
   collectMatchingLines,
@@ -155,6 +156,10 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.stdout).toContain("Access from tailnet devices via the host's tailnet IP.");
     expect(result.stdout).toContain("Commands:");
     expect(result.stdout).toContain("logs -f openclaw-gateway");
+    expect(result.stdout).toContain(
+      `exec openclaw-gateway sh -lc 'node dist/index.js gateway health --token "$OPENCLAW_GATEWAY_TOKEN"'`,
+    );
+    expect(result.stdout).not.toContain("node dist/index.js health --token");
     expect(result.stdout).not.toContain("test-token");
     expect(result.stdout).not.toContain("#token=");
     expect(log).toContain(
@@ -208,6 +213,25 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.status).toBe(0);
     const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
     expect(envFile).toContain("OPENCLAW_DISABLE_BONJOUR=0");
+  });
+
+  it("persists and forwards signal-specific OTLP protocol overrides", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    const protocolEnv = {
+      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: "http/protobuf",
+      OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: "http/protobuf",
+      OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "http/protobuf",
+    };
+
+    const result = runDockerSetup(activeSandbox, protocolEnv);
+
+    expect(result.status).toBe(0);
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
+    for (const [key, value] of Object.entries(protocolEnv)) {
+      expect(envFile).toContain(`${key}=${value}`);
+      expect(compose).toContain(`${key}: \${${key}:-}`);
+    }
   });
 
   it("normalizes legacy OPENCLAW_DOCKER_APT_PACKAGES into OPENCLAW_IMAGE_APT_PACKAGES", async () => {
@@ -807,7 +831,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.stderr).toContain("OPENCLAW_HOME_VOLUME must match");
   });
 
-  it("rejects OPENCLAW_TZ values that are not present in zoneinfo", () => {
+  it("rejects OPENCLAW_TZ values that are unsupported by the runtime image", () => {
     const activeSandbox = requireSandbox(sandbox);
 
     const result = runDockerSetup(activeSandbox, {
@@ -815,7 +839,7 @@ describe("scripts/docker/setup.sh", () => {
     });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("OPENCLAW_TZ must match a timezone in /usr/share/zoneinfo");
+    expect(result.stderr).toContain("OPENCLAW_TZ must be supported by openclaw:local");
   });
 
   it("skips onboarding when OPENCLAW_SKIP_ONBOARDING is set", async () => {
@@ -929,20 +953,31 @@ describe("scripts/docker/setup.sh", () => {
     expect(compose.match(/TZ: \$\{OPENCLAW_TZ:-UTC\}/g)).toHaveLength(2);
   });
 
-  it("pins container-side state, workspace, and config dirs on both services so host .env paths cannot leak (#77436)", async () => {
-    const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
-    // Both gateway and CLI services must override env_file values with the
-    // canonical container paths so host-style paths written to `.env` cannot
-    // reach runtime code inside Linux Docker.
-    expect(compose.match(/OPENCLAW_HOME: \/home\/node$/gm)).toHaveLength(2);
-    expect(compose.match(/OPENCLAW_STATE_DIR: \/home\/node\/\.openclaw$/gm)).toHaveLength(2);
-    expect(
-      compose.match(/OPENCLAW_CONFIG_PATH: \/home\/node\/\.openclaw\/openclaw\.json$/gm),
-    ).toHaveLength(2);
-    expect(compose.match(/OPENCLAW_CONFIG_DIR: \/home\/node\/\.openclaw$/gm)).toHaveLength(2);
-    expect(
-      compose.match(/OPENCLAW_WORKSPACE_DIR: \/home\/node\/\.openclaw\/workspace$/gm),
-    ).toHaveLength(2);
+  it("isolates container paths and listener port from host .env values on both services", async () => {
+    const { services } = parse(await readFile(join(repoRoot, "docker-compose.yml"), "utf8")) as {
+      services: Record<
+        "openclaw-gateway" | "openclaw-cli",
+        {
+          environment: Record<string, string>;
+          command: string[];
+          ports: string[];
+        }
+      >;
+    };
+    const gateway = services["openclaw-gateway"];
+    const listenerPort = gateway.command[gateway.command.indexOf("--port") + 1];
+    expect(listenerPort).toBe("18789");
+    expect(gateway.ports).toContain(`\${OPENCLAW_GATEWAY_PORT:-18789}:${listenerPort}`);
+    for (const name of ["openclaw-gateway", "openclaw-cli"] as const) {
+      expect(services[name].environment, name).toMatchObject({
+        OPENCLAW_HOME: "/home/node",
+        OPENCLAW_STATE_DIR: "/home/node/.openclaw",
+        OPENCLAW_CONFIG_PATH: "/home/node/.openclaw/openclaw.json",
+        OPENCLAW_CONFIG_DIR: "/home/node/.openclaw",
+        OPENCLAW_WORKSPACE_DIR: "/home/node/.openclaw/workspace",
+        OPENCLAW_GATEWAY_PORT: listenerPort,
+      });
+    }
   });
 
   it("Dockerfile ARG OPENCLAW_IMAGE_APT_PACKAGES must not have a default value", async () => {
@@ -955,7 +990,6 @@ describe("scripts/docker/setup.sh", () => {
     const argLine = dockerfile
       .split("\n")
       .find((line) => line.startsWith("ARG OPENCLAW_IMAGE_APT_PACKAGES"));
-    expect(argLine).toBeDefined();
     // Must be bare `ARG OPENCLAW_IMAGE_APT_PACKAGES` with no default assignment
     expect(argLine).toBe("ARG OPENCLAW_IMAGE_APT_PACKAGES");
   });

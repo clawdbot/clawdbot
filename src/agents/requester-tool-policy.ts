@@ -3,7 +3,6 @@
  * Sender-dependent policy resolves once at trusted ingress; verified descendants
  * consume the persisted effective parent projection instead of guessing identity.
  */
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
@@ -15,12 +14,16 @@ import {
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import {
+  isTrustedSubagentCompletionHandoffForRun,
+  type TrustedSubagentCompletionHandoff,
+} from "./subagents/announce/subagent-announce-handoff.js";
+import { resolveRequesterStoreKey } from "./subagents/announce/subagent-requester-store-key.js";
+import {
   isSubagentEnvelopeSession,
   resolvePersistedSubagentToolPolicyEnvelope,
   resolveSubagentCapabilityStore,
   type SessionCapabilityStore,
-} from "./subagent-capabilities.js";
-import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
+} from "./subagents/spawn/subagent-capabilities.js";
 
 const MAX_DELEGATION_LINEAGE_DEPTH = 32;
 
@@ -58,12 +61,17 @@ type RequesterToolPolicyParams = {
   senderUsername?: string | null;
   senderE164?: string | null;
   inputProvenance?: InputProvenance;
-  trustedInternalHandoff?: boolean;
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+  sessionId?: string;
+  modelProvider?: string;
+  modelId?: string;
   senderPolicyMode?: SenderPolicyMode;
   /** Group session selected by a trusted scheduled authority envelope. */
   groupPolicySessionKey?: string;
   /** Fail closed when scheduled authority names a removed non-default account. */
   requireConfiguredGroupAccount?: boolean;
+  /** Policy prepared by the trusted channel ingress owner for this conversation. */
+  conversationPolicy?: SandboxToolPolicy;
 };
 
 function policyFromEnvelope(
@@ -94,6 +102,56 @@ function resolveDelegatedPolicy(
   const hasExternalRequester =
     provenance?.kind === "external_user" ||
     Boolean(params.senderId || params.senderName || params.senderUsername || params.senderE164);
+  const isTrustedCompletionHandoff = isTrustedSubagentCompletionHandoffForRun({
+    handoff: params.trustedInternalHandoff,
+    inputProvenance: provenance,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    provider: params.modelProvider,
+    model: params.modelId,
+  });
+  if (isTrustedCompletionHandoff) {
+    if (!provenance?.sourceSessionKey || !params.sessionKey) {
+      return { delegated: false };
+    }
+    if (!params.config) {
+      throw new Error("Trusted internal handoff policy resolution requires configuration.");
+    }
+    const targetSessionKey = resolveRequesterStoreKey(params.config, params.sessionKey);
+    let currentSessionKey = resolveRequesterStoreKey(params.config, provenance.sourceSessionKey);
+    const visited = new Set<string>();
+    for (let depth = 0; depth < MAX_DELEGATION_LINEAGE_DEPTH; depth += 1) {
+      if (visited.has(currentSessionKey)) {
+        return { delegated: false };
+      }
+      visited.add(currentSessionKey);
+      // The signed handoff authorizes the one store lookup needed for dashboard
+      // children; the persisted envelope still has to prove lineage and depth.
+      const completionStore = resolveSubagentCapabilityStore(currentSessionKey, {
+        cfg: params.config,
+      });
+      const envelope = resolvePersistedSubagentToolPolicyEnvelope(currentSessionKey, {
+        cfg: params.config,
+        store: completionStore,
+      });
+      if (!envelope) {
+        return { delegated: false };
+      }
+      const parentSessionKey = resolveRequesterStoreKey(params.config, envelope.spawnedBy);
+      const completionOwnerSessionKey = envelope.completionOwnerSessionKey
+        ? resolveRequesterStoreKey(params.config, envelope.completionOwnerSessionKey)
+        : undefined;
+      if ((completionOwnerSessionKey ?? parentSessionKey) === targetSessionKey) {
+        return {
+          delegated: true,
+          source: "completion-handoff",
+          policy: policyFromEnvelope(envelope),
+        };
+      }
+      currentSessionKey = parentSessionKey;
+    }
+    return { delegated: false };
+  }
   if (!hasExternalRequester) {
     const ownEnvelope = resolvePersistedSubagentToolPolicyEnvelope(params.subagentSessionKey, {
       cfg: params.config,
@@ -109,48 +167,24 @@ function resolveDelegatedPolicy(
       };
     }
   }
-  if (!params.trustedInternalHandoff) {
-    return { delegated: false };
-  }
-  if (
-    provenance?.kind !== "inter_session" ||
-    normalizeOptionalLowercaseString(provenance.sourceTool) !== "subagent_announce" ||
-    !provenance.sourceSessionKey ||
-    !params.sessionKey
-  ) {
-    return { delegated: false };
-  }
-  if (!params.config) {
-    throw new Error("Trusted internal handoff policy resolution requires configuration.");
-  }
-  const targetSessionKey = resolveRequesterStoreKey(params.config, params.sessionKey);
-  let currentSessionKey = resolveRequesterStoreKey(params.config, provenance.sourceSessionKey);
-  const visited = new Set<string>();
-  for (let depth = 0; depth < MAX_DELEGATION_LINEAGE_DEPTH; depth += 1) {
-    if (visited.has(currentSessionKey)) {
-      return { delegated: false };
-    }
-    visited.add(currentSessionKey);
-    const envelope = resolvePersistedSubagentToolPolicyEnvelope(currentSessionKey, {
-      cfg: params.config,
-    });
-    if (!envelope) {
-      return { delegated: false };
-    }
-    const parentSessionKey = resolveRequesterStoreKey(params.config, envelope.spawnedBy);
-    const completionOwnerSessionKey = envelope.completionOwnerSessionKey
-      ? resolveRequesterStoreKey(params.config, envelope.completionOwnerSessionKey)
-      : undefined;
-    if ((completionOwnerSessionKey ?? parentSessionKey) === targetSessionKey) {
-      return {
-        delegated: true,
-        source: "completion-handoff",
-        policy: policyFromEnvelope(envelope),
-      };
-    }
-    currentSessionKey = parentSessionKey;
-  }
   return { delegated: false };
+}
+
+/** Confirms that an exact consumed completion capability also owns persisted requester lineage. */
+export function hasVerifiedRequesterCompletionHandoff(
+  params: Pick<
+    RequesterToolPolicyParams,
+    | "config"
+    | "sessionKey"
+    | "inputProvenance"
+    | "trustedInternalHandoff"
+    | "sessionId"
+    | "modelProvider"
+    | "modelId"
+  >,
+): boolean {
+  const delegatedPolicy = resolveDelegatedPolicy(params, undefined);
+  return delegatedPolicy.delegated && delegatedPolicy.source === "completion-handoff";
 }
 
 /** Resolve sender/group policy or a verified inherited projection, never both. */
@@ -190,26 +224,29 @@ export function resolveRequesterToolPolicies(
   return {
     delegated: false,
     requesterPolicySource: "current-request",
-    groupPolicy: resolveGroupToolPolicy({
-      config: params.config,
-      sessionKey: params.groupPolicySessionKey ?? params.sessionKey,
-      spawnedBy: params.spawnedBy,
-      messageProvider: params.messageProvider ?? undefined,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      accountId: params.accountId,
-      requireConfiguredAccount: params.requireConfiguredGroupAccount,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-      senderPolicyMode: senderPolicyMode === "never" ? "never" : "always",
-    }),
+    groupPolicy:
+      params.conversationPolicy ??
+      resolveGroupToolPolicy({
+        config: params.config,
+        sessionKey: params.groupPolicySessionKey ?? params.sessionKey,
+        spawnedBy: params.spawnedBy,
+        messageProvider: params.messageProvider ?? undefined,
+        groupId: params.groupId,
+        groupChannel: params.groupChannel,
+        groupSpace: params.groupSpace,
+        accountId: params.accountId,
+        requireConfiguredAccount: params.requireConfiguredGroupAccount,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+        senderPolicyMode: senderPolicyMode === "never" ? "never" : "always",
+      }),
     senderPolicy: shouldResolveSenderPolicy
       ? resolveSenderToolPolicy({
           config: params.config,
           agentId: params.agentId,
+          sessionKey: params.sessionKey,
           messageProvider: params.messageProvider,
           senderId: params.senderId,
           senderName: params.senderName,

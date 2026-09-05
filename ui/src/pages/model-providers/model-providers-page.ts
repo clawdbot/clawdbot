@@ -1,22 +1,30 @@
 import { consume } from "@lit/context";
-import { initialState, Task, TaskStatus } from "@lit/task";
+import { initialState, Task } from "@lit/task";
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
+import type { ModelsProbeResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { icons } from "../../components/icons.ts";
+import { renderLearnMoreLink, renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
+import {
+  modelProviderErrorMessage,
+  runModelProviderConfigMutation,
+  type ModelProviderConfigMutation,
+  type ModelProviderConfigMutationResult,
+} from "./config-mutation.ts";
 import {
   buildModelProviderCards,
   buildSelectableDefaultModels,
@@ -31,72 +39,27 @@ import {
   MODEL_PROVIDERS_COST_DAYS,
   type ModelProvidersData,
 } from "./load.ts";
+import { readModelBehaviorConfig, type ModelBehaviorConfig } from "./model-behavior.ts";
 import {
-  buildDefaultModelsPatch,
+  buildDefaultsPatch,
   buildProviderApiKeyPatch,
   DEFAULT_MODELS_REPLACE_PATHS,
 } from "./mutations.ts";
+import { isMissingMethodError, mergeProbeResults } from "./probe-results.ts";
+import type { ModelProvidersRouteData } from "./route.ts";
+import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
 import { renderModelProviders, type ModelProviderRowMessage } from "./view.ts";
 
 const MODEL_PROVIDERS_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
 
-export type ModelProvidersRouteData = {
-  data: ModelProvidersData;
-  /** Client the loader fetched from; null when it ran disconnected. */
-  client: GatewayBrowserClient | null;
-  /** Concrete agent whose credential store populated the auth snapshot. */
-  agentId: string;
-};
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  return typeof error === "string" && error.trim() ? error : t("modelProviders.requestFailed");
-}
-
-function isMissingMethodError(error: unknown): boolean {
-  return /method (?:not found|not supported)|unknown method/iu.test(errorMessage(error));
-}
-
-const PROBE_FAILURE_PRIORITY: readonly ModelsProbeResult["status"][] = [
-  "auth",
-  "billing",
-  "rate_limit",
-  "timeout",
-  "format",
-  "no_model",
-  "unknown",
-];
-
-function mergeProbeResults(cardId: string, results: ModelsProbeResult[]): ModelsProbeResult {
-  if (results.length === 1) {
-    return results[0]!;
-  }
-  const status = results.some((result) => result.status === "ok")
-    ? "ok"
-    : (PROBE_FAILURE_PRIORITY.find((candidate) =>
-        results.some((result) => result.status === candidate),
-      ) ?? "unknown");
-  const error = results.find((result) => result.status === status)?.error;
-  return {
-    provider: cardId,
-    status,
-    ...(error ? { error } : {}),
-    results: results.flatMap((result) =>
-      result.results.map((target) => ({
-        ...target,
-        label: `${result.provider}: ${target.label}`,
-      })),
-    ),
-  };
-}
+type DefaultsDraft = DefaultModelSelection & ModelBehaviorConfig;
 
 export class ModelProvidersPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @property({ attribute: false }) routeData: ModelProvidersRouteData | undefined;
+  @property({ attribute: false }) loaderPending = false;
 
   @state() private data: ModelProvidersData | null = null;
   @state() private busy: Record<string, boolean> = {};
@@ -109,42 +72,82 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   @state() private addProviderOpen = false;
   @state() private addProviderId = "";
   @state() private addProviderKey = "";
-  @state() private defaultsDraft: DefaultModelSelection | null = null;
-  @state() private selectedAgentId = "main";
-
+  @state() private defaultsDraft: DefaultsDraft | null = null;
+  @state() private selectedAgentId = "";
   /** Client the current data was loaded from; a new client means stale data. */
   private dataClient: GatewayBrowserClient | null = null;
-  private observedClient: GatewayBrowserClient | null = null;
-  private clientEpoch = 0;
+  // Null Task runs supersede stale work without counting as a real load.
+  private loadClient: GatewayBrowserClient | null = null;
+  private routeDataObserved = false;
+  // Global config writes survive agent switches; their card state does not.
+  private agentEpoch = 0;
   private probeEpochs = new Map<string, number>();
   private readonly refreshTask = new Task(this, {
     autoRun: false,
-    args: () =>
-      [
-        this.context?.gateway.snapshot.phase === "connected"
-          ? (this.context.gateway.snapshot.client ?? null)
-          : null,
-        this.selectedAgentId,
-        false as boolean,
-      ] as const,
-    task: ([client, agentId, force], { signal }) =>
-      client
-        ? loadModelProvidersData(client, {
-            agentId,
-            ...(force ? { refresh: true } : {}),
-            signal,
-          }).then((data) => ({ client, data }))
-        : initialState,
+    task: (
+      [client, agentId, force]: [GatewayBrowserClient | null, string, boolean],
+      { signal },
+    ) => {
+      if (!client || !agentId) {
+        return initialState;
+      }
+      return loadModelProvidersData(client, {
+        agentId,
+        ...(force ? { refresh: true } : {}),
+        signal,
+      }).then((data) => ({ client, data }));
+    },
     onComplete: ({ client, data }) => {
-      this.data = data;
-      this.dataClient = client;
+      this.loadClient = null;
+      this.supplemental.adoptCoreData(client, data);
+    },
+    onError: () => {
+      this.loadClient = null;
     },
   });
+  private readonly refreshPolicy = new UsageRefreshPolicy({
+    isLoading: () =>
+      this.loaderPending ||
+      !this.routeDataObserved ||
+      this.loadClient !== null ||
+      this.supplemental.usageLoading,
+    // Usage convergence must not restart the independent local-cost request.
+    reload: () => this.supplemental.loadUsage(),
+    onIncompleteUsageExhausted: () => this.requestUpdate(),
+  });
+  private readonly supplemental = new ModelProviderSupplementalLoader(this, {
+    isCoreLoading: () => this.loaderPending,
+    getGateway: () => this.gateway,
+    getData: () => this.data,
+    getDataClient: () => this.dataClient,
+    setData: (data) => (this.data = data),
+    setDataClient: (client) => (this.dataClient = client),
+    refreshPolicy: this.refreshPolicy,
+  });
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    onIdentityChange: () => this.resetConnectionState(),
+    invalidateRequests: () => this.invalidateRequests(),
+    ensureInitialData: () => this.ensureInitialData(),
+    onSnapshot: (change) => {
+      if (change.initial) {
+        this.resetConnectionState();
+      } else if (change.connectionChanged && !change.identityChanged) {
+        // Keep the last snapshot visible while the canonical reconnect load replaces it.
+        this.resetConnectionState({ preserveVisibleData: true });
+      }
+      if (
+        change.becameConnected &&
+        !change.initial &&
+        this.routeDataObserved &&
+        !this.loaderPending
+      ) {
+        void this.refresh({ force: false });
+      }
+    },
+    onPageActivation: () => this.refreshPolicy.request("focus"),
+  });
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    )
     .watch(
       () => this.context?.runtimeConfig,
       (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
@@ -169,109 +172,133 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     );
 
   override disconnectedCallback() {
-    void this.refreshTask.run([null, this.selectedAgentId, false]);
     this.subscriptions.clear();
+    this.refreshPolicy.dispose();
     super.disconnectedCallback();
   }
 
   override willUpdate(changed: PropertyValues) {
-    if (changed.has("routeData") && this.routeData) {
+    if (
+      (changed.has("routeData") || changed.has("loaderPending")) &&
+      this.routeData !== undefined
+    ) {
+      this.routeDataObserved = true;
       const selectedAgentId = this.resolveSelectedAgentId();
-      this.selectedAgentId = selectedAgentId;
-      if (this.routeData.agentId === selectedAgentId) {
-        this.data = this.routeData.data;
-        this.dataClient = this.routeData.client;
+      this.setSelectedAgent(selectedAgentId);
+      if (
+        (this.routeData.agentId ?? "") === selectedAgentId &&
+        this.gateway.isRouteDataCurrent(this.routeData)
+      ) {
+        this.supplemental.adoptCoreData(this.routeData.client, this.routeData.data);
       } else {
         this.data = null;
         this.dataClient = null;
+        this.refreshPolicy.resetPayload();
       }
+      this.ensureInitialData();
     }
   }
 
-  override updated() {
-    const snapshot = this.context.gateway.snapshot;
-    if (snapshot.client !== this.observedClient) {
-      this.resetClientState(snapshot.client);
-    }
-    if (!this.context.agents.state.agentsList && !this.context.agents.state.agentsLoading) {
+  private ensureInitialData() {
+    if (
+      !this.context.agents.state.agentsList &&
+      !this.context.agents.state.agentsLoading &&
+      !this.context.agents.state.agentsError
+    ) {
       void this.context.agents.ensureList();
     }
+    // The route owns initial loading, even when its page module is already cached.
+    const client = this.gateway.client;
     if (
-      snapshot.phase !== "connected" ||
-      !snapshot.client ||
-      this.refreshTask.status === TaskStatus.PENDING
+      !this.routeDataObserved ||
+      this.loaderPending ||
+      !this.gateway.connected ||
+      !client ||
+      !this.selectedAgentId ||
+      this.loadClient !== null ||
+      (this.data !== null && this.data.updatedAt !== null && client === this.dataClient)
     ) {
       return;
     }
-    const stale = this.data === null || this.data.updatedAt === null;
-    if (stale || snapshot.client !== this.dataClient) {
-      void this.refresh({ force: false });
-    }
+    void this.refresh({ force: false });
   }
 
-  private resetClientState(client: GatewayBrowserClient | null) {
-    this.observedClient = client;
-    this.clientEpoch += 1;
+  private invalidateRequests() {
+    this.loadClient = null;
     void this.refreshTask.run([null, this.selectedAgentId, false]);
+    this.supplemental.invalidate();
+  }
+
+  private resetConnectionState(options: { preserveVisibleData?: boolean } = {}) {
+    if (!options.preserveVisibleData) {
+      this.data = null;
+      this.dataClient = null;
+    }
+    this.refreshPolicy.resetPayload();
+    this.resetAgentScopeState();
+    this.probeEpochs = new Map();
+    this.probeUnsupported = false;
+    this.defaultsDraft = null;
+  }
+
+  private resetAgentScopeState() {
     this.busy = {};
     this.messages = {};
     this.probeResults = {};
-    this.probeEpochs = new Map();
-    this.probeUnsupported = false;
-    this.keyEditorProvider = null;
-    this.keyDraft = "";
+    this.closeKeyEditor();
     this.pendingLogoutProvider = null;
     this.addProviderOpen = false;
     this.addProviderId = "";
     this.addProviderKey = "";
-    this.defaultsDraft = null;
-    if (client !== this.dataClient) {
-      this.data = null;
-    }
   }
 
   private isCurrentClient(client: GatewayBrowserClient, epoch: number): boolean {
-    return (
-      this.clientEpoch === epoch &&
-      this.observedClient === client &&
-      this.context.gateway.snapshot.client === client
-    );
+    return this.gateway.isCurrent({ client, epoch });
   }
 
   private resolveSelectedAgentId(): string {
-    const agentsList = this.context.agents.state.agentsList;
-    const requested = this.context.agentSelection.state.scopeId;
-    const normalizedRequested = requested ? normalizeAgentId(requested) : null;
-    const rosterIds = new Set(agentsList?.agents.map((agent) => normalizeAgentId(agent.id)) ?? []);
-    if (normalizedRequested && rosterIds.has(normalizedRequested)) {
-      return normalizedRequested;
+    const selected = this.context.agentSelection.state.selectedId;
+    return selected ? normalizeAgentId(selected) : "";
+  }
+
+  private setSelectedAgent(agentId: string): boolean {
+    if (agentId === this.selectedAgentId) {
+      return false;
     }
-    return normalizeAgentId(agentsList?.defaultId ?? agentsList?.agents[0]?.id ?? "main");
+    this.selectedAgentId = agentId;
+    this.agentEpoch += 1;
+    this.resetAgentScopeState();
+    return true;
   }
 
   private syncSelectedAgent() {
     const agentId = this.resolveSelectedAgentId();
-    if (agentId === this.selectedAgentId) {
+    if (!this.setSelectedAgent(agentId)) {
       return;
     }
-    this.selectedAgentId = agentId;
-    void this.refreshTask.run([null, agentId, false]);
+    this.invalidateRequests();
     this.data = null;
-    this.busy = {};
-    this.pendingLogoutProvider = null;
-    this.messages = {};
-    this.probeResults = {};
+    this.dataClient = null;
+    this.refreshPolicy.resetPayload();
     // probeEpochs stays: per-card counters must remain monotonic across agent
     // switches, or an in-flight probe from the old agent can reuse an epoch
     // and clobber a newer probe's state (A->B->A ABA race).
     this.requestUpdate();
+    this.ensureInitialData();
   }
 
   private refresh(opts: { force: boolean }): Promise<void> {
-    const client = this.context.gateway.snapshot.client;
-    if (!client) {
+    if (!this.selectedAgentId) {
       return Promise.resolve();
     }
+    const client = this.gateway.client;
+    if (!this.gateway.connected || !client) {
+      this.refreshPolicy.markLoadDeferred();
+      return Promise.resolve();
+    }
+    // Cancel the old supplemental generation before it can publish during core loading.
+    this.supplemental.beginCoreRefresh(opts.force);
+    this.loadClient = client;
     return this.refreshTask.run([client, this.selectedAgentId, opts.force]);
   }
 
@@ -280,17 +307,29 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (snapshot.phase !== "connected") {
       return t("modelProviders.readOnly.disconnected");
     }
-    if (!hasOperatorAdminAccess(snapshot.hello?.auth ?? null)) {
+    if (this.context.runtimeConfig.canPatch !== true) {
       return t("modelProviders.readOnly.adminRequired");
     }
-    if (!snapshot.client || !this.data?.config) {
+    if (!snapshot.client || !this.selectedAgentId || !this.data?.config) {
       return t("modelProviders.configUnavailable");
     }
     return null;
   }
 
   private canMutate(): boolean {
-    return this.mutationBlockedReason() === null;
+    return this.mutationBlockedReason() === null && !this.configBusy();
+  }
+
+  private configBusy(): boolean {
+    const runtimeState = this.context.runtimeConfig.state;
+    const update = this.context.overlays.snapshot;
+    return (
+      runtimeState.configLoading ||
+      runtimeState.configSaving ||
+      runtimeState.configApplying ||
+      update.updateRunning ||
+      update.updateReconciliationPending
+    );
   }
 
   private setBusy(key: string, value: boolean) {
@@ -321,64 +360,30 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.probeResults = next;
   }
 
-  private async patchConfig(params: {
-    key: string;
-    raw: Record<string, unknown>;
-    note: string;
-    success: string;
-    replacePaths?: string[];
-  }): Promise<boolean> {
+  private async patchConfig(
+    params: ModelProviderConfigMutation,
+  ): Promise<ModelProviderConfigMutationResult> {
     if (!this.canMutate() || this.busy[params.key]) {
-      return false;
+      return { ok: false };
     }
     const client = this.context.gateway.snapshot.client;
     if (!client) {
-      return false;
+      return { ok: false };
     }
-    const clientEpoch = this.clientEpoch;
-    const runtimeConfig = this.context.runtimeConfig;
-    this.setBusy(params.key, true);
-    this.setMessage(params.key, null);
-    try {
-      await runtimeConfig.ensureLoaded();
-      if (!this.isCurrentClient(client, clientEpoch)) {
-        return false;
-      }
-      const patched = await runtimeConfig.patch({
-        raw: params.raw,
-        note: params.note,
-        ...(params.replacePaths ? { replacePaths: params.replacePaths } : {}),
-      });
-      if (!this.isCurrentClient(client, clientEpoch)) {
-        return false;
-      }
-      if (!patched) {
-        this.setMessage(params.key, {
-          kind: "error",
-          text: runtimeConfig.state.lastError ?? t("modelProviders.configUnavailable"),
-        });
-        return false;
-      }
-      await runtimeConfig.refresh();
-      if (!this.isCurrentClient(client, clientEpoch)) {
-        return false;
-      }
-      await this.refresh({ force: true });
-      if (!this.isCurrentClient(client, clientEpoch)) {
-        return false;
-      }
-      this.setMessage(params.key, { kind: "success", text: params.success });
-      return true;
-    } catch (error) {
-      if (this.isCurrentClient(client, clientEpoch)) {
-        this.setMessage(params.key, { kind: "error", text: errorMessage(error) });
-      }
-      return false;
-    } finally {
-      if (this.isCurrentClient(client, clientEpoch)) {
-        this.setBusy(params.key, false);
-      }
-    }
+    const clientEpoch = this.gateway.epoch;
+    const agentEpoch = this.agentEpoch;
+    return runModelProviderConfigMutation(
+      {
+        runtimeConfig: this.context.runtimeConfig,
+        agentEpoch,
+        isCurrentClient: () => this.isCurrentClient(client, clientEpoch),
+        isCurrentAgent: () => this.agentEpoch === agentEpoch,
+        refreshProviders: () => this.refresh({ force: true }),
+        setBusy: (busy) => this.setBusy(params.key, busy),
+        setMessage: (message) => this.setMessage(params.key, message),
+      },
+      params,
+    );
   }
 
   private openKeyEditor(provider: string) {
@@ -400,16 +405,22 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.clearProbe(provider);
     this.setMessage(provider, null);
     this.setMessage(`key:${provider}`, null);
-    const ok = await this.patchConfig({
+    const result = await this.patchConfig({
       key: `key:${provider}`,
       raw: buildProviderApiKeyPatch(configKey, apiKey),
       note: t("modelProviders.notes.saveKey", { provider }),
       success: t("modelProviders.apiKey.saved"),
     });
-    if (ok) {
+    if (result.ok && this.agentEpoch === result.agentEpoch) {
       this.setMessage(`key:${provider}`, null);
-      this.closeKeyEditor();
-      this.setMessage(provider, { kind: "success", text: t("modelProviders.apiKey.saved") });
+      if (this.keyEditorProvider === provider && this.keyDraft.trim() === apiKey) {
+        this.closeKeyEditor();
+      }
+      this.setMessage(provider, {
+        kind: "success",
+        text: t("modelProviders.apiKey.saved"),
+        ...(result.warning ? { warning: result.warning } : {}),
+      });
     }
   }
 
@@ -417,16 +428,22 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.clearProbe(provider);
     this.setMessage(provider, null);
     this.setMessage(`key:${provider}`, null);
-    const ok = await this.patchConfig({
+    const result = await this.patchConfig({
       key: `key:${provider}`,
       raw: buildProviderApiKeyPatch(configKey, null),
       note: t("modelProviders.notes.removeKey", { provider }),
       success: t("modelProviders.apiKey.removed"),
     });
-    if (ok) {
+    if (result.ok && this.agentEpoch === result.agentEpoch) {
       this.setMessage(`key:${provider}`, null);
-      this.closeKeyEditor();
-      this.setMessage(provider, { kind: "success", text: t("modelProviders.apiKey.removed") });
+      if (this.keyEditorProvider === provider) {
+        this.closeKeyEditor();
+      }
+      this.setMessage(provider, {
+        kind: "success",
+        text: t("modelProviders.apiKey.removed"),
+        ...(result.warning ? { warning: result.warning } : {}),
+      });
     }
   }
 
@@ -436,35 +453,36 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!client || !this.canMutate() || this.busy[key] || this.probeUnsupported) {
       return;
     }
-    const clientEpoch = this.clientEpoch;
+    const clientEpoch = this.gateway.epoch;
     const agentId = this.selectedAgentId;
+    const agentEpoch = this.agentEpoch;
     const probeEpoch = (this.probeEpochs.get(cardId) ?? 0) + 1;
     this.probeEpochs.set(cardId, probeEpoch);
+    const ownsProbe = () =>
+      this.isCurrentClient(client, clientEpoch) &&
+      this.agentEpoch === agentEpoch &&
+      this.selectedAgentId === agentId &&
+      this.probeEpochs.get(cardId) === probeEpoch;
     this.setBusy(key, true);
     this.setMessage(cardId, null);
     try {
       const results: ModelsProbeResult[] = [];
       for (const provider of providers) {
+        if (!ownsProbe()) {
+          return;
+        }
         results.push(
           await client.request<ModelsProbeResult>("models.probe", { provider, agentId }),
         );
       }
-      if (
-        this.isCurrentClient(client, clientEpoch) &&
-        this.selectedAgentId === agentId &&
-        this.probeEpochs.get(cardId) === probeEpoch
-      ) {
+      if (ownsProbe()) {
         this.probeResults = {
           ...this.probeResults,
           [cardId]: mergeProbeResults(cardId, results),
         };
       }
     } catch (error) {
-      if (
-        !this.isCurrentClient(client, clientEpoch) ||
-        this.selectedAgentId !== agentId ||
-        this.probeEpochs.get(cardId) !== probeEpoch
-      ) {
+      if (!ownsProbe()) {
         return;
       }
       if (isMissingMethodError(error)) {
@@ -474,13 +492,10 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
           text: t("modelProviders.probe.unavailable"),
         });
       } else {
-        this.setMessage(cardId, { kind: "error", text: errorMessage(error) });
+        this.setMessage(cardId, { kind: "error", text: modelProviderErrorMessage(error) });
       }
     } finally {
-      if (
-        this.isCurrentClient(client, clientEpoch) &&
-        this.probeEpochs.get(cardId) === probeEpoch
-      ) {
+      if (ownsProbe()) {
         this.setBusy(key, false);
       }
     }
@@ -492,39 +507,45 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!client || !this.canMutate() || this.busy[key]) {
       return;
     }
-    const clientEpoch = this.clientEpoch;
+    const clientEpoch = this.gateway.epoch;
     const agentId = this.selectedAgentId;
+    const agentEpoch = this.agentEpoch;
     this.clearProbe(cardId);
     this.setBusy(key, true);
     this.setMessage(cardId, null);
     try {
       let firstError: unknown;
       for (const target of targets) {
+        // OAuth profiles are agent-owned; stop undispatched targets after any
+        // scope change, including a switch away from and back to this agent.
+        if (!this.isCurrentClient(client, clientEpoch) || this.agentEpoch !== agentEpoch) {
+          return;
+        }
         try {
           await client.request("models.authLogout", { ...target, agentId });
         } catch (error) {
           firstError ??= error;
         }
       }
-      if (!this.isCurrentClient(client, clientEpoch) || this.selectedAgentId !== agentId) {
+      if (!this.isCurrentClient(client, clientEpoch) || this.agentEpoch !== agentEpoch) {
         return;
       }
       await this.refresh({ force: true });
-      if (!this.isCurrentClient(client, clientEpoch) || this.selectedAgentId !== agentId) {
+      if (!this.isCurrentClient(client, clientEpoch) || this.agentEpoch !== agentEpoch) {
         return;
       }
       if (firstError) {
-        this.setMessage(cardId, { kind: "error", text: errorMessage(firstError) });
+        this.setMessage(cardId, { kind: "error", text: modelProviderErrorMessage(firstError) });
         return;
       }
       this.pendingLogoutProvider = null;
       this.setMessage(cardId, { kind: "success", text: t("modelProviders.logout.done") });
     } catch (error) {
-      if (this.isCurrentClient(client, clientEpoch) && this.selectedAgentId === agentId) {
-        this.setMessage(cardId, { kind: "error", text: errorMessage(error) });
+      if (this.isCurrentClient(client, clientEpoch) && this.agentEpoch === agentEpoch) {
+        this.setMessage(cardId, { kind: "error", text: modelProviderErrorMessage(error) });
       }
     } finally {
-      if (this.isCurrentClient(client, clientEpoch) && this.selectedAgentId === agentId) {
+      if (this.isCurrentClient(client, clientEpoch) && this.agentEpoch === agentEpoch) {
         this.setBusy(key, false);
       }
     }
@@ -536,48 +557,61 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!provider || !apiKey) {
       return;
     }
-    const ok = await this.patchConfig({
+    const result = await this.patchConfig({
       key: "add",
       raw: buildProviderApiKeyPatch(provider, apiKey),
       note: t("modelProviders.notes.addProvider", { provider }),
       success: t("modelProviders.add.saved", { provider }),
     });
-    if (ok) {
-      this.addProviderOpen = false;
-      this.addProviderId = "";
-      this.addProviderKey = "";
+    if (result.ok && this.agentEpoch === result.agentEpoch) {
+      if (this.addProviderId === provider && this.addProviderKey.trim() === apiKey) {
+        // A failed refresh leaves a new provider without a card. Keep its
+        // success + warning visible in the open form instead of losing both.
+        this.addProviderOpen = Boolean(result.warning);
+        if (!result.warning) {
+          this.addProviderId = "";
+        }
+        this.addProviderKey = "";
+      }
       this.setMessage(provider, {
         kind: "success",
         text: t("modelProviders.add.saved", { provider }),
+        ...(result.warning ? { warning: result.warning } : {}),
       });
     }
   }
 
-  private async saveDefaultModels() {
-    const selection = this.defaultsDraft;
-    if (!selection?.primary) {
+  private async saveDefaults(defaults = this.defaultsDraft) {
+    if (!defaults) {
       return;
     }
-    const ok = await this.patchConfig({
+    const agentEpoch = this.agentEpoch;
+    const result = await this.patchConfig({
       key: "defaults",
-      raw: buildDefaultModelsPatch(selection.primary, selection.fallbacks, selection.utilityModel),
+      raw: buildDefaultsPatch(defaults),
       note: t("modelProviders.notes.defaultModel"),
       success: t("modelProviders.defaults.saved"),
       replacePaths: DEFAULT_MODELS_REPLACE_PATHS,
     });
-    if (ok) {
+    // Keep the draft when fresh provider data is unavailable after commit.
+    if (
+      this.agentEpoch === agentEpoch &&
+      this.defaultsDraft === defaults &&
+      (!result.ok || !result.warning)
+    ) {
       this.defaultsDraft = null;
     }
   }
 
   override render() {
     const gatewaySnapshot = this.context.gateway.snapshot;
-    const agents = this.context.agents.state.agentsList?.agents ?? [];
+    const agentsState = this.context.agents.state;
+    const agents = agentsState.agentsList?.agents ?? [];
+    const rosterError = agentsState.agentsList ? null : agentsState.agentsError;
     const selected = agents.find((agent) => normalizeAgentId(agent.id) === this.selectedAgentId);
     const selectedAgentLabel = selected ? normalizeAgentLabel(selected) : this.selectedAgentId;
     const data = this.data ?? EMPTY_MODEL_PROVIDERS_DATA;
     const config = readModelProviderConfig(data.config);
-    const defaults = this.defaultsDraft ?? config.defaults;
     const runtimeConfig = this.context.runtimeConfig;
     const runtimeState = runtimeConfig.state;
     const configObject =
@@ -585,22 +619,20 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       asConfigRecord(data.config) ??
       {};
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
-    const thinkingLevel =
-      typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
-    const fastValue = agentsDefaults?.fastModeDefault;
-    const fastMode = fastValue === "auto" || typeof fastValue === "boolean" ? fastValue : false;
-    const update = this.context.overlays.snapshot;
-    // The overlay update states replace General's old configUpdating prop,
-    // which config-page derived from this same snapshot (isUpdateBusy); the
-    // busy gate is behavior-identical to the pre-move General controls.
-    const configBusy =
-      runtimeState.configLoading ||
-      runtimeState.configSaving ||
-      runtimeState.configApplying ||
-      update.updateRunning ||
-      update.updateReconciliationPending;
+    const configuredDefaults = {
+      ...config.defaults,
+      ...readModelBehaviorConfig(agentsDefaults),
+    };
+    const defaults = this.defaultsDraft ?? configuredDefaults;
+    const stageDefaults = (patch: Partial<DefaultsDraft>) => {
+      this.defaultsDraft = { ...(this.defaultsDraft ?? configuredDefaults), ...patch };
+      this.setMessage("defaults", null);
+      void this.saveDefaults(this.defaultsDraft);
+    };
+    // This keeps the pre-move General busy gate sourced from the same update state.
     const cards = buildModelProviderCards({
       ...data,
+      providerUsage: data.providerUsage?.ok ? data.providerUsage.value : null,
       configProviderIds: config.providerIds,
       configApiKeyProviderIds: config.apiKeyProviderIds,
       configProviderAuthModes: config.providerAuthModes,
@@ -612,29 +644,32 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         .map((provider) => provider.provider) ?? []),
     ]);
     const advertised = isGatewayMethodAdvertised(gatewaySnapshot, "models.probe");
-    const blockedReason = this.mutationBlockedReason();
-    const configuredModels = buildSelectableDefaultModels(data.models, defaults);
     const body = renderModelProviders({
       connected: gatewaySnapshot.phase === "connected",
-      loading: gatewaySnapshot.phase === "connected" && this.data === null,
-      refreshing: this.refreshTask.status === TaskStatus.PENDING,
-      error: data.error,
+      loading: gatewaySnapshot.phase === "connected" && this.data === null && !rosterError,
+      refreshing: this.loadClient !== null,
+      error: rosterError ?? data.error ?? data.catalogError,
+      providerUsageFailed: data.providerUsage?.ok === false,
+      supplementalLoading: this.loaderPending || this.supplemental.loading,
       updatedAt: data.updatedAt,
       costDays: MODEL_PROVIDERS_COST_DAYS,
       credentialAgentLabel: selectedAgentLabel,
       cards,
-      configuredModels,
+      configuredModels: buildSelectableDefaultModels(data.models, defaults),
       defaultModels: defaults,
-      defaultModelsDirty: this.defaultsDraft !== null,
-      thinkingLevel,
-      fastMode,
-      configBusy,
+      thinkingLevel: defaults.thinkingLevel,
+      thinkingOverridden: defaults.thinkingOverridden,
+      fastMode: defaults.fastMode,
+      fastModeOverridden: defaults.fastModeOverridden,
+      configBusy: this.configBusy(),
+      quickAddSupported: data.authStatus?.providerCapabilities !== undefined,
       unconfiguredProviders: buildUnconfiguredProviderOptions(
-        data.catalogModels,
+        data.authStatus?.providerCapabilities,
         configuredProviderIds,
       ),
       canMutate: this.canMutate(),
-      mutationBlockedReason: blockedReason,
+      mutationBlockedReason: this.mutationBlockedReason(),
+      providerUsageStalled: this.refreshPolicy.incompleteUsageExhausted,
       probeAvailable: !this.probeUnsupported && advertised !== false,
       busy: this.busy,
       messages: this.messages,
@@ -645,7 +680,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       addProviderOpen: this.addProviderOpen,
       addProviderId: this.addProviderId,
       addProviderKey: this.addProviderKey,
-      onRefresh: () => void this.refresh({ force: true }),
+      onRefresh: () =>
+        void (rosterError ? this.context.agents.refreshList() : this.refresh({ force: true })),
       onOpenKeyEditor: (provider) => this.openKeyEditor(provider),
       onCloseKeyEditor: () => this.closeKeyEditor(),
       onKeyDraftChange: (value) => (this.keyDraft = value),
@@ -664,52 +700,34 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       onAddProviderKeyChange: (value) => (this.addProviderKey = value),
       onAddProvider: () => void this.addProvider(),
       onPrimaryChange: (model) => {
-        this.defaultsDraft = {
-          ...defaults,
+        const current = this.defaultsDraft ?? configuredDefaults;
+        stageDefaults({
           primary: model,
-          fallbacks: defaults.fallbacks.filter((fallback) => fallback !== model),
-        };
-        this.setMessage("defaults", null);
+          fallbacks: current.fallbacks.filter((fallback) => fallback !== model),
+        });
       },
-      onFallbackAdd: (model) => {
-        this.defaultsDraft = {
-          ...defaults,
-          fallbacks: [...defaults.fallbacks, model],
-        };
-        this.setMessage("defaults", null);
+      onFallbackChange: (model) => {
+        const current = this.defaultsDraft ?? configuredDefaults;
+        stageDefaults({
+          fallbacks: model
+            ? [model, ...current.fallbacks.slice(1).filter((fallback) => fallback !== model)]
+            : [],
+        });
       },
-      onFallbackRemove: (index) => {
-        this.defaultsDraft = {
-          ...defaults,
-          fallbacks: defaults.fallbacks.filter((_, candidate) => candidate !== index),
-        };
-        this.setMessage("defaults", null);
-      },
-      onUtilityChange: (model) => {
-        this.defaultsDraft = { ...defaults, utilityModel: model };
-        this.setMessage("defaults", null);
-      },
-      onDefaultModelsSave: () => void this.saveDefaultModels(),
-      onDefaultModelsReset: () => {
-        this.defaultsDraft = null;
-        this.setMessage("defaults", null);
-      },
+      onUtilityChange: (model) => stageDefaults({ utilityModel: model }),
       onThinkingChange: (level) =>
-        runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
-      onFastModeChange: (mode: FastMode) =>
-        runtimeConfig.patchForm(["agents", "defaults", "fastModeDefault"], mode),
+        stageDefaults({ thinkingLevel: level, thinkingOverridden: true }),
+      onThinkingReset: () => stageDefaults({ thinkingLevel: undefined, thinkingOverridden: false }),
+      onFastModeChange: (mode) => stageDefaults({ fastMode: mode, fastModeOverridden: true }),
+      onFastModeReset: () => stageDefaults({ fastMode: undefined, fastModeOverridden: false }),
       onOpenModelSetup: () => this.context.navigate("model-setup"),
     });
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${titleForRoute("model-providers")}</div>
-          <div class="page-subtitle">
-            ${t("modelProviders.subtitle")}
-            ${renderDocsLink(MODEL_PROVIDERS_DOCS_URL, t("common.learnMore"))}
-          </div>
-        </div>
-        <div class="page-header-actions">
+      ${renderSettingsPageHeader({
+        title: titleForRoute("model-providers"),
+        subtitle: html`${t("modelProviders.subtitle")}
+        ${renderLearnMoreLink(MODEL_PROVIDERS_DOCS_URL)}`,
+        actions: html`
           ${renderAgentScopeControl({
             agents,
             selection: this.context.agentSelection,
@@ -717,10 +735,10 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
             selectedId: this.selectedAgentId,
           })}
           <button class="btn" @click=${() => this.context.navigate("model-setup")}>
-            ${t("tabs.modelSetup")}
+            ${icons.settings}<span>${t("modelProviders.configureModels")}</span>
           </button>
-        </div>
-      </section>
+        `,
+      })}
       ${renderSettingsWorkspace(body)}
     `;
   }

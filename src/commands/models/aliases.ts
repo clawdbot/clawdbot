@@ -3,7 +3,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { DEFAULT_MODEL_ALIASES } from "../../config/defaults.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { normalizeAgentModelMapForConfig } from "../../config/model-input.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { normalizeAlias } from "./alias-name.js";
 import { loadModelsConfig } from "./load-config.js";
 import { ensureFlagCompatibility, resolveModelTarget, updateConfig } from "./shared.js";
@@ -16,34 +16,33 @@ export async function modelsAliasesListCommand(
   ensureFlagCompatibility(opts);
   const cfg = await loadModelsConfig({ commandName: "models aliases list", runtime });
   const models = cfg.agents?.defaults?.models ?? {};
-  const aliases = Object.entries(models).reduce<Record<string, string>>(
-    (acc, [modelKey, entry]) => {
+  const aliases = Object.fromEntries(
+    Object.entries(models).flatMap(([modelKey, entry]) => {
       const alias = entry?.alias?.trim();
-      if (alias) {
-        acc[alias] = modelKey;
-      }
-      return acc;
-    },
-    {},
+      return alias ? [[alias, modelKey] as const] : [];
+    }),
+  );
+  const aliasEntries = Object.entries(aliases).toSorted(([left], [right]) =>
+    left.localeCompare(right),
   );
 
   if (opts.json) {
-    writeRuntimeJson(runtime, { aliases });
+    writeRuntimeJson(runtime, { aliases: Object.fromEntries(aliasEntries) });
     return;
   }
   if (opts.plain) {
-    for (const [alias, target] of Object.entries(aliases)) {
-      runtime.log(`${alias} ${target}`);
+    for (const [alias, target] of aliasEntries) {
+      writeRuntimeStdout(runtime, `${alias} ${target}`);
     }
     return;
   }
 
-  runtime.log(`Aliases (${Object.keys(aliases).length}):`);
-  if (Object.keys(aliases).length === 0) {
+  runtime.log(`Aliases (${aliasEntries.length}):`);
+  if (aliasEntries.length === 0) {
     runtime.log("- none");
     return;
   }
-  for (const [alias, target] of Object.entries(aliases)) {
+  for (const [alias, target] of aliasEntries) {
     runtime.log(`- ${alias} -> ${target}`);
   }
 }
@@ -55,16 +54,18 @@ export async function modelsAliasesAddCommand(
   runtime: RuntimeEnv,
 ) {
   const alias = normalizeAlias(aliasRaw);
-  const cfg = await loadModelsConfig({ commandName: "models aliases add", runtime });
-  const resolved = resolveModelTarget({ raw: modelRaw, cfg });
-  await updateConfig((cfgLocal) => {
+  const normalizedAlias = alias.toLowerCase();
+  let target = modelRaw;
+  await updateConfig((cfgLocal, context) => {
+    // Alias resolution must share the snapshot whose hash fences this write.
+    const resolved = resolveModelTarget({ raw: modelRaw, cfg: context.runtimeConfig });
     const modelKey = `${resolved.provider}/${resolved.model}`;
+    target = modelKey;
     const nextModels = { ...cfgLocal.agents?.defaults?.models };
-    // Alias names are globally unique across model entries; otherwise command
-    // input could resolve to different targets depending on config order.
+    // Model selection folds alias case, so case variants must not collide.
     for (const [key, entry] of Object.entries(nextModels)) {
       const existing = entry?.alias?.trim();
-      if (existing && existing === alias && key !== modelKey) {
+      if (existing && existing.toLowerCase() === normalizedAlias && key !== modelKey) {
         throw new Error(`Alias ${alias} already points to ${key}.`);
       }
     }
@@ -83,20 +84,20 @@ export async function modelsAliasesAddCommand(
   });
 
   logConfigUpdated(runtime);
-  runtime.log(`Alias ${alias} -> ${resolved.provider}/${resolved.model}`);
+  runtime.log(`Alias ${alias} -> ${target}`);
 }
 
 /** Removes a configured alias by name. */
 export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: RuntimeEnv) {
   const alias = normalizeAlias(aliasRaw);
+  const normalizedAlias = alias.toLowerCase();
   const updated = await updateConfig((cfg) => {
     const nextModels = { ...cfg.agents?.defaults?.models };
     let found = false;
     for (const [key, entry] of Object.entries(nextModels)) {
-      if (entry?.alias?.trim() === alias) {
+      if (entry?.alias?.trim().toLowerCase() === normalizedAlias) {
         nextModels[key] = { ...entry, alias: undefined };
         found = true;
-        break;
       }
     }
     if (!found) {
@@ -110,7 +111,7 @@ export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: Runt
       // (provider ids and retired Google preview keys are canonicalized first), so an
       // entry whose only matching key is un-normalized still surfaces the alias in `list`.
       // Match that contract here so `remove` recognizes the same built-in aliases.
-      const builtinTarget = DEFAULT_MODEL_ALIASES[alias];
+      const builtinTarget = DEFAULT_MODEL_ALIASES[normalizedAlias];
       const normalizedModels = normalizeAgentModelMapForConfig(nextModels);
       if (
         builtinTarget &&

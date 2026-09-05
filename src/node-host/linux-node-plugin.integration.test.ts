@@ -4,8 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { reconcileNodePairingOnConnect } from "../gateway/node-connect-reconcile.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
-import { testing as runtimeRegistryLoaderTesting } from "../plugins/runtime/runtime-registry-loader.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
+import {
+  getNodeHostPluginRegistry,
+  resetNodeHostPluginRegistry,
+} from "./plugin-node-host.test-support.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
 const LINUX_NODE_COMMANDS = [
@@ -18,13 +22,34 @@ const LINUX_NODE_COMMANDS = [
 
 function resetPluginState(): void {
   resetPluginLoaderTestStateForTest();
-  runtimeRegistryLoaderTesting.resetPluginRegistryLoadedForTests();
+  resetNodeHostPluginRegistry();
+}
+
+const tempBundledRoots: string[] = [];
+
+function createLinuxNodeBundledRoot(): string {
+  // Keep workspace dependencies resolvable from the copied integration package.
+  const root = fs.mkdtempSync(path.resolve(".linux-node-plugin-test-"));
+  try {
+    // Bundled discovery requires the package itself to stay inside its physical root.
+    fs.cpSync(path.resolve("extensions/linux-node"), path.join(root, "linux-node"), {
+      recursive: true,
+    });
+  } catch (error) {
+    fs.rmSync(root, { force: true, recursive: true });
+    throw error;
+  }
+  tempBundledRoots.push(root);
+  return root;
 }
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   resetPluginState();
+  for (const root of tempBundledRoots.splice(0)) {
+    fs.rmSync(root, { force: true, recursive: true });
+  }
 });
 
 describe("linux-node node-host integration", () => {
@@ -34,6 +59,7 @@ describe("linux-node node-host integration", () => {
     if (!platformDescriptor) {
       throw new Error("process.platform descriptor unavailable");
     }
+    const bundledRoot = createLinuxNodeBundledRoot();
     Object.defineProperty(process, "platform", { ...platformDescriptor, value: "linux" });
 
     const fakeBinDir = path.resolve(".artifacts", "linux-node-test-bin");
@@ -45,7 +71,7 @@ describe("linux-node node-host integration", () => {
       return originalAccessSync(candidate, mode);
     });
     vi.stubEnv("PATH", `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`);
-    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledRoot);
     vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
 
@@ -75,11 +101,14 @@ describe("linux-node node-host integration", () => {
       const prepared = await prepareNodeHostRuntime({ config, env: process.env });
       const registered = listRegisteredNodeHostCapsAndCommands({ config, env: process.env });
 
-      expect(registered.commands).toEqual(LINUX_NODE_COMMANDS);
+      expect(registered.commands, JSON.stringify(getNodeHostPluginRegistry()?.diagnostics)).toEqual(
+        LINUX_NODE_COMMANDS,
+      );
       expect(registered.caps).toEqual(["camera", "location"]);
       expect(prepared.manifest.commands).toEqual(expect.arrayContaining([...LINUX_NODE_COMMANDS]));
 
       const requestPairing = vi.fn();
+      setActivePluginRegistry(getNodeHostPluginRegistry()!);
       const reconciliation = await reconcileNodePairingOnConnect({
         cfg: config,
         connectParams: {

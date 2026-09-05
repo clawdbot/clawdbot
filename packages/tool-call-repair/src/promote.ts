@@ -1,3 +1,5 @@
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { PlainTextToolCallProtectedRangeResolver } from "./contracts.js";
 // Tool Call Repair module implements promote behavior.
 import { parseStandalonePlainTextToolCallBlocks, type PlainTextToolCallBlock } from "./payload.js";
 
@@ -21,6 +23,7 @@ export type PlainTextToolCallPromotionOptions = {
   isRetainableNonTextBlock?: (block: Record<string, unknown>) => boolean;
   message: unknown;
   requireAssistantRole?: boolean;
+  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver;
   resolveToolName?: ToolCallRepairNameResolver;
 };
 
@@ -41,10 +44,6 @@ export function createPromotedPlainTextToolCallBlock(
     arguments: block.arguments,
     partialArgs: JSON.stringify(block.arguments),
   };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
 
 /** Emits the complete provider-neutral lifecycle for promoted tool-call blocks. */
@@ -85,6 +84,14 @@ function createPromotedToolCallBlocks(
     lineBreakOffsets ? { lineBreakOffsets } : undefined,
   );
   if (!parsedBlocks) {
+    return undefined;
+  }
+  const protectedRanges = options.resolveProtectedRanges?.(text) ?? [];
+  if (
+    parsedBlocks.some((block) =>
+      protectedRanges.some((range) => block.start >= range.start && block.start < range.end),
+    )
+  ) {
     return undefined;
   }
 
@@ -137,7 +144,7 @@ export function projectStandalonePlainTextToolCallMessage(
 
   const originalContent = messageRecord.content;
   if (typeof originalContent === "string") {
-    const toolCalls = createPromotedToolCallBlocks(originalContent.trim(), options);
+    const toolCalls = createPromotedToolCallBlocks(originalContent, options);
     if (!toolCalls) {
       return undefined;
     }

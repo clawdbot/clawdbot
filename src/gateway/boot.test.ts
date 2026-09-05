@@ -8,21 +8,24 @@ import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const agentCommand = vi.fn();
+const localAgentCommand = vi.fn();
 
 vi.mock("../commands/agent.js", () => ({
-  agentCommand,
-  agentCommandFromIngress: agentCommand,
+  agentCommand: localAgentCommand,
+  agentCommandFromSystem: agentCommand,
 }));
 
 const { runBootOnce } = await import("./boot.js");
 const { resolveAgentIdFromSessionKey, resolveAgentMainSessionKey, resolveMainSessionKey } =
   await import("../config/sessions/main-session.js");
-const { resolveStorePath } = await import("../config/sessions/paths.js");
+const { resolveSessionStorePathCore } = await import("../config/sessions/paths.js");
 const {
   applySessionEntryLifecycleMutation,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
+  loadTranscriptEvents,
   replaceSessionEntry,
+  replaceTranscriptEvents,
 } = await import("../config/sessions/session-accessor.js");
 const { stripInternalRuntimeContext } = await import("../agents/internal-runtime-context.js");
 const { getBootEchoContextForSession } = await import("./boot-echo-guard.js");
@@ -45,16 +48,17 @@ describe("runBootOnce", () => {
   const resolveMainStore = (cfg: OpenClawConfig = testConfig()) => {
     const sessionKey = resolveMainSessionKey(cfg);
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    const bootSessionKey = `agent:${agentId}:boot`;
-    return { sessionKey, bootSessionKey, storePath };
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
+    return { sessionKey, storePath };
   };
 
   beforeEach(async () => {
     vi.clearAllMocks();
     const { storePath } = resolveMainStore();
     await fs.rm(storePath, { force: true });
-    const removals = listSessionEntries({ storePath }).map(({ sessionKey }) => ({ sessionKey }));
+    const removals = listSessionEntriesCore({ storePath }).map(({ sessionKey }) => ({
+      sessionKey,
+    }));
     await applySessionEntryLifecycleMutation({ storePath, removals, skipMaintenance: true });
   });
 
@@ -131,6 +135,7 @@ describe("runBootOnce", () => {
           }),
         ).resolves.toEqual({ status: "ran" });
         expect(agentCommand).toHaveBeenCalledTimes(1);
+        expect(localAgentCommand).not.toHaveBeenCalled();
         call = requireAgentCall();
       },
     );
@@ -284,7 +289,7 @@ describe("runBootOnce", () => {
     const content = "Say hello when you wake up.";
     const call = await runBootAndReturnCall({ content });
     expect(call.deliver).toBe(false);
-    expect(call.sessionKey).toBe("agent:main:boot");
+    expect(call.sessionKey).toBe(`agent:main:boot:${String(call.sessionId)}`);
     expect(call.suppressPromptPersistence).toBe(true);
     expect(call.message).toContain("BOOT.md:");
     expect(call.message).toContain(content);
@@ -372,7 +377,9 @@ describe("runBootOnce", () => {
     const agentId = "ops";
     const call = await runBootAndReturnCall({ cfg, agentId });
     const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
-    expect(call.sessionKey).toBe(`agent:${resolveAgentIdFromSessionKey(mainSessionKey)}:boot`);
+    expect(call.sessionKey).toBe(
+      `agent:${resolveAgentIdFromSessionKey(mainSessionKey)}:boot:${String(call.sessionId)}`,
+    );
   });
 
   it("keeps boot session isolation when the main session key is configured", async () => {
@@ -381,7 +388,7 @@ describe("runBootOnce", () => {
     const call = await runBootAndReturnCall({ cfg, agentId });
     const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
     expect(mainSessionKey).toBe("agent:ops:primary");
-    expect(call.sessionKey).toBe("agent:ops:boot");
+    expect(call.sessionKey).toBe(`agent:ops:boot:${String(call.sessionId)}`);
   });
 
   it("generates new session ID when no existing session exists", async () => {
@@ -407,7 +414,7 @@ describe("runBootOnce", () => {
     const content = "Say hello when you wake up.";
     await withBootWorkspace({ bootContent: content }, async (workspaceDir) => {
       const cfg = testConfig();
-      const { bootSessionKey, sessionKey, storePath } = resolveMainStore(cfg);
+      const { sessionKey, storePath } = resolveMainStore(cfg);
       const existingSessionId = "main-session-abc123";
 
       await replaceSessionEntry(
@@ -430,7 +437,7 @@ describe("runBootOnce", () => {
       expect(call.sessionId).toMatch(
         /^boot-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}-[0-9a-f]{8}$/,
       );
-      expect(call.sessionKey).toBe(bootSessionKey);
+      expect(call.sessionKey).toBe(`agent:main:boot:${String(call.sessionId)}`);
       expectSessionMapping({ storePath, sessionKey, expectedSessionId: existingSessionId });
     });
   });
@@ -439,7 +446,7 @@ describe("runBootOnce", () => {
     const content = "Check if the system is healthy.";
     await withBootWorkspace({ bootContent: content }, async (workspaceDir) => {
       const cfg = testConfig();
-      const { bootSessionKey, sessionKey, storePath } = resolveMainStore(cfg);
+      const { sessionKey, storePath } = resolveMainStore(cfg);
       const existingSessionId = "main-session-xyz789";
 
       await replaceSessionEntry(
@@ -456,14 +463,14 @@ describe("runBootOnce", () => {
       });
 
       expectSessionMapping({ storePath, sessionKey, expectedSessionId: existingSessionId });
-      expectSessionMapping({ storePath, sessionKey: bootSessionKey });
+      expectSessionMapping({ storePath, sessionKey: String(requireAgentCall().sessionKey) });
     });
   });
 
   it("removes a boot-created boot-session mapping when none existed before", async () => {
     await withBootWorkspace({ bootContent: "health check" }, async (workspaceDir) => {
       const cfg = testConfig();
-      const { bootSessionKey, sessionKey, storePath } = resolveMainStore(cfg);
+      const { sessionKey, storePath } = resolveMainStore(cfg);
 
       mockAgentUpdatesRequestedSession(storePath);
 
@@ -472,7 +479,55 @@ describe("runBootOnce", () => {
       });
 
       expectSessionMapping({ storePath, sessionKey });
-      expectSessionMapping({ storePath, sessionKey: bootSessionKey });
+      expectSessionMapping({ storePath, sessionKey: String(requireAgentCall().sessionKey) });
     });
   });
+
+  it.each([false, true])(
+    "only cleans up a replacement session when the boot run owns its rotation=%s",
+    async (ownedRotation) => {
+      await withBootWorkspace({ bootContent: "health check" }, async (workspaceDir) => {
+        const cfg = testConfig();
+        const { storePath } = resolveMainStore(cfg);
+        agentCommand.mockImplementationOnce(
+          async (opts: {
+            sessionKey: string;
+            sessionId: string;
+            onSessionIdChanged?: (sessionId: string) => void;
+          }) => {
+            const replacementScope = {
+              storePath,
+              sessionKey: opts.sessionKey,
+              sessionId: `${opts.sessionId}-successor`,
+            };
+            await replaceSessionEntry(replacementScope, {
+              sessionId: replacementScope.sessionId,
+              updatedAt: Date.now(),
+            });
+            await replaceTranscriptEvents(replacementScope, [
+              { type: "session", id: replacementScope.sessionId, cwd: workspaceDir },
+            ]);
+            if (ownedRotation) {
+              opts.onSessionIdChanged?.(replacementScope.sessionId);
+            }
+          },
+        );
+        await expect(runBootOnce({ cfg, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+          status: "ran",
+        });
+        const call = requireAgentCall();
+        const replacementScope = {
+          storePath,
+          sessionKey: String(call.sessionKey),
+          sessionId: `${String(call.sessionId)}-successor`,
+        };
+        expect(loadSessionEntry(replacementScope)).toEqual(
+          ownedRotation
+            ? undefined
+            : expect.objectContaining({ sessionId: replacementScope.sessionId }),
+        );
+        expect(await loadTranscriptEvents(replacementScope)).toHaveLength(ownedRotation ? 0 : 1);
+      });
+    },
+  );
 });

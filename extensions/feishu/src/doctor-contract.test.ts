@@ -226,3 +226,69 @@ describe("feishu normalizeCompatibilityConfig streaming aliases", () => {
     expect(second.config).toBe(first.config);
   });
 });
+
+describe("feishu webhook route doctor migration", () => {
+  const webhookRule = legacyConfigRules.find((rule) => rule.message.includes("webhookPath"));
+
+  it("detects noncanonical webhook paths at root and account scope", () => {
+    expect(webhookRule?.match?.({ webhookPath: "/hook#fragment" }, {})).toBe(true);
+    expect(webhookRule?.match?.({ accounts: { main: { webhookPath: "hook" } } }, {})).toBe(true);
+    expect(webhookRule?.match?.({ webhookPath: "/hook/?tenant=alpha" }, {})).toBe(false);
+  });
+
+  it.each([
+    ["hook#fragment", "/hook"],
+    ["/hook?tenant=alpha#fragment", "/hook?tenant=alpha"],
+    ["/hook?", "/hook?"],
+    ["/hook?#", "/hook"],
+    ["/other/%2e%2e/hook", "/hook"],
+    ["/other\\..\\hook", "/hook"],
+    ["//example.com/hook", "/hook"],
+    ["https://example.com/hook/?tenant=alpha#fragment", "/hook/?tenant=alpha"],
+    ["/café", "/caf%C3%A9"],
+    ["/hook name", "/hook%20name"],
+    ["/hook\u0000name", "/hook%00name"],
+    ["/hook%23fragment", "/hook%23fragment"],
+    ["", "/feishu/events"],
+    ["   ", "/feishu/events"],
+    ["mailto:hello@example.com", "/feishu/events"],
+    ["javascript:alert(1)", "/feishu/events"],
+    ["ftp://example.com/hook", "/feishu/events"],
+    ["file:///tmp/hook", "/feishu/events"],
+    ["//[", "/feishu/events"],
+  ])("repairs root and account webhook path %j to %j", (webhookPath, expectedPath) => {
+    const result = normalizeCompatibilityConfig({
+      cfg: feishuConfig({ webhookPath, accounts: { main: { webhookPath } } }),
+    });
+    const feishu = result.config.channels?.feishu as unknown as {
+      webhookPath?: string;
+      accounts?: Record<string, { webhookPath?: string }>;
+    };
+
+    expect(feishu.webhookPath).toBe(expectedPath);
+    expect(feishu.accounts?.main?.webhookPath).toBe(expectedPath);
+    expect(FeishuConfigSchema.safeParse(feishu).success).toBe(true);
+    if (webhookPath === expectedPath) {
+      expect(result.changes).toEqual([]);
+    } else {
+      expect(result.changes).toEqual([
+        expect.stringContaining("channels.feishu.webhookPath"),
+        expect.stringContaining("channels.feishu.accounts.main.webhookPath"),
+      ]);
+    }
+
+    const second = normalizeCompatibilityConfig({ cfg: result.config });
+    expect(second.changes).toEqual([]);
+    expect(second.config).toBe(result.config);
+  });
+
+  it("reports actionable default repairs without echoing malformed operator URLs", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: feishuConfig({ webhookPath: "javascript:alert(operator-private-value)" }),
+    });
+
+    expect(result.changes).toEqual([
+      "Reset invalid channels.feishu.webhookPath to /feishu/events.",
+    ]);
+  });
+});

@@ -1,334 +1,175 @@
-// Filesystem transcript indexer.
-// Streams JSONL transcript files into byte-offset indexes for history paging.
 import fs from "node:fs";
-import { StringDecoder } from "node:string_decoder";
+import readline from "node:readline";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { selectSessionTranscriptActiveEntries } from "../config/sessions/transcript-tree.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import {
-  scanSessionTranscriptTree,
-  selectSessionTranscriptActiveEntries,
-} from "../config/sessions/transcript-tree.js";
+  createTranscriptDisplayPosition,
+  createTranscriptDisplaySource,
+} from "../sessions/transcript-display-position.js";
 import {
-  extractJsonNullableStringFieldPrefix,
-  extractJsonNumberFieldPrefix,
-  extractJsonStringFieldPrefix,
-  readNonBlankStringPreservingWhitespace,
-} from "./session-transcript-json.js";
+  parseTranscriptRecord,
+  type TranscriptRecord,
+} from "./session-transcript-record-parser.js";
 
-const TRANSCRIPT_INDEX_READ_CHUNK_BYTES = 64 * 1024;
-const MAX_TRANSCRIPT_INDEX_CACHE_ENTRIES = 256;
-const MAX_TRANSCRIPT_INDEX_PARSE_LINE_BYTES = 256 * 1024;
-const OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS = 64 * 1024;
-const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message too large]";
-
-type ParsedTranscriptRecord = Record<string, unknown>;
-
-/** Visible transcript entry plus its byte range in the JSONL file. */
-export type IndexedTranscriptEntry = {
+export type IndexedTranscriptEntry = TranscriptRecord & {
   seq: number;
-  id?: string;
-  offset: number;
-  byteLength: number;
-  record: ParsedTranscriptRecord;
+  transcriptPosition: TranscriptDisplayPosition;
 };
 
-type SessionTranscriptIndex = {
-  filePath: string;
-  mtimeMs: number;
-  size: number;
-  hasTreeEntries: boolean;
-  leafId?: string | null;
+export type SessionTranscriptIndex = {
   entries: IndexedTranscriptEntry[];
-  allEntries: IndexedTranscriptEntry[];
+  byId: Map<string, IndexedTranscriptEntry>;
+  displaySource: string;
 };
 
-type IndexedRawEntry = {
-  id?: string;
-  offset: number;
-  byteLength: number;
-  record: ParsedTranscriptRecord;
+type CachedTranscriptIndex = {
+  identity: string;
+  value: Promise<SessionTranscriptIndex>;
 };
 
-type CacheEntry = {
-  mtimeMs: number;
-  size: number;
-  index: SessionTranscriptIndex;
-};
+const transcriptIndexes = new Map<string, CachedTranscriptIndex>();
+const MAX_TRANSCRIPT_INDEXES = 256;
 
-type ReadSessionTranscriptIndexOptions = {
-  cache?: "reuse" | "skip";
-  view?: "active" | "all";
-};
-
-const transcriptIndexCache = new Map<string, CacheEntry>();
-const transcriptIndexBuilds = new Map<
-  string,
-  {
-    mtimeMs: number;
-    size: number;
-    promise: Promise<SessionTranscriptIndex>;
-  }
->();
-
-async function yieldTranscriptIndexScan(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+function transcriptArtifactDisplaySource(filePath: string, stat: fs.Stats): string {
+  // Inode/ctime distinguish replacement or rewrite even when size and mtime are preserved.
+  const identity = `${stat.dev}:${stat.ino}:${stat.ctimeMs}:${stat.mtimeMs}:${stat.size}`;
+  return createTranscriptDisplaySource(["archive", filePath, identity]);
 }
 
-function touchCachedIndex(filePath: string, entry: CacheEntry): SessionTranscriptIndex {
-  transcriptIndexCache.delete(filePath);
-  transcriptIndexCache.set(filePath, entry);
-  return entry.index;
-}
-
-function setCachedIndex(filePath: string, entry: CacheEntry): void {
-  transcriptIndexCache.set(filePath, entry);
-  while (transcriptIndexCache.size > MAX_TRANSCRIPT_INDEX_CACHE_ENTRIES) {
-    const oldestKey = transcriptIndexCache.keys().next().value;
-    if (typeof oldestKey !== "string" || !oldestKey) {
-      break;
-    }
-    transcriptIndexCache.delete(oldestKey);
-  }
-}
-
-function selectTranscriptIndexView(
-  index: SessionTranscriptIndex,
-  view: ReadSessionTranscriptIndexOptions["view"],
-): SessionTranscriptIndex {
-  return view === "all" ? { ...index, entries: index.allEntries } : index;
-}
-
-function isIndexableTranscriptRecord(record: unknown): record is ParsedTranscriptRecord {
-  return Boolean(record && typeof record === "object" && !Array.isArray(record));
-}
-
-function isVisibleTranscriptRecord(record: ParsedTranscriptRecord): boolean {
-  return Boolean(record.message) || record.type === "compaction";
-}
-
-function buildOversizedIndexedRawEntry(params: {
-  line: string;
-  offset: number;
-  byteLength: number;
-}): IndexedRawEntry | null {
-  // Oversized lines may contain huge message arrays, so recover only metadata
-  // from a bounded prefix and synthesize a visible placeholder record.
-  const prefix = params.line.slice(0, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
-  const messageMatch = /"message"\s*:/.exec(prefix);
-  const recordPrefix = messageMatch ? prefix.slice(0, messageMatch.index) : prefix;
-  const id = extractJsonStringFieldPrefix(prefix, "id");
-  const parentId = extractJsonNullableStringFieldPrefix(prefix, "parentId");
-  const type = extractJsonStringFieldPrefix(prefix, "type");
-  const timestamp =
-    extractJsonStringFieldPrefix(recordPrefix, "timestamp") ??
-    extractJsonNumberFieldPrefix(recordPrefix, "timestamp");
-  const role = extractJsonStringFieldPrefix(prefix, "role") ?? "assistant";
-  const record: ParsedTranscriptRecord = {
-    ...(type ? { type } : {}),
-    ...(id ? { id } : {}),
-    ...(parentId !== undefined ? { parentId } : {}),
-    ...(timestamp !== undefined ? { timestamp } : {}),
-    message: {
-      role,
-      content: [{ type: "text", text: TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER }],
-      __openclaw: { truncated: true, reason: "oversized" },
-    },
-  };
-  return {
-    ...(id ? { id } : {}),
-    offset: params.offset,
-    byteLength: params.byteLength,
-    record,
-  };
-}
-
-async function visitTranscriptJsonLines(
+export function assertArchiveTranscriptSource(
   filePath: string,
-  visit: (line: string, offset: number, byteLength: number) => void,
-): Promise<void> {
-  const handle = await fs.promises.open(filePath, "r");
-  try {
-    const decoder = new StringDecoder("utf8");
-    const buffer = Buffer.allocUnsafe(TRANSCRIPT_INDEX_READ_CHUNK_BYTES);
-    let carry = "";
-    let carryOffset = 0;
-    let nextOffset = 0;
-
-    while (true) {
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
-      if (bytesRead <= 0) {
-        break;
-      }
-      const chunk = buffer.subarray(0, bytesRead);
-      const text = carry + decoder.write(chunk);
-      const lines = text.split("\n");
-      carry = lines.pop() ?? "";
-      let lineOffset = carryOffset;
-      for (const rawLine of lines) {
-        const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-        const byteLength = Buffer.byteLength(line, "utf8");
-        visit(line, lineOffset, byteLength);
-        lineOffset += Buffer.byteLength(rawLine, "utf8") + 1;
-      }
-      nextOffset += bytesRead;
-      carryOffset = nextOffset - Buffer.byteLength(carry, "utf8");
-      // Yield between chunks so a large transcript scan does not monopolize the
-      // gateway event loop while chat/session traffic is still flowing.
-      await yieldTranscriptIndexScan();
-    }
-
-    const tail = carry + decoder.end();
-    if (tail) {
-      const line = tail.endsWith("\r") ? tail.slice(0, -1) : tail;
-      visit(line, carryOffset, Buffer.byteLength(line, "utf8"));
-    }
-  } finally {
-    await handle.close();
+  stat: fs.Stats,
+  displaySource: string,
+  sessionId: string,
+): void {
+  if (transcriptArtifactDisplaySource(filePath, stat) !== displaySource) {
+    throw new SessionTranscriptProjectionUnavailableError(sessionId);
   }
 }
 
-function toIndexedEntries(rawEntries: IndexedRawEntry[]): IndexedTranscriptEntry[] {
-  const entries: IndexedTranscriptEntry[] = [];
-  let seq = 0;
-  for (const entry of rawEntries) {
-    if (!isVisibleTranscriptRecord(entry.record)) {
-      continue;
-    }
-    seq += 1;
-    entries.push({
-      seq,
-      ...(entry.id ? { id: entry.id } : {}),
-      offset: entry.offset,
-      byteLength: entry.byteLength,
-      record: entry.record,
-    });
-  }
-  return entries;
+export function isVisibleTranscriptRecord(record: Record<string, unknown>): boolean {
+  return Boolean(record.message) || record.type === "compaction" || record.type === "reset";
 }
 
-function projectResetBoundary(rawEntries: IndexedRawEntry[]): IndexedRawEntry[] {
-  const boundaryIndex = rawEntries.findLastIndex((entry) => {
-    const type = entry.record.type;
-    return type === "compaction" || type === "reset";
+export function selectArchiveTranscriptEntries<T extends TranscriptRecord>(
+  records: T[],
+  failClosedOnInvalidLeafControl = false,
+): T[] {
+  const entries = selectSessionTranscriptActiveEntries({
+    entries: records,
+    recordOf: (entry) => entry.record,
+    failClosedOnInvalidLeafControl,
   });
-  if (boundaryIndex < 0 || rawEntries[boundaryIndex]?.record.type !== "reset") {
-    return rawEntries;
+  const boundaryIndex = entries.findLastIndex(({ record }) => {
+    return record.type === "compaction" || record.type === "reset";
+  });
+  if (boundaryIndex < 0 || entries[boundaryIndex]?.record.type !== "reset") {
+    return entries;
   }
-  const reset = rawEntries[boundaryIndex]?.record;
-  const firstKeptEntryId = reset?.firstKeptEntryId;
+  const firstKeptEntryId = entries[boundaryIndex]?.record.firstKeptEntryId;
   const firstKeptIndex =
     typeof firstKeptEntryId === "string"
-      ? rawEntries.findIndex(
-          (entry, index) => index < boundaryIndex && entry.id === firstKeptEntryId,
-        )
+      ? entries.findIndex((entry, index) => index < boundaryIndex && entry.id === firstKeptEntryId)
       : -1;
   const kept =
     firstKeptIndex < 0
       ? []
-      : rawEntries.slice(firstKeptIndex, boundaryIndex).filter((entry) => {
-          const role = (entry.record.message as { role?: unknown } | undefined)?.role;
+      : entries.slice(firstKeptIndex, boundaryIndex).filter(({ record }) => {
+          const role = asOptionalRecord(record.message)?.role;
           return role === "user" || role === "assistant";
         });
-  return [...kept, ...rawEntries.slice(boundaryIndex + 1)];
+  return [...kept, ...entries.slice(boundaryIndex)];
 }
 
 async function buildSessionTranscriptIndex(
   filePath: string,
-  stat: fs.Stats,
+  displaySource: string,
+  sessionId: string,
 ): Promise<SessionTranscriptIndex> {
-  const rawEntries: IndexedRawEntry[] = [];
-
-  await visitTranscriptJsonLines(filePath, (line, offset, byteLength) => {
-    if (!line.trim()) {
-      return;
-    }
-    if (byteLength > MAX_TRANSCRIPT_INDEX_PARSE_LINE_BYTES) {
-      const rawEntry = buildOversizedIndexedRawEntry({ line, offset, byteLength });
-      if (!rawEntry) {
-        return;
-      }
-      rawEntries.push(rawEntry);
-      return;
-    }
-    let parsed: unknown;
+  const records: Array<TranscriptRecord & { rawSeq: number }> = [];
+  const rawSeqById = new Map<string, number>();
+  const handle = await fs.promises.open(filePath, "r");
+  try {
+    const stat = await handle.stat();
+    assertArchiveTranscriptSource(filePath, stat, displaySource, sessionId);
+    // The handle pins the scan across path replacement and owns stream shutdown on failure.
+    const stream = fs.createReadStream(filePath, {
+      encoding: "utf8",
+      fd: handle,
+      autoClose: false,
+    });
+    const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
     try {
-      parsed = JSON.parse(line);
-    } catch {
-      return;
+      for await (const line of lines) {
+        if (!line.trim()) {
+          continue;
+        }
+        const record = parseTranscriptRecord(line);
+        if (record) {
+          const rawSeq = records.length + 1;
+          records.push({ ...record, rawSeq });
+          if (record.id) {
+            // Capture physical cuts before branch/reset selection removes their control rows.
+            rawSeqById.set(record.id, rawSeq);
+          }
+        }
+      }
+      const finalStat = await handle.stat();
+      assertArchiveTranscriptSource(filePath, finalStat, displaySource, sessionId);
+    } finally {
+      lines.close();
     }
-    if (!isIndexableTranscriptRecord(parsed)) {
-      return;
-    }
-    const id = readNonBlankStringPreservingWhitespace(parsed.id);
-    const rawEntry: IndexedRawEntry = {
-      ...(id ? { id } : {}),
-      offset,
-      byteLength,
-      record: parsed,
-    };
-    rawEntries.push(rawEntry);
-  });
-
-  const tree = scanSessionTranscriptTree(rawEntries.map((entry) => entry.record));
-  const activeRawEntries = selectSessionTranscriptActiveEntries({
-    entries: rawEntries,
-    recordOf: (entry) => entry.record,
-    tree,
-  });
+  } finally {
+    await handle.close();
+  }
+  const entries = selectArchiveTranscriptEntries(records)
+    .filter((entry) => isVisibleTranscriptRecord(entry.record))
+    .map((entry, index): IndexedTranscriptEntry => ({
+      byteLength: entry.byteLength,
+      id: entry.id,
+      recoveredImageData: entry.recoveredImageData,
+      record: entry.record,
+      seq: index + 1,
+      transcriptPosition: createTranscriptDisplayPosition(
+        displaySource,
+        entry.rawSeq,
+        entry.record.message,
+        (id) => rawSeqById.get(id),
+      ),
+    }));
   return {
-    filePath,
-    mtimeMs: stat.mtimeMs,
-    size: stat.size,
-    hasTreeEntries: tree.hasExplicitLeafUpdate,
-    ...(tree.hasExplicitLeafUpdate ? { leafId: tree.leafId } : {}),
-    entries: toIndexedEntries(projectResetBoundary(activeRawEntries)),
-    allEntries: toIndexedEntries(rawEntries),
+    entries,
+    byId: new Map(entries.flatMap((entry) => (entry.id ? [[entry.id, entry] as const] : []))),
+    displaySource,
   };
 }
 
-/** Reads or builds the visible transcript index for a JSONL session file. */
 export async function readSessionTranscriptIndex(
   filePath: string,
-  opts: ReadSessionTranscriptIndexOptions = {},
+  sessionId: string,
 ): Promise<SessionTranscriptIndex | null> {
-  let stat: fs.Stats;
+  const stat = await fs.promises.stat(filePath).catch(() => null);
+  if (!stat?.isFile()) {
+    transcriptIndexes.delete(filePath);
+    return null;
+  }
+  const identity = transcriptArtifactDisplaySource(filePath, stat);
+  let cached = transcriptIndexes.get(filePath);
+  if (cached?.identity !== identity) {
+    cached = { identity, value: buildSessionTranscriptIndex(filePath, identity, sessionId) };
+  }
+  transcriptIndexes.delete(filePath);
+  transcriptIndexes.set(filePath, cached);
+  pruneMapToMaxSize(transcriptIndexes, MAX_TRANSCRIPT_INDEXES);
   try {
-    stat = await fs.promises.stat(filePath);
-  } catch {
-    transcriptIndexCache.delete(filePath);
-    return null;
-  }
-  if (!stat.isFile()) {
-    transcriptIndexCache.delete(filePath);
-    return null;
-  }
-  if (opts.cache === "skip") {
-    return selectTranscriptIndexView(await buildSessionTranscriptIndex(filePath, stat), opts.view);
-  }
-  const cached = transcriptIndexCache.get(filePath);
-  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-    return selectTranscriptIndexView(touchCachedIndex(filePath, cached), opts.view);
-  }
-  const inFlight = transcriptIndexBuilds.get(filePath);
-  if (inFlight && inFlight.mtimeMs === stat.mtimeMs && inFlight.size === stat.size) {
-    return selectTranscriptIndexView(await inFlight.promise, opts.view);
-  }
-  const promise = buildSessionTranscriptIndex(filePath, stat);
-  transcriptIndexBuilds.set(filePath, {
-    mtimeMs: stat.mtimeMs,
-    size: stat.size,
-    promise,
-  });
-  const index = await promise.finally(() => {
-    const current = transcriptIndexBuilds.get(filePath);
-    if (current?.promise === promise) {
-      transcriptIndexBuilds.delete(filePath);
+    return await cached.value;
+  } catch (error) {
+    if (transcriptIndexes.get(filePath) === cached) {
+      transcriptIndexes.delete(filePath);
     }
-  });
-  setCachedIndex(filePath, {
-    mtimeMs: stat.mtimeMs,
-    size: stat.size,
-    index,
-  });
-  return selectTranscriptIndexView(index, opts.view);
+    throw error;
+  }
 }

@@ -20,6 +20,7 @@ const stageSandboxMediaRuntimeLoader = createLazyImportLoader(
 export async function stageRemoteInboundMediaIfNeeded(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
+  agentId?: string;
   sessionKey?: string;
   workspaceDir: string;
   remoteMediaMode?: "sandbox-or-cache" | "cache";
@@ -38,6 +39,7 @@ export async function stageRemoteInboundMediaIfNeeded(params: {
     ctx: params.ctx,
     sessionCtx: params.ctx,
     cfg: params.cfg,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
     remoteMediaMode: params.remoteMediaMode,

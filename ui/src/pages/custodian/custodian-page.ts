@@ -6,8 +6,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import "../../components/openclaw-mascot.ts";
 import { t } from "../../i18n/index.ts";
+import { channelSnapshotHasActiveChannel } from "../../lib/channels/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/custodian.css";
 import { renderCustodianChangeHistory } from "./custodian-history.ts";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
@@ -36,6 +38,24 @@ export class CustodianPage extends OpenClawLightDomElement {
   private historyRequestEpoch = 0;
   private subscribedStore: CustodianSessionStore | null = null;
   private storeCleanup: (() => void) | null = null;
+  private channelsSource: ApplicationContext["channels"] | null = null;
+  private readonly subscriptions = new SubscriptionsController(this).effect(
+    () => this.context?.channels,
+    (channels) => {
+      this.channelsSource = channels;
+      const stop = channels.subscribe(() => {
+        this.ensureOnboardingChannelStatus();
+        this.requestUpdate();
+      });
+      this.ensureOnboardingChannelStatus();
+      return () => {
+        stop();
+        if (this.channelsSource === channels) {
+          this.channelsSource = null;
+        }
+      };
+    },
+  );
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -46,6 +66,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.storeCleanup?.();
     this.storeCleanup = null;
     this.subscribedStore = null;
+    this.subscriptions.clear();
     super.disconnectedCallback();
   }
 
@@ -63,6 +84,24 @@ export class CustodianPage extends OpenClawLightDomElement {
       this.subscribeToStore();
     }
     this.synchronizeHistoryClient();
+    this.ensureOnboardingChannelStatus();
+  }
+
+  private ensureOnboardingChannelStatus(): void {
+    const channels = this.channelsSource;
+    if (!this.onboarding || this.store.channelOnboardingNudgeClosed || !channels) {
+      return;
+    }
+    const channelState = channels.state;
+    if (
+      !channelState.connected ||
+      channelState.channelsSnapshot ||
+      channelState.channelsLoading ||
+      channelState.channelsError
+    ) {
+      return;
+    }
+    void channels.refresh(false);
   }
 
   private subscribeToStore(): void {
@@ -72,6 +111,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.storeCleanup?.();
     this.subscribedStore = this.store;
     this.storeCleanup = this.store.subscribe(() => this.requestUpdate());
+    void this.store.refreshTranscriptIfIdle();
   }
 
   private synchronizeHistoryClient(): void {
@@ -153,6 +193,21 @@ export class CustodianPage extends OpenClawLightDomElement {
   }
 
   override render() {
+    const channelState = this.channelsSource?.state;
+    const channelSnapshot = channelState?.channelsSnapshot ?? null;
+    const channelStatusError =
+      this.onboarding && !this.store.channelOnboardingNudgeClosed && channelState?.connected
+        ? (channelState?.channelsError ?? null)
+        : null;
+    const showChannelOnboardingNudge =
+      this.onboarding &&
+      !this.store.channelOnboardingNudgeClosed &&
+      channelState?.connected &&
+      !channelState.channelsLoading &&
+      channelStatusError === null &&
+      channelSnapshot !== null &&
+      channelSnapshot.partial !== true &&
+      !channelSnapshotHasActiveChannel(channelSnapshot);
     const historyContent =
       this.historyOpen && this.historyAvailable
         ? renderCustodianChangeHistory({
@@ -167,43 +222,60 @@ export class CustodianPage extends OpenClawLightDomElement {
         : nothing;
     return html`
       <section
-        class="custodian custodian--page ${this.store.setupRequired
-          ? "custodian--setup-required"
-          : ""}"
+        class="custodian custodian--page ${
+          this.store.setupRequired ? "custodian--setup-required" : ""
+        }"
       >
-        <header class="custodian__header custodian__column">
-          <div class="custodian__identity">
-            <div class="custodian__mark" aria-hidden="true">
-              <openclaw-mascot
-                .mood=${this.store.sending ? "thinking" : "idle"}
-                .size=${38}
-              ></openclaw-mascot>
-            </div>
-            <div>
-              <h1>${t("custodian.title")}</h1>
-              <p>${t(this.onboarding ? "custodian.subtitle" : "custodian.subtitleCaretaker")}</p>
-            </div>
-          </div>
+        <header
+          class="custodian__header custodian__column ${
+            this.onboarding ? "custodian__header--minimal" : ""
+          }"
+        >
+          ${
+            this.onboarding
+              ? nothing
+              : html`<div class="custodian__identity">
+                  <div class="custodian__mark" aria-hidden="true">
+                    <openclaw-mascot
+                      .mood=${this.store.sending ? "thinking" : "idle"}
+                      .size=${38}
+                    ></openclaw-mascot>
+                  </div>
+                  <div>
+                    <h1>${t("custodian.title")}</h1>
+                    <p>${t("custodian.subtitleCaretaker")}</p>
+                  </div>
+                </div>`
+          }
           <div class="custodian__header-actions">
-            ${this.historyAvailable
-              ? html`<button
-                  class="btn btn--ghost custodian__history-toggle"
-                  type="button"
-                  aria-expanded=${this.historyOpen ? "true" : "false"}
-                  @click=${() => this.toggleHistory()}
-                >
-                  ${t("custodian.history.button")}
-                </button>`
-              : nothing}
-            ${this.onboarding
-              ? html`<button
-                  class="btn btn--ghost"
-                  type="button"
-                  @click=${() => this.store.exitSetup()}
-                >
-                  ${t("custodian.exitSetup")}
-                </button>`
-              : nothing}
+            ${
+              this.onboarding
+                ? html`<openclaw-sidebar-attention></openclaw-sidebar-attention>`
+                : nothing
+            }
+            ${
+              this.historyAvailable
+                ? html`<button
+                    class="btn btn--ghost custodian__history-toggle"
+                    type="button"
+                    aria-expanded=${this.historyOpen ? "true" : "false"}
+                    @click=${() => this.toggleHistory()}
+                  >
+                    ${t("custodian.history.button")}
+                  </button>`
+                : nothing
+            }
+            ${
+              this.onboarding
+                ? html`<button
+                    class="btn btn--ghost"
+                    type="button"
+                    @click=${() => this.store.exitSetup()}
+                  >
+                    ${t("custodian.exitSetup")}
+                  </button>`
+                : nothing
+            }
           </div>
         </header>
 
@@ -212,6 +284,10 @@ export class CustodianPage extends OpenClawLightDomElement {
           .store=${this.store}
           .onboarding=${this.onboarding}
           .newAgentIntent=${this.newAgentIntent}
+          .showChannelOnboardingNudge=${showChannelOnboardingNudge}
+          .channelOnboardingError=${channelStatusError}
+          .channelOnboardingRetrying=${channelState?.channelsLoading ?? false}
+          .onRetryChannelOnboarding=${() => void this.channelsSource?.refresh(false)}
           .historyContent=${historyContent}
         ></openclaw-custodian-surface>
       </section>

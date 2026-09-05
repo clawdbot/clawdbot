@@ -21,6 +21,25 @@ describe("renderIMessagePollBody", () => {
     expect(out).toContain("\u{1F4CA} Poll");
   });
 
+  it("renders stable option ids for Remote Mac accounts", () => {
+    const out = renderIMessagePollBody(
+      {
+        kind: "created",
+        question: "Favorite color?",
+        options: [
+          { id: "option-red", text: "Red" },
+          { id: "option-blue", text: "Blue" },
+        ],
+      },
+      undefined,
+      { preferOptionId: true },
+    );
+    expect(out).toContain("Red (id: option-red)");
+    expect(out).toContain("Blue (id: option-blue)");
+    expect(out).toContain("pollOptionId = the stable option id shown above");
+    expect(out).not.toContain("pollOptionIndex =");
+  });
+
   it("folds in vote tallies", () => {
     const out = renderIMessagePollBody({
       kind: "created",

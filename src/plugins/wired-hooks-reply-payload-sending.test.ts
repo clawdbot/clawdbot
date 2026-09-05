@@ -1,5 +1,6 @@
 /** Tests reply payload sending through wired plugin hook flows. */
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -7,14 +8,6 @@ import {
 } from "../auto-reply/reply-payload.js";
 import type { PluginHookReplyPayload } from "./hook-types.js";
 import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
 
 const replyPayloadSendingEvent = {
   payload: { text: "hello" } satisfies ReplyPayload,
@@ -41,7 +34,7 @@ describe("reply_payload_sending hook runner", () => {
     vi.useFakeTimers();
     try {
       const logger = { warn: vi.fn(), error: vi.fn() };
-      const firstStarted = createDeferred<void>();
+      const firstStarted = createDeferred();
       const first = vi.fn(() => {
         firstStarted.resolve();
         return new Promise<never>(() => {});

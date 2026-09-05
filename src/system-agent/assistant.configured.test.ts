@@ -1,14 +1,26 @@
 // Configured OpenClaw assistant tests cover route-owned, tool-free planning.
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
+import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
+import { resolveRequestStreamTransportOverrides } from "../agents/embedded-agent-runner/run/runtime-resolution.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { planSystemAgentCommandWithConfiguredModel } from "./assistant.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import type { SystemAgentOverview } from "./overview.js";
-import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
-import { createSystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
+import {
+  createSystemAgentVerifiedInferenceTestFixture,
+  installSystemAgentClaudeCliBackendTestFixture,
+} from "./system-agent.test-helpers.js";
+import {
+  createSystemAgentVerifiedInferenceBinding,
+  type SystemAgentVerifiedInferenceBinding,
+} from "./verified-inference.js";
+
+const inferenceMocks = vi.hoisted(() => ({
+  fastBindings: new WeakSet<object>(),
+}));
 
 vi.mock("../plugins/providers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/providers.js")>()),
@@ -22,6 +34,40 @@ vi.mock("../agents/harness/runtime-plugin.js", async (importOriginal) => ({
     runtime === "codex" ? ["codex"] : [],
   ),
 }));
+
+vi.mock("./verified-inference.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./verified-inference.js")>();
+  return {
+    ...actual,
+    resolveSystemAgentVerifiedInferenceRoute: (
+      ...args: Parameters<typeof actual.resolveSystemAgentVerifiedInferenceRoute>
+    ) => {
+      // These cases own planner dispatch, not repeated inference ownership checks.
+      // Unmarked bindings still exercise the real resolver for every drift boundary.
+      if (inferenceMocks.fastBindings.has(args[0])) {
+        return Promise.resolve(args[0].execution);
+      }
+      return actual.resolveSystemAgentVerifiedInferenceRoute(...args);
+    },
+  };
+});
+
+function useFastVerifiedInference(
+  binding: SystemAgentVerifiedInferenceBinding,
+): SystemAgentVerifiedInferenceBinding {
+  inferenceMocks.fastBindings.add(binding);
+  return binding;
+}
+
+let restoreCliBackendFixture: (() => void) | undefined;
+
+beforeAll(() => {
+  restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
+});
+
+afterAll(() => {
+  restoreCliBackendFixture?.();
+});
 
 function overview(defaultModel?: string): SystemAgentOverview {
   return {
@@ -121,17 +167,19 @@ describe("OpenClaw configured-model planner", () => {
     if (!authFingerprint) {
       throw new Error("missing test auth fingerprint");
     }
-    const binding = await createSystemAgentVerifiedInferenceBinding({
-      configuredRoute,
-      executionRoute: { ...configuredRoute, authProfileId: "openai:p2" },
-      auth: {
-        authProfileId: "openai:p2",
-        authFingerprint,
-        modelId: configuredRoute.model,
-        modelApi: "openai-responses",
-      },
-      deps: authDeps,
-    });
+    const binding = useFastVerifiedInference(
+      await createSystemAgentVerifiedInferenceBinding({
+        configuredRoute,
+        executionRoute: { ...configuredRoute, authProfileId: "openai:p2" },
+        auth: {
+          authProfileId: "openai:p2",
+          authFingerprint,
+          modelId: configuredRoute.model,
+          modelApi: "openai-responses",
+        },
+        deps: authDeps,
+      }),
+    );
     const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: '{"reply":"Ready.","command":"gateway status"}' }],
     }));
@@ -255,6 +303,7 @@ describe("OpenClaw configured-model planner", () => {
     }));
     const removeTempDir = vi.fn(async () => {});
     const { binding, deps } = await createSystemAgentVerifiedInferenceTestFixture(config);
+    useFastVerifiedInference(binding);
 
     const result = await planSystemAgentCommandWithConfiguredModel({
       input: "please finish setup",
@@ -308,9 +357,14 @@ describe("OpenClaw configured-model planner", () => {
       },
     };
     const runEmbeddedAgent = vi.fn(async () => ({
-      payloads: [{ text: '{"reply":"Ready.","command":"gateway status"}' }],
+      payloads: [
+        { text: "Considering the gateway", isReasoning: true },
+        { text: "Checking the gateway", isCommentary: true },
+        { text: '{"reply":"Ready.","command":"gateway status"}' },
+      ],
     }));
     const { binding, deps } = await createSystemAgentVerifiedInferenceTestFixture(config);
+    useFastVerifiedInference(binding);
 
     const result = await planSystemAgentCommandWithConfiguredModel({
       input: "is the gateway healthy",
@@ -352,7 +406,7 @@ describe("OpenClaw configured-model planner", () => {
     );
   });
 
-  it("carries the verified child runtime artifact into planning", async () => {
+  it("keeps the verified child runtime while parsing a JSON plan", async () => {
     const config = {
       agents: {
         list: [
@@ -367,11 +421,12 @@ describe("OpenClaw configured-model planner", () => {
       },
     } satisfies OpenClawConfig;
     const { binding, deps } = await createSystemAgentVerifiedInferenceTestFixture(config);
-    const runEmbeddedAgent = vi.fn(async () => ({
+    useFastVerifiedInference(binding);
+    const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
       payloads: [{ text: '{"reply":"Ready.","command":"gateway status"}' }],
     }));
 
-    await planSystemAgentCommandWithConfiguredModel({
+    const result = await planSystemAgentCommandWithConfiguredModel({
       input: "is the gateway healthy",
       overview: overview("openai/gpt-5.5"),
       verifiedInference: binding,
@@ -384,6 +439,14 @@ describe("OpenClaw configured-model planner", () => {
       },
     });
 
+    expect(result).toEqual({
+      reply: "Ready.",
+      command: "gateway status",
+      modelLabel: "openai/gpt-5.5",
+    });
+    expect(
+      resolveRequestStreamTransportOverrides(runEmbeddedAgent.mock.calls[0]?.[0]?.streamParams),
+    ).toBeUndefined();
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         agentHarnessRuntimeOverride: "codex",

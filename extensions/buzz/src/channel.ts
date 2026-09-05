@@ -5,15 +5,27 @@ import {
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
+import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { BuzzConfigSchema } from "./config-schema.js";
-import { buzzOutboundAdapter, startBuzzGatewayAccount } from "./gateway.js";
+import {
+  listBuzzDirectoryGroupsFromConfig,
+  listBuzzDirectoryPeersFromConfig,
+} from "./directory-config.js";
+import {
+  getBuzzDirectorySelf,
+  listBuzzDirectoryGroupMembers,
+  listBuzzDirectoryGroupsLive,
+  listBuzzDirectoryPeersLive,
+} from "./directory.js";
+import { buzzOutboundAdapter, sendBuzzTyping, startBuzzGatewayAccount } from "./gateway.js";
 import { discoverBuzzRooms } from "./room-discovery.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
-import { buzzSetupAdapter, buzzSetupContract } from "./setup-core.js";
+import { buzzSetupContract } from "./setup-core.js";
 import { buzzSetupWizard } from "./setup-surface.js";
 import {
   buildBuzzTarget,
@@ -22,6 +34,7 @@ import {
   parseBuzzTarget,
 } from "./target.js";
 import {
+  assertBuzzAccountAvailable,
   listBuzzAccountIds,
   resolveBuzzAccount,
   resolveDefaultBuzzAccountId,
@@ -57,9 +70,19 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
       chatTypes: ["group"],
       threads: true,
     },
-    reload: { configPrefixes: ["channels.buzz"] },
+    threading: {
+      // Only automatic replies carry replyDelivery; explicit message-tool targets stay intact.
+      resolveReplyTransport: ({ replyDelivery }) =>
+        replyDelivery?.replyToMode === "off" ? { threadId: null, replyToId: null } : null,
+    },
+    agentPrompt: {
+      messageToolHints: () => [
+        "- Buzz targets: use a configured room UUID, `buzz:<ROOM_UUID>`, or a unique current room name. Use the UUID when room names are ambiguous.",
+        "- Buzz mentions: write a unique current room member as `@Display Name`. For an explicit identity, include `nostr:npub...`; the public key must belong to the target room. Any unresolved or ambiguous label needs an explicit identity for every intended member.",
+      ],
+    },
+    reload: { configPrefixes: ["channels.buzz"], accountScopedRestart: true },
     configSchema: BuzzConfigSchema,
-    setup: buzzSetupAdapter,
     setupContract: buzzSetupContract,
     setupWizard: buzzSetupWizard,
     config: {
@@ -74,6 +97,7 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
           extra: {
             baseUrl: account.relayUrl,
             publicKey: account.publicKey,
+            tokenStatus: account.tokenStatus,
           },
         }),
       resolveAllowFrom: ({ cfg, accountId }) =>
@@ -91,7 +115,7 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
       inferTargetChatType: () => "group",
       targetResolver: {
         looksLikeId: looksLikeBuzzTarget,
-        hint: "<buzz:channel-uuid>",
+        hint: "<room UUID|configured room name>",
       },
       resolveOutboundSessionRoute: ({
         cfg,
@@ -123,9 +147,11 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
         });
       },
       resolveSessionConversation: ({ rawId }) => {
-        const channelId = parseBuzzTarget(rawId);
+        const { baseSessionKey, threadId } = parseThreadSessionSuffix(rawId);
+        const channelId = parseBuzzTarget(baseSessionKey ?? rawId);
         return {
           id: channelId,
+          threadId,
           baseConversationId: channelId,
           parentConversationCandidates: [channelId],
         };
@@ -144,11 +170,15 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
           name: account.name,
           enabled: account.enabled,
           configured: account.configured,
-          baseUrl: account.relayUrl,
-          publicKey: account.publicKey,
+          extra: {
+            baseUrl: account.relayUrl,
+            publicKey: account.publicKey,
+            tokenStatus: account.tokenStatus,
+          },
         }),
       }),
       probeAccount: async ({ account, timeoutMs }) => {
+        assertBuzzAccountAvailable(account);
         const rooms = await discoverBuzzRooms({
           relayUrl: account.relayUrl,
           privateKey: account.privateKey,
@@ -166,6 +196,17 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
     gateway: {
       startAccount: startBuzzGatewayAccount,
     },
+    heartbeat: {
+      sendTyping: sendBuzzTyping,
+    },
+    directory: createChannelDirectoryAdapter({
+      self: getBuzzDirectorySelf,
+      listPeers: listBuzzDirectoryPeersFromConfig,
+      listPeersLive: listBuzzDirectoryPeersLive,
+      listGroups: listBuzzDirectoryGroupsFromConfig,
+      listGroupsLive: listBuzzDirectoryGroupsLive,
+      listGroupMembers: listBuzzDirectoryGroupMembers,
+    }),
     message: buzzMessageAdapter,
   },
   outbound: buzzOutboundAdapter,

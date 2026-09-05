@@ -2,8 +2,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { listSlackReactions } from "@openclaw/slack/api.js";
-import type { WebClient } from "@slack/web-api";
 import { extractGatewayMessageText } from "../../gateway-log-sentinel.js";
 import { formatApprovalResultValue } from "../shared/live-approval-result.js";
 import { asPlainRecord } from "./slack-live.config.js";
@@ -12,8 +10,10 @@ import {
   type SlackQaCodexApprovalMethod,
   type SlackQaCodexApprovalScenarioRun,
   type SlackQaScenarioContext,
-  type SlackQaScenarioDefinition,
+  type SlackQaScenarioMetadata,
+  type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
+import { loadSlackQaRuntime } from "./slack-plugin.runtime.js";
 
 export function resolveCodexFileApprovalTargetPath(token: string) {
   return path.join(os.homedir(), `.openclaw-qa-codex-file-approval-${token.toLowerCase()}.txt`);
@@ -76,6 +76,7 @@ export async function waitForSlackReaction(params: {
   sutUserId: string;
   timeoutMs: number;
 }) {
+  const { listSlackReactions } = loadSlackQaRuntime();
   const deadline = Date.now() + params.timeoutMs;
   while (true) {
     const reactions = await listSlackReactions(params.channelId, params.messageId, {
@@ -174,7 +175,7 @@ function findPendingCodexPluginApprovalRecord(params: {
     }
     const request = asPlainRecord(record.request);
     if (
-      request.pluginId === "openclaw-codex-app-server" &&
+      request.pluginId === "codex" &&
       request.title === expectedTitle &&
       request.toolName === expectedToolName &&
       request.sessionKey === params.sessionKey &&
@@ -224,7 +225,7 @@ export async function startCodexApprovalAgentRun(params: {
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
   runId: string;
-  scenario: SlackQaScenarioDefinition;
+  scenario: SlackQaScenarioMetadata;
   sessionKey: string;
   sutAccountId: string;
 }) {
@@ -258,7 +259,7 @@ export async function startCodexApprovalAgentRun(params: {
 }
 
 export function buildCodexApprovalSessionKey(params: {
-  scenario: SlackQaScenarioDefinition;
+  scenario: SlackQaScenarioMetadata;
   token: string;
 }) {
   return `agent:qa:${params.scenario.id}-${params.token.toLowerCase()}`;

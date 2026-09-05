@@ -1,10 +1,8 @@
 import fs from "node:fs";
 // Resolves agent-specific config and workspace directories.
-import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries, resolveAgentConfig } from "../agents/agent-scope-config.js";
-import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { isPathCaseInsensitive } from "../infra/path-case.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
@@ -103,15 +101,10 @@ function resolveEffectiveAgentDir(
   const configured = resolveAgentConfig(cfg, id)?.agentDir;
   const trimmed = configured?.trim();
   const env = deps?.env ?? process.env;
-  const homedir = deps?.homedir ?? (() => resolveRequiredHomeDir(env, os.homedir));
   if (trimmed) {
-    // Forward the caller's env/homedir so a ~/$VAR-relative configured agentDir expands the same
-    // way as the default branch below (and every other resolveUserPath caller); otherwise it falls
-    // back to process.env/os.homedir and can diverge from the intended directory -- e.g. a
-    // false-negative in the duplicate-agentDir guard when deps.env differs from process.env.
-    return resolveUserPath(trimmed, env, homedir);
+    return resolveUserPath(trimmed, env, deps?.homedir);
   }
-  const root = resolveStateDir(env, homedir);
+  const root = resolveStateDir(env, deps?.homedir);
   return path.join(root, "agents", id, "agent");
 }
 
@@ -146,7 +139,7 @@ export function formatDuplicateAgentDirError(dups: DuplicateAgentDir[]): string 
     ...dups.map((d) => `- ${d.agentDir}: ${d.agentIds.map((id) => `"${id}"`).join(", ")}`),
     "",
     "Fix: remove the shared agents.entries.*.agentDir override (or give each agent its own directory).",
-    "If you want to share credentials, copy auth-profiles.json instead of sharing the entire agentDir.",
+    "Auth profiles live in each agent's SQLite store, so a shared agentDir is not how credentials are shared: give each agent its own directory and either leave its store empty to inherit the main agent's profiles, or log it in with `openclaw models auth login`.",
   ];
   return lines.join("\n");
 }

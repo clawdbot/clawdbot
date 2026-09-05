@@ -1,6 +1,6 @@
 // Whatsapp plugin module normalizes inbound identity and access facts.
 import type { AnyMessageContent, WAMessage } from "baileys";
-import type { OpenClawConfig } from "../runtime-api.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   checkInboundAccessControl,
   type AcceptedInboundAccessControlResult,
@@ -45,6 +45,7 @@ export function createWhatsAppInboundMessageNormalizer(options: {
       !isRecentOutboundMessage({
         accountId: options.accountId,
         remoteJid,
+        alternateRemoteJid: msg.key?.remoteJidAlt,
         messageId: id,
       })
     ) {

@@ -1,13 +1,16 @@
 // Msteams tests cover reply dispatcher plugin behavior.
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReplyPayload } from "../runtime-api.js";
 
 const createChannelMessageReplyPipelineMock = vi.hoisted(() => vi.fn());
 const getMSTeamsRuntimeMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
 const renderReplyPayloadsToMessagesMock = vi.hoisted(() => vi.fn(() => []));
-const sendMSTeamsMessagesMock = vi.hoisted(() => vi.fn(async () => []));
+const sendMSTeamsMessagesMock = vi.hoisted(() =>
+  vi.fn<(typeof import("./messenger.js"))["sendMSTeamsMessages"]>(async () => []),
+);
 
 vi.mock("../runtime-api.js", () => ({
   createChannelMessageReplyPipeline: createChannelMessageReplyPipelineMock,
@@ -30,12 +33,6 @@ vi.mock("./messenger.js", () => ({
   sendMSTeamsMessages: sendMSTeamsMessagesMock,
 }));
 
-vi.mock("./errors.js", () => ({
-  classifyMSTeamsSendError: vi.fn(() => ({})),
-  formatMSTeamsSendErrorHint: vi.fn(() => undefined),
-  formatUnknownError: vi.fn((err) => String(err)),
-}));
-
 vi.mock("./revoked-context.js", () => ({
   withRevokedProxyFallback: async ({ run }: { run: () => Promise<unknown> }) => await run(),
 }));
@@ -52,15 +49,45 @@ type StreamMock = {
   clearText: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   canceled: boolean;
+  events: {
+    on: ReturnType<typeof vi.fn>;
+    off: ReturnType<typeof vi.fn>;
+  };
+  acknowledge: (text: string) => void;
 };
 
 function createStreamMock(): StreamMock {
+  let chunkHandler:
+    | ((activity: {
+        id: string;
+        type: string;
+        text: string;
+        channelData: { streamType: string };
+      }) => void)
+    | undefined;
   return {
     update: vi.fn(),
     emit: vi.fn(),
     clearText: vi.fn(),
     close: vi.fn(async () => ({ id: "stream-final" })),
     canceled: false,
+    events: {
+      on: vi.fn((_event: "chunk", handler: typeof chunkHandler) => {
+        chunkHandler = handler;
+        return 0;
+      }),
+      off: vi.fn(() => {
+        chunkHandler = undefined;
+      }),
+    },
+    acknowledge: (text: string) => {
+      chunkHandler?.({
+        id: "stream-acknowledged",
+        type: "typing",
+        text,
+        channelData: { streamType: "streaming" },
+      });
+    },
   };
 }
 
@@ -169,9 +196,9 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   type DispatcherOptions = {
     onReplyStart?: () => Promise<void> | void;
-    deliver: (payload: {
-      text: string;
-    }) => ReturnType<ReturnType<typeof createMSTeamsReplyDispatcher>["delivery"]["deliver"]>;
+    deliver: (
+      payload: ReplyPayload,
+    ) => ReturnType<ReturnType<typeof createMSTeamsReplyDispatcher>["delivery"]["deliver"]>;
   };
 
   type PipelineArgs = {
@@ -233,7 +260,9 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("sends an informative status update once work expands in personal chats", async () => {
     vi.useFakeTimers();
-    const dispatcher = createDispatcher("personal", { streaming: { mode: "progress" } });
+    const dispatcher = createDispatcher("personal", {
+      streaming: { mode: "progress", progress: { toolProgress: true } },
+    });
     const options = dispatcherOptions();
 
     // onReplyStart renders the initial informative line. Tool/item events
@@ -381,19 +410,47 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(typingCallbacks.onReplyStart).not.toHaveBeenCalled();
   });
 
-  it("delays the informative status update until the progress-draft gate fires", async () => {
-    const dispatcher = createDispatcher("personal", { streaming: { mode: "progress" } });
+  it("keeps quiet Teams progress useful without exposing routine tool rows", async () => {
+    vi.useFakeTimers();
+    const dispatcher = createDispatcher("personal", {
+      streaming: { mode: "progress", progress: { label: "Working" } },
+    });
     const stream = getStreamMock();
 
-    // The progress-draft gate (createChannelProgressDraftGate) gates updates
-    // by waiting for a configured initial-delay before the first onStart fires.
-    // Until then, work-noting calls don't render the informative line.
     await dispatcher.replyOptions.onToolStart?.({ name: "exec" });
-    // Note: pre-rebase tests asserted exact call counts at specific gate
-    // boundaries. The new gate timing is shape-equivalent but driven by the
-    // plugin-sdk default, so we just assert that work events flow through to
-    // the controller without throwing.
-    expect(stream.update).toBeDefined();
+    expect(stream.update).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(stream.update).toHaveBeenLastCalledWith("Working");
+
+    await dispatcher.replyOptions.onApprovalEvent?.({
+      phase: "requested",
+      approvalId: "approval-1",
+      command: "confirm-operation",
+    });
+    expect(stream.update).toHaveBeenLastCalledWith(expect.stringContaining("confirm-operation"));
+
+    await dispatcher.replyOptions.onCommandOutput?.({
+      itemId: "command-1",
+      phase: "end",
+      name: "exec",
+      exitCode: 1,
+    });
+    expect(stream.update).toHaveBeenLastCalledWith(expect.stringContaining("exit 1"));
+
+    await dispatcher.replyOptions.onApprovalEvent?.({
+      phase: "resolved",
+      approvalId: "approval-1",
+    });
+    expect(stream.update).toHaveBeenLastCalledWith(
+      expect.not.stringContaining("confirm-operation"),
+    );
+    await dispatcher.replyOptions.onCommandOutput?.({
+      itemId: "command-1",
+      phase: "end",
+      name: "exec",
+      exitCode: 0,
+    });
+    expect(stream.update).toHaveBeenLastCalledWith("Working");
   });
 
   it("forwards partial replies into the Teams stream via emit()", async () => {
@@ -416,7 +473,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
     vi.useFakeTimers();
     const progressDispatcher = createDispatcher("personal", {
-      streaming: { mode: "progress" },
+      streaming: { mode: "progress", progress: { toolProgress: true } },
     });
     await progressDispatcher.replyOptions.onToolStart?.({ name: "exec" });
     await vi.advanceTimersByTimeAsync(5_000);
@@ -455,7 +512,7 @@ describe("createMSTeamsReplyDispatcher", () => {
   });
 
   it("falls back to normal Teams delivery when native stream close returns no final activity", async () => {
-    renderReplyPayloadsToMessagesMock.mockReturnValue([{ content: "fallback" }] as never);
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ text: "streamed final" }] as never);
     sendMSTeamsMessagesMock.mockResolvedValue(["fallback-id"] as never);
     const dispatcher = createDispatcher("personal");
     const options = dispatcherOptions();
@@ -475,8 +532,78 @@ describe("createMSTeamsReplyDispatcher", () => {
       expect.any(Object),
     );
     expect(sendMSTeamsMessagesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ messages: [{ content: "fallback" }] }),
+      expect.objectContaining({ messages: [{ text: "streamed final" }] }),
     );
+  });
+
+  it("keeps acknowledged stream identity ahead of successful fallback ids", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ text: "world" }] as never);
+    sendMSTeamsMessagesMock.mockResolvedValue(["fallback-id"] as never);
+    const dispatcher = createDispatcher("personal");
+    const options = dispatcherOptions();
+    const stream = getStreamMock();
+    stream.close.mockResolvedValueOnce(undefined);
+
+    dispatcher.replyOptions.onPartialReply?.({ text: "hello" });
+    stream.acknowledge("hello");
+    const result = await options.deliver({ text: "hello world" });
+    await dispatcher.dispatcherOptions.onSettled?.();
+
+    await expect(result?.finalization).resolves.toEqual({
+      visibleReplySent: true,
+      messageIds: ["stream-acknowledged", "fallback-id"],
+      content: "hello world",
+    });
+  });
+
+  it("preserves acknowledged text when a media-only final has no logical text", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([
+      { mediaUrl: "https://example.com/image.png" },
+    ] as never);
+    sendMSTeamsMessagesMock.mockResolvedValue(["media-id"] as never);
+    const dispatcher = createDispatcher("personal");
+    const options = dispatcherOptions();
+    const stream = getStreamMock();
+    stream.close.mockResolvedValueOnce(undefined);
+
+    dispatcher.replyOptions.onPartialReply?.({ text: "hello" });
+    stream.acknowledge("hello");
+    const result = await options.deliver({ mediaUrl: "https://example.com/image.png" });
+    await dispatcher.dispatcherOptions.onSettled?.();
+
+    await expect(result?.finalization).resolves.toEqual({
+      visibleReplySent: true,
+      messageIds: ["stream-acknowledged", "media-id"],
+      content: "hello",
+    });
+  });
+
+  it("reports only accepted native and fallback content after partial fallback failure", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([
+      { text: "world-one" },
+      { text: "world-two" },
+    ] as never);
+    sendMSTeamsMessagesMock
+      .mockResolvedValueOnce(["fallback-id"] as never)
+      .mockRejectedValueOnce(new Error("fallback failed"));
+    const dispatcher = createDispatcher("personal");
+    const options = dispatcherOptions();
+    const stream = getStreamMock();
+    stream.close.mockRejectedValueOnce(new Error("close failed"));
+
+    dispatcher.replyOptions.onPartialReply?.({ text: "hello" });
+    stream.acknowledge("hello");
+    const result = await options.deliver({ text: "hello world" });
+    const finalization = expect(result?.finalization).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        visibleReplySent: true,
+        messageIds: ["stream-acknowledged", "fallback-id"],
+        content: "hello\nworld-one",
+      },
+    });
+    await dispatcher.dispatcherOptions.onSettled?.();
+    await finalization;
   });
 
   it("sets suppressDefaultToolProgressMessages when progress tool lines are enabled", async () => {
@@ -485,6 +612,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       streaming: {
         mode: "progress",
         progress: {
+          toolProgress: true,
           label: "Working",
         },
       },
@@ -507,7 +635,9 @@ describe("createMSTeamsReplyDispatcher", () => {
       streaming: {
         mode: "progress",
         progress: {
+          toolProgress: true,
           label: "Working",
+          commandText: "raw",
         },
       },
     });
@@ -533,50 +663,76 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(lastUpdate).not.toContain("completed");
   });
 
-  it("replaces reasoning progress snapshots in progress mode", async () => {
+  it("preserves command output text when raw command progress is configured", async () => {
     vi.useFakeTimers();
     const dispatcher = createDispatcher("personal", {
       streaming: {
         mode: "progress",
         progress: {
+          toolProgress: true,
           label: "Working",
+          commandText: "raw",
         },
       },
     });
 
-    await dispatcher.replyOptions.onReasoningStream?.({
-      text: "Checking",
-      isReasoningSnapshot: true,
+    await dispatcher.replyOptions.onCommandOutput?.({
+      phase: "end",
+      title: "pnpm test -- --watch=false",
+      name: "exec",
+      exitCode: 1,
     });
     await vi.advanceTimersByTimeAsync(5_000);
-    await dispatcher.replyOptions.onReasoningStream?.({
-      text: "Checking files",
-      isReasoningSnapshot: true,
-    });
 
-    const stream = getStreamMock();
-    expect(stream.update).toHaveBeenLastCalledWith("Working\n\n- Checking files");
-    const updates = stream.update.mock.calls.map((call) => call[0]).join("\n");
-    expect(updates).not.toContain("- Checking\n- Checking files");
+    expect(getStreamMock().update).toHaveBeenLastCalledWith(
+      expect.stringContaining("pnpm test -- --watch=false"),
+    );
   });
 
-  it("keeps appending delta reasoning progress in progress mode", async () => {
-    vi.useFakeTimers();
-    const dispatcher = createDispatcher("personal", {
-      streaming: {
-        mode: "progress",
-        progress: {
-          label: "Working",
-        },
-      },
-    });
+  it.each(
+    [undefined, false, true].flatMap((toolProgress) => [
+      { kind: "snapshot", toolProgress, isReasoningSnapshot: true, continuation: "Checking files" },
+      { kind: "delta", toolProgress, isReasoningSnapshot: false, continuation: " files" },
+    ]),
+  )(
+    "keeps $kind reasoning visible with toolProgress=$toolProgress",
+    async ({ toolProgress, isReasoningSnapshot, continuation }) => {
+      vi.useFakeTimers();
+      const dispatcher = createDispatcher("personal", {
+        streaming: { mode: "progress", progress: { toolProgress, label: "Working" } },
+      });
 
-    await dispatcher.replyOptions.onReasoningStream?.({ text: "Checking" });
-    await vi.advanceTimersByTimeAsync(5_000);
-    await dispatcher.replyOptions.onReasoningStream?.({ text: "files" });
+      await dispatcher.replyOptions.onReasoningStream?.({ text: "Checking", isReasoningSnapshot });
+      await vi.advanceTimersByTimeAsync(1_500);
+      await dispatcher.replyOptions.onReasoningStream?.({
+        text: continuation,
+        isReasoningSnapshot,
+      });
 
-    expect(getStreamMock().update).toHaveBeenLastCalledWith("Working\n\n- Checking\n- files");
-  });
+      const stream = getStreamMock();
+      expect(stream.update).toHaveBeenLastCalledWith(expect.stringContaining("Checking files"));
+      const latest = String(stream.update.mock.calls.at(-1)?.[0]);
+      expect(latest.match(/Checking/g)).toHaveLength(1);
+
+      dispatcher.replyOptions.onReasoningEnd?.();
+      await dispatcher.replyOptions.onReasoningStream?.({
+        text: "Next thought",
+        isReasoningSnapshot,
+      });
+      expect(stream.update).toHaveBeenLastCalledWith(expect.stringContaining("Next thought"));
+      expect(stream.update).toHaveBeenLastCalledWith(expect.not.stringContaining("Checking files"));
+
+      await dispatcher.delivery.deliver({ text: "Final answer" }, { kind: "final" });
+      await dispatcher.dispatcherOptions.onSettled?.();
+      const updateCount = stream.update.mock.calls.length;
+      await dispatcher.replyOptions.onReasoningStream?.({
+        text: "Late reasoning",
+        isReasoningSnapshot,
+      });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(stream.update).toHaveBeenCalledTimes(updateCount);
+    },
+  );
 
   it("does not suppress default tool progress messages in partial stream mode", () => {
     const dispatcher = createDispatcher("personal", {
@@ -591,21 +747,21 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(dispatcher.replyOptions.suppressDefaultToolProgressMessages).toBeUndefined();
   });
 
-  it("does not set suppressDefaultToolProgressMessages when toolProgress=false", async () => {
-    const dispatcher = createDispatcher("personal", {
-      streaming: {
-        mode: "progress",
-        progress: {
-          toolProgress: false,
+  it.each([undefined, false, true])(
+    "suppresses standalone Teams progress with toolProgress=%s",
+    (toolProgress) => {
+      const dispatcher = createDispatcher("personal", {
+        streaming: {
+          mode: "progress",
+          progress: {
+            toolProgress,
+          },
         },
-      },
-    });
+      });
 
-    // With toolProgress disabled, the previewToolProgressEnabled gate flips
-    // false so we don't claim to suppress the agent's default messages —
-    // they should flow through openclaw's normal block delivery instead.
-    expect(dispatcher.replyOptions.suppressDefaultToolProgressMessages).toBeUndefined();
-  });
+      expect(dispatcher.replyOptions.suppressDefaultToolProgressMessages).toBe(true);
+    },
+  );
 
   it("does not create a stream for channel conversations", () => {
     createDispatcher("channel");
@@ -675,10 +831,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
   it("queues a system event when some queued Teams messages fail to send", async () => {
     const onSentMessageIds = vi.fn();
-    renderReplyPayloadsToMessagesMock.mockReturnValue([
-      { content: "one" },
-      { content: "two" },
-    ] as never);
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ text: "one" }, { text: "two" }] as never);
     sendMSTeamsMessagesMock
       .mockResolvedValueOnce(["id-1"] as never)
       .mockRejectedValueOnce(Object.assign(new Error("gateway timeout"), { statusCode: 502 }));
@@ -696,7 +849,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       deliveryResult: {
         visibleReplySent: true,
         messageIds: ["id-1"],
-        content: "block content",
+        content: "one",
       },
     });
     await dispatcher.dispatcherOptions.onSettled?.();
@@ -706,9 +859,17 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [message, context] = firstSystemEventCall();
     expect(message).toContain("Microsoft Teams delivery failed");
-    expect(message).toContain("1 of 2 message blocks were not delivered");
-    expect(message).toContain("The user may not have received the full reply");
-    expect(message).toContain("Error: Error: gateway timeout.");
+    expect(message).toContain("the delivery outcome is unknown for 1 of 2 message blocks");
+    expect(message).not.toContain("not delivered");
+    expect(message).not.toContain("The user may not have received");
+    expect(message).toContain("Error: gateway timeout.");
+    expect(message).toContain("Delivery may already have succeeded");
+    expect(message).not.toContain("Retrying later may succeed");
+    expect(sendMSTeamsMessagesMock).toHaveBeenCalledTimes(2);
+    expect(sendMSTeamsMessagesMock.mock.calls.map(([send]) => send.messages)).toEqual([
+      [{ text: "one" }],
+      [{ text: "two" }],
+    ]);
     expect(context).toEqual({
       sessionKey: "agent:main:main",
       contextKey: "msteams:delivery-failure:conv",
@@ -785,6 +946,92 @@ describe("createMSTeamsReplyDispatcher", () => {
       messageIds: ["stream-final"],
       content: "streamed final",
     });
+  });
+
+  it.each([
+    {
+      name: "attached media",
+      payloads: [
+        {
+          text: "provider final",
+          mediaUrl: "https://example.test/must-not-send.png",
+        },
+      ],
+    },
+    {
+      name: "media after text",
+      payloads: [
+        { text: "provider final" },
+        { mediaUrl: "https://example.test/must-not-send.png" },
+      ],
+    },
+    {
+      name: "media before text",
+      payloads: [
+        { mediaUrl: "https://example.test/must-not-send.png" },
+        { text: "provider final" },
+      ],
+    },
+  ])("settles a stopped divergent final without $name fallback", async ({ payloads }) => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([
+      { mediaUrl: "https://example.test/must-not-send.png" },
+    ] as never);
+    const dispatcher = createDispatcher("personal");
+    const stream = getStreamMock();
+    stream.close.mockImplementation(() => {
+      stream.canceled = true;
+      return undefined;
+    });
+
+    dispatcher.replyOptions.onPartialReply?.({ text: "streamed preview" });
+    stream.acknowledge("streamed preview");
+    dispatcher.replyOptions.onPartialReply?.({ text: "provider final" });
+    const results = [];
+    for (const payload of payloads) {
+      results.push(await dispatcher.delivery.deliver(payload, { kind: "final" }));
+    }
+    await dispatcher.dispatcherOptions.onSettled?.();
+
+    const nativeResult = results.find((result) => result?.finalization !== undefined);
+    await expect(nativeResult?.finalization).resolves.toEqual({
+      visibleReplySent: true,
+      messageIds: ["stream-acknowledged"],
+      content: "streamed preview",
+    });
+    expect(stream.clearText).toHaveBeenCalledTimes(1);
+    expect(stream.close).toHaveBeenCalledTimes(1);
+    expect(renderReplyPayloadsToMessagesMock).not.toHaveBeenCalled();
+    expect(sendMSTeamsMessagesMock).not.toHaveBeenCalled();
+  });
+
+  it("releases later payloads only after divergent native replacement settles", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ text: "second payload" }] as never);
+    sendMSTeamsMessagesMock.mockResolvedValue(["post-native-id"] as never);
+    const dispatcher = createDispatcher("personal");
+    const stream = getStreamMock();
+
+    dispatcher.replyOptions.onPartialReply?.({ text: "streamed preview" });
+    stream.acknowledge("streamed preview");
+    dispatcher.replyOptions.onPartialReply?.({ text: "provider final" });
+    const nativeResult = await dispatcher.delivery.deliver(
+      { text: "provider final" },
+      { kind: "final" },
+    );
+    await dispatcher.delivery.deliver({ text: "second payload" }, { kind: "final" });
+
+    expect(sendMSTeamsMessagesMock).not.toHaveBeenCalled();
+    await dispatcher.dispatcherOptions.onSettled?.();
+
+    await expect(nativeResult?.finalization).resolves.toEqual({
+      visibleReplySent: true,
+      messageIds: ["stream-final", "post-native-id"],
+      content: "provider final\nsecond payload",
+    });
+    expect(renderReplyPayloadsToMessagesMock).toHaveBeenCalledWith(
+      [{ text: "second payload" }],
+      expect.any(Object),
+    );
+    expect(sendMSTeamsMessagesMock).toHaveBeenCalledTimes(1);
   });
 
   it("settles delivery when sent-message ID observation throws", async () => {

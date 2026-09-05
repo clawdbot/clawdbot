@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isAuditLedgerEnabled, resolveAuditMessageMode } from "./audit-config.js";
+import {
+  isAuditLedgerEnabled,
+  isExecutionIdentityCollectionEnabled,
+  resolveAuditMessageMode,
+} from "./audit-config.js";
 
 describe("isAuditLedgerEnabled", () => {
   it("defaults to enabled without config or audit section", () => {
@@ -21,5 +25,20 @@ describe("isAuditLedgerEnabled", () => {
     expect(resolveAuditMessageMode({ logging: { audit: {} } })).toBe("off");
     expect(resolveAuditMessageMode({ logging: { audit: { messages: "direct" } } })).toBe("direct");
     expect(resolveAuditMessageMode({ logging: { audit: { messages: "all" } } })).toBe("all");
+  });
+
+  it("keeps execution identity off until both switches are explicitly enabled", () => {
+    expect(isExecutionIdentityCollectionEnabled(undefined)).toBe(false);
+    expect(isExecutionIdentityCollectionEnabled({ logging: { audit: {} } })).toBe(false);
+    expect(
+      isExecutionIdentityCollectionEnabled({
+        logging: { audit: { enabled: true, executionIdentity: true } },
+      }),
+    ).toBe(true);
+    expect(
+      isExecutionIdentityCollectionEnabled({
+        logging: { audit: { enabled: false, executionIdentity: true } },
+      }),
+    ).toBe(false);
   });
 });

@@ -79,14 +79,21 @@ internal fun ClawAgentAvatar(
   fallback: @Composable () -> Unit,
 ) {
   when (source) {
-    is AgentAvatarSource.Data ->
+    is AgentAvatarSource.Data -> {
       if (source.mimeType == "image/svg+xml") {
         SvgAgentAvatar(base64 = source.base64, size = size, shape = shape, fallback = fallback)
       } else {
         RasterDataAgentAvatar(source = source, size = size, shape = shape, fallback = fallback)
       }
-    is AgentAvatarSource.Remote -> RemoteAgentAvatar(source.url, size, shape, fallback)
-    null -> fallback()
+    }
+
+    is AgentAvatarSource.Remote -> {
+      RemoteAgentAvatar(source.url, size, shape, fallback)
+    }
+
+    null -> {
+      fallback()
+    }
   }
 }
 
@@ -134,15 +141,22 @@ private fun RemoteAgentAvatar(
     result = safeRemoteImageStore.get(url)
   }
   when (val image = result) {
-    is RemoteImageResult.Raster ->
+    is RemoteImageResult.Raster -> {
       Image(
         bitmap = image.bitmap.asImageBitmap(),
         contentDescription = null,
         modifier = Modifier.size(size).clip(shape),
         contentScale = ContentScale.Crop,
       )
-    is RemoteImageResult.Svg -> SvgAgentAvatar(bytes = image.bytes, size = size, shape = shape, fallback = fallback)
-    RemoteImageResult.Failed, null -> fallback()
+    }
+
+    is RemoteImageResult.Svg -> {
+      SvgAgentAvatar(bytes = image.bytes, size = size, shape = shape, fallback = fallback)
+    }
+
+    RemoteImageResult.Failed, null -> {
+      fallback()
+    }
   }
 }
 

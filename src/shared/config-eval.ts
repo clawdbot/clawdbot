@@ -125,7 +125,7 @@ function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): boolean 
   return true;
 }
 
-/** Evaluates OS gating and runtime requirements for skill/plugin entry eligibility. */
+/** Enforces OS compatibility before allowing `always` to bypass runtime requirements. */
 export function evaluateRuntimeEligibility(
   params: {
     os?: string[];
@@ -169,21 +169,20 @@ function windowsPathExtensions(): string[] {
 
 let cachedHasBinaryPath: string | undefined;
 let cachedHasBinaryPathExt: string | undefined;
-const hasBinaryCache = new Map<string, boolean>();
+// Installs can create binaries under unchanged PATH/PATHEXT, so cache only successful probes.
+const hasBinaryCache = new Set<string>();
 
 /** Checks PATH for an executable binary, including PATHEXT candidates on Windows. */
 export function hasBinary(bin: string): boolean {
   const pathEnv = process.env.PATH ?? "";
   const pathExt = process.platform === "win32" ? (process.env.PATHEXT ?? "") : "";
   if (cachedHasBinaryPath !== pathEnv || cachedHasBinaryPathExt !== pathExt) {
-    // PATH/PATHEXT changes invalidate all cached binary probes; keeping stale misses
-    // would make newly installed tools invisible until process restart.
     cachedHasBinaryPath = pathEnv;
     cachedHasBinaryPathExt = pathExt;
     hasBinaryCache.clear();
   }
   if (hasBinaryCache.has(bin)) {
-    return hasBinaryCache.get(bin)!;
+    return true;
   }
 
   const parts = pathEnv.split(path.delimiter).filter(Boolean);
@@ -193,13 +192,12 @@ export function hasBinary(bin: string): boolean {
       const candidate = path.join(part, bin + ext);
       try {
         fs.accessSync(candidate, fs.constants.X_OK);
-        hasBinaryCache.set(bin, true);
+        hasBinaryCache.add(bin);
         return true;
       } catch {
         // keep scanning
       }
     }
   }
-  hasBinaryCache.set(bin, false);
   return false;
 }

@@ -33,13 +33,14 @@ vi.mock("../agents/embedded-agent.js", () => ({
 }));
 
 vi.mock("../agents/model-catalog.runtime.js", () => ({
+  loadProviderScopedThinkingCatalog: async () => [],
   loadPreparedModelCatalog: (...args: unknown[]) =>
     replyRuntimeMockState.mocks.loadModelCatalog(...args),
 }));
 
 vi.mock("../agents/auth-profiles/session-override.js", () => ({
   clearSessionAuthProfileOverride: vi.fn(),
-  resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
+  resolveSessionAuthSelection: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../commands-registry.runtime.js", () => ({

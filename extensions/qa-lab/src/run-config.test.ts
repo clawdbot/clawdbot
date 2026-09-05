@@ -2,19 +2,22 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { defaultQaRuntimeModelForMode } = vi.hoisted(() => ({
+const { defaultQaRuntimeModelForMode, resolveQaRuntimeModelPair } = vi.hoisted(() => ({
   defaultQaRuntimeModelForMode:
     vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(),
+  resolveQaRuntimeModelPair: vi.fn(),
 }));
 
 vi.mock("./model-selection.runtime.js", () => ({
   defaultQaRuntimeModelForMode,
+  resolveQaRuntimeModelPair,
 }));
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
 import {
   resolveQaRunProfileExecutionSelection,
   resolveQaRunProfileMembership,
 } from "./profile-planning.js";
+import { resolveQaLiveFrontierAlternateModel } from "./providers/live-frontier/model-selection.runtime.js";
 import {
   createIdleQaRunnerSnapshot,
   createQaRunOutputDir,
@@ -28,7 +31,26 @@ import {
   type QaScorecardTaxonomyReport,
 } from "./scorecard-taxonomy.js";
 
-const DEFAULT_LIVE_FRONTIER_MODEL = defaultQaProviderModelForMode("live-frontier");
+function resolveMockQaRuntimeModelPair(params: {
+  providerMode: string;
+  primaryModel?: string;
+  alternateModel?: string;
+  resolveDefaultModel?: (mode: string, alternate?: boolean) => string;
+}) {
+  const resolveDefaultModel =
+    params.resolveDefaultModel ??
+    ((mode: string, alternate = false) =>
+      defaultQaRuntimeModelForMode(mode, alternate ? { alternate: true } : undefined));
+  const primaryModel = params.primaryModel?.trim() || resolveDefaultModel(params.providerMode);
+  const alternateModel =
+    params.alternateModel?.trim() ||
+    (params.providerMode === "live-frontier"
+      ? (resolveQaLiveFrontierAlternateModel(primaryModel) ??
+        resolveDefaultModel(params.providerMode, true))
+      : resolveDefaultModel(params.providerMode, true));
+  return { primaryModel, alternateModel };
+}
+
 const profiles: QaScorecardTaxonomyReport["profiles"] = [
   {
     id: "smoke-ci",
@@ -92,6 +114,7 @@ describe("qa run config", () => {
       (mode: string, options?: { alternate?: boolean }) =>
         defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
+    resolveQaRuntimeModelPair.mockImplementation(resolveMockQaRuntimeModelPair);
   });
 
   it("creates a canonical smoke-profile request without copying profile membership", () => {
@@ -132,7 +155,7 @@ describe("qa run config", () => {
       evidenceMode: "full",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: DEFAULT_LIVE_FRONTIER_MODEL,
+      alternateModel: "openai/gpt-5.6-sol",
       fastMode: true,
       runtimePair: null,
       runtimePairLane: null,
@@ -352,7 +375,7 @@ describe("qa run config", () => {
     expect(execution.excludedScenarios).toEqual([]);
   });
 
-  it("keeps portable threads but excludes live-only scenarios from Crabline plans", () => {
+  it("keeps portable threads but excludes module flows from Crabline plans", () => {
     const catalog = readQaScenarioPack();
     const scenarioIds = new Set([
       "matrix-approval-channel-target-both",
@@ -387,15 +410,33 @@ describe("qa run config", () => {
         execution.excludedScenarios.map(({ scenario, reasons }) => [scenario.id, reasons]),
       ),
     ).toEqual({
-      "matrix-approval-channel-target-both": ["channelDriver=live"],
-      "matrix-approval-deny-reaction": ["channelDriver=live"],
-      "matrix-approval-exec-metadata-chunked": ["channelDriver=live"],
-      "matrix-approval-exec-metadata-single-event": ["channelDriver=live"],
-      "matrix-approval-plugin-metadata-single-event": ["channelDriver=live"],
-      "matrix-approval-thread-target": ["channelDriver=live"],
-      "matrix-mxid-prefixed-command-block": ["channelDriver=live"],
-      "slack-codex-approval-exec-native": ["channelDriver=live"],
-      "slack-codex-approval-plugin-native": ["channelDriver=live"],
+      "matrix-approval-channel-target-both": [
+        "module flow unsupported by implementation=crabline:matrix",
+      ],
+      "matrix-approval-deny-reaction": [
+        "module flow unsupported by implementation=crabline:matrix",
+      ],
+      "matrix-approval-exec-metadata-chunked": [
+        "module flow unsupported by implementation=crabline:matrix",
+      ],
+      "matrix-approval-exec-metadata-single-event": [
+        "module flow unsupported by implementation=crabline:matrix",
+      ],
+      "matrix-approval-plugin-metadata-single-event": [
+        "module flow unsupported by implementation=crabline:matrix",
+      ],
+      "matrix-approval-thread-target": [
+        "module flow unsupported by implementation=crabline:matrix",
+      ],
+      "matrix-mxid-prefixed-command-block": [
+        "module flow unsupported by implementation=crabline:matrix",
+      ],
+      "slack-codex-approval-exec-native": [
+        "module flow unsupported by implementation=crabline:slack",
+      ],
+      "slack-codex-approval-plugin-native": [
+        "module flow unsupported by implementation=crabline:slack",
+      ],
     });
   });
 
@@ -763,11 +804,12 @@ describe("qa run config", () => {
   });
 
   it("prefers the Codex OAuth default when the runtime resolver says it is available", () => {
-    defaultQaRuntimeModelForMode.mockImplementation((mode, options) =>
-      mode === "live-frontier"
-        ? "openai/gpt-5.6-luna"
-        : defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
-    );
+    defaultQaRuntimeModelForMode.mockImplementation((mode, options) => {
+      if (mode === "live-frontier" && !options?.alternate) {
+        return "openai/gpt-5.6-luna";
+      }
+      return defaultQaProviderModelForMode(mode as QaProviderModeInput, options);
+    });
 
     expect(normalizeQaRunSelection({ profile: "release" }, scenarios, profiles)).toEqual({
       profile: "release",
@@ -776,7 +818,7 @@ describe("qa run config", () => {
       evidenceMode: "full",
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-luna",
-      alternateModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-sol",
       fastMode: true,
       runtimePair: null,
       runtimePairLane: null,

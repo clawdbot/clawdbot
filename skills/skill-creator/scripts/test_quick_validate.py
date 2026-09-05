@@ -111,6 +111,26 @@ metadata: |
         self.assertFalse(valid)
         self.assertEqual(message, "Description must not be empty")
 
+    def test_accepts_openclaw_invocation_frontmatter(self):
+        skill_dir = self.temp_dir / "invocable-skill"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        content = """---
+name: invocable-skill
+description: A manually invoked skill
+user-invocable: true
+disable-model-invocation: true
+command-dispatch: tool
+command-tool: example_tool
+command-arg-mode: raw
+---
+# Skill
+"""
+        (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
+
+        valid, message = quick_validate.validate_skill(skill_dir)
+
+        self.assertTrue(valid, message)
+
 
 if __name__ == "__main__":
     main()

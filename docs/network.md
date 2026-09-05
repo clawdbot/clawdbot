@@ -19,7 +19,7 @@ Most operations flow through the Gateway (`openclaw gateway`), a single long-run
   shared-secret token/password auth, or a correctly configured non-loopback
   `trusted-proxy` deployment.
 - **One Gateway per host** is recommended. For isolation, run multiple gateways with isolated profiles and ports ([Multiple Gateways](/gateway/multiple-gateways)).
-- **Canvas host** is served on the same port as the Gateway (`/__openclaw__/canvas/`, `/__openclaw__/a2ui/`), protected by Gateway auth when bound beyond loopback.
+- **Hosted widget documents and A2UI renderer assets** are served on the same port as the Gateway (`/__openclaw__/canvas/`, `/__openclaw__/a2ui/`), protected by Gateway auth when bound beyond loopback.
 - **Remote access** is typically an SSH tunnel or Tailscale VPN ([Remote Access](/gateway/remote)).
 
 Key references:
@@ -55,7 +55,6 @@ Local trust:
 ## Nodes + transports
 
 - [Nodes overview](/nodes)
-- [Bridge protocol (legacy nodes, historical)](/gateway/bridge-protocol)
 - [Node runbook: iOS](/platforms/ios)
 - [Node runbook: Android](/platforms/android)
 

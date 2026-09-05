@@ -5,6 +5,11 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { isWellFormedApprovalId } from "../../packages/gateway-protocol/src/schema/approval-id.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
+
+const PRESENTATION_FALLBACK_CONTINUATION = Symbol.for(
+  "openclaw.presentation.fallback-continuation",
+);
 
 export type InteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
@@ -13,6 +18,20 @@ export type MessagePresentationTone = "info" | "success" | "warning" | "danger" 
 
 /** Button style hint for renderers that support styled actions. */
 export type MessagePresentationButtonStyle = InteractiveButtonStyle;
+
+type QuestionPresentationAction =
+  | {
+      /** Resolve one declared choice. */
+      type: "question";
+      questionId: string;
+      optionValue: string;
+    }
+  | {
+      /** Switch this question to its free-text answer path. */
+      type: "question";
+      questionId: string;
+      intent: "custom-input";
+    };
 
 /** Core-owned model-picker action; channels serialize it only inside private envelopes. */
 export type ModelPickerAction = (
@@ -80,15 +99,10 @@ export type MessagePresentationAction =
       /** Resolve one durable operator approval without exposing transport callback data. */
       type: "approval";
       approvalId: string;
-      approvalKind: "exec" | "plugin";
+      approvalKind: ChannelApprovalKind;
       decision: "allow-once" | "allow-always" | "deny";
     }
-  | {
-      /** Resolve one runtime-authored operator question choice. */
-      type: "question";
-      questionId: string;
-      optionValue: string;
-    }
+  | QuestionPresentationAction
   | {
       /** Open a normal external link. */
       type: "url";
@@ -541,15 +555,19 @@ function normalizePresentationAction(raw: unknown): MessagePresentationAction | 
     }
     const questionId = record.questionId;
     const optionValue = record.optionValue;
-    if (
-      typeof questionId !== "string" ||
-      !isWellFormedApprovalId(questionId) ||
-      typeof optionValue !== "string" ||
-      !optionValue.trim()
-    ) {
+    if (typeof questionId !== "string" || !isWellFormedApprovalId(questionId)) {
       return undefined;
     }
-    return { type: "question", questionId, optionValue };
+    const intent = record.intent;
+    if (intent === undefined) {
+      return typeof optionValue === "string" && optionValue.trim()
+        ? { type: "question", questionId, optionValue }
+        : undefined;
+    }
+    if (intent === "custom-input") {
+      return { type: "question", questionId, intent };
+    }
+    return undefined;
   }
   if (type === "url") {
     const url = normalizeOptionalString(record.url);
@@ -820,15 +838,36 @@ export function normalizeLegacyInteractiveReply(raw: unknown): LegacyInteractive
 /** @deprecated Use normalizeMessagePresentation. */
 export const normalizeInteractiveReply = normalizeLegacyInteractiveReply;
 
-function normalizePresentationBlock(raw: unknown): MessagePresentationBlock | undefined {
+function isPresentationContinuation(raw: unknown): boolean {
+  const record = toRecord(raw);
+  return Boolean(
+    record &&
+    Object.getOwnPropertyDescriptor(record, PRESENTATION_FALLBACK_CONTINUATION)?.value === true,
+  );
+}
+
+function normalizePresentationBlock(
+  raw: unknown,
+  followedByContinuation: boolean,
+): MessagePresentationBlock | undefined {
   const record = toRecord(raw);
   if (!record) {
     return undefined;
   }
   const type = normalizeOptionalLowercaseString(record.type);
   if (type === "text" || type === "context") {
-    const text = normalizeOptionalString(record.text);
-    return text ? { type, text } : undefined;
+    const continuation = isPresentationContinuation(record);
+    // Adapted fragments share one authored paragraph; trimming either side loses
+    // whitespace at the split, and dropping the marker changes fallback layout.
+    const text =
+      (continuation || followedByContinuation) && typeof record.text === "string"
+        ? record.text
+        : normalizeOptionalString(record.text);
+    const block: MessagePresentationBlock | undefined = text ? { type, text } : undefined;
+    if (block && continuation) {
+      Object.defineProperty(block, PRESENTATION_FALLBACK_CONTINUATION, { value: true });
+    }
+    return block;
   }
   if (type === "divider") {
     return { type: "divider" };
@@ -861,8 +900,18 @@ export function normalizeMessagePresentation(raw: unknown): MessagePresentation 
   if (!record) {
     return undefined;
   }
-  const blocks = normalizeList(record.blocks, normalizePresentationBlock);
-  const title = normalizeOptionalString(record.title);
+  const rawBlocks: unknown[] = Array.isArray(record.blocks) ? record.blocks : [];
+  const blocks = rawBlocks.flatMap((block, index) => {
+    const normalized = normalizePresentationBlock(
+      block,
+      isPresentationContinuation(rawBlocks[index + 1]),
+    );
+    return normalized ? [normalized] : [];
+  });
+  const title =
+    isPresentationContinuation(rawBlocks[0]) && typeof record.title === "string"
+      ? record.title
+      : normalizeOptionalString(record.title);
   if (!title && blocks.length === 0) {
     return undefined;
   }
@@ -1084,6 +1133,26 @@ export function renderMessagePresentationTableFallbackText(
   return lines.join("\n");
 }
 
+/** Keep only operator-visible navigation and public command text in control fallbacks. */
+export function renderMessagePresentationControlFallbackLabel(
+  control: Pick<
+    MessagePresentationButton,
+    "label" | "action" | "value" | "url" | "webApp" | "web_app" | "disabled"
+  >,
+): string {
+  if (control.disabled) {
+    return control.label;
+  }
+  const action = resolveMessagePresentationButtonAction(control);
+  if (action?.type === "url" || (action?.type === "web-app" && action.url)) {
+    return `${control.label}: ${action.url}`;
+  }
+  if (action?.type === "command") {
+    return `${control.label}: \`${action.command}\``;
+  }
+  return control.label;
+}
+
 export function renderMessagePresentationFallbackText(params: {
   presentation?: MessagePresentation;
   emptyFallback?: string | null;
@@ -1103,24 +1172,17 @@ export function renderMessagePresentationFallbackText(params: {
   }
   for (const block of presentation.blocks) {
     if (block.type === "text" || block.type === "context") {
-      lines.push(block.text);
+      // Generated continuation blocks are bounded native fragments, not new paragraphs.
+      if (isPresentationContinuation(block) && lines.length) {
+        lines[lines.length - 1] += block.text;
+      } else {
+        lines.push(block.text);
+      }
       continue;
     }
     if (block.type === "buttons") {
       const labels = block.buttons
-        .map((button) => {
-          if (button.disabled) {
-            return button.label;
-          }
-          const action = resolveMessagePresentationButtonAction(button);
-          if (action?.type === "url" || (action?.type === "web-app" && action.url)) {
-            return `${button.label}: ${action.url}`;
-          }
-          if (action?.type === "command") {
-            return `${button.label}: \`${action.command}\``;
-          }
-          return button.label;
-        })
+        .map(renderMessagePresentationControlFallbackLabel)
         .filter(Boolean);
       if (labels.length > 0) {
         lines.push(labels.map((label) => `- ${label}`).join("\n"));
@@ -1136,7 +1198,9 @@ export function renderMessagePresentationFallbackText(params: {
       continue;
     }
     if (block.type === "select") {
-      const labels = block.options.map((option) => option.label).filter(Boolean);
+      const labels = block.options
+        .map(renderMessagePresentationControlFallbackLabel)
+        .filter(Boolean);
       if (labels.length > 0) {
         const heading = block.placeholder ? `${block.placeholder}:` : "Options:";
         lines.push(`${heading}\n${labels.map((label) => `- ${label}`).join("\n")}`);

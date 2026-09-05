@@ -12,11 +12,11 @@ import {
   isHelpOrVersionInvocation,
   isRootHelpInvocation,
   isRootVersionInvocation,
+  isSimpleCommandHelpInvocation,
   normalizeGeneratedHelpCommandArgv,
   normalizeRootHelpTargetArgv,
   normalizeRootLogLevelArgv,
   normalizeRootNoColorArgv,
-  shouldMigrateStateFromPath,
 } from "./argv.js";
 
 describe("argv helpers", () => {
@@ -480,6 +480,31 @@ describe("argv helpers", () => {
     ).toEqual(["config", "validate"]);
   });
 
+  it("limits simple help fast paths to root options, a command, and help", () => {
+    const commands = new Set(["setup"]);
+    expect(
+      isSimpleCommandHelpInvocation(
+        ["node", "openclaw", "--profile", "work", "setup", "--help"],
+        commands,
+      ),
+    ).toBe(true);
+    expect(
+      isSimpleCommandHelpInvocation(
+        ["node", "openclaw", "setup", "--workspace", "--help"],
+        commands,
+      ),
+    ).toBe(false);
+    expect(
+      isSimpleCommandHelpInvocation(
+        ["node", "openclaw", "setup", "--profile", "work", "--help"],
+        commands,
+      ),
+    ).toBe(false);
+    expect(isSimpleCommandHelpInvocation(["node", "openclaw", "--help", "setup"], commands)).toBe(
+      false,
+    );
+  });
+
   it("extracts routed config get positionals with interleaved root options", () => {
     expect(
       getCommandPositionalsWithRootOptions(
@@ -729,44 +754,5 @@ describe("argv helpers", () => {
   ] as const)("builds parse argv from raw args: $name", ({ rawArgs, expected }) => {
     const parsed = buildParseArgv([...rawArgs]);
     expect(parsed).toEqual([...expected]);
-  });
-
-  it.each([
-    { argv: ["node", "openclaw", "status"], expected: true },
-    { argv: ["node", "openclaw", "health"], expected: false },
-    { argv: ["node", "openclaw", "sessions"], expected: false },
-    { argv: ["node", "openclaw", "--profile", "work", "status"], expected: true },
-    { argv: ["node", "openclaw", "--log-level=debug", "models", "list"], expected: true },
-    { argv: ["node", "openclaw", "config", "get", "update"], expected: false },
-    { argv: ["node", "openclaw", "config", "unset", "update"], expected: false },
-    { argv: ["node", "openclaw", "models", "list"], expected: true },
-    { argv: ["node", "openclaw", "models", "status"], expected: true },
-    { argv: ["node", "openclaw", "update", "status", "--json"], expected: false },
-    { argv: ["node", "openclaw", "gateway", "call", "health", "--json"], expected: false },
-    {
-      argv: ["node", "openclaw", "--profile", "remote", "gateway", "call", "status"],
-      expected: false,
-    },
-    { argv: ["node", "openclaw", "gateway", "status"], expected: true },
-    { argv: ["node", "openclaw", "agent", "--message", "hi"], expected: true },
-    { argv: ["node", "openclaw", "agents", "list"], expected: true },
-    { argv: ["node", "openclaw", "message", "send"], expected: true },
-  ] as const)("decides when to migrate state: $argv", ({ argv, expected }) => {
-    const commandPath = getCommandPathWithRootOptions([...argv], 2);
-    expect(shouldMigrateStateFromPath(commandPath)).toBe(expected);
-  });
-
-  it.each([
-    { path: ["status"], expected: true },
-    { path: ["update", "status"], expected: false },
-    { path: ["gateway", "call"], expected: false },
-    { path: ["gateway", "health"], expected: true },
-    { path: ["gateway", "status"], expected: true },
-    { path: ["config", "get"], expected: false },
-    { path: ["agent"], expected: true },
-    { path: ["models", "status"], expected: true },
-    { path: ["agents", "list"], expected: true },
-  ])("reuses command path for migrate state decisions: $path", ({ path, expected }) => {
-    expect(shouldMigrateStateFromPath(path)).toBe(expected);
   });
 });

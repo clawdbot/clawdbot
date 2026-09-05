@@ -1,13 +1,11 @@
 fn main() {
     link_macos_swift_runtime();
-    // Command metadata generates capability permissions independently of the
-    // target's invoke handler, so keep the Linux-only command permission known.
     const COMMANDS: &[&str] = &[
         "bootstrap",
         "build_info",
-        "canvas_a2ui_action",
         "check_for_updates",
         "connect_discovered_gateway",
+        "connect_remote_gateway",
         "discover_gateways",
         "gateway_action",
         "install_cli",

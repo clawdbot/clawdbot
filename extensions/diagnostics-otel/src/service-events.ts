@@ -17,6 +17,10 @@ type DiagnosticsEventRecorders = ReturnType<typeof createHarnessRecorders> &
   ReturnType<typeof createOperationsRecorders> &
   ReturnType<typeof createToolAndSystemRecorders> &
   ReturnType<typeof createUsageRecorders>;
+type OtelDiagnosticEventPrivateData = DiagnosticEventPrivateData &
+  Readonly<{
+    hostPluginId?: string;
+  }>;
 
 export function createDiagnosticsEventHandler(params: {
   logger: OtelLogger;
@@ -26,6 +30,8 @@ export function createDiagnosticsEventHandler(params: {
 }) {
   const { logger, recorders, recordLogRecord, recordSecurityEvent } = params;
   const {
+    recordGatewayEventLoopSample,
+    recordGatewayRpc,
     recordModelUsage,
     recordWebhookReceived,
     recordWebhookProcessed,
@@ -76,12 +82,18 @@ export function createDiagnosticsEventHandler(params: {
   return (
     evt: DiagnosticEventPayload,
     metadata: DiagnosticEventMetadata,
-    privateData: DiagnosticEventPrivateData,
+    privateData: OtelDiagnosticEventPrivateData,
   ) => {
     try {
       switch (evt.type) {
+        case "gateway.event_loop.sample":
+          recordGatewayEventLoopSample(evt, metadata);
+          return;
+        case "gateway.rpc":
+          recordGatewayRpc(evt, metadata);
+          return;
         case "model.usage":
-          recordModelUsage(evt, metadata);
+          recordModelUsage(evt, metadata, privateData.hostPluginId);
           return;
         case "webhook.received":
           recordWebhookReceived(evt);
@@ -202,7 +214,7 @@ export function createDiagnosticsEventHandler(params: {
           recordSkillUsed(evt, metadata);
           return;
         case "exec.process.completed":
-          recordExecProcessCompleted(evt);
+          recordExecProcessCompleted(evt, metadata);
           break;
         case "exec.approval.followup_suppressed":
           break;

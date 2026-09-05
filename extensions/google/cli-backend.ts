@@ -1,10 +1,5 @@
 import crypto from "node:crypto";
 import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
-import {
-  CLI_FRESH_WATCHDOG_DEFAULTS,
-  CLI_RESUME_WATCHDOG_DEFAULTS,
-} from "openclaw/plugin-sdk/cli-backend";
-
 const GEMINI_MODEL_ALIASES: Record<string, string> = {
   pro: "gemini-3.1-pro-preview",
   flash: "gemini-3.1-flash-preview",
@@ -113,9 +108,19 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
       kind: "bundled-package-tree",
       packageName: "@google/gemini-cli",
       entrypoint: "command",
+      exactToolAvailabilityVersionPolicy: {
+        stableMinimum: "0.39.1",
+        prereleaseMinimums: {
+          preview: "0.40.0-preview.3",
+          nightly: "0.41.0-nightly.20260427.g42587de73",
+        },
+      },
     },
     bundleMcp: true,
     bundleMcpMode: "gemini-system-settings",
+    // Gemini compresses and persists its native history before requests; a second
+    // compactor would require API auth outside the CLI and discard its resume binding.
+    ownsNativeCompaction: true,
     nativeToolMode: "selectable",
     toolAvailabilityEnforcement: "prepare-execution",
     authEpochMode: "profile-only",
@@ -123,15 +128,30 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
     resolveExecutionArgs: resolveGeminiCliExecutionArgs,
     prepareExecution: async (ctx) => {
       const { prepareGeminiCliExecution } = await import("./cli-backend-auth.runtime.js");
+      const privateContext = ctx as typeof ctx & {
+        authCredential?: unknown;
+        isolatedCompletionCwd?: string;
+        isolatedCompletionModelId?: string;
+        isolatedCompletionPrompt?: string;
+        isolatedCompletionSystemPrompt?: string;
+      };
       return await prepareGeminiCliExecution(
         {
           agentDir: ctx.agentDir,
           authProfileId: ctx.authProfileId,
+          workspaceDir: ctx.workspaceDir,
+          baseEnv: ctx.env,
+          isolatedCompletionCwd: privateContext.isolatedCompletionCwd,
           systemSettingsPath:
             ctx.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH ?? process.env.GEMINI_CLI_SYSTEM_SETTINGS_PATH,
           toolAvailability: ctx.toolAvailability,
+          // Gemini owns a native per-process system-prompt file. Consume the private
+          // core bridge without making isolated completion a public CLI SDK contract.
+          isolatedCompletionModelId: privateContext.isolatedCompletionModelId,
+          isolatedCompletionPrompt: privateContext.isolatedCompletionPrompt,
+          isolatedCompletionSystemPrompt: privateContext.isolatedCompletionSystemPrompt,
         },
-        (ctx as typeof ctx & { authCredential?: unknown }).authCredential,
+        privateContext.authCredential,
       );
     },
     config: {
@@ -165,12 +185,6 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
       modelAliases: GEMINI_MODEL_ALIASES,
       sessionMode: "existing",
       sessionIdFields: ["session_id", "sessionId"],
-      reliability: {
-        watchdog: {
-          fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
-          resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
-        },
-      },
       serialize: true,
     },
   };

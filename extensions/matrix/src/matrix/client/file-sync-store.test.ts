@@ -10,12 +10,9 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMatrixRuntime } from "../../runtime.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
-import {
-  openMatrixSyncCacheStoreOptions,
-  SqliteBackedMatrixSyncStore,
-  type MatrixSyncCacheRecord,
-} from "./file-sync-store.js";
+import { SqliteBackedMatrixSyncStore } from "./file-sync-store.js";
 import { openMatrixStorageMetaStoreOptions } from "./storage.js";
+import { openMatrixSyncCacheStoreOptions, type MatrixSyncCacheRecord } from "./sync-cache-state.js";
 
 function createSyncResponse(nextBatch: string): ISyncResponse {
   return {
@@ -248,6 +245,51 @@ describe("SqliteBackedMatrixSyncStore", () => {
     expect(afterNewSync.hasSavedSync()).toBe(true);
     expect(afterNewSync.hasSavedSyncFromCleanShutdown()).toBe(false);
     await expect(afterNewSync.getSavedSyncToken()).resolves.toBe("s456");
+  });
+
+  it("freezes the last admitted cursor and marks only that cursor clean", async () => {
+    const storageRoot = createStorageRoot();
+    const store = new SqliteBackedMatrixSyncStore(storageRoot);
+
+    await store.setSyncData(createSyncResponse("before-freeze"));
+    await store.freezeSyncCursorPersistence();
+    await store.setSyncData(createSyncResponse("after-freeze"));
+    store.markCleanShutdown();
+    await store.flush();
+
+    const persisted = new SqliteBackedMatrixSyncStore(storageRoot);
+    await expect(persisted.getSavedSyncToken()).resolves.toBe("before-freeze");
+    expect(persisted.hasSavedSyncFromCleanShutdown()).toBe(true);
+  });
+
+  it("waits for an in-flight pre-freeze persist before freezing the cursor", async () => {
+    const storageRoot = createStorageRoot();
+    const store = new SqliteBackedMatrixSyncStore(storageRoot);
+
+    await store.setSyncData(createSyncResponse("in-flight"));
+    const flush = store.flush();
+    const freeze = store.freezeSyncCursorPersistence();
+    await Promise.all([flush, freeze]);
+    store.markCleanShutdown();
+    await store.flush();
+
+    const persisted = new SqliteBackedMatrixSyncStore(storageRoot);
+    await expect(persisted.getSavedSyncToken()).resolves.toBe("in-flight");
+    expect(persisted.hasSavedSyncFromCleanShutdown()).toBe(true);
+  });
+
+  it("discards pending cursor writes without marking a poisoned shutdown clean", async () => {
+    const storageRoot = createStorageRoot();
+    const store = new SqliteBackedMatrixSyncStore(storageRoot);
+
+    await store.setSyncData(createSyncResponse("suspect"));
+    await store.freezeSyncCursorPersistence();
+    store.discardPendingSyncCursorPersistence();
+    await store.flush();
+
+    const persisted = new SqliteBackedMatrixSyncStore(storageRoot);
+    expect(persisted.hasSavedSync()).toBe(false);
+    expect(persisted.hasSavedSyncFromCleanShutdown()).toBe(false);
   });
 
   it("coalesces background persistence until the debounce window elapses", async () => {

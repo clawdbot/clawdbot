@@ -1,12 +1,15 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
-  interruptCodexTurnBestEffort,
+  interruptCodexTurnAndWaitBestEffort,
+  retireUnsafeCodexTurnClientBestEffort,
 } from "./attempt-client-cleanup.js";
 import {
   createCodexModelCallDiagnosticEmitter,
   utf8JsonByteLength,
 } from "./attempt-diagnostics.js";
+import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
+import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
+import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
 import type { CodexTurnStartResponse } from "./protocol.js";
 import { readCodexRateLimitsRevision } from "./rate-limit-cache.js";
@@ -30,7 +33,7 @@ export async function prepareCodexAttemptTurnRequest(
   const { runtime, attemptTools, hookContextWindowFields, workspaceBootstrapContext } = context;
   const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
     runtime;
-  const { tools } = attemptTools;
+  const { tools, toolBridge } = attemptTools;
   const {
     params,
     usesSupervisionConnection,
@@ -41,6 +44,12 @@ export async function prepareCodexAttemptTurnRequest(
     runAbortController,
   } = connection;
   const { state } = turnRuntime;
+  const explicitSkillInputs = await resolveCodexExplicitSkillInputs({
+    client: resourceState.client,
+    cwd: resourceState.codexExecutionCwd,
+    selections: runtimeParams.explicitSkillSelections,
+    signal: runAbortController.signal,
+  });
   const buildCodexModelInputMessages = () => [
     ...prompt.codexModelInputHistoryMessages,
     buildCodexUserPromptMessage({ ...runtimeParams, prompt: turnState.codexTurnPromptText }),
@@ -94,6 +103,12 @@ export async function prepareCodexAttemptTurnRequest(
       armTurn(): void;
       cancelTurn(): Promise<void>;
     };
+    // Resume may observe a newer native tuple after host auth was prepared. Keep
+    // that truthful binding, but never infer with credentials selected for the old tuple.
+    assertCodexSessionRuntimeOwnership(
+      resourceState.thread,
+      params.expectedSessionRuntimeOwnership,
+    );
     const turnAppServer = withCodexAppServerFastModeServiceTier(
       connection.mutable.pluginAppServer,
       runtimeParams,
@@ -104,8 +119,10 @@ export async function prepareCodexAttemptTurnRequest(
       cwd: resourceState.codexExecutionCwd,
       appServer: turnAppServer,
       promptText: turnState.codexTurnPromptText,
+      explicitSkillInputs,
       sandboxPolicy: resourceState.codexSandboxPolicy,
       environmentSelection: resourceState.codexEnvironmentSelection,
+      clearInheritedServiceTier: resourceState.thread.clearInheritedServiceTier,
       ...(usesSupervisionConnection
         ? {}
         : { model: resourceState.thread.model, modelProvider: resourceState.thread.modelProvider }),
@@ -113,6 +130,9 @@ export async function prepareCodexAttemptTurnRequest(
       skillsCollaborationInstructions: context.skillsCollaborationInstructions,
       memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
       preserveNativeTurnSettings: usesSupervisionConnection,
+      sessionStatusAvailable: toolBridge.availableTools.some(
+        (tool) => tool.name === "session_status",
+      ),
     });
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
     state.latestStartupErrorNotification = undefined;
@@ -123,9 +143,10 @@ export async function prepareCodexAttemptTurnRequest(
       data: {
         phase: "turn_starting",
         threadId: resourceState.thread.threadId,
-        model: turnStartParams.model,
+        model: params.modelId,
         effort: turnStartParams.effort,
         collaborationEffort: turnStartParams.collaborationMode?.settings.reasoning_effort,
+        serviceTier: turnStartParams.serviceTier,
       },
     });
     let acceptedTurnId: string | undefined;
@@ -140,13 +161,20 @@ export async function prepareCodexAttemptTurnRequest(
       throwIfTurnStartAcceptedAfterAbort();
       return startedTurn;
     } catch (error) {
-      if (acceptedTurnId) {
-        interruptCodexTurnBestEffort(resourceState.client, {
-          threadId: resourceState.thread.threadId,
-          turnId: acceptedTurnId,
-          timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
-        });
-        releaseCurrentRoute();
+      if (acceptedTurnId || isCodexAppServerIndeterminateRequestCancellationError(error)) {
+        // Codex serializes start/interrupt per thread; an empty id interrupts
+        // the accepted native turn even when local cancellation hid its response.
+        try {
+          resourceState.startupClientUnsafe = !(await interruptCodexTurnAndWaitBestEffort(
+            resourceState.client,
+            { threadId: resourceState.thread.threadId, turnId: acceptedTurnId ?? "" },
+          ));
+          if (resourceState.startupClientUnsafe) {
+            await retireUnsafeCodexTurnClientBestEffort(resourceState.client, "startup interrupt");
+          }
+        } finally {
+          releaseCurrentRoute();
+        }
       } else {
         await activeTurnRoute.cancelTurn();
       }

@@ -1,15 +1,35 @@
 // Telegram plugin module implements send harness behavior.
+import type { Bot } from "grammy";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   buildOutboundMediaLoadOptions,
-  isGifMedia,
-  kindFromMime,
   normalizePollInput,
 } from "openclaw/plugin-sdk/media-runtime";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, vi } from "vitest";
 import { markdownToTelegramHtml } from "./format.js";
 import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-block-model.js";
+
+type TelegramApiMethod = (...args: never[]) => unknown;
+type TelegramApiTestOverrides = {
+  [Key in keyof Bot["api"] as Bot["api"][Key] extends TelegramApiMethod ? Key : never]?: MockFn<
+    Extract<Bot["api"][Key], TelegramApiMethod>
+  >;
+};
+
+export function makeTelegramApiTestMock<Overrides extends TelegramApiTestOverrides>(
+  overrides: Overrides,
+): Overrides & Partial<Bot["api"]> {
+  return overrides as Overrides & Partial<Bot["api"]>;
+}
+
+export function makeTelegramInvalidApiResultMock<Key extends keyof Bot["api"]>(
+  _method: Key,
+  implementation: (...args: Parameters<Extract<Bot["api"][Key], TelegramApiMethod>>) => unknown,
+): MockFn<Extract<Bot["api"][Key], TelegramApiMethod>> {
+  return vi.fn(implementation) as ReturnType<typeof vi.fn> &
+    MockFn<Extract<Bot["api"][Key], TelegramApiMethod>>;
+}
 
 function richMessagePlainTextForTest(richMessage: {
   blocks?: InputRichBlock[];
@@ -37,6 +57,7 @@ const { botApi, botRawApi, botConfigUseSpy, botCtorSpy } = vi.hoisted(() => ({
     editMessageCaption: vi.fn(),
     editMessageText: vi.fn(),
     editMessageReplyMarkup: vi.fn(),
+    getChatMember: vi.fn(),
     pinChatMessage: vi.fn(),
     sendChatAction: vi.fn(),
     sendMessage: vi.fn(),
@@ -160,7 +181,12 @@ vi.mock("grammy", () => ({
   GrammyError: class GrammyError extends Error {
     description = "";
   },
-  InputFile: function InputFile() {},
+  InputFile: class InputFile {
+    constructor(
+      public readonly fileData: Buffer,
+      public readonly filename?: string,
+    ) {}
+  },
 }));
 
 vi.mock("undici", async () => {
@@ -188,8 +214,6 @@ vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
 vi.mock("./send.runtime.js", () => ({
   buildOutboundMediaLoadOptions,
   getImageMetadata: vi.fn(async () => ({ ...imageMetadata })),
-  isGifMedia,
-  kindFromMime,
   loadConfig,
   loadWebMedia,
   normalizePollInput,

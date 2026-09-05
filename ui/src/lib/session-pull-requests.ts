@@ -1,4 +1,7 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type {
+  ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
   ControlUiSessionPullRequestsChanged,
 } from "../../../src/gateway/control-ui-contract.js";
@@ -7,13 +10,46 @@ import {
   CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
 } from "../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
-import { normalizeAgentId, parseAgentSessionKey } from "./sessions/session-key.ts";
+import { createGatewayRetryOwner } from "./gateway-retry.ts";
+import { readSessionChangedEvent } from "./sessions/reconcile.ts";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  uiSessionEventMatches,
+} from "./sessions/session-key.ts";
+
+export function summarizeSessionPullRequests(
+  pullRequests: readonly ControlUiSessionPullRequest[],
+  previous?: SessionCatalogPullRequestSummary,
+): SessionCatalogPullRequestSummary | undefined {
+  // Keep active work ahead of newer merged/closed history, as the sidebar and PR menu do.
+  const current =
+    pullRequests.find(({ state }) => state === "open") ??
+    pullRequests.find(({ state }) => state === "draft") ??
+    pullRequests.find(({ state }) => state === "merged") ??
+    pullRequests[0];
+  if (!current) {
+    return undefined;
+  }
+  const numbers = [...new Set(pullRequests.map((pullRequest) => pullRequest.number))]
+    .slice(0, 20)
+    .toSorted((left, right) => left - right);
+  return previous?.state === current.state && previous.numbers.join(",") === numbers.join(",")
+    ? previous
+    : { numbers, state: current.state };
+}
 
 export const SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD = "controlUi.sessionPullRequests.subscribe";
 
-const SUBSCRIPTION_RETRY_BASE_MS = 30_000;
-const SUBSCRIPTION_RETRY_MAX_MS = 5 * 60_000;
+const STRUCTURAL_SESSION_REASONS = new Set<unknown>([
+  "new",
+  "reset",
+  "branch-switch",
+  "fork",
+  "rewind",
+]);
 
 export type SessionPullRequestSnapshotStore = {
   watch: (
@@ -48,9 +84,7 @@ function readChangedSessions(
     return null;
   }
   const sessions = (payload as { sessions?: unknown }).sessions;
-  return sessions && typeof sessions === "object" && !Array.isArray(sessions)
-    ? (sessions as ControlUiSessionPullRequestsChanged["sessions"])
-    : null;
+  return asNullableRecord(sessions) as ControlUiSessionPullRequestsChanged["sessions"] | null;
 }
 
 function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotStore {
@@ -63,11 +97,10 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     Set<(snapshot: ControlUiSessionPullRequestSnapshot | undefined) => void>
   >();
   const pendingRefreshKeys = new Set<string>();
-  let knownClient = gateway.snapshot.client;
+  const retry = createGatewayRetryOwner();
+  const connection = createGatewayConnectionLifecycle(gateway.snapshot);
   let lastHello: object | null = null;
   let lastSignature: string | null = null;
-  let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  let retryDelayMs = SUBSCRIPTION_RETRY_BASE_MS;
   let syncRequestGeneration = 0;
   let syncScheduled = false;
   let syncScheduleGeneration = 0;
@@ -75,16 +108,6 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   let stopGatewaySnapshots: (() => void) | null = null;
   let stopGatewayEvents: (() => void) | null = null;
   let visibilityDocument: Document | null = null;
-
-  const clearRetry = (resetDelay: boolean) => {
-    if (retryTimer !== null) {
-      globalThis.clearTimeout(retryTimer);
-      retryTimer = null;
-    }
-    if (resetDelay) {
-      retryDelayMs = SUBSCRIPTION_RETRY_BASE_MS;
-    }
-  };
 
   const notify = () => {
     for (const listener of Array.from(listeners)) {
@@ -140,14 +163,64 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
 
   const isActive = () => watchedByOwner.size > 0 || listeners.size > 0 || waiters.size > 0;
 
+  const retireConnection = () => {
+    syncRequestGeneration += 1;
+    lastHello = null;
+    lastSignature = null;
+    const hadSnapshots = snapshots.size > 0;
+    snapshots.clear();
+    for (const key of waiters.keys()) {
+      settle(key);
+    }
+    if (hadSnapshots) {
+      notify();
+    }
+  };
+
   const handleGatewaySnapshot = (snapshot: ApplicationGateway["snapshot"]) => {
-    if (snapshot.client !== knownClient || snapshot.hello !== lastHello) {
-      clearRetry(true);
+    const changed = connection.transition(snapshot);
+    if (changed) {
+      retireConnection();
+    }
+    if (changed || snapshot.hello !== lastHello) {
+      retry.reset();
       scheduleSync();
     }
   };
 
   const handleGatewayEvent: Parameters<ApplicationGateway["subscribeEvents"]>[0] = (event) => {
+    if (event.event === "sessions.changed") {
+      const changed = readSessionChangedEvent(event.payload);
+      const reason = asNullableRecord(event.payload)?.reason;
+      if (!changed || !STRUCTURAL_SESSION_REASONS.has(reason)) {
+        return;
+      }
+      const matchingKeys = watchedKeys().filter((sessionKey) =>
+        uiSessionEventMatches(
+          {
+            assistantAgentId: gateway.snapshot.assistantAgentId,
+            hello: gateway.snapshot.hello,
+            sessionKey,
+          },
+          changed.key,
+          changed.agentId,
+        ),
+      );
+      if (matchingKeys.length === 0) {
+        return;
+      }
+      let removed = false;
+      for (const sessionKey of matchingKeys) {
+        removed = snapshots.delete(sessionKey) || removed;
+        pendingRefreshKeys.add(sessionKey);
+      }
+      retry.reset();
+      if (removed) {
+        notify();
+      }
+      scheduleSync();
+      return;
+    }
     if (event.event !== CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT) {
       return;
     }
@@ -182,7 +255,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   };
 
   const handleVisibilityChange = () => {
-    clearRetry(true);
+    retry.reset();
     scheduleSync();
   };
 
@@ -191,7 +264,9 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       return;
     }
     attached = true;
-    knownClient = gateway.snapshot.client;
+    if (connection.transition(gateway.snapshot)) {
+      retireConnection();
+    }
     lastHello = null;
     lastSignature = null;
     // Active consumers own these registrations: isolate:false workers share document, so an
@@ -215,7 +290,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     stopGatewayEvents = null;
     visibilityDocument?.removeEventListener("visibilitychange", handleVisibilityChange);
     visibilityDocument = null;
-    clearRetry(true);
+    retry.reset();
     syncRequestGeneration += 1;
     syncScheduleGeneration += 1;
     syncScheduled = false;
@@ -231,14 +306,6 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     }
     const snapshot = gateway.snapshot;
     const client = snapshot.client;
-    if (snapshot.client !== knownClient) {
-      clearRetry(true);
-      knownClient = snapshot.client;
-      lastHello = null;
-      lastSignature = null;
-      snapshots.clear();
-      notify();
-    }
     const available =
       snapshot.phase === "connected" &&
       client !== null &&
@@ -259,7 +326,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       typeof document !== "undefined" && document.visibilityState === "hidden" ? [] : watchedKeys();
     const sessionKeySet = new Set(sessionKeys);
     const refreshSessionKeys = [...pendingRefreshKeys].filter((key) => sessionKeySet.has(key));
-    const signature = JSON.stringify(sessionKeys);
+    const signature = JSON.stringify(sessionKeys.toSorted());
     if (
       snapshot.hello === lastHello &&
       signature === lastSignature &&
@@ -279,7 +346,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       requestGeneration === syncRequestGeneration &&
       snapshot.hello === lastHello &&
       signature === lastSignature;
-    clearRetry(false);
+    retry.cancel();
     const request = client.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
       sessionKeys,
       ...(refreshSessionKeys.length > 0 ? { refreshSessionKeys } : {}),
@@ -293,20 +360,17 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
           for (const key of refreshSessionKeys) {
             pendingRefreshKeys.delete(key);
           }
-          retryDelayMs = SUBSCRIPTION_RETRY_BASE_MS;
+          retry.reset();
         }
       })
       .catch(() => {
         if (isCurrentRequest()) {
           lastSignature = null;
-          const delayMs = retryDelayMs;
-          retryDelayMs = Math.min(retryDelayMs * 2, SUBSCRIPTION_RETRY_MAX_MS);
-          retryTimer = globalThis.setTimeout(() => {
-            retryTimer = null;
+          retry.schedule(() => {
             if (attached && isActive()) {
               scheduleSync();
             }
-          }, delayMs);
+          });
           for (const key of sessionKeys) {
             settle(key);
           }
@@ -349,7 +413,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
     } else {
       watchedByOwner.set(owner, { keys: next, foreground: options.foreground === true });
     }
-    clearRetry(true);
+    retry.reset();
     pruneUnwatched();
     if (isActive()) {
       if (!wasActive) {
@@ -415,7 +479,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
         return;
       }
       pendingRefreshKeys.add(key);
-      clearRetry(true);
+      retry.reset();
       scheduleSync();
     },
     get: (sessionKey) => snapshots.get(sessionKey),

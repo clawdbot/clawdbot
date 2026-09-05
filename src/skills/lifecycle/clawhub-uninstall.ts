@@ -2,8 +2,13 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { normalizeTrackedSkillSlug, resolveWorkspaceSkillInstallDir } from "./archive-install.js";
-import { resolveClawHubSkillStatusLinkSync, untrackClawHubSkill } from "./clawhub.js";
+import { resolveWorkspaceSkillInstallDir } from "./archive-install.js";
+import { resolveClawHubSkillStatusLinkSync } from "./clawhub-status.js";
+import {
+  formatClawHubSkillRef,
+  parseRequestedClawHubSkillRef,
+  untrackClawHubSkill,
+} from "./clawhub-store.js";
 import {
   dispatchCommittedSkillChangeBestEffort,
   hasCommittedSkillChangeHooks,
@@ -13,6 +18,8 @@ import { digestClawHubSkillTree } from "./skill-tree-digest.js";
 
 export type ClawHubSkillUninstallPlan = {
   workspaceDir: string;
+  // Replan from the registry identity so publisher/source changes cannot retarget deletion.
+  requestedRef: string;
   slug: string;
   version: string;
   installedAt: number;
@@ -35,12 +42,26 @@ export async function planClawHubSkillUninstall(params: {
   slug: string;
   expectedVersion: string;
 }): Promise<ClawHubSkillUninstallPlanResult> {
-  let slug: string;
+  let requestedRef: ReturnType<typeof parseRequestedClawHubSkillRef>;
   try {
-    slug = normalizeTrackedSkillSlug(params.slug);
+    requestedRef = parseRequestedClawHubSkillRef(params.slug);
   } catch (error) {
     return { ok: false, code: "ambiguous", error: String(error) };
   }
+  return await planTrackedClawHubSkillState({
+    workspaceDir: params.workspaceDir,
+    requestedRef,
+    expectedVersion: params.expectedVersion,
+  });
+}
+
+export async function planTrackedClawHubSkillState(params: {
+  workspaceDir: string;
+  requestedRef: ReturnType<typeof parseRequestedClawHubSkillRef>;
+  expectedVersion: string;
+}): Promise<ClawHubSkillUninstallPlanResult> {
+  const requestedRef = params.requestedRef;
+  const slug = requestedRef.slug;
   const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, slug);
   const link = resolveClawHubSkillStatusLinkSync({
     workspaceDir: params.workspaceDir,
@@ -59,8 +80,26 @@ export async function planClawHubSkillUninstall(params: {
       ok: false,
       code: "ambiguous",
       error: link.valid
-        ? `Skill ${JSON.stringify(slug)} has no complete installed-file digest.`
+        ? `Skill ${JSON.stringify(slug)} was installed before OpenClaw recorded file fingerprints, so local changes cannot be detected.`
         : link.reason,
+    };
+  }
+  if (requestedRef.ownerHandle && link.ownerHandle !== requestedRef.ownerHandle) {
+    const trackedRef = link.ownerHandle ? `@${link.ownerHandle}/${slug}` : slug;
+    return {
+      ok: false,
+      code: "ambiguous",
+      error: `Skill ${JSON.stringify(slug)} is tracked as ${trackedRef}, not @${requestedRef.ownerHandle}/${slug}.`,
+    };
+  }
+  if (
+    requestedRef.requestedReference &&
+    link.requestedReference !== requestedRef.requestedReference
+  ) {
+    return {
+      ok: false,
+      code: "ambiguous",
+      error: `Skill ${JSON.stringify(slug)} is not tracked from ${requestedRef.requestedReference}.`,
     };
   }
   if (link.installedVersion !== params.expectedVersion) {
@@ -109,6 +148,7 @@ export async function planClawHubSkillUninstall(params: {
     ok: true,
     plan: {
       workspaceDir: params.workspaceDir,
+      requestedRef: requestedRef.requestedReference ?? formatClawHubSkillRef(requestedRef),
       slug,
       version: link.installedVersion,
       installedAt: link.installedAt,
@@ -118,6 +158,29 @@ export async function planClawHubSkillUninstall(params: {
       fileTreeSha256,
     },
   };
+}
+
+export async function checkClawHubSkillPlanAtPath(
+  plan: ClawHubSkillUninstallPlan,
+  skillDir: string,
+  readFile: typeof fs.readFile = fs.readFile,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const stat = await fs.lstat(skillDir);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during update.` };
+    }
+    const content = await readFile(path.join(skillDir, plan.skillFilePath));
+    if (
+      sha256Hex(content) !== plan.skillFileSha256 ||
+      (await digestClawHubSkillTree(skillDir)) !== plan.fileTreeSha256
+    ) {
+      return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during update.` };
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: String(error) };
+  }
 }
 
 export async function applyClawHubSkillUninstall(
@@ -131,7 +194,7 @@ export async function applyClawHubSkillUninstall(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const current = await planClawHubSkillUninstall({
     workspaceDir: plan.workspaceDir,
-    slug: plan.slug,
+    slug: plan.requestedRef,
     expectedVersion: plan.version,
   });
   if (!current.ok) {
@@ -153,12 +216,12 @@ export async function applyClawHubSkillUninstall(
   try {
     await rename(plan.targetDir, stagedDir);
     staged = true;
-    const content = await (deps.readFile ?? fs.readFile)(path.join(stagedDir, plan.skillFilePath));
-    if (sha256Hex(content) !== plan.skillFileSha256) {
-      await rename(stagedDir, plan.targetDir);
-      return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during removal.` };
-    }
-    if ((await digestClawHubSkillTree(stagedDir)) !== plan.fileTreeSha256) {
+    const stagedPlan = await checkClawHubSkillPlanAtPath(
+      plan,
+      stagedDir,
+      deps.readFile ?? fs.readFile,
+    );
+    if (!stagedPlan.ok) {
       await rename(stagedDir, plan.targetDir);
       return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during removal.` };
     }

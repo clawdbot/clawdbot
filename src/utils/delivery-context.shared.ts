@@ -12,13 +12,13 @@ import {
   normalizeChannelRouteTarget,
   type ChannelRouteRef,
 } from "../plugin-sdk/channel-route.js";
-import { normalizeAccountId } from "./account-id.js";
+import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import type { DeliveryContext } from "./delivery-context.types.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
 } from "./message-channel-constants.js";
-import { isDeliverableMessageChannel, normalizeMessageChannel } from "./message-channel-core.js";
+import { isNormalizedMessageChannel, normalizeMessageChannel } from "./message-channel-core.js";
 export type { DeliveryContext } from "./delivery-context.types.js";
 
 /**
@@ -48,13 +48,20 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
   const normalized: DeliveryContext = {
     channel: route.channel,
     to: channelRouteTarget(route),
-    accountId: normalizeAccountId(route.accountId),
+    accountId: normalizeOptionalAccountId(route.accountId),
   };
   const threadId = channelRouteThreadId(route);
   if (threadId != null) {
     normalized.threadId = threadId;
   }
   return normalized;
+}
+
+/** Checks raw channel/to presence only; does not normalize or validate deliverability. */
+export function hasDeliveryTargetFields(
+  context?: DeliveryContext,
+): context is DeliveryContext & { channel: string; to: string } {
+  return Boolean(context?.channel && context?.to);
 }
 
 /** Normalizes an unknown channel route payload from persisted session/plugin metadata. */
@@ -120,11 +127,11 @@ function isInternalRouteContext(context?: DeliveryContext): boolean {
 }
 
 function hasExternalDeliveryTarget(context?: DeliveryContext): boolean {
-  const channel = normalizeMessageChannel(context?.channel);
+  const channel = context?.channel;
   return Boolean(
     channel &&
+    isNormalizedMessageChannel(channel) &&
     !isInternalNonDeliveryChannel(channel) &&
-    isDeliverableMessageChannel(channel) &&
     context?.to,
   );
 }

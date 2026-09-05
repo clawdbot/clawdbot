@@ -1,13 +1,11 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI chat module implements message extract behavior.
 import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
-import {
-  isMeaningfulMediaFact,
-  readPersistedMediaFacts,
-} from "../../../../src/media/media-facts.js";
+import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
-import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import { extractAssistantPhaseText } from "../../../../src/shared/chat-message-content.js";
 import { stripThinkingTags } from "../strip-thinking-tags.ts";
 
 const textCache = new WeakMap<object, string | null>();
@@ -40,8 +38,7 @@ export function extractText(message: unknown): string | null {
   }
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
-  const raw =
-    role === "assistant" ? extractSharedAssistantVisibleText(message) : extractRawText(message);
+  const raw = role === "assistant" ? extractAssistantPhaseText(message) : extractRawText(message);
   if (!raw) {
     return null;
   }
@@ -70,8 +67,8 @@ function extractThinking(message: unknown): string | null {
   const parts: string[] = [];
   if (Array.isArray(content)) {
     for (const p of content) {
-      const item = p as Record<string, unknown>;
-      if (item.type === "thinking" && typeof item.thinking === "string") {
+      const item = asOptionalRecord(p);
+      if (item?.type === "thinking" && typeof item.thinking === "string") {
         const cleaned = item.thinking.trim();
         if (cleaned) {
           parts.push(cleaned);
@@ -95,7 +92,7 @@ export function extractThinkingCached(message: unknown): string | null {
   return value;
 }
 
-export function extractRawText(message: unknown): string | null {
+function extractRawText(message: unknown): string | null {
   if (message == null) {
     return null;
   }
@@ -108,8 +105,8 @@ export function extractRawText(message: unknown): string | null {
   if (Array.isArray(content)) {
     const parts = content
       .map((p) => {
-        const item = p as Record<string, unknown>;
-        if (isTextContentBlockType(item.type, role) && typeof item.text === "string") {
+        const item = asOptionalRecord(p);
+        if (item && isTextContentBlockType(item.type, role) && typeof item.text === "string") {
           return item.text;
         }
         return null;
@@ -125,22 +122,35 @@ export function extractRawText(message: unknown): string | null {
   return null;
 }
 
-function hasTranscriptMediaFacts(message: unknown): boolean {
-  return message != null && typeof message === "object"
-    ? (readPersistedMediaFacts(message) ?? []).some(isMeaningfulMediaFact)
-    : false;
-}
-
 export function readTranscriptMediaEntries(message: unknown): Array<{
+  factIndex: number;
   path: string;
   mediaType: string | undefined;
+  fileName: string | undefined;
+  sizeBytes?: number;
+  durationMs?: number;
+  width?: number;
+  height?: number;
 }> {
   if (!message || typeof message !== "object") {
     return [];
   }
-  return (readPersistedMediaFacts(message) ?? []).flatMap((fact) => {
+  return (readPersistedMediaFacts(message) ?? []).flatMap((fact, factIndex) => {
     const path = fact.path ?? fact.url;
-    return path ? [{ path, mediaType: fact.contentType ?? fact.kind }] : [];
+    return path
+      ? [
+          {
+            factIndex,
+            path,
+            mediaType: fact.contentType ?? fact.kind,
+            fileName: fact.fileName,
+            ...(fact.sizeBytes !== undefined ? { sizeBytes: fact.sizeBytes } : {}),
+            ...(fact.durationMs !== undefined ? { durationMs: fact.durationMs } : {}),
+            ...(fact.width !== undefined ? { width: fact.width } : {}),
+            ...(fact.height !== undefined ? { height: fact.height } : {}),
+          },
+        ]
+      : [];
   });
 }
 
@@ -193,7 +203,7 @@ export function isEmptyUserTextOnlyMessage(message: unknown): boolean {
   if (normalizeLowercaseStringOrEmpty(entry.role) !== "user") {
     return false;
   }
-  if (hasTranscriptMediaFacts(entry)) {
+  if (readTranscriptMediaEntries(entry).length > 0) {
     return false;
   }
   if (!isTextOnlyContent(entry.content ?? entry.text)) {

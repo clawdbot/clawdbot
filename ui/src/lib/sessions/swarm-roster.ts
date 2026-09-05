@@ -2,6 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { fetchChildSessionRows } from "./child-session-data.ts";
 import type { SessionCapability } from "./index.ts";
+import { normalizeAgentId } from "./session-key.ts";
 
 const SWARM_SESSION_PAGE_SIZE = 10_000;
 
@@ -18,17 +19,15 @@ export function isSwarmEnabledInConfig(config: unknown, agentId?: string): boole
   const globalEnabled = readSwarmEnabled(asNullableRecord(root?.tools)?.swarm);
   const agents = asNullableRecord(root?.agents);
   const entries = asNullableRecord(agents?.entries);
-  const listedEntries = Array.isArray(agents?.list)
-    ? agents.list
-    : Array.isArray(agents?.entries)
-      ? agents.entries
-      : [];
-  const listedAgent = agentId
-    ? listedEntries.map((entry) => asNullableRecord(entry)).find((entry) => entry?.id === agentId)
-    : undefined;
-  const agent = agentId ? (asNullableRecord(entries?.[agentId]) ?? listedAgent) : null;
+  const normalizedAgentId = agentId ? normalizeAgentId(agentId) : null;
+  const authoredAgentId = normalizedAgentId
+    ? Object.keys(entries ?? {}).find(
+        (candidate) => normalizeAgentId(candidate) === normalizedAgentId,
+      )
+    : null;
+  const agent = authoredAgentId ? asNullableRecord(entries?.[authoredAgentId]) : null;
   const agentEnabled = readSwarmEnabled(asNullableRecord(agent?.tools)?.swarm);
-  return agentEnabled ?? globalEnabled ?? false;
+  return agentEnabled ?? globalEnabled ?? true;
 }
 
 function isNewerSessionRow(candidate: GatewaySessionRow, current: GatewaySessionRow): boolean {
@@ -81,6 +80,7 @@ export class SwarmRosterHydrator {
   private generation = 0;
   private attemptRevision = -1;
   private attempts = 0;
+  private currentRowsByKey = new Map<string, string>();
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   update(params: SwarmHydrationParams): void {
@@ -88,7 +88,17 @@ export class SwarmRosterHydrator {
     if (this.key !== key) {
       this.reset(key);
     }
-    this.rows = mergeSwarmSessionRows(this.rows, params.currentRows());
+    const currentRows = params.currentRows();
+    const currentRowsByKey = new Map(currentRows.map((row) => [row.key, JSON.stringify(row)]));
+    // A repeated page is not a new lifecycle observation. Reapplying it can
+    // overwrite a newer child fetch whose persisted timestamp did not change.
+    this.rows = mergeSwarmSessionRows(
+      this.rows,
+      currentRows.filter(
+        (row) => this.currentRowsByKey.get(row.key) !== currentRowsByKey.get(row.key),
+      ),
+    );
+    this.currentRowsByKey = currentRowsByKey;
     params.onRows(this.rows);
     const revision = params.sessions.canonicalListRevision;
     if (this.attemptRevision !== revision) {
@@ -166,6 +176,7 @@ export class SwarmRosterHydrator {
       clearTimeout(this.timer);
     }
     this.rows = [];
+    this.currentRowsByKey.clear();
     this.key = key;
     this.revision = -1;
     this.generation += 1;

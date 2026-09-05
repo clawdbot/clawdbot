@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { addStaticTestHooks, addTestHook } from "./hooks.test-fixtures.js";
-import { createEmptyPluginRegistry } from "./registry.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginHookResolveExecEnvContext } from "./types.js";
 
 const ctx: PluginHookResolveExecEnvContext = {

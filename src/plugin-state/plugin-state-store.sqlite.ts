@@ -1,6 +1,7 @@
 // Plugin state SQLite helpers persist plugin state in the OpenClaw state database.
 import type { DatabaseSync } from "node:sqlite";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { Insertable, Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -8,7 +9,17 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
+import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import {
+  isSqliteCorruptionError,
+  runSqliteImmediateTransactionSync,
+} from "../infra/sqlite-transaction.js";
+import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import {
+  hasOpenClawStateTablesBeyondStartupCheckpoint,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -29,8 +40,11 @@ import {
 } from "./plugin-state-store.types.js";
 
 // Plugin-wide fuse only; namespace maxEntries still owns normal cache eviction.
-export const MAX_PLUGIN_STATE_VALUE_BYTES = 65_536;
+export const MAX_PLUGIN_STATE_VALUE_BYTES = 1_048_576;
 export const MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN = 50_000;
+export const MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES = 512;
+const PLUGIN_STATE_EXPIRY_BATCH_ROWS = 1_024;
+export const PLUGIN_STATE_DOCTOR_IMPORT_BATCH_ROWS = 500;
 let maxPluginStateEntriesPerPluginForTests: number | undefined;
 
 type PluginStateEntriesTable = OpenClawStateKyselyDatabase["plugin_state_entries"];
@@ -38,8 +52,10 @@ type PluginStateStoreDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_
 
 type PluginStateRow = Selectable<PluginStateEntriesTable>;
 
-type CountRow = {
-  count: number | bigint;
+export type PluginDoctorRawStateEntry = Omit<PluginStateEntry<unknown>, "value" | "expiresAt"> & {
+  valueJson: string;
+  value?: unknown;
+  expiresAt: number | null;
 };
 
 type PluginStateDatabase = {
@@ -55,8 +71,6 @@ type PluginStateSeedEntryForTests = {
   createdAt?: number;
   expiresAt?: number | null;
 };
-
-let cachedDatabase: PluginStateDatabase | null = null;
 
 function createPluginStateError(params: {
   code: PluginStateStoreErrorCode;
@@ -104,10 +118,22 @@ function wrapPluginStateError(
   if (error instanceof PluginStateStoreError) {
     return error;
   }
+  let publicMessage = message;
+  // Only owner-classified failures get public hints. Cause messages can contain
+  // database paths, SQL, or stored values and must stay out of this message.
+  if (fallbackCode === "PLUGIN_STATE_OPEN_FAILED") {
+    if (isSqliteSchemaVersionError(error)) {
+      publicMessage +=
+        "\nThe state database uses a newer schema. Run an OpenClaw build that supports it.";
+    } else if (error instanceof Error && isTerminalSqliteIntegrityError(error)) {
+      publicMessage +=
+        "\nDatabase integrity verification failed. Restore or repair the state database, then run openclaw doctor --fix.";
+    }
+  }
   return createPluginStateError({
     code: fallbackCode,
     operation,
-    message,
+    message: publicMessage,
     path: pathname,
     cause: error,
   });
@@ -264,19 +290,39 @@ function deletePluginStateEntry(
   return Number(result.numAffectedRows ?? 0);
 }
 
-function deleteExpiredPluginStateNamespaceEntries(
+function deleteExpiredPluginStateEntries(
   db: DatabaseSync,
-  params: { pluginId: string; namespace: string; now: number },
-): void {
-  executeSqliteQuerySync(
+  now: number,
+  scope?: { pluginId: string; namespace: string },
+): number {
+  const kysely = getPluginStateKysely(db);
+  let expiredEntries = kysely
+    .selectFrom("plugin_state_entries")
+    .select(["plugin_id", "namespace", "entry_key"])
+    .where("expires_at", "is not", null)
+    .where("expires_at", "<=", now);
+  // Global expiry ordering uses its index; namespace scans must stay unsorted
+  // so SQLite never builds an unbounded temporary sort under the write lock.
+  expiredEntries = scope
+    ? expiredEntries
+        .where("plugin_id", "=", scope.pluginId)
+        .where("namespace", "=", scope.namespace)
+    : expiredEntries.orderBy("expires_at", "asc");
+  const result = executeSqliteQuerySync(
     db,
-    getPluginStateKysely(db)
+    kysely
       .deleteFrom("plugin_state_entries")
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where("expires_at", "is not", null)
-      .where("expires_at", "<=", params.now),
+      .where((expression) =>
+        expression(
+          expression.refTuple("plugin_id", "namespace", "entry_key"),
+          "in",
+          expiredEntries
+            .limit(PLUGIN_STATE_EXPIRY_BATCH_ROWS)
+            .$asTuple("plugin_id", "namespace", "entry_key"),
+        ),
+      ),
   );
+  return Number(result.numAffectedRows ?? 0);
 }
 
 function countLivePluginStateNamespaceEntries(
@@ -292,7 +338,7 @@ function countLivePluginStateNamespaceEntries(
       .where("namespace", "=", params.namespace)
       .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
   );
-  return countRow(row);
+  return coerceRequiredSqliteNumber(row?.count ?? 0);
 }
 
 function allocatePluginStateNamespaceCreatedAt(
@@ -327,13 +373,13 @@ function countLivePluginStateEntries(
       .where("plugin_id", "=", params.pluginId)
       .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
   );
-  return countRow(row);
+  return coerceRequiredSqliteNumber(row?.count ?? 0);
 }
 
 function deleteOldestPluginStateNamespaceEntries(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; protectedKey: string; now: number; limit: number },
-): void {
+): number {
   const keys = executeSqliteQuerySync(
     db,
     getPluginStateKysely(db)
@@ -354,17 +400,7 @@ function deleteOldestPluginStateNamespaceEntries(
       key: row.entry_key,
     });
   }
-}
-
-function sweepExpiredPluginStateEntriesFromDatabase(db: DatabaseSync, now: number): number {
-  const result = executeSqliteQuerySync(
-    db,
-    getPluginStateKysely(db)
-      .deleteFrom("plugin_state_entries")
-      .where("expires_at", "is not", null)
-      .where("expires_at", "<=", now),
-  );
-  return Number(result.numAffectedRows ?? 0);
+  return keys.length;
 }
 
 function openPluginStateDatabase(
@@ -373,20 +409,8 @@ function openPluginStateDatabase(
 ): PluginStateDatabase {
   const env = options.env ?? process.env;
   const pathname = resolveOpenClawStateSqlitePath(env);
-  if (cachedDatabase && cachedDatabase.path === pathname && cachedDatabase.db.isOpen) {
-    return cachedDatabase;
-  }
-  if (cachedDatabase && !cachedDatabase.db.isOpen) {
-    cachedDatabase = null;
-  }
-
   try {
-    const database = openOpenClawStateDatabase(options);
-    cachedDatabase = {
-      db: database.db,
-      path: database.path,
-    };
-    return cachedDatabase;
+    return openOpenClawStateDatabase(options);
   } catch (error) {
     throw wrapPluginStateError(
       error,
@@ -398,9 +422,50 @@ function openPluginStateDatabase(
   }
 }
 
-function countRow(row: CountRow | undefined): number {
-  const raw = row?.count ?? 0;
-  return typeof raw === "bigint" ? Number(raw) : raw;
+function isMissingPluginStateTableError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as NodeJS.ErrnoException).code === "ERR_SQLITE_ERROR" &&
+    error.message === "no such table: plugin_state_entries"
+  );
+}
+
+/** Read plugin state without joining the shared writable database lifecycle. */
+function withPluginStateDatabaseReadOnly<T>(
+  operationName: PluginStateStoreOperation,
+  operation: (store: PluginStateDatabase) => T,
+  options: OpenClawStateDatabaseOptions = {},
+): T | undefined {
+  const pathname = resolveOpenClawStateSqlitePath(options.env ?? process.env);
+  let operationStarted = false;
+  try {
+    return withExistingOpenClawStateDatabaseReadOnly(({ db, path }) => {
+      operationStarted = true;
+      try {
+        return operation({ db, path });
+      } catch (error) {
+        if (isMissingPluginStateTableError(error)) {
+          // The lease bootstrap creates exactly schema_meta + state_leases before the first write;
+          // any other table means the missing plugin-state table is damage, not fresh state.
+          if (!hasOpenClawStateTablesBeyondStartupCheckpoint(db)) {
+            return undefined;
+          }
+        }
+        throw error;
+      }
+    }, options);
+  } catch (error) {
+    if (!operationStarted) {
+      throw wrapPluginStateError(
+        error,
+        operationName,
+        "PLUGIN_STATE_OPEN_FAILED",
+        "Failed to open the plugin state database.",
+        pathname,
+      );
+    }
+    throw error;
+  }
 }
 
 function envOptions(env?: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
@@ -412,11 +477,48 @@ function runWriteTransaction<T>(
   write: (store: PluginStateDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
 ): T {
-  const store = openPluginStateDatabase(operation, options);
-  return runOpenClawStateWriteTransaction(() => {
-    const result = write(store);
-    return result;
-  }, options);
+  // Only cold acquisition failures are open errors. A held owner's ownership or
+  // transaction failure must remain a write error, with its callback supplying the handle.
+  if (!isOpenClawStateDatabaseOpen(resolveOpenClawStateSqlitePath(options.env ?? process.env))) {
+    openPluginStateDatabase(operation, options);
+  }
+  return runOpenClawStateWriteTransaction(write, options);
+}
+
+type PluginStateRetention = {
+  namespaceCount: number;
+  pluginCount: number;
+  nextExpiry: number;
+  now: number;
+  sweepPending: boolean;
+};
+
+function readPluginStateRetention(
+  db: DatabaseSync,
+  params: { pluginId: string; namespace: string; now: number },
+): PluginStateRetention {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getPluginStateKysely(db)
+      .selectFrom("plugin_state_entries")
+      .select((eb) => [
+        eb.fn.countAll<number | bigint>().as("plugin_count"),
+        eb.fn
+          .countAll<number | bigint>()
+          .filterWhere("namespace", "=", params.namespace)
+          .as("namespace_count"),
+        eb.fn.min<number | bigint | null>("expires_at").as("next_expiry"),
+      ])
+      .where("plugin_id", "=", params.pluginId)
+      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
+  );
+  return {
+    namespaceCount: coerceRequiredSqliteNumber(row?.namespace_count ?? 0),
+    pluginCount: coerceRequiredSqliteNumber(row?.plugin_count ?? 0),
+    nextExpiry: normalizeSqliteNumber(row?.next_expiry ?? null) ?? Infinity,
+    now: params.now,
+    sweepPending: true,
+  };
 }
 
 function enforcePostRegisterLimits(params: {
@@ -426,35 +528,44 @@ function enforcePostRegisterLimits(params: {
   maxEntries: number;
   overflowPolicy: PluginStateOverflowPolicy;
   now: number;
+  retention?: PluginStateRetention;
   protectedKey: string;
   enforcePluginLimit?: boolean;
 }): void {
   if (params.overflowPolicy === "reject-new") {
     return;
   }
-  const namespaceCount = countLivePluginStateNamespaceEntries(params.store.db, {
-    pluginId: params.pluginId,
-    namespace: params.namespace,
-    now: params.now,
-  });
+  const namespaceCount =
+    params.retention?.namespaceCount ??
+    countLivePluginStateNamespaceEntries(params.store.db, {
+      pluginId: params.pluginId,
+      namespace: params.namespace,
+      now: params.now,
+    });
   if (namespaceCount > params.maxEntries) {
-    deleteOldestPluginStateNamespaceEntries(params.store.db, {
+    const deleted = deleteOldestPluginStateNamespaceEntries(params.store.db, {
       pluginId: params.pluginId,
       namespace: params.namespace,
       protectedKey: params.protectedKey,
       now: params.now,
       limit: namespaceCount - params.maxEntries,
     });
+    if (params.retention) {
+      params.retention.namespaceCount -= deleted;
+      params.retention.pluginCount -= deleted;
+    }
   }
 
   if (params.enforcePluginLimit === false) {
     return;
   }
 
-  const pluginCount = countLivePluginStateEntries(params.store.db, {
-    pluginId: params.pluginId,
-    now: params.now,
-  });
+  const pluginCount =
+    params.retention?.pluginCount ??
+    countLivePluginStateEntries(params.store.db, {
+      pluginId: params.pluginId,
+      now: params.now,
+    });
   const maxPluginEntries = resolveMaxPluginStateEntriesPerPlugin();
   if (pluginCount <= maxPluginEntries) {
     return;
@@ -463,17 +574,23 @@ function enforcePostRegisterLimits(params: {
   // Shed only rows from the namespace that grew. Sibling namespaces can hold
   // durable state; if this namespace cannot cover the overflow, fail so the
   // surrounding transaction rolls every insertion and deletion back.
-  deleteOldestPluginStateNamespaceEntries(params.store.db, {
+  const deleted = deleteOldestPluginStateNamespaceEntries(params.store.db, {
     pluginId: params.pluginId,
     namespace: params.namespace,
     protectedKey: params.protectedKey,
     now: params.now,
     limit: pluginCount - maxPluginEntries,
   });
-  const remainingPluginCount = countLivePluginStateEntries(params.store.db, {
-    pluginId: params.pluginId,
-    now: params.now,
-  });
+  if (params.retention) {
+    params.retention.namespaceCount -= deleted;
+    params.retention.pluginCount -= deleted;
+  }
+  const remainingPluginCount =
+    params.retention?.pluginCount ??
+    countLivePluginStateEntries(params.store.db, {
+      pluginId: params.pluginId,
+      now: params.now,
+    });
   if (remainingPluginCount > maxPluginEntries) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_LIMIT_EXCEEDED",
@@ -491,15 +608,18 @@ function assertCanInsertPluginStateEntry(params: {
   maxEntries: number;
   overflowPolicy: PluginStateOverflowPolicy;
   now: number;
+  retention?: PluginStateRetention;
 }): void {
   if (params.overflowPolicy !== "reject-new") {
     return;
   }
-  const namespaceCount = countLivePluginStateNamespaceEntries(params.store.db, {
-    pluginId: params.pluginId,
-    namespace: params.namespace,
-    now: params.now,
-  });
+  const namespaceCount =
+    params.retention?.namespaceCount ??
+    countLivePluginStateNamespaceEntries(params.store.db, {
+      pluginId: params.pluginId,
+      namespace: params.namespace,
+      now: params.now,
+    });
   if (namespaceCount >= params.maxEntries) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_LIMIT_EXCEEDED",
@@ -509,10 +629,12 @@ function assertCanInsertPluginStateEntry(params: {
     });
   }
   const maxPluginEntries = resolveMaxPluginStateEntriesPerPlugin();
-  const pluginCount = countLivePluginStateEntries(params.store.db, {
-    pluginId: params.pluginId,
-    now: params.now,
-  });
+  const pluginCount =
+    params.retention?.pluginCount ??
+    countLivePluginStateEntries(params.store.db, {
+      pluginId: params.pluginId,
+      now: params.now,
+    });
   if (pluginCount >= maxPluginEntries) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_LIMIT_EXCEEDED",
@@ -527,7 +649,7 @@ export function resolveMaxPluginStateEntriesPerPlugin(): number {
   return maxPluginStateEntriesPerPluginForTests ?? MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN;
 }
 
-export function pluginStateRegister(params: {
+type PluginStateRegisterParams = {
   pluginId: string;
   namespace: string;
   key: string;
@@ -539,62 +661,141 @@ export function pluginStateRegister(params: {
   // legacy rows must keep their original age instead of the import time.
   createdAtMs?: number;
   env?: NodeJS.ProcessEnv;
-}): void {
+};
+
+function registerPluginStateEntry(
+  store: PluginStateDatabase,
+  params: PluginStateRegisterParams,
+  retention?: PluginStateRetention,
+): void {
+  const now = Date.now();
+  const expiresAt = resolvePluginStateExpiresAtMs({
+    ttlMs: params.ttlMs,
+    now,
+    operation: "register",
+    path: store.path,
+  });
+  // Counts belong to this transaction. Expiry (including sibling rows) or a
+  // backward clock invalidates them; ordinary writes update them incrementally.
+  if (retention && (now < retention.now || now >= retention.nextExpiry)) {
+    Object.assign(retention, readPluginStateRetention(store.db, { ...params, now }));
+  }
+  if (!retention || retention.sweepPending) {
+    const deleted = deleteExpiredPluginStateEntries(store.db, now, params);
+    if (retention) {
+      retention.sweepPending = deleted === PLUGIN_STATE_EXPIRY_BATCH_ROWS;
+    }
+  }
+  const existing = selectPluginStateEntry(store.db, {
+    pluginId: params.pluginId,
+    namespace: params.namespace,
+    key: params.key,
+    now,
+  });
+  if (!existing) {
+    assertCanInsertPluginStateEntry({
+      store,
+      pluginId: params.pluginId,
+      namespace: params.namespace,
+      maxEntries: params.maxEntries,
+      overflowPolicy: params.overflowPolicy,
+      now,
+      retention,
+    });
+  }
+  upsertPluginStateEntry(
+    store.db,
+    bindPluginStateEntry({
+      pluginId: params.pluginId,
+      namespace: params.namespace,
+      key: params.key,
+      valueJson: params.valueJson,
+      createdAt: params.createdAtMs ?? now,
+      expiresAt,
+    }),
+  );
+  if (retention) {
+    if (!existing) {
+      retention.namespaceCount += 1;
+      retention.pluginCount += 1;
+    }
+    retention.nextExpiry = Math.min(retention.nextExpiry, expiresAt ?? Infinity);
+    retention.now = now;
+  }
+  enforcePostRegisterLimits({
+    store,
+    pluginId: params.pluginId,
+    namespace: params.namespace,
+    maxEntries: params.maxEntries,
+    overflowPolicy: params.overflowPolicy,
+    now,
+    protectedKey: params.key,
+    retention,
+  });
+}
+
+export function pluginStateRegister(params: PluginStateRegisterParams): void {
   try {
     runWriteTransaction(
       "register",
-      (store) => {
-        const now = Date.now();
-        const expiresAt = resolvePluginStateExpiresAtMs({
-          ttlMs: params.ttlMs,
-          now,
-          operation: "register",
-          path: store.path,
-        });
-        deleteExpiredPluginStateNamespaceEntries(store.db, {
-          pluginId: params.pluginId,
-          namespace: params.namespace,
-          now,
-        });
-        const existing = selectPluginStateEntry(store.db, {
-          pluginId: params.pluginId,
-          namespace: params.namespace,
-          key: params.key,
-          now,
-        });
-        if (!existing) {
-          assertCanInsertPluginStateEntry({
-            store,
-            pluginId: params.pluginId,
-            namespace: params.namespace,
-            maxEntries: params.maxEntries,
-            overflowPolicy: params.overflowPolicy,
-            now,
-          });
+      (store) => registerPluginStateEntry(store, params),
+      envOptions(params.env),
+    );
+  } catch (error) {
+    throw wrapPluginStateError(
+      error,
+      "register",
+      "PLUGIN_STATE_WRITE_FAILED",
+      "Failed to register plugin state entry.",
+    );
+  }
+}
+
+/** Prepared doctor rows only: validation and plugin-owned accessors run before BEGIN. */
+export function pluginStateImportBatch(
+  params: Pick<
+    PluginStateRegisterParams,
+    "pluginId" | "namespace" | "maxEntries" | "overflowPolicy" | "env"
+  >,
+  entries: readonly Pick<
+    PluginStateRegisterParams,
+    "key" | "valueJson" | "createdAtMs" | "ttlMs"
+  >[],
+): void {
+  if (entries.length === 0) {
+    return;
+  }
+  if (entries.length > PLUGIN_STATE_DOCTOR_IMPORT_BATCH_ROWS) {
+    throw new RangeError("Plugin state doctor import batch exceeds its row limit");
+  }
+  try {
+    const result = runWriteTransaction(
+      "register",
+      (store): Result<void, unknown> => {
+        const retention = readPluginStateRetention(store.db, { ...params, now: Date.now() });
+        for (const entry of entries) {
+          try {
+            // A row can evict before failing. Roll back only that row, then commit
+            // the successful prefix before reporting failure so Doctor can resume.
+            runSqliteImmediateTransactionSync(store.db, () =>
+              registerPluginStateEntry(store, { ...params, ...entry }, retention),
+            );
+          } catch (error) {
+            // Corruption must reach the shared database owner so it evicts the
+            // damaged handle; an unsafe transaction cannot commit its prefix.
+            if (isSqliteCorruptionError(error)) {
+              throw error;
+            }
+            return err(error);
+          }
         }
-        upsertPluginStateEntry(
-          store.db,
-          bindPluginStateEntry({
-            pluginId: params.pluginId,
-            namespace: params.namespace,
-            key: params.key,
-            valueJson: params.valueJson,
-            createdAt: params.createdAtMs ?? now,
-            expiresAt,
-          }),
-        );
-        enforcePostRegisterLimits({
-          store,
-          pluginId: params.pluginId,
-          namespace: params.namespace,
-          maxEntries: params.maxEntries,
-          overflowPolicy: params.overflowPolicy,
-          now,
-          protectedKey: params.key,
-        });
+        return ok(undefined);
       },
       envOptions(params.env),
     );
+    if (!result.ok) {
+      throw result.error;
+    }
   } catch (error) {
     throw wrapPluginStateError(
       error,
@@ -626,15 +827,13 @@ export function pluginStateRegisterSequencedJournalEntry(params: {
       "register",
       (store) => {
         const now = Date.now();
-        deleteExpiredPluginStateNamespaceEntries(store.db, {
+        deleteExpiredPluginStateEntries(store.db, now, {
           pluginId: params.pluginId,
           namespace: params.cursorNamespace,
-          now,
         });
-        deleteExpiredPluginStateNamespaceEntries(store.db, {
+        deleteExpiredPluginStateEntries(store.db, now, {
           pluginId: params.pluginId,
           namespace: params.journalNamespace,
-          now,
         });
         const cursor = selectPluginStateEntry(store.db, {
           pluginId: params.pluginId,
@@ -761,10 +960,9 @@ export function pluginStateRegisterIfAbsent(params: {
           operation: "register",
           path: store.path,
         });
-        deleteExpiredPluginStateNamespaceEntries(store.db, {
+        deleteExpiredPluginStateEntries(store.db, now, {
           pluginId: params.pluginId,
           namespace: params.namespace,
-          now,
         });
         const existing = selectPluginStateEntry(store.db, {
           pluginId: params.pluginId,
@@ -775,6 +973,9 @@ export function pluginStateRegisterIfAbsent(params: {
         if (existing) {
           return false;
         }
+        // The exact expired key can lie beyond this namespace's cleanup batch.
+        // Reclaim it inside the same authoritative transaction before insertion.
+        deletePluginStateEntry(store.db, params);
         assertCanInsertPluginStateEntry({
           store,
           pluginId: params.pluginId,
@@ -834,10 +1035,9 @@ export function pluginStateUpdate(params: {
       "register",
       (store) => {
         const now = Date.now();
-        deleteExpiredPluginStateNamespaceEntries(store.db, {
+        deleteExpiredPluginStateEntries(store.db, now, {
           pluginId: params.pluginId,
           namespace: params.namespace,
-          now,
         });
         const existing = selectPluginStateEntry(store.db, {
           pluginId: params.pluginId,
@@ -907,21 +1107,28 @@ export function pluginStateLookup(params: {
   key: string;
   env?: NodeJS.ProcessEnv;
 }): unknown {
+  const pathname = resolveOpenClawStateSqlitePath(params.env ?? process.env);
   try {
-    const { db } = openPluginStateDatabase("lookup", envOptions(params.env));
-    const row = selectPluginStateEntry(db, {
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      key: params.key,
-      now: Date.now(),
-    });
-    return row ? parseStoredJson(row.value_json, "lookup") : undefined;
+    return withPluginStateDatabaseReadOnly(
+      "lookup",
+      ({ db }) => {
+        const row = selectPluginStateEntry(db, {
+          pluginId: params.pluginId,
+          namespace: params.namespace,
+          key: params.key,
+          now: Date.now(),
+        });
+        return row ? parseStoredJson(row.value_json, "lookup") : undefined;
+      },
+      envOptions(params.env),
+    );
   } catch (error) {
     throw wrapPluginStateError(
       error,
       "lookup",
       "PLUGIN_STATE_READ_FAILED",
       "Failed to read plugin state entry.",
+      pathname,
     );
   }
 }
@@ -1018,31 +1225,135 @@ export function pluginStateDeleteIf(params: {
   }
 }
 
+/** Deletes one bounded set of exact observed rows in a single synchronous transaction. */
+export function pluginStateDeleteEntriesIfUnchanged(params: {
+  pluginId: string;
+  namespace: string;
+  entries: readonly PluginDoctorRawStateEntry[];
+  assertOwnedInTransaction: (database: DatabaseSync) => void;
+  env?: NodeJS.ProcessEnv;
+}): { deleted: number; changed: number } {
+  if (params.entries.length > MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES) {
+    throw new RangeError(
+      `Plugin state bulk deletion cannot exceed ${MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES} entries.`,
+    );
+  }
+  if (params.entries.length === 0) {
+    return { deleted: 0, changed: 0 };
+  }
+  // Copy plugin-visible envelopes before BEGIN; no plugin-owned accessors run in the transaction.
+  const observed = params.entries.map(({ value: _value, ...entry }) => entry);
+  return runWriteTransaction(
+    "delete",
+    ({ db }) => {
+      params.assertOwnedInTransaction(db);
+      let deleted = 0;
+      for (const entry of observed) {
+        let query = getPluginStateKysely(db)
+          .deleteFrom("plugin_state_entries")
+          .where("plugin_id", "=", params.pluginId)
+          .where("namespace", "=", params.namespace)
+          .where("entry_key", "=", entry.key)
+          .where("value_json", "=", entry.valueJson)
+          .where("created_at", "=", entry.createdAt);
+        query =
+          entry.expiresAt === null
+            ? query.where("expires_at", "is", null)
+            : query.where("expires_at", "=", entry.expiresAt);
+        deleted += Number(executeSqliteQuerySync(db, query).numAffectedRows ?? 0);
+      }
+      return { deleted, changed: observed.length - deleted };
+    },
+    envOptions(params.env),
+  );
+}
+
+/** Doctor-only bounded raw read keeps malformed rows visible and preserves exact CAS bytes. */
+export function pluginStateDoctorEntriesInKeyRange(params: {
+  pluginId: string;
+  namespace: string;
+  prefix: string;
+  after?: string;
+  limit: number;
+  env?: NodeJS.ProcessEnv;
+}): PluginDoctorRawStateEntry[] {
+  if (
+    !params.prefix ||
+    !Number.isSafeInteger(params.limit) ||
+    params.limit < 1 ||
+    params.limit > MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES ||
+    (params.after !== undefined && !params.after.startsWith(params.prefix))
+  ) {
+    throw new RangeError(
+      `Plugin doctor state reads require a valid prefix and a limit of 1-${MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES}.`,
+    );
+  }
+  return readPluginStateRowsInKeyRange(
+    {
+      ...params,
+      keyStartInclusive: params.after === undefined ? params.prefix : `${params.after}\0`,
+      keyEndExclusive: `${params.prefix}\uffff`,
+    },
+    (row): PluginDoctorRawStateEntry => {
+      const createdAt = normalizeSqliteNumber(row.created_at);
+      const expiresAt = normalizeSqliteNumber(row.expires_at);
+      const entry: PluginDoctorRawStateEntry = {
+        key: row.entry_key,
+        valueJson: row.value_json,
+        createdAt: createdAt ?? 0,
+        expiresAt: expiresAt ?? null,
+      };
+      if (
+        !Number.isSafeInteger(createdAt) ||
+        (createdAt ?? -1) < 0 ||
+        (row.expires_at !== null && !Number.isSafeInteger(expiresAt))
+      ) {
+        return entry;
+      }
+      try {
+        entry.value = JSON.parse(row.value_json) as unknown;
+      } catch {
+        // Keep corrupt rows in the page so Doctor can advance past them safely.
+      }
+      return entry;
+    },
+  );
+}
+
 export function pluginStateEntries(params: {
   pluginId: string;
   namespace: string;
   env?: NodeJS.ProcessEnv;
 }): PluginStateEntry<unknown>[] {
+  const pathname = resolveOpenClawStateSqlitePath(params.env ?? process.env);
   try {
-    const { db } = openPluginStateDatabase("entries", envOptions(params.env));
-    const rows = selectPluginStateEntries(db, {
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      now: Date.now(),
-    });
-    return rows.map((row) => rowToEntry(row, "entries"));
+    return (
+      withPluginStateDatabaseReadOnly(
+        "entries",
+        ({ db }) => {
+          const rows = selectPluginStateEntries(db, {
+            pluginId: params.pluginId,
+            namespace: params.namespace,
+            now: Date.now(),
+          });
+          return rows.map((row) => rowToEntry(row, "entries"));
+        },
+        envOptions(params.env),
+      ) ?? []
+    );
   } catch (error) {
     throw wrapPluginStateError(
       error,
       "entries",
       "PLUGIN_STATE_READ_FAILED",
       "Failed to list plugin state entries.",
+      pathname,
     );
   }
 }
 
 /** Internal bounded key-range read for core owners with sortable plugin-state keys. */
-export function pluginStateEntriesInKeyRange(params: {
+type PluginStateKeyRangeParams = {
   pluginId: string;
   namespace: string;
   keyStartInclusive: string;
@@ -1050,7 +1361,18 @@ export function pluginStateEntriesInKeyRange(params: {
   limit: number;
   order?: "asc" | "desc";
   env?: NodeJS.ProcessEnv;
-}): PluginStateEntry<unknown>[] {
+};
+
+export function pluginStateEntriesInKeyRange(
+  params: PluginStateKeyRangeParams,
+): PluginStateEntry<unknown>[] {
+  return readPluginStateRowsInKeyRange(params, (row) => rowToEntry(row, "entries"));
+}
+
+function readPluginStateRowsInKeyRange<T>(
+  params: PluginStateKeyRangeParams,
+  mapRow: (row: PluginStateRow) => T,
+): T[] {
   if (!Number.isSafeInteger(params.limit) || params.limit < 1) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_INVALID_INPUT",
@@ -1065,23 +1387,31 @@ export function pluginStateEntriesInKeyRange(params: {
       message: "Plugin state key range must have an increasing exclusive upper bound.",
     });
   }
+  const pathname = resolveOpenClawStateSqlitePath(params.env ?? process.env);
   try {
-    const { db } = openPluginStateDatabase("entries", envOptions(params.env));
-    return selectPluginStateEntriesInKeyRange(db, {
-      pluginId: params.pluginId,
-      namespace: params.namespace,
-      keyStartInclusive: params.keyStartInclusive,
-      keyEndExclusive: params.keyEndExclusive,
-      limit: params.limit,
-      order: params.order ?? "asc",
-      now: Date.now(),
-    }).map((row) => rowToEntry(row, "entries"));
+    return (
+      withPluginStateDatabaseReadOnly(
+        "entries",
+        ({ db }) =>
+          selectPluginStateEntriesInKeyRange(db, {
+            pluginId: params.pluginId,
+            namespace: params.namespace,
+            keyStartInclusive: params.keyStartInclusive,
+            keyEndExclusive: params.keyEndExclusive,
+            limit: params.limit,
+            order: params.order ?? "asc",
+            now: Date.now(),
+          }).map(mapRow),
+        envOptions(params.env),
+      ) ?? []
+    );
   } catch (error) {
     throw wrapPluginStateError(
       error,
       "entries",
       "PLUGIN_STATE_READ_FAILED",
       "Failed to list plugin state entries by key range.",
+      pathname,
     );
   }
 }
@@ -1118,7 +1448,7 @@ export function pluginStateClear(params: {
 export function sweepExpiredPluginStateEntries(): number {
   try {
     return runWriteTransaction("sweep", ({ db }) =>
-      sweepExpiredPluginStateEntriesFromDatabase(db, Date.now()),
+      deleteExpiredPluginStateEntries(db, Date.now()),
     );
   } catch (error) {
     throw wrapPluginStateError(
@@ -1128,10 +1458,6 @@ export function sweepExpiredPluginStateEntries(): number {
       "Failed to sweep expired plugin state entries.",
     );
   }
-}
-
-export function isPluginStateDatabaseOpen(): boolean {
-  return cachedDatabase?.db.isOpen === true;
 }
 
 export function clearPluginStateDatabaseForTests(): void {
@@ -1147,15 +1473,22 @@ function setMaxPluginStateEntriesPerPluginForTests(value?: number): void {
 }
 
 export function countPluginStateLiveEntries(pluginId: string, env?: NodeJS.ProcessEnv): number {
+  const pathname = resolveOpenClawStateSqlitePath(env ?? process.env);
   try {
-    const { db } = openPluginStateDatabase("entries", envOptions(env));
-    return countLivePluginStateEntries(db, { pluginId, now: Date.now() });
+    return (
+      withPluginStateDatabaseReadOnly(
+        "entries",
+        ({ db }) => countLivePluginStateEntries(db, { pluginId, now: Date.now() }),
+        envOptions(env),
+      ) ?? 0
+    );
   } catch (error) {
     throw wrapPluginStateError(
       error,
       "entries",
       "PLUGIN_STATE_READ_FAILED",
       "Failed to count plugin state entries.",
+      pathname,
     );
   }
 }
@@ -1198,7 +1531,6 @@ function seedPluginStateDatabaseEntriesForTests(
 function probePluginStateStore(): PluginStateStoreProbeResult {
   const databasePath = resolveOpenClawStateSqlitePath(process.env);
   const steps: PluginStateStoreProbeStep[] = [];
-  const wasOpen = cachedDatabase !== null;
   const stateWasOpen = isOpenClawStateDatabaseOpen();
 
   const pushOk = (name: string) => steps.push({ name, ok: true });
@@ -1274,7 +1606,7 @@ function probePluginStateStore(): PluginStateStoreProbeResult {
   } catch (error) {
     pushFailure("probe", error);
   } finally {
-    if (!wasOpen && !stateWasOpen) {
+    if (!stateWasOpen) {
       closePluginStateDatabase();
     }
   }
@@ -1283,7 +1615,6 @@ function probePluginStateStore(): PluginStateStoreProbeResult {
 }
 
 export function closePluginStateDatabase(): void {
-  cachedDatabase = null;
   closeOpenClawStateDatabase();
 }
 

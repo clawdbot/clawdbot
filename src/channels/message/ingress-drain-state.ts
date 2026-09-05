@@ -38,6 +38,37 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   settleOnce: (fn: () => Promise<void>) => Promise<void>;
 };
 
+export function createIngressSettleOwner<TPayload, TMetadata>(
+  state: ActiveHandlerState<TPayload, TMetadata>,
+  removeActive: (state: ActiveHandlerState<TPayload, TMetadata>) => void,
+): (fn: () => Promise<void>) => Promise<void> {
+  let settlePromise: Promise<void> | undefined;
+  let settled = false;
+  return async (fn) => {
+    if (settled) {
+      return;
+    }
+    if (settlePromise) {
+      await settlePromise;
+      return;
+    }
+    settlePromise = (async () => {
+      // Only mark settled after the tombstone/fail/release write commits.
+      // Write failure must keep heartbeat + in-memory ownership (wedged > duplicated).
+      await fn();
+      settled = true;
+      state.phase = "settled";
+      removeActive(state);
+    })();
+    try {
+      await settlePromise;
+    } catch (err) {
+      settlePromise = undefined;
+      throw err;
+    }
+  };
+}
+
 export function activeClaimKey<TPayload, TMetadata>(
   claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
 ): string {
@@ -47,8 +78,25 @@ export function activeClaimKey<TPayload, TMetadata>(
 export function resolveLaneKey<TPayload, TMetadata>(
   record: ChannelIngressQueueRecord<TPayload, TMetadata>,
   deriveLaneKey?: (record: ChannelIngressQueueRecord<TPayload, TMetadata>) => string | undefined,
+  reconcileStoredLaneKey?: (
+    record: ChannelIngressQueueRecord<TPayload, TMetadata>,
+    storedLaneKey: string,
+    derivedLaneKey: string,
+  ) => boolean,
 ): string {
-  return deriveLaneKey?.(record) ?? record.laneKey ?? record.id;
+  const derivedLaneKey = deriveLaneKey?.(record);
+  const storedLaneKey = record.laneKey;
+  if (
+    !reconcileStoredLaneKey ||
+    storedLaneKey === undefined ||
+    derivedLaneKey === undefined ||
+    storedLaneKey === derivedLaneKey
+  ) {
+    return derivedLaneKey ?? storedLaneKey ?? record.id;
+  }
+  return reconcileStoredLaneKey(record, storedLaneKey, derivedLaneKey)
+    ? derivedLaneKey
+    : storedLaneKey;
 }
 
 export function sortedKeys(keys: Iterable<string>): string[] {

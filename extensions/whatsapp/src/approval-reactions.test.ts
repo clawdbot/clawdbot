@@ -6,6 +6,7 @@ import {
   registerWhatsAppApprovalReactionTarget,
   resolveWhatsAppApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
+import * as whatsappRuntime from "./runtime.js";
 import { resolveEquivalentWhatsAppDirectChatJids } from "./text-runtime.js";
 
 type LidLookup = NonNullable<
@@ -17,10 +18,18 @@ const resolverMocks = vi.hoisted(() => ({
   isApprovalNotFoundError: vi.fn(() => false),
 }));
 
-vi.mock("./approval-resolver.js", () => ({
-  resolveWhatsAppApproval: resolverMocks.resolveWhatsAppApproval,
-  isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: resolverMocks.resolveWhatsAppApproval,
 }));
+vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
+    "openclaw/plugin-sdk/error-runtime",
+  );
+  return {
+    ...actual,
+    isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
+  };
+});
 
 function approvalConfig(allowFrom: string[]) {
   return {
@@ -148,6 +157,39 @@ describe("WhatsApp approval reactions", () => {
     });
   });
 
+  it("rejects persisted targets containing an invalid approval decision", async () => {
+    const runtime = vi.spyOn(whatsappRuntime, "getOptionalWhatsAppRuntime").mockReturnValue({
+      state: {
+        openKeyedStore: () => ({
+          register: async () => {},
+          lookup: async () => ({
+            version: 1,
+            target: {
+              approvalId: "exec-corrupt",
+              approvalKind: "exec",
+              allowedDecisions: ["allow-once", "invalid"],
+            },
+          }),
+          delete: async () => false,
+        }),
+      },
+    } as never);
+    try {
+      clearWhatsAppApprovalReactionTargetsForTest();
+      await expect(
+        resolveWhatsAppApprovalReactionTargetWithPersistence({
+          accountId: "default",
+          remoteJid: "15551230000@s.whatsapp.net",
+          messageId: "corrupt-message",
+          reactionKey: "👍",
+        }),
+      ).resolves.toBeNull();
+    } finally {
+      clearWhatsAppApprovalReactionTargetsForTest();
+      runtime.mockRestore();
+    }
+  });
+
   it("authorizes group reactions using the participant, not the group chat", async () => {
     registerWhatsAppApprovalReactionTarget({
       accountId: "default",
@@ -175,6 +217,8 @@ describe("WhatsApp approval reactions", () => {
       approvalId: "plugin:abc",
       approvalKind: "plugin",
       decision: "allow-once",
+      channel: "whatsapp",
+      accountId: "default",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -251,6 +295,8 @@ describe("WhatsApp approval reactions", () => {
       approvalId: "exec-self",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "whatsapp",
+      accountId: "default",
       senderId: "+15551230001",
       gatewayUrl: undefined,
     });
@@ -315,6 +361,8 @@ describe("WhatsApp approval reactions", () => {
       approvalId: "exec-direct",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "whatsapp",
+      accountId: "default",
       senderId: testCase.actorId,
       gatewayUrl: undefined,
     });

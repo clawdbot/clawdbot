@@ -1,6 +1,6 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Progress tests cover CLI progress rendering and lifecycle cleanup.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createCliProgress, shouldUseInteractiveProgressSpinner } from "./progress.js";
 
 const clackMocks = vi.hoisted(() => {
@@ -84,6 +84,89 @@ describe("cli progress", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
+  it("does not render progress updates after the reporter is finished", () => {
+    const writes: string[] = [];
+    const stream = {
+      isTTY: false,
+      write: vi.fn((chunk: string) => {
+        writes.push(chunk);
+      }),
+    } as unknown as NodeJS.WriteStream;
+
+    const progress = createCliProgress({
+      label: "Indexing memory...",
+      total: 10,
+      stream,
+      fallback: "log",
+    });
+    progress.done();
+    progress.setLabel("Late progress");
+    progress.setPercent(50);
+    progress.tick();
+
+    expect(writes).toEqual(["Indexing memory... 0%\n"]);
+  });
+
+  it("does not stop an interactive spinner more than once", () => {
+    const stream = {
+      isTTY: true,
+      write: vi.fn(),
+    } as unknown as NodeJS.WriteStream;
+
+    const progress = createCliProgress({ label: "Loading", stream });
+    progress.done();
+    progress.done();
+
+    expect(clackMocks.spinnerInstance.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let a finished reporter clear or unlock a newer progress line", () => {
+    const firstStream = {
+      isTTY: true,
+      write: vi.fn(),
+    } as unknown as NodeJS.WriteStream;
+    const secondWrite = vi.fn();
+    const secondStream = {
+      isTTY: true,
+      write: secondWrite,
+    } as unknown as NodeJS.WriteStream;
+    const thirdWrite = vi.fn();
+    const thirdStream = {
+      isTTY: true,
+      write: thirdWrite,
+    } as unknown as NodeJS.WriteStream;
+
+    const first = createCliProgress({
+      label: "First",
+      stream: firstStream,
+      fallback: "line",
+    });
+    first.done();
+
+    const second = createCliProgress({
+      label: "Second",
+      stream: secondStream,
+      fallback: "line",
+    });
+    try {
+      secondWrite.mockClear();
+      first.done();
+
+      expect(secondWrite).not.toHaveBeenCalled();
+
+      const third = createCliProgress({
+        label: "Third",
+        stream: thirdStream,
+        fallback: "line",
+      });
+      third.done();
+
+      expect(thirdWrite).not.toHaveBeenCalled();
+    } finally {
+      second.done();
+    }
+  });
+
   it("does not use readline-backed spinners while raw TUI input is active", () => {
     expect(
       shouldUseInteractiveProgressSpinner({
@@ -91,15 +174,6 @@ describe("cli progress", () => {
         stdinIsRaw: true,
       }),
     ).toBe(false);
-  });
-
-  it("uses the progress stream instead of stdout to decide spinner interactivity", () => {
-    expect(
-      shouldUseInteractiveProgressSpinner({
-        streamIsTty: true,
-        stdinIsRaw: false,
-      }),
-    ).toBe(true);
   });
 
   it("keeps the normal interactive spinner for regular tty commands", () => {

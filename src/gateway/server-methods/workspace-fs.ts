@@ -3,9 +3,11 @@
 // hardlink rejection) so no caller can access files outside a workspace root.
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { readFileWindowFully } from "../../infra/file-read.js";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
+import { isPathInside } from "../../infra/path-guards.js";
 
-type WorkspaceRoot = Awaited<ReturnType<typeof fsSafeRoot>>;
+export type WorkspaceRoot = Awaited<ReturnType<typeof fsSafeRoot>>;
 type WorkspacePathStat = Awaited<ReturnType<WorkspaceRoot["stat"]>>;
 export type WorkspaceDirEntry = WorkspacePathStat & { name: string };
 type WorkspaceFileReadResult = ReadResult & { canonicalPath: string };
@@ -16,7 +18,7 @@ export const WORKSPACE_PREVIEW_MAX_BYTES = 256 * 1024;
 
 let workspaceFileUpdateQueue: Promise<void> = Promise.resolve();
 
-async function openWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undefined> {
+export async function openWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undefined> {
   try {
     return await fsSafeRoot(rootDir, {
       hardlinks: "reject",
@@ -30,10 +32,10 @@ async function openWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undef
 }
 
 export async function statWorkspacePath(
-  rootDir: string,
+  rootDir: string | WorkspaceRoot,
   browserPath: string,
 ): Promise<WorkspacePathStat | undefined> {
-  const workspaceRoot = await openWorkspaceRoot(rootDir);
+  const workspaceRoot = typeof rootDir === "string" ? await openWorkspaceRoot(rootDir) : rootDir;
   if (!workspaceRoot) {
     return undefined;
   }
@@ -45,10 +47,10 @@ export async function statWorkspacePath(
 }
 
 export async function listWorkspacePath(
-  rootDir: string,
+  rootDir: string | WorkspaceRoot,
   browserPath: string,
 ): Promise<WorkspaceDirEntry[] | undefined> {
-  const workspaceRoot = await openWorkspaceRoot(rootDir);
+  const workspaceRoot = typeof rootDir === "string" ? await openWorkspaceRoot(rootDir) : rootDir;
   if (!workspaceRoot) {
     return undefined;
   }
@@ -108,7 +110,7 @@ export async function readWorkspaceFilePrefix(
     });
     try {
       const buffer = Buffer.allocUnsafe(Math.min(maxBytes, opened.stat.size));
-      const { bytesRead } = await opened.handle.read(buffer, 0, buffer.byteLength, 0);
+      const bytesRead = await readFileWindowFully(opened.handle, buffer, 0);
       return {
         buffer: buffer.subarray(0, bytesRead),
         canonicalPath: path
@@ -228,14 +230,8 @@ export function resolveWorkspacePath(
   if (!root) {
     return undefined;
   }
-  const resolved = path.isAbsolute(filePath)
-    ? path.resolve(filePath)
-    : path.resolve(root, filePath);
-  const relative = path.relative(root, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return undefined;
-  }
-  return resolved;
+  const resolved = path.resolve(root, filePath);
+  return isPathInside(root, resolved) ? resolved : undefined;
 }
 
 export function workspaceStatKind(

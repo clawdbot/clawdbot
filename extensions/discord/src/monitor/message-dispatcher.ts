@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import type { Client } from "../internal/discord.js";
@@ -15,17 +16,19 @@ import type {
   DiscordIngressLifecycle,
 } from "./ingress.js";
 import type { DiscordMessageEvent } from "./listeners.js";
+import { createDiscordAvatarResolver } from "./message-avatar.js";
+import { resolveDiscordMessageChannelId } from "./message-channel-info.js";
+import {
+  hasDiscordMessageStickers,
+  resolveDiscordReferencedReplyMessageId,
+} from "./message-forwarded.js";
 import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import {
   createDiscordMessageRunQueue,
   type DiscordMessageRunQueueTestingHooks,
 } from "./message-run-queue.js";
-import {
-  hasDiscordMessageStickers,
-  resolveDiscordMessageChannelId,
-  resolveDiscordMessageText,
-} from "./message-utils.js";
+import { resolveDiscordMessageText } from "./message-text.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 
 type PreflightDiscordMessage =
@@ -71,10 +74,7 @@ export function createDiscordMessageDispatcher(
     groupPolicy: params.discordConfig?.groupPolicy,
     defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
   });
-  const ackReactionScope =
-    params.discordConfig?.ackReactionScope ??
-    params.cfg.messages?.ackReactionScope ??
-    "group-mentions";
+  const readConfig = createRuntimeConfigReader(params.cfg);
   const preflightDiscordMessageImpl = params.testing?.preflightDiscordMessage;
   const messageRunQueue = createDiscordMessageRunQueue({
     runtime: params.runtime,
@@ -83,6 +83,7 @@ export function createDiscordMessageDispatcher(
     testing: params.testing,
   });
   const dispatcherShutdown = new AbortController();
+  const avatarResolver = createDiscordAvatarResolver();
 
   type DiscordDebounceEntry = {
     data: DiscordMessageEvent;
@@ -103,7 +104,11 @@ export function createDiscordMessageDispatcher(
       message,
       eventChannelId: entry.data.channel_id,
     });
-    return channelId ? `discord:${params.accountId}:${channelId}:${authorId}` : null;
+    if (!channelId) {
+      return null;
+    }
+    const replyTargetId = resolveDiscordReferencedReplyMessageId(message);
+    return `discord:${params.accountId}:${channelId}:${authorId}:reply:${replyTargetId ?? "none"}`;
   };
   const { debouncer } = createChannelInboundDebouncer<DiscordDebounceEntry>({
     cfg: params.cfg,
@@ -139,88 +144,74 @@ export function createDiscordMessageDispatcher(
           }
           const abortSignal = last.abortSignal;
           if (abortSignal?.aborted) {
-            await admissionLifecycle.onAbandoned();
+            await ingress.cancel();
             return;
           }
           try {
-            if (entries.length === 1) {
-              const preflight =
-                preflightDiscordMessageImpl ??
-                (await loadMessagePreflightRuntime()).preflightDiscordMessage;
-              const ctx = await preflight({
-                ...params,
-                ackReactionScope,
-                groupPolicy,
-                abortSignal,
-                data: last.data,
-                client: last.client,
-                turnAdoptionLifecycle: admissionLifecycle,
-              });
-              if (abortSignal?.aborted) {
-                await ingress.abandon(abortSignal.reason);
-                return;
-              }
-              if (!ctx) {
-                await ingress.settle();
-                return;
-              }
-              applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
-              messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { ingressSettlement: ingress }));
-              return;
+            const cfg = readConfig();
+            let data = last.data;
+            if (entries.length > 1) {
+              const combinedBaseText = entries
+                .map((entry) =>
+                  resolveDiscordMessageText(entry.data.message, { includeForwarded: false }),
+                )
+                .filter(Boolean)
+                .join("\n");
+              const syntheticMessage = Object.create(Object.getPrototypeOf(last.data.message), {
+                ...Object.getOwnPropertyDescriptors(last.data.message),
+                content: { value: combinedBaseText, enumerable: true, configurable: true },
+                attachments: { value: [], enumerable: true, configurable: true },
+                message_snapshots: {
+                  value: (last.data.message as { message_snapshots?: unknown }).message_snapshots,
+                  enumerable: true,
+                  configurable: true,
+                },
+                messageSnapshots: {
+                  value: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
+                  enumerable: true,
+                  configurable: true,
+                },
+                rawData: {
+                  value: {
+                    ...(last.data.message as { rawData?: Record<string, unknown> }).rawData,
+                  },
+                  enumerable: true,
+                  configurable: true,
+                },
+              }) as DiscordMessageEvent["message"];
+              data = {
+                ...last.data,
+                message: syntheticMessage,
+              };
             }
-            const combinedBaseText = entries
-              .map((entry) =>
-                resolveDiscordMessageText(entry.data.message, { includeForwarded: false }),
-              )
-              .filter(Boolean)
-              .join("\n");
-            const syntheticMessage = Object.create(Object.getPrototypeOf(last.data.message), {
-              ...Object.getOwnPropertyDescriptors(last.data.message),
-              content: { value: combinedBaseText, enumerable: true, configurable: true },
-              attachments: { value: [], enumerable: true, configurable: true },
-              message_snapshots: {
-                value: (last.data.message as { message_snapshots?: unknown }).message_snapshots,
-                enumerable: true,
-                configurable: true,
-              },
-              messageSnapshots: {
-                value: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
-                enumerable: true,
-                configurable: true,
-              },
-              rawData: {
-                value: { ...(last.data.message as { rawData?: Record<string, unknown> }).rawData },
-                enumerable: true,
-                configurable: true,
-              },
-            }) as DiscordMessageEvent["message"];
-            const syntheticData: DiscordMessageEvent = {
-              ...last.data,
-              message: syntheticMessage,
-            };
             const preflight =
               preflightDiscordMessageImpl ??
               (await loadMessagePreflightRuntime()).preflightDiscordMessage;
             const ctx = await preflight({
               ...params,
-              ackReactionScope,
+              cfg,
+              avatarResolver,
+              ackReactionScope:
+                params.discordConfig?.ackReactionScope ??
+                cfg.messages?.ackReactionScope ??
+                "group-mentions",
               groupPolicy,
               abortSignal,
-              data: syntheticData,
+              data,
               client: last.client,
               turnAdoptionLifecycle: admissionLifecycle,
             });
             if (abortSignal?.aborted) {
-              await ingress.abandon(abortSignal.reason);
+              await ingress.cancel();
               return;
             }
             if (!ctx) {
               await ingress.settle();
               return;
             }
-            applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
+            applyImplicitReplyBatchGate(ctx, params.replyToMode, entries.length > 1);
             const ids = entries.map((entry) => entry.data.message?.id).filter(isNonEmptyString);
-            if (ids.length > 0) {
+            if (entries.length > 1 && ids.length > 0) {
               const ctxBatch = ctx as typeof ctx & {
                 MessageSids?: string[];
                 MessageSidFirst?: string;
@@ -232,7 +223,10 @@ export function createDiscordMessageDispatcher(
             }
             messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { ingressSettlement: ingress }));
           } catch (error) {
-            await admissionLifecycle.onAbandoned();
+            if (abortSignal?.aborted) {
+              await ingress.cancel();
+              return;
+            }
             throw error;
           }
         },
@@ -244,7 +238,8 @@ export function createDiscordMessageDispatcher(
     onCancel: (entries) => {
       for (const entry of entries) {
         pendingDebounceEntries.delete(entry);
-        const settlement = Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned())
+        const settlement = fanInChannelIngressLifecycles([entry.turnAdoptionLifecycle])
+          .cancel()
           .catch((error: unknown) => {
             params.runtime.error(
               danger(`discord ingress cancellation settlement failed: ${String(error)}`),
@@ -271,6 +266,10 @@ export function createDiscordMessageDispatcher(
         const reason = dispatcherShutdown.signal.aborted
           ? (dispatcherShutdown.signal.reason ?? new Error("discord dispatcher shut down"))
           : (options?.abortSignal?.reason ?? new Error("discord dispatch aborted"));
+        if (options?.turnAdoptionLifecycle) {
+          await fanInChannelIngressLifecycles([options.turnAdoptionLifecycle]).cancel();
+          return { kind: "deferred" };
+        }
         return { kind: "failed-retryable", error: reason };
       }
       // Filter bot-own messages before they enter the debounce queue.

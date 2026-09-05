@@ -1,6 +1,7 @@
 /** Non-deep audit facade for cheap summary/config findings. */
 export {
   collectAttackSurfaceSummaryFindings,
+  collectCrossAgentSessionAccessFindings,
   collectSmallModelRiskFindings,
 } from "./audit-extra.summary.js";
 

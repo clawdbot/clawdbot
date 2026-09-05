@@ -4,27 +4,23 @@
  * This module handles login, token refresh, and credential storage
  * for OAuth-based providers:
  * - Anthropic (Claude Pro/Max)
- * - GitHub Copilot
+ * - provider plugins through their runtime auth hooks
  */
 
 // Anthropic
-// GitHub Copilot
 // OpenAI Codex (ChatGPT OAuth)
-
-export * from "./types.js";
 
 // ============================================================================
 // Built-in providers and instance-owned registries
 // ============================================================================
 
 import { anthropicOAuthProvider } from "./anthropic.js";
-import { githubCopilotOAuthProvider } from "./github-copilot.js";
 import { openaiCodexOAuthProvider } from "./openai-chatgpt.js";
 import type { OAuthCredentials, OAuthProviderId, OAuthProviderInterface } from "./types.js";
+export * from "./types.js";
 
 const BUILT_IN_OAUTH_PROVIDERS: OAuthProviderInterface[] = [
   anthropicOAuthProvider,
-  githubCopilotOAuthProvider,
   openaiCodexOAuthProvider,
 ];
 

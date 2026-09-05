@@ -1,7 +1,7 @@
 // Channel setup status helpers format channel setup progress and docs links.
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import { listChatChannels } from "../channels/chat-meta.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
@@ -14,12 +14,15 @@ import type {
 import type { ChannelMeta } from "../channels/plugins/types.core.js";
 import { formatChannelPrimerLine, formatChannelSelectionLine } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveChannelSetupEntries } from "../commands/channel-setup/discovery.js";
-import { shouldShowChannelInSetup } from "../commands/channel-setup/discovery.js";
+import {
+  resolveChannelSetupEntries,
+  shouldShowChannelInSetup,
+} from "../commands/channel-setup/discovery.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   findBundledPluginSourceInMap,
   resolveBundledPluginSources,
@@ -53,6 +56,14 @@ type ChannelSetupSelectionEntry = {
     exposure?: { setup?: boolean };
   };
 };
+
+export function resolveChannelSetupWorkspaceDir(cfg: OpenClawConfig): string {
+  const agentId = resolveAmbientOwnerAgentId(cfg, undefined, {
+    surface: "channel setup",
+    hint: "Set agents.defaults.systemAgent.agentId before configuring channels.",
+  });
+  return resolveAgentWorkspaceDir(cfg, agentId);
+}
 
 const CHANNEL_PRIMER_BLURB_KEYS: Record<string, string> = {
   clickclack: "wizard.channelsPrimer.blurbs.clickclack",
@@ -142,19 +153,23 @@ function formatSetupDisplayList(values: readonly string[] | undefined): string[]
 }
 
 function formatSetupDisplayMeta(meta: ChannelMeta): ChannelMeta {
+  const { selectionDocsPrefix, ...displayMeta } = meta;
   const safeId = formatSetupDisplayText(meta.id, "<invalid channel>");
   const safeLabel = formatSetupDisplayText(meta.label, safeId);
-  const safeSelectionDocsPrefix = formatSetupOptionalDisplayText(meta.selectionDocsPrefix);
+  const safeSelectionDocsPrefix =
+    selectionDocsPrefix === "" ? "" : formatSetupOptionalDisplayText(selectionDocsPrefix?.trim());
   const safeSelectionExtras = formatSetupDisplayList(meta.selectionExtras);
   return {
-    ...meta,
+    ...displayMeta,
     id: safeId,
     label: safeLabel,
     selectionLabel: formatSetupDisplayText(meta.selectionLabel, safeLabel),
     docsPath: formatSetupDisplayText(meta.docsPath, "/"),
     ...(meta.docsLabel ? { docsLabel: formatSetupDisplayText(meta.docsLabel, safeId) } : {}),
     blurb: formatSetupFreeText(meta.blurb),
-    ...(safeSelectionDocsPrefix ? { selectionDocsPrefix: safeSelectionDocsPrefix } : {}),
+    ...(safeSelectionDocsPrefix !== undefined
+      ? { selectionDocsPrefix: safeSelectionDocsPrefix }
+      : {}),
     ...(safeSelectionExtras ? { selectionExtras: safeSelectionExtras } : {}),
   };
 }
@@ -169,11 +184,12 @@ function formatChannelPrimerBlurb(channel: { id: string; blurb: string }): strin
 }
 
 function formatChannelSelectionMeta(meta: ChannelMeta): ChannelMeta {
-  return formatSetupDisplayMeta({
+  const formatted = formatSetupDisplayMeta({
     ...meta,
     blurb: formatChannelPrimerBlurb(meta),
-    selectionDocsPrefix: meta.selectionDocsPrefix ?? t("common.docs"),
   });
+  formatted.selectionDocsPrefix ??= t("common.docs");
+  return formatted;
 }
 
 function localizeChannelStatusLabel(label: string): string {
@@ -336,13 +352,14 @@ export function findBundledSourceForCatalogChannel(params: {
 
 export async function collectChannelStatus(params: {
   cfg: OpenClawConfig;
+  workspaceDir?: string;
   options?: SetupChannelsOptions;
   accountOverrides: Partial<Record<ChannelChoice, string>>;
   installedPlugins?: ChannelSetupPlugin[];
   resolveAdapter?: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
 }): Promise<ChannelStatusSummary> {
   const installedPlugins = params.installedPlugins ?? listChannelSetupPlugins();
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
+  const workspaceDir = params.workspaceDir ?? resolveChannelSetupWorkspaceDir(params.cfg);
   const { installedCatalogEntries, installableCatalogEntries } = resolveChannelSetupEntries({
     cfg: params.cfg,
     installedPlugins,
@@ -355,22 +372,35 @@ export async function collectChannelStatus(params: {
       resolveChannelSetupWizardAdapterForPlugin(
         installedPlugins.find((plugin) => plugin.id === channel),
       ));
-  const statusEntries = await Promise.all(
-    installedPlugins.flatMap((plugin) => {
-      if (!shouldShowChannelInSetup(plugin.meta)) {
-        return [];
-      }
-      const adapter = resolveAdapter(plugin.id);
-      if (!adapter) {
-        return [];
-      }
-      return adapter.getStatus({
-        cfg: params.cfg,
-        options: params.options,
-        accountOverrides: params.accountOverrides,
-      });
-    }),
-  );
+  const statusEntries = (
+    await Promise.all(
+      installedPlugins
+        .filter((plugin) => shouldShowChannelInSetup(plugin.meta))
+        .map(async (plugin): Promise<ChannelSetupStatus | undefined> => {
+          try {
+            const adapter = resolveAdapter(plugin.id);
+            if (!adapter) {
+              return undefined;
+            }
+            return await adapter.getStatus({
+              cfg: params.cfg,
+              options: params.options,
+              accountOverrides: params.accountOverrides,
+            });
+          } catch (error) {
+            const detail = formatSetupFreeText(formatErrorMessage(error));
+            return {
+              channel: plugin.id,
+              configured: isChannelConfigured(params.cfg, plugin.id),
+              statusLines: [
+                `${formatSetupSelectionLabel(plugin.meta.label, plugin.id)}: status unavailable (${detail})`,
+              ],
+              selectionHint: "status unavailable",
+            };
+          }
+        }),
+    )
+  ).filter((status): status is ChannelSetupStatus => status !== undefined);
   const statusByChannel = new Map(
     statusEntries.map((entry: ChannelSetupStatus) => [entry.channel, entry]),
   );
@@ -514,13 +544,14 @@ export function resolveQuickstartDefault(
 
 export function resolveChannelSelectionNoteLines(params: {
   cfg: OpenClawConfig;
+  workspaceDir?: string;
   installedPlugins: ChannelSetupPlugin[];
   selection: ChannelChoice[];
 }): string[] {
   const { entries } = resolveChannelSetupEntries({
     cfg: params.cfg,
     installedPlugins: params.installedPlugins,
-    workspaceDir: resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg)),
+    workspaceDir: params.workspaceDir ?? resolveChannelSetupWorkspaceDir(params.cfg),
   });
   const selectionNotes = new Map<string, string>();
   for (const entry of entries) {

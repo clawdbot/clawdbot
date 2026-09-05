@@ -68,6 +68,7 @@ describe("acpx plugin", () => {
     expect(api.registerService).toHaveBeenCalledWith(service);
     expect(api.on).toHaveBeenCalledWith("reply_dispatch", expect.any(Function), {
       timeoutMs: 120_000,
+      eligibleDispatchKinds: ["acp"],
     });
   });
 
@@ -86,6 +87,7 @@ describe("acpx plugin", () => {
 
     expect(api.on).toHaveBeenCalledWith("reply_dispatch", expect.any(Function), {
       timeoutMs: 180_000,
+      eligibleDispatchKinds: ["acp"],
     });
   });
 
@@ -136,6 +138,7 @@ describe("acpx plugin", () => {
       inboundAudio: false,
       shouldRouteToOriginating: false,
       shouldSendToolSummaries: true,
+      shouldSendFullToolDetails: false,
       sendPolicy: "allow",
     };
     const ctx = {
@@ -202,6 +205,7 @@ describe("acpx plugin", () => {
           inboundAudio: false,
           shouldRouteToOriginating: false,
           shouldSendToolSummaries: true,
+          shouldSendFullToolDetails: false,
           sendPolicy: "allow",
         },
         {

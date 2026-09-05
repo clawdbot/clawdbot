@@ -1,4 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasTerminalControl } from "../../../../packages/terminal-core/src/safe-text.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 
 const CLOUD_WORKSPACE_CONFLICT_TRANSCRIPT_TYPE = "cloud-workspace-conflict";
@@ -9,17 +10,6 @@ export type WorkspaceResultConflict = {
   stagedResultRef: string;
   totalCount?: number;
 };
-
-function hasTerminalControl(entryPath: string): boolean {
-  // Copied commands must not preserve terminal controls: bracketed-paste terminators
-  // can turn a displayed filename into executed shell input.
-  return Array.from(entryPath).some((character) => {
-    const codePoint = character.codePointAt(0);
-    return (
-      codePoint !== undefined && (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
-    );
-  });
-}
 
 function isWorkspaceConflictPath(entryPath: string): boolean {
   if (!entryPath || entryPath.startsWith("/") || entryPath.includes("\0")) {
@@ -108,13 +98,21 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-export function workspaceConflictGitCommands(conflict: WorkspaceResultConflict):
+export function workspaceConflictGitCommands(
+  conflict: WorkspaceResultConflict,
+  requestedPath?: string,
+):
   | {
       inspect: string;
       takeCloud: string;
     }
   | undefined {
-  const entryPath = conflict.paths.find((candidate) => !hasTerminalControl(candidate));
+  const entryPath =
+    requestedPath === undefined
+      ? conflict.paths.find((candidate) => !hasTerminalControl(candidate))
+      : conflict.paths.includes(requestedPath) && !hasTerminalControl(requestedPath)
+        ? requestedPath
+        : undefined;
   if (!entryPath) {
     return undefined;
   }

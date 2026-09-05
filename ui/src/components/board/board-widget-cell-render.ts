@@ -1,7 +1,9 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
-import type { BoardTab } from "../../lib/board/types.ts";
-import type { BoardGrantDecision, BoardViewWidget } from "../../lib/board/view-types.ts";
+import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
+import type { BoardGrantDecision } from "../../lib/board/view-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { icons } from "../icons.ts";
 import { renderBoardPendingCapabilities } from "./board-widget-capabilities.ts";
 
 export const BOARD_SIZE_PRESETS = {
@@ -19,7 +21,7 @@ export function closeBoardWidgetMenu(root: ParentNode): void {
 }
 
 export function renderBoardWidgetMenu(options: {
-  widget: BoardViewWidget;
+  widget: BoardWidget;
   tabs: readonly BoardTab[];
   disabled: boolean;
   onSelect: (event: CustomEvent<{ item: { value?: string } }>) => void;
@@ -38,15 +40,17 @@ export function renderBoardWidgetMenu(options: {
         ⋮
       </button>
       <div class="board-widget__menu-heading">${t("board.widget.moveToTab")}</div>
-      ${otherTabs.length > 0
-        ? otherTabs.map(
-            (tab) => html`
-              <wa-dropdown-item value=${`move:${tab.tabId}`} ?disabled=${disabled}>
-                ${tab.title}
-              </wa-dropdown-item>
-            `,
-          )
-        : html`<span class="board-widget__menu-empty">${t("board.widget.noOtherTabs")}</span>`}
+      ${
+        otherTabs.length > 0
+          ? otherTabs.map(
+              (tab) => html`
+                <wa-dropdown-item value=${`move:${tab.tabId}`} ?disabled=${disabled}>
+                  ${tab.title}
+                </wa-dropdown-item>
+              `,
+            )
+          : html`<span class="board-widget__menu-empty">${t("board.widget.noOtherTabs")}</span>`
+      }
       <div class="board-widget__menu-heading">${t("board.widget.resize")}</div>
       ${Object.entries(BOARD_SIZE_PRESETS).map(
         ([label, size]) => html`
@@ -60,19 +64,22 @@ export function renderBoardWidgetMenu(options: {
           </wa-dropdown-item>
         `,
       )}
-      ${widget.contentKind === "html"
-        ? html`<wa-dropdown-item
-            class="board-widget__preset"
-            type="checkbox"
-            value="height:auto"
-            ?checked=${widget.heightMode !== "fixed"}
-            ?disabled=${disabled}
-          >
-            ${t("board.widget.autoHeight")}
-          </wa-dropdown-item>`
-        : nothing}
+      ${
+        widget.contentKind === "html"
+          ? html`<wa-dropdown-item
+              class="board-widget__preset"
+              type="checkbox"
+              value="height:auto"
+              ?checked=${widget.heightMode !== "fixed"}
+              ?disabled=${disabled}
+            >
+              ${t("board.widget.autoHeight")}
+            </wa-dropdown-item>`
+          : nothing
+      }
       <div class="board-widget__menu-separator" role="separator"></div>
       <wa-dropdown-item class="board-widget__menu-danger" value="remove" ?disabled=${disabled}>
+        <span slot="icon" class="board-widget__menu-icon" aria-hidden="true">${icons.trash}</span>
         ${t("board.widget.remove")}
       </wa-dropdown-item>
     </wa-dropdown>
@@ -80,7 +87,7 @@ export function renderBoardWidgetMenu(options: {
 }
 
 export function renderBoardWidgetPending(options: {
-  widget: BoardViewWidget;
+  widget: BoardWidget;
   disabled: boolean;
   onGrant: (decision: BoardGrantDecision) => void;
   error?: TemplateResult;
@@ -89,7 +96,7 @@ export function renderBoardWidgetPending(options: {
 }
 
 export function renderBoardWidgetRejected(options: {
-  widget: BoardViewWidget;
+  widget: BoardWidget;
   disabled: boolean;
   onRemove: () => void;
 }): TemplateResult {
@@ -113,10 +120,14 @@ export function renderBoardDisabledPlugin(options: {
   pluginId: string;
   disabled: boolean;
   onRemove: () => void;
+  content?: TemplateResult;
 }): TemplateResult {
   return html`
     <div class="board-widget__disabled-plugin" data-test-id="board-disabled-plugin">
-      <strong>${t("board.widget.disabledPlugin", { pluginId: options.pluginId })}</strong>
+      ${
+        options.content ??
+        html`<strong>${t("board.widget.disabledPlugin", { pluginId: options.pluginId })}</strong>`
+      }
       <button
         class="btn btn--small"
         type="button"
@@ -130,7 +141,7 @@ export function renderBoardDisabledPlugin(options: {
 }
 
 export function renderBoardWidgetError(error: unknown, onRetry?: () => void): TemplateResult {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = formatUiError(error);
   return html`
     <div class="board-widget__error" role="alert" data-test-id="board-widget-error">
       <strong>${t("board.widget.errorTitle")}</strong>
@@ -139,11 +150,13 @@ export function renderBoardWidgetError(error: unknown, onRetry?: () => void): Te
         <summary>${t("board.widget.errorShow")}</summary>
         <code>${message}</code>
       </details>
-      ${onRetry
-        ? html`<button class="btn btn--small" type="button" @click=${onRetry}>
-            ${t("board.widget.retry")}
-          </button>`
-        : nothing}
+      ${
+        onRetry
+          ? html`<button class="btn btn--small" type="button" @click=${onRetry}>
+              ${t("board.widget.retry")}
+            </button>`
+          : nothing
+      }
     </div>
   `;
 }

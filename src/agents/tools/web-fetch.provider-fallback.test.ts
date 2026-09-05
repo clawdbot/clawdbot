@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { wrapExternalContent } from "../../security/external-content.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { createWebFetchTool } from "./web-fetch.js";
 import * as webGuardedFetch from "./web-guarded-fetch.js";
 
@@ -25,7 +26,7 @@ vi.mock("../../secrets/runtime-state.js", () => ({
   getActiveSecretsRuntimeConfigSnapshot: () => runtimeState.activeSecretsRuntimeSnapshot,
 }));
 vi.mock("../../secrets/runtime-web-tools-state.js", () => ({
-  getActiveRuntimeWebToolsMetadata: () => runtimeState.activeRuntimeWebToolsMetadata,
+  getActiveRuntimeWebToolsMetadataFromState: () => runtimeState.activeRuntimeWebToolsMetadata,
 }));
 
 describe("web_fetch provider fallback normalization", () => {
@@ -159,6 +160,57 @@ describe("web_fetch provider fallback normalization", () => {
     if (details.spill) {
       await rm(details.spill.path, { force: true });
     }
+  });
+
+  it("preserves short source-truncated provider results through cache and presentation", async () => {
+    global.fetch = withFetchPreconnect(
+      vi.fn(async () => {
+        throw new Error("network failed");
+      }),
+    );
+    const providerExecute = vi.fn(async () => ({
+      text: "partial provider body",
+      truncated: true,
+    }));
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "firecrawl" },
+      definition: {
+        description: "firecrawl",
+        parameters: {},
+        execute: providerExecute,
+      },
+    });
+    const tool = createWebFetchTool({
+      config: {
+        tools: { web: { fetch: { cacheTtlMinutes: 1 } } },
+      } as OpenClawConfig,
+      sandboxed: false,
+    });
+    const args = { url: "https://example.com/short-partial-provider" };
+
+    const first = await tool?.execute?.("short-partial-provider-first", args);
+    const second = await tool?.execute?.("short-partial-provider-second", args);
+    if (!first || !second) {
+      throw new Error("expected web_fetch results");
+    }
+    const firstDetails = first.details as {
+      truncated?: boolean;
+      spill?: { path: string };
+    };
+    const secondDetails = second?.details as {
+      cached?: boolean;
+      truncated?: boolean;
+      spill?: { path: string };
+    };
+    const terminalPresentation = tool ? getToolTerminalPresentation(tool) : undefined;
+
+    expect(firstDetails.truncated).toBe(true);
+    expect(firstDetails.spill).toBeUndefined();
+    expect(secondDetails.cached).toBe(true);
+    expect(secondDetails.truncated).toBe(true);
+    expect(secondDetails.spill).toBeUndefined();
+    expect(providerExecute).toHaveBeenCalledTimes(1);
+    expect(terminalPresentation?.({}, first)?.text).toContain("Truncated: yes");
   });
 
   it("keeps requested url and only accepts safe provider finalUrl values", async () => {
@@ -360,6 +412,99 @@ describe("web_fetch provider fallback normalization", () => {
     expect(secondDetails.externalContent?.provider).toBe("perplexity-fetch");
     expect(secondDetails.text).toContain("perplexity-fetch fallback body");
     expect(secondDetails.cached).toBeUndefined();
+  });
+
+  it("late-binds direct request headers and partitions the cache by the refreshed values", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response("# Routed", {
+        status: 200,
+        headers: { "content-type": "text/markdown; charset=utf-8" },
+      }),
+    );
+    global.fetch = withFetchPreconnect(fetchSpy);
+    const tool = createWebFetchTool({
+      config: {} as OpenClawConfig,
+      sandboxed: false,
+      lateBindRuntimeConfig: true,
+    });
+    const url = "https://example.com/late-bound-request-headers";
+
+    runtimeState.activeSecretsRuntimeSnapshot = {
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 15,
+              headers: { "X-Routing-Target": "staging-a" },
+            },
+          },
+        },
+      },
+    };
+    await tool?.execute?.("late-bound-header-a", { url });
+
+    runtimeState.activeSecretsRuntimeSnapshot = {
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 15,
+              headers: { "X-Routing-Target": "staging-b" },
+            },
+          },
+        },
+      },
+    };
+    await tool?.execute?.("late-bound-header-b", { url });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const firstHeaders = fetchSpy.mock.calls[0]?.[1]?.headers as Record<string, string> | undefined;
+    const secondHeaders = fetchSpy.mock.calls[1]?.[1]?.headers as
+      | Record<string, string>
+      | undefined;
+    expect(firstHeaders?.["X-Routing-Target"]).toBe("staging-a");
+    expect(secondHeaders?.["X-Routing-Target"]).toBe("staging-b");
+  });
+
+  it("does not pass operator request headers to provider fallbacks", async () => {
+    global.fetch = withFetchPreconnect(
+      vi.fn(async () => {
+        throw new Error("network failed");
+      }),
+    );
+    const providerExecute = vi.fn(async (_input: unknown) => ({ text: "provider body" }));
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "firecrawl" },
+      definition: {
+        description: "firecrawl",
+        parameters: {},
+        execute: providerExecute,
+      },
+    });
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              headers: { "X-Routing-Target": "direct-only" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sandboxed: false,
+    });
+
+    await tool?.execute?.("provider-header-isolation", {
+      url: "https://example.com/provider-header-isolation",
+    });
+
+    const providerInput = providerExecute.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(providerInput).toEqual({
+      url: "https://example.com/provider-header-isolation",
+      extractMode: "markdown",
+      maxChars: 20_000,
+    });
+    expect(providerInput).not.toHaveProperty("headers");
   });
 
   it("cancels an unread error response when provider fallback succeeds", async () => {

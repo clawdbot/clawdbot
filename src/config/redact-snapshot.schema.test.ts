@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
 import { REDACTED_SENTINEL, redactConfigSnapshot } from "./redact-snapshot.js";
 import { makeSnapshot, restoreRedactedValues } from "./redact-snapshot.test-helpers.js";
-import { buildConfigSchema } from "./schema.js";
+import { buildConfigSchemaCore } from "./schema.js";
 
 describe("realredactConfigSnapshot_real", () => {
   it("main schema redact works (samples)", () => {
@@ -50,7 +50,7 @@ describe("realredactConfigSnapshot_real", () => {
   });
 
   it("redacts bundled channel private keys from generated schema hints", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     const snapshot = makeSnapshot({
       channels: {
         nostr: {
@@ -72,8 +72,27 @@ describe("realredactConfigSnapshot_real", () => {
     );
   });
 
+  it("redacts remote edge-auth header values from generated schema hints", () => {
+    const hints = buildConfigSchemaCore().uiHints;
+    const snapshot = makeSnapshot({
+      gateway: {
+        remote: {
+          edgeAuth: { "X-Edge-Auth": "test-secret" },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const gateway = expectDefined(result.config.gateway, "redacted gateway config");
+    const remote = expectDefined(gateway.remote, "redacted remote gateway config");
+    const edgeAuth = expectDefined(remote.edgeAuth, "redacted edge auth config");
+    expect(edgeAuth["X-Edge-Auth"]).toBe(REDACTED_SENTINEL);
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.gateway.remote.edgeAuth["X-Edge-Auth"]).toBe("test-secret");
+  });
+
   it("redacts Discord Activity client secrets registered on plain string schemas", () => {
-    const hints = buildConfigSchema().uiHints;
+    const hints = buildConfigSchemaCore().uiHints;
     expect(hints["channels.discord.activities.clientSecret"]?.sensitive).toBe(true);
     const snapshot = makeSnapshot({
       channels: {
@@ -90,5 +109,34 @@ describe("realredactConfigSnapshot_real", () => {
     const discord = expectDefined(channels.discord, "channels.discord test invariant");
     const activities = discord.activities as Record<string, unknown>;
     expect(activities.clientSecret).toBe(REDACTED_SENTINEL);
+  });
+
+  it("redacts and restores web fetch operator headers from generated schema hints", () => {
+    const hints = buildConfigSchemaCore().uiHints;
+    expect(hints["tools.web.fetch.headers.*"]?.sensitive).toBe(true);
+    const snapshot = makeSnapshot({
+      tools: {
+        web: {
+          fetch: {
+            headers: {
+              "X-Routing-Target": "staging-private-route",
+            },
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const tools = expectDefined(result.config.tools, "result.config.tools test invariant");
+    const web = expectDefined(tools.web, "result.config.tools.web test invariant");
+    const fetch = expectDefined(web.fetch, "result.config.tools.web.fetch test invariant");
+    const headers = expectDefined(
+      fetch.headers,
+      "result.config.tools.web.fetch.headers test invariant",
+    );
+    expect(headers["X-Routing-Target"]).toBe(REDACTED_SENTINEL);
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.tools.web.fetch.headers["X-Routing-Target"]).toBe("staging-private-route");
   });
 });

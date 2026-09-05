@@ -1,16 +1,54 @@
 /** Tests bootstrap context truncation accounting and user-facing warning metadata. */
 import { describe, expect, it } from "vitest";
+import { buildBootstrapPromptWarning } from "./bootstrap-budget-warning.js";
 import {
-  appendBootstrapPromptWarning,
   analyzeBootstrapBudget,
+  buildBootstrapBudgetState,
   buildBootstrapInjectionStats,
-  buildBootstrapPromptWarning,
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
   resolveBootstrapWarningSignaturesSeen,
 } from "./bootstrap-budget.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
+
+describe("buildBootstrapBudgetState", () => {
+  it("composes configured limits, ordered injection stats, and warning state", () => {
+    const bootstrapFiles: WorkspaceBootstrapFile[] = [
+      {
+        name: "AGENTS.md",
+        path: "/tmp/AGENTS.md",
+        content: "a".repeat(8),
+        missing: false,
+      },
+      {
+        name: "SOUL.md",
+        path: "/tmp/SOUL.md",
+        content: "b".repeat(8),
+        missing: false,
+      },
+    ];
+
+    const state = buildBootstrapBudgetState({
+      config: {
+        agents: { defaults: { bootstrapMaxChars: 10, bootstrapTotalMaxChars: 12 } },
+      },
+      files: buildBootstrapInjectionStats({
+        bootstrapFiles,
+        injectedFiles: [
+          { path: "/tmp/AGENTS.md", content: "a".repeat(8) },
+          { path: "/tmp/SOUL.md", content: "b".repeat(4) },
+        ],
+      }),
+    });
+
+    expect(state.bootstrapMaxChars).toBe(10);
+    expect(state.bootstrapTotalMaxChars).toBe(12);
+    expect(state.bootstrapPromptWarningMode).toBe("always");
+    expect(state.bootstrapAnalysis.truncatedFiles[0]?.causes).toEqual(["total-limit"]);
+    expect(state.bootstrapPromptWarning.warningShown).toBe(true);
+  });
+});
 
 describe("buildBootstrapInjectionStats", () => {
   it("maps raw and injected sizes and marks truncation", () => {
@@ -259,36 +297,6 @@ describe("bootstrap prompt warnings", () => {
       mode: "always",
     }).lines;
     expect(lines.join("\n")).toContain("10 raw -> 1 injected");
-  });
-
-  it("appends warning details to the turn prompt instead of mutating the system prompt", () => {
-    const prompt = appendBootstrapPromptWarning("Please continue.", [
-      "AGENTS.md: 200 raw -> 0 injected",
-    ]);
-    expect(prompt.startsWith("Please continue.")).toBe(true);
-    expect(prompt).toContain("[Bootstrap truncation warning]");
-    expect(prompt).toContain("Treat Project Context as partial");
-    expect(prompt).toContain("- AGENTS.md: 200 raw -> 0 injected");
-    expect(prompt.endsWith("- AGENTS.md: 200 raw -> 0 injected")).toBe(true);
-  });
-
-  it("preserves raw prompt whitespace when appending warning details", () => {
-    const prompt = appendBootstrapPromptWarning("  indented\nkeep tail  ", [
-      "AGENTS.md: 200 raw -> 0 injected",
-    ]);
-
-    expect(prompt).toContain("  indented\nkeep tail  ");
-    expect(prompt.indexOf("  indented\nkeep tail  ")).toBe(0);
-  });
-
-  it("preserves exact heartbeat prompts without warning suffixes", () => {
-    const heartbeatPrompt = "Read HEARTBEAT.md. Reply HEARTBEAT_OK.";
-
-    expect(
-      appendBootstrapPromptWarning(heartbeatPrompt, ["AGENTS.md: 200 raw -> 0 injected"], {
-        preserveExactPrompt: heartbeatPrompt,
-      }),
-    ).toBe(heartbeatPrompt);
   });
 
   it("builds a concise agent notice without raw truncation diagnostics", () => {

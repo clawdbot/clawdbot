@@ -1,5 +1,6 @@
 // Mattermost tests cover client plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -27,7 +28,7 @@ import {
 
 function createMockFetch(response?: { status?: number; body?: unknown; contentType?: string }) {
   const status = response?.status ?? 200;
-  const body = response?.body ?? {};
+  const body = response && "body" in response ? response.body : {};
   const contentType = response?.contentType ?? "application/json";
 
   const calls: Array<{ url: string; init?: RequestInit }> = [];
@@ -35,7 +36,7 @@ function createMockFetch(response?: { status?: number; body?: unknown; contentTy
   const mockFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     const urlStr = requestUrl(url);
     calls.push({ url: urlStr, init });
-    return new Response(JSON.stringify(body), {
+    return new Response(status === 204 ? null : JSON.stringify(body), {
       status,
       headers: { "content-type": contentType },
     });
@@ -594,6 +595,134 @@ describe("fetchMattermostChannelPosts", () => {
 // ── createMattermostPost ─────────────────────────────────────────────
 
 describe("createMattermostPost", () => {
+  it.each(["{", ""])(
+    "preserves accepted visibility when a successful post receipt cannot be decoded (%j)",
+    async (body) => {
+      const mockFetch = vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      );
+      const client = createMattermostClient({
+        baseUrl: "http://localhost:8065",
+        botToken: "tok",
+        fetchImpl: mockFetch,
+      });
+
+      let caught: unknown;
+      try {
+        await createMattermostPost(client, { channelId: "ch123", message: "hello" });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(isChannelPartialDeliveryError(caught)).toBe(true);
+      if (!isChannelPartialDeliveryError(caught)) {
+        throw new Error("expected an accepted Mattermost delivery with an unreadable identity");
+      }
+      expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
+      expect(mockFetch).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not mark rejected Mattermost posts as accepted", async () => {
+    const mockFetch = vi.fn(
+      async () => new Response("{", { status: 400, statusText: "Bad Request" }),
+    );
+    const client = createMattermostClient({
+      baseUrl: "http://localhost:8065",
+      botToken: "tok",
+      fetchImpl: mockFetch,
+    });
+
+    let caught: unknown;
+    try {
+      await createMattermostPost(client, { channelId: "ch123", message: "hello" });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(false);
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain("Mattermost API 400 Bad Request");
+  });
+
+  it("does not misclassify Mattermost network SyntaxErrors as accepted", async () => {
+    const failure = new SyntaxError("network response parser failed");
+    const mockFetch = vi.fn(async () => {
+      throw failure;
+    });
+    const client = createMattermostClient({
+      baseUrl: "http://localhost:8065",
+      botToken: "tok",
+      fetchImpl: mockFetch,
+    });
+
+    await expect(
+      createMattermostPost(client, { channelId: "ch123", message: "hello" }),
+    ).rejects.toBe(failure);
+    expect(isChannelPartialDeliveryError(failure)).toBe(false);
+  });
+
+  it("does not mark unreadable non-delivery responses as visible posts", async () => {
+    const mockFetch = vi.fn(
+      async () =>
+        new Response("{", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const client = createMattermostClient({
+      baseUrl: "http://localhost:8065",
+      botToken: "tok",
+      fetchImpl: mockFetch,
+    });
+
+    let caught: unknown;
+    try {
+      await client.request("/users/me");
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(false);
+    expect(caught).toBeInstanceOf(Error);
+  });
+
+  it.each([
+    { name: "missing", response: { body: { message: "sent" } } },
+    { name: "empty", response: { body: { id: "" } } },
+    { name: "blank", response: { body: { id: "  " } } },
+    { name: "null", response: { body: null } },
+    { name: "no-content", response: { status: 204 } },
+  ])("preserves accepted visibility for a $name provider post identity", async ({ response }) => {
+    const { client } = createTestClient(response);
+
+    let caught: unknown;
+    try {
+      await createMattermostPost(client, { channelId: "ch123", message: "hello" });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    if (!isChannelPartialDeliveryError(caught) || !(caught instanceof Error)) {
+      throw new Error("expected an accepted Mattermost delivery without an identity");
+    }
+    expect(caught.message).toBe("Mattermost post creation response did not include a post id");
+    expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
+  });
+
+  it("normalizes the provider post identity before callers consume it", async () => {
+    const { client } = createTestClient({ body: { id: "  post-123  " } });
+
+    await expect(
+      createMattermostPost(client, { channelId: "ch123", message: "hello" }),
+    ).resolves.toMatchObject({ id: "post-123" });
+  });
+
   it("sends channel_id and message", async () => {
     const { mockFetch, calls } = createMockFetch({ body: { id: "post1" } });
     const client = createMattermostClient({

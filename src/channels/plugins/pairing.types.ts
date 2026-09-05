@@ -21,6 +21,7 @@ export type ChannelPairingAdapter = {
     cfg: OpenClawConfig;
     id: string;
     accountId?: string;
+    meta?: Record<string, string>;
     runtime?: RuntimeEnv;
   }) => Promise<void>;
 };

@@ -7,6 +7,7 @@ import {
   isIpInCidr,
   isLoopbackIpAddress,
   isPrivateOrLoopbackIpAddress,
+  isRfc8215LocalUseNat64Ipv6Address,
   normalizeIpAddress,
 } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -19,6 +20,7 @@ import {
   type NetworkInterfacesSnapshot,
 } from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
+import { normalizeWebSocketProtocol } from "./websocket-protocol.js";
 
 /** Pick the primary non-internal IPv4 address, preferring common LAN interface names. */
 export function pickPrimaryLanIPv4(): string | undefined {
@@ -63,13 +65,14 @@ export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
     return false;
   }
   const headers = req.headers ?? {};
-  return Boolean(
-    headers.forwarded ||
-    headers["x-real-ip"] ||
-    Object.keys(headers).some((header) =>
-      normalizeLowercaseStringOrEmpty(header).startsWith("x-forwarded-"),
-    ),
-  );
+  return Object.keys(headers).some((header) => {
+    const normalized = normalizeLowercaseStringOrEmpty(header);
+    return (
+      normalized === "forwarded" ||
+      normalized === "x-real-ip" ||
+      normalized.startsWith("x-forwarded-")
+    );
+  });
 }
 
 /** Return whether a request is a clean loopback request without forwarded identity headers. */
@@ -109,9 +112,11 @@ export function resolveLocalInterfaceAddressMatch(
 /**
  * Returns true if the IP belongs to a private or loopback network range.
  * Private ranges: RFC1918, link-local, ULA IPv6, and CGNAT (100.64/10), plus loopback.
+ * Excludes RFC8215 local-use NAT64: SSRF policy blocks that allocation, but
+ * Gateway trust decisions cannot infer a private mapped destination from it.
  */
 export function isPrivateOrLoopbackAddress(ip: string | undefined): boolean {
-  return isPrivateOrLoopbackIpAddress(ip);
+  return isPrivateOrLoopbackIpAddress(ip) && !isRfc8215LocalUseNat64Ipv6Address(ip);
 }
 
 function normalizeIp(ip: string | undefined): string | undefined {
@@ -238,7 +243,7 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-export function resolveRequestClientIp(
+export function resolveRequestClientIpFromHeaders(
   req?: IncomingMessage,
   trustedProxies?: string[],
   allowRealIpFallback = false,
@@ -369,14 +374,9 @@ export async function resolveGatewayListenHosts(
   bindHost: string,
   opts?: { canBindToHost?: (host: string) => Promise<boolean> },
 ): Promise<string[]> {
+  const requiredHosts = resolveGatewayRequiredListenHosts(bindHost);
   if (bindHost !== "127.0.0.1") {
-    if (!isValidIPv4(bindHost) || bindHost === "0.0.0.0") {
-      return [bindHost];
-    }
-    // Same-host clients use the canonical loopback URL even when external access is
-    // pinned to one interface. Startup requires both listeners so a foreign loopback
-    // process cannot receive credentials intended for the local Gateway.
-    return [bindHost, "127.0.0.1"];
+    return requiredHosts;
   }
   // Windows: uv_tcp_bind6 creates a dual-stack socket (no UV_TCP_IPV6ONLY), which
   // also accepts ::ffff:127.0.0.1 connections. Binding both ::1 and 127.0.0.1 on
@@ -389,6 +389,16 @@ export async function resolveGatewayListenHosts(
     return [bindHost, "::1"];
   }
   return [bindHost];
+}
+
+/** Returns every address whose bind must succeed for Gateway startup to succeed. */
+export function resolveGatewayRequiredListenHosts(bindHost: string): string[] {
+  if (!isValidIPv4(bindHost) || bindHost === "0.0.0.0" || bindHost === "127.0.0.1") {
+    return [bindHost];
+  }
+  // Same-host clients use the canonical loopback URL even when external access is
+  // pinned to one interface. Lifecycle checks must therefore cover both listeners.
+  return [bindHost, "127.0.0.1"];
 }
 
 /**
@@ -415,6 +425,18 @@ export function isLoopbackHost(host: string): boolean {
     return true;
   }
   return isLoopbackAddress(parsed.unbracketedHost);
+}
+
+// Gateway-local policy rejects dotted localhost and intentionally allows any URL scheme.
+export function isLoopbackGatewayUrl(rawUrl: string): boolean {
+  try {
+    const hostname = new URL(rawUrl).hostname.toLowerCase();
+    const unbracketed =
+      hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+    return unbracketed === "localhost" || isLoopbackIpAddress(unbracketed);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -510,8 +532,7 @@ export function isSecureWebSocketUrl(
   // Node's ws client accepts http(s) URLs and normalizes them to ws(s).
   // Treat those aliases the same way here so loopback cron announce delivery
   // and TLS-backed https endpoints follow the same security policy.
-  const protocol =
-    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+  const protocol = normalizeWebSocketProtocol(parsed.protocol);
 
   if (protocol === "wss:") {
     return true;

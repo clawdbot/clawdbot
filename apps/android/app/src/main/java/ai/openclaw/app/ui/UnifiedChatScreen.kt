@@ -6,8 +6,6 @@ import ai.openclaw.app.ui.chat.rememberChatRealtimeTalkLauncher
 import ai.openclaw.app.ui.design.ClawScaffold
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
-import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -18,9 +16,11 @@ import androidx.compose.ui.unit.dp
 @Composable
 internal fun UnifiedChatShellScreen(
   viewModel: MainViewModel,
-  onOpenSessions: () -> Unit,
+  showSidebarButton: Boolean,
+  onOpenSidebar: () -> Unit,
   onOpenDashboard: (String) -> Unit,
   onOpenGatewaySettings: () -> Unit,
+  onOpenProvidersModels: () -> Unit,
 ) {
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
   val startTalk = rememberChatRealtimeTalkLauncher(viewModel)
@@ -28,11 +28,13 @@ internal fun UnifiedChatShellScreen(
 
   ClawScaffold(
     contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 0.dp),
-    contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
+    contentWindowInsets = WindowInsets.safeDrawing,
   ) {
     ChatScreen(
       viewModel = viewModel,
       talkActive = talkModeEnabled,
+      showSidebarButton = showSidebarButton,
+      onOpenSidebar = onOpenSidebar,
       onToggleTalk = {
         if (talkModeEnabled) {
           viewModel.setTalkModeEnabled(false)
@@ -40,9 +42,9 @@ internal fun UnifiedChatShellScreen(
           startTalk()
         }
       },
-      onOpenSessions = onOpenSessions,
       onOpenDashboard = onOpenDashboard,
       onOpenGatewaySettings = onOpenGatewaySettings,
+      onOpenProvidersModels = onOpenProvidersModels,
     )
   }
 }

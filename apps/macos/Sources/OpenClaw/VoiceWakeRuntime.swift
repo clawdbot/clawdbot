@@ -8,13 +8,25 @@ import SwabbleKit
 import AppKit
 #endif
 
+enum VoiceWakeRuntimeTaskSupport {
+    static func wait(nanoseconds: UInt64) async -> Bool {
+        guard !Task.isCancelled else { return false }
+        do {
+            try await Task.sleep(nanoseconds: nanoseconds)
+        } catch {
+            return false
+        }
+        return !Task.isCancelled
+    }
+}
+
 /// Background listener that keeps the voice-wake pipeline alive outside the settings test view.
 actor VoiceWakeRuntime {
     static let shared = VoiceWakeRuntime()
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.runtime")
 
-    private var recognizer: SFSpeechRecognizer?
+    private var recognizerCache = SpeechRecognizerCache()
     // Lazily created on start to avoid creating an AVAudioEngine at app launch, which can switch Bluetooth
     // headphones into the low-quality headset profile even if Voice Wake is disabled.
     private var audioEngine: AVAudioEngine?
@@ -145,7 +157,7 @@ actor VoiceWakeRuntime {
             self.recognitionGeneration &+= 1
             let generation = self.recognitionGeneration
 
-            self.configureSession(localeID: config.localeID)
+            let recognizer = self.recognizerCache.recognizer(localeID: config.localeID ?? Locale.current.identifier)
 
             guard let recognizer, recognizer.isAvailable else {
                 self.logger.error("voicewake runtime: speech recognizer unavailable")
@@ -248,7 +260,6 @@ actor VoiceWakeRuntime {
         self.triggerOnlyTask?.cancel()
         self.triggerOnlyTask = nil
         self.haltRecognitionPipeline()
-        self.recognizer = nil
         self.currentConfig = nil
         self.activeTriggerEndTime = nil
         self.activeTriggerWord = nil
@@ -265,12 +276,6 @@ actor VoiceWakeRuntime {
                 VoiceWakeOverlayController.shared.dismiss()
             }
         }
-    }
-
-    private func configureSession(localeID: String?) {
-        let locale = localeID.flatMap { Locale(identifier: $0) } ?? Locale(identifier: Locale.current.identifier)
-        self.recognizer = SFSpeechRecognizer(locale: locale)
-        self.recognizer?.defaultTaskHint = .dictation
     }
 
     private func handleRecognition(_ update: RecognitionUpdate, config: RuntimeConfig) async {
@@ -448,7 +453,7 @@ actor VoiceWakeRuntime {
         let lastText = self.lastTranscript
         let windowNanos = UInt64(self.triggerPauseWindow * 1_000_000_000)
         self.triggerOnlyTask = Task { [weak self, lastSeenAt, lastText] in
-            try? await Task.sleep(nanoseconds: windowNanos)
+            guard await VoiceWakeRuntimeTaskSupport.wait(nanoseconds: windowNanos) else { return }
             guard let self else { return }
             await self.triggerOnlyPauseCheck(
                 lastSeenAt: lastSeenAt,
@@ -468,7 +473,7 @@ actor VoiceWakeRuntime {
         let lastText = self.lastTranscript
         let windowNanos = UInt64(self.preDetectSilenceWindow * 1_000_000_000)
         self.preDetectTask = Task { [weak self, lastSeenAt, lastText] in
-            try? await Task.sleep(nanoseconds: windowNanos)
+            guard await VoiceWakeRuntimeTaskSupport.wait(nanoseconds: windowNanos) else { return }
             guard let self else { return }
             await self.preDetectSilenceCheck(
                 lastSeenAt: lastSeenAt,
@@ -605,7 +610,7 @@ actor VoiceWakeRuntime {
         }
 
         // Keep the "ears" boosted for the capture window so the status icon animates while recording.
-        await MainActor.run { AppStateStore.shared.triggerVoiceEars(ttl: nil) }
+        await MainActor.run { AppStateStore.shared.startVoiceEars() }
 
         self.captureTask?.cancel()
         self.captureTask = Task { [weak self] in
@@ -632,7 +637,7 @@ actor VoiceWakeRuntime {
                 return
             }
 
-            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard await VoiceWakeRuntimeTaskSupport.wait(nanoseconds: 200_000_000) else { return }
         }
     }
 
@@ -737,7 +742,7 @@ actor VoiceWakeRuntime {
         self.scheduledRestartTask?.cancel()
         self.scheduledRestartTask = Task { [weak self] in
             let nanos = UInt64(max(0, delay) * 1_000_000_000)
-            try? await Task.sleep(nanoseconds: nanos)
+            guard await VoiceWakeRuntimeTaskSupport.wait(nanoseconds: nanos) else { return }
             guard let self else { return }
             await self.consumeScheduledRestart()
             await self.restartRecognizerIfIdleAndOverlayHidden()

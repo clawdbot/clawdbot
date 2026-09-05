@@ -1,4 +1,5 @@
 /** Canonical debug-proxy capture header redaction. */
+import { Headers as UndiciHeaders } from "undici";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -32,6 +33,20 @@ describe("redactedCaptureHeaders", () => {
     expect(redacted?.["x-trace-note"]).not.toContain("super-secret-value");
   });
 
+  it("redacts caller-declared sensitive header names regardless of case", () => {
+    const redacted = redactedCaptureHeaders(
+      {
+        "X-Routing-Target": "staging-private-route",
+        Accept: "text/plain",
+      },
+      ["x-routing-target"],
+    );
+    expect(redacted).toEqual({
+      "X-Routing-Target": "[REDACTED]",
+      Accept: "text/plain",
+    });
+  });
+
   it("flattens node's array-valued headers instead of dropping them", () => {
     // node:http exposes repeated headers as arrays; the standalone proxy feeds
     // those in directly.
@@ -43,9 +58,12 @@ describe("redactedCaptureHeaders", () => {
     expect(redacted?.via).toBe("1.1 a, 1.1 b");
   });
 
-  it("accepts a Headers instance", () => {
+  it.each([
+    ["global", Headers],
+    ["Undici", UndiciHeaders],
+  ] as const)("accepts a %s Headers instance", (_name, HeadersConstructor) => {
     const redacted = redactedCaptureHeaders(
-      new Headers({ authorization: "Bearer x", accept: "text/plain" }),
+      new HeadersConstructor({ authorization: "Bearer x", accept: "text/plain" }),
     );
     expect(redacted?.authorization).toBe("[REDACTED]");
     expect(redacted?.accept).toBe("text/plain");

@@ -105,7 +105,7 @@ openclaw tasks cancel <lookup>
 | Provider              | Default model                   | Text | Image ref                                            | Video ref                                       | Auth                                     |
 | --------------------- | ------------------------------- | :--: | ---------------------------------------------------- | ----------------------------------------------- | ---------------------------------------- |
 | Alibaba               | `wan2.6-t2v`                    |  ✓   | Yes (remote URL)                                     | Yes (remote URL)                                | `MODELSTUDIO_API_KEY`                    |
-| BytePlus (bundled)    | `seedance-1-0-pro-250528`       |  ✓   | Up to 2 images (first + last frame)                  | -                                               | `BYTEPLUS_API_KEY`                       |
+| BytePlus plugin       | `seedance-1-0-pro-250528`       |  ✓   | Up to 2 images (first + last frame)                  | -                                               | `BYTEPLUS_API_KEY`                       |
 | BytePlus 1.5 plugin   | `seedance-1-5-pro-251215`       |  ✓   | Up to 2 images (first + last frame via role)         | -                                               | `BYTEPLUS_API_KEY`                       |
 | BytePlus Seedance 2.0 | `dreamina-seedance-2-0-260128`  |  ✓   | Up to 9 reference images                             | Up to 3 videos                                  | `BYTEPLUS_API_KEY`                       |
 | ComfyUI               | `workflow`                      |  ✓   | 1 image                                              | -                                               | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
@@ -146,7 +146,7 @@ the shared live sweep:
 | Qwen       |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                              |
 | Runway     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`                                     |
 | Together   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
-| Vydra      |     ✓      |       ✓        |       -        | `generate`; shared `imageToVideo` skipped because bundled `veo3` is text-only and bundled `kling` requires a remote image URL           |
+| Vydra      |     ✓      |       ✓        |       -        | `generate`; shared `imageToVideo` skipped because `veo3` is text-only and `kling` requires a remote image URL                           |
 | xAI        |     ✓      |       ✓        |       ✓        | Classic supports all modes; Video 1.5 is image-to-video only; remote MP4 input keeps `videoToVideo` out of the shared sweep             |
 
 ## Tool parameters
@@ -286,29 +286,31 @@ aggregated error includes the skip reason for each.
 
 ## Model selection
 
-OpenClaw resolves the model in this order:
+For `video_generate`, OpenClaw resolves the model in this order:
 
-1. **`model` tool parameter** - if the agent specifies one in the call.
-2. **`videoGenerationModel.primary`** from config.
-3. **`videoGenerationModel.fallbacks`** in order.
-4. **Auto-detection** - providers that have valid auth, starting with the
-   current default provider, then remaining providers in alphabetical
-   order.
+1. **`model` tool parameter** - when set, only this model is tried.
+2. **`agents.defaults.mediaModels.video.primary`** from config.
+3. **`agents.defaults.mediaModels.video.fallbacks`** in order.
+4. **Auto-detection** - only when neither a primary nor fallback model is
+   configured, using configured provider defaults. The current default provider
+   comes first, then remaining providers in alphabetical order.
 
 If a provider fails, the next candidate is tried automatically. If all
 candidates fail, the error includes details from each attempt.
 
-Automatic fallback across authenticated providers is always enabled. A per-call
-`model` remains authoritative.
+Explicit video model configuration limits fallback to the configured list;
+OpenClaw does not append auto-detected providers.
 
 ```json5
 {
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "google/veo-3.1-fast-generate-preview",
-        fallbacks: ["runway/gen4.5", "qwen/wan2.6-t2v"],
-        timeoutMs: 180000, // optional per-tool provider request timeout override
+      mediaModels: {
+        video: {
+          primary: "google/veo-3.1-fast-generate-preview",
+          fallbacks: ["runway/gen4.5", "qwen/wan2.6-t2v"],
+          timeoutMs: 180000, // optional per-tool provider request timeout override
+        },
       },
     },
   },
@@ -322,7 +324,8 @@ Automatic fallback across authenticated providers is always enabled. A per-call
     Uses DashScope / Model Studio async endpoint. Reference images and
     videos must be remote `http(s)` URLs.
   </Accordion>
-  <Accordion title="BytePlus (bundled)">
+  <Accordion title="BytePlus plugin">
+    Requires the official `@openclaw/byteplus-provider` plugin.
     Provider id: `byteplus`.
 
     Models: `seedance-1-0-pro-250528` (default),
@@ -416,7 +419,7 @@ Automatic fallback across authenticated providers is always enabled. A per-call
   </Accordion>
   <Accordion title="Vydra">
     Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping
-    redirects. `veo3` is bundled as text-to-video only; `kling` requires
+    redirects. `veo3` is text-to-video only; `kling` requires
     a remote image URL.
   </Accordion>
   <Accordion title="xAI">
@@ -524,9 +527,11 @@ Set the default video-generation model in your OpenClaw config:
 {
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "qwen/wan2.6-t2v",
-        fallbacks: ["qwen/wan2.6-r2v-flash"],
+      mediaModels: {
+        video: {
+          primary: "qwen/wan2.6-t2v",
+          fallbacks: ["qwen/wan2.6-r2v-flash"],
+        },
       },
     },
   },

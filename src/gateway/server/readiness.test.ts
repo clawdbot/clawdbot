@@ -30,11 +30,13 @@ function snapshotWith(
 function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
   return {
     getRuntimeSnapshot: vi.fn(() => snapshot),
+    pauseChannelStarts: vi.fn(() => () => {}),
     startChannels: vi.fn(),
     startChannel: vi.fn(),
     stopChannel: vi.fn(),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
+    recoverAutostartSuppression: vi.fn(async () => false),
     setAmbientAutostartSuppressedChannelIds: vi.fn(),
     isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
@@ -76,6 +78,7 @@ function createReadinessHarness(params: {
   getStartupPendingReason?: Parameters<typeof createReadinessChecker>[0]["getStartupPendingReason"];
   getGatewayDraining?: Parameters<typeof createReadinessChecker>[0]["getGatewayDraining"];
   getEventLoopHealth?: Parameters<typeof createReadinessChecker>[0]["getEventLoopHealth"];
+  getStateDatabaseFailure?: Parameters<typeof createReadinessChecker>[0]["getStateDatabaseFailure"];
   shouldSkipChannelReadiness?: Parameters<
     typeof createReadinessChecker
   >[0]["shouldSkipChannelReadiness"];
@@ -92,6 +95,7 @@ function createReadinessHarness(params: {
       getStartupPendingReason: params.getStartupPendingReason,
       getGatewayDraining: params.getGatewayDraining,
       getEventLoopHealth: params.getEventLoopHealth,
+      getStateDatabaseFailure: params.getStateDatabaseFailure,
       shouldSkipChannelReadiness: params.shouldSkipChannelReadiness,
       cacheTtlMs: params.cacheTtlMs,
     }),
@@ -215,6 +219,22 @@ describe("createReadinessChecker", () => {
     });
   });
 
+  it("reports a terminal state database failure after the readiness cache expires", () => {
+    withReadinessClock(() => {
+      const stateDatabase = { failure: undefined as Error | undefined };
+      const { manager, readiness } = createReadinessHarness({
+        getStateDatabaseFailure: () => stateDatabase.failure,
+        cacheTtlMs: 1_000,
+      });
+      expect(readiness()).toEqual(readySnapshot());
+
+      stateDatabase.failure = new Error("newer shared-state schema");
+      vi.advanceTimersByTime(1_000);
+      expect(readiness()).toEqual(failingSnapshot(["state-database"], FIVE_MIN_MS + 1_000));
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("ignores disabled and unconfigured channels", () => {
     withReadinessClock(() => {
       const { readiness } = createReadinessHarness({
@@ -256,6 +276,74 @@ describe("createReadinessChecker", () => {
         },
       });
       expect(readiness()).toEqual(failingSnapshot(["discord"]));
+    });
+  });
+
+  it("keeps a long-running Reef account ready during fresh reconnect grace", () => {
+    withReadinessClock(() => {
+      const { readiness } = createLongRunningReadinessHarness({
+        reef: managedAccount({
+          connected: false,
+          lifecycle: "recovering",
+          lastStartAt: Date.now() - THIRTY_ONE_MIN_MS,
+          lastDisconnect: { at: Date.now() - 5_000, error: "socket closed" },
+        }),
+      });
+      expect(readiness()).toEqual(readySnapshot(THIRTY_ONE_MIN_MS));
+    });
+  });
+
+  it("uses fresh recorded lifecycle within connect grace", () => {
+    withReadinessClock(() => {
+      const { readiness } = createLongRunningReadinessHarness({
+        discord: managedAccount({
+          connected: false,
+          lifecycle: "starting",
+          lastStartAt: Date.now() - 30_000,
+        }),
+        slack: stoppedAccount({
+          connected: false,
+          lifecycle: "recovering",
+          lastStartAt: Date.now() - 30_000,
+        }),
+      });
+      expect(readiness()).toEqual(readySnapshot(THIRTY_ONE_MIN_MS));
+    });
+  });
+
+  it("reports a recorded starting lifecycle that outlives connect grace", () => {
+    withReadinessClock(() => {
+      const { readiness } = createLongRunningReadinessHarness({
+        discord: managedAccount({ connected: false, lifecycle: "starting" }),
+      });
+      expect(readiness()).toEqual(failingSnapshot(["discord"], THIRTY_ONE_MIN_MS));
+    });
+  });
+
+  it("reports recorded blocked lifecycle as not ready", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        accounts: {
+          slack: managedAccount({ lifecycle: "blocked" }),
+        },
+      });
+      expect(readiness()).toEqual(failingSnapshot(["slack"]));
+    });
+  });
+
+  it("does not hide a ready lifecycle disconnect behind wall-clock grace", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        startedAgoMs: 30_000,
+        accounts: {
+          discord: managedAccount({
+            connected: false,
+            lifecycle: "ready",
+            lastStartAt: Date.now() - 30_000,
+          }),
+        },
+      });
+      expect(readiness()).toEqual(failingSnapshot(["discord"], 30_000));
     });
   });
 
@@ -428,11 +516,30 @@ describe("createReadinessChecker", () => {
     });
   });
 
+  it("refreshes stopped channels when the clock moves behind cached readiness", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        accounts: { discord: managedAccount({ lifecycle: "ready" }) },
+        cacheTtlMs: 1_000,
+      });
+
+      expect(readiness()).toEqual(readySnapshot());
+      vi.mocked(manager.getRuntimeSnapshot).mockReturnValue(
+        snapshotWith({ discord: stoppedAccount({ connected: false, lifecycle: "stopped" }) }),
+      );
+      vi.setSystemTime(Date.now() - 60_000);
+
+      expect(readiness()).toEqual(failingSnapshot(["discord"], FIVE_MIN_MS - 60_000));
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("adds event-loop health to detailed readiness without changing readiness state", () => {
     withReadinessClock(() => {
       const { readiness } = createReadinessHarness({
         getEventLoopHealth: () => ({
           degraded: true,
+          degradedSinceMs: 61_000,
           reasons: ["cpu", "event_loop_utilization"],
           intervalMs: 2_000,
           delayP99Ms: 42.1,
@@ -446,6 +553,7 @@ describe("createReadinessChecker", () => {
         readySnapshot(FIVE_MIN_MS, {
           eventLoop: {
             degraded: true,
+            degradedSinceMs: 61_000,
             reasons: ["cpu", "event_loop_utilization"],
             intervalMs: 2_000,
             delayP99Ms: 42.1,

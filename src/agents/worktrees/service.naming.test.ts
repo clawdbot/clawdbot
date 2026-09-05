@@ -42,9 +42,13 @@ describe("ManagedWorktreeService naming", () => {
   });
 
   it("uses readable defaults and numbers colliding inferred names", async () => {
-    const fallback = await service.create({ repoRoot: repo });
-    await service.create({ repoRoot: repo, name: "release-planning" });
-    const second = await service.create({ repoRoot: repo, suggestedName: "release-planning" });
+    const fallback = await service.create({ repoRoot: repo, baseRef: "HEAD" });
+    await service.create({ repoRoot: repo, name: "release-planning", baseRef: "HEAD" });
+    const second = await service.create({
+      repoRoot: repo,
+      suggestedName: "release-planning",
+      baseRef: "HEAD",
+    });
 
     expect(fallback.name).toMatch(
       /^[a-z]+-(?:barnacle|claw|crab|crayfish|krill|langoustine|lobster|prawn|shrimp|shell)$/,
@@ -53,19 +57,23 @@ describe("ManagedWorktreeService naming", () => {
   });
 
   it("numbers inferred names around unmanaged Git and filesystem collisions", async () => {
-    const anchor = await service.create({ repoRoot: repo, name: "anchor" });
+    const anchor = await service.create({ repoRoot: repo, name: "anchor", baseRef: "HEAD" });
     await git(repo, "branch", "openclaw/release-planning");
     await fs.mkdir(path.join(path.dirname(anchor.path), "release-planning-2"));
 
-    const created = await service.create({ repoRoot: repo, suggestedName: "release-planning" });
+    const created = await service.create({
+      repoRoot: repo,
+      suggestedName: "release-planning",
+      baseRef: "HEAD",
+    });
 
     expect(created.name).toBe("release-planning-3");
   });
 
   it("serializes concurrent inferred-name creation", async () => {
     const created = await Promise.all([
-      service.create({ repoRoot: repo, suggestedName: "concurrent-task" }),
-      service.create({ repoRoot: repo, suggestedName: "concurrent-task" }),
+      service.create({ repoRoot: repo, suggestedName: "concurrent-task", baseRef: "HEAD" }),
+      service.create({ repoRoot: repo, suggestedName: "concurrent-task", baseRef: "HEAD" }),
     ]);
 
     expect(created.map((record) => record.name).toSorted()).toEqual([
@@ -77,6 +85,7 @@ describe("ManagedWorktreeService naming", () => {
   it("reuses concurrent inferred names for the same owner", async () => {
     const owner = {
       repoRoot: repo,
+      baseRef: "HEAD",
       ownerKind: "session" as const,
       ownerId: "agent:main:session-1",
     };
@@ -92,12 +101,31 @@ describe("ManagedWorktreeService naming", () => {
     ).toHaveLength(1);
   });
 
+  it("numbers a generated name colliding with the owner's removed record", async () => {
+    const owner = {
+      repoRoot: repo,
+      baseRef: "HEAD",
+      ownerKind: "session" as const,
+      ownerId: "agent:main:main",
+    };
+    const first = await service.create({ ...owner, suggestedName: "same-title" });
+    await service.remove({ id: first.id, reason: "session-reset" });
+
+    const successor = await service.create({ ...owner, suggestedName: "same-title" });
+
+    expect(successor.id).not.toBe(first.id);
+    expect(successor.name).toBe("same-title-2");
+    expect((await service.list()).find((record) => record.id === first.id)?.removedAt).toEqual(
+      expect.any(Number),
+    );
+  });
+
   it("serializes overlapping numeric suffix families", async () => {
-    await service.create({ repoRoot: repo, name: "task" });
+    await service.create({ repoRoot: repo, name: "task", baseRef: "HEAD" });
 
     const created = await Promise.all([
-      service.create({ repoRoot: repo, suggestedName: "task" }),
-      service.create({ repoRoot: repo, suggestedName: "task-2" }),
+      service.create({ repoRoot: repo, suggestedName: "task", baseRef: "HEAD" }),
+      service.create({ repoRoot: repo, suggestedName: "task-2", baseRef: "HEAD" }),
     ]);
     const names = created.map((record) => record.name);
 

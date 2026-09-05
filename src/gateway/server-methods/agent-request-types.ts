@@ -33,10 +33,11 @@ export type AgentRunRequest = {
   modelRun?: boolean;
   promptMode?: "full" | "minimal" | "none";
   bootstrapContextMode?: "full" | "lightweight";
-  // Commitment fan-out scope is scheduler-internal and cannot be selected over Gateway RPC.
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   acpTurnSource?: "manual_spawn";
   internalRuntimeHandoffId?: string;
+  internalExecutionIdentityRetry?: boolean;
+  internalExecutionIdentityRecoveryAttempt?: number;
   execApprovalFollowupExpectedSessionId?: string;
   internalEvents?: AgentInternalEvent[];
   suppressPromptPersistence?: boolean;
@@ -47,6 +48,7 @@ export type AgentRunRequest = {
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
   forceRestartSafeTools?: boolean;
+  forceCodeModeTools?: boolean;
   timeout?: number;
   bestEffortDeliver?: boolean;
   cleanupBundleMcpOnRunEnd?: boolean;

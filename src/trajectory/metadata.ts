@@ -10,7 +10,10 @@ import {
   sanitizeSupportSnapshotValue,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  loadPluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistry, listImportedRuntimePluginIds } from "../plugins/runtime.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { VERSION } from "../version.js";
@@ -20,6 +23,7 @@ import { VERSION } from "../version.js";
 type BuildTrajectoryRunMetadataParams = {
   env?: NodeJS.ProcessEnv;
   config?: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir: string;
   sessionFile?: string;
   sessionKey?: string;
@@ -58,6 +62,7 @@ type BuildTrajectoryArtifactsParams = {
   promptCache?: unknown;
   compactionCount: number;
   assistantTexts: string[];
+  stopReason?: string;
   finalPromptText?: string;
   itemLifecycle: {
     startedCount: number;
@@ -130,7 +135,6 @@ function buildPluginsFromActiveRegistry() {
         musicGenerationProviderIds: toSortedUniqueStrings(plugin.musicGenerationProviderIds),
         webFetchProviderIds: toSortedUniqueStrings(plugin.webFetchProviderIds),
         webSearchProviderIds: toSortedUniqueStrings(plugin.webSearchProviderIds),
-        memoryEmbeddingProviderIds: toSortedUniqueStrings(plugin.memoryEmbeddingProviderIds),
         agentHarnessIds: toSortedUniqueStrings(plugin.agentHarnessIds),
       }))
       .toSorted((left, right) => left.id.localeCompare(right.id)),
@@ -139,16 +143,19 @@ function buildPluginsFromActiveRegistry() {
 
 function buildPluginsFromManifest(params: {
   config?: OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }) {
   // Startup captures can happen before runtime activation. Fall back to the
   // manifest snapshot so exported runs still show configured plugin surfaces.
-  const snapshot = loadPluginMetadataSnapshot({
-    config: params.config ?? {},
-    workspaceDir: params.workspaceDir,
-    env: params.env ?? process.env,
-  });
+  const snapshot =
+    params.pluginMetadataSnapshot ??
+    loadPluginMetadataSnapshot({
+      config: params.config ?? {},
+      workspaceDir: params.workspaceDir,
+      env: params.env ?? process.env,
+    });
   return {
     source: "manifest-registry",
     entries: snapshot.plugins
@@ -235,6 +242,9 @@ export function buildTrajectoryRunMetadata(
     buildPluginsFromActiveRegistry() ??
     buildPluginsFromManifest({
       config: params.config,
+      ...(params.pluginMetadataSnapshot
+        ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+        : {}),
       workspaceDir: params.workspaceDir,
       env,
     });
@@ -330,6 +340,7 @@ export function buildTrajectoryArtifacts(
     promptCache: params.promptCache,
     compactionCount: params.compactionCount,
     assistantTexts: params.assistantTexts,
+    stopReason: params.stopReason,
     finalPromptText: params.finalPromptText,
     itemLifecycle: params.itemLifecycle,
     toolMetas: params.toolMetas,

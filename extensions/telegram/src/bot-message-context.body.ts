@@ -14,11 +14,10 @@ import {
   type InboundEventKind,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
+  OpenClawConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
@@ -30,6 +29,7 @@ import {
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -45,16 +45,22 @@ import {
   buildSenderName,
   extractTelegramLocation,
   getTelegramTextParts,
+  hasLeadingBotCommandAddressedToOtherBot,
   hasBotMentionInText,
   hasBotMention,
-  renderTelegramTextEntities,
   resolveTelegramPrimaryMedia,
   resolveTelegramRichMessagePlaceholder,
   resolveTelegramRichMessageText,
 } from "./bot/body-helpers.js";
-import { buildTelegramGroupPeerId, buildTelegramInboundOriginTarget } from "./bot/helpers.js";
+import {
+  buildTelegramGroupPeerId,
+  buildTelegramInboundOriginTarget,
+  type TelegramThreadSpec,
+} from "./bot/helpers.js";
+import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
+import { resolveTelegramGroupIngestEnabled } from "./group-config-helpers.js";
 import { recordTelegramGroupHistoryEntry } from "./group-history-window.js";
 import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 type TelegramMentionFacts = NonNullable<
@@ -84,10 +90,6 @@ type TelegramInboundBodyResult = {
   stickerCacheHit: boolean;
   locationData?: NormalizedLocation;
 };
-
-function formatAudioTranscriptForAgent(transcript: string): string {
-  return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
-}
 
 function resolveTelegramMentionFacts(params: {
   canDetectMention: boolean;
@@ -145,6 +147,7 @@ export async function resolveTelegramInboundBody(params: {
   sessionKey?: string;
   resolvedThreadId?: number;
   replyThreadId?: number;
+  threadSpec: TelegramThreadSpec;
   originatingTo?: string;
   routeAgentId?: string;
   effectiveGroupAllow: NormalizedAllowFrom;
@@ -171,6 +174,7 @@ export async function resolveTelegramInboundBody(params: {
     sessionKey,
     resolvedThreadId,
     replyThreadId,
+    threadSpec,
     originatingTo: providedOriginatingTo,
     routeAgentId,
     effectiveGroupAllow,
@@ -187,10 +191,19 @@ export async function resolveTelegramInboundBody(params: {
   const botUsername = normalizeOptionalLowercaseString(primaryCtx.me?.username);
   const mentionRegexes = buildMentionRegexes(cfg, routeAgentId, {
     provider: "telegram",
-    conversationId: isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId),
+    conversationId: isGroup ? buildTelegramGroupPeerId(chatId, threadSpec) : String(chatId),
     providerPolicy: providerMentionPatterns,
   });
   const messageTextParts = getTelegramTextParts(msg);
+  if (botUsername && hasLeadingBotCommandAddressedToOtherBot(msg, botUsername)) {
+    logInboundDrop({
+      log: logVerbose,
+      channel: "telegram",
+      reason: "command addressed to another bot",
+      target: senderId ?? "unknown",
+    });
+    return null;
+  }
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
   const useAccessGroups = true;
   const hasControlCommandInMessage = hasControlCommand(messageTextParts.text, cfg, {
@@ -214,8 +227,9 @@ export async function resolveTelegramInboundBody(params: {
     includeDmAllowForGroupCommands: false,
   });
   const commandAuthorized = commandGate.authorized;
-  const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
-  const originatingTo = providedOriginatingTo ?? buildTelegramInboundOriginTarget(chatId);
+  const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, threadSpec) : undefined;
+  const originatingTo =
+    providedOriginatingTo ?? buildTelegramInboundOriginTarget(chatId, threadSpec);
 
   const primaryMedia = resolveTelegramPrimaryMedia(msg);
   const nativeMediaFacts =
@@ -388,17 +402,7 @@ export async function resolveTelegramInboundBody(params: {
         messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
       },
     });
-    const telegramGroupPolicy = resolveChannelGroupPolicy({
-      cfg,
-      channel: "telegram",
-      groupId: String(chatId),
-      accountId,
-    });
-    const ingestEnabled =
-      topicConfig?.ingest ??
-      telegramGroupPolicy.groupConfig?.ingest ??
-      telegramGroupPolicy.defaultConfig?.ingest;
-    if (ingestEnabled === true && sessionKey) {
+    if (sessionKey && resolveTelegramGroupIngestEnabled({ cfg, chatId, accountId, topicConfig })) {
       fireAndForgetHook(
         triggerInternalHook(
           createInternalHookEvent(
@@ -408,7 +412,7 @@ export async function resolveTelegramInboundBody(params: {
             toInternalMessageReceivedContext({
               from: `telegram:group:${historyKey ?? chatId}`,
               to: originatingTo,
-              content: rawBody,
+              content: historyBody,
               timestamp: msg.date ? msg.date * 1000 : undefined,
               channelId: "telegram",
               accountId,
@@ -424,6 +428,12 @@ export async function resolveTelegramInboundBody(params: {
               originatingTo,
               isGroup: true,
               groupId: `telegram:${chatId}`,
+              media: materializedMedia.map(({ path, contentType, kind, sourceMessageId }) => ({
+                path,
+                contentType,
+                kind,
+                messageId: sourceMessageId ?? String(msg.message_id),
+              })),
             }),
           ),
         ),

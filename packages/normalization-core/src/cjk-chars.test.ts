@@ -7,13 +7,35 @@ import {
 
 describe("normalization-core/cjk-chars", () => {
   it("keeps Latin text on the regular chars-per-token heuristic", () => {
+    expect(estimateStringChars("")).toBe(0);
     expect(estimateStringChars("hello world")).toBe(11);
-    expect(estimateTokensFromChars(9)).toBe(3);
+    expect(estimateStringChars("123.45, hello! @#$%")).toBe(19);
   });
 
   it("weights common CJK text as roughly one token per character", () => {
     expect(estimateStringChars("\u4F60\u597D\u4E16\u754C")).toBe(4 * CHARS_PER_TOKEN_ESTIMATE);
     expect(estimateStringChars("hi\u4F60\u597D")).toBe(10);
+  });
+
+  it.each([
+    ["hiragana", "こんにちは", 20],
+    ["katakana", "カタカナ", 16],
+    ["Hangul", "안녕하세요", 20],
+    ["fullwidth letters and numbers", "ＡＢＣ１２３", 24],
+    ["fullwidth punctuation with Latin text", "hello，world", 14],
+    ["mixed BMP and supplementary CJK", "你𠀀好", 24],
+    ["mixed CJK and emoji", "你😀", 6],
+  ])("weights %s", (_label, text, expected) => {
+    expect(estimateStringChars(text)).toBe(expected);
+  });
+
+  it.each([
+    [8, 2],
+    [9, 3],
+    [0, 0],
+    [-10, 0],
+  ])("estimates %s weighted characters as %s tokens", (chars, expected) => {
+    expect(estimateTokensFromChars(chars)).toBe(expected);
   });
 
   it("uses measured weights for halfwidth and supplementary CJK", () => {
@@ -62,5 +84,21 @@ describe("normalization-core/cjk-chars", () => {
 
   it("does not collapse non-CJK surrogate pairs", () => {
     expect(estimateStringChars("\uD83D\uDE00")).toBe(2);
+  });
+
+  it.each([
+    ["\ud800", 1],
+    ["\udfff", 1],
+    ["\ud800a\udfff", 3],
+    ["\u{1D360}\u{20000}", 28],
+    ["\u{20000}\u{20000}", 32],
+  ])("keeps repeated estimates stable for %j", (text, expected) => {
+    expect([text, "ascii", text, "", text].map(estimateStringChars)).toEqual([
+      expected,
+      5,
+      expected,
+      0,
+      expected,
+    ]);
   });
 });

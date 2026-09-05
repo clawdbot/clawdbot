@@ -5,6 +5,7 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
   ReplyRuntimeConfigSchemaShape,
+  ReplyToModeSchema,
   buildChannelConfigSchema,
   buildMultiAccountChannelSchema,
   requireOpenAllowFrom,
@@ -36,6 +37,8 @@ const IrcAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
+    replyToMode: ReplyToModeSchema.optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     host: z.string().optional(),
     port: z.number().int().min(1).max(65535).optional(),
@@ -52,7 +55,6 @@ const IrcAccountSchemaBase = z
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groups: z.record(z.string(), ChannelGroupEntrySchema.optional()).optional(),
     channels: z.array(z.string()).optional(),
-    mentionPatterns: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
     ...ReplyRuntimeConfigSchemaShape,
   })

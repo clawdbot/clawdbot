@@ -26,7 +26,7 @@ type Credentials = {
 };
 type CardState = {
   cardId: string;
-  messageId: string;
+  messageId?: string;
   sequence: number;
   currentText: string;
   sentText: string;
@@ -128,12 +128,22 @@ function resolveAllowedHostnames(domain?: FeishuDomain): string[] {
   return ["open.feishu.cn"];
 }
 
+function cancelUnreadResponseBody(response: Response): void {
+  // A rejected response leaves its body unread; start cancellation before the
+  // guarded dispatcher is released so the connection is not leaked. Do not
+  // await: debug capture can tee the stream and deadlock a waiter.
+  if (!response.bodyUsed) {
+    void response.body?.cancel().catch(() => undefined);
+  }
+}
+
 async function assertSuccessfulCardKitResponse(
   response: Response,
   auditContext: string,
   action: string,
 ): Promise<void> {
   if (!response.ok) {
+    cancelUnreadResponseBody(response);
     throw new Error(`${action} failed with HTTP ${response.status}`);
   }
   const data = await readFeishuJsonResponse<CardKitResponse>(response, auditContext);
@@ -174,6 +184,7 @@ async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise
   };
   try {
     if (!response.ok) {
+      cancelUnreadResponseBody(response);
       throw new Error(`Token request failed with HTTP ${response.status}`);
     }
     data = await readFeishuJsonResponse(response, "feishu.streaming-card.token");
@@ -328,6 +339,7 @@ export class FeishuStreamingSession {
     };
     try {
       if (!createRes.ok) {
+        cancelUnreadResponseBody(createRes);
         throw new Error(`Create card request failed with HTTP ${createRes.status}`);
       }
       createData = await readFeishuJsonResponse(createRes, "feishu.streaming-card.create");
@@ -360,19 +372,6 @@ export class FeishuStreamingSession {
           }),
         "Send card failed",
       );
-    } else if (sendMode === "root_create") {
-      // root_id is undeclared in the SDK types but accepted at runtime
-      sendRes = await requestFeishuApi(
-        () =>
-          this.client.im.message.create({
-            params: { receive_id_type: receiveIdType },
-            data: Object.assign(
-              { receive_id: receiveId, msg_type: "interactive", content: cardContent },
-              { root_id: sendOptions.rootId },
-            ),
-          }),
-        "Send card failed",
-      );
     } else {
       sendRes = await requestFeishuApi(
         () =>
@@ -382,24 +381,27 @@ export class FeishuStreamingSession {
               receive_id: receiveId,
               msg_type: "interactive",
               content: cardContent,
+              // The SDK omits root_id from its types, but Feishu accepts it at runtime.
+              ...(sendMode === "root_create" ? { root_id: sendOptions.rootId } : {}),
             },
           }),
         "Send card failed",
       );
     }
-    if (sendRes.code !== 0 || !sendRes.data?.message_id) {
+    if (sendRes.code !== 0) {
       throw new Error(`Send card failed: ${sendRes.msg}`);
     }
 
+    const messageId = sendRes.data?.message_id?.trim();
     this.state = {
       cardId,
-      messageId: sendRes.data.message_id,
+      ...(messageId ? { messageId } : {}),
       sequence: 1,
       currentText: "",
       sentText: "",
       hasNote: Boolean(options?.note),
     };
-    this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
+    this.log?.(`Started streaming: cardId=${cardId}${messageId ? `, messageId=${messageId}` : ""}`);
   }
 
   private async updateCardContent(
@@ -711,7 +713,7 @@ export class FeishuStreamingSession {
     const result: FeishuStreamingCloseResult = {
       visibleReplySent: visibleContentSent,
       ...(visibleContentSent ? { content: finalState.sentText } : {}),
-      messageId: finalState.messageId,
+      ...(finalState.messageId ? { messageId: finalState.messageId } : {}),
     };
     if (finalWriteError !== undefined || closeError !== undefined) {
       const cause =
@@ -726,40 +728,35 @@ export class FeishuStreamingSession {
     return result;
   }
 
-  async close(finalText?: string, options?: { note?: string }): Promise<boolean> {
-    try {
-      return (await this.closeWithResult(finalText, options)).visibleReplySent;
-    } catch (error: unknown) {
-      if (error instanceof FeishuStreamingFinalizationError) {
-        return error.result.visibleReplySent;
-      }
-      throw error;
-    }
-  }
-
-  async discard(): Promise<void> {
+  async discard(): Promise<FeishuStreamingCloseResult> {
     if (!this.state || this.closed) {
-      return;
+      return { visibleReplySent: false };
+    }
+    const { cardId, messageId } = this.state;
+    if (!messageId) {
+      // Accepted cards without a message receipt can still be cleared by card id.
+      return this.closeWithResult("");
     }
     this.closed = true;
     this.clearFlushTimer();
     await this.queue;
 
-    const currentState = this.state;
     try {
       const response = await this.client.im.message.delete({
-        path: { message_id: currentState.messageId },
+        path: { message_id: messageId },
       });
       if (response.code !== undefined && response.code !== 0) {
         throw new Error(`Delete streaming card message failed: ${response.msg ?? response.code}`);
       }
       this.state = null;
       this.pendingText = null;
-      this.log?.(`Discarded streaming card: cardId=${currentState.cardId}`);
+      this.log?.(`Discarded streaming card: cardId=${cardId}`);
+      return { visibleReplySent: false };
     } catch (error) {
       this.log?.(`Discard failed: ${String(error)}`);
       this.closed = false;
-      await this.close("");
+      // A rejected clear leaves accepted text visible; preserve its receipt and failure.
+      return this.closeWithResult("");
     }
   }
 

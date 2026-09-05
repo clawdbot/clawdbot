@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatQaGatewayLogsForError, redactQaGatewayDebugText } from "./gateway-log-redaction.js";
+import {
+  createQaGatewayCliError,
+  formatQaGatewayLogsForError,
+  redactQaGatewayDebugText,
+} from "./gateway-log-redaction.js";
 
 describe("gateway log redaction", () => {
   it("redacts raw Telegram bot tokens and Bot API URLs", () => {
@@ -24,6 +28,40 @@ describe("gateway log redaction", () => {
     expect(redactQaGatewayDebugText(raw)).not.toContain(token);
     expect(redactQaGatewayDebugText(raw)).toContain("123456…cdef");
     expect(formatQaGatewayLogsForError(raw)).not.toContain(token);
+  });
+
+  it("redacts Buzz QA private keys and authorization tags", () => {
+    const privateKey = "01".repeat(32);
+    const authTag = '["auth","pubkey","conditions","signature"]';
+    const raw = [
+      `privateKey: ${privateKey}`,
+      `authTag: ${authTag}`,
+      `{"privateKey":"${privateKey}"}`,
+      JSON.stringify({ authTag }),
+      `channels.buzz.authTag: ${authTag}`,
+      [
+        "channels.buzz.authTag: [",
+        '  "auth",',
+        '  "pubkey",',
+        '  "conditions",',
+        '  "signature"',
+        "]",
+      ].join("\n"),
+      [
+        "channels.buzz.authTag: [",
+        "  'auth',",
+        "  'pubkey',",
+        "  'conditions',",
+        "  'escaped\\'signature'",
+        "]",
+      ].join("\n"),
+    ].join("\n");
+
+    const redacted = redactQaGatewayDebugText(raw);
+    expect(redacted).not.toContain(privateKey);
+    expect(redacted).not.toContain(authTag);
+    expect(redacted).not.toContain("signature");
+    expect(redacted.match(/<redacted>/gu)).toHaveLength(7);
   });
 
   it("neutralizes GitHub workflow commands at every line boundary", () => {
@@ -59,4 +97,16 @@ describe("gateway log redaction", () => {
     expect(formatQaGatewayLogsForError(raw)).not.toMatch(/(^|[\r\n])[^\S\r\n]*::/u);
     expect(formatQaGatewayLogsForError(raw)).not.toContain("##[");
   });
+
+  it.each([995, 996, 997])(
+    "keeps a CLI truncation boundary inert with %s trailing chars",
+    (padding) => {
+      const raw = `${"context ".repeat(512)}::error::untrusted${"x".repeat(padding)}`;
+      const error = createQaGatewayCliError(raw);
+
+      expect(error.message).toContain("untrusted");
+      expect(error.message.length).toBeLessThanOrEqual(2_048);
+      expect(error.message).not.toMatch(/(^|[\r\n])[^\S\r\n]*::/u);
+    },
+  );
 });

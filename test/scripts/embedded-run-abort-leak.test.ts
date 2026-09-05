@@ -1,17 +1,10 @@
 // Embedded Run Abort Leak tests cover embedded run abort leak script behavior.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { readdirSync } from "node:fs";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempRoots: string[] = [];
-
-function makeTempRoot(): string {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-embedded-abort-leak-test-"));
-  tempRoots.push(root);
-  return root;
-}
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
 function runHarness(args: string[]) {
   return spawnSync(
@@ -24,66 +17,59 @@ function runHarness(args: string[]) {
   );
 }
 
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
 describe("scripts/embedded-run-abort-leak", () => {
-  let looseThresholdProbe: {
-    result: ReturnType<typeof runHarness>;
-    snapDir: string;
-  };
-
-  beforeAll(() => {
-    const snapDir = makeTempRoot();
-    looseThresholdProbe = {
-      result: runHarness(["--snap-dir", snapDir, "--iters", "1e3", "--quiet"]),
-      snapDir,
-    };
-  });
-
-  it("rejects loose numeric thresholds before writing heap snapshots", () => {
-    expect(looseThresholdProbe.result.status).toBe(2);
-    expect(looseThresholdProbe.result.stdout).toBe("");
-    expect(looseThresholdProbe.result.stderr).toContain(
-      "error: --iters must be a positive integer",
-    );
-    expect(readdirSync(looseThresholdProbe.snapDir)).toEqual([]);
-  });
-
-  it("rejects duplicate thresholds before writing heap snapshots", () => {
-    const snapDir = makeTempRoot();
-    const result = runHarness(["--snap-dir", snapDir, "--iters", "1", "--iters", "2", "--quiet"]);
+  it.each([
+    [["--iters", "1e3"], "--iters must be a positive integer"],
+    [["--iters", "0"], "--iters must be a positive integer"],
+    [["--batches", "+1"], "--batches must be a positive integer"],
+    [["--scope-bytes", "9007199254740992"], "--scope-bytes must be a positive integer"],
+    [["--max-rss-growth-mb", "1.5"], "--max-rss-growth-mb must be a non-negative integer"],
+    [
+      ["--max-tracked-retention", "9007199254740992"],
+      "--max-tracked-retention must be a non-negative integer",
+    ],
+    [["--iters", "1", "--iters", "2"], "--iters was provided more than once"],
+    [["--iters", "1", "--iters"], "--iters was provided more than once"],
+    [["--iters", "1", "--iters", "-h"], "--iters was provided more than once"],
+    [["--iters", "  "], "--iters requires a value"],
+    [["--iters", " -1 "], "--iters requires a value"],
+    [["--iters", "-h"], "--iters requires a value"],
+    [["--mode", "-h"], "--mode requires a value"],
+  ])("rejects %j before writing heap snapshots", (args, message) => {
+    const snapDir = tempRoots.make("openclaw-embedded-abort-leak-test-");
+    const result = runHarness(["--snap-dir", snapDir, ...args]);
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("error: --iters was provided more than once");
+    expect(result.stderr).toBe(`error: ${message}\n`);
     expect(readdirSync(snapDir)).toEqual([]);
   });
 
-  it("rejects missing snapshot directories before writing heap snapshots", () => {
-    const result = runHarness(["--snap-dir", "--quiet", "--iters", "1", "--batches", "1"]);
+  it.each(["--quiet", "-h"])("rejects %s as a snapshot directory", (value) => {
+    const result = runHarness(["--snap-dir", value]);
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("error: --snap-dir requires a value");
+    expect(result.stderr).toBe("error: --snap-dir requires a value\n");
   });
 
-  it("rejects short flag values before writing heap snapshots", () => {
-    const snapDirResult = runHarness(["--snap-dir", "-h", "--quiet", "--iters", "1"]);
-    const itersResult = runHarness(["--iters", "-h", "--quiet"]);
-    const modeResult = runHarness(["--mode", "-h", "--quiet"]);
+  it("accepts padded decimal controls and zero thresholds before help", () => {
+    const result = runHarness([
+      "--iters",
+      " 01 ",
+      "--batches",
+      "01",
+      "--scope-bytes",
+      "9007199254740991",
+      "--max-rss-growth-mb",
+      " 0 ",
+      "--max-tracked-retention",
+      "00",
+      "--help",
+    ]);
 
-    expect(snapDirResult.status).toBe(2);
-    expect(snapDirResult.stdout).toBe("");
-    expect(snapDirResult.stderr).toContain("error: --snap-dir requires a value");
-    expect(itersResult.status).toBe(2);
-    expect(itersResult.stdout).toBe("");
-    expect(itersResult.stderr).toContain("error: --iters requires a value");
-    expect(modeResult.status).toBe(2);
-    expect(modeResult.stdout).toBe("");
-    expect(modeResult.stderr).toContain("error: --mode requires a value");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Usage: node --import tsx --expose-gc");
   });
 });

@@ -8,16 +8,19 @@ type FastAbortResult = {
   aborted: boolean;
   rejectionReason?: "finalizing";
   stoppedSubagents?: number;
+  failedSubagents?: number;
 };
 
 /** Runtime hook that may convert a message into an immediate abort action. */
 export type TryFastAbortFromMessage = (params: {
   ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
+  isCommandTargetCurrent?: () => boolean;
 }) => Promise<FastAbortResult>;
 
 /** Formats the user-visible abort acknowledgement text. */
 export type FormatAbortReplyText = (
   stoppedSubagents?: number,
   rejectionReason?: FastAbortResult["rejectionReason"],
+  failedSubagents?: number,
 ) => string;

@@ -1,18 +1,11 @@
 // Slack plugin module implements channel.setup behavior.
+import { isSlackSetupAccountConfigured } from "./account-configured.js";
 import type { ResolvedSlackAccount } from "./accounts.js";
 import type { ChannelPlugin } from "./channel-api.js";
 import { slackBaseConfigAdapter } from "./config-adapter.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
-import {
-  slackSetupAdapter,
-  slackSetupContract,
-  createSlackSetupWizardProxy,
-} from "./setup-core.js";
-import {
-  describeSlackSetupAccount,
-  isSlackSetupAccountConfigured,
-  SLACK_CHANNEL,
-} from "./setup-shared.js";
+import { slackSetupContract, createSlackSetupWizardProxy } from "./setup-core.js";
+import { describeSlackSetupAccount, SLACK_CHANNEL } from "./setup-shared.js";
 
 const slackSetupWizard = createSlackSetupWizardProxy(async () => ({
   slackSetupWizard: (await import("./setup-surface.js")).slackSetupWizard,
@@ -60,6 +53,5 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     isConfigured: (account) => isSlackSetupAccountConfigured(account),
     describeAccount: (account) => describeSlackSetupAccount(account),
   },
-  setup: slackSetupAdapter,
   setupContract: slackSetupContract,
 };

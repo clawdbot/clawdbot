@@ -30,6 +30,23 @@ describe("built-in machine-output resolvers", () => {
     expect(isDoctorMachineOutput({ argv, stdoutIsTTY: true })).toBe(false);
   });
 
+  it("reserves doctor JSON output with or without explicit lint mode", () => {
+    for (const argv of [
+      ["node", "openclaw", "doctor", "--json"],
+      ["node", "openclaw", "doctor", "--lint", "--json"],
+    ]) {
+      expect(isDoctorMachineOutput({ argv, stdoutIsTTY: true })).toBe(true);
+    }
+  });
+
+  it.each(["--post-upgrade", "--state-sqlite=compact", "--session-sqlite=dry-run"])(
+    "preserves registered-command JSON handling for doctor %s",
+    (mode) => {
+      const argv = ["node", "openclaw", "doctor", mode, "--json"];
+      expect(isDoctorMachineOutput({ argv, stdoutIsTTY: true })).toBe(false);
+    },
+  );
+
   it.each(["blob", "coverage", "purge", "query", "sessions"])(
     "detects proxy %s output",
     (command) => {
@@ -67,23 +84,27 @@ describe("built-in machine-output resolvers", () => {
     ).toBe(true);
   });
 
-  it("reserves raw cron scratch and config get output", () => {
+  it("reserves raw cron scratch output", () => {
     expect(isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job"])).toBe(true);
-    expect(isConfigMachineOutput(["node", "openclaw", "config", "get", "gateway.port"])).toBe(true);
     expect(
-      isConfigMachineOutput([
-        "node",
-        "openclaw",
-        "config",
-        "--section",
-        "agents",
-        "get",
-        "gateway.port",
-      ]),
+      isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job", "--set", "note"]),
+    ).toBe(true);
+    expect(isCronMachineOutput(["node", "openclaw", "cron", "scratch", "job", "--unset"])).toBe(
+      true,
+    );
+  });
+
+  it.each(["get", "file", "schema"])("reserves config %s machine output", (subcommand) => {
+    expect(isConfigMachineOutput(["node", "openclaw", "config", subcommand])).toBe(true);
+    expect(
+      isConfigMachineOutput(["node", "openclaw", "config", "--section", "agents", subcommand]),
     ).toBe(true);
   });
 
   it("treats config set --json as parse-only except for JSON dry-run reports", () => {
+    expect(isConfigMachineOutput(["node", "openclaw", "config", "set", "gateway.port"])).toBe(
+      false,
+    );
     expect(
       isConfigSetJsonParseOnly([
         "node",

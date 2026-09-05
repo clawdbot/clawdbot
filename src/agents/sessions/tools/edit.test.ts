@@ -34,6 +34,22 @@ describe("edit tool", () => {
     return filePath;
   }
 
+  async function statEditFile(absolutePath: string) {
+    try {
+      const stat = await fs.stat(absolutePath);
+      return {
+        type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      } as const;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return null;
+      }
+      throw error;
+    }
+  }
+
   it("preserves a valid UTF-8 BOM when editing a real file", async () => {
     const filePath = await createTempFile(Buffer.from("\uFEFFheading\nprice: 5\n", "utf-8"));
     const tool = createEditTool(tmpDir);
@@ -50,6 +66,36 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath)).resolves.toEqual(
       Buffer.from("\uFEFFheading\nprice: 7\n", "utf-8"),
     );
+  });
+
+  it("writes and reports only the requested fuzzy Unicode replacement", async () => {
+    const original =
+      "export const RETRY\u00A0MAX = 3; // \u518D\u8A66\u884C\uFF08\u6700\u5927\uFF13\u56DE\uFF09\uFF71\uFF72\uFF73 \u2014 \u8A2D\u5B9A\n";
+    const expected =
+      "export const RETRY_MAX = 5; // \u518D\u8A66\u884C\uFF08\u6700\u5927\uFF13\u56DE\uFF09\uFF71\uFF72\uFF73 \u2014 \u8A2D\u5B9A\n";
+    const filePath = await createTempFile(original);
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-fuzzy-unicode",
+      {
+        path: filePath,
+        edits: [{ oldText: "export const RETRY MAX = 3;", newText: "export const RETRY_MAX = 5;" }],
+      },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(expected);
+    const details = result.details as EditToolDetails;
+    expect(details.changed).toBe(true);
+    if (!details.changed) {
+      throw new Error("Expected the edit to change the file.");
+    }
+    expect(details.diff).toContain(
+      "+1 export const RETRY_MAX = 5; // \u518D\u8A66\u884C\uFF08\u6700\u5927\uFF13\u56DE\uFF09\uFF71\uFF72\uFF73 \u2014 \u8A2D\u5B9A",
+    );
+    expect(details.diff).not.toContain("// \u518D\u8A66\u884C(\u6700\u59273\u56DE)");
+    expect(applyPatch(original, details.patch)).toBe(expected);
   });
 
   it("rejects invalid UTF-8 without changing a real file", async () => {
@@ -77,6 +123,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile: async () => Buffer.from(original),
+      statFile: async () => null,
       writeFile,
     };
     const tool = createEditTool("/remote/workspace", { operations });
@@ -137,6 +184,7 @@ describe("edit tool", () => {
         await fs.access(absolutePath);
       },
       readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
       writeFile: async (absolutePath, content) => {
         await fs.writeFile(absolutePath, content, "utf-8");
         throw new Error("Simulated post-write failure");
@@ -172,6 +220,7 @@ describe("edit tool", () => {
         await fs.access(absolutePath);
       },
       readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
       writeFile: async () => {
         throw new Error("Simulated write failure");
       },
@@ -190,6 +239,31 @@ describe("edit tool", () => {
     ).rejects.toThrow("Simulated write failure");
   });
 
+  it("rejects false success when a delegated write resolves without persisting", async () => {
+    const filePath = await createTempFile("old\n");
+    const operations: EditOperations = {
+      access: async (absolutePath) => {
+        await fs.access(absolutePath);
+      },
+      readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
+      writeFile: async () => {},
+    };
+    const tool = createEditTool(tmpDir, { operations });
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "old", newText: "new" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow("Edit verification failed");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("old\n");
+  });
+
   it("recovers multi-edit post-write failures", async () => {
     const filePath = await createTempFile("alpha beta gamma delta\n");
     const operations: EditOperations = {
@@ -197,6 +271,7 @@ describe("edit tool", () => {
         await fs.access(absolutePath);
       },
       readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
       writeFile: async (absolutePath, content) => {
         await fs.writeFile(absolutePath, content, "utf-8");
         throw new Error("Simulated post-write failure");
@@ -315,19 +390,79 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("after\n");
   });
 
-  it("renders previews through custom edit operations", async () => {
-    // Preview rendering must use injected operations so remote/sandbox files are
-    // shown without accidentally reading from the host filesystem.
-    const readFile = vi.fn(async () => Buffer.from("remote original\n"));
+  it.each(["local", "injected"] as const)(
+    "renders @ previews through %s operations",
+    async (backend) => {
+      await createTempFile("plain sibling\n");
+      await fs.writeFile(path.join(tmpDir, "@demo.txt"), "local original\n");
+      const readFile = vi.fn(async () => Buffer.from("remote original\n"));
+      const operations: EditOperations = {
+        access: async () => {},
+        readFile,
+        statFile: async () => null,
+        writeFile: async () => {},
+      };
+      const tool = createEditToolDefinition(
+        tmpDir,
+        backend === "injected" ? { operations } : undefined,
+      );
+      const owner = backend === "injected" ? "remote" : "local";
+      const args = {
+        path: "@demo.txt",
+        edits: [{ oldText: `${owner} original`, newText: `${owner} changed` }],
+      };
+      const context = {
+        args,
+        argsComplete: true,
+        cwd: tmpDir,
+        executionStarted: false,
+        expanded: false,
+        invalidate: vi.fn(),
+        isError: false,
+        isPartial: false,
+        lastComponent: undefined,
+        showImages: false,
+        state: {},
+        toolCallId: "call-preview",
+      };
+
+      const component = tool.renderCall?.(args, testTheme, context);
+      await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+
+      if (backend === "injected") {
+        expect(readFile).toHaveBeenCalledWith(path.join(tmpDir, "demo.txt"));
+      } else {
+        expect(readFile).not.toHaveBeenCalled();
+      }
+      const preview = (component as { preview?: { error?: string; diff?: string } } | undefined)
+        ?.preview;
+      expect(preview?.error).toBeUndefined();
+      expect(preview?.diff).toContain(`${owner} changed`);
+      await expect(fs.readFile(path.join(tmpDir, "@demo.txt"), "utf8")).resolves.toBe(
+        "local original\n",
+      );
+      await expect(fs.readFile(path.join(tmpDir, "demo.txt"), "utf8")).resolves.toBe(
+        "plain sibling\n",
+      );
+    },
+  );
+
+  it("renders fuzzy Unicode previews from the original source bytes", async () => {
+    const readFile = vi.fn(async () =>
+      Buffer.from(
+        "const label\u00A0= \u201Chello\u201D; // keep \uFF08\uFF13\uFF09 \u2014 unchanged\n",
+      ),
+    );
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
     const args = {
       path: "remote.txt",
-      edits: [{ oldText: "remote original", newText: "remote changed" }],
+      edits: [{ oldText: 'const label = "hello";', newText: "const label = 'hi';" }],
     };
     const context = {
       args,
@@ -341,16 +476,19 @@ describe("edit tool", () => {
       lastComponent: undefined,
       showImages: false,
       state: {},
-      toolCallId: "call-preview",
+      toolCallId: "call-preview-fuzzy-unicode",
     };
 
     const component = tool.renderCall?.(args, testTheme, context);
     await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
 
-    expect(readFile).toHaveBeenCalledWith(path.join("/workspace", "remote.txt"));
-    expect((component as { preview?: { diff?: string } } | undefined)?.preview?.diff).toContain(
-      "remote changed",
+    const preview = (component as { preview?: { error?: string; diff?: string } } | undefined)
+      ?.preview;
+    expect(preview?.error).toBeUndefined();
+    expect(preview?.diff).toContain(
+      "+1 const label = 'hi'; // keep \uFF08\uFF13\uFF09 \u2014 unchanged",
     );
+    expect(preview?.diff).not.toContain("// keep (3) - unchanged");
   });
 
   it("filters fuzzy no-op edits from mixed previews", async () => {
@@ -358,6 +496,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -399,6 +538,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -432,7 +572,7 @@ describe("edit tool", () => {
     );
   });
 
-  it("returns terminal no-op when oldText equals newText", async () => {
+  it("returns a non-terminal no-op when oldText equals newText", async () => {
     const filePath = await createTempFile("unchanged content\n");
     const tool = createEditTool(tmpDir);
 
@@ -447,7 +587,7 @@ describe("edit tool", () => {
 
     const tc0 = expectDefined(result.content[0], "result.content[0] test invariant");
     expect("text" in tc0 ? tc0.text : "").toContain("No changes made");
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("unchanged content\n");
   });
 
@@ -456,6 +596,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -491,6 +632,7 @@ describe("edit tool", () => {
     const operations: EditOperations = {
       access: async () => {},
       readFile,
+      statFile: async () => null,
       writeFile: async () => {},
     };
     const tool = createEditToolDefinition("/workspace", { operations });
@@ -544,6 +686,7 @@ describe("edit tool", () => {
         await fs.access(absolutePath);
       },
       readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: statEditFile,
       writeFile: async () => {
         throw new Error("No changes made to the disk because it is full");
       },
@@ -575,7 +718,7 @@ describe("edit tool", () => {
       undefined,
     );
 
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo\n");
   });
 
@@ -598,7 +741,7 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("bazbar\n");
   });
 
-  it("preserves unrelated whitespace beside a fuzzy-equivalent no-op", async () => {
+  it("applies exact formatting beside a disjoint content replacement", async () => {
     const filePath = await createTempFile("foo  \nkeep  \n");
     const tool = createEditTool(tmpDir);
 
@@ -614,7 +757,7 @@ describe("edit tool", () => {
       undefined,
     );
 
-    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo  \nchanged  \n");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo\nchanged  \n");
   });
 
   it("rejects duplicate no-op entries", async () => {

@@ -11,6 +11,7 @@ android {
   defaultConfig {
     minSdk = 31
     targetSdk = 36
+    missingDimensionStrategy("store", "play")
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     testInstrumentationRunnerArguments["androidx.benchmark.suppressErrors"] = "DEBUGGABLE,EMULATOR"
   }
@@ -32,6 +33,7 @@ kotlin {
 }
 
 ktlint {
+  version.set(libs.versions.ktlint.cli)
   android.set(true)
   ignoreFailures.set(false)
   filter {

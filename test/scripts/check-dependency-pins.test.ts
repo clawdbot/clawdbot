@@ -3,11 +3,12 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { collectDependencyPinViolations } from "../../scripts/check-dependency-pins.mjs";
-import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
+import { collectDependencyPinViolations } from "../../scripts/check-dependency-pins.mts";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 const itUnix = process.platform === "win32" ? it.skip : it;
+const hangingGitTimeoutMs = 1_000;
 
 const nestedGitEnvKeys = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -45,15 +46,15 @@ function writeJson(filePath: string, value: unknown) {
 function stubHangingGit(cwd: string, stalledSubcommand: "ls-files" | "show") {
   const binDir = path.join(cwd, "fake-git-bin");
   mkdirSync(binDir);
-  const fixture = `#!${process.execPath}
-if (process.argv[2] === ${JSON.stringify(stalledSubcommand)}) {
-  process.on("SIGTERM", () => {});
-  setInterval(() => {}, 1_000);
-} else if (process.argv[2] === "ls-files") {
-  process.stdout.write("package.json\\0");
-} else {
-  process.exitCode = 1;
-}
+  const fixture = `#!/bin/sh
+if [ "$1" = ${JSON.stringify(stalledSubcommand)} ]; then
+  trap '' TERM
+  exec sleep 60
+elif [ "$1" = "ls-files" ]; then
+  printf 'package.json\\000'
+else
+  exit 1
+fi
 `;
   writeFileSync(path.join(binDir, "git"), fixture, { mode: 0o755 });
   vi.stubEnv("PATH", `${binDir}${path.delimiter}${process.env.PATH ?? ""}`);
@@ -82,6 +83,8 @@ describe("check-dependency-pins", () => {
         linked: "link:../linked",
         local: "file:../local",
         gitPinned: "github:owner/repo#0123456789abcdef0123456789abcdef01234567",
+        gitPinnedPath:
+          "github:owner/repo#0123456789abcdef0123456789abcdef01234567&path:packages/pkg",
         tarballPinned:
           "https://codeload.github.com/owner/repo/tar.gz/0123456789abcdef0123456789abcdef01234567",
       },
@@ -100,6 +103,7 @@ describe("check-dependency-pins", () => {
       `overrides:
   exact: 1.2.3
   alias: "npm:@scope/real-package@2.3.4"
+  parent>unused-adapter: "-"
 packageExtensions:
   parent@1.0.0:
     dependencies:
@@ -122,7 +126,11 @@ packageExtensions:
         wildcard: "*",
         tag: "latest",
         broad: ">=1 <2",
+        malformedSemver: "01.2.3",
         gitFloating: "github:owner/repo#main",
+        fragmentlessGitPath:
+          "git+https://github.com/owner/repo/commit/0123456789abcdef0123456789abcdef01234567",
+        invalidRemoval: "-",
       },
     });
     writeJson(path.join(dir, "extensions", "demo", "package.json"), {
@@ -159,9 +167,22 @@ packageExtensions:
       {
         file: "package.json",
         section: "dependencies",
+        name: "malformedSemver",
+        spec: "01.2.3",
+      },
+      {
+        file: "package.json",
+        section: "dependencies",
         name: "gitFloating",
         spec: "github:owner/repo#main",
       },
+      {
+        file: "package.json",
+        section: "dependencies",
+        name: "fragmentlessGitPath",
+        spec: "git+https://github.com/owner/repo/commit/0123456789abcdef0123456789abcdef01234567",
+      },
+      { file: "package.json", section: "dependencies", name: "invalidRemoval", spec: "-" },
     ]);
   });
 
@@ -184,8 +205,10 @@ packageExtensions:
     const dir = makeTempRepoRoot(tempDirs, "openclaw-dependency-pins-ls-files-timeout-");
     stubHangingGit(dir, "ls-files");
 
-    expect(() => collectDependencyPinViolations(dir, { gitTimeoutMs: 200 })).toThrow(
-      "dependency pin guard: git ls-files -z -- *package.json timed out after 200ms.",
+    expect(() =>
+      collectDependencyPinViolations(dir, { gitTimeoutMs: hangingGitTimeoutMs }),
+    ).toThrow(
+      `dependency pin guard: git ls-files -z -- *package.json timed out after ${hangingGitTimeoutMs}ms.`,
     );
   });
 
@@ -198,8 +221,10 @@ packageExtensions:
       rmSync(path.join(dir, "package.json"));
       stubHangingGit(dir, "show");
 
-      expect(() => collectDependencyPinViolations(dir, { gitTimeoutMs: 200 })).toThrow(
-        "dependency pin guard: git show :package.json timed out after 200ms.",
+      expect(() =>
+        collectDependencyPinViolations(dir, { gitTimeoutMs: hangingGitTimeoutMs }),
+      ).toThrow(
+        `dependency pin guard: git show :package.json timed out after ${hangingGitTimeoutMs}ms.`,
       );
     },
   );

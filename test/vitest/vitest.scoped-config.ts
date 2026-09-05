@@ -1,10 +1,11 @@
 // Vitest scoped config helper builds test configs for scoped file patterns.
 import path from "node:path";
-import { defineConfig } from "vitest/config";
+import { defineConfig, type ViteUserConfig } from "vitest/config";
 import {
   intersectIncludePatterns,
   loadPatternListFromEnv,
   narrowIncludePatternsForCli,
+  relativizeScopedPatterns,
 } from "./vitest.pattern-file.ts";
 import {
   nonIsolatedRunnerPath,
@@ -16,28 +17,6 @@ import { getUnitFastTestFilesForIncludePatterns } from "./vitest.unit-fast-paths
 
 function normalizePathPattern(value: string): string {
   return value.replaceAll("\\", "/");
-}
-
-function relativizeScopedPattern(value: string, dir: string): string {
-  const normalizedValue = normalizePathPattern(value);
-  const normalizedDir = normalizePathPattern(dir).replace(/\/+$/u, "");
-  if (!normalizedDir) {
-    return normalizedValue;
-  }
-  if (normalizedValue === normalizedDir) {
-    return ".";
-  }
-  const prefix = `${normalizedDir}/`;
-  return normalizedValue.startsWith(prefix)
-    ? normalizedValue.slice(prefix.length)
-    : normalizedValue;
-}
-
-function relativizeScopedPatterns(values: string[], dir?: string): string[] {
-  if (!dir) {
-    return values.map(normalizePathPattern);
-  }
-  return values.map((value) => relativizeScopedPattern(value, dir));
 }
 
 function globRoot(pattern: string): string | null {
@@ -142,6 +121,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "extension-zalo",
     "extensions",
     "gateway",
+    "gateway-methods-isolated",
     "hooks",
     "infra",
     "logging",
@@ -219,7 +199,9 @@ export function createScopedVitestConfig(
     setupFiles?: string[];
     useNonIsolatedRunner?: boolean;
   },
-) {
+  // Explicit nameable return type: inference otherwise reaches vite-internal
+  // names (TS4058/TS4082) in every downstream scoped-config creator.
+): ViteUserConfig {
   const base = sharedVitestConfig as Record<string, unknown>;
   const baseTest = sharedVitestConfig.test ?? {};
   const baseSequence = (baseTest as { sequence?: { groupOrder?: number } }).sequence;

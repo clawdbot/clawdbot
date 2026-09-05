@@ -1,6 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import { runApprovalRequestDeliveries } from "./approval-request-delivery.js";
+
+const handleApprovalWebPushRequestedMock = vi.fn(() => false);
 
 const approvalDeliveryCallers = [
   {
@@ -45,88 +50,108 @@ async function expectPromptDelivery(delivery: boolean | Promise<boolean>): Promi
   }
 }
 
-describe("runApprovalRequestDeliveries", () => {
-  it("returns false synchronously when no external routes exist", () => {
-    const manager = new ExecApprovalManager();
-    const record = manager.create({ command: "echo ok" }, 60_000, "approval-no-delivery");
+function deliveryContext(error?: (message: string) => void) {
+  return {
+    approvalWebPushDelivery: { handleRequested: handleApprovalWebPushRequestedMock },
+    ...(error ? { logGateway: { error } } : {}),
+  };
+}
 
-    expect(runApprovalRequestDeliveries({ context: {}, record })).toBe(false);
+describe("runApprovalRequestDeliveries", () => {
+  beforeEach(() => {
+    handleApprovalWebPushRequestedMock.mockReset();
+    handleApprovalWebPushRequestedMock.mockReturnValue(false);
   });
 
-  it.each(approvalDeliveryCallers)(
-    "immediately reports a successful $name forward while iOS push remains pending",
-    async ({ approvalKind, id, request }) => {
-      const manager = new ExecApprovalManager<typeof request>({ approvalKind });
+  it("returns false synchronously when no external routes exist", (testContext) => {
+    const manager = createTestApprovalManager(testContext);
+    const record = manager.create({ command: "echo ok" }, 60_000, "approval-no-delivery");
+
+    expect(runApprovalRequestDeliveries({ context: deliveryContext(), record })).toBe(false);
+  });
+
+  it("counts a successful approval Web Push as an external route", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
+    const record = manager.create({ command: "echo ok" }, 60_000, "approval-web-push");
+    handleApprovalWebPushRequestedMock.mockResolvedValue(true);
+
+    const delivery = runApprovalRequestDeliveries({ context: deliveryContext(), record });
+
+    await expect(delivery).resolves.toBe(true);
+    expect(handleApprovalWebPushRequestedMock).toHaveBeenCalledWith(record);
+  });
+
+  it.for(
+    (["forward", "push"] as const).flatMap((successfulRoute) =>
+      approvalDeliveryCallers.map((caller) => ({ caller, successfulRoute })),
+    ),
+  )(
+    "immediately reports a successful $caller.name $successfulRoute while the other route remains pending",
+    async ({ caller, successfulRoute }, testContext) => {
+      const { approvalKind, id, request } = caller;
+      const manager = createTestApprovalManager<typeof request>(testContext, { approvalKind });
       const record = manager.create(request, 60_000, id);
+      const scope = new AsyncWorkScope();
+      const release = createDeferredCore<boolean>();
       const started: string[] = [];
-
-      const delivery = runApprovalRequestDeliveries({
-        context: {},
-        record,
-        forward: [
-          async () => {
-            started.push("forward");
+      const routeTasks: Promise<boolean>[] = [];
+      let pendingRouteFinished = false;
+      const route = (name: "forward" | "push") => {
+        const task = (async () => {
+          started.push(name);
+          if (name === successfulRoute) {
             return true;
-          },
-          "forward failed",
-        ],
-        iosPush: [
-          async () => {
-            started.push("push");
-            return await new Promise<boolean>(() => {});
-          },
-          "push failed",
-        ],
-      });
-
-      expect(started).toEqual(["forward", "push"]);
-      await expectPromptDelivery(delivery);
+          }
+          const delivered = await release.promise;
+          pendingRouteFinished = true;
+          return delivered;
+        })();
+        routeTasks.push(task);
+        return task;
+      };
+      let draining: Promise<void> | undefined;
+      let drained = false;
+      try {
+        const delivery = scope.track(() =>
+          runApprovalRequestDeliveries({
+            context: deliveryContext(),
+            record,
+            forward: [() => route("forward"), "forward failed"],
+            iosPush: [() => route("push"), "push failed"],
+          }),
+        );
+        expect(started).toEqual(["forward", "push"]);
+        await expectPromptDelivery(delivery);
+        expect(pendingRouteFinished).toBe(false);
+        draining = scope.drain().then(() => {
+          drained = true;
+        });
+        await nextTurn();
+        // Fast delivery acknowledgement must not release the other route's active work.
+        expect(drained).toBe(false);
+        release.resolve(true);
+        await draining;
+        expect(pendingRouteFinished).toBe(true);
+      } finally {
+        release.resolve(true);
+        await Promise.allSettled(routeTasks);
+        await (draining ?? scope.drain());
+      }
     },
   );
 
-  it.each(approvalDeliveryCallers)(
-    "immediately reports a successful $name iOS push while forwarding remains pending",
-    async ({ approvalKind, id, request }) => {
-      const manager = new ExecApprovalManager<typeof request>({ approvalKind });
-      const record = manager.create(request, 60_000, id);
-      const started: string[] = [];
-
-      const delivery = runApprovalRequestDeliveries({
-        context: {},
-        record,
-        forward: [
-          async () => {
-            started.push("forward");
-            return await new Promise<boolean>(() => {});
-          },
-          "forward failed",
-        ],
-        iosPush: [
-          async () => {
-            started.push("push");
-            return true;
-          },
-          "push failed",
-        ],
-      });
-
-      expect(started).toEqual(["forward", "push"]);
-      await expectPromptDelivery(delivery);
-    },
-  );
-
-  it.each([
+  it.for([
     { name: "both routes decline", forwardRejects: false, pushRejects: false },
     { name: "forwarding rejects", forwardRejects: true, pushRejects: false },
     { name: "iOS push rejects", forwardRejects: false, pushRejects: true },
     { name: "both routes reject", forwardRejects: true, pushRejects: true },
-  ])("reports false after $name", async ({ forwardRejects, pushRejects }) => {
-    const manager = new ExecApprovalManager();
+  ])("reports false after $name", async ({ forwardRejects, pushRejects }, testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-all-deliveries-fail");
     const error = vi.fn();
 
     const delivery = runApprovalRequestDeliveries({
-      context: { logGateway: { error } },
+      context: deliveryContext(error),
       record,
       forward: [
         async () => {
@@ -158,8 +183,8 @@ describe("runApprovalRequestDeliveries", () => {
     }
   });
 
-  it("continues handling a late route rejection after another route succeeds", async () => {
-    const manager = new ExecApprovalManager();
+  it("continues handling a late route rejection after another route succeeds", async (testContext) => {
+    const manager = createTestApprovalManager(testContext);
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-late-push-failure");
     const error = vi.fn();
     let rejectPush: ((reason: Error) => void) | undefined;
@@ -168,7 +193,7 @@ describe("runApprovalRequestDeliveries", () => {
     });
 
     const delivery = runApprovalRequestDeliveries({
-      context: { logGateway: { error } },
+      context: deliveryContext(error),
       record,
       forward: [async () => true, "forward failed"],
       iosPush: [async () => await pendingPush, "push failed"],
@@ -182,7 +207,7 @@ describe("runApprovalRequestDeliveries", () => {
     });
   });
 
-  it.each([
+  it.for([
     {
       failedRoute: "forward",
       expectedError: "forward failed: Error: offline",
@@ -193,8 +218,8 @@ describe("runApprovalRequestDeliveries", () => {
     },
   ] as const)(
     "starts every route before awaiting and isolates $failedRoute failures",
-    async ({ failedRoute, expectedError }) => {
-      const manager = new ExecApprovalManager();
+    async ({ failedRoute, expectedError }, testContext) => {
+      const manager = createTestApprovalManager(testContext);
       const record = manager.create({ command: "echo ok" }, 60_000, "approval-deliveries");
       const started: string[] = [];
       const error = vi.fn();
@@ -204,7 +229,7 @@ describe("runApprovalRequestDeliveries", () => {
       });
 
       const delivery = runApprovalRequestDeliveries({
-        context: { logGateway: { error } },
+        context: deliveryContext(error),
         record,
         forward: [
           async () => {

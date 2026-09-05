@@ -1,14 +1,19 @@
 // Tests applying parsed directives to get-reply execution options.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
-import { parseInlineDirectives } from "./directive-handling.parse.js";
+import { applyMixedDirectives } from "./directive-handling.mixed-inline.test-helpers.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
+import { resolveDirectiveRuntimeContext } from "./directive-runtime-context.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
+import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
 import { buildTestCtx } from "./test-ctx.js";
+import { createMockTypingController } from "./test-helpers.js";
+import { createTypingController } from "./typing.js";
 
 const mocks = vi.hoisted(() => ({
-  fastLane: vi.fn(),
-  persist: vi.fn(),
+  handleDirective: vi.fn(),
+  applyModelSelection: vi.fn(),
   systemEvent: vi.fn(),
 }));
 
@@ -16,21 +21,122 @@ vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => mocks.systemEvent(...args),
 }));
 
-vi.mock("./directive-handling.fast-lane.js", () => ({
-  applyInlineDirectivesFastLane: (...args: unknown[]) => mocks.fastLane(...args),
+vi.mock("./directive-handling.impl.js", () => ({
+  handleDirectiveOnly: (...args: unknown[]) => mocks.handleDirective(...args),
 }));
 
 vi.mock("./directive-handling.persist.runtime.js", () => ({
-  persistInlineDirectives: (...args: unknown[]) => mocks.persist(...args),
+  applySessionModelSelection: (...args: unknown[]) => mocks.applyModelSelection(...args),
 }));
 
 beforeEach(() => {
-  mocks.fastLane.mockReset();
-  mocks.persist.mockReset();
+  mocks.handleDirective.mockReset();
+  mocks.applyModelSelection.mockReset();
   mocks.systemEvent.mockReset();
 });
 
 describe("applyInlineDirectiveOverrides", () => {
+  it("returns the elevated denial for a prepared global owner", async () => {
+    const ctx = buildTestCtx({
+      Body: "/elevated on",
+      CommandBody: "/elevated on",
+      CommandAuthorized: true,
+      SessionKey: "global",
+      Provider: "webchat",
+      Surface: "webchat",
+    });
+    const result = await resolveReplyDirectives({
+      ctx,
+      cfg: {
+        agents: { ownership: "explicit", entries: { target: {}, other: {} } },
+        tools: { elevated: { enabled: false } },
+      },
+      agentId: "target",
+      agentDir: "/tmp/target-agent",
+      workspaceDir: "/tmp/workspace",
+      agentCfg: {},
+      sessionCtx: ctx,
+      sessionEntry: { sessionId: "global-session", updatedAt: 1 },
+      sessionStore: {},
+      sessionKey: "global",
+      sessionScope: "global",
+      groupResolution: undefined,
+      isGroup: false,
+      triggerBodyNormalized: "/elevated on",
+      resetTriggered: false,
+      commandAuthorized: true,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: { byAlias: new Map(), byKey: new Map() },
+      provider: "openai",
+      model: "gpt-5.5",
+      hasResolvedHeartbeatModelOverride: false,
+      typing: createTypingController({}),
+    });
+
+    expect(result).toMatchObject({
+      kind: "reply",
+      reply: { text: expect.stringContaining("elevated is not available") },
+    });
+    expect(mocks.handleDirective).not.toHaveBeenCalled();
+  });
+
+  it("keeps the prepared global owner through directive application and context budgeting", async () => {
+    const { result } = await applyMixedDirectives({
+      body: "hello /verbose on",
+      cfg: { agents: { ownership: "explicit", entries: { main: {}, other: {} } } },
+      sessionKey: "global",
+    });
+
+    expect(result.kind).toBe("continue");
+    expect(mocks.handleDirective).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+    );
+  });
+
+  it("uses the prepared global owner for directive runtime policy", () => {
+    const params = {
+      cfg: {
+        session: { scope: "global" as const },
+        agents: { ownership: "explicit" as const, entries: { target: {}, other: {} } },
+      },
+      agentId: "target",
+      sessionKey: "global",
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        ChatType: "direct",
+        SenderId: "sender",
+        AccountId: "default",
+      }),
+    };
+
+    const result = resolveDirectiveRuntimeContext(params);
+
+    expect(result.activeAgentId).toBe("target");
+    expect(result.runtimePolicySessionKey).toBe("agent:target:telegram:default:direct:sender");
+  });
+
+  it("keeps the active agent when an independent directive policy belongs to another agent", () => {
+    const result = resolveDirectiveRuntimeContext({
+      cfg: {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            target: { sandbox: { mode: "off" } },
+            main: { sandbox: { mode: "all" } },
+          },
+        },
+      },
+      agentId: "target",
+      sessionKey: "agent:target:main",
+      ctx: buildTestCtx({ RuntimePolicySessionKey: "agent:main:group" }),
+    });
+
+    expect(result.activeAgentId).toBe("target");
+    expect(result.runtimePolicySessionKey).toBe("agent:main:group");
+    expect(result.runtimeIsSandboxed).toBe(true);
+  });
+
   it.each([
     {
       rejectedRef: "ollama/Gemma4-26b-a4-it-gguf",
@@ -72,17 +178,10 @@ describe("applyInlineDirectiveOverrides", () => {
       modelPolicyRepairConfigPath,
       expected,
     }) => {
-      const directives = parseInlineDirectives("hello /model openai/gpt-5.4 --runtime openclaw");
-      const typing = {
-        onReplyStart: async () => {},
-        startTypingLoop: async () => {},
-        startTypingOnText: async () => {},
-        refreshTypingTtl: () => {},
-        isActive: () => false,
-        markRunComplete: () => {},
-        markDispatchIdle: () => {},
-        cleanup: vi.fn(),
-      };
+      const directives = parseInlineSessionDirectives(
+        "hello /model openai/gpt-5.4 --runtime openclaw",
+      );
+      const typing = createMockTypingController();
       const sessionEntry = {
         sessionId: "session-1",
         updatedAt: 1,
@@ -152,11 +251,11 @@ describe("applyInlineDirectiveOverrides", () => {
 
       expect(result).toEqual({
         kind: "reply",
-        reply: { text: MODEL_SELECTION_LOCKED_MESSAGE },
+        reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
       });
       expect(typing.cleanup).toHaveBeenCalledOnce();
-      expect(mocks.fastLane).not.toHaveBeenCalled();
-      expect(mocks.persist).not.toHaveBeenCalled();
+      expect(mocks.handleDirective).not.toHaveBeenCalled();
+      expect(mocks.applyModelSelection).not.toHaveBeenCalled();
       expect(mocks.systemEvent).toHaveBeenCalledWith(expected, {
         sessionKey: "agent:main:main",
         contextKey: "model:reset:openai/gpt-5.5",
@@ -173,159 +272,86 @@ describe("applyInlineDirectiveOverrides", () => {
     },
   );
 
-  it("stops a mixed inline turn when final directive persistence loses", async () => {
-    const directives = parseInlineDirectives("hello /elevated full");
-    mocks.fastLane.mockResolvedValue({
-      directiveAck: { text: "Elevated FULL enabled." },
-      provider: "openai",
-      model: "gpt-5.5",
-      sessionChangesApplied: true,
-    });
-    mocks.persist.mockResolvedValue({
-      provider: "openai",
+  it.each([
+    {
+      reason: "its single directive transaction loses",
+      body: "hello /elevated full",
+      errorText: "Session settings were not applied because the session changed. Retry.",
       model: "gpt-5.5",
       contextTokens: 8192,
-      sessionChangesApplied: false,
-    });
-    const typing = {
-      onReplyStart: async () => {},
-      startTypingLoop: async () => {},
-      startTypingOnText: async () => {},
-      refreshTypingTtl: () => {},
-      isActive: () => false,
-      markRunComplete: () => {},
-      markDispatchIdle: () => {},
-      cleanup: vi.fn(),
-    };
-    const sessionEntry = { sessionId: "session-1", updatedAt: 1 };
-
-    const result = await applyInlineDirectiveOverrides({
-      ctx: buildTestCtx({ Body: "hello /elevated full", CommandAuthorized: true }),
-      cfg: {},
-      agentId: "main",
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-      agentCfg: {},
-      sessionEntry,
-      sessionStore: { "agent:main:main": sessionEntry },
-      sessionKey: "agent:main:main",
-      sessionScope: undefined,
-      isGroup: false,
-      allowTextCommands: true,
-      command: {
-        surface: "webchat",
-        channel: "webchat",
-        ownerList: [],
-        senderIsOwner: true,
-        isAuthorizedSender: true,
-        rawBodyNormalized: "hello /elevated full",
-        commandBodyNormalized: "hello /elevated full",
-      },
-      directives,
-      messageProviderKey: "webchat",
-      elevatedEnabled: true,
-      elevatedAllowed: true,
-      elevatedFailures: [],
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      aliasIndex: { byAlias: new Map(), byKey: new Map() },
-      provider: "openai",
-      model: "gpt-5.5",
-      modelState: createFastTestModelSelectionState({
-        agentCfg: {},
-        provider: "openai",
-        model: "gpt-5.5",
-      }),
-      initialModelLabel: "openai/gpt-5.5",
-      formatModelSwitchEvent: (label) => label,
-      resolvedElevatedLevel: "full",
-      defaultActivation: () => "always",
-      contextTokens: 8192,
-      typing,
-    });
-
-    expect(result).toEqual({
-      kind: "reply",
-      reply: { text: "Session settings were not applied because the session changed. Retry." },
-    });
-    expect(typing.cleanup).toHaveBeenCalledOnce();
-  });
-
-  it("stops a mixed inline turn when final thinking validation fails", async () => {
-    const errorText =
-      'Thinking level "ultra" is not supported for openai/gpt-5.6-luna. Use one of: off, low, medium, high, max.';
-    const directives = parseInlineDirectives("/think ultra please solve");
-    mocks.fastLane.mockResolvedValue({
-      directiveAck: { text: errorText },
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      sessionChangesApplied: true,
-    });
-    mocks.persist.mockResolvedValue({
-      provider: "openai",
+      resolvedElevatedLevel: "full" as const,
+    },
+    {
+      reason: "its transaction rejects unsupported thinking",
+      body: "/think ultra please solve",
+      errorText:
+        'Thinking level "ultra" is not supported for openai/gpt-5.6-luna. Use one of: off, low, medium, high, max.',
       model: "gpt-5.6-luna",
       contextTokens: 372_000,
-      sessionChangesApplied: true,
-      errorText,
-    });
-    const typing = {
-      onReplyStart: async () => {},
-      startTypingLoop: async () => {},
-      startTypingOnText: async () => {},
-      refreshTypingTtl: () => {},
-      isActive: () => false,
-      markRunComplete: () => {},
-      markDispatchIdle: () => {},
-      cleanup: vi.fn(),
-    };
-    const sessionEntry = { sessionId: "session-1", updatedAt: 1 };
+      resolvedElevatedLevel: "off" as const,
+    },
+  ])(
+    "stops a mixed inline turn when $reason",
+    async ({ body, errorText, model, contextTokens, resolvedElevatedLevel }) => {
+      const directives = parseInlineSessionDirectives(body);
+      mocks.handleDirective.mockImplementation(async (params) => {
+        params.persistenceState.outcome = { kind: "rejected", errorText };
+        return { text: errorText };
+      });
+      const typing = createMockTypingController();
+      const sessionEntry = { sessionId: "session-1", updatedAt: 1 };
 
-    const result = await applyInlineDirectiveOverrides({
-      ctx: buildTestCtx({ Body: "/think ultra please solve", CommandAuthorized: true }),
-      cfg: {},
-      agentId: "main",
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-      agentCfg: {},
-      sessionEntry,
-      sessionStore: { "agent:main:main": sessionEntry },
-      sessionKey: "agent:main:main",
-      sessionScope: undefined,
-      isGroup: false,
-      allowTextCommands: true,
-      command: {
-        surface: "webchat",
-        channel: "webchat",
-        ownerList: [],
-        senderIsOwner: true,
-        isAuthorizedSender: true,
-        rawBodyNormalized: "/think ultra please solve",
-        commandBodyNormalized: "/think ultra please solve",
-      },
-      directives,
-      messageProviderKey: "webchat",
-      elevatedEnabled: true,
-      elevatedAllowed: true,
-      elevatedFailures: [],
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.6-luna",
-      aliasIndex: { byAlias: new Map(), byKey: new Map() },
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      modelState: createFastTestModelSelectionState({
+      const result = await applyInlineDirectiveOverrides({
+        ctx: buildTestCtx({ Body: body, CommandAuthorized: true }),
+        cfg: {},
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        workspaceDir: "/tmp/workspace",
         agentCfg: {},
+        sessionEntry,
+        sessionStore: { "agent:main:main": sessionEntry },
+        sessionKey: "agent:main:main",
+        sessionScope: undefined,
+        isGroup: false,
+        allowTextCommands: true,
+        command: {
+          surface: "webchat",
+          channel: "webchat",
+          ownerList: [],
+          senderIsOwner: true,
+          isAuthorizedSender: true,
+          rawBodyNormalized: body,
+          commandBodyNormalized: body,
+        },
+        directives,
+        messageProviderKey: "webchat",
+        elevatedEnabled: true,
+        elevatedAllowed: true,
+        elevatedFailures: [],
+        defaultProvider: "openai",
+        defaultModel: model,
+        aliasIndex: { byAlias: new Map(), byKey: new Map() },
         provider: "openai",
-        model: "gpt-5.6-luna",
-      }),
-      initialModelLabel: "openai/gpt-5.6-luna",
-      formatModelSwitchEvent: (label) => label,
-      resolvedElevatedLevel: "off",
-      defaultActivation: () => "always",
-      contextTokens: 372_000,
-      typing,
-    });
+        model,
+        modelState: createFastTestModelSelectionState({
+          agentCfg: {},
+          provider: "openai",
+          model,
+        }),
+        initialModelLabel: `openai/${model}`,
+        formatModelSwitchEvent: (label) => label,
+        resolvedElevatedLevel,
+        defaultActivation: () => "always",
+        contextTokens,
+        typing,
+      });
 
-    expect(result).toEqual({ kind: "reply", reply: { text: errorText } });
-    expect(typing.cleanup).toHaveBeenCalledOnce();
-  });
+      expect(result).toEqual({
+        kind: "reply",
+        reply: { text: errorText, isError: true },
+      });
+      expect(typing.cleanup).toHaveBeenCalledOnce();
+      expect(mocks.handleDirective).toHaveBeenCalledOnce();
+    },
+  );
 });

@@ -1,5 +1,5 @@
 // Discord tests cover setup account state plugin behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   inspectDiscordSetupAccount,
   resolveDefaultDiscordSetupAccountId,
@@ -7,6 +7,8 @@ import {
 } from "./setup-account-state.js";
 
 describe("discord setup account state", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it("resolves setup account config when account key casing differs from normalized id", () => {
     const resolved = resolveDiscordSetupAccountConfig({
       cfg: {
@@ -94,5 +96,21 @@ describe("discord setup account state", () => {
     expect(inspected.tokenSource).toBe("config");
     expect(inspected.tokenStatus).toBe("configured_unavailable");
     expect(inspected.configured).toBe(true);
+  });
+
+  it("keeps the runtime resolver's default-account-only environment fallback", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "Bot setup-token");
+
+    expect(inspectDiscordSetupAccount({ cfg: {}, accountId: "default" })).toMatchObject({
+      token: "setup-token",
+      tokenSource: "env",
+      configured: true,
+    });
+    expect(
+      inspectDiscordSetupAccount({
+        cfg: { channels: { discord: { accounts: { work: {} } } } },
+        accountId: "work",
+      }),
+    ).toMatchObject({ token: "", tokenSource: "none", configured: false });
   });
 });

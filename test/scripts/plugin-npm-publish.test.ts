@@ -1,6 +1,6 @@
 // Plugin NPM Publish tests cover publish wrapper argument safety.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -23,7 +23,7 @@ function runPluginPublishWrapper(args: string[], env: NodeJS.ProcessEnv = {}) {
   });
 }
 
-function makePackage(version: string): { packageDir: string; path: string } {
+function makePackage(version: string): { packageDir: string; path: string; root: string } {
   const root = mkdtempSync(join(tmpdir(), "openclaw-plugin-publish-test-"));
   tempDirs.push(root);
   const packageDir = join(root, "plugin");
@@ -37,16 +37,41 @@ function makePackage(version: string): { packageDir: string; path: string } {
   const npmPath = join(binDir, "npm");
   writeFileSync(npmPath, "#!/bin/sh\nexit 1\n");
   chmodSync(npmPath, 0o755);
-  return { packageDir, path: `${binDir}${delimiter}${process.env.PATH ?? ""}` };
+  return { packageDir, path: `${binDir}${delimiter}${process.env.PATH ?? ""}`, root };
 }
 
 describe("plugin npm publish wrapper", () => {
+  it("revalidates release tooling after preparation and immediately before npm publish", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const buildIndex = source.indexOf("build_package_runtime");
+    const identityIndex = source.indexOf("\n  verify_release_tooling_identity", buildIndex);
+    const publishIndex = source.indexOf(
+      'run_with_manifest_overlay "${publish_cmd[@]}"',
+      identityIndex,
+    );
+
+    expect(buildIndex).toBeGreaterThan(-1);
+    expect(identityIndex).toBeGreaterThan(buildIndex);
+    expect(publishIndex).toBeGreaterThan(identityIndex);
+    expect(source.slice(identityIndex, publishIndex)).not.toContain("npm view");
+  });
+
+  it("revalidates release tooling immediately before every npm dist-tag mutation", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    const distTagIndex = source.indexOf('npm dist-tag add "${package_name}@${package_version}"');
+    const identityIndex = source.lastIndexOf("verify_release_tooling_identity", distTagIndex);
+
+    expect(identityIndex).toBeGreaterThan(-1);
+    expect(distTagIndex).toBeGreaterThan(identityIndex);
+    expect(source.slice(identityIndex, distTagIndex)).not.toContain("npm view");
+  });
+
   it("prints help before package or npm checks", () => {
     const result = runPluginPublishWrapper(["--help"]);
 
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(
-      "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack|--pack-dry-run|--publish] <package-dir>",
+      "usage: bash scripts/plugin-npm-publish.sh [--repo-root <dir>] [--dry-run|--pack|--pack-dry-run|--publish] <package-dir>",
     );
     expect(result.stderr).toBe("");
   });
@@ -57,8 +82,20 @@ describe("plugin npm publish wrapper", () => {
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe(
-      "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack|--pack-dry-run|--publish] <package-dir>",
+      "usage: bash scripts/plugin-npm-publish.sh [--repo-root <dir>] [--dry-run|--pack|--pack-dry-run|--publish] <package-dir>",
     );
+  });
+
+  it("runs trusted tooling against an explicit repository root", () => {
+    const fixture = makePackage("2026.8.1-beta.1");
+    const result = runPluginPublishWrapper(["--repo-root", fixture.root, "--dry-run", "plugin"], {
+      PATH: fixture.path,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`Resolved repository root: ${fixture.root}`);
+    expect(result.stdout).toContain(`Resolved package dir: ${fixture.packageDir}`);
+    expect(result.stdout).toContain("Resolved package name: @openclaw/demo");
   });
 
   it("requires an explicit artifact directory for real pack mode", () => {

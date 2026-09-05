@@ -115,59 +115,75 @@ export function renderNostrCard(params: {
       <div class="settings-row">
         <div class="settings-row__text">
           <span class="settings-row__title">${t("channels.nostr.profile")}</span>
-          ${hasAnyProfileData
-            ? nothing
-            : html`<span class="settings-row__desc"
-                >${t("channels.nostr.noProfile")} ${t("channels.nostr.noProfileHint")}</span
-              >`}
+          ${
+            hasAnyProfileData
+              ? nothing
+              : html`<span class="settings-row__desc"
+                  >${t("channels.nostr.noProfile")} ${t("channels.nostr.noProfileHint")}</span
+                >`
+          }
         </div>
-        ${summaryConfigured
-          ? html`
-              <div class="settings-row__control">
-                <button class="btn btn--sm" @click=${onEditProfile}>
-                  ${t("channels.nostr.editProfile")}
-                </button>
-              </div>
-            `
-          : nothing}
+        ${
+          summaryConfigured
+            ? html`
+                <div class="settings-row__control">
+                  <button class="btn btn--sm" @click=${onEditProfile}>
+                    ${t("channels.nostr.editProfile")}
+                  </button>
+                </div>
+              `
+            : nothing
+        }
       </div>
-      ${hasAnyProfileData
-        ? html`
-            <dl class="settings-kv">
-              ${picture
-                ? html`
-                    <dt>${t("channels.nostr.profilePicture")}</dt>
-                    <dd>
-                      <img
-                        style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover;"
-                        src=${picture}
-                        alt=${t("channels.nostr.profilePicture")}
-                        @error=${(e: Event) => {
-                          (e.target as HTMLImageElement).style.display = "none";
-                        }}
-                      />
-                    </dd>
-                  `
-                : nothing}
-              ${name
-                ? html`<dt>${t("channels.nostr.name")}</dt>
-                    <dd>${name}</dd>`
-                : nothing}
-              ${displayName
-                ? html`<dt>${t("channels.nostr.displayName")}</dt>
-                    <dd>${displayName}</dd>`
-                : nothing}
-              ${about
-                ? html`<dt>${t("channels.nostr.about")}</dt>
-                    <dd>${about}</dd>`
-                : nothing}
-              ${nip05
-                ? html`<dt>NIP-05</dt>
-                    <dd>${nip05}</dd>`
-                : nothing}
-            </dl>
-          `
-        : nothing}
+      ${
+        hasAnyProfileData
+          ? html`
+              <dl class="settings-kv">
+                ${
+                  picture
+                    ? html`
+                        <dt>${t("channels.nostr.profilePicture")}</dt>
+                        <dd>
+                          <img
+                            style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover;"
+                            src=${picture}
+                            alt=${t("channels.nostr.profilePicture")}
+                            @error=${(e: Event) => {
+                              (e.target as HTMLImageElement).style.display = "none";
+                            }}
+                          />
+                        </dd>
+                      `
+                    : nothing
+                }
+                ${
+                  name
+                    ? html`<dt>${t("channels.nostr.name")}</dt>
+                        <dd>${name}</dd>`
+                    : nothing
+                }
+                ${
+                  displayName
+                    ? html`<dt>${t("channels.nostr.displayName")}</dt>
+                        <dd>${displayName}</dd>`
+                    : nothing
+                }
+                ${
+                  about
+                    ? html`<dt>${t("channels.nostr.about")}</dt>
+                        <dd>${about}</dd>`
+                    : nothing
+                }
+                ${
+                  nip05
+                    ? html`<dt>NIP-05</dt>
+                        <dd>${nip05}</dd>`
+                    : nothing
+                }
+              </dl>
+            `
+          : nothing
+      }
     `;
   };
 
@@ -178,32 +194,34 @@ export function renderNostrCard(params: {
       ...(accountCount !== undefined ? { count: accountCount } : {}),
     },
     html`
-      ${hasMultipleAccounts
-        ? nostrAccounts.map((account) => renderAccountRow(account))
-        : renderChannelFacts([
-            {
-              label: t("common.configured"),
-              value: summaryConfigured ? t("common.yes") : t("common.no"),
-              kind: boolStatusKind(summaryConfigured),
-            },
-            {
-              label: t("common.running"),
-              value: summaryRunning ? t("common.yes") : t("common.no"),
-              kind: boolStatusKind(summaryRunning),
-            },
-            {
-              label: t("common.publicKey"),
-              value: html`<code title="${summaryPublicKey ?? ""}"
-                >${truncatePubkey(summaryPublicKey)}</code
-              >`,
-            },
-            {
-              label: t("common.lastStart"),
-              value: summaryLastStartAt
-                ? formatRelativeTimestamp(summaryLastStartAt)
-                : t("common.na"),
-            },
-          ])}
+      ${
+        hasMultipleAccounts
+          ? nostrAccounts.map((account) => renderAccountRow(account))
+          : renderChannelFacts([
+              {
+                label: t("common.configured"),
+                value: summaryConfigured ? t("common.yes") : t("common.no"),
+                kind: boolStatusKind(summaryConfigured),
+              },
+              {
+                label: t("common.running"),
+                value: summaryRunning ? t("common.yes") : t("common.no"),
+                kind: boolStatusKind(summaryRunning),
+              },
+              {
+                label: t("common.publicKey"),
+                value: html`<code title="${summaryPublicKey ?? ""}"
+                  >${truncatePubkey(summaryPublicKey)}</code
+                >`,
+              },
+              {
+                label: t("common.lastStart"),
+                value: summaryLastStartAt
+                  ? formatRelativeTimestamp(summaryLastStartAt)
+                  : t("common.na"),
+              },
+            ])
+      }
       ${summaryLastError ? renderChannelErrorRow(summaryLastError) : nothing}
       ${renderProfileSection()} ${renderChannelConfigSection({ channelId: "nostr", props })}
       ${renderChannelActionRow(

@@ -65,6 +65,50 @@ describe("docsSearchCommand", () => {
     expect(init).toMatchObject({ headers: { Accept: "application/json" } });
   });
 
+  it("emits one JSON object for search results", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          results: [
+            {
+              title: "CLI reference",
+              link: "https://docs.openclaw.ai/cli",
+              snippet: "Command-line usage",
+            },
+          ],
+        }),
+      ),
+    );
+    const runtime = makeRuntime();
+
+    await docsSearchCommand(["cli"], runtime, { json: true });
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+      query: "cli",
+      results: [
+        {
+          title: "CLI reference",
+          link: "https://docs.openclaw.ai/cli",
+          snippet: "Command-line usage",
+        },
+      ],
+    });
+  });
+
+  it("emits one JSON object for the docs homepage", async () => {
+    const runtime = makeRuntime();
+
+    await docsSearchCommand([], runtime, { json: true });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+      query: null,
+      url: "https://docs.openclaw.ai/",
+      results: [],
+    });
+  });
+
   it("cancels non-OK docs search response bodies and fails loudly", async () => {
     let cancelled = false;
     const response = new Response(
@@ -81,11 +125,11 @@ describe("docsSearchCommand", () => {
     fetchMock.mockResolvedValueOnce(response);
     const runtime = makeRuntime();
 
-    await docsSearchCommand(["browser", "existing-session"], runtime);
+    await expect(docsSearchCommand(["browser", "existing-session"], runtime)).rejects.toThrow(
+      "Docs search failed: HTTP 503",
+    );
 
     expect(cancelled).toBe(true);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("HTTP 503"));
-    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("reports malformed docs search JSON with CLI context", async () => {
@@ -96,13 +140,9 @@ describe("docsSearchCommand", () => {
     );
     const runtime = makeRuntime();
 
-    await docsSearchCommand(["bad-json"], runtime);
-
-    expect(runtime.error).toHaveBeenCalledWith(
+    await expect(docsSearchCommand(["bad-json"], runtime)).rejects.toThrow(
       "Docs search failed: Docs search response is malformed JSON",
     );
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("reports docs search responses with invalid UTF-8 bytes as malformed", async () => {
@@ -116,12 +156,9 @@ describe("docsSearchCommand", () => {
     );
     const runtime = makeRuntime();
 
-    await docsSearchCommand(["plugin"], runtime);
-
-    expect(runtime.error).toHaveBeenCalledWith(
+    await expect(docsSearchCommand(["plugin"], runtime)).rejects.toThrow(
       "Docs search failed: Docs search response is malformed JSON",
     );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("renders successful results from the Cloudflare docs search API", async () => {
@@ -168,12 +205,9 @@ describe("docsSearchCommand", () => {
     );
     const runtime = makeRuntime();
 
-    await docsSearchCommand(["oversized"], runtime);
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Docs search response exceeds"),
+    await expect(docsSearchCommand(["oversized"], runtime)).rejects.toThrow(
+      "Docs search failed: Docs search response exceeds 8388608 bytes",
     );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(cancel).toHaveBeenCalledOnce();
   });
 });

@@ -1,7 +1,7 @@
 // Claw doctor diagnostics project the lifecycle ownership ledger into health findings.
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { stableStringify } from "../agents/stable-stringify.js";
+import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDefaultCronStaggerMs } from "../cron/stagger.js";
@@ -145,6 +145,17 @@ function collectInstallFindings(
     );
   }
   for (const pkg of record.packages) {
+    if (pkg.extensionCompatibility && pkg.extensionCompatibility.state !== "compatible") {
+      findings.push(
+        finding({
+          message: `Claw extension ${JSON.stringify(pkg.extension?.id ?? pkg.ref)} has ${pkg.extensionCompatibility.state} host compatibility state${pkg.extensionCompatibility.message ? `: ${pkg.extensionCompatibility.message}` : "."}`,
+          path: `claws.${agentId}.extensions.${pkg.extension?.id ?? pkg.ref}`,
+          target: `${pkg.source}:${pkg.ref}@${pkg.version}`,
+          requirement: "Claw extensions should retain their consented canonical capability mapping",
+          fixHint: "Preview a Claw update before accepting the host's current extension mapping.",
+        }),
+      );
+    }
     if (pkg.state === "present") {
       continue;
     }
@@ -225,7 +236,7 @@ function collectInstallFindings(
           target: cron.schedulerJobId,
           requirement: "Claw cron health requires live Gateway corroboration by scheduler job id",
           fixHint:
-            "Recreate or reconcile the Gateway cron job before treating this Claw as healthy.",
+            "Recreate or reconcile the Gateway automation before treating this Claw as healthy.",
         }),
       );
       continue;
@@ -358,7 +369,7 @@ export async function collectClawStateHealthFindings(
       } catch (error) {
         cronInventory = {
           ok: false,
-          error: error instanceof Error ? error.message : String(error),
+          error: coerceErrorMessage(error),
         };
       }
     }
@@ -373,7 +384,7 @@ export async function collectClawStateHealthFindings(
     return [
       finding({
         severity: "error",
-        message: `Could not inspect Claw lifecycle state: ${error instanceof Error ? error.message : String(error)}`,
+        message: `Could not inspect Claw lifecycle state: ${coerceErrorMessage(error)}`,
         requirement: "Claw doctor diagnostics require readable lifecycle state",
       }),
     ];

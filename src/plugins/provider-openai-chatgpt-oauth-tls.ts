@@ -6,6 +6,7 @@ import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coer
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { cancelUnreadResponseBody } from "../infra/http-body.js";
 
 const OPENAI_AUTH_PROBE_URL =
   "https://auth.openai.com/oauth/authorize?response_type=code&client_id=openclaw-preflight&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email";
@@ -112,9 +113,7 @@ export async function runOpenAIOAuthTlsPreflight(options?: {
       message: failure.message,
     };
   } finally {
-    if (response?.bodyUsed !== true) {
-      await response?.body?.cancel().catch(() => undefined);
-    }
+    await cancelUnreadResponseBody(response);
   }
 }
 

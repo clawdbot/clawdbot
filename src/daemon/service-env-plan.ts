@@ -1,5 +1,5 @@
 /** Builds normalized environment plans for managed daemon service rendering. */
-import { normalizeEnvVarKey } from "../infra/host-env-security.js";
+import { normalizeServiceEnvKey } from "./service-managed-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
 export type MutableServiceEnvPlan = {
@@ -12,10 +12,6 @@ export function createMutableServiceEnvPlan(): MutableServiceEnvPlan {
     environment: {},
     environmentValueSources: {},
   };
-}
-
-export function normalizeServiceEnvPlanKey(rawKey: string): string | undefined {
-  return normalizeEnvVarKey(rawKey, { portable: true })?.toUpperCase();
 }
 
 export function addServiceEnvPlanEntries(
@@ -42,7 +38,7 @@ export function addServiceEnvPlanEntries(
       continue;
     }
     const value = rawValue;
-    const normalizedKey = normalizeServiceEnvPlanKey(rawKey);
+    const normalizedKey = normalizeServiceEnvKey(rawKey);
     if (!normalizedKey) {
       continue;
     }

@@ -3,10 +3,12 @@ import {
   buildAgentMessageFromConversationEntries,
   type ConversationEntry,
   IMAGE_ONLY_USER_MESSAGE,
+  renderConversationToolCall,
 } from "./agent-prompt.js";
 import type { ContentPart, ItemParam } from "./open-responses.schema.js";
 
 const FILE_ONLY_USER_MESSAGE = "User sent file(s) with no text.";
+type ResponseMessageItem = Extract<ItemParam, { type: "message" }>;
 
 function extractTextContent(content: string | ContentPart[]): string {
   if (typeof content === "string") {
@@ -44,21 +46,25 @@ function placeholderForActiveTurn(content: string | ContentPart[]): string {
   return "";
 }
 
-/** Index of the last user message item, or -1 when there is none. */
-function findActiveUserMessageIndex(input: ItemParam[]): number {
+/** A tool result starts its own turn and cannot inherit an earlier user's media. */
+function resolveActiveUserMessage(input: ItemParam[]): ResponseMessageItem | undefined {
   for (let i = input.length - 1; i >= 0; i -= 1) {
     const item = input[i];
+    if (item?.type === "function_call_output") {
+      return undefined;
+    }
     if (item?.type === "message" && item.role === "user") {
-      return i;
+      return item;
     }
   }
-  return -1;
+  return undefined;
 }
 
 /** Build the user message and optional system prompt from Responses API input. */
 export function buildAgentPrompt(input: string | ItemParam[]): {
   message: string;
   extraSystemPrompt?: string;
+  activeUserMessage?: ResponseMessageItem;
 } {
   if (typeof input === "string") {
     return { message: input };
@@ -66,9 +72,9 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
 
   const systemParts: string[] = [];
   const conversationEntries: ConversationEntry[] = [];
-  const activeUserMessageIndex = findActiveUserMessageIndex(input);
+  const activeUserMessage = resolveActiveUserMessage(input);
 
-  for (const [i, item] of input.entries()) {
+  for (const item of input) {
     if (item.type === "message") {
       const content = extractTextContent(item.content).trim();
       // Substitute a placeholder for an image-only or file-only active user turn
@@ -77,10 +83,7 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
       // matching /v1/chat/completions. Historical media-only turns stay skipped
       // because their bytes are not replayed.
       const body =
-        content ||
-        (item.role === "user" && i === activeUserMessageIndex
-          ? placeholderForActiveTurn(item.content)
-          : "");
+        content || (item === activeUserMessage ? placeholderForActiveTurn(item.content) : "");
       if (!body) {
         continue;
       }
@@ -97,6 +100,14 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
         role: normalizedRole,
         entry: { sender, body },
       });
+    } else if (item.type === "function_call") {
+      conversationEntries.push({
+        role: "assistant",
+        entry: {
+          sender: "Assistant",
+          body: renderConversationToolCall({ ...item, id: item.call_id ?? item.id }),
+        },
+      });
     } else if (item.type === "function_call_output") {
       conversationEntries.push({
         role: "tool",
@@ -111,5 +122,6 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
   return {
     message,
     extraSystemPrompt: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
+    activeUserMessage,
   };
 }

@@ -1,4 +1,6 @@
 // Session memory transcript helpers persist compact session transcript excerpts.
+import { classifySessionMessageOrigin } from "../../../../packages/memory-host-sdk/src/host/session-provenance.js";
+import type { MemoryOriginClass } from "../../../../packages/memory-host-sdk/src/host/types.js";
 import { sanitizeModelSpecialTokens } from "../../../security/external-content.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
@@ -13,6 +15,16 @@ const SESSION_MEMORY_DROP_BLOCK_RE = new RegExp(
 const SESSION_MEMORY_ROLE_DIRECTIVE_BLOCK_RE = /<(system|assistant|user)\b[^>]*>[\s\S]*?<\/\1>/gi;
 const SESSION_MEMORY_ROLE_DIRECTIVE_TAG_RE = /<\/?(?:system|assistant|user)\b[^>]*>/gi;
 const SESSION_MEMORY_TRAILING_NO_REPLY_RE = /(?:^|\n)\s*NO_REPLY\s*$/i;
+const SESSION_MEMORY_JSON_LINE_SEPARATOR_RE = /[\u0085\u2028\u2029]/gu;
+
+function quoteSessionMemoryText(text: string): string {
+  // One JSON string per role record keeps message text from forging later
+  // records while preserving every character for memory readers.
+  return JSON.stringify(text).replace(
+    SESSION_MEMORY_JSON_LINE_SEPARATOR_RE,
+    (separator) => `\\u${separator.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
 
 function isNoReplyMarker(text: string): boolean {
   const trimmed = text.trim();
@@ -54,52 +66,79 @@ function extractTextMessageContent(content: unknown): string | undefined {
 
 type RenderedSessionMemoryMessage = {
   isDeliveryMirror: boolean;
+  originClass: MemoryOriginClass;
   role: "assistant" | "user";
   text?: string;
 };
 
-function renderSessionMemoryMessage(entry: unknown): RenderedSessionMemoryMessage | undefined {
+type SessionMemoryMessageRenderResult = {
+  message?: RenderedSessionMemoryMessage;
+  turnOrigin: MemoryOriginClass;
+};
+
+function renderSessionMemoryMessage(
+  entry: unknown,
+  turnOrigin: MemoryOriginClass,
+): SessionMemoryMessageRenderResult {
   if (!entry || typeof entry !== "object") {
-    return undefined;
+    return { turnOrigin };
   }
   const record = entry as {
     message?: {
       content?: unknown;
       provenance?: unknown;
       role?: unknown;
-    };
+    } & Record<string, unknown>;
     type?: unknown;
   };
   if (record.type !== "message" || !record.message) {
-    return undefined;
+    return { turnOrigin };
   }
   const role = record.message.role;
   if ((role !== "user" && role !== "assistant") || !("content" in record.message)) {
-    return undefined;
+    return { turnOrigin };
   }
+  const nextTurnOrigin =
+    role === "user" ? classifySessionMessageOrigin(record.message, turnOrigin) : turnOrigin;
+  const originClass = classifySessionMessageOrigin(record.message, nextTurnOrigin);
   if (role === "user" && hasInterSessionUserProvenance(record.message)) {
-    return undefined;
+    return { turnOrigin: nextTurnOrigin };
   }
   const text = extractTextMessageContent(record.message.content);
   const sanitized = text ? sanitizeSessionMemoryTranscriptText(text) : null;
   if (!sanitized) {
-    return undefined;
+    return { turnOrigin: nextTurnOrigin };
   }
   if (sanitized.startsWith("/")) {
-    return role === "user" ? { isDeliveryMirror: false, role } : undefined;
+    return {
+      turnOrigin: nextTurnOrigin,
+      ...(role === "user" ? { message: { isDeliveryMirror: false, originClass, role } } : {}),
+    };
   }
   return {
-    isDeliveryMirror: isOpenClawDeliveryMirrorAssistantMessage(record.message),
-    role,
-    text: sanitized,
+    turnOrigin: nextTurnOrigin,
+    message: {
+      isDeliveryMirror: isOpenClawDeliveryMirrorAssistantMessage(record.message),
+      originClass,
+      role,
+      text: sanitized,
+    },
   };
 }
 
-function renderSessionMemoryLines(events: readonly unknown[]): string[] {
-  const allMessages: string[] = [];
+type SessionMemoryRecord = {
+  line: string;
+  originClass: MemoryOriginClass;
+};
+
+function renderSessionMemoryRecords(events: readonly unknown[]): SessionMemoryRecord[] {
+  const allMessages: SessionMemoryRecord[] = [];
   let lastAssistantText: string | undefined;
+  let turnOrigin: MemoryOriginClass = "untrusted";
   for (const event of events) {
-    const rendered = renderSessionMemoryMessage(event);
+    const result = renderSessionMemoryMessage(event, turnOrigin);
+    turnOrigin = result.turnOrigin;
+    const rendered = result.message;
     if (!rendered) {
       continue;
     }
@@ -117,7 +156,10 @@ function renderSessionMemoryLines(events: readonly unknown[]): string[] {
     if (rendered.isDeliveryMirror && rendered.text === lastAssistantText) {
       continue;
     }
-    allMessages.push(`${rendered.role}: ${rendered.text}`);
+    allMessages.push({
+      line: `${rendered.role}: ${quoteSessionMemoryText(rendered.text)}`,
+      originClass: rendered.originClass,
+    });
     if (rendered.role === "assistant") {
       lastAssistantText = rendered.text;
     }
@@ -127,18 +169,32 @@ function renderSessionMemoryLines(events: readonly unknown[]): string[] {
 
 /** Counts transcript events that remain after session-memory filtering and deduplication. */
 export function countSessionMemoryMessages(events: readonly unknown[]): number {
-  return renderSessionMemoryLines(events).length;
+  return renderSessionMemoryRecords(events).length;
 }
 
-/** Renders recent user/assistant transcript events into session memory text. */
-export function getRecentSessionContentFromEvents(
+export type SessionMemoryProjection = {
+  content: string;
+  originClass: "agent" | "untrusted";
+};
+
+export function getRecentSessionProjectionFromEvents(
   events: readonly unknown[],
   messageCount = 15,
-): string | null {
+): SessionMemoryProjection | null {
   const limit = Number.isFinite(messageCount) ? Math.max(0, Math.floor(messageCount)) : 0;
   if (limit === 0) {
     return null;
   }
-  const allMessages = renderSessionMemoryLines(events);
-  return allMessages.slice(-limit).join("\n") || null;
+  const records = renderSessionMemoryRecords(events).slice(-limit);
+  if (records.length === 0) {
+    return null;
+  }
+  return {
+    content: records.map((record) => record.line).join("\n"),
+    originClass: records.some(
+      (record) => record.originClass === "untrusted" || record.originClass === "system",
+    )
+      ? "untrusted"
+      : "agent",
+  };
 }

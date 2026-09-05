@@ -1,15 +1,25 @@
 // Google tests cover google plugin behavior.
-import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import {
+  completeSimple,
+  type Model,
+  type ProviderContext,
+  type ProviderModel,
+  type ProviderStreamFunction,
+} from "openclaw/plugin-sdk/llm";
 import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
 import {
+  createCapturedPluginRegistration,
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { normalizeTranscriptForMatch } from "openclaw/plugin-sdk/provider-test-contracts";
+import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import { buildGoogleLiveCatalogProvider } from "./provider-catalog.js";
+import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 const GOOGLE_API_KEY =
@@ -19,6 +29,25 @@ const GOOGLE_API_KEY =
   "";
 const LIVE = isLiveTestEnabled() && GOOGLE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
+
+// Two 64x64 solid-red H.264 frames keep native-video proof bounded and reproducible.
+const GOOGLE_LIVE_RED_VIDEO_BASE64 = [
+  "AAAAJGZ0eXBpc29tAAACAGlzb21pc282aXNvMmF2YzFtcDQxAAAC5m1vb3YAAABsbXZoZAAAAAAAAAAAAAAAAAAAA+gAAAAA",
+  "AAEAAAEAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "AAAAAAAAAAIAAAHodHJhawAAAFx0a2hkAAAAAwAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAA",
+  "AAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAABAAAAAQAAAAAABhG1kaWEAAAAgbWRoZAAAAAAAAAAAAAAAAAAAQAAAAAAA",
+  "VcQAAAAAAC1oZGxyAAAAAAAAAAB2aWRlAAAAAAAAAAAAAAAAVmlkZW9IYW5kbGVyAAAAAS9taW5mAAAAFHZtaGQAAAABAAAA",
+  "AAAAAAAAAAAkZGluZgAAABxkcmVmAAAAAAAAAAEAAAAMdXJsIAAAAAEAAADvc3RibAAAAKNzdHNkAAAAAAAAAAEAAACTYXZj",
+  "MQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAABAAEAASAAAAEgAAAAAAAAAARVMYXZjNjIuMjguMTAyIGxpYngyNjQAAAAAAAAA",
+  "AAAAABj//wAAAC1hdmNDAULACv/hABZnQsAK2hCbARAAAAMAEAAAAwAo8SJqAQAEaM4PyAAAABBwYXNwAAAAAQAAAAEAAAAQ",
+  "c3R0cwAAAAAAAAAAAAAAEHN0c2MAAAAAAAAAAAAAABRzdHN6AAAAAAAAAAAAAAAAAAAAEHN0Y28AAAAAAAAAAAAAAChtdmV4",
+  "AAAAIHRyZXgAAAAAAAAAAQAAAAEAAAAAAAAAAAAAAAAAAABidWR0YQAAAFptZXRhAAAAAAAAACFoZGxyAAAAAAAAAABtZGly",
+  "YXBwbAAAAAAAAAAAAAAAAC1pbHN0AAAAJal0b28AAAAdZGF0YQAAAAEAAAAATGF2ZjYyLjEyLjEwMgAAAHhtb29mAAAAEG1m",
+  "aGQAAAAAAAAAAQAAAGB0cmFmAAAAJHRmaGQAAAA5AAAAAQAAAAAAAAMKAABAAAAAACMBAQAAAAAAFHRmZHQBAAAAAAAAAAAA",
+  "AAAAAAAgdHJ1bgAAAgUAAAACAAAAgAIAAAAAAAAjAAAACgAAADVtZGF0AAAAH2WIhDoRigACGPHAAED2OAAIeUnJyddddddd",
+  "dddddeAAAAAGQZogF6CMAAAAQ21mcmEAAAArdGZyYQEAAAAAAAABAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAMKAQEBAAAAEG1m",
+  "cm8AAAAAAAAAQw==",
+].join("");
 
 async function withGoogleApiEnvUnset<T>(fn: () => Promise<T>): Promise<T> {
   const geminiApiKey = process.env.GEMINI_API_KEY;
@@ -66,6 +95,33 @@ function hasTrustedFfmpegForLiveVoiceNote(): boolean {
   }
 }
 
+async function waitForGoogleLive(
+  label: string,
+  predicate: () => boolean,
+  timeoutMs = 45_000,
+  describeState?: () => unknown,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      const state = describeState?.();
+      throw new Error(
+        `Google live timeout waiting for ${label}${state === undefined ? "" : ` (${JSON.stringify(state)})`}`,
+      );
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+  }
+}
+
+function shortGoogleLiveError(error: Error): string {
+  return error.message
+    .replace(/https?:\/\/\S+/giu, "<url>")
+    .replace(/\b[A-Za-z0-9_-]{24,}\b/gu, "<id>")
+    .slice(0, 200);
+}
+
 const registerGooglePlugin = () =>
   registerProviderPlugin({
     plugin,
@@ -73,8 +129,18 @@ const registerGooglePlugin = () =>
     name: "Google Provider",
   });
 
+function registerGoogleRealtimeVoiceProvider() {
+  const captured = createCapturedPluginRegistration({
+    id: "google",
+    name: "Google Provider",
+    source: "test",
+  });
+  plugin.register(captured.api);
+  return requireRegisteredProvider(captured.realtimeVoiceProviders, "google");
+}
+
 describeLive("google plugin live", () => {
-  it.each(["gemini-3.6-flash", "gemini-3.5-flash-lite"])(
+  it.each(["gemini-3.7-flash", "gemini-3.5-flash-lite"])(
     "discovers and completes through %s",
     async (modelId) => {
       const provider = await buildGoogleLiveCatalogProvider({
@@ -110,6 +176,74 @@ describeLive("google plugin live", () => {
     },
     90_000,
   );
+
+  it("understands native video through the registered Google chat transport", async () => {
+    const catalog = await buildGoogleLiveCatalogProvider({
+      apiKey: "GEMINI_API_KEY",
+      discoveryApiKey: GOOGLE_API_KEY,
+    });
+    const definition = catalog.models.find((candidate) => candidate.id === "gemini-3.5-flash-lite");
+    expect(definition, "gemini-3.5-flash-lite missing from Google models.list").toBeDefined();
+    expect(definition?.input).toContain("video");
+
+    const catalogModel = {
+      ...definition!,
+      provider: "google",
+      baseUrl: catalog.baseUrl,
+      api: "google-generative-ai",
+    } as ProviderModel<"google-generative-ai">;
+    const { providers } = await registerGooglePlugin();
+    const provider = requireRegisteredProvider(providers, "google");
+    const model = provider.normalizeResolvedModel?.({
+      provider: "google",
+      modelId: catalogModel.id,
+      model: catalogModel,
+    } as never) as ProviderModel<"google-generative-ai"> | undefined;
+    expect(model?.input).toContain("video");
+    if (!model) {
+      throw new Error("registered Google provider did not prepare its native video model");
+    }
+
+    const registeredStream = provider.createStreamFn?.({
+      provider: "google",
+      modelId: model.id,
+      model: model as never,
+    });
+    const streamFn = registeredStream as ProviderStreamFunction<"google-generative-ai"> | undefined;
+    if (!streamFn) {
+      throw new Error("registered Google provider did not create its native chat transport");
+    }
+    const context: ProviderContext = {
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "What single color fills this video? Reply with exactly RED, BLUE, or GREEN.",
+            },
+            {
+              type: "video",
+              mimeType: "video/mp4",
+              data: GOOGLE_LIVE_RED_VIDEO_BASE64,
+            },
+          ],
+          timestamp: Date.now(),
+        },
+      ],
+    };
+
+    const stream = await Promise.resolve(
+      streamFn(model, context, { apiKey: GOOGLE_API_KEY, maxTokens: 16 }),
+    );
+    const response = await stream.result();
+    expect(response.stopReason, response.errorMessage).not.toBe("error");
+    const answer = response.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join(" ");
+    expect(answer).toMatch(/\bRED\b/iu);
+  }, 90_000);
 
   it("synthesizes speech through the registered provider", async () => {
     const { speechProviders } = await registerGooglePlugin();
@@ -177,6 +311,179 @@ describeLive("google plugin live", () => {
     expect(normalized).toContain("pineapple");
   }, 180_000);
 
+  it("talks back when ready owns the realtime session", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const finalAssistantTranscripts: string[] = [];
+    const errors: Error[] = [];
+    const closeReasons: string[] = [];
+    const eventTypeCounts = new Map<string, number>();
+    let outputAudioBytes = 0;
+    let assistantPartialCount = 0;
+    let lastAssistantOutputAt = 0;
+    let readyCount = 0;
+    const bridge: RealtimeVoiceBridge = provider.createBridge({
+      providerConfig: { apiKey: GOOGLE_API_KEY },
+      instructions: "Reply briefly and plainly.",
+      onAudio: (audio) => {
+        outputAudioBytes += audio.byteLength;
+        lastAssistantOutputAt = Date.now();
+      },
+      onClearAudio: () => {},
+      onTranscript: (role, text, isFinal) => {
+        if (role !== "assistant") {
+          return;
+        }
+        if (isFinal) {
+          finalAssistantTranscripts.push(text);
+        } else {
+          assistantPartialCount += 1;
+        }
+        lastAssistantOutputAt = Date.now();
+      },
+      onEvent: (event) => {
+        eventTypeCounts.set(event.type, (eventTypeCounts.get(event.type) ?? 0) + 1);
+      },
+      onReady: () => {
+        readyCount += 1;
+        bridge.triggerGreeting?.("Reply with exactly: OpenClaw Google realtime ready.");
+      },
+      onError: (error) => errors.push(error),
+      onClose: (reason) => closeReasons.push(reason),
+    });
+    const describeState = () => ({
+      readyCount,
+      connected: bridge.isConnected(),
+      outputAudioBytes,
+      assistantPartialCount,
+      assistantIdleMs: lastAssistantOutputAt === 0 ? 0 : Date.now() - lastAssistantOutputAt,
+      assistantFinalCount: finalAssistantTranscripts.length,
+      errors: errors.map(shortGoogleLiveError),
+      closeReasons,
+      eventTypeCounts: Object.fromEntries(
+        [...eventTypeCounts.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
+      ),
+    });
+
+    try {
+      await bridge.connect();
+      // Gemini 3.1 can omit transcription.finished. Wait for output to go idle
+      // before close terminalizes the buffered transcript.
+      await waitForGoogleLive(
+        "assistant response drain",
+        () =>
+          outputAudioBytes > 0 &&
+          assistantPartialCount > 0 &&
+          Date.now() - lastAssistantOutputAt >= 1_000,
+        45_000,
+        describeState,
+      );
+      expect(readyCount).toBe(1);
+      expect(bridge.isConnected()).toBe(true);
+      expect(outputAudioBytes).toBeGreaterThan(0);
+      expect(assistantPartialCount).toBeGreaterThan(0);
+      expect(errors).toStrictEqual([]);
+    } finally {
+      bridge.close();
+    }
+
+    await waitForGoogleLive(
+      "final transcript and clean close",
+      () => finalAssistantTranscripts.length > 0 && closeReasons.length === 1,
+      5_000,
+      describeState,
+    );
+    expect(finalAssistantTranscripts.some((text) => text.trim().length > 0)).toBe(true);
+    expect(closeReasons).toEqual(["completed"]);
+  }, 120_000);
+
+  it("delivers a queued prompt through the registered lazy realtime bridge", async () => {
+    const provider = registerGoogleRealtimeVoiceProvider();
+    const finalAssistantTranscripts: string[] = [];
+    const errors: Error[] = [];
+    const closeReasons: string[] = [];
+    let outputAudioBytes = 0;
+    let assistantPartialCount = 0;
+    let lastAssistantOutputAt = 0;
+    let readyCount = 0;
+    const bridge: RealtimeVoiceBridge = provider.createBridge({
+      providerConfig: { apiKey: GOOGLE_API_KEY },
+      instructions: "Reply briefly and plainly.",
+      onAudio: (audio) => {
+        outputAudioBytes += audio.byteLength;
+        lastAssistantOutputAt = Date.now();
+      },
+      onClearAudio: () => {},
+      onTranscript: (role, text, isFinal) => {
+        if (role !== "assistant") {
+          return;
+        }
+        if (isFinal) {
+          finalAssistantTranscripts.push(text);
+        } else {
+          assistantPartialCount += 1;
+        }
+        lastAssistantOutputAt = Date.now();
+      },
+      onReady: () => {
+        readyCount += 1;
+      },
+      onError: (error) => errors.push(error),
+      onClose: (reason) => closeReasons.push(reason),
+    });
+    const describeState = () => ({
+      readyCount,
+      connected: bridge.isConnected(),
+      outputAudioBytes,
+      assistantPartialCount,
+      assistantIdleMs: lastAssistantOutputAt === 0 ? 0 : Date.now() - lastAssistantOutputAt,
+      assistantFinalCount: finalAssistantTranscripts.length,
+      errors: errors.map(shortGoogleLiveError),
+      closeReasons,
+    });
+
+    bridge.sendUserMessage?.("Reply with exactly: OpenClaw lazy bridge ready.");
+    try {
+      await bridge.connect();
+      // Gemini 3.1 can omit transcription.finished. Wait for output to go idle
+      // before close terminalizes the buffered transcript.
+      await waitForGoogleLive(
+        "queued assistant response drain",
+        () =>
+          outputAudioBytes > 0 &&
+          assistantPartialCount > 0 &&
+          Date.now() - lastAssistantOutputAt >= 1_000,
+        45_000,
+        describeState,
+      );
+      expect(readyCount).toBe(1);
+      expect(bridge.isConnected()).toBe(true);
+      expect(outputAudioBytes).toBeGreaterThan(0);
+      expect(assistantPartialCount).toBeGreaterThan(0);
+      expect(errors).toStrictEqual([]);
+    } finally {
+      bridge.close();
+      bridge.close();
+    }
+
+    await waitForGoogleLive(
+      "queued final transcript and clean close",
+      () => finalAssistantTranscripts.length > 0 && closeReasons.length === 1,
+      5_000,
+      describeState,
+    );
+    expect(
+      finalAssistantTranscripts.some((text) => {
+        const normalized = normalizeTranscriptForMatch(text);
+        return (
+          normalized.includes("openclaw") &&
+          normalized.includes("lazy") &&
+          normalized.includes("bridge")
+        );
+      }),
+    ).toBe(true);
+    expect(closeReasons).toEqual(["completed"]);
+  }, 120_000);
+
   it("runs Gemini web search through the registered provider tool", async () => {
     const provider = createGeminiWebSearchProvider();
     const tool = provider.createTool?.({
@@ -236,17 +543,3 @@ describeLive("google plugin live", () => {
     });
   }, 120_000);
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

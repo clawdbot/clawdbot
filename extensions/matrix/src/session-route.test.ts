@@ -2,13 +2,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeSessionDeliveryState,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "./runtime-api.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 
 const tempDirs = new Set<string>();
@@ -296,6 +296,36 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expect(channelRoute.threadId).toBe("$RootEvent:Example.Org");
   });
 
+  it.each([
+    {
+      name: "uses the Matrix thread root when replying to a child event",
+      threadId: "$ThreadRoot:Example.Org",
+      replyToId: "$ReplyChild:Example.Org",
+      expectedThreadId: "$ThreadRoot:Example.Org",
+    },
+    {
+      name: "keeps reply-only session routing when no Matrix thread exists",
+      threadId: undefined,
+      replyToId: "$ReplyChild:Example.Org",
+      expectedThreadId: "$ReplyChild:Example.Org",
+    },
+  ])("$name", ({ threadId, replyToId, expectedThreadId }) => {
+    const route = expectRoute(
+      resolveMatrixOutboundSessionRoute({
+        cfg: {},
+        agentId: "main",
+        target: "room:!ops:example.org",
+        threadId,
+        replyToId,
+      }),
+    );
+
+    expect(route.threadId).toBe(expectedThreadId);
+    expect(route.sessionKey).toBe(
+      `agent:main:matrix:channel:!ops:example.org:thread:${expectedThreadId}`,
+    );
+  });
+
   it("does not claim room aliases as canonical inbound session ids", () => {
     const route = resolveMatrixOutboundSessionRoute({
       cfg: {},
@@ -314,6 +344,27 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     });
 
     expect(route?.recipientSessionExact).toBe(false);
+  });
+
+  it("claims a room id as canonical when DMs are room-scoped", () => {
+    const route = resolveMatrixOutboundSessionRoute({
+      cfg: { channels: { matrix: perRoomDmMatrixConfig } },
+      agentId: "main",
+      target: "room:!ops:example.org",
+    });
+
+    expect(route?.recipientSessionExact).toBe(true);
+  });
+
+  it("claims a room version 12 room id (no :server suffix) as canonical when DMs are room-scoped", () => {
+    // Room version 12 (MSC4291) dropped the trailing ":server" from room IDs.
+    const route = resolveMatrixOutboundSessionRoute({
+      cfg: { channels: { matrix: perRoomDmMatrixConfig } },
+      agentId: "main",
+      target: "room:!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70",
+    });
+
+    expect(route?.recipientSessionExact).toBe(true);
   });
 
   it("resolves per-room DM metadata from the base key when currentSessionKey has a thread suffix", async () => {

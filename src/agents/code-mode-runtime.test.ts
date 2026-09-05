@@ -1,52 +1,152 @@
 import { describe, expect, it } from "vitest";
 import {
-  enforceOutputLimit,
-  enforceResultLimit,
-  isCodeModeEngagedForModel,
-  prepareSource,
-  resolveCodeModeConfig,
-} from "./code-mode-runtime.js";
+  captureCodeModeOutput,
+  captureCodeModeValue,
+  CodeModeOutputState,
+} from "./code-mode-json.js";
+import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "./code-mode-runtime.js";
+import { parseCodeModeScriptSyntax } from "./code-mode-script-syntax.js";
+import { prepareSource } from "./code-mode-source.js";
 
 const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
-describe("Code Mode output accounting", () => {
-  it("accepts Unicode output at its exact serialized byte limit", () => {
-    const output = [{ type: "text", text: "😀 café" }];
+function projectResult(params: {
+  output: unknown[];
+  value?: unknown;
+  error?: string;
+  maxOutputBytes: number;
+}) {
+  const state = new CodeModeOutputState(params.maxOutputBytes);
+  state.append(captureCodeModeOutput(params.output, params.maxOutputBytes));
+  return state.take({
+    ...(Object.hasOwn(params, "value")
+      ? { value: captureCodeModeValue(params.value, params.maxOutputBytes) }
+      : {}),
+    ...(params.error === undefined ? {} : { error: params.error }),
+  });
+}
+
+describe("Code Mode output bounding", () => {
+  it("preserves Unicode output at its exact serialized byte limit", () => {
+    const output = [{ type: "text", text: "😀 café".repeat(200) }];
     const maxOutputBytes = Buffer.byteLength(JSON.stringify(output), "utf8");
 
-    expect(() => enforceOutputLimit(output, { ...config, maxOutputBytes })).not.toThrow();
-    expect(() =>
-      enforceOutputLimit(output, { ...config, maxOutputBytes: maxOutputBytes - 1 }),
-    ).toThrow("code mode output limit exceeded");
+    expect(projectResult({ output, maxOutputBytes }).output).toEqual(output);
+    expect(output).toEqual([{ type: "text", text: "😀 café".repeat(200) }]);
+
+    const bounded = projectResult({ output, maxOutputBytes: maxOutputBytes - 1 });
+    expect(JSON.stringify(bounded.output)).toContain("rerun with narrower args");
   });
 
-  it("counts serialized output only once against the returned value", () => {
-    const output = [{ type: "text", text: "😀" }];
-    const value = { result: "café" };
+  it("bounds output and the returned value under one serialized budget", () => {
+    const output = [{ type: "text", text: "😀".repeat(200) }];
+    const value = { result: "café".repeat(200) };
     const maxOutputBytes =
       Buffer.byteLength(JSON.stringify(output), "utf8") +
       Buffer.byteLength(JSON.stringify(value), "utf8");
 
-    expect(() =>
-      enforceResultLimit({ output, value, config: { ...config, maxOutputBytes } }),
-    ).not.toThrow();
-    expect(() =>
-      enforceResultLimit({
-        output,
-        value,
-        config: { ...config, maxOutputBytes: maxOutputBytes - 1 },
-      }),
-    ).toThrow("code mode output limit exceeded");
+    expect(projectResult({ output, value, maxOutputBytes })).toMatchObject({
+      output,
+      value,
+    });
+
+    const bounded = projectResult({
+      output,
+      value,
+      maxOutputBytes: maxOutputBytes - 1,
+    });
+    expect(
+      Buffer.byteLength(JSON.stringify(bounded.output), "utf8") +
+        Buffer.byteLength(JSON.stringify(bounded.value), "utf8"),
+    ).toBeLessThanOrEqual(maxOutputBytes - 1);
   });
 
   it("does not charge an empty output array against the returned value", () => {
     const value = "ok";
     const maxOutputBytes = Buffer.byteLength(JSON.stringify(value), "utf8");
 
-    expect(() =>
-      enforceResultLimit({ output: [], value, config: { ...config, maxOutputBytes } }),
-    ).not.toThrow();
+    expect(projectResult({ output: [], value, maxOutputBytes })).toMatchObject({
+      output: [],
+      value,
+    });
   });
+
+  it("preserves failure text and output at their exact serialized byte limit", () => {
+    const output = [{ type: "text", text: "before failure" }];
+    const error = "Error: café 😀";
+    const maxOutputBytes =
+      Buffer.byteLength(JSON.stringify(output), "utf8") +
+      Buffer.byteLength(JSON.stringify(error), "utf8");
+
+    expect(projectResult({ output, error, maxOutputBytes })).toEqual({
+      output,
+      error,
+    });
+  });
+
+  it.each([
+    { name: "plain error", errorText: "failure ", output: [], returned: {} },
+    { name: "Unicode error", errorText: "😀 café ", output: [], returned: {} },
+    { name: "escaped error", errorText: '\\"\n\t', output: [], returned: {} },
+    {
+      name: "error and output",
+      errorText: "😀 failure ",
+      output: [{ type: "text", text: "output ".repeat(1_000) }],
+      returned: {},
+    },
+    {
+      name: "error, output, and value",
+      errorText: "😀 failure ",
+      output: [{ type: "text", text: "output ".repeat(1_000) }],
+      returned: { value: "value ".repeat(1_000) },
+    },
+  ])(
+    "bounds $name without losing the cause or splitting Unicode",
+    ({ errorText, output, returned }) => {
+      const maxOutputBytes = 1_024;
+      const bounded = projectResult({
+        output,
+        error: `Error: ${errorText.repeat(1_000)}`,
+        ...returned,
+        maxOutputBytes,
+      });
+
+      expect(bounded.error).toMatch(/^Error: .*\[error truncated\]$/s);
+      expect(bounded.error).not.toContain("�");
+      const serializedBytes =
+        Buffer.byteLength(JSON.stringify(bounded.error), "utf8") +
+        (bounded.output.length ? Buffer.byteLength(JSON.stringify(bounded.output), "utf8") : 0) +
+        (Object.hasOwn(returned, "value")
+          ? Buffer.byteLength(JSON.stringify(bounded.value), "utf8")
+          : 0);
+      expect(serializedBytes).toBeLessThanOrEqual(maxOutputBytes);
+    },
+  );
+});
+
+describe("Code Mode source retention", () => {
+  it.each([65536, 10 * 1024 * 1024])(
+    "retains at most %i source bytes per channel across repeated legs",
+    (cap) => {
+      const original = [{ type: "text", text: "🦞".repeat(Math.ceil(cap / 4)) }];
+      const state = new CodeModeOutputState(cap);
+      const leg = captureCodeModeOutput(original, cap);
+      const value = captureCodeModeValue(original[0], cap);
+      expect(Buffer.byteLength(leg.source.json)).toBeLessThanOrEqual(cap);
+      expect(Buffer.byteLength(value.json)).toBeLessThanOrEqual(cap);
+      for (let index = 1; index <= 8; index++) {
+        state.append(leg);
+        state.append(captureCodeModeOutput([], cap));
+        expect(state.source.count).toBe(index);
+        expect(Buffer.byteLength(state.source.source.json)).toBeLessThanOrEqual(cap);
+        expect(state.source.source).toMatchObject({
+          kind: "prefix",
+          originalBytes: index * (Buffer.byteLength(JSON.stringify(original)) - 1) + 1,
+        });
+      }
+      expect(state.source.source.json).toBe(leg.source.json);
+    },
+  );
 });
 
 describe("Code Mode master switch resolution", () => {
@@ -55,8 +155,9 @@ describe("Code Mode master switch resolution", () => {
     { name: "boolean shorthand false", codeMode: false, enabled: false },
     { name: "auto shorthand", codeMode: "auto", enabled: "auto" },
     { name: "object enabled auto", codeMode: { enabled: "auto" }, enabled: "auto" },
-    { name: "object without enabled", codeMode: { timeoutMs: 5000 }, enabled: "auto" },
-    { name: "omitted", codeMode: undefined, enabled: "auto" },
+    { name: "object with options", codeMode: { timeoutMs: 5000 }, enabled: false },
+    { name: "empty object", codeMode: {}, enabled: false },
+    { name: "omitted", codeMode: undefined, enabled: false },
   ])("resolves enabled for $name", ({ codeMode, enabled }) => {
     expect(resolveCodeModeConfig({ tools: { codeMode } } as never).enabled).toBe(enabled);
   });
@@ -104,6 +205,15 @@ describe("Code Mode master switch resolution", () => {
 });
 
 describe("Code Mode guest source validation", () => {
+  it("reports syntax errors at user-relative locations", () => {
+    expect(parseCodeModeScriptSyntax("const x = ;")).toEqual({
+      ok: false,
+      message: "Unexpected token",
+      line: 1,
+      column: 10,
+    });
+  });
+
   it.each([
     {
       name: "import-shaped template text",
@@ -415,7 +525,7 @@ describe("Code Mode guest source validation", () => {
     );
   });
 
-  it("separates 50,000 deterministic literal and executable module-shaped inputs", async () => {
+  it("separates every deterministic literal and executable module-shaped input", async () => {
     const moduleExpressions = [
       "require('node:fs')",
       "import('node:fs')",
@@ -424,23 +534,22 @@ describe("Code Mode guest source validation", () => {
       'import /* comment */ ("node:fs")',
     ];
 
-    for (let index = 0; index < 25_000; index += 1) {
-      const expression = moduleExpressions[index % moduleExpressions.length]!;
-      const harmless =
-        index % 2 === 0
-          ? `return ${JSON.stringify(expression)};`
-          : `return \`literal ${expression}\`;`;
-      await expect(prepareSource({ code: harmless, config })).resolves.toBe(harmless);
-
-      const executable =
-        index % 2 === 0 ? `return ${expression};` : `return \`value \${${expression}}\`;`;
-      await expect(prepareSource({ code: executable, config })).rejects.toThrow(
-        "code mode module access is disabled",
-      );
+    for (const expression of moduleExpressions) {
+      for (const harmless of [
+        `return ${JSON.stringify(expression)};`,
+        `return \`literal ${expression}\`;`,
+      ]) {
+        await expect(prepareSource({ code: harmless, config })).resolves.toBe(harmless);
+      }
+      for (const executable of [`return ${expression};`, `return \`value \${${expression}}\`;`]) {
+        await expect(prepareSource({ code: executable, config })).rejects.toThrow(
+          "code mode module access is disabled",
+        );
+      }
     }
-  }, 30_000);
+  });
 
-  it("distinguishes 50,000 adversarial division and regular-expression contexts", async () => {
+  it("distinguishes every adversarial division and regular-expression context", async () => {
     const divisionContexts = [
       { prefix: "let value = 10; return value++", suffix: "" },
       { prefix: "let value = 10; return value--", suffix: "" },
@@ -460,8 +569,7 @@ describe("Code Mode guest source validation", () => {
       },
     ];
 
-    for (let index = 0; index < 25_000; index += 1) {
-      const { prefix, suffix } = divisionContexts[index % divisionContexts.length]!;
+    for (const { prefix, suffix } of divisionContexts) {
       const harmless = `${prefix} / /import.meta/.source.length;${suffix}`;
       await expect(prepareSource({ code: harmless, config })).resolves.toBe(harmless);
 
@@ -470,9 +578,9 @@ describe("Code Mode guest source validation", () => {
         "code mode module access is disabled",
       );
     }
-  }, 30_000);
+  });
 
-  it("separates 20,000 ordinary methods from disguised module loaders", async () => {
+  it("separates ordinary methods from every disguised module loader", async () => {
     const harmlessMethods = [
       "api.import(value)",
       "api.require(value)",
@@ -486,20 +594,23 @@ describe("Code Mode guest source validation", () => {
       "(0, require)('node:fs')",
     ];
 
-    for (let index = 0; index < 10_000; index += 1) {
-      const harmless = `const value = ${index}; const api = { import(value) { return value; }, require(value) { return value; } }; return ${harmlessMethods[index % harmlessMethods.length]};`;
-      await expect(prepareSource({ code: harmless, config })).resolves.toBe(harmless);
-
-      const executable = `return ${moduleExpressions[index % moduleExpressions.length]};`;
+    for (const index of [0, 1, 9_999]) {
+      for (const method of harmlessMethods) {
+        const harmless = `const value = ${index}; const api = { import(value) { return value; }, require(value) { return value; } }; return ${method};`;
+        await expect(prepareSource({ code: harmless, config })).resolves.toBe(harmless);
+      }
+    }
+    for (const expression of moduleExpressions) {
+      const executable = `return ${expression};`;
       await expect(prepareSource({ code: executable, config })).rejects.toThrow(
         "code mode module access is disabled",
       );
     }
-  }, 30_000);
+  });
 
-  it("rejects 10,000 Unicode-shifted TypeScript module-access attempts", async () => {
-    for (let index = 0; index < 5_000; index += 1) {
-      const padding = "😀".repeat((index % 96) + 1);
+  it("rejects every Unicode-shifted TypeScript module-access offset", async () => {
+    for (let length = 1; length <= 96; length += 1) {
+      const padding = "😀".repeat(length);
       for (const access of ["import('node:fs')", "require('node:fs')"]) {
         await expect(
           prepareSource({

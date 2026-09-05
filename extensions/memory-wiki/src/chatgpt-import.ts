@@ -1,13 +1,19 @@
 // Memory Wiki plugin module implements chatgpt import behavior.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import {
+  asNullableRecord,
+  isRecord,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
@@ -25,6 +31,7 @@ import {
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
+import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
@@ -32,6 +39,7 @@ const CHATGPT_PREFERENCE_SIGNAL_RE =
   /\b(prefer|prefers|preference|want|wants|need|needs|avoid|avoids|hate|hates|love|loves|default to|should default to|always use|don't want|does not want|likes|dislikes)\b/i;
 const HUMAN_START_MARKER = "<!-- openclaw:human:start -->";
 const HUMAN_END_MARKER = "<!-- openclaw:human:end -->";
+const MAX_ROLLBACK_RECREATE_ATTEMPTS = 32;
 
 const CHATGPT_RISK_RULES: Array<{ label: string; pattern: RegExp }> = [
   {
@@ -116,28 +124,27 @@ export type ChatGptImportResult = {
   indexUpdatedFiles: string[];
 };
 
+type ChatGptRollbackPreservedPage = {
+  path: string;
+  recoveryPath: string;
+};
+
 export type ChatGptRollbackResult = {
   runId: string;
   removedCount: number;
   restoredCount: number;
+  preservedPaths: ChatGptRollbackPreservedPage[];
   pagePaths: string[];
   indexUpdatedFiles: string[];
   alreadyRolledBack: boolean;
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
 
 function normalizeWhitespace(value: string): string {
   return value.trim().replace(/\s+/g, " ");
 }
 
 function isMissingConversationPageError(error: unknown): boolean {
-  return asRecord(error)?.code === "ENOENT";
+  return asNullableRecord(error)?.code === "ENOENT";
 }
 
 async function readExistingConversationPage(absolutePath: string): Promise<string> {
@@ -177,30 +184,13 @@ async function loadConversations(exportInputPath: string): Promise<{
   const { exportPath, conversationsPath } = resolveConversationSourcePath(exportInputPath);
   const raw = await fs.readFile(conversationsPath, "utf8");
   const parsed = JSON.parse(raw) as unknown;
-  if (Array.isArray(parsed)) {
-    return {
-      exportPath,
-      conversationsPath,
-      conversations: parsed.filter(
-        (entry): entry is Record<string, unknown> => asRecord(entry) !== null,
-      ),
-    };
+  const conversations = Array.isArray(parsed)
+    ? parsed
+    : Object.values(asNullableRecord(parsed) ?? {}).find(Array.isArray);
+  if (!conversations) {
+    throw new Error(`Unrecognized ChatGPT conversations export format: ${conversationsPath}`);
   }
-  const record = asRecord(parsed);
-  if (record) {
-    for (const value of Object.values(record)) {
-      if (Array.isArray(value)) {
-        return {
-          exportPath,
-          conversationsPath,
-          conversations: value.filter(
-            (entry): entry is Record<string, unknown> => asRecord(entry) !== null,
-          ),
-        };
-      }
-    }
-  }
-  throw new Error(`Unrecognized ChatGPT conversations export format: ${conversationsPath}`);
+  return { exportPath, conversationsPath, conversations: conversations.filter(isRecord) };
 }
 
 function isoFromUnix(raw: unknown): string | undefined {
@@ -240,7 +230,7 @@ function cleanMessageText(value: string): string {
 }
 
 function extractMessageText(message: Record<string, unknown>): string {
-  const content = asRecord(message.content);
+  const content = asNullableRecord(message.content);
   if (content) {
     const parts = content.parts;
     if (Array.isArray(parts)) {
@@ -253,7 +243,7 @@ function extractMessageText(message: Record<string, unknown>): string {
           }
           continue;
         }
-        const partRecord = asRecord(part);
+        const partRecord = asNullableRecord(part);
         if (partRecord && typeof partRecord.text === "string" && partRecord.text.trim()) {
           collected.push(partRecord.text.trim());
         }
@@ -268,7 +258,7 @@ function extractMessageText(message: Record<string, unknown>): string {
 }
 
 function activeBranchMessages(conversation: Record<string, unknown>): ChatGptMessage[] {
-  const mapping = asRecord(conversation.mapping);
+  const mapping = asNullableRecord(conversation.mapping);
   if (!mapping) {
     return [];
   }
@@ -278,13 +268,13 @@ function activeBranchMessages(conversation: Record<string, unknown>): ChatGptMes
   const chain: ChatGptMessage[] = [];
   while (currentNode && !seen.has(currentNode)) {
     seen.add(currentNode);
-    const node = asRecord(mapping[currentNode]);
+    const node = asNullableRecord(mapping[currentNode]);
     if (!node) {
       break;
     }
-    const message = asRecord(node.message);
+    const message = asNullableRecord(node.message);
     if (message) {
-      const author = asRecord(message.author);
+      const author = asNullableRecord(message.author);
       const role = typeof author?.role === "string" ? author.role : "unknown";
       const text = extractMessageText(message);
       if (text) {
@@ -694,6 +684,18 @@ async function readImportRunRecord(
   return record;
 }
 
+const MACHINE_RELATED_BLOCK_PATTERN = new RegExp(
+  `(?:^|\\n\\n)## Related\\n${WIKI_RELATED_START_MARKER}\\n[\\s\\S]*?\\n${WIKI_RELATED_END_MARKER}`,
+  "g",
+);
+
+function hashChatGptImportContent(content: string): string {
+  // The compiler owns the exact separator and Related block, but not any
+  // suffix bytes after it. Keep those bytes visible to rollback comparisons.
+  const importOwnedContent = content.replace(MACHINE_RELATED_BLOCK_PATTERN, "");
+  return createHash("sha256").update(importOwnedContent, "utf8").digest("hex");
+}
+
 async function writeTrackedImportPage(params: {
   vaultRoot: string;
   runDir: string;
@@ -706,10 +708,13 @@ async function writeTrackedImportPage(params: {
   if (params.existing === params.rendered) {
     return "skip";
   }
+  // Hash the exact import-owned bytes before writing. A later compile must not
+  // let a concurrent user save become the recorded rollback baseline.
+  const contentHash = hashChatGptImportContent(params.rendered);
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
   if (!params.existing) {
     await fs.writeFile(absolutePath, params.rendered, "utf8");
-    params.record.createdPaths.push(params.relativePath);
+    params.record.createdPaths.push({ path: params.relativePath, contentHash });
     return "create";
   }
   const snapshotHash = createHash("sha1").update(params.relativePath).digest("hex").slice(0, 12);
@@ -721,11 +726,12 @@ async function writeTrackedImportPage(params: {
   params.record.updatedPaths.push({
     path: params.relativePath,
     snapshotPath: snapshotRelativePath,
+    contentHash,
   });
   return "update";
 }
 
-export async function importChatGptConversations(params: {
+async function importChatGptConversationsUnlocked(params: {
   config: ResolvedMemoryWikiConfig;
   exportPath: string;
   dryRun?: boolean;
@@ -824,9 +830,15 @@ export async function importChatGptConversations(params: {
   let indexUpdatedFiles: string[] = [];
   if (!params.dryRun && importRunRecord) {
     if (importRunRecord.createdPaths.length > 0 || importRunRecord.updatedPaths.length > 0) {
-      const compile = await compileMemoryWikiVault(params.config);
-      indexUpdatedFiles = compile.updatedFiles;
       await writeImportRunRecord(params.config.vault.path, importRunRecord);
+      const compile = await compileMemoryWikiVault(params.config).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Memory Wiki ChatGPT import run ${importRunRecord.runId} changed source pages, but vault compilation failed: ${message}. After fixing the compile error, run \`openclaw wiki chatgpt rollback ${importRunRecord.runId}\` to restore the imported pages.`,
+          { cause: error },
+        );
+      });
+      indexUpdatedFiles = compile.updatedFiles;
       await appendMemoryWikiLog(params.config.vault.path, {
         type: "ingest",
         timestamp: nowIso,
@@ -861,49 +873,374 @@ export async function importChatGptConversations(params: {
   };
 }
 
-export async function rollbackChatGptImportRun(params: {
+export async function importChatGptConversations(params: {
+  config: ResolvedMemoryWikiConfig;
+  exportPath: string;
+  dryRun?: boolean;
+  nowMs?: number;
+}): Promise<ChatGptImportResult> {
+  return await withMemoryWikiVaultMutation(params.config.vault.path, () =>
+    importChatGptConversationsUnlocked(params),
+  );
+}
+
+type ChatGptImportRunEntry = ChatGptImportRunRecord["createdPaths"][number];
+type ChatGptRollbackEntryRef = {
+  entry: ChatGptImportRunEntry;
+  kind: "created" | "updated";
+  index: number;
+};
+type ChatGptRecoverySlot = {
+  ref: ChatGptRollbackEntryRef;
+  slotRelativePath: string;
+  contentRelativePath: string;
+};
+type ChatGptRollbackRoot = Awaited<ReturnType<typeof fsRoot>>;
+
+function toVaultRelativePath(vaultRoot: string, absolutePath: string): string {
+  return path.relative(vaultRoot, absolutePath).replace(/\\/g, "/");
+}
+
+function recoverySlotPrefix(ref: ChatGptRollbackEntryRef): string {
+  return `${ref.kind}-${ref.index}-${createHash("sha256").update(ref.entry.path).digest("hex")}-`;
+}
+
+function resolveContainedImportPath(root: string, relativePath: string, label: string): string {
+  if (!relativePath || path.isAbsolute(relativePath) || path.win32.isAbsolute(relativePath)) {
+    throw new Error(`${label} must be a relative path: ${relativePath}`);
+  }
+  const resolvedRoot = path.resolve(root);
+  const resolvedPath = path.resolve(resolvedRoot, relativePath);
+  if (!isPathInside(resolvedRoot, resolvedPath)) {
+    throw new Error(`${label} must stay inside ${resolvedRoot}: ${relativePath}`);
+  }
+  return resolvedPath;
+}
+
+function buildRollbackEntryRefs(record: ChatGptImportRunRecord): ChatGptRollbackEntryRef[] {
+  return [
+    ...record.createdPaths.map((entry, index) => ({ entry, kind: "created" as const, index })),
+    ...record.updatedPaths.map((entry, index) => ({ entry, kind: "updated" as const, index })),
+  ];
+}
+
+function listPreservedPaths(record: ChatGptImportRunRecord): ChatGptRollbackPreservedPage[] {
+  return [...record.createdPaths, ...record.updatedPaths].flatMap((entry) =>
+    (entry.recoveryPaths ?? []).map((recoveryPath) => ({
+      path: entry.path,
+      recoveryPath,
+    })),
+  );
+}
+
+function isFsSafeErrorCode(error: unknown, code: FsSafeError["code"]): boolean {
+  return error instanceof FsSafeError && error.code === code;
+}
+
+async function reserveRecoverySlot(
+  runRoot: ChatGptRollbackRoot,
+  ref: ChatGptRollbackEntryRef,
+): Promise<{ slotRelativePath: string; contentRelativePath: string }> {
+  await runRoot.mkdir("recovered");
+  const slotRelativePath = path.posix.join(
+    "recovered",
+    `${recoverySlotPrefix(ref)}${randomUUID()}`,
+  );
+  await runRoot.mkdir(slotRelativePath);
+  return {
+    slotRelativePath,
+    contentRelativePath: path.posix.join(slotRelativePath, "content"),
+  };
+}
+
+async function removeEmptyRecoverySlot(
+  runRoot: ChatGptRollbackRoot,
+  slotRelativePath: string,
+): Promise<void> {
+  try {
+    if ((await runRoot.list(slotRelativePath)).length > 0) {
+      return;
+    }
+    await runRoot.remove(slotRelativePath);
+  } catch (error) {
+    if (isFsSafeErrorCode(error, "not-found")) {
+      return;
+    }
+    throw error;
+  }
+}
+
+function recordRecoveryPath(entry: ChatGptImportRunEntry, recoveryPath: string): boolean {
+  const recoveryPaths = entry.recoveryPaths ?? [];
+  if (recoveryPaths.includes(recoveryPath)) {
+    return false;
+  }
+  entry.recoveryPaths = [...recoveryPaths, recoveryPath];
+  return true;
+}
+
+async function moveTargetToRecovery(params: {
+  vaultRoot: ChatGptRollbackRoot;
+  runRoot: ChatGptRollbackRoot;
+  runRelativePath: string;
+  ref: ChatGptRollbackEntryRef;
+}): Promise<ChatGptRecoverySlot | null> {
+  resolveContainedImportPath(
+    params.vaultRoot.rootDir,
+    params.ref.entry.path,
+    "Memory Wiki import page path",
+  );
+  for (;;) {
+    const slot = await reserveRecoverySlot(params.runRoot, params.ref);
+    const recoveryVaultRelativePath = path.posix.join(
+      params.runRelativePath,
+      slot.contentRelativePath,
+    );
+    try {
+      await params.vaultRoot.move(params.ref.entry.path, recoveryVaultRelativePath);
+      return { ref: params.ref, ...slot };
+    } catch (error) {
+      await removeEmptyRecoverySlot(params.runRoot, slot.slotRelativePath);
+      if (isFsSafeErrorCode(error, "not-found")) {
+        return null;
+      }
+      if (isFsSafeErrorCode(error, "already-exists")) {
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+async function scanRecoverySlots(params: {
+  runRoot: ChatGptRollbackRoot;
+  record: ChatGptImportRunRecord;
+}): Promise<ChatGptRecoverySlot[]> {
+  const refs = buildRollbackEntryRefs(params.record);
+  const refsByPrefix = new Map(refs.map((ref) => [recoverySlotPrefix(ref), ref]));
+  let slots: Array<{ name: string; isDirectory: boolean; isSymbolicLink: boolean }>;
+  try {
+    slots = await params.runRoot.list("recovered", { withFileTypes: true });
+  } catch (error) {
+    if (isFsSafeErrorCode(error, "not-found")) {
+      return [];
+    }
+    throw error;
+  }
+  const recovered: ChatGptRecoverySlot[] = [];
+  for (const slot of slots) {
+    if (!slot.isDirectory || slot.isSymbolicLink) {
+      continue;
+    }
+    const prefix = /^(?:created|updated)-\d+-[a-f0-9]{64}-/.exec(slot.name)?.[0];
+    const ref = prefix ? refsByPrefix.get(prefix) : undefined;
+    if (!ref) {
+      continue;
+    }
+    const slotRelativePath = path.posix.join("recovered", slot.name);
+    recovered.push({
+      ref,
+      slotRelativePath,
+      contentRelativePath: path.posix.join(slotRelativePath, "content"),
+    });
+  }
+  return recovered;
+}
+
+async function classifyRecoverySlots(params: {
+  vaultRoot: string;
+  runRoot: ChatGptRollbackRoot;
+  slots: ChatGptRecoverySlot[];
+}): Promise<boolean> {
+  const seen = new Set<string>();
+  let recordChanged = false;
+  for (const slot of params.slots) {
+    if (seen.has(slot.contentRelativePath)) {
+      continue;
+    }
+    seen.add(slot.contentRelativePath);
+    const { entry } = slot.ref;
+    const recoveryPath = toVaultRelativePath(
+      params.vaultRoot,
+      path.join(params.runRoot.rootDir, slot.contentRelativePath),
+    );
+    // Once reported, recovery evidence is operator-owned. Retries must not
+    // reclassify or remove it even if its contents later change.
+    if (entry.recoveryPaths?.includes(recoveryPath)) {
+      continue;
+    }
+    let recoveryHash: string | null = null;
+    try {
+      const stat = await params.runRoot.stat(slot.contentRelativePath);
+      if (stat.isFile && !stat.isSymbolicLink) {
+        recoveryHash = hashChatGptImportContent(
+          await params.runRoot.readText(slot.contentRelativePath),
+        );
+      }
+    } catch (error) {
+      if (isFsSafeErrorCode(error, "not-found")) {
+        await removeEmptyRecoverySlot(params.runRoot, slot.slotRelativePath);
+        continue;
+      }
+      throw error;
+    }
+    if (entry.contentHash && recoveryHash === entry.contentHash) {
+      await params.runRoot.remove(slot.contentRelativePath);
+      await removeEmptyRecoverySlot(params.runRoot, slot.slotRelativePath);
+      continue;
+    }
+    recordChanged = recordRecoveryPath(entry, recoveryPath) || recordChanged;
+  }
+  return recordChanged;
+}
+
+async function targetMatchesSnapshot(
+  vaultRoot: ChatGptRollbackRoot,
+  targetRelativePath: string,
+  snapshot: string,
+): Promise<boolean> {
+  try {
+    const target = await vaultRoot.readText(targetRelativePath);
+    return hashChatGptImportContent(target) === hashChatGptImportContent(snapshot);
+  } catch (error) {
+    if (isFsSafeErrorCode(error, "not-found")) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function rollbackChatGptImportRunUnlocked(params: {
   config: ResolvedMemoryWikiConfig;
   runId: string;
 }): Promise<ChatGptRollbackResult> {
-  await initializeMemoryWikiVault(params.config);
-  const record = await readImportRunRecord(params.config.vault.path, params.runId);
+  const vaultRoot = params.config.vault.path;
+  const record = await readImportRunRecord(vaultRoot, params.runId);
   if (record.rolledBackAt) {
     return {
       runId: record.runId,
       removedCount: 0,
       restoredCount: 0,
+      preservedPaths: listPreservedPaths(record),
       pagePaths: [
-        ...record.createdPaths,
+        ...record.createdPaths.map((entry) => entry.path),
         ...record.updatedPaths.map((entry) => entry.path),
       ].toSorted((left, right) => left.localeCompare(right)),
       indexUpdatedFiles: [],
       alreadyRolledBack: true,
     };
   }
-  let removedCount = 0;
-  for (const relativePath of record.createdPaths) {
-    await fs
-      .rm(path.join(params.config.vault.path, relativePath), { force: true })
-      .catch(() => undefined);
-    removedCount += 1;
-  }
-  let restoredCount = 0;
-  const runDir = path.join(resolveMemoryWikiImportRunsDir(params.config.vault.path), record.runId);
-  for (const entry of record.updatedPaths) {
-    if (!entry.snapshotPath) {
-      continue;
+  const importRunsDir = resolveMemoryWikiImportRunsDir(vaultRoot);
+  const runDir = resolveContainedImportPath(
+    importRunsDir,
+    record.runId,
+    "Memory Wiki import run id",
+  );
+  const refs = buildRollbackEntryRefs(record);
+  for (const ref of refs) {
+    resolveContainedImportPath(vaultRoot, ref.entry.path, "Memory Wiki import page path");
+    if (ref.entry.snapshotPath) {
+      resolveContainedImportPath(
+        runDir,
+        ref.entry.snapshotPath,
+        "Memory Wiki import snapshot path",
+      );
     }
-    const snapshotPath = path.join(runDir, entry.snapshotPath);
-    const snapshot = await fs.readFile(snapshotPath, "utf8");
-    const targetPath = path.join(params.config.vault.path, entry.path);
-    await fs.mkdir(path.dirname(targetPath), { recursive: true });
-    await fs.writeFile(targetPath, snapshot, "utf8");
-    restoredCount += 1;
   }
-  const compile = await compileMemoryWikiVault(params.config);
+  if (!record.rollbackStartedAt) {
+    record.rollbackStartedAt = new Date().toISOString();
+    await writeImportRunRecord(vaultRoot, record);
+  }
+  if (!record.rollbackTargetsFinalizedAt) {
+    await initializeMemoryWikiVault(params.config);
+    const vaultFs = await fsRoot(vaultRoot);
+    const runRelativePath = toVaultRelativePath(vaultRoot, runDir);
+    await vaultFs.mkdir(runRelativePath);
+    const runFs = await fsRoot(runDir);
+    const recoverySlots = await scanRecoverySlots({ runRoot: runFs, record });
+    if (await classifyRecoverySlots({ vaultRoot, runRoot: runFs, slots: recoverySlots })) {
+      await writeImportRunRecord(vaultRoot, record);
+    }
+    for (const ref of refs.filter((candidate) => candidate.kind === "created")) {
+      let removed = false;
+      for (let attempt = 0; attempt < MAX_ROLLBACK_RECREATE_ATTEMPTS; attempt += 1) {
+        const slot = await moveTargetToRecovery({
+          vaultRoot: vaultFs,
+          runRoot: runFs,
+          runRelativePath,
+          ref,
+        });
+        if (!slot) {
+          removed = true;
+          break;
+        }
+        if (await classifyRecoverySlots({ vaultRoot, runRoot: runFs, slots: [slot] })) {
+          await writeImportRunRecord(vaultRoot, record);
+        }
+      }
+      if (!removed) {
+        throw new Error(
+          `Memory Wiki rollback could not remove ${ref.entry.path} after ${MAX_ROLLBACK_RECREATE_ATTEMPTS} concurrent recreations`,
+        );
+      }
+    }
+    for (const ref of refs.filter((candidate) => candidate.kind === "updated")) {
+      const { entry } = ref;
+      if (!entry.snapshotPath) {
+        continue;
+      }
+      resolveContainedImportPath(runDir, entry.snapshotPath, "Memory Wiki import snapshot path");
+      const snapshot = await runFs.readText(entry.snapshotPath);
+      resolveContainedImportPath(vaultRoot, entry.path, "Memory Wiki import page path");
+      let restored = false;
+      for (let attempt = 0; attempt < MAX_ROLLBACK_RECREATE_ATTEMPTS; attempt += 1) {
+        if (await targetMatchesSnapshot(vaultFs, entry.path, snapshot)) {
+          restored = true;
+          break;
+        }
+        const slot = await moveTargetToRecovery({
+          vaultRoot: vaultFs,
+          runRoot: runFs,
+          runRelativePath,
+          ref,
+        });
+        if (slot) {
+          if (await classifyRecoverySlots({ vaultRoot, runRoot: runFs, slots: [slot] })) {
+            await writeImportRunRecord(vaultRoot, record);
+          }
+        }
+        try {
+          await vaultFs.create(entry.path, snapshot, { encoding: "utf8", mkdir: true });
+          restored = true;
+          break;
+        } catch (error) {
+          if (!isFsSafeErrorCode(error, "already-exists")) {
+            throw error;
+          }
+        }
+      }
+      if (!restored) {
+        throw new Error(
+          `Memory Wiki rollback could not restore ${entry.path} after ${MAX_ROLLBACK_RECREATE_ATTEMPTS} concurrent recreations`,
+        );
+      }
+    }
+    // The store commits path rows before this meta fence. It does not claim
+    // host power-loss ordering beyond process-restart recovery.
+    record.rollbackTargetsFinalizedAt = new Date().toISOString();
+    await writeImportRunRecord(vaultRoot, record);
+  }
+  // Finalization rebuilds derived artifacts without rewriting source pages.
+  // A normal later compile may refresh machine-managed Related blocks.
+  const compile = await compileMemoryWikiVault(params.config, {
+    sourcePageWrites: "preserve",
+  });
   record.rolledBackAt = new Date().toISOString();
-  await writeImportRunRecord(params.config.vault.path, record);
-  await appendMemoryWikiLog(params.config.vault.path, {
+  await writeImportRunRecord(vaultRoot, record);
+  const preservedPaths = listPreservedPaths(record);
+  const removedCount = record.createdPaths.length;
+  const restoredCount = record.updatedPaths.filter((entry) => entry.snapshotPath).length;
+  await appendMemoryWikiLog(vaultRoot, {
     type: "ingest",
     timestamp: record.rolledBackAt,
     details: {
@@ -912,17 +1249,29 @@ export async function rollbackChatGptImportRun(params: {
       rollback: true,
       removedCount,
       restoredCount,
+      preservedCount: preservedPaths.length,
     },
-  });
+  }).catch(() => undefined);
   return {
     runId: record.runId,
     removedCount,
     restoredCount,
-    pagePaths: [...record.createdPaths, ...record.updatedPaths.map((entry) => entry.path)].toSorted(
-      (left, right) => left.localeCompare(right),
-    ),
+    preservedPaths,
+    pagePaths: [
+      ...record.createdPaths.map((entry) => entry.path),
+      ...record.updatedPaths.map((entry) => entry.path),
+    ].toSorted((left, right) => left.localeCompare(right)),
     indexUpdatedFiles: compile.updatedFiles,
     alreadyRolledBack: false,
   };
+}
+
+export async function rollbackChatGptImportRun(params: {
+  config: ResolvedMemoryWikiConfig;
+  runId: string;
+}): Promise<ChatGptRollbackResult> {
+  return await withMemoryWikiVaultMutation(params.config.vault.path, () =>
+    rollbackChatGptImportRunUnlocked(params),
+  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

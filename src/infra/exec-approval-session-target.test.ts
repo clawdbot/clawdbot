@@ -10,9 +10,10 @@ import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   doesApprovalRequestMatchChannelAccount,
+  doesApprovalRequestSelectChannelAccount,
   resolveApprovalRequestAccountId,
   resolveApprovalRequestChannelAccountId,
 } from "./approval-request-account-binding.js";
@@ -64,6 +65,155 @@ const baseRequest: ExecApprovalRequest = {
   createdAtMs: 1000,
   expiresAtMs: 6000,
 };
+
+describe("native approval account selection", () => {
+  it("selects only the sole eligible account when no owner is recorded", () => {
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: {},
+        request: baseRequest,
+        channel: "telegram",
+        accountId: "default",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default"],
+      }),
+    ).toBe(true);
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: {},
+        request: baseRequest,
+        channel: "telegram",
+        accountId: "default",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default", "ops"],
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects foreign-channel fallback but preserves explicit forwarding", () => {
+    const request = buildRequest({ turnSourceChannel: "whatsapp" });
+    const explicitTargetConfig: OpenClawConfig = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "owner" }],
+        },
+      },
+    };
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: {},
+        request,
+        channel: "telegram",
+        accountId: "default",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default"],
+      }),
+    ).toBe(false);
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: explicitTargetConfig,
+        request,
+        channel: "telegram",
+        accountId: "default",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default"],
+      }),
+    ).toBe(true);
+  });
+
+  it("selects the recorded account even when several accounts are eligible", () => {
+    const request = buildRequest({
+      turnSourceChannel: "telegram",
+      turnSourceAccountId: "ops",
+    });
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: {},
+        request,
+        channel: "telegram",
+        accountId: "ops",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default", "ops"],
+      }),
+    ).toBe(true);
+    expect(
+      doesApprovalRequestSelectChannelAccount({
+        cfg: {},
+        request,
+        channel: "telegram",
+        accountId: "default",
+        defaultAccountId: "default",
+        eligibleAccountIds: ["default", "ops"],
+      }),
+    ).toBe(false);
+  });
+
+  it("maps unscoped explicit targets to default and preserves scoped targets", () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [
+            { channel: "telegram", to: "owner" },
+            { channel: "telegram", to: "ops-owner", accountId: "ops" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+    for (const [accountId, selected] of [
+      ["default", true],
+      ["ops", true],
+      ["other", false],
+    ] as const) {
+      expect(
+        doesApprovalRequestSelectChannelAccount({
+          cfg,
+          request: baseRequest,
+          channel: "telegram",
+          accountId,
+          defaultAccountId: "default",
+          eligibleAccountIds: ["default", "ops", "other"],
+        }),
+      ).toBe(selected);
+    }
+  });
+
+  it("selects the source account and explicit targets in both mode", () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "both",
+          targets: [{ channel: "telegram", accountId: "audit" }],
+        },
+      },
+    } as OpenClawConfig;
+    const request = buildRequest({
+      turnSourceChannel: "telegram",
+      turnSourceAccountId: "ops",
+    });
+
+    for (const [accountId, selected] of [
+      ["ops", true],
+      ["audit", true],
+      ["other", false],
+    ] as const) {
+      expect(
+        doesApprovalRequestSelectChannelAccount({
+          cfg,
+          request,
+          channel: "telegram",
+          accountId,
+          defaultAccountId: "default",
+          eligibleAccountIds: ["ops", "audit", "other"],
+        }),
+      ).toBe(selected);
+    }
+  });
+});
 
 type SessionEntryFixture = Partial<SessionEntry> & {
   origin?: SessionOrigin;
@@ -161,7 +311,7 @@ describe("exec approval session target", () => {
   };
 
   it("returns null for blank session keys, missing entries, and unresolved targets", async () => {
-    await withTempDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
+    await withTestDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
       const storePath = path.join(tmpDir, "sessions.json");
       const cfg = await writeStoreFile(storePath, {
         "agent:main:main": {
@@ -184,7 +334,7 @@ describe("exec approval session target", () => {
   });
 
   it("prefers turn-source routing over stale session delivery state", async () => {
-    await withTempDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
+    await withTestDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
       const storePath = path.join(tmpDir, "sessions.json");
       const cfg = await writeStoreFile(storePath, {
         "agent:main:main": {
@@ -261,7 +411,7 @@ describe("exec approval session target", () => {
   ] satisfies PlaceholderStoreCase[])(
     "$name",
     async ({ relativeStoreDir, entries, request, expected }) => {
-      await withTempDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
+      await withTestDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
         const cfg = await writeStoreFile(
           path.join(tmpDir, relativeStoreDir, "sessions.json"),
           entries,
@@ -273,7 +423,7 @@ describe("exec approval session target", () => {
   );
 
   it("preserves string thread ids from the session store", async () => {
-    await withTempDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
+    await withTestDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
       const storePath = path.join(tmpDir, "sessions.json");
       const cfg = await writeStoreFile(storePath, {
         "agent:main:main": {
@@ -376,7 +526,7 @@ describe("exec approval session target", () => {
   });
 
   it("falls back to the stored session binding when turn source uses another channel", async () => {
-    await withTempDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
+    await withTestDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
       const storePath = path.join(tmpDir, "sessions.json");
       const cfg = await writeStoreFile(storePath, {
         "agent:main:main": {
@@ -406,7 +556,7 @@ describe("exec approval session target", () => {
   });
 
   it("falls back to the session-bound account when no turn-source account is present", async () => {
-    await withTempDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
+    await withTestDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
       const storePath = path.join(tmpDir, "sessions.json");
       const cfg = await writeStoreFile(storePath, {
         "agent:main:main": {
@@ -433,7 +583,7 @@ describe("exec approval session target", () => {
   });
 
   it("prefers explicit turn-source accounts over stale session account bindings", async () => {
-    await withTempDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
+    await withTestDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
       const storePath = path.join(tmpDir, "sessions.json");
       const cfg = await writeStoreFile(storePath, {
         "agent:main:main": {
@@ -462,7 +612,7 @@ describe("exec approval session target", () => {
   });
 
   it("reconciles plugin-request turn source and session origin targets through the shared helper", async () => {
-    await withTempDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
+    await withTestDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
       const storePath = path.join(tmpDir, "sessions.json");
       const cfg = await writeStoreFile(storePath, {
         "agent:main:main": {
@@ -483,7 +633,7 @@ describe("exec approval session target", () => {
   });
 
   it("returns null when explicit turn source conflicts with the session-bound origin target", async () => {
-    await withTempDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
+    await withTestDir({ prefix: "openclaw-exec-approval-session-target-" }, async (tmpDir) => {
       const storePath = path.join(tmpDir, "sessions.json");
       const cfg = await writeStoreFile(storePath, {
         "agent:main:main": {

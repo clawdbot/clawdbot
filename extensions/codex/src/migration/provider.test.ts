@@ -1,6 +1,5 @@
 // Codex tests cover provider plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -8,6 +7,11 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
 import { codexAppInventoryResponse } from "../app-server/app-inventory.test-helpers.js";
@@ -25,7 +29,7 @@ vi.mock("../app-server/request.js", () => ({
   withCodexAppServerJsonClient: sourceAppServerClientScope,
 }));
 
-const tempRoots = new Set<string>();
+const tempWorkspaces: TempWorkspace[] = [];
 
 const logger = {
   info() {},
@@ -33,12 +37,6 @@ const logger = {
   error() {},
   debug() {},
 };
-
-async function makeTempRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-migrate-codex-"));
-  tempRoots.add(root);
-  return root;
-}
 
 async function writeFile(filePath: string, content = ""): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -124,12 +122,12 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
   return call[argIndex];
 }
 
-function targetAgentDir(fixture: { stateDir: string }): string {
-  return path.join(fixture.stateDir, "agents", "main", "agent");
+function targetAgentDir(fixture: { stateDir: string }, agentId = "main"): string {
+  return path.join(fixture.stateDir, "agents", agentId, "agent");
 }
 
-function loadTargetAuthStore(fixture: { stateDir: string }) {
-  return loadAuthProfileStoreForSecretsRuntime(targetAgentDir(fixture));
+function loadTargetAuthStore(fixture: { stateDir: string }, agentId = "main") {
+  return loadAuthProfileStoreForSecretsRuntime(targetAgentDir(fixture, agentId));
 }
 
 async function createCodexFixture(): Promise<{
@@ -139,7 +137,12 @@ async function createCodexFixture(): Promise<{
   stateDir: string;
   workspaceDir: string;
 }> {
-  const root = await makeTempRoot();
+  const workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-migrate-codex-",
+  });
+  tempWorkspaces.push(workspace);
+  const root = workspace.dir;
   const homeDir = path.join(root, "home");
   const codexHome = path.join(root, ".codex");
   const stateDir = path.join(root, "state");
@@ -194,10 +197,7 @@ afterEach(async () => {
   appServerRequest.mockReset();
   sourceAppServerClientScope.mockReset();
   defaultCodexAppInventoryCache.clear();
-  for (const root of tempRoots) {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-  tempRoots.clear();
+  await Promise.all(tempWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
 });
 
 describe("buildCodexMigrationProvider", () => {
@@ -214,7 +214,12 @@ describe("buildCodexMigrationProvider", () => {
   });
 
   it("preserves whitespace in nonempty CODEX_HOME values", async () => {
-    const root = await makeTempRoot();
+    const workspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-migrate-codex-",
+    });
+    tempWorkspaces.push(workspace);
+    const root = workspace.dir;
     const codexHome = path.join(root, " spaced ");
     await writeFile(path.join(codexHome, "memories", "MEMORY.md"), "# Memory\n");
     vi.stubEnv("CODEX_HOME", codexHome);
@@ -799,7 +804,7 @@ describe("buildCodexMigrationProvider", () => {
     expect(sourceAppServerClientScope).toHaveBeenCalledTimes(1);
   });
 
-  it("imports Codex auth.json OAuth and seeds cached OpenAI Codex models", async () => {
+  it("imports Codex auth.json OAuth into the selected agent and seeds cached models", async () => {
     const fixture = await createCodexFixture();
     const reportDir = path.join(fixture.root, "report");
     const configState: MigrationProviderContext["config"] = {
@@ -808,6 +813,7 @@ describe("buildCodexMigrationProvider", () => {
           model: { fallbacks: [] },
           workspace: fixture.workspaceDir,
         },
+        list: [{ id: "main", default: true }, { id: "research" }],
       },
     } as MigrationProviderContext["config"];
     const accessToken = fakeJwt({
@@ -857,6 +863,7 @@ describe("buildCodexMigrationProvider", () => {
       runtime: createConfigRuntime(configState),
       reportDir,
       includeSecrets: true,
+      targetAgentId: "research",
     });
     const plan = await provider.plan(ctx);
     expectRecordFields(findItem(plan.items, "auth:openai"), {
@@ -868,7 +875,7 @@ describe("buildCodexMigrationProvider", () => {
     const result = await provider.apply(ctx, plan);
 
     expectRecordFields(findItem(result.items, "auth:openai"), { status: "migrated" });
-    const authStore = loadTargetAuthStore(fixture);
+    const authStore = loadTargetAuthStore(fixture, "research");
     expect(authStore.profiles?.["openai:account-acct_test"]).toEqual(
       expect.objectContaining({
         type: "oauth",
@@ -877,6 +884,7 @@ describe("buildCodexMigrationProvider", () => {
         refresh: "refresh-test-token",
       }),
     );
+    expect(loadTargetAuthStore(fixture).profiles?.["openai:account-acct_test"]).toBeUndefined();
     expect(configState.auth?.profiles?.["openai:account-acct_test"]).toEqual(
       expect.objectContaining({
         provider: "openai",

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import type { QaBusStateSnapshot } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bootstrap, RunnerSelection } from "./ui-types.js";
 
@@ -83,7 +84,7 @@ function createBootstrap(selection: RunnerSelection): Bootstrap {
       status: "idle",
     },
     runnerCatalog: {
-      channels: ["matrix", "telegram"],
+      channels: ["buzz", "matrix", "telegram"],
       profiles: [
         { id: "smoke-ci", evidenceMode: "slim", channelDriver: "crabline", categoryIds: [] },
         { id: "all", evidenceMode: "full", channelDriver: "live", categoryIds: [] },
@@ -103,14 +104,23 @@ function createBootstrap(selection: RunnerSelection): Bootstrap {
   };
 }
 
-async function mountRunner(selection: RunnerSelection) {
+async function mountRunner(
+  selection: RunnerSelection,
+  snapshot: QaBusStateSnapshot = {
+    conversations: [],
+    cursor: 0,
+    events: [],
+    messages: [],
+    threads: [],
+  },
+) {
   let bootstrap = createBootstrap(selection);
   httpMock.getJson.mockImplementation(async (url: string) => {
     if (url === "/api/bootstrap") {
       return bootstrap;
     }
     if (url === "/api/state") {
-      return { conversations: [], events: [], messages: [], threads: [] };
+      return snapshot;
     }
     if (url === "/api/report") {
       return { report: null };
@@ -195,6 +205,101 @@ afterEach(() => {
 });
 
 describe("QA Lab runner browser interactions", () => {
+  it("labels every execution configuration select", async () => {
+    const root = await mountRunner({
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
+      channel: null,
+      channelDriver: "qa-channel",
+      evidenceMode: "full",
+      fastMode: false,
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      profile: "all",
+      providerMode: "mock-openai",
+      runtimePair: null,
+      runtimePairLane: null,
+      scenarioIds: ["dm-chat-baseline"],
+    });
+
+    root.querySelector<HTMLButtonElement>("[data-sidebar-panel='config']")?.click();
+    const selects = [...root.querySelectorAll<HTMLSelectElement>(".config-field select")];
+
+    expect(selects).toHaveLength(9);
+    expect(selects.map((select) => select.labels?.[0]?.textContent?.trim())).toEqual([
+      "Profile",
+      "Provider lane",
+      "Channel driver",
+      "Execution channel",
+      "Evidence mode",
+      "Runtime pair",
+      "Runtime-pair lane",
+      "Primary model",
+      "Alternate model",
+    ]);
+  });
+
+  it("sends group conversation messages from the interactive chat composer", async () => {
+    const root = await mountRunner(
+      {
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
+        channel: null,
+        channelDriver: "qa-channel",
+        evidenceMode: "full",
+        fastMode: false,
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        profile: "all",
+        providerMode: "mock-openai",
+        runtimePair: null,
+        runtimePairLane: null,
+        scenarioIds: ["dm-chat-baseline"],
+      },
+      {
+        conversations: [{ accountId: "default", id: "qa-room", kind: "channel" }],
+        cursor: 0,
+        events: [],
+        messages: [],
+        threads: [
+          {
+            accountId: "default",
+            conversationId: "qa-room",
+            createdAt: 0,
+            createdBy: "qa-operator",
+            id: "owned-thread",
+            title: "Owned thread",
+          },
+        ],
+      },
+    );
+    httpMock.postJson.mockResolvedValue({ message: { id: "group-message" } });
+
+    root.querySelector<HTMLButtonElement>("[data-thread-select='owned-thread']")?.click();
+    selectValue(root, "#conversation-kind", "group");
+    const conversationInput = root.querySelector<HTMLInputElement>("#conversation-id");
+    if (!conversationInput) {
+      throw new Error("missing group conversation input");
+    }
+    conversationInput.value = "qa-group";
+    conversationInput.dispatchEvent(new Event("input", { bubbles: true }));
+    const composer = root.querySelector<HTMLTextAreaElement>("#composer-text");
+    if (!composer) {
+      throw new Error("missing group message composer");
+    }
+    composer.value = "hello group";
+    composer.dispatchEvent(new Event("input", { bubbles: true }));
+    root.querySelector<HTMLButtonElement>("[data-action='send']")?.click();
+
+    await vi.waitFor(() => expect(httpMock.postJson).toHaveBeenCalledTimes(1));
+    expect(httpMock.postJson).toHaveBeenCalledWith(
+      "/api/inbound/message",
+      expect.objectContaining({
+        accountId: "default",
+        conversation: { id: "qa-group", kind: "group", title: "qa-group" },
+        text: "hello group",
+      }),
+    );
+    const submittedPayload = httpMock.postJson.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(submittedPayload).not.toHaveProperty("threadId");
+  });
+
   it("keeps scenario rows from collapsing inside the scrolling list", async () => {
     const root = await mountRunner({
       alternateModel: "mock-openai/gpt-5.6-luna-alt",
@@ -263,6 +368,12 @@ describe("QA Lab runner browser interactions", () => {
     });
 
     root.querySelector<HTMLButtonElement>("[data-sidebar-panel='config']")?.click();
+    expect(
+      Array.from(
+        root.querySelectorAll<HTMLSelectElement>("#execution-channel option"),
+        (option) => option.value,
+      ),
+    ).toEqual(["", "buzz", "matrix", "telegram"]);
     selectValue(root, "#channel-driver", "live");
     selectValue(root, "#execution-channel", "telegram");
     root.querySelector<HTMLButtonElement>("[data-action='run-suite']")?.click();

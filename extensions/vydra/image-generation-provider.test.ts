@@ -1,3 +1,4 @@
+import { bufferedOversizedJsonResponse as oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 // Vydra tests cover image generation provider plugin behavior.
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +8,7 @@ import {
   jsonResponse,
   stubFetch,
   stubVydraApiKey,
-} from "./provider-test-helpers.test.js";
+} from "./provider-test-helpers.js";
 
 function fetchCall(fetchMock: ReturnType<typeof vi.fn>, index = 0): [string, RequestInit] {
   const call = fetchMock.mock.calls[index];
@@ -15,13 +16,6 @@ function fetchCall(fetchMock: ReturnType<typeof vi.fn>, index = 0): [string, Req
     throw new Error(`Expected fetch call ${index}`);
   }
   return call as [string, RequestInit];
-}
-
-function oversizedJsonResponse(): Response {
-  return new Response(Buffer.alloc(16 * 1024 * 1024 + 1, 0x20), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
 }
 
 describe("vydra image-generation provider", () => {

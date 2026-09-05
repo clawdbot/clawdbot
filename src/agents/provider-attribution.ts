@@ -10,6 +10,7 @@ import type {
 } from "../plugins/manifest.js";
 import { normalizePluginProviderBaseUrl } from "../plugins/plugin-metadata-provider-facts.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -64,6 +65,7 @@ export type ProviderEndpointClass =
   | "openai-public"
   | "openai"
   | "opencode-native"
+  | "opencode-go-native"
   | "azure-openai"
   | "openrouter"
   | "xai-native"
@@ -89,6 +91,7 @@ export type ProviderRequestPolicyInput = {
   baseUrl?: string | null;
   transport?: ProviderRequestTransport;
   capability?: ProviderRequestCapability;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
 };
 
 /** Provider policy facts consumed by transports before constructing a request. */
@@ -177,27 +180,30 @@ type ProviderMetadataOwners = {
   providerRequests: ReadonlyMap<string, PluginManifestProviderRequestProvider>;
 };
 
-function resolveProviderMetadataOwners(): ProviderMetadataOwners {
-  const current = getCurrentPluginMetadataSnapshot({
-    allowWorkspaceScopedSnapshot: true,
-  });
-  if (current) {
-    return {
-      providerEndpoints: current.owners?.providerEndpoints ?? [],
-      providerRequests: current.owners?.providerRequests ?? new Map(),
-    };
-  }
-  const fallback = loadPluginMetadataSnapshot({ config: {} }).owners;
+function resolveProviderMetadataOwners(
+  prepared?: PluginMetadataSnapshotOwnerMaps,
+): ProviderMetadataOwners {
+  const owners =
+    prepared ??
+    getCurrentPluginMetadataSnapshot({
+      allowWorkspaceScopedSnapshot: true,
+    })?.owners ??
+    loadPluginMetadataSnapshot({ config: {} }).owners;
   return {
-    providerEndpoints: fallback.providerEndpoints ?? [],
-    providerRequests: fallback.providerRequests ?? new Map(),
+    providerEndpoints: owners.providerEndpoints ?? [],
+    providerRequests: owners.providerRequests ?? new Map(),
   };
 }
 
-function resolveManifestProviderRequest(
-  provider: string | undefined,
-): PluginManifestProviderRequestProvider | undefined {
-  return provider ? resolveProviderMetadataOwners().providerRequests.get(provider) : undefined;
+function resolveManifestProviderRequest(params: {
+  provider: string | undefined;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
+}): PluginManifestProviderRequestProvider | undefined {
+  return params.provider
+    ? resolveProviderMetadataOwners(params.providerMetadataOwners).providerRequests.get(
+        params.provider,
+      )
+    : undefined;
 }
 
 function hostMatchesSuffix(host: string, suffix: string): boolean {
@@ -227,8 +233,10 @@ function buildManifestEndpointResolution(
 function resolveManifestProviderEndpoint(params: {
   host: string;
   normalizedBaseUrl?: string;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
 }): ProviderEndpointResolution | undefined {
-  for (const endpoint of resolveProviderMetadataOwners().providerEndpoints) {
+  for (const endpoint of resolveProviderMetadataOwners(params.providerMetadataOwners)
+    .providerEndpoints) {
     if ((endpoint.hosts ?? []).includes(params.host)) {
       return buildManifestEndpointResolution(endpoint, params.host);
     }
@@ -253,6 +261,7 @@ function isLocalEndpointHost(host: string): boolean {
 
 export function resolveProviderEndpoint(
   baseUrl: string | null | undefined,
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps,
 ): ProviderEndpointResolution {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
     return { endpointClass: "default" };
@@ -263,7 +272,11 @@ export function resolveProviderEndpoint(
     return { endpointClass: "invalid" };
   }
   const normalizedBaseUrl = normalizePluginProviderBaseUrl(baseUrl);
-  const manifestEndpoint = resolveManifestProviderEndpoint({ host, normalizedBaseUrl });
+  const manifestEndpoint = resolveManifestProviderEndpoint({
+    host,
+    normalizedBaseUrl,
+    ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
+  });
   if (manifestEndpoint) {
     return manifestEndpoint;
   }
@@ -273,8 +286,14 @@ export function resolveProviderEndpoint(
   return { endpointClass: "custom", hostname: host };
 }
 
-function resolveKnownProviderFamily(provider: string | undefined): string {
-  const manifestFamily = resolveManifestProviderRequest(provider)?.family;
+function resolveKnownProviderFamily(
+  provider: string | undefined,
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps,
+): string {
+  const manifestFamily = resolveManifestProviderRequest({
+    provider,
+    ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
+  })?.family;
   if (manifestFamily) {
     return manifestFamily;
   }
@@ -382,6 +401,23 @@ function buildOpenAIAttributionPolicy(
   };
 }
 
+function buildOpenCodeGoAttributionPolicy(env: RuntimeVersionEnv): ProviderAttributionPolicy {
+  const identity = resolveProviderAttributionIdentity(env);
+  return {
+    provider: "opencode-go",
+    enabledByDefault: true,
+    verification: "vendor-documented",
+    hook: "request-headers",
+    docsUrl: "https://opencode.ai/docs/go/",
+    reviewNote:
+      "OpenCode Go requires coding agents to identify themselves with a specific User-Agent.",
+    ...identity,
+    headers: {
+      "User-Agent": formatOpenClawUserAgent(identity.version),
+    },
+  };
+}
+
 function buildXaiAttributionPolicy(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy {
@@ -426,6 +462,7 @@ function listProviderAttributionPolicies(
     buildNvidiaAttributionPolicy(env),
     buildGoogleAttributionPolicy(env),
     buildOpenAIAttributionPolicy(env),
+    buildOpenCodeGoAttributionPolicy(env),
     buildXaiAttributionPolicy(env),
     buildSdkHookOnlyPolicy(
       "anthropic",
@@ -469,7 +506,7 @@ export function resolveProviderRequestPolicy(
 ): ProviderRequestPolicyResolution {
   const provider = normalizeProviderId(input.provider ?? "");
   const policy = resolveProviderAttributionPolicy(provider, env);
-  const endpointResolution = resolveProviderEndpoint(input.baseUrl);
+  const endpointResolution = resolveProviderEndpoint(input.baseUrl, input.providerMetadataOwners);
   const endpointClass = endpointResolution.endpointClass;
   const usesConfiguredBaseUrl = endpointClass !== "default";
   const usesKnownNativeOpenAIEndpoint =
@@ -497,6 +534,14 @@ export function resolveProviderRequestPolicy(
     if (usesXaiNativeAttributionHost || endpointClass === "default") {
       attributionProvider = "xai";
     }
+  } else if (
+    provider === "opencode-go" &&
+    policy?.enabledByDefault &&
+    endpointClass === "opencode-go-native"
+  ) {
+    // The documented identification contract belongs to Go's native endpoint.
+    // A custom baseUrl is a proxy and must not inherit OpenClaw attribution.
+    attributionProvider = "opencode-go";
   }
   if (!attributionProvider && endpointClass === "nvidia-native") {
     attributionProvider = "nvidia";
@@ -517,7 +562,10 @@ export function resolveProviderRequestPolicy(
     policy: attributionPolicy ?? policy,
     endpointClass,
     usesConfiguredBaseUrl,
-    knownProviderFamily: resolveKnownProviderFamily(provider || undefined),
+    knownProviderFamily: resolveKnownProviderFamily(
+      provider || undefined,
+      input.providerMetadataOwners,
+    ),
     attributionProvider,
     attributionHeaders,
     allowsHiddenAttribution:
@@ -557,6 +605,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "openai-public" ||
     endpointClass === "openai" ||
     endpointClass === "opencode-native" ||
+    endpointClass === "opencode-go-native" ||
     endpointClass === "azure-openai" ||
     endpointClass === "openrouter" ||
     endpointClass === "xai-native" ||
@@ -565,7 +614,12 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "google-generative-ai" ||
     endpointClass === "google-vertex";
 
-  const manifestProviderRequest = resolveManifestProviderRequest(provider);
+  const manifestProviderRequest = resolveManifestProviderRequest({
+    provider,
+    ...(input.providerMetadataOwners
+      ? { providerMetadataOwners: input.providerMetadataOwners }
+      : {}),
+  });
   const compatibilityFamily = manifestProviderRequest?.compatibilityFamily;
 
   const isResponsesApi = isOpenAIResponsesApi(api);

@@ -9,6 +9,7 @@ import {
 import {
   collectOpenGroupPolicyRouteAllowlistWarnings,
   createAllowlistProviderGroupPolicyWarningCollector,
+  createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
@@ -106,8 +107,7 @@ function createWhatsAppSetupWizardProxy(
 export function createWhatsAppPluginBase(params: {
   groups: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["groups"]>;
   setupWizard: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>;
-  setup: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setup"]>;
-  setupContract?: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupContract"]>;
+  setupContract: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupContract"]>;
   isConfigured: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isConfigured"];
   isLinked: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isLinked"];
 }) {
@@ -145,6 +145,12 @@ export function createWhatsAppPluginBase(params: {
           }),
         },
       }),
+  });
+  const collectWhatsAppOpenGroupFindings = createConditionalWarningCollector.findings({
+    collectWarnings: collectWhatsAppSecurityWarnings,
+    checkId: "channels.whatsapp.groups.open",
+    severity: "critical",
+    title: "WhatsApp security warning",
   });
   const base = createChannelPluginBase({
     id: WHATSAPP_CHANNEL,
@@ -210,11 +216,10 @@ export function createWhatsAppPluginBase(params: {
     security: {
       applyConfigFixes: applyWhatsAppSecurityConfigFixes,
       resolveDmPolicy: whatsappResolveDmPolicy,
-      collectWarnings: collectWhatsAppSecurityWarnings,
+      collectWarnings: collectWhatsAppOpenGroupFindings,
     },
     doctor: whatsappDoctor,
-    setup: params.setup,
-    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
+    setupContract: params.setupContract,
     groups: params.groups,
   });
   return {
@@ -253,7 +258,7 @@ export function createWhatsAppPluginBase(params: {
     | "secrets"
     | "security"
     | "doctor"
-    | "setup"
+    | "setupContract"
     | "groups"
   >;
 }

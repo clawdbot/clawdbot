@@ -4,6 +4,7 @@ import { sortUniqueStrings } from "@openclaw/normalization-core/string-normaliza
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -36,7 +37,7 @@ import {
 } from "./runtime-owner-assignments.js";
 import { hasCredentialBearingObjectValue } from "./runtime-secret-scan.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
-import { getActiveSecretsRuntimeSnapshot } from "./runtime-state.js";
+import { getActiveSecretsRuntimeSnapshotState } from "./runtime-state.js";
 import { runtimeWebSecretOwnerId } from "./runtime-web-secret-owner.js";
 import {
   hasConfiguredSecretRef,
@@ -141,6 +142,7 @@ function collectUnavailableWebProviders(params: {
   sourceConfig: OpenClawConfig;
   metadata: RuntimeWebSearchMetadata | RuntimeWebFetchMetadata;
   degradedOwners: DegradedSecretOwner[];
+  forceColdRefKeys?: ReadonlySet<string>;
 }): void {
   for (const unavailable of params.result.unavailableProviders) {
     let degradationState = classifySecretOwnerDegradationState({
@@ -149,9 +151,10 @@ function collectUnavailableWebProviders(params: {
       refs: [unavailable.ref],
       config: params.sourceConfig,
       contractDigest: unavailable.contractDigest,
+      forceColdRefKeys: params.forceColdRefKeys,
     });
     if (degradationState === "stale") {
-      const active = getActiveSecretsRuntimeSnapshot();
+      const active = getActiveSecretsRuntimeSnapshotState();
       const activeOwner = active?.secretOwners?.find(
         (entry) =>
           entry.ownerKind === "capability" &&
@@ -216,6 +219,7 @@ function associateWebProviderResolutionError(params: {
   config: OpenClawConfig;
   error: unknown;
   unavailableProviders: RuntimeWebProviderFailure[];
+  forceColdRefKeys?: ReadonlySet<string>;
 }): void {
   const failureByRefKey = new Map(
     params.unavailableProviders.map((unavailable) => [unavailable.refKey, unavailable] as const),
@@ -230,13 +234,14 @@ function associateWebProviderResolutionError(params: {
         refs: [unavailable.ref],
         config: params.config,
         contractDigest: unavailable.contractDigest,
+        forceColdRefKeys: params.forceColdRefKeys,
       }),
       failureMatched: true,
       source: "config" as const,
     };
   });
   const ownerIds = new Set(owners.map((owner) => owner.ownerId));
-  const activeCoOwners = (getActiveSecretsRuntimeSnapshot()?.secretOwners ?? []).flatMap(
+  const activeCoOwners = (getActiveSecretsRuntimeSnapshotState()?.secretOwners ?? []).flatMap(
     (owner) => {
       if (
         owner.ownerKind !== "capability" ||
@@ -267,6 +272,7 @@ function associateWebProviderResolutionError(params: {
             refs: matches.map((match) => match.ref),
             config: params.config,
             contractDigest: owner.contractDigest,
+            forceColdRefKeys: params.forceColdRefKeys,
           }),
           failureMatched: true,
           source: "config" as const,
@@ -362,6 +368,7 @@ async function hasCustomWebProviderPluginRisk(params: {
   contract: WebProviderContract;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  manifestRecords?: readonly PluginManifestRecord[];
 }): Promise<boolean> {
   const installRecords = loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
   if (Object.keys(installRecords).length > 0) {
@@ -382,6 +389,7 @@ async function hasCustomWebProviderPluginRisk(params: {
       origin: "bundled",
       config: params.config,
       env: params.env,
+      manifestRecords: params.manifestRecords,
     }),
   );
   // Public artifacts are complete only for bundled providers. Any configured non-bundled
@@ -425,6 +433,7 @@ async function resolveSecretInputWithEnvFallback(params: {
   contractDigest: string;
   providerFailuresByRefKey: RuntimeWebProviderFailureByRefKey;
   restrictEnvRefsToEnvVars?: boolean;
+  forceColdRefKeys?: ReadonlySet<string>;
 }): Promise<SecretResolutionResult<SecretResolutionSource>> {
   const { ref } = resolveSecretInputRef({
     value: params.value,
@@ -479,6 +488,7 @@ async function resolveSecretInputWithEnvFallback(params: {
           kind: params.kind,
           config: params.sourceConfig,
           error,
+          forceColdRefKeys: params.forceColdRefKeys,
           unavailableProviders: [
             {
               providerId: params.providerId,
@@ -503,6 +513,7 @@ async function resolveSecretInputWithEnvFallback(params: {
             kind: params.kind,
             config: params.sourceConfig,
             error,
+            forceColdRefKeys: params.forceColdRefKeys,
             unavailableProviders: [
               {
                 providerId: params.providerId,
@@ -588,6 +599,7 @@ async function resolveBundledWebSearchProviders(params: {
       env,
       onlyPluginIds,
       origin: "bundled",
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
   }
   if (!params.hasCustomWebSearchPluginRisk) {
@@ -596,6 +608,7 @@ async function resolveBundledWebSearchProviders(params: {
     const bundled = resolveBundledWebSearchProvidersFromPublicArtifacts({
       config: params.sourceConfig,
       env,
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
     if (bundled && bundled.length > 0) {
       return bundled;
@@ -605,12 +618,14 @@ async function resolveBundledWebSearchProviders(params: {
       config: params.sourceConfig,
       env,
       origin: "bundled",
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
   }
   const { resolvePluginWebSearchProviders } = await loadRuntimeWebToolsFallbackProviders();
   return resolvePluginWebSearchProviders({
     config: params.sourceConfig,
     env,
+    manifestRecords: params.context.manifestRegistry?.plugins,
   });
 }
 
@@ -636,6 +651,7 @@ async function resolveBundledWebFetchProviders(params: {
       env,
       onlyPluginIds: [params.configuredBundledPluginId],
       origin: "bundled",
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
   }
   if (!params.hasCustomWebFetchPluginRisk) {
@@ -644,6 +660,7 @@ async function resolveBundledWebFetchProviders(params: {
     const bundled = resolveBundledWebFetchProvidersFromPublicArtifacts({
       config: params.sourceConfig,
       env,
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
     if (bundled && bundled.length > 0) {
       return bundled;
@@ -653,6 +670,7 @@ async function resolveBundledWebFetchProviders(params: {
       config: params.sourceConfig,
       env,
       origin: "bundled",
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
   }
   const { resolvePluginWebFetchProviders } = await loadRuntimeWebToolsFallbackProviders();
@@ -662,6 +680,7 @@ async function resolveBundledWebFetchProviders(params: {
     // Runtime credential resolution may load only bundled providers or verified
     // official installs. Arbitrary external providers must not gain SecretRef access.
     sandboxed: true,
+    manifestRecords: params.context.manifestRegistry?.plugins,
   });
 }
 
@@ -745,6 +764,7 @@ export async function resolveRuntimeWebTools(params: {
   resolvedConfig: OpenClawConfig;
   context: ResolverContext;
   allowUnavailableSecretOwners?: boolean;
+  forceColdRefKeys?: ReadonlySet<string>;
 }): Promise<ResolvedRuntimeWebTools> {
   const defaults = params.sourceConfig.secrets?.defaults;
   const diagnostics: RuntimeWebDiagnostic[] = [];
@@ -766,6 +786,7 @@ export async function resolveRuntimeWebTools(params: {
       contract: "webSearchProviders",
       config: params.sourceConfig,
       env,
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
     return hasCustomWebSearchRisk;
   };
@@ -775,6 +796,7 @@ export async function resolveRuntimeWebTools(params: {
       contract: "webFetchProviders",
       config: params.sourceConfig,
       env,
+      manifestRecords: params.context.manifestRegistry?.plugins,
     });
     return hasCustomWebFetchRisk;
   };
@@ -885,6 +907,7 @@ export async function resolveRuntimeWebTools(params: {
           kind: "search",
           config: params.sourceConfig,
           error,
+          forceColdRefKeys: params.forceColdRefKeys,
           unavailableProviders: error.unavailableProviders,
         });
       },
@@ -914,6 +937,7 @@ export async function resolveRuntimeWebTools(params: {
           envVars,
           contractDigest,
           providerFailuresByRefKey,
+          forceColdRefKeys: params.forceColdRefKeys,
         }),
       setResolvedCredential: ({ resolvedConfig, provider, value }) =>
         setResolvedWebSearchApiKey({
@@ -952,6 +976,7 @@ export async function resolveRuntimeWebTools(params: {
       sourceConfig: params.sourceConfig,
       metadata: searchMetadata,
       degradedOwners,
+      forceColdRefKeys: params.forceColdRefKeys,
     });
     for (const owner of searchSelection.secretOwners) {
       secretOwners.push(toWebSecretOwnerRefState("search", owner));
@@ -1023,6 +1048,7 @@ export async function resolveRuntimeWebTools(params: {
           kind: "fetch",
           config: params.sourceConfig,
           error,
+          forceColdRefKeys: params.forceColdRefKeys,
           unavailableProviders: error.unavailableProviders,
         });
       },
@@ -1053,6 +1079,7 @@ export async function resolveRuntimeWebTools(params: {
           contractDigest,
           providerFailuresByRefKey,
           restrictEnvRefsToEnvVars: true,
+          forceColdRefKeys: params.forceColdRefKeys,
         }),
       setResolvedCredential: ({ resolvedConfig, provider, value }) =>
         setResolvedWebFetchApiKey({
@@ -1091,6 +1118,7 @@ export async function resolveRuntimeWebTools(params: {
       sourceConfig: params.sourceConfig,
       metadata: fetchMetadata,
       degradedOwners,
+      forceColdRefKeys: params.forceColdRefKeys,
     });
     for (const owner of fetchSelection.secretOwners) {
       secretOwners.push(toWebSecretOwnerRefState("fetch", owner));

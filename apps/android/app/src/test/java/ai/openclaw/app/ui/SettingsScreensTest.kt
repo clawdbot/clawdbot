@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.GatewayExecApprovalSummary
@@ -7,6 +8,7 @@ import ai.openclaw.app.GatewayNodeCapabilityApproval
 import ai.openclaw.app.GatewayUsageProviderSummary
 import ai.openclaw.app.GatewayUsageWindowSummary
 import ai.openclaw.app.LocationMode
+import ai.openclaw.app.appearanceAccentPalette
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.verbatimText
@@ -131,6 +133,32 @@ class SettingsScreensTest {
     assertEquals("Ready", gatewayStatusLabel("auth failed", isConnected = true, gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING")))
     assertEquals("Pairing needed", gatewayStatusLabel("Pairing in progress", isConnected = false, gatewayConnectionProblem = problem))
     assertEquals("Cannot reach gateway", gatewayStatusLabel("Connection failed", isConnected = false, gatewayConnectionProblem = problem))
+    assertEquals("Offline", gatewayStatusLabel("Offline", isConnected = false))
+    assertEquals("Cannot reach gateway", gatewayStatusLabel("Gateway error: offline", isConnected = false))
+  }
+
+  @Test
+  fun gatewayStatusLabelPreservesPartialConnectivity() {
+    assertEquals(
+      "Connected (node offline)",
+      gatewayStatusLabel(
+        GatewayConnectionDisplay(
+          isConnected = true,
+          statusText = "Connected (node offline)",
+          problem = null,
+        ),
+      ),
+    )
+    assertEquals(
+      "Connected (operator offline)",
+      gatewayStatusLabel(
+        GatewayConnectionDisplay(
+          isConnected = false,
+          statusText = "Connected (operator offline)",
+          problem = null,
+        ),
+      ),
+    )
   }
 
   @Test
@@ -325,6 +353,13 @@ class SettingsScreensTest {
   }
 
   @Test
+  fun usageRefreshStaysVisibleBetweenIncompleteRetries() {
+    assertTrue(usageRefreshVisible(requestRefreshing = true, summaryRefreshing = false))
+    assertTrue(usageRefreshVisible(requestRefreshing = false, summaryRefreshing = true))
+    assertFalse(usageRefreshVisible(requestRefreshing = false, summaryRefreshing = false))
+  }
+
+  @Test
   fun approvalCardShowsTheWholeMonospacedCommandBeforeStackedActions() {
     val source = settingsScreensSource()
     val cardStart = source.indexOf("private fun ExecApprovalCard(")
@@ -394,6 +429,16 @@ class SettingsScreensTest {
     // Discovered gateways surface inside Add Gateway with a per-row connect.
     val discoveredRows = source.indexOf("discoveredGateways.forEachIndexed", screenStart)
     assertTrue(discoveredRows > addPanel && discoveredRows < pairedPanel)
+  }
+
+  @Test
+  fun accentSwatchDescriptionsNameDefaultAndEveryColor() {
+    val descriptions =
+      (listOf<Long?>(null) + appearanceAccentPalette).map(::appearanceAccentSwatchDescription)
+
+    assertEquals(appearanceAccentPalette.size + 1, descriptions.toSet().size)
+    assertEquals("Accent color, Default", descriptions.first())
+    assertTrue(descriptions.drop(1).all { it.startsWith("Accent color, #") })
   }
 
   private fun settingsScreensSource(): String {

@@ -5,10 +5,10 @@ import {
   verifyChannelMessageLiveCapabilityAdapterProofs,
   verifyChannelMessageLiveFinalizerProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "./channel.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 
 const cfg = {
   channels: {
@@ -132,6 +132,7 @@ describe("slack channel message adapter", () => {
 
     const provePayload = async () => {
       sendSlack.mockClear();
+      const onPlatformSendDispatch = vi.fn();
       const result = await sendPayload({
         cfg,
         to: "C123",
@@ -139,6 +140,7 @@ describe("slack channel message adapter", () => {
         payload: { text: "payload" },
         accountId: "default",
         deliveryQueueId: "queue-1",
+        onPlatformSendDispatch,
         deps: { sendSlack },
       });
       const [to, text, options] = expectLastSendSlackCall();
@@ -146,6 +148,7 @@ describe("slack channel message adapter", () => {
       expect(text).toBe("payload");
       expect(options.accountId).toBe("default");
       expect(options.deliveryQueueId).toBeUndefined();
+      expect(options.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
       expect(result.receipt.platformMessageIds).toEqual(["msg-1"]);
     };
 

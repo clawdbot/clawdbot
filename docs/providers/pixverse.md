@@ -94,8 +94,10 @@ The video provider accepts these optional provider-specific keys:
 {
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "pixverse/v6",
+      mediaModels: {
+        video: {
+          primary: "pixverse/v6",
+        },
       },
     },
   },

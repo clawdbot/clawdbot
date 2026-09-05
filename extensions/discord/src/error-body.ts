@@ -1,4 +1,5 @@
 // Discord plugin module implements error body behavior.
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const DISCORD_RESPONSE_BODY_SUMMARY_MAX_CHARS = 240;
@@ -20,7 +21,7 @@ export function summarizeDiscordResponseBody(
   if (!summary) {
     return opts.emptyText;
   }
-  return truncateUtf16Safe(summary, DISCORD_RESPONSE_BODY_SUMMARY_MAX_CHARS);
+  return truncateUtf16Safe(redactToolPayloadText(summary), DISCORD_RESPONSE_BODY_SUMMARY_MAX_CHARS);
 }
 
 export function isDiscordHtmlResponseBody(body: string, contentType?: string | null): boolean {

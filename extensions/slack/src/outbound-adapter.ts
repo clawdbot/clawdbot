@@ -1,11 +1,13 @@
 // Slack plugin module implements outbound adapter behavior.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import type { OutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
+import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
+import {
+  resolveOutboundSendDep,
+  type OutboundIdentity,
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   attachChannelToResult,
   type ChannelOutboundAdapter,
-  createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import {
   normalizeMessagePresentation,
@@ -20,13 +22,19 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import {
   resolveSlackAuthoredTextPlacement,
   type SlackAuthoredTextPlacement,
 } from "./authored-text.js";
+import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
+import {
+  resolveSlackQuestionActionIds,
+  SLACK_QUESTION_FINALIZATION_BLOCKS,
+} from "./reply-action-ids.js";
 import {
   parseSlackReplyBlockSegments,
   resolveSlackReplyBlockResolution,
@@ -34,10 +42,22 @@ import {
   type SlackReplyBlockResolution,
   type SlackReplyBlockSegment,
 } from "./reply-blocks.js";
-import type { SlackSendIdentity } from "./send.js";
+import { mergeSlackSendResults } from "./send-results.js";
+import type { SlackSendIdentity, SlackSendResult } from "./send.js";
+import { parseSlackTarget } from "./target-parsing.js";
 import { resolveSlackThreadTsValue } from "./thread-ts.js";
 
 type SlackSendFn = typeof import("./send.runtime.js").sendMessageSlack;
+
+function toSlackOutboundResult<T extends { channelId?: string }>(result: T) {
+  const { channelId, ...delivery } = result;
+  return attachChannelToResult(
+    "slack",
+    channelId === undefined
+      ? delivery
+      : { ...delivery, target: { kind: "channel" as const, id: channelId } },
+  );
+}
 
 type SlackOutboundChannelData = Record<string, unknown> & {
   authoredTextPlacement?: SlackAuthoredTextPlacement;
@@ -172,89 +192,64 @@ function readSlackAuthoredTextPlacement(value: unknown): SlackAuthoredTextPlacem
   return value === "none" || value === "blocks" || value === "outside-blocks" ? value : undefined;
 }
 
-async function sendSlackOutboundMessage(params: {
-  cfg: NonNullable<NonNullable<Parameters<SlackSendFn>[2]>["cfg"]>;
-  to: string;
-  text: string;
-  mediaUrl?: string;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  blocks?: NonNullable<Parameters<SlackSendFn>[2]>["blocks"];
-  authoredTextPlacement?: SlackAuthoredTextPlacement;
-  nativeDataFallbackBaseText?: string;
-  textIsSlackPlainText?: boolean;
-  accountId?: string | null;
-  deps?: { [channelId: string]: unknown } | null;
-  replyToId?: string | null;
-  threadId?: string | number | null;
-  identity?: OutboundIdentity;
-  deliveryQueueId?: Parameters<
-    NonNullable<ChannelOutboundAdapter["sendText"]>
-  >[0]["deliveryQueueId"];
-  onPlatformSendDispatch?: Parameters<
-    NonNullable<ChannelOutboundAdapter["sendText"]>
-  >[0]["onPlatformSendDispatch"];
-  onDeliveryResult?: Parameters<
-    NonNullable<ChannelOutboundAdapter["sendText"]>
-  >[0]["onDeliveryResult"];
-}) {
-  const send =
-    resolveOutboundSendDep<SlackSendFn>(params.deps, "slack") ??
-    (await loadSlackSendRuntime()).sendMessageSlack;
-  const slackIdentity = resolveSlackSendIdentity(params.identity);
-  const threadTs = resolveSlackThreadTsValue({
-    replyToId: params.replyToId,
-    threadId: params.threadId,
-  });
-  const sendOptions: NonNullable<Parameters<SlackSendFn>[2]> & {
-    authoredTextPlacement?: SlackAuthoredTextPlacement;
-  } = {
-    cfg: params.cfg,
-    threadTs,
-    accountId: params.accountId ?? undefined,
-    ...(params.mediaUrl
-      ? {
-          mediaUrl: params.mediaUrl,
-          mediaAccess: params.mediaAccess,
-          mediaLocalRoots: params.mediaLocalRoots,
-          mediaReadFile: params.mediaReadFile,
-        }
-      : {}),
-    ...(params.blocks ? { blocks: params.blocks } : {}),
-    ...(params.authoredTextPlacement
-      ? { authoredTextPlacement: params.authoredTextPlacement }
-      : {}),
-    ...(Object.hasOwn(params, "nativeDataFallbackBaseText")
-      ? { nativeDataFallbackBaseText: params.nativeDataFallbackBaseText }
-      : {}),
-    ...(params.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
-    ...(slackIdentity ? { identity: slackIdentity } : {}),
-    ...(params.deliveryQueueId ? { deliveryQueueId: params.deliveryQueueId } : {}),
-    ...(params.onPlatformSendDispatch
-      ? { onPlatformSendDispatch: params.onPlatformSendDispatch }
-      : {}),
-    ...(params.onDeliveryResult
-      ? {
-          onDeliveryResult: async (progress) => {
-            await params.onDeliveryResult?.(attachChannelToResult("slack", progress));
-          },
-        }
-      : {}),
-  };
-  const result = await send(params.to, params.text, sendOptions);
-  return result;
-}
+type SlackOutboundSendParams = ChannelOutboundContext &
+  Pick<
+    Parameters<SlackSendFn>[2],
+    "blocks" | "authoredTextPlacement" | "nativeDataFallbackBaseText" | "textIsSlackPlainText"
+  >;
 
-function createSlackAttachedSendAdapter() {
-  return createAttachedChannelResultAdapter({
-    channel: "slack",
-    sendText: sendSlackOutboundMessage,
-    sendMedia: sendSlackOutboundMessage,
-  });
+async function prepareSlackOutboundSend(ctx: ChannelOutboundContext) {
+  // Sends require the scoped runtime snapshot, including resolved active credentials.
+  // Admission also applies to injected senders, before any platform work begins.
+  const account = resolveSlackAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
+  const target = parseSlackTarget(ctx.to, { defaultKind: "channel" });
+  assertSlackDetachedTargetAllowed(account.accountId, target?.teamId);
+  const send =
+    resolveOutboundSendDep<SlackSendFn>(ctx.deps, "slack") ??
+    (await loadSlackSendRuntime()).sendMessageSlack;
+  const token = resolveSlackOperationToken(account, "write");
+  const botToken = account.botToken?.trim();
+  const tokenOverride = token && token !== botToken ? token : undefined;
+  return async (params: SlackOutboundSendParams) => {
+    const slackIdentity = resolveSlackSendIdentity(params.identity);
+    const threadTs = resolveSlackThreadTsValue(params);
+    const sendOptions: Parameters<SlackSendFn>[2] = {
+      cfg: params.cfg,
+      ...(tokenOverride ? { token: tokenOverride } : {}),
+      threadTs,
+      accountId: params.accountId ?? undefined,
+      ...(params.mediaUrl
+        ? {
+            mediaUrl: params.mediaUrl,
+            mediaAccess: params.mediaAccess,
+            mediaLocalRoots: params.mediaLocalRoots,
+            mediaReadFile: params.mediaReadFile,
+            ...(params.forceDocument ? { forceDocument: true } : {}),
+          }
+        : {}),
+      ...(params.blocks ? { blocks: params.blocks } : {}),
+      ...(params.authoredTextPlacement
+        ? { authoredTextPlacement: params.authoredTextPlacement }
+        : {}),
+      ...(Object.hasOwn(params, "nativeDataFallbackBaseText")
+        ? { nativeDataFallbackBaseText: params.nativeDataFallbackBaseText }
+        : {}),
+      ...(params.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
+      ...(slackIdentity ? { identity: slackIdentity } : {}),
+      ...(params.deliveryQueueId ? { deliveryQueueId: params.deliveryQueueId } : {}),
+      ...(params.onPlatformSendDispatch
+        ? { onPlatformSendDispatch: params.onPlatformSendDispatch }
+        : {}),
+      ...(params.onDeliveryResult
+        ? {
+            onDeliveryResult: async (progress) => {
+              await params.onDeliveryResult?.(toSlackOutboundResult(progress));
+            },
+          }
+        : {}),
+    };
+    return await send(params.to, params.text, sendOptions);
+  };
 }
 
 export const slackOutbound: ChannelOutboundAdapter = {
@@ -270,12 +265,23 @@ export const slackOutbound: ChannelOutboundAdapter = {
       : null;
   },
   sendPayload: async (ctx) => {
+    const send = await prepareSlackOutboundSend(ctx);
+    // Media belongs to each media unit, never to subsequent card or text sends.
+    const { mediaUrl: _mediaUrl, ...commonCtx } = ctx;
+    const preparedCtx = {
+      ...commonCtx,
+      replyToId: resolveSlackThreadTsValue(ctx),
+      // Keeping the fallback thread would resurrect an implicit reply consumed by fanout.
+      threadId: null,
+      // Only text sends can reconcile an unknown send with one provider marker.
+      deliveryQueueId: undefined,
+    };
     const payload = {
-      ...ctx.payload,
+      ...preparedCtx.payload,
       text:
         resolveLegacyInteractiveTextFallback({
-          text: ctx.payload.text,
-          interactive: ctx.payload.interactive,
+          text: preparedCtx.payload.text,
+          interactive: preparedCtx.payload.interactive,
         }) ?? "",
     };
     const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
@@ -287,10 +293,12 @@ export const slackOutbound: ChannelOutboundAdapter = {
       resolution = resolveSlackOutboundBlockResolution(payload);
     }
     if (resolution.segments.length === 0) {
+      const sendPart = async (part: ChannelOutboundContext) =>
+        toSlackOutboundResult(await send(part));
       return await sendTextMediaPayload({
         channel: "slack",
-        ctx: { ...ctx, payload },
-        adapter: slackOutbound,
+        ctx: { ...preparedCtx, payload },
+        adapter: { sendText: sendPart, sendMedia: sendPart },
       });
     }
     const mediaUrls = resolvePayloadMediaUrls(payload);
@@ -299,46 +307,38 @@ export const slackOutbound: ChannelOutboundAdapter = {
       segments: resolution.segments,
       text: payload.text,
     });
-    const useSingleDeliveryMarker = mediaUrls.length === 0 && deliveryMessages.length === 1;
-    return attachChannelToResult(
-      "slack",
+    const sentResults: Awaited<ReturnType<SlackSendFn>>[] = [];
+    return toSlackOutboundResult(
       await sendPayloadMediaSequenceAndFinalize({
         text: "",
         mediaUrls,
         send: async ({ text, mediaUrl }) =>
-          await sendSlackOutboundMessage({
-            ...ctx,
+          await send({
+            ...preparedCtx,
             text,
             mediaUrl,
-            deliveryQueueId: useSingleDeliveryMarker ? ctx.deliveryQueueId : undefined,
-            onPlatformSendDispatch: useSingleDeliveryMarker
-              ? ctx.onPlatformSendDispatch
-              : undefined,
           }),
+        onResult: (result) => {
+          sentResults.push(result);
+        },
         finalize: async () => {
-          let lastResult: Awaited<ReturnType<SlackSendFn>> | undefined;
           for (const message of deliveryMessages) {
-            lastResult = await sendSlackOutboundMessage({
-              ...ctx,
-              text: message.text,
-              ...(message.blocks ? { blocks: message.blocks } : {}),
-              ...(message.authoredTextPlacement
-                ? { authoredTextPlacement: message.authoredTextPlacement }
-                : {}),
-              ...(message.nativeDataFallbackBaseText
-                ? { nativeDataFallbackBaseText: message.nativeDataFallbackBaseText }
-                : {}),
-              ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
-              deliveryQueueId: useSingleDeliveryMarker ? ctx.deliveryQueueId : undefined,
-              onPlatformSendDispatch: useSingleDeliveryMarker
-                ? ctx.onPlatformSendDispatch
-                : undefined,
-            });
+            sentResults.push(
+              await send({
+                ...preparedCtx,
+                text: message.text,
+                ...(message.blocks ? { blocks: message.blocks } : {}),
+                ...(message.authoredTextPlacement
+                  ? { authoredTextPlacement: message.authoredTextPlacement }
+                  : {}),
+                ...(message.nativeDataFallbackBaseText
+                  ? { nativeDataFallbackBaseText: message.nativeDataFallbackBaseText }
+                  : {}),
+                ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
+              }),
+            );
           }
-          if (!lastResult) {
-            throw new Error("Slack rendered presentation produced no deliverable segment");
-          }
-          return lastResult;
+          return mergeSlackSendResults(sentResults);
         },
       }),
     );
@@ -358,40 +358,63 @@ export const slackOutbound: ChannelOutboundAdapter = {
       segments: resolution.segments,
       text: payload.text,
     });
-    const blockMessageIndex = deliveryMessages.findIndex((message) =>
-      message.blocks?.some((block) => block.type === "actions"),
+    const deliveryMessage = deliveryMessages.find(
+      (message) => resolveSlackQuestionActionIds(message.blocks).length > 0,
     );
-    const deliveryMessage = deliveryMessages[blockMessageIndex];
-    const result =
-      results[blockMessageIndex] ?? results.find((candidate) => candidate.channel === "slack");
-    const deliveryBlocks = deliveryMessage?.blocks;
-    if (!deliveryMessage || !deliveryBlocks || !result?.messageId) {
+    const questionActionIds = resolveSlackQuestionActionIds(deliveryMessage?.blocks);
+    const result = results.find(
+      ({ channel, meta }) =>
+        channel === "slack" &&
+        Array.isArray(meta?.slackQuestionActionIds) &&
+        meta.slackQuestionActionIds.some(
+          (actionId) => typeof actionId === "string" && questionActionIds.includes(actionId),
+        ),
+    );
+    const deliveredDisplayBlocks = (result?.meta as SlackSendResult["meta"] | undefined)?.[
+      SLACK_QUESTION_FINALIZATION_BLOCKS
+    ];
+    if (!deliveryMessage || !deliveredDisplayBlocks || !result?.messageId) {
       return;
     }
-    const channelId = result.channelId;
+    const channelId = result.target?.kind === "channel" ? result.target.id : undefined;
     if (!channelId) {
       return;
     }
+    const teamId = parseSlackTarget(target.to, { defaultKind: "channel" })?.teamId;
+    // Aggregate fallback receipts retain their last platform id separately
+    // from the actual card whose question controls need finalization.
+    const questionMessageId =
+      typeof result.meta?.slackQuestionMessageId === "string"
+        ? result.meta.slackQuestionMessageId
+        : result.messageId;
     questionGatewayRuntime.registerChannelDelivery({
       questionId,
-      deliveryId: `slack:${target.accountId ?? "default"}:${channelId}:${result.messageId}`,
+      deliveryId: `slack:${target.accountId ?? "default"}:${channelId}:${questionMessageId}`,
       finalize: async (statusLine) => {
         const { updateMessageSlack } = await loadSlackSendRuntime();
         const escapedStatusLine = escapeSlackMrkdwn(statusLine);
         const blocks = [
-          ...deliveryBlocks.filter((block) => block.type !== "actions"),
+          ...deliveredDisplayBlocks,
           { type: "context", elements: [{ type: "mrkdwn", text: escapedStatusLine }] },
         ];
         await updateMessageSlack({
           cfg,
           accountId: target.accountId ?? undefined,
           channelId,
-          messageTs: result.messageId,
+          teamId,
+          messageTs: questionMessageId,
           text: `${deliveryMessage.text}\n\n${escapedStatusLine}`,
           blocks,
         });
       },
     });
   },
-  ...createSlackAttachedSendAdapter(),
+  sendText: async (ctx) => {
+    const send = await prepareSlackOutboundSend(ctx);
+    return toSlackOutboundResult(await send(ctx));
+  },
+  sendMedia: async (ctx) => {
+    const send = await prepareSlackOutboundSend(ctx);
+    return toSlackOutboundResult(await send({ ...ctx, deliveryQueueId: undefined }));
+  },
 };

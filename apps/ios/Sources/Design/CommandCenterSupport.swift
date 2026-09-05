@@ -93,6 +93,9 @@ struct CommandSessionRow: View {
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 6)
+        .overlay(alignment: .leading) {
+            OpenClawSessionColorStripe(color: self.item.sessionColor)
+        }
         .contentShape(Rectangle())
     }
 
@@ -118,6 +121,7 @@ struct CommandSessionRow: View {
 struct CommandSessionActions {
     let rename: (String?) -> Void
     let moveToGroup: (String?) -> Void
+    let setColor: (String?) -> Void
     let togglePinned: () -> Void
     let toggleUnread: () -> Void
     let fork: () -> Void
@@ -154,9 +158,12 @@ struct CommandSessionActionsModifier: ViewModifier {
     private func managedContent(_ content: Content) -> some View {
         content
             .contextMenu {
+                OpenClawSessionColorMenu(color: self.session.color, onSelect: self.actions.setColor)
                 if self.isArchived {
-                    self.actionButton("Unarchive", systemImage: "archivebox") {
-                        self.actions.toggleArchived()
+                    if self.canArchive {
+                        self.actionButton("Unarchive", systemImage: "archivebox") {
+                            self.actions.toggleArchived()
+                        }
                     }
                     if self.canDelete {
                         self.deleteButton
@@ -181,7 +188,12 @@ struct CommandSessionActionsModifier: ViewModifier {
                     self.actionButton("Rename…", systemImage: "pencil") {
                         self.beginRename()
                     }
-                    self.actionButton("Fork", systemImage: "arrow.triangle.branch") {
+                    self.actionButton(
+                        self.session.hasActiveRun == true
+                            ? OpenClawTextValue.localized("Fork from last completed message")
+                            : OpenClawTextValue.localized("Fork"),
+                        systemImage: "arrow.triangle.branch")
+                    {
                         self.actions.fork()
                     }
                     self.groupMenu

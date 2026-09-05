@@ -30,8 +30,10 @@ export type LegacyChannelPairingStateDetection = {
 export function detectLegacyChannelPairingState(params: {
   sourceDir: string;
   configuredChannelIds?: readonly string[];
-  configuredDefaultAccountIds?: Readonly<Record<string, string>>;
-  configuredAccountIds?: Readonly<Record<string, readonly string[]>>;
+  resolveAccounts?: () => {
+    defaultAccountIds?: Readonly<Record<string, string>>;
+    accountIds?: Readonly<Record<string, readonly string[]>>;
+  };
 }): LegacyChannelPairingStateDetection {
   let directoryEntries: fs.Dirent[] = [];
   try {
@@ -52,6 +54,11 @@ export function detectLegacyChannelPairingState(params: {
   const pairedChannelIds = files
     .filter((filename) => filename.endsWith(PAIRING_SUFFIX))
     .map((filename) => filename.slice(0, -PAIRING_SUFFIX.length));
+  // Pairing requests carry their own account metadata. Only allowFrom filenames need
+  // config facts, which can materialize channel runtimes even when no input exists.
+  const accounts = files.some((filename) => filename.endsWith(ALLOW_FROM_SUFFIX))
+    ? params.resolveAccounts?.()
+    : undefined;
   const knownChannelIds = dedupePreserveOrder([
     ...CHANNEL_IDS,
     ...(params.configuredChannelIds ?? []),
@@ -61,9 +68,9 @@ export function detectLegacyChannelPairingState(params: {
     sourceDir: params.sourceDir,
     files,
     knownChannelIds,
-    defaultAccountIds: { ...params.configuredDefaultAccountIds },
+    defaultAccountIds: { ...accounts?.defaultAccountIds },
     accountIds: Object.fromEntries(
-      Object.entries(params.configuredAccountIds ?? {}).map(([channel, accountIds]) => [
+      Object.entries(accounts?.accountIds ?? {}).map(([channel, accountIds]) => [
         channel,
         dedupePreserveOrder(accountIds.map((accountId) => resolveAllowFromAccountId(accountId))),
       ]),
@@ -76,6 +83,35 @@ function parsePairingFilename(filename: string): PairingChannel | null {
   return filename.endsWith(PAIRING_SUFFIX)
     ? (filename.slice(0, -PAIRING_SUFFIX.length) as PairingChannel)
     : null;
+}
+
+function findCaseFoldedAllowFromCollisions(
+  filenames: readonly string[],
+  knownChannelIds: readonly string[],
+): Set<string> {
+  const firstFilenameByKey = new Map<string, string>();
+  const collisions = new Set<string>();
+  for (const filename of filenames) {
+    if (!filename.endsWith(ALLOW_FROM_SUFFIX)) {
+      continue;
+    }
+    const stem = filename.slice(0, -ALLOW_FROM_SUFFIX.length);
+    for (const channel of knownChannelIds) {
+      if (!stem.startsWith(`${channel}-`)) {
+        continue;
+      }
+      const accountKey = stem.slice(channel.length + 1).toLowerCase();
+      const collisionKey = `${channel}\0${accountKey}`;
+      const firstFilename = firstFilenameByKey.get(collisionKey);
+      if (firstFilename) {
+        collisions.add(firstFilename);
+        collisions.add(filename);
+      } else {
+        firstFilenameByKey.set(collisionKey, filename);
+      }
+    }
+  }
+  return collisions;
 }
 
 function parseAllowFromFilename(
@@ -105,9 +141,20 @@ function parseAllowFromFilename(
       continue;
     }
     const accountKey = stem.slice(channel.length + 1);
-    const matchingAccountIds = (accountIds[channel] ?? []).filter(
-      (accountId) => safeAccountKey(accountId) === accountKey,
-    );
+    // Fold case only: either side may contain punctuation that safe-key encoding would conflate.
+    const matchingAccountIds = (accountIds[channel] ?? []).filter((accountId) => {
+      try {
+        safeAccountKey(accountId);
+        if (accountId === DEFAULT_ACCOUNT_ID && accountKey !== DEFAULT_ACCOUNT_ID) {
+          return false;
+        }
+        return accountId.toLowerCase() === accountKey.toLowerCase();
+      } catch {
+        // One invalid configured candidate must not abort every legacy migration.
+        // With no valid match, the source remains in place as unresolved below.
+        return false;
+      }
+    });
     if (matchingAccountIds.length === 1 && matchingAccountIds[0]) {
       targets.push({ channel: channel as PairingChannel, accountId: matchingAccountIds[0] });
     } else if (matchingAccountIds.length > 1) {
@@ -235,6 +282,10 @@ export function migrateLegacyChannelPairingState(params: {
 }): { changes: string[]; warnings: string[] } {
   const changes: string[] = [];
   const warnings: string[] = [];
+  const caseFoldedCollisions = findCaseFoldedAllowFromCollisions(
+    params.detected.files,
+    params.detected.knownChannelIds,
+  );
   for (const filename of params.detected.files) {
     const filePath = path.join(params.detected.sourceDir, filename);
     const pairingChannel = parsePairingFilename(filename);
@@ -263,8 +314,10 @@ export function migrateLegacyChannelPairingState(params: {
     if (!allowTarget) {
       continue;
     }
-    if (!allowTarget.target) {
-      const reason = allowTarget.reason === "ambiguous" ? "ambiguous" : "unresolved";
+    const hasCaseFoldedCollision = caseFoldedCollisions.has(filename);
+    if (hasCaseFoldedCollision || !allowTarget.target) {
+      const reason =
+        hasCaseFoldedCollision || allowTarget.reason === "ambiguous" ? "ambiguous" : "unresolved";
       warnings.push(
         `Legacy channel allowFrom channel/account is ${reason}; left in place at ${filePath}`,
       );

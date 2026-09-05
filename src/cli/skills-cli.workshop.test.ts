@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayTransportError } from "../gateway/transport-error.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -17,6 +18,7 @@ let stateDir = "";
 const mocks = vi.hoisted(() => {
   const runtimeStdout: string[] = [];
   const runtimeErrors: string[] = [];
+  const resolvedAgentIds: string[] = [];
   const defaultRuntime = {
     log: vi.fn((message: string) => {
       runtimeStdout.push(message);
@@ -36,22 +38,35 @@ const mocks = vi.hoisted(() => {
   };
   return {
     defaultRuntime,
+    resolvedAgentIds,
     runtimeStdout,
     runtimeErrors,
     workspaceDir: "",
   };
 });
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: mocks.defaultRuntime,
 }));
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async () => {
-    throw Object.assign(new Error("gateway unavailable"), { kind: "closed", code: 1006 });
+    throw new GatewayTransportError({
+      kind: "closed",
+      code: 1006,
+      reason: "abnormal closure",
+      message: "gateway closed (1006): abnormal closure",
+      connectionDetails: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        message: "",
+      },
+    });
   }),
-  isGatewayCredentialsRequiredError: () => false,
-  isGatewayTransportError: () => true,
+  isGatewayCredentialsRequiredError: (error: unknown) =>
+    error instanceof Error && error.name === "GatewayCredentialsRequiredError",
+  isImplicitLocalGatewayTarget: async () => !process.env.OPENCLAW_GATEWAY_URL,
 }));
 
 vi.mock("../infra/gateway-lock.js", () => ({
@@ -81,14 +96,18 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  resolveConfiguredAgentId: (_config: unknown, agentId: string) => agentId,
   resolveAgentIdByWorkspacePath: () => undefined,
   resolveDefaultAgentId: () => "main",
-  resolveAgentWorkspaceDir: () => mocks.workspaceDir,
+  resolveAgentWorkspaceDir: (_config: unknown, agentId: string) => {
+    mocks.resolvedAgentIds.push(agentId);
+    return mocks.workspaceDir;
+  },
 }));
 
 describe("skills workshop cli", () => {
   const createProgram = () => {
-    const program = new Command();
+    const program = new Command().enablePositionalOptions();
     program.exitOverride();
     registerSkillsCli(program);
     return program;
@@ -111,6 +130,7 @@ describe("skills workshop cli", () => {
       prefix: "openclaw-skills-cli-workshop-state-",
     });
     mocks.workspaceDir = await tempDirs.make("openclaw-skills-cli-workshop-");
+    mocks.resolvedAgentIds.length = 0;
     stateDir = testState.stateDir;
     mocks.runtimeStdout.length = 0;
     mocks.runtimeErrors.length = 0;
@@ -124,6 +144,70 @@ describe("skills workshop cli", () => {
   afterEach(async () => {
     await testState.cleanup();
     await tempDirs.cleanup();
+  });
+
+  it("renders workshop parent help successfully without creating workshop state", async () => {
+    const helpOutput: string[] = [];
+    const program = new Command();
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: (value) => helpOutput.push(value),
+      writeOut: (value) => helpOutput.push(value),
+    });
+    registerSkillsCli(program);
+
+    const originalExitCode = process.exitCode;
+    try {
+      process.exitCode = undefined;
+      await program.parseAsync(["skills", "workshop"], { from: "user" });
+
+      expect(process.exitCode).toBe(0);
+      expect(helpOutput.join("")).toContain("Manage pending skill proposals");
+      expect(helpOutput.join("")).toContain("propose-create");
+      expect(mocks.runtimeStdout).toEqual([]);
+      expect(mocks.runtimeErrors).toEqual([]);
+      await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
+    } finally {
+      process.exitCode = originalExitCode;
+    }
+  });
+
+  it.each([
+    {
+      label: "parent placement",
+      argv: ["skills", "workshop", "--agent", "parent-agent", "list"],
+      expectedAgent: "parent-agent",
+    },
+    {
+      label: "leaf placement",
+      argv: ["skills", "workshop", "list", "--agent", "leaf-agent"],
+      expectedAgent: "leaf-agent",
+    },
+    {
+      label: "leaf precedence",
+      argv: ["skills", "workshop", "--agent", "parent-agent", "list", "--agent", "leaf-agent"],
+      expectedAgent: "leaf-agent",
+    },
+  ])("resolves workshop --agent with $label", async ({ argv, expectedAgent }) => {
+    await runCommand(argv);
+    expect(mocks.resolvedAgentIds.at(-1)).toBe(expectedAgent);
+  });
+
+  it("uses the leaf --agent when inspecting a proposal", async () => {
+    await expect(
+      runCommand([
+        "skills",
+        "workshop",
+        "--agent",
+        "parent-agent",
+        "inspect",
+        "missing-proposal",
+        "--agent",
+        "leaf-agent",
+      ]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(mocks.resolvedAgentIds.at(-1)).toBe("leaf-agent");
   });
 
   it("creates, lists, inspects, and applies a skill proposal", async () => {

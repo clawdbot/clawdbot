@@ -1,5 +1,4 @@
 // Memory host dreaming helpers record and load memory dreaming artifacts.
-import path from "node:path";
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import {
   parseStrictNonNegativeInteger,
@@ -7,16 +6,17 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
-  listAgentEntries,
+  listAgentIds,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const DEFAULT_MEMORY_DREAMING_ENABLED = true;
@@ -176,14 +176,6 @@ const DEFAULT_MEMORY_DEEP_DREAMING_SOURCES: MemoryDeepDreamingSource[] = [
 ];
 const DEFAULT_MEMORY_REM_DREAMING_SOURCES: MemoryRemDreamingSource[] = ["memory", "daily", "deep"];
 
-function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 function normalizeNonNegativeInt(value: unknown, fallback: number): number {
   // Config integers are decimal-only; Number() would accept hex/exponent forms.
   return parseStrictNonNegativeInteger(value) ?? fallback;
@@ -283,7 +275,7 @@ function resolveExecutionConfig(
     typeof temperatureRaw === "number" && Number.isFinite(temperatureRaw) && temperatureRaw >= 0
       ? Math.min(2, temperatureRaw)
       : undefined;
-  const model = normalizeTrimmedString(record?.model) ?? fallback.model;
+  const model = normalizeOptionalString(record?.model) ?? fallback.model;
 
   return {
     speed: normalizeSpeed(record?.speed) ?? fallback.speed,
@@ -294,11 +286,6 @@ function resolveExecutionConfig(
     ...(typeof temperature === "number" ? { temperature } : {}),
     ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
   };
-}
-
-function normalizePathForComparison(input: string): string {
-  const normalized = path.resolve(input);
-  return process.platform === "win32" ? lowercasePreservingWhitespace(normalized) : normalized;
 }
 
 function formatLocalIsoDay(epochMs: number): string {
@@ -315,7 +302,7 @@ export function resolveMemoryDreamingPluginId(
   const root = asNullableRecord(cfg);
   const plugins = asNullableRecord(root?.plugins);
   const slots = asNullableRecord(plugins?.slots);
-  const configuredSlot = normalizeTrimmedString(slots?.memory);
+  const configuredSlot = normalizeOptionalString(slots?.memory);
   if (configuredSlot && normalizeLowercaseStringOrEmpty(configuredSlot) !== "none") {
     return configuredSlot;
   }
@@ -339,15 +326,15 @@ export function resolveMemoryDreamingConfig(params: {
 }): MemoryDreamingConfig {
   const dreaming = asNullableRecord(params.pluginConfig?.dreaming);
   const frequency =
-    normalizeTrimmedString(dreaming?.frequency) ?? DEFAULT_MEMORY_DREAMING_FREQUENCY;
+    normalizeOptionalString(dreaming?.frequency) ?? DEFAULT_MEMORY_DREAMING_FREQUENCY;
   const timezone =
-    normalizeTrimmedString(dreaming?.timezone) ??
-    normalizeTrimmedString(params.cfg?.agents?.defaults?.userTimezone) ??
+    normalizeOptionalString(dreaming?.timezone) ??
+    normalizeOptionalString(params.cfg?.agents?.defaults?.userTimezone) ??
     DEFAULT_MEMORY_DREAMING_TIMEZONE;
   const storage = asNullableRecord(dreaming?.storage);
   const execution = asNullableRecord(dreaming?.execution);
   const phases = asNullableRecord(dreaming?.phases);
-  const topLevelModel = normalizeTrimmedString(dreaming?.model);
+  const topLevelModel = normalizeOptionalString(dreaming?.model);
 
   const defaultExecution = resolveExecutionConfig(execution?.defaults, {
     speed: DEFAULT_MEMORY_DREAMING_SPEED,
@@ -593,20 +580,7 @@ export function resolveMemoryDreamingWorkspaces(
   cfg: OpenClawConfig,
   options: MemoryDreamingWorkspaceOptions = {},
 ): MemoryDreamingWorkspace[] {
-  const configured = listAgentEntries(cfg);
-  const agentIds: string[] = [];
-  const seenAgents = new Set<string>();
-  for (const entry of configured) {
-    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
-      continue;
-    }
-    const id = normalizeOptionalLowercaseString(entry.id);
-    if (!id || seenAgents.has(id)) {
-      continue;
-    }
-    seenAgents.add(id);
-    agentIds.push(id);
-  }
+  const agentIds = listAgentIds(cfg);
   if (agentIds.length === 0) {
     agentIds.push(resolveDefaultAgentId(cfg));
   }
@@ -618,7 +592,7 @@ export function resolveMemoryDreamingWorkspaces(
       return;
     }
     const agentId = normalizeOptionalLowercaseString(agentIdRaw) || resolveDefaultAgentId(cfg);
-    const key = normalizePathForComparison(workspaceDir);
+    const key = resolveWorkspaceStateIdentity(workspaceDir).workspacePath;
     const existing = byWorkspace.get(key);
     if (existing) {
       if (!existing.agentIds.includes(agentId)) {
@@ -632,9 +606,9 @@ export function resolveMemoryDreamingWorkspaces(
   for (const agentId of agentIds) {
     addWorkspace(resolveAgentWorkspaceDir(cfg, agentId, options.env), agentId);
   }
-  addWorkspace(
-    options.primaryWorkspaceDir ?? undefined,
-    options.primaryAgentId ?? resolveDefaultAgentId(cfg),
-  );
+  const primaryWorkspaceDir = options.primaryWorkspaceDir?.trim();
+  if (primaryWorkspaceDir) {
+    addWorkspace(primaryWorkspaceDir, options.primaryAgentId ?? resolveDefaultAgentId(cfg));
+  }
   return [...byWorkspace.values()];
 }

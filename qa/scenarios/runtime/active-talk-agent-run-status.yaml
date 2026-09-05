@@ -24,6 +24,7 @@ scenario:
     - test/e2e/qa-lab/runtime/media-talk-gateway.ts
   execution:
     kind: script
+    parallelSafe: true
     path: test/e2e/qa-lab/runtime/media-talk-gateway.ts
     summary: Starts a real Gateway and persistent WebChat client, creates a Talk session, starts an agent consult, and exercises status, steer, follow-up, and cancel RPCs.
     args:

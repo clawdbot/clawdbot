@@ -1,5 +1,6 @@
 // Voice Call tests cover api plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../../../../test-support/streaming-error-response.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -32,28 +33,6 @@ function requireFirstFetchGuardRequest(): FetchGuardRequest {
     throw new Error("expected guarded fetch request");
   }
   return request as FetchGuardRequest;
-}
-
-function cancelTrackedTextResponse(
-  text: string,
-  init?: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
-  });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
 }
 
 describe("twilioApiRequest", () => {
@@ -98,6 +77,33 @@ describe("twilioApiRequest", () => {
     expect(requestBody.toString()).toBe(
       "To=%2B14155550123&StatusCallbackEvent=initiated&StatusCallbackEvent=completed",
     );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects malformed UTF-8 JSON instead of returning a corrupted call SID", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        Buffer.concat([
+          Buffer.from('{"sid":"CA'),
+          Buffer.from([0xff]),
+          Buffer.from('","status":"queued"}'),
+        ]),
+        { status: 200 },
+      ),
+      release,
+    });
+
+    await expect(
+      twilioApiRequest({
+        baseUrl: DEFAULT_BASE_URL,
+        accountSid: "AC123",
+        authToken: "secret",
+        endpoint: "/Calls.json",
+        body: {},
+      }),
+    ).rejects.toThrow("Twilio API returned malformed JSON.");
+
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -147,7 +153,7 @@ describe("twilioApiRequest", () => {
 
   it("passes through URLSearchParams, allows 404s, and returns undefined for empty bodies", async () => {
     const missing = cancelTrackedTextResponse("missing", { status: 404 });
-    const responses = [new Response(null, { status: 204 }), missing.response];
+    const responses = [new Response("", { status: 200 }), missing.response];
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockImplementation(async () => ({
       response: responses.shift()!,

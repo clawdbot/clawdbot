@@ -1,6 +1,6 @@
 {
   "id": "xiaomi",
-  "icon": "https://cdn.simpleicons.org/xiaomi",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },
@@ -99,7 +99,7 @@
     }
   ],
   "contracts": {
-    "speechProviders": ["xiaomi"],
+    "speechProviders": ["xiaomi", "mimo"],
     "usageProviders": ["xiaomi", "xiaomi-token-plan"]
   },
   "providerAuthChoices": [

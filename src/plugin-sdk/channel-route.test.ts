@@ -10,7 +10,6 @@ import {
   channelRoutesMatchExact,
   channelRoutesShareConversation,
   normalizeChannelRouteRef,
-  resolveChannelRouteTargetWithParser,
   stringifyRouteThreadId,
 } from "./channel-route.js";
 
@@ -168,27 +167,5 @@ describe("plugin-sdk channel-route", () => {
         }),
       }),
     ).toBe(false);
-  });
-
-  it("keeps deprecated parser wrapper wired for public SDK compatibility", () => {
-    expect(
-      resolveChannelRouteTargetWithParser({
-        channel: "Mock",
-        rawTarget: " room-a:topic:77 ",
-        fallbackThreadId: 11,
-        parseExplicitTarget: (_channel, rawTarget) => {
-          const match = /^(.*):topic:(\d+)$/u.exec(rawTarget);
-          return match
-            ? { to: match[1] ?? rawTarget, threadId: Number.parseInt(match[2] ?? "", 10) }
-            : null;
-        },
-      }),
-    ).toEqual({
-      channel: "mock",
-      rawTo: "room-a:topic:77",
-      to: "room-a",
-      threadId: 77,
-      chatType: undefined,
-    });
   });
 });

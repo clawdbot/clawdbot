@@ -113,7 +113,7 @@ export function checkIMessageResourceBinding(params: {
   let db: import("node:sqlite").DatabaseSync | undefined;
   try {
     db = openNodeSqliteDatabase(dbPath, { readOnly: true });
-    const rows = db
+    const rows: IMessageChatRow[] = db
       .prepare(
         `SELECT cmj.chat_id AS chatId,
                 c.guid AS chatGuid,
@@ -123,7 +123,12 @@ export function checkIMessageResourceBinding(params: {
          JOIN chat c ON c.ROWID = cmj.chat_id
          WHERE m.guid = ?`,
       )
-      .all(messageGuid) as unknown as IMessageChatRow[];
+      .all(messageGuid)
+      .map((row) => ({
+        chatId: row.chatId,
+        chatGuid: row.chatGuid,
+        chatIdentifier: row.chatIdentifier,
+      }));
     const matched = rows.some(
       (row) =>
         (!hasChatId || row.chatId === chatId) &&

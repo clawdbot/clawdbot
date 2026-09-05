@@ -84,10 +84,6 @@ export async function readEmbeddingBatchJsonl<T>(
     return options.onRecord(parsed as T);
   };
 
-  const cancel = async () => {
-    await reader.cancel().catch(() => {});
-  };
-
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -102,7 +98,8 @@ export async function readEmbeddingBatchJsonl<T>(
         }
         appendRecordPart(value.subarray(offset, index));
         if (!emitRecord()) {
-          await cancel();
+          // Release the reader without waiting for a retained capture tee.
+          void reader.cancel().catch(() => {});
           return;
         }
         offset = index + 1;
@@ -113,7 +110,7 @@ export async function readEmbeddingBatchJsonl<T>(
       emitRecord();
     }
   } catch (error) {
-    await cancel();
+    void reader.cancel().catch(() => {});
     throw error;
   } finally {
     reader.releaseLock();
@@ -174,8 +171,8 @@ export function applyEmbeddingBatchOutputLine(params: {
   const data =
     response?.body && typeof response.body === "object" ? (response.body.data ?? []) : [];
   const embedding = data[0]?.embedding ?? [];
-  if (embedding.length === 0) {
-    params.errors.push(`${customId}: empty embedding`);
+  if (!Array.isArray(embedding) || embedding.length === 0 || !embedding.every(Number.isFinite)) {
+    params.errors.push(`${customId}: ${embedding?.length ? "invalid" : "empty"} embedding`);
     return;
   }
   params.byCustomId.set(customId, embedding);

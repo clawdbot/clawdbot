@@ -4,7 +4,7 @@ import { createAcceptedWhatsAppSendResult } from "../inbound/send-result.test-he
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { loadWebMedia } from "../media.js";
-import { deliverWebReply } from "./deliver-reply.js";
+import { createWhatsAppReplyTransportContext, deliverWebReply } from "./deliver-reply.js";
 
 const hoisted = vi.hoisted(() => ({
   transcodeAudioBufferToOpus: vi.fn(),
@@ -161,7 +161,7 @@ describe("WhatsApp filename-only media delivery", () => {
 
       await deliverWebReply({
         replyResult: { text: "caption", mediaUrl: "https://example.com/download" },
-        msg,
+        transport: createWhatsAppReplyTransportContext(msg),
         maxMediaBytes: 1024 * 1024,
         textLimit: 200,
         replyLogger: { info: vi.fn(), warn: vi.fn() },

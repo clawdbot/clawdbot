@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   validateSystemAgentChatParams,
   validateSystemAgentChatHistoryParams,
+  validateSystemAgentSetupActivateParams,
+  validateSystemAgentSetupActivateStartParams,
+  validateSystemAgentSetupAuthStartParams,
+  validateSystemAgentSetupDetectParams,
   validateSystemAgentSetupVerifyParams,
 } from "../index.js";
 import {
@@ -21,6 +25,36 @@ describe("OpenClaw chat params protocol", () => {
     expect(
       validateSystemAgentChatParams({ ...base, context: { page: "/settings/channels" } }),
     ).toBe(true);
+  });
+
+  it("accepts a typed wizard answer and rejects unknown answer fields", () => {
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        wizardAnswer: { stepId: "channel", value: "twitch" },
+      }),
+    ).toBe(true);
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        wizardAnswer: { stepId: "channel", value: "twitch", display: "Twitch" },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts a typed wizard cancel and rejects unknown cancel fields", () => {
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        wizardCancel: { stepId: "channel" },
+      }),
+    ).toBe(true);
+    expect(
+      validateSystemAgentChatParams({
+        sessionId: "session-1",
+        wizardCancel: { stepId: "channel", reason: "user" },
+      }),
+    ).toBe(false);
   });
 
   it("rejects unsafe page ids and unknown context fields", () => {
@@ -84,7 +118,53 @@ describe("OpenClaw chat history protocol", () => {
   });
 });
 
+describe("OpenClaw interactive activation protocol", () => {
+  it("requires a session id and does not accept client capability acknowledgments", () => {
+    const activation = { kind: "codex-cli", modelRef: "openai/gpt-5.6-luna" };
+    expect(validateSystemAgentSetupActivateParams(activation)).toBe(true);
+    expect(validateSystemAgentSetupActivateStartParams(activation)).toBe(false);
+    expect(
+      validateSystemAgentSetupActivateStartParams({ ...activation, sessionId: "activation" }),
+    ).toBe(true);
+    expect(
+      validateSystemAgentSetupActivateStartParams({
+        ...activation,
+        sessionId: "activation",
+        reviewToken: "client-token",
+      }),
+    ).toBe(false);
+    expect(
+      validateSystemAgentSetupActivateStartParams({
+        ...activation,
+        sessionId: "activation",
+        acceptCapabilities: true,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("OpenClaw setup detection protocol", () => {
+  it("accepts an explicit owner across the structured setup family", () => {
+    expect(validateSystemAgentSetupDetectParams({ agentId: "research" })).toBe(true);
+    expect(validateSystemAgentSetupVerifyParams({ agentId: "research" })).toBe(true);
+    expect(
+      validateSystemAgentSetupActivateParams({
+        agentId: "research",
+        kind: "existing-model",
+      }),
+    ).toBe(true);
+    expect(
+      validateSystemAgentSetupAuthStartParams({
+        sessionId: "setup-1",
+        agentId: "research",
+        authChoice: "openai-api-key",
+      }),
+    ).toBe(true);
+    expect(validateSystemAgentSetupDetectParams({ agentId: "research", unknown: true })).toBe(
+      false,
+    );
+  });
+
   it("accepts additive presentation metadata and older results without installs", () => {
     const result = {
       candidates: [
@@ -114,12 +194,24 @@ describe("OpenClaw setup detection protocol", () => {
         {
           id: "ollama",
           brandId: "ollama",
+          groupLabel: "Ollama",
           label: "Ollama",
           icon: "https://cdn.simpleicons.org/ollama",
           website: "https://ollama.com/download",
         },
       ],
       authOptions: [],
+      prepareOptions: [
+        {
+          id: "lmstudio",
+          brandId: "lmstudio",
+          label: "LM Studio",
+          hint: "Local/self-hosted LM Studio server",
+          actionLabel: "Connect server",
+          icon: "https://cdn.simpleicons.org/lmstudio",
+          website: "https://lmstudio.ai/download",
+        },
+      ],
       recommendedInstalls: [
         {
           id: "ollama",
@@ -143,8 +235,9 @@ describe("OpenClaw setup detection protocol", () => {
           ({ brandId: _brandId, ...candidate }) => candidate,
         ),
         manualProviders: result.manualProviders.map(
-          ({ brandId: _brandId, ...provider }) => provider,
+          ({ brandId: _brandId, groupLabel: _groupLabel, ...provider }) => provider,
         ),
+        prepareOptions: result.prepareOptions.map(({ brandId: _brandId, ...option }) => option),
         recommendedInstalls: result.recommendedInstalls.map(
           ({ brandId: _brandId, ...install }) => install,
         ),
@@ -154,6 +247,7 @@ describe("OpenClaw setup detection protocol", () => {
       Value.Check(SystemAgentSetupDetectResultSchema, {
         ...result,
         recommendedInstalls: undefined,
+        prepareOptions: undefined,
       }),
     ).toBe(true);
     expect(

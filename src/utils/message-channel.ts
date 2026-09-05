@@ -10,6 +10,8 @@ import {
 import { listBundledChannelCatalogEntries } from "../channels/bundled-channel-catalog-read.js";
 import { findChatChannelMeta } from "../channels/chat-meta.js";
 import { getRegisteredChannelPluginMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
+import { normalizeMessageChannel } from "./message-channel-normalize.js";
 export {
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
@@ -17,15 +19,11 @@ export {
   normalizeMessageChannel,
   resolveGatewayMessageChannel,
   resolveMessageChannel,
-  type DeliverableMessageChannel,
-  type GatewayMessageChannel,
 } from "./message-channel-normalize.js";
 export {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
 } from "./message-channel-constants.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
-import { normalizeMessageChannel } from "./message-channel-normalize.js";
 
 /**
  * Message channel and Gateway client classification helpers.
@@ -111,6 +109,28 @@ export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean 
     return true;
   }
   return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.WEBCHAT_UI;
+}
+
+const PROGRESS_CARD_RENDERER_PLATFORMS = new Set(["web", "ios", "android", "macos", "darwin"]);
+
+/** Return whether a paired Gateway client can render progress cards. */
+export function isProgressCardRendererClient(
+  paired?: {
+    clientId?: string | null;
+    clientMode?: string | null;
+    platform?: string | null;
+  } | null,
+): boolean {
+  const client = { id: paired?.clientId, mode: paired?.clientMode };
+  const clientId = normalizeGatewayClientName(client?.id);
+  const rendererClient =
+    (clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI && isBrowserOperatorUiClient(client)) ||
+    (clientId === GATEWAY_CLIENT_NAMES.WEBCHAT_UI && isWebchatClient(client)) ||
+    clientId === GATEWAY_CLIENT_NAMES.IOS_APP ||
+    clientId === GATEWAY_CLIENT_NAMES.ANDROID_APP ||
+    clientId === GATEWAY_CLIENT_NAMES.MACOS_APP;
+  const platform = paired?.platform?.trim().toLowerCase();
+  return rendererClient || (platform ? PROGRESS_CARD_RENDERER_PLATFORMS.has(platform) : false);
 }
 
 /** Resolve whether a channel can receive markdown without plain-text downgrade. */

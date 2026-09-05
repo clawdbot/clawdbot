@@ -1,8 +1,9 @@
-// ACPX tests cover doctor migration of legacy runtime state.
+// ACPX tests cover doctor repair of legacy config and runtime state.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -10,9 +11,14 @@ import {
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { stateMigrations } from "./doctor-contract-api.js";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  legacyConfigRules,
+  normalizeCompatibilityConfig,
+  stateMigrations,
+} from "./doctor-contract-api.js";
+import { AcpxPluginConfigSchema } from "./src/config-schema.js";
 import { openAcpxProcessLeaseStateStore, type AcpxProcessLease } from "./src/process-lease.js";
 import {
   ACPX_GATEWAY_INSTANCE_KEY,
@@ -22,6 +28,64 @@ import {
   ACPX_LEGACY_PROCESS_LEASE_FILE,
   type AcpxGatewayInstanceRecord,
 } from "./src/state.js";
+
+vi.mock("./runtime-api.js", () => {
+  throw new Error("Empty-state doctor detection must not load ACPX runtime helpers");
+});
+
+describe("acpx doctor config repair", () => {
+  it("flags both retired config keys for openclaw doctor --fix", () => {
+    expect(legacyConfigRules).toEqual([
+      expect.objectContaining({
+        path: ["plugins", "entries", "acpx", "config", "strictWindowsCmdWrapper"],
+        message: expect.stringContaining("openclaw doctor --fix"),
+      }),
+      expect.objectContaining({
+        path: ["plugins", "entries", "acpx", "config", "queueOwnerTtlSeconds"],
+        message: expect.stringContaining("openclaw doctor --fix"),
+      }),
+    ]);
+  });
+
+  it("removes retired config before strict plugin validation", () => {
+    const config = {
+      plugins: {
+        entries: {
+          acpx: {
+            enabled: true,
+            config: {
+              cwd: "/tmp/acpx",
+              strictWindowsCmdWrapper: false,
+              queueOwnerTtlSeconds: 30,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = normalizeCompatibilityConfig({ cfg: config });
+
+    expect(result.changes).toEqual([
+      "Removed retired ACPX plugin config: plugins.entries.acpx.config.strictWindowsCmdWrapper, plugins.entries.acpx.config.queueOwnerTtlSeconds.",
+    ]);
+    expect(result.config.plugins?.entries?.acpx).toEqual({
+      enabled: true,
+      config: { cwd: "/tmp/acpx" },
+    });
+    expect(
+      AcpxPluginConfigSchema.safeParse(result.config.plugins?.entries?.acpx?.config).success,
+    ).toBe(true);
+    expect(config.plugins?.entries?.acpx?.config).toEqual({
+      cwd: "/tmp/acpx",
+      strictWindowsCmdWrapper: false,
+      queueOwnerTtlSeconds: 30,
+    });
+    expect(normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
+      config: result.config,
+      changes: [],
+    });
+  });
+});
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
@@ -45,6 +109,7 @@ describe("acpx doctor state migration", () => {
   });
 
   afterEach(async () => {
+    resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -57,6 +122,33 @@ describe("acpx doctor state migration", () => {
       context: createDoctorContext(env),
     };
   }
+
+  it.each(["missing", "empty"])(
+    "does not load runtime helpers or inspect claims when the legacy directory is %s",
+    async (directoryState) => {
+      if (directoryState === "empty") {
+        await fs.mkdir(path.join(stateDir, "state", "sessions"), { recursive: true });
+      }
+      const migration = expectDefined(
+        stateMigrations.find((entry) => entry.id === "acpx-session-owner-resources"),
+        "ACP session owner migration",
+      );
+      await expect(
+        migration.detectLegacyState({
+          ...migrationParams(),
+          serviceWorkspaceDir: stateDir,
+          context: {
+            openPluginStateKeyedStore() {
+              throw new Error("No record requires a state store");
+            },
+            async inspectAcpSessionClaims() {
+              throw new Error("No record requires canonical ownership evidence");
+            },
+          },
+        }),
+      ).resolves.toBeNull();
+    },
+  );
 
   it("imports legacy gateway identity and open process leases into plugin state", async () => {
     const gatewayPath = path.join(stateDir, ACPX_LEGACY_GATEWAY_INSTANCE_FILE);

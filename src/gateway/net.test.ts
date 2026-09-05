@@ -10,6 +10,7 @@ import {
   defaultGatewayBindMode,
   isContainerEnvironment,
   isLocalishHost,
+  isLoopbackGatewayUrl,
   isLoopbackHost,
   isPrivateOrLoopbackAddress,
   isPrivateOrLoopbackHost,
@@ -20,6 +21,7 @@ import {
   resolveClientIp,
   resolveGatewayBindHost,
   resolveGatewayListenHosts,
+  resolveGatewayRequiredListenHosts,
   resolveHostName,
 } from "./net.js";
 
@@ -85,6 +87,24 @@ describe("isLoopbackHost", () => {
   it("accepts localhost absolute-form hostnames", () => {
     expect(isLoopbackHost("localhost.")).toBe(true);
     expect(isLoopbackHost("LOCALHOST...")).toBe(true);
+  });
+});
+
+describe("isLoopbackGatewayUrl", () => {
+  it.each([
+    ["ws://LOCALHOST:18789", true],
+    ["ws://localhost.:18789", false],
+    ["ws://127.42.0.1:18789", true],
+    ["ws://[::1]:18789", true],
+    ["ws://[0:0:0:0:0:0:0:1]:18789", true],
+    ["ws://[::ffff:127.0.0.1]:18789", true],
+    ["ws://192.168.1.2:18789", false],
+    ["not-a-url", false],
+    ["/relative", false],
+    ["http://localhost:18789", true],
+    ["https://localhost:18789", true],
+  ] as const)("classifies %s as %s", (url, expected) => {
+    expect(isLoopbackGatewayUrl(url)).toBe(expected);
   });
 });
 
@@ -419,6 +439,17 @@ describe("resolveGatewayListenHosts", () => {
   });
 });
 
+describe("resolveGatewayRequiredListenHosts", () => {
+  it.each([
+    ["127.0.0.1", ["127.0.0.1"]],
+    ["0.0.0.0", ["0.0.0.0"]],
+    ["::1", ["::1"]],
+    ["100.64.0.1", ["100.64.0.1", "127.0.0.1"]],
+  ])("returns required startup hosts for %s", (host, expected) => {
+    expect(resolveGatewayRequiredListenHosts(host)).toEqual(expected);
+  });
+});
+
 describe("pickPrimaryLanIPv4", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -497,7 +528,14 @@ describe("isPrivateOrLoopbackAddress", () => {
   });
 
   it("rejects public IP addresses", () => {
-    const rejected = ["1.1.1.1", "8.8.8.8", "172.32.0.1", "203.0.113.10", "2001:4860:4860::8888"];
+    const rejected = [
+      "1.1.1.1",
+      "8.8.8.8",
+      "172.32.0.1",
+      "203.0.113.10",
+      "2001:4860:4860::8888",
+      "64:ff9b:1::8.8.8.8",
+    ];
     for (const ip of rejected) {
       expect(isPrivateOrLoopbackAddress(ip)).toBe(false);
     }
@@ -553,6 +591,7 @@ describe("isPrivateOrLoopbackHost", () => {
     expect(isPrivateOrLoopbackHost("1.1.1.1")).toBe(false);
     expect(isPrivateOrLoopbackHost("8.8.8.8")).toBe(false);
     expect(isPrivateOrLoopbackHost("203.0.113.10")).toBe(false);
+    expect(isPrivateOrLoopbackHost("[64:ff9b:1::8.8.8.8]")).toBe(false);
   });
 
   it("rejects empty/falsy input", () => {

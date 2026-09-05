@@ -1,11 +1,10 @@
 // Whatsapp plugin module composes the inbound socket, metadata, and delivery owners.
 import type { WAMessageKey, WASocket } from "baileys";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { createSubsystemLogger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
-import type { OpenClawConfig } from "../runtime-api.js";
 import { createWaSocket, waitForWaConnection } from "../session.js";
 import { resolveWhatsAppSocketTiming, type WhatsAppSocketTimingOptions } from "../socket-timing.js";
-import { requireAdmittedWhatsAppInboundMessage } from "./admission.js";
 import {
   readWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysGroupMetadataCache,
@@ -20,28 +19,19 @@ import {
   type WhatsAppGroupMetadataCache,
 } from "./group-metadata-cache.js";
 import { closeInboundMonitorSocket } from "./lifecycle.js";
-import { normalizeWebInboundMessage } from "./message-aliases.js";
 import {
   createWhatsAppMessageDeliveryCoordinator,
   type WhatsAppAppendReplyWindow,
 } from "./message-delivery.js";
 import { createWebSendApi } from "./send-api.js";
 import { createWhatsAppAttachedSocketSession } from "./socket-session.js";
-import type {
-  AdmittedWebInboundMessage,
-  WebInboundMessage,
-  WebInboundMessageInput,
-} from "./types.js";
+import type { AdmittedWebInboundCallbackMessage } from "./types.js";
 
 function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
   if (enabled) {
     defaultRuntime.log(message);
   }
 }
-
-type AdmittedWebInboundCallbackMessage = WebInboundMessage & {
-  admission: AdmittedWebInboundMessage["admission"];
-};
 
 type MonitorWebInboxOptions = {
   cfg: OpenClawConfig;
@@ -89,8 +79,8 @@ type AttachWebInboxToSocketOptions = Omit<
   "onMessage" | "shouldDebounce" | "socketTiming"
 > & {
   socketTiming: Required<WhatsAppSocketTimingOptions>;
-  onMessage: (msg: WebInboundMessageInput) => Promise<void>;
-  shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+  onMessage: (msg: AdmittedWebInboundCallbackMessage) => Promise<void>;
+  shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
 };
 
 export async function attachWebInboxToSocket(
@@ -205,20 +195,8 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
     closeInboundMonitorSocket(sock);
     throw error;
   }
-  const normalizeAdmittedWebInboundMessage = (
-    msg: WebInboundMessageInput,
-  ): AdmittedWebInboundCallbackMessage =>
-    requireAdmittedWhatsAppInboundMessage(
-      normalizeWebInboundMessage(msg),
-    ) as AdmittedWebInboundCallbackMessage;
   return attachWebInboxToSocket({
     ...options,
-    onMessage: async (msg) => {
-      await options.onMessage(normalizeAdmittedWebInboundMessage(msg));
-    },
-    shouldDebounce: options.shouldDebounce
-      ? (msg) => options.shouldDebounce?.(normalizeAdmittedWebInboundMessage(msg)) ?? true
-      : undefined,
     socketTiming,
     sock,
     recentMessageKeys,

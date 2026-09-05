@@ -1,15 +1,25 @@
+import type { TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
-import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type {
+  WebPushDevicePreferences,
+  WebPushNotificationPreferences,
+} from "../../../../packages/gateway-protocol/src/schema/push.js";
 import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
-import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
+import type {
+  NativeNotificationsPermission,
+  NativeNotificationTestOutcome,
+} from "../../app/native-notifications.ts";
+import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import type { ChatFollowUpMode, ChatSendShortcut, CatalogOpenTarget } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
+import type { TypefaceId } from "../../app/typography.ts";
+import type { WebPushSnapshot } from "../../app/web-push.ts";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
 import type { ConfigSchemaAnalysis } from "../../components/config-form.ts";
 import type { Locale } from "../../i18n/index.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
-import type { WebPushUiState } from "./notifications-section.ts";
 import type { SessionObserverModelSelection } from "./session-observer-settings.ts";
 
 type SettingsMediaDeviceState = {
@@ -60,6 +70,8 @@ export type ConfigProps = {
   /** App updater running; config writes and restarts are interlocked. */
   updating: boolean;
   connected: boolean;
+  mutationAllowed?: boolean;
+  openFileAllowed?: boolean;
   schema: unknown;
   schemaLoading: boolean;
   uiHints: ConfigUiHints;
@@ -72,6 +84,9 @@ export type ConfigProps = {
   /** Set when the form renders under a composite page's custom rows; an empty
    *  schema section stays silent instead of claiming the page is empty. */
   embeddedEditor?: boolean;
+  /** Control UI rows that belong to the active schema section but are not Gateway config. */
+  sectionPrelude?: TemplateResult;
+  showSectionDocs?: boolean;
   formValue: Record<string, unknown> | null;
   originalValue: Record<string, unknown> | null;
   activeSection: string | null;
@@ -80,6 +95,7 @@ export type ConfigProps = {
   onFormModeChange: (mode: ConfigFormMode) => void;
   onViewStateChange: () => void;
   onFormPatch: (path: Array<string | number>, value: unknown) => void;
+  onFormRemove: (path: Array<string | number>) => void;
   onSectionChange: (section: string | null) => void;
   onSubsectionChange: (section: string | null) => void;
   onSave: () => void;
@@ -87,11 +103,31 @@ export type ConfigProps = {
   onOpenFile?: () => void;
   version: string;
   theme: ThemeName;
+  themeOverridden: boolean;
+  themeProvenance: ServerUiPrefProvenance;
+  themeResetValue: ThemeName;
   themeMode: ThemeMode;
-  locale: Locale;
-  onLocaleChange: (locale: Locale) => void;
+  themeModeOverridden: boolean;
+  themeModeProvenance: ServerUiPrefProvenance;
+  themeModeResetValue: ThemeMode;
+  fontUi: TypefaceId | undefined;
+  fontChat: TypefaceId | undefined;
+  fontUiProvenance: ServerUiPrefProvenance;
+  fontChatProvenance: ServerUiPrefProvenance;
+  setFontUi: (font: TypefaceId | undefined) => void;
+  setFontChat: (font: TypefaceId | undefined) => void;
+  accent: string | undefined;
+  accentProvenance: ServerUiPrefProvenance;
+  accentResetValue: string | undefined;
+  systemLocale: Locale;
+  localeOverride?: Locale;
+  localeOverridden: boolean;
+  localeProvenance: ServerUiPrefProvenance;
+  localeResetValue?: Locale;
+  onLocaleChange: (locale: Locale | undefined) => void;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+  setAccent: (accent: string | undefined) => void;
   hasCustomTheme: boolean;
   customThemeLabel: string | null;
   customThemeSourceUrl: string | null;
@@ -105,11 +141,17 @@ export type ConfigProps = {
   onClearCustomTheme: () => void;
   onOpenCustomThemeImport?: () => void;
   textScale: number;
+  textScaleOverridden: boolean;
   setTextScale: (value: number) => void;
   sidebarLiveActivity: boolean;
   setSidebarLiveActivity: (enabled: boolean) => void;
+  hiddenSessionCatalogIds: ReadonlySet<string>;
+  hiddenSessionCatalogLabels: ReadonlyMap<string, string>;
+  setSessionCatalogHidden: (catalogId: string, hidden: boolean) => void;
   chatMessageMaxWidth?: string;
   setChatMessageMaxWidth: (value: string | undefined) => void;
+  chatCollapseTaskProgress: boolean;
+  setChatCollapseTaskProgress: (enabled: boolean) => void;
   showAdvancedSettings: boolean;
   setShowAdvancedSettings: (enabled: boolean) => void;
   forceShowAdvanced?: boolean;
@@ -124,15 +166,23 @@ export type ConfigProps = {
   setSessionObserverUtilityModel?: (selection: SessionObserverModelSelection) => void;
   lobsterPetVisits?: boolean;
   setLobsterPetVisits?: (enabled: boolean) => void;
+  sessionDeleteConfirm?: boolean;
+  setSessionDeleteConfirm?: (enabled: boolean) => void;
   lobsterPetSounds?: boolean;
   setLobsterPetSounds?: (enabled: boolean) => void;
   lobsterdexHref?: string;
   onOpenLobsterdex?: () => void;
   chatSendShortcut: ChatSendShortcut;
+  chatSendShortcutOverridden: boolean;
+  chatSendShortcutProvenance: ServerUiPrefProvenance;
+  chatSendShortcutResetValue: ChatSendShortcut;
   setChatSendShortcut: (value: ChatSendShortcut) => void;
   chatFollowUpMode: ChatFollowUpMode | undefined;
+  chatFollowUpModeOverridden: boolean;
+  chatFollowUpModeProvenance: ServerUiPrefProvenance;
   serverQueueMode: QueueMode | undefined;
   setChatFollowUpMode: (value: ChatFollowUpMode | undefined) => void;
+  resetChatFollowUpMode: () => void;
   catalogOpenTarget: CatalogOpenTarget;
   setCatalogOpenTarget: (value: CatalogOpenTarget) => void;
   microphone?: SettingsMediaDeviceState;
@@ -153,11 +203,16 @@ export type ConfigProps = {
   includeVirtualSections?: boolean;
   /** Layout mode: "tabs" (default flat scroll) or "accordion" (grouped collapsible). */
   settingsLayout?: "tabs" | "accordion";
-  nativeNotifications?: { permission: NativeNotificationsPermission | "unknown" };
+  nativeNotifications?: {
+    permission: NativeNotificationsPermission | "unknown";
+    test: NativeNotificationTestOutcome | null;
+  };
   onNativeNotificationsRequestPermission?: () => void;
   onNativeNotificationsSendTest?: () => void;
-  webPush?: WebPushUiState;
+  webPush?: WebPushSnapshot;
   onWebPushSubscribe?: () => void;
   onWebPushUnsubscribe?: () => void;
   onWebPushTest?: () => void;
+  onWebPushSetUserPreferences?: (preferences: WebPushNotificationPreferences) => void;
+  onWebPushSetDevicePreferences?: (preferences: WebPushDevicePreferences) => void;
 };

@@ -1,11 +1,11 @@
 import crypto from "node:crypto";
+import { extractMessagingToolSend } from "../embedded-agent-messaging-extraction.js";
 import { isMessagingToolTargetEvidenceAction } from "../embedded-agent-messaging.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
 import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
-  extractMessagingToolSend,
-} from "../embedded-agent-subscribe.tools.js";
+} from "../embedded-agent-tool-media.js";
 import { stripOpenClawMcpToolPrefix } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 

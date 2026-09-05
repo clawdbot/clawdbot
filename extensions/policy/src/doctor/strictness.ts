@@ -9,6 +9,7 @@ import {
 import { ROUTING_MATCH_KINDS } from "../policy-routing.js";
 import { expandPolicyToolRequirement, toolListCoversTool } from "../tool-policy-conformance.js";
 import type { PolicyRuleMetadata } from "./metadata.js";
+import { isChannelDenyRule } from "./shape-helpers.js";
 
 type ExecApprovalAllowlistRequirement = {
   readonly key: string;
@@ -356,18 +357,4 @@ function execApprovalAllowlistRequirementKey(
   argPattern: string | undefined,
 ): string {
   return `${pattern}\0${argPattern ?? ""}`;
-}
-
-function isChannelDenyRule(value: unknown): value is {
-  readonly id?: string;
-  readonly when?: { readonly provider?: string };
-  readonly reason?: string;
-} {
-  return (
-    isRecord(value) &&
-    (value.id === undefined || typeof value.id === "string") &&
-    (value.reason === undefined || typeof value.reason === "string") &&
-    isRecord(value.when) &&
-    typeof value.when.provider === "string"
-  );
 }

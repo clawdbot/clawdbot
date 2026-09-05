@@ -1,9 +1,11 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { resolveCatalogOwnedModelCompat } from "../model-compat-catalog.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
+  attachModelProviderRequestRouteFacts,
   attachModelProviderRequestTransport,
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
@@ -14,6 +16,7 @@ import {
   findConfiguredProviderModel,
   hasConfiguredFallbackSurface,
   mergeConfiguredRuntimeModelParams,
+  mergeConfiguredModelCost,
   resolveConfiguredProviderConfig,
   resolveConfiguredProviderDefaultApi,
   shouldSuppressConfiguredModel,
@@ -31,17 +34,16 @@ import {
   resolveProviderRequestTimeoutMs,
   resolveProviderTransport,
 } from "./model.provider-hooks.js";
-import {
-  resolveBundledStaticCatalogModel,
-  type ManifestModelCatalogProviderAliasMetadata,
-} from "./model.static-catalog.js";
+import type { ManifestModelCatalogProviderAliasMetadata } from "./model.static-catalog.js";
 
-export function resolveConfiguredFallbackModel(params: {
+export function buildConfiguredFallbackModel(params: {
   provider: string;
   modelId: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
   manifestAlias: ManifestModelCatalogProviderAliasMetadata;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
+  getStaticCatalogModel?: () => StaticCatalogFallbackModel | undefined;
   workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model | undefined {
@@ -52,13 +54,7 @@ export function resolveConfiguredFallbackModel(params: {
   if (!hasConfiguredFallbackSurface({ providerConfig, configuredModel, modelId })) {
     return undefined;
   }
-  const staticCatalogModel = resolveBundledStaticCatalogModel({
-    provider,
-    modelId,
-    cfg,
-    workspaceDir,
-    includeRuntimeDiscovery: true,
-  }) as StaticCatalogFallbackModel | undefined;
+  const staticCatalogModel = params.getStaticCatalogModel?.();
   const metadataModel = configuredModel ?? staticCatalogModel;
   const fallbackMediaInput = mergeModelMediaInput(
     staticCatalogModel?.mediaInput,
@@ -138,6 +134,9 @@ export function resolveConfiguredFallbackModel(params: {
     provider,
     api: fallbackTransport.api ?? "openai-responses",
     baseUrl: fallbackTransport.baseUrl,
+    ...(params.providerMetadataOwners
+      ? { providerMetadataOwners: params.providerMetadataOwners }
+      : {}),
     discoveredHeaders: staticCatalogHeaders,
     providerHeaders,
     modelHeaders,
@@ -157,11 +156,7 @@ export function resolveConfiguredFallbackModel(params: {
     providerConfig?.models?.[0]?.maxTokens;
   const resolvedFallbackMaxTokens = configuredFallbackMaxTokens ?? staticCatalogModel?.maxTokens;
   const resolvedFallbackContextWindow =
-    configuredModel?.contextWindow ??
-    providerConfig?.contextWindow ??
-    providerConfig?.models?.[0]?.contextWindow ??
-    staticCatalogModel?.contextWindow ??
-    DEFAULT_CONTEXT_TOKENS;
+    configuredModel?.contextWindow ?? staticCatalogModel?.contextWindow ?? DEFAULT_CONTEXT_TOKENS;
   const normalizedResolvedFallbackMaxTokens = clampModelMaxTokensToContextWindow(
     resolvedFallbackMaxTokens,
     resolvedFallbackContextWindow,
@@ -171,52 +166,56 @@ export function resolveConfiguredFallbackModel(params: {
     cfg,
     agentDir,
     workspaceDir,
-    model: attachModelProviderLocalService(
-      attachModelProviderRequestTransport(
-        {
-          id: modelId,
-          name: metadataModel?.name ?? modelId,
-          api: requestConfig.api ?? "openai-responses",
-          provider,
-          baseUrl: requestConfig.baseUrl,
-          reasoning: fallbackReasoning,
-          input: resolveProviderModelInput({
+    model: attachModelProviderRequestRouteFacts(
+      attachModelProviderLocalService(
+        attachModelProviderRequestTransport(
+          {
+            id: modelId,
+            name: metadataModel?.name ?? modelId,
+            api: requestConfig.api ?? "openai-responses",
             provider,
-            modelId,
-            modelName: metadataModel?.name ?? modelId,
-            input: metadataModel?.input,
-          }),
-          ...(configuredModel?.thinkingLevelMap !== undefined
-            ? { thinkingLevelMap: configuredModel.thinkingLevelMap }
-            : {}),
-          cost: metadataModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: resolvedFallbackContextWindow,
-          contextTokens:
-            configuredModel?.contextTokens ??
-            providerConfig?.contextTokens ??
-            providerConfig?.models?.[0]?.contextTokens ??
-            staticCatalogModel?.contextTokens,
-          // maxTokens is a wire-level output cap, not a context-budget fallback.
-          // Omit an unknown cap so strict providers can apply their own limit.
-          ...(normalizedResolvedFallbackMaxTokens !== undefined
-            ? {
-                maxTokens: normalizedResolvedFallbackMaxTokens,
-                maxTokensSource:
-                  configuredFallbackMaxTokens !== undefined ? "configured" : "discovered",
-              }
-            : {}),
-          ...(resolvedParams ? { params: resolvedParams } : {}),
-          ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
-          headers: requestConfig.headers,
-          ...(providerConfig?.authHeader !== undefined
-            ? { authHeader: providerConfig.authHeader }
-            : {}),
-          compat: fallbackCompat,
-          mediaInput: fallbackMediaInput,
-        } as Model,
-        providerRequest,
+            baseUrl: requestConfig.baseUrl,
+            reasoning: fallbackReasoning,
+            input: resolveProviderModelInput({
+              provider,
+              modelId,
+              modelName: metadataModel?.name ?? modelId,
+              input: metadataModel?.input,
+            }),
+            ...(configuredModel?.thinkingLevelMap !== undefined
+              ? { thinkingLevelMap: configuredModel.thinkingLevelMap }
+              : {}),
+            cost: mergeConfiguredModelCost({
+              provider,
+              cfg,
+              configuredModel,
+              catalogCost: staticCatalogModel?.cost,
+            }),
+            contextWindow: resolvedFallbackContextWindow,
+            contextTokens: configuredModel?.contextTokens ?? staticCatalogModel?.contextTokens,
+            // maxTokens is a wire-level output cap, not a context-budget fallback.
+            // Omit an unknown cap so strict providers can apply their own limit.
+            ...(normalizedResolvedFallbackMaxTokens !== undefined
+              ? {
+                  maxTokens: normalizedResolvedFallbackMaxTokens,
+                  maxTokensSource:
+                    configuredFallbackMaxTokens !== undefined ? "configured" : "discovered",
+                }
+              : {}),
+            ...(resolvedParams ? { params: resolvedParams } : {}),
+            ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+            headers: requestConfig.headers,
+            ...(providerConfig?.authHeader !== undefined
+              ? { authHeader: providerConfig.authHeader }
+              : {}),
+            compat: fallbackCompat,
+            mediaInput: fallbackMediaInput,
+          } as Model,
+          providerRequest,
+        ),
+        providerConfig?.localService,
       ),
-      providerConfig?.localService,
+      params.providerMetadataOwners,
     ),
     runtimeHooks,
   });

@@ -3,7 +3,8 @@ import path from "node:path";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   applySessionEntryLifecycleMutation,
-  listSessionEntries,
+  listSessionEntriesCore,
+  loadExactSessionEntryReadOnly,
   type SessionEntryLifecycleRemoval,
 } from "../config/sessions/session-accessor.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
@@ -11,7 +12,9 @@ import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isCompetingSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
 import { buildPendingGeneratedMediaSessionKeySet } from "../tasks/task-status-access.js";
+import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import type { Logger } from "./service/state.js";
 
 const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
@@ -33,7 +36,15 @@ function resolveRetentionMs(cronConfig?: CronConfig): number | null {
   const raw = cronConfig?.sessionRetention;
   if (typeof raw === "string" && raw.trim()) {
     try {
-      return parseDurationMs(raw.trim(), { defaultUnit: "h" });
+      const ms = parseDurationMs(raw.trim(), { defaultUnit: "h" });
+      // A zero retention ("0h") is a disable signal, not "prune everything":
+      // cutoff would equal now and the next sweep would delete every cron run
+      // session. Negative durations never get here (the parser rejects them);
+      // the <= 0 check stays defensive.
+      if (ms <= 0) {
+        return null;
+      }
+      return ms;
     } catch {
       return DEFAULT_RETENTION_MS;
     }
@@ -46,22 +57,44 @@ type ReaperResult = {
   pruned: number;
 };
 
+/** Removes the reusable base session whose owning isolated cron job was deleted. */
+export async function removeCronJobBaseSession(params: {
+  agentId: string;
+  jobId: string;
+  sessionStorePath: string;
+}): Promise<boolean> {
+  const sessionKey = resolveCronAgentSessionKey({
+    agentId: params.agentId,
+    sessionKey: `cron:${params.jobId}`,
+  });
+  const existing = loadExactSessionEntryReadOnly({
+    storePath: params.sessionStorePath,
+    sessionKey,
+  })?.entry;
+  if (!existing) {
+    return false;
+  }
+  const result = await applySessionEntryLifecycleMutation({
+    agentId: params.agentId,
+    storePath: params.sessionStorePath,
+    removals: [{ sessionKey, archiveRemovedTranscript: true, expectedEntry: existing }],
+  });
+  return result.removedEntries > 0;
+}
+
 /**
  * Sweeps completed isolated cron run sessions while preserving base cron sessions.
  *
- * Must run outside the cron service `locked()` section because this acquires
- * the session-store file lock; reversing that order can deadlock timer ticks.
+ * Run outside the cron service `locked()` section: cleanup acquires session
+ * lifecycle and writer ownership, so nesting the queues can deadlock timer ticks.
  */
 export async function sweepCronRunSessions(params: {
   cronConfig?: CronConfig;
   agentId: string;
-  defaultAgentId: string;
-  /** Resolved path to sessions.json — required. */
+  /** Resolved session-store target, interpreted by the SQLite accessor. */
   sessionStorePath: string;
   nowMs?: number;
   log: Logger;
-  /** Override for testing — skips the min-interval throttle. */
-  force?: boolean;
 }): Promise<ReaperResult> {
   const retentionMs = resolveRetentionMs(params.cronConfig);
   if (retentionMs === null) {
@@ -76,8 +109,8 @@ export async function sweepCronRunSessions(params: {
   const lastSweepAtMs = lastSweepAtMsByTarget.get(targetKey) ?? 0;
 
   // Timer ticks can be frequent; throttle per agent/store target to avoid
-  // repeated session-store I/O while preserving a force path for tests.
-  if (!params.force && now >= lastSweepAtMs && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
+  // repeated session-store I/O.
+  if (now >= lastSweepAtMs && now - lastSweepAtMs < MIN_SWEEP_INTERVAL_MS) {
     return { swept: false, pruned: 0 };
   }
 
@@ -94,7 +127,7 @@ export async function sweepCronRunSessions(params: {
     const removals: SessionEntryLifecycleRemoval[] = [];
     // The accessor keeps agentId logical for admission checks and resolves a shared
     // store's physical database owner internally through its SQLite scope.
-    for (const { sessionKey, entry } of listSessionEntries({
+    for (const { sessionKey, entry } of listSessionEntriesCore({
       agentId: params.agentId,
       storePath,
     })) {
@@ -116,6 +149,14 @@ export async function sweepCronRunSessions(params: {
         if (pendingMediaSessionKeys.has(sessionKey)) {
           continue;
         }
+      }
+      // Skip known-busy rows so one active generation cannot abort idle sibling cleanup.
+      // The shared deletion guard still closes the race between selection and commit.
+      if (
+        entry.sessionId &&
+        isCompetingSessionWorkAdmissionActive(storePath, [sessionKey, entry.sessionId])
+      ) {
+        continue;
       }
       removals.push({
         sessionKey,

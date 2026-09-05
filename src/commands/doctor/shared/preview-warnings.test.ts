@@ -68,8 +68,15 @@ const staleAuthOrderState = vi.hoisted(() => ({
   warnings: [] as string[],
 }));
 
+const repairMergedGatewayOwnerProfile = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../state/user-profiles-owner-migration.js", () => ({
+  repairMergedGatewayOwnerProfile,
+}));
+
 const activeToolSchemaState = vi.hoisted(() => ({
   warnings: [] as string[],
+  params: undefined as { runWithPluginMetadataSnapshot?: unknown } | undefined,
 }));
 
 const commandSecretState = vi.hoisted(() => ({
@@ -315,7 +322,12 @@ vi.mock("./stale-auth-order.js", () => ({
 }));
 
 vi.mock("./active-tool-schema-warnings.js", () => ({
-  collectActiveToolSchemaProjectionWarnings: async () => activeToolSchemaState.warnings,
+  collectActiveToolSchemaProjectionWarnings: async (params: {
+    runWithPluginMetadataSnapshot?: unknown;
+  }) => {
+    activeToolSchemaState.params = params;
+    return activeToolSchemaState.warnings;
+  },
 }));
 
 vi.mock("./codex-route-warnings.js", () => ({
@@ -388,7 +400,13 @@ describe("doctor preview warnings", () => {
     manifestState.diagnostics = [];
     staleOAuthShadowState.warnings = [];
     staleAuthOrderState.warnings = [];
+    repairMergedGatewayOwnerProfile.mockReset().mockReturnValue({
+      repaired: false,
+      changes: [],
+      warnings: [],
+    });
     activeToolSchemaState.warnings = [];
+    activeToolSchemaState.params = undefined;
     commandSecretState.targetIds = new Set<string>();
     commandSecretState.resolvedConfig = undefined;
     commandSecretState.diagnostics = [];
@@ -403,6 +421,26 @@ describe("doctor preview warnings", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
     tempRoots.clear();
+  });
+
+  it("reports merged gateway owner profiles without applying the repair", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-preview" };
+    const warning = 'Gateway owner profile is merged. Run "openclaw doctor --fix" to repair it.';
+    repairMergedGatewayOwnerProfile.mockReturnValue({
+      repaired: false,
+      changes: [],
+      warnings: [warning],
+    });
+
+    const notes = await collectDoctorPreviewNotes({
+      cfg: {},
+      doctorFixCommand: "openclaw doctor --fix",
+      env,
+    });
+
+    expect(repairMergedGatewayOwnerProfile).toHaveBeenCalledWith({ env, shouldRepair: false });
+    expect(notes.warningNotes).toContain(warning);
+    expect(notes.infoNotes).toEqual([]);
   });
 
   it("routes personal Codex asset notices to info instead of warnings", async () => {
@@ -696,6 +734,23 @@ describe("doctor preview warnings", () => {
     expect(
       warnings.some((warning) => warning.includes('active tool "fuzzplugin_move_angles"')),
     ).toBe(true);
+  });
+
+  it("scopes active tool schema preview checks to the Doctor metadata lifecycle", async () => {
+    const runWithPluginMetadataSnapshot = <T>(
+      _scope: { config: OpenClawConfig; workspaceDir?: string },
+      run: () => T,
+    ): T => run();
+
+    await collectDoctorPreviewWarnings({
+      cfg: {},
+      doctorFixCommand: "openclaw doctor --fix",
+      runWithPluginMetadataSnapshot,
+    });
+
+    expect(activeToolSchemaState.params?.runWithPluginMetadataSnapshot).toBe(
+      runWithPluginMetadataSnapshot,
+    );
   });
 
   it("warns but skips auto-removal when plugin discovery has errors", async () => {

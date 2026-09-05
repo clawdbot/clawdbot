@@ -132,6 +132,9 @@ function createMarkerSession(options: { existingPage?: boolean; navigateError?: 
       connect: vi.fn(),
     },
     transport: { pid: 123 },
+    closeTransport() {
+      return this.client.close();
+    },
     ready: Promise.resolve(),
     routing: {
       sessionNonce: "000000000001",
@@ -395,47 +398,69 @@ describe("Chrome MCP durable tab ownership", () => {
     );
   });
 
-  it("closes a failed first-page marker through its captured native target", async () => {
-    const navigateError = new Error("navigation failed");
-    const { session, pages } = createMarkerSession({ existingPage: false, navigateError });
-    setChromeMcpSessionFactoryForTest(async () => session as never);
-    fetchJsonMock.mockImplementation(async (url: string) => {
-      if (url.includes("/json/list")) {
-        return pages.map((page) => ({
-          id: page.nativeTargetId,
-          url: page.url,
-          type: "page",
-        }));
-      }
-      return {
-        webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/BROWSER-ONE",
-      };
-    });
-    fetchOkMock.mockImplementationOnce(async (url: string) => {
-      const nativeTargetId = decodeURIComponent(url.split("/").at(-1) ?? "");
-      const index = pages.findIndex((page) => page.nativeTargetId === nativeTargetId);
-      if (index >= 0) {
-        pages.splice(index, 1);
-      }
-    });
+  it.each([
+    { label: "cdpUrl", profile: { cdpUrl: "http://127.0.0.1:9222" } },
+    { label: "mcpArgs only", profile: { mcpArgs: ["--browserUrl", "http://127.0.0.1:9222"] } },
+    {
+      label: "HTTP mcpArgs override",
+      profile: {
+        cdpUrl: "http://127.0.0.1:9333",
+        mcpArgs: ["--browserUrl", "http://127.0.0.1:9222"],
+      },
+    },
+    {
+      label: "WebSocket mcpArgs override",
+      profile: {
+        cdpUrl: "http://127.0.0.1:9333",
+        mcpArgs: ["--wsEndpoint", "ws://127.0.0.1:9222/devtools/browser/BROWSER-ONE"],
+      },
+    },
+  ])(
+    "closes a failed first-page marker through its captured native target using $label",
+    async ({ profile }) => {
+      const navigateError = new Error("navigation failed");
+      const { session, pages } = createMarkerSession({ existingPage: false, navigateError });
+      setChromeMcpSessionFactoryForTest(async () => session as never);
+      fetchJsonMock.mockImplementation(async (url: string) => {
+        if (url.includes("/json/list")) {
+          return pages.map((page) => ({
+            id: page.nativeTargetId,
+            url: page.url,
+            type: "page",
+          }));
+        }
+        return {
+          webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/BROWSER-ONE",
+        };
+      });
+      fetchOkMock.mockImplementationOnce(async (url: string) => {
+        const nativeTargetId = decodeURIComponent(url.split("/").at(-1) ?? "");
+        const index = pages.findIndex((page) => page.nativeTargetId === nativeTargetId);
+        if (index >= 0) {
+          pages.splice(index, 1);
+        }
+      });
 
-    await expect(
-      openChromeMcpTab("chrome-live", "https://example.com", {
-        cdpUrl: "http://127.0.0.1:9222",
-      }),
-    ).rejects.toBe(navigateError);
-    expect(pages).toEqual([]);
-    expect(fetchOkMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:9222/json/close/NATIVE-1",
-      undefined,
-      undefined,
-      undefined,
-    );
-    const calls = (session.client.callTool as ReturnType<typeof vi.fn>).mock.calls as Array<
-      [ToolCall, ...unknown[]]
-    >;
-    expect(calls.map(([call]) => call.name)).not.toContain("close_page");
-  });
+      await expect(openChromeMcpTab("chrome-live", "https://example.com", profile)).rejects.toBe(
+        navigateError,
+      );
+      expect(pages).toEqual([]);
+      expect(fetchJsonMock.mock.calls.map(([url]) => url)).toEqual([
+        "http://127.0.0.1:9222/json/list",
+        "http://127.0.0.1:9222/json/version",
+      ]);
+      expect(fetchOkMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:9222/json/close/NATIVE-1",
+        undefined,
+        undefined,
+        undefined,
+      );
+      const calls = (session.client.callTool as ReturnType<typeof vi.fn>).mock.calls as Array<
+        [ToolCall, ...unknown[]]
+      >;
+      expect(calls.map(([call]) => call.name)).not.toContain("close_page");
+    },
+  );
 
   it("classifies marker lookup network failures separately from ambiguous matches", async () => {
     const { session } = createMarkerSession();

@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as noteModule from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../cli/completion-runtime.js";
+import {
+  COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
+  formatCompletionReloadCommand,
+  resolveCompletionCachePath,
+} from "../cli/completion-runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   checkShellCompletionStatus,
@@ -19,6 +23,8 @@ const originalEnv = captureEnv([
   "HOME",
   "OPENCLAW_STATE_DIR",
   "SHELL",
+  "XDG_CONFIG_HOME",
+  "ZDOTDIR",
   COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
 ]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -84,6 +90,31 @@ describe("shell completion health mapping", () => {
       cacheExists: false,
       cachePath: path.join(stateDir, "completions", "openclaw.bash"),
       usesSlowPattern: true,
+    });
+  });
+
+  it("reports an orphaned shell-completion marker as uninstalled", async () => {
+    const homeDir = tempDirs.make("openclaw-bash-orphaned-profile-home-");
+    const stateDir = tempDirs.make("openclaw-bash-orphaned-profile-state-");
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", "/bin/bash");
+
+    const cachePath = path.join(stateDir, "completions", "openclaw.bash");
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    await fs.writeFile(cachePath, "complete -W 'status' openclaw\n", "utf-8");
+    await fs.writeFile(
+      path.join(homeDir, ".bash_profile"),
+      "# OpenClaw Completion\nexport IMPORTANT=keep\n",
+      "utf-8",
+    );
+
+    await expect(checkShellCompletionStatus("openclaw", { shell: "bash" })).resolves.toEqual({
+      shell: "bash",
+      profileInstalled: false,
+      cacheExists: true,
+      cachePath,
+      usesSlowPattern: false,
     });
   });
 
@@ -236,6 +267,33 @@ describe("doctorShellCompletion", () => {
   });
 
   it.each([
+    { shell: "zsh", variable: "ZDOTDIR", profile: ".zshrc" },
+    {
+      shell: "fish",
+      variable: "XDG_CONFIG_HOME",
+      profile: path.join("fish", "config.fish"),
+    },
+  ])("reports the configured $shell startup profile after installation", async (testCase) => {
+    const homeDir = tempDirs.make("openclaw-doctor-custom-profile-home-");
+    const stateDir = tempDirs.make("openclaw-doctor-custom-profile-state-");
+    const configDir = tempDirs.make(`openclaw doctor ${testCase.shell} profile-`);
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("SHELL", `/bin/${testCase.shell}`);
+    setTestEnvValue(testCase.variable, configDir);
+    installCompletionMock.mockResolvedValue(undefined);
+    const noteSpy = vi.spyOn(noteModule, "note");
+
+    await doctorShellCompletion({} as never, mockPrompter());
+
+    expect(installCompletionMock).toHaveBeenCalledWith(testCase.shell, true, "openclaw");
+    expect(noteSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`source '${path.join(configDir, testCase.profile)}'`),
+      "Shell completion",
+    );
+  });
+
+  it.each([
     { generationMode: "core-only" as const, expectedSkipValue: "1" },
     { generationMode: "full" as const, expectedSkipValue: undefined },
   ])(
@@ -272,22 +330,24 @@ describe("doctorShellCompletion", () => {
     { code: "EACCES", usesSlowPattern: false, action: "installed" },
     { code: "EPERM", usesSlowPattern: false, action: "installed" },
     { code: "EROFS", usesSlowPattern: false, action: "installed" },
-  ])("keeps $action completion best-effort for wrapped $code errors", async (testCase) => {
+  ])("offers session recovery when completion is not $action after $code", async (testCase) => {
     const profilePath = await setupDoctorCompletionTest(testCase.usesSlowPattern);
-    installCompletionMock.mockRejectedValue(wrappedFsError(testCase.code, profilePath));
+    const failedPath = path.dirname(profilePath);
+    installCompletionMock.mockRejectedValue(wrappedFsError(testCase.code, failedPath));
     const noteSpy = vi.spyOn(noteModule, "note");
 
     await expect(doctorShellCompletion({} as never, mockPrompter())).resolves.not.toThrow();
 
+    const command = formatCompletionReloadCommand(
+      "bash",
+      resolveCompletionCachePath("bash", "openclaw"),
+    );
+    expect(noteSpy).toHaveBeenCalledWith(expect.stringContaining(command), "Shell completion");
     expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringMatching(
-        new RegExp(
-          `Shell completion not ${testCase.action}: .* is not writable.*completion --install`,
-        ),
-      ),
+      expect.stringContaining("session only"),
       "Shell completion",
     );
-    expect(noteSpy).toHaveBeenCalledWith(expect.stringContaining(profilePath), "Shell completion");
+    expect(noteSpy).toHaveBeenCalledWith(expect.stringContaining(failedPath), "Shell completion");
   });
 
   it("re-throws non-permission errors from installCompletion", async () => {

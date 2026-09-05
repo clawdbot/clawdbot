@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  collectAmbiguousAutomaticMediaUrls,
   collectAutomaticDeliveredMediaUrls,
   collectDeliveredMediaUrls,
-  hasAmbiguousPayloadSendBeforeError,
   hasCompleteAutomaticMediaDeliveryOutcomeEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
-  hasIncompletePartialPayloadOutcomeEvidence,
-  hasPayloadOutcomeSendEvidence,
+  getAutomaticDeliveryEvidence,
   hasUnaccountedMessagingToolAggregateEvidence,
   hasVisibleOutboundDeliveryEvidence,
   resolveExplicitFinalSourceReplyDeliveryEvidence,
@@ -256,18 +255,23 @@ describe("queued delivery evidence", () => {
         ],
       },
     };
-    expect(hasPayloadOutcomeSendEvidence(complete)).toBe(true);
-    expect(hasAmbiguousPayloadSendBeforeError(complete)).toBe(true);
-    expect(hasIncompletePartialPayloadOutcomeEvidence(complete)).toBe(false);
+    expect(getAutomaticDeliveryEvidence(complete).mayHaveSent).toBe(true);
+    expect(collectAmbiguousAutomaticMediaUrls(complete)).toEqual(["/tmp/proof.png"]);
+    expect(hasCompleteAutomaticMediaDeliveryOutcomeEvidence(complete, ["/tmp/proof.png"])).toBe(
+      true,
+    );
     expect(
-      hasIncompletePartialPayloadOutcomeEvidence({
-        ...complete,
-        deliveryStatus: {
-          ...complete.deliveryStatus,
-          payloadOutcomes: complete.deliveryStatus.payloadOutcomes.slice(1),
+      hasCompleteAutomaticMediaDeliveryOutcomeEvidence(
+        {
+          ...complete,
+          deliveryStatus: {
+            ...complete.deliveryStatus,
+            payloadOutcomes: complete.deliveryStatus.payloadOutcomes.slice(0, 1),
+          },
         },
-      }),
-    ).toBe(true);
+        ["/tmp/proof.png"],
+      ),
+    ).toBe(false);
   });
 
   it("credits an ambiguous single-payload send only when requested", () => {

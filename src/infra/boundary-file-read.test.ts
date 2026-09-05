@@ -9,13 +9,6 @@ import * as shim from "./boundary-file-read.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("root file open shim", () => {
-  it("re-exports the fs-safe root file helpers", () => {
-    expect(shim.canUseRootFileOpen).toBe(upstream.canUseRootFileOpen);
-    expect(shim.matchRootFileOpenFailure).toBe(upstream.matchRootFileOpenFailure);
-    expect(shim.openRootFile).toBe(upstream.openRootFile);
-    expect(shim.openRootFileSync).toBe(upstream.openRootFileSync);
-  });
-
   it("separates missing, unreadable, and boundary-violating open failures", () => {
     const messageFor = (failure: upstream.RootFileOpenFailure) =>
       shim.describeRootFileOpenFailure({

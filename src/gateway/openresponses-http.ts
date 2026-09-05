@@ -9,14 +9,19 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
+import { toOpenAiResponsesUsage } from "../agents/usage.js";
+import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
+import { agentCommandFromGatewayIngress } from "../commands/agent.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
-import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, onAgentEventForRun } from "../infra/agent-events.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { logWarn } from "../logger.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import {
@@ -32,6 +37,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -42,6 +48,8 @@ import {
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
+  parseGatewayJsonRequest,
+  sendInvalidRequest,
   sendJson,
   sendMissingScopeForbidden,
   setSseHeaders,
@@ -50,10 +58,14 @@ import {
 } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
+  type AuthorizedGatewayHttpRequest,
   authorizeOpenAiCompatibleHttpModelOverride,
+  authorizeOpenAiCompatibleHttpSession,
   getBearerToken,
   getHeader,
+  isAgentSelectionRequiredError,
   isGatewaySessionKeyOverrideError,
+  isInvalidGatewayModelError,
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
@@ -70,6 +82,7 @@ import {
   type StreamingEvent,
   type Usage,
 } from "./open-responses.schema.js";
+import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
 import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
@@ -80,6 +93,8 @@ import {
 import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
+import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 
 type OpenResponsesHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -88,6 +103,7 @@ type OpenResponsesHttpOptions = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  resolveGatewayContext?: GatewayContextResolver;
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
@@ -123,16 +139,15 @@ function normalizeResponseSessionScope(scope: ResponseSessionScope): ResponseSes
 function resolveResponseSessionAuthSubject(params: {
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
+  requestAuth: AuthorizedGatewayHttpRequest;
 }): string {
+  // Proxy-verified identity owns continuation; forwarded bearers are unverified.
+  if (params.requestAuth.authMethod === "trusted-proxy") {
+    return `trusted-proxy:${params.requestAuth.user}`;
+  }
   const bearer = getBearerToken(params.req);
   if (bearer) {
     return `bearer:${createHash("sha256").update(bearer).digest("hex")}`;
-  }
-  if (params.auth.mode === "trusted-proxy" && params.auth.trustedProxy?.userHeader) {
-    const user = getHeader(params.req, params.auth.trustedProxy.userHeader)?.trim();
-    if (user) {
-      return `trusted-proxy:${user}`;
-    }
   }
   return `gateway-auth:${params.auth.mode}`;
 }
@@ -140,10 +155,11 @@ function resolveResponseSessionAuthSubject(params: {
 function createResponseSessionScope(params: {
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
+  requestAuth: AuthorizedGatewayHttpRequest;
   agentId: string;
 }): ResponseSessionScope {
   return normalizeResponseSessionScope({
-    authSubject: resolveResponseSessionAuthSubject({ req: params.req, auth: params.auth }),
+    authSubject: resolveResponseSessionAuthSubject(params),
     agentId: params.agentId,
     requestedSessionKey: getHeader(params.req, "x-openclaw-session-key"),
   });
@@ -174,16 +190,6 @@ function pruneExpiredResponseSessions(now: number) {
   }
 }
 
-function evictOverflowResponseSessions() {
-  while (responseSessionMap.size > MAX_RESPONSE_SESSION_ENTRIES) {
-    const oldestKey = responseSessionMap.keys().next().value;
-    if (!oldestKey) {
-      return;
-    }
-    responseSessionMap.delete(oldestKey);
-  }
-}
-
 function storeResponseSession(
   responseId: string,
   sessionKey: string,
@@ -194,7 +200,7 @@ function storeResponseSession(
   responseSessionMap.delete(responseId);
   responseSessionMap.set(responseId, { ...scope, sessionKey, ts: now });
   pruneExpiredResponseSessions(now);
-  evictOverflowResponseSessions();
+  pruneMapToMaxSize(responseSessionMap, MAX_RESPONSE_SESSION_ENTRIES);
 }
 
 function lookupResponseSession(
@@ -248,6 +254,17 @@ export const testing = {
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\n`);
   res.write(`data: ${JSON.stringify(event)}\n\n`);
+}
+
+function resolveResponsePayloadText(result: unknown): string {
+  const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+  return Array.isArray(payloads)
+    ? payloads
+        .flatMap((payload) =>
+          typeof payload.text === "string" && payload.text ? [payload.text] : [],
+        )
+        .join("\n\n")
+    : "";
 }
 
 type ResolvedResponsesLimits = {
@@ -342,43 +359,11 @@ function applyToolChoice(params: {
 export { buildAgentPrompt } from "./openresponses-prompt.js";
 
 function createEmptyUsage(): Usage {
-  return { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
-}
-
-function toUsage(
-  value:
-    | {
-        input?: number;
-        output?: number;
-        cacheRead?: number;
-        cacheWrite?: number;
-        total?: number;
-      }
-    | undefined,
-): Usage {
-  if (!value) {
-    return createEmptyUsage();
-  }
-  const input = value.input ?? 0;
-  const output = value.output ?? 0;
-  const cacheRead = value.cacheRead ?? 0;
-  const cacheWrite = value.cacheWrite ?? 0;
-  const total = value.total ?? input + output + cacheRead + cacheWrite;
-  return {
-    input_tokens: Math.max(0, input),
-    output_tokens: Math.max(0, output),
-    total_tokens: Math.max(0, total),
-  };
+  return toOpenAiResponsesUsage(undefined);
 }
 
 function extractUsageFromResult(result: unknown): Usage {
-  const meta = (result as { meta?: { agentMeta?: { usage?: unknown } } } | null)?.meta;
-  const usage = meta && typeof meta === "object" ? meta.agentMeta?.usage : undefined;
-  return toUsage(
-    usage as
-      | { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number }
-      | undefined,
-  );
+  return toOpenAiResponsesUsage(resolveAgentRunUsage(result));
 }
 
 type PendingToolCall = { id: string; name: string; arguments: string };
@@ -396,6 +381,7 @@ function resolveStopReasonAndPendingToolCalls(meta: unknown): {
 
 function createResponseResource(params: {
   id: string;
+  createdAt: number;
   model: string;
   status: ResponseResource["status"];
   output: OutputItem[];
@@ -405,7 +391,7 @@ function createResponseResource(params: {
   return {
     id: params.id,
     object: "response",
-    created_at: Math.floor(Date.now() / 1000),
+    created_at: params.createdAt,
     status: params.status,
     model: params.model,
     output: params.output,
@@ -426,9 +412,10 @@ async function runResponsesAgentCommand(params: {
   messageChannel: string;
   senderIsOwner: boolean;
   deps: CliDeps;
+  resolveGatewayContext?: GatewayContextResolver;
   abortSignal?: AbortSignal;
 }) {
-  return agentCommandFromIngress(
+  return agentCommandFromGatewayIngress(
     {
       message: params.message,
       images: params.images.length > 0 ? params.images : undefined,
@@ -444,9 +431,16 @@ async function runResponsesAgentCommand(params: {
       bestEffortDeliver: false,
       allowModelOverride: params.modelOverride !== undefined,
       abortSignal: params.abortSignal,
+      ...(params.resolveGatewayContext
+        ? {
+            onAdmittedRunContext: (context: AdmittedRunContext) =>
+              bindGatewayContextResolver(context, params.resolveGatewayContext),
+          }
+        : {}),
     },
     defaultRuntime,
     params.deps,
+    {},
   );
 }
 
@@ -483,18 +477,10 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
   const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
-  // Validate request body with Zod
-  const parseResult = CreateResponseBodySchema.safeParse(handled.body);
-  if (!parseResult.success) {
-    const issue = parseResult.error.issues[0];
-    const message = issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid request body";
-    sendJson(res, 400, {
-      error: { message, type: "invalid_request_error" },
-    });
+  const payload = parseGatewayJsonRequest(res, handled.body, CreateResponseBodySchema);
+  if (!payload) {
     return true;
   }
-
-  const payload: CreateResponseBody = parseResult.data;
   const stream = Boolean(payload.stream);
   const model = payload.model;
   const user = payload.user;
@@ -502,13 +488,28 @@ export async function handleOpenResponsesHttpRequest(
   try {
     agentId = resolveAgentIdForRequest({ req, model });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err)) {
-      sendJson(res, 400, {
-        error: { message: err.message, type: "invalid_request_error" },
-      });
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isUnknownGatewayAgentError(err)
+    ) {
+      sendInvalidRequest(res, err.message);
       return true;
     }
     throw err;
+  }
+  const creationAuth = authorizeGatewaySessionCreation({
+    cfg: getRuntimeConfig(),
+    ...(handled.requestAuth.operatorRoleActor
+      ? { actor: handled.requestAuth.operatorRoleActor }
+      : { profileId: handled.requestAuth.authenticatedUserProfile?.profileId }),
+    agentId,
+  });
+  if (creationAuth) {
+    sendJson(res, 403, {
+      error: { message: creationAuth.message, type: "forbidden" },
+    });
+    return true;
   }
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
@@ -516,13 +517,13 @@ export async function handleOpenResponsesHttpRequest(
     model,
   });
   if (modelError) {
-    sendJson(res, 400, {
-      error: { message: modelError, type: "invalid_request_error" },
-    });
+    sendInvalidRequest(res, modelError);
     return true;
   }
 
-  // Extract images + files from input (Phase 2)
+  const prompt = buildAgentPrompt(payload.input);
+
+  // Count URL sources request-wide, but replay media only from the current user turn.
   let images: ImageContent[] = [];
   const fileContexts: string[] = [];
   let urlParts = 0;
@@ -539,31 +540,23 @@ export async function handleOpenResponsesHttpRequest(
       for (const item of payload.input) {
         if (item.type === "message" && typeof item.content !== "string") {
           for (const part of item.content) {
+            if (part.type !== "input_image" && part.type !== "input_file") {
+              continue;
+            }
+            if (part.source.type === "url") {
+              markUrlPart();
+            }
+            if (item !== prompt.activeUserMessage) {
+              continue;
+            }
             if (part.type === "input_image") {
-              const source = part.source as {
-                type?: string;
-                url?: string;
-                data?: string;
-                media_type?: string;
-              };
-              const sourceType =
-                source.type === "base64" || source.type === "url" ? source.type : undefined;
-              if (!sourceType) {
-                throw new Error("input_image must have 'source.url' or 'source.data'");
-              }
-              if (sourceType === "url") {
-                markUrlPart();
-              }
+              const source = part.source;
               const imageSource: InputImageSource =
-                sourceType === "url"
-                  ? {
-                      type: "url",
-                      url: source.url ?? "",
-                      mediaType: source.media_type,
-                    }
+                source.type === "url"
+                  ? { type: "url", url: source.url }
                   : {
                       type: "base64",
-                      data: source.data ?? "",
+                      data: source.data,
                       mediaType: source.media_type,
                     };
               const image = await extractImageContentFromSource(imageSource, limits.images);
@@ -571,67 +564,46 @@ export async function handleOpenResponsesHttpRequest(
               continue;
             }
 
-            if (part.type === "input_file") {
-              const source = part.source as {
-                type?: string;
-                url?: string;
-                data?: string;
-                media_type?: string;
-                filename?: string;
-              };
-              const sourceType =
-                source.type === "base64" || source.type === "url" ? source.type : undefined;
-              if (!sourceType) {
-                throw new Error("input_file must have 'source.url' or 'source.data'");
-              }
-              if (sourceType === "url") {
-                markUrlPart();
-              }
-              const file = await extractFileContentFromSource({
-                source:
-                  sourceType === "url"
-                    ? {
-                        type: "url",
-                        url: source.url ?? "",
-                        mediaType: source.media_type,
-                        filename: source.filename,
-                      }
-                    : {
-                        type: "base64",
-                        data: source.data ?? "",
-                        mediaType: source.media_type,
-                        filename: source.filename,
-                      },
-                limits: limits.files,
-              });
-              const rawText = file.text;
-              if (rawText?.trim()) {
-                fileContexts.push(
-                  renderFileContextBlock({
-                    filename: file.filename,
-                    content: wrapUntrustedFileContent(rawText),
-                  }),
-                );
-              } else if (file.images && file.images.length > 0) {
-                fileContexts.push(
-                  renderFileContextBlock({
-                    filename: file.filename,
-                    content: "[PDF content rendered to images]",
-                    surroundContentWithNewlines: false,
-                  }),
-                );
-              } else {
-                fileContexts.push(
-                  renderFileContextBlock({
-                    filename: file.filename,
-                    content: "[No extractable text]",
-                    surroundContentWithNewlines: false,
-                  }),
-                );
-              }
-              if (file.images && file.images.length > 0) {
-                images = images.concat(file.images);
-              }
+            const source = part.source;
+            const file = await extractFileContentFromSource({
+              source:
+                source.type === "url"
+                  ? { type: "url", url: source.url }
+                  : {
+                      type: "base64",
+                      data: source.data,
+                      mediaType: source.media_type,
+                      filename: source.filename,
+                    },
+              limits: limits.files,
+            });
+            const rawText = file.text;
+            if (rawText?.trim()) {
+              fileContexts.push(
+                renderFileContextBlock({
+                  filename: file.filename,
+                  content: wrapUntrustedFileContent(rawText),
+                }),
+              );
+            } else if (file.images && file.images.length > 0) {
+              fileContexts.push(
+                renderFileContextBlock({
+                  filename: file.filename,
+                  content: "[PDF content rendered to images]",
+                  surroundContentWithNewlines: false,
+                }),
+              );
+            } else {
+              fileContexts.push(
+                renderFileContextBlock({
+                  filename: file.filename,
+                  content: "[No extractable text]",
+                  surroundContentWithNewlines: false,
+                }),
+              );
+            }
+            if (file.images && file.images.length > 0) {
+              images = images.concat(file.images);
             }
           }
         }
@@ -639,9 +611,7 @@ export async function handleOpenResponsesHttpRequest(
     }
   } catch (err) {
     logWarn(`openresponses: request parsing failed: ${String(err)}`);
-    sendJson(res, 400, {
-      error: { message: "invalid request", type: "invalid_request_error" },
-    });
+    sendInvalidRequest(res, "invalid request");
     return true;
   }
 
@@ -659,9 +629,7 @@ export async function handleOpenResponsesHttpRequest(
     toolChoiceConstraint = toolChoiceResult.constraint;
   } catch (err) {
     logWarn(`openresponses: tool configuration failed: ${String(err)}`);
-    sendJson(res, 400, {
-      error: { message: "invalid tool configuration", type: "invalid_request_error" },
-    });
+    sendInvalidRequest(res, "invalid tool configuration");
     return true;
   }
   let resolved: ReturnType<typeof resolveGatewayRequestContext>;
@@ -675,10 +643,13 @@ export async function handleOpenResponsesHttpRequest(
       useMessageChannelHeader: true,
     });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err) || isGatewaySessionKeyOverrideError(err)) {
-      sendJson(res, 400, {
-        error: { message: err.message, type: "invalid_request_error" },
-      });
+    if (
+      isAgentSelectionRequiredError(err) ||
+      isUnknownGatewayAgentError(err) ||
+      isInvalidGatewayModelError(err) ||
+      isGatewaySessionKeyOverrideError(err)
+    ) {
+      sendInvalidRequest(res, err.message);
       return true;
     }
     throw err;
@@ -686,6 +657,7 @@ export async function handleOpenResponsesHttpRequest(
   const responseSessionScope = createResponseSessionScope({
     req,
     auth: opts.auth,
+    requestAuth: handled.requestAuth,
     agentId: resolved.agentId,
   });
   // Resolve session key: reuse previous_response_id only when it matches the
@@ -696,9 +668,16 @@ export async function handleOpenResponsesHttpRequest(
   );
   const sessionKey = previousSessionKey ?? resolved.sessionKey;
   const messageChannel = resolved.messageChannel;
-
-  // Build prompt from input
-  const prompt = buildAgentPrompt(payload.input);
+  const sessionAuth = authorizeOpenAiCompatibleHttpSession({
+    agentId: resolved.agentId,
+    sessionKey,
+    requestAuth: handled.requestAuth,
+    senderIsOwner,
+  });
+  if (!sessionAuth.allowed) {
+    sendJson(res, 403, { error: { message: sessionAuth.message, type: "forbidden" } });
+    return true;
+  }
 
   const fileContext = fileContexts.length > 0 ? fileContexts.join("\n\n") : undefined;
   const toolChoiceContext = toolChoicePrompt?.trim();
@@ -714,16 +693,24 @@ export async function handleOpenResponsesHttpRequest(
     .join("\n\n");
 
   if (!prompt.message) {
-    sendJson(res, 400, {
-      error: {
-        message: "Missing user message in `input`.",
-        type: "invalid_request_error",
-      },
-    });
+    sendInvalidRequest(res, "Missing user message in `input`.");
     return true;
   }
 
   const responseId = `resp_${randomUUID()}`;
+  const responseIdentity = { id: responseId, createdAt: Math.floor(Date.now() / 1000) };
+  const createFailedResponse = (
+    error: { code: string; message: string },
+    usage?: Usage,
+  ): ResponseResource =>
+    createResponseResource({
+      ...responseIdentity,
+      model,
+      status: "failed",
+      output: [],
+      error,
+      usage,
+    });
   const rememberResponseSession = () =>
     storeResponseSession(responseId, sessionKey, responseSessionScope);
   const outputItemId = `msg_${randomUUID()}`;
@@ -758,6 +745,7 @@ export async function handleOpenResponsesHttpRequest(
         messageChannel,
         senderIsOwner,
         deps,
+        resolveGatewayContext: opts.resolveGatewayContext,
         abortSignal: abortController.signal,
       });
 
@@ -765,9 +753,12 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
 
-      const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
+      const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
+      if (readAgentRunTerminalOutcome(result) === "failed") {
+        throw new Error("agent run failed");
+      }
+      const assistantText = resolveResponsePayloadText(result);
       const usage = extractUsageFromResult(result);
-      const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
       // A `required`/pinned `tool_choice` must reject a text-only turn instead
@@ -777,17 +768,13 @@ export async function handleOpenResponsesHttpRequest(
         toolChoiceConstraint &&
         !isToolChoiceConstraintSatisfied({ constraint: toolChoiceConstraint, pendingToolCalls })
       ) {
-        const failed = createResponseResource({
-          id: responseId,
-          model,
-          status: "failed",
-          output: [],
-          error: {
+        const failed = createFailedResponse(
+          {
             code: "api_error",
             message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
           },
           usage,
-        });
+        );
         rememberResponseSession();
         sendJson(res, 502, failed);
         return true;
@@ -799,14 +786,6 @@ export async function handleOpenResponsesHttpRequest(
       // pending call was emitted, so multi-tool turns lost every call but
       // the leading one.
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
-        const assistantText =
-          Array.isArray(payloads) && payloads.length > 0
-            ? payloads
-                .map((p) => (typeof p.text === "string" ? p.text : ""))
-                .filter(Boolean)
-                .join("\n\n")
-            : "";
-
         const output: OutputItem[] = [];
         if (assistantText) {
           output.push(
@@ -830,9 +809,9 @@ export async function handleOpenResponsesHttpRequest(
         }
 
         const response = createResponseResource({
-          id: responseId,
+          ...responseIdentity,
           model,
-          status: "incomplete",
+          status: "completed",
           output,
           usage,
         });
@@ -841,22 +820,14 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
 
-      const content =
-        Array.isArray(payloads) && payloads.length > 0
-          ? payloads
-              .map((p) => (typeof p.text === "string" ? p.text : ""))
-              .filter(Boolean)
-              .join("\n\n")
-          : "No response from OpenClaw.";
-
       const response = createResponseResource({
-        id: responseId,
+        ...responseIdentity,
         model,
         status: "completed",
         output: [
           createAssistantOutputItem({
             id: outputItemId,
-            text: content,
+            text: assistantText || "No response from OpenClaw.",
             phase: "final_answer",
             status: "completed",
           }),
@@ -872,41 +843,25 @@ export async function handleOpenResponsesHttpRequest(
       }
       logWarn(`openresponses: non-stream response failed: ${String(err)}`);
       if (isClientToolNameConflictError(err)) {
-        const response = createResponseResource({
-          id: responseId,
-          model,
-          status: "failed",
-          output: [],
-          error: { code: "invalid_request_error", message: "invalid tool configuration" },
+        const response = createFailedResponse({
+          code: "invalid_request_error",
+          message: "invalid tool configuration",
         });
         sendJson(res, 400, response);
         return true;
       }
-      const response = createResponseResource({
-        id: responseId,
-        model,
-        status: "failed",
-        output: [],
-        error: { code: "api_error", message: "internal error" },
-      });
       const mapped = resolveOpenAiCompatError(err);
       if (mapped) {
-        const mappedResponse = createResponseResource({
-          id: responseId,
-          model,
-          status: "failed",
-          output: [],
-          error: {
-            code: mapped.error.type,
-            message: mapped.error.message,
-          },
+        const mappedResponse = createFailedResponse({
+          code: mapped.error.type,
+          message: mapped.error.message,
         });
         rememberResponseSession();
         sendJson(res, mapped.status, mappedResponse);
         return true;
       }
       rememberResponseSession();
-      sendJson(res, 500, response);
+      sendJson(res, 500, createFailedResponse({ code: "api_error", message: "internal error" }));
     } finally {
       stopWatchingDisconnect();
     }
@@ -930,9 +885,12 @@ export async function handleOpenResponsesHttpRequest(
   let finalUsage: Usage | undefined;
   let finalizeStatus: ResponseResource["status"] | null = null;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
+  let finalizeScheduled = false;
+  let finalizeErrorMessage: string | undefined;
+  let terminalLifecyclePhase: "end" | "error" = "end";
 
   const maybeFinalize = () => {
-    if (closed) {
+    if (closed || finalizeScheduled) {
       return;
     }
     if (!finalizeRequested) {
@@ -941,60 +899,90 @@ export async function handleOpenResponsesHttpRequest(
     if (!finalUsage) {
       return;
     }
-    const usage = finalUsage;
+    // Lifecycle listeners can queue assistant flushes after this listener runs;
+    // the next turn preserves all same-turn deltas before the terminal snapshot.
+    finalizeScheduled = true;
+    setImmediate(() => {
+      if (closed || !finalizeRequested || !finalUsage) {
+        return;
+      }
+      if (unrepresentableAssistantReplacement) {
+        finalizeUnrepresentableAssistantReplacement();
+        return;
+      }
+      const usage = finalUsage;
+      const finalText =
+        accumulatedText || bufferedReplaceableAssistantContent || finalizeRequested.text;
 
-    closed = true;
-    stopWatchingDisconnect();
-    unsubscribe();
+      closed = true;
+      stopWatchingDisconnect();
+      unsubscribe();
 
-    writeSseEvent(res, {
-      type: "response.output_text.done",
-      item_id: outputItemId,
-      output_index: 0,
-      content_index: 0,
-      text: finalizeRequested.text,
+      writeSseEvent(res, {
+        type: "response.output_text.done",
+        item_id: outputItemId,
+        output_index: 0,
+        content_index: 0,
+        text: finalText,
+      });
+
+      writeSseEvent(res, {
+        type: "response.content_part.done",
+        item_id: outputItemId,
+        output_index: 0,
+        content_index: 0,
+        part: { type: "output_text", text: finalText },
+      });
+
+      const completedItem = createAssistantOutputItem({
+        id: outputItemId,
+        text: finalText,
+        phase: finalizeRequested.status === "completed" ? "final_answer" : "commentary",
+        status: "completed",
+      });
+
+      writeSseEvent(res, {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: completedItem,
+      });
+
+      const finalResponse = createResponseResource({
+        ...responseIdentity,
+        model,
+        status: finalizeRequested.status,
+        output: [completedItem],
+        usage,
+        ...(finalizeRequested.status === "failed"
+          ? {
+              error: {
+                code: "server_error",
+                message: finalizeErrorMessage || "Agent run failed",
+              },
+            }
+          : {}),
+      });
+
+      rememberResponseSession();
+      writeSseEvent(res, {
+        type: finalizeRequested.status === "failed" ? "response.failed" : "response.completed",
+        response: finalResponse,
+      });
+      writeDone(res);
+      res.end();
     });
-
-    writeSseEvent(res, {
-      type: "response.content_part.done",
-      item_id: outputItemId,
-      output_index: 0,
-      content_index: 0,
-      part: { type: "output_text", text: finalizeRequested.text },
-    });
-
-    const completedItem = createAssistantOutputItem({
-      id: outputItemId,
-      text: finalizeRequested.text,
-      phase: finalizeRequested.status === "completed" ? "final_answer" : "commentary",
-      status: "completed",
-    });
-
-    writeSseEvent(res, {
-      type: "response.output_item.done",
-      output_index: 0,
-      item: completedItem,
-    });
-
-    const finalResponse = createResponseResource({
-      id: responseId,
-      model,
-      status: finalizeRequested.status,
-      output: [completedItem],
-      usage,
-    });
-
-    rememberResponseSession();
-    writeSseEvent(res, { type: "response.completed", response: finalResponse });
-    writeDone(res);
-    res.end();
   };
 
-  const requestFinalize = (status: ResponseResource["status"], text: string) => {
+  const requestFinalize = (
+    status: ResponseResource["status"],
+    text: string,
+    errorMessage?: string,
+  ) => {
     if (finalizeRequested) {
       return;
     }
     finalizeStatus = status;
+    finalizeErrorMessage = errorMessage;
     finalizeRequested = { status, text };
     maybeFinalize();
   };
@@ -1012,9 +1000,26 @@ export async function handleOpenResponsesHttpRequest(
     res.end();
   };
 
+  const finalizeUnrepresentableAssistantReplacement = () => {
+    const usage = finalUsage;
+    if (!usage) {
+      return;
+    }
+    rememberResponseSession();
+    finalizeFailedResponse(
+      createFailedResponse(
+        {
+          code: "server_error",
+          message: "Assistant output cannot be represented as an append-only response stream.",
+        },
+        usage,
+      ),
+    );
+  };
+
   // Send initial events
   const initialResponse = createResponseResource({
-    id: responseId,
+    ...responseIdentity,
     model,
     status: "in_progress",
     output: [],
@@ -1023,7 +1028,7 @@ export async function handleOpenResponsesHttpRequest(
   writeSseEvent(res, { type: "response.created", response: initialResponse });
   writeSseEvent(res, { type: "response.in_progress", response: initialResponse });
 
-  // Add output item
+  // Start empty because content_part.added owns appending content index 0.
   const outputItem = createAssistantOutputItem({
     id: outputItemId,
     text: "",
@@ -1033,7 +1038,7 @@ export async function handleOpenResponsesHttpRequest(
   writeSseEvent(res, {
     type: "response.output_item.added",
     output_index: 0,
-    item: outputItem,
+    item: { ...outputItem, content: [] },
   });
 
   // Add content part
@@ -1045,7 +1050,7 @@ export async function handleOpenResponsesHttpRequest(
     part: { type: "output_text", text: "" },
   });
 
-  unsubscribe = onAgentEvent((evt) => {
+  unsubscribe = onAgentEventForRun(responseId, (evt) => {
     if (evt.runId !== responseId) {
       return;
     }
@@ -1091,10 +1096,14 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
 
-      const content = resolveAssistantStreamDeltaText(evt);
+      const content =
+        typeof text === "string" && text.startsWith(streamedAssistantText)
+          ? text.slice(streamedAssistantText.length)
+          : resolveAssistantStreamDeltaText(evt);
       if (!content) {
         return;
       }
+      streamedAssistantText += content;
 
       // Hold assistant prose until the tool-choice contract is confirmed. A
       // `required`/pinned request must reject text-only turns, so streaming
@@ -1108,7 +1117,6 @@ export async function handleOpenResponsesHttpRequest(
 
       sawAssistantDelta = true;
       accumulatedText += content;
-      streamedAssistantText += content;
 
       writeSseEvent(res, {
         type: "response.output_text.delta",
@@ -1126,20 +1134,33 @@ export async function handleOpenResponsesHttpRequest(
         const finalText =
           accumulatedText || bufferedReplaceableAssistantContent || "No response from OpenClaw.";
         const finalStatus = phase === "error" ? "failed" : "completed";
-        requestFinalize(finalStatus, finalText);
+        const errorMessage =
+          phase === "error" && typeof evt.data?.error === "string"
+            ? evt.data.error.trim()
+            : undefined;
+        requestFinalize(finalStatus, finalText, errorMessage);
       }
     }
   });
 
+  // Agent cleanup and deferred SSE delivery have independent lifetimes;
+  // shutdown must wait until both have settled, whichever finishes last.
+  const releaseAgentRootWork = retainGatewayRootWorkAdmissionContinuation();
+  const releaseResponseRootWork = retainGatewayRootWorkAdmissionContinuation();
+  const releaseStreamRootWork = () => {
+    res.off("finish", releaseStreamRootWork);
+    res.off("close", releaseStreamRootWork);
+    releaseResponseRootWork?.();
+  };
+  res.once("finish", releaseStreamRootWork);
+  res.once("close", releaseStreamRootWork);
+
   stopWatchingDisconnect = watchClientDisconnect(req, res, abortController, () => {
     closed = true;
     unsubscribe();
+    releaseStreamRootWork();
   });
 
-  // The streamed run outlives this handler, whose root-work admission is
-  // released on return. Without retaining it, subordinate session/lane
-  // admissions inherit a released lease and fail as GatewayDrainingError.
-  const releaseRootWork = retainGatewayRootWorkAdmissionContinuation();
   void (async () => {
     try {
       const result = await runResponsesAgentCommand({
@@ -1154,38 +1175,37 @@ export async function handleOpenResponsesHttpRequest(
         messageChannel,
         senderIsOwner,
         deps,
+        resolveGatewayContext: opts.resolveGatewayContext,
         abortSignal: abortController.signal,
       });
+
+      if (closed) {
+        return;
+      }
+
+      if (readAgentRunTerminalOutcome(result) === "failed") {
+        terminalLifecyclePhase = "error";
+        rememberResponseSession();
+        finalizeFailedResponse(
+          createFailedResponse(
+            { code: "api_error", message: "internal error" },
+            extractUsageFromResult(result),
+          ),
+        );
+        return;
+      }
 
       finalUsage = extractUsageFromResult(result);
 
       if (unrepresentableAssistantReplacement) {
-        rememberResponseSession();
-        finalizeFailedResponse(
-          createResponseResource({
-            id: responseId,
-            model,
-            status: "failed",
-            output: [],
-            error: {
-              code: "server_error",
-              message: "Assistant output cannot be represented as an append-only response stream.",
-            },
-            usage: finalUsage,
-          }),
-        );
+        finalizeUnrepresentableAssistantReplacement();
         return;
       }
 
       // Check for pending client tool calls BEFORE maybeFinalize() because the
       // lifecycle:end event may already have requested finalization.
-      const resultAny = result as { payloads?: Array<{ text?: string }>; meta?: unknown };
-      const resultPayloadText = Array.isArray(resultAny.payloads)
-        ? resultAny.payloads
-            .map((p) => (typeof p.text === "string" ? p.text : ""))
-            .filter(Boolean)
-            .join("\n\n")
-        : "";
+      const resultAny = result as { meta?: unknown };
+      const resultPayloadText = resolveResponsePayloadText(result);
       const meta = resultAny.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
@@ -1197,24 +1217,15 @@ export async function handleOpenResponsesHttpRequest(
         toolChoiceConstraint &&
         !isToolChoiceConstraintSatisfied({ constraint: toolChoiceConstraint, pendingToolCalls })
       ) {
-        const failed = createResponseResource({
-          id: responseId,
-          model,
-          status: "failed",
-          output: [],
-          error: {
+        const failed = createFailedResponse(
+          {
             code: "api_error",
             message: resolveUnsatisfiedToolChoiceMessage(toolChoiceConstraint),
           },
-          usage: finalUsage ?? createEmptyUsage(),
-        });
-        closed = true;
-        stopWatchingDisconnect();
-        unsubscribe();
+          finalUsage ?? createEmptyUsage(),
+        );
         rememberResponseSession();
-        writeSseEvent(res, { type: "response.failed", response: failed });
-        writeDone(res);
-        res.end();
+        finalizeFailedResponse(failed);
         return;
       }
 
@@ -1228,7 +1239,7 @@ export async function handleOpenResponsesHttpRequest(
         const finalText =
           accumulatedText || resultPayloadText || bufferedReplaceableAssistantContent;
 
-        if (toolChoiceConstraint && finalText && !sawAssistantDelta) {
+        if (finalText && !sawAssistantDelta) {
           sawAssistantDelta = true;
           writeSseEvent(res, {
             type: "response.output_text.delta",
@@ -1299,14 +1310,14 @@ export async function handleOpenResponsesHttpRequest(
             output_index: nextStreamOutputIndex,
             item: completedFunctionCallItem,
           });
-          functionCallItems.push(functionCallItem);
+          functionCallItems.push(completedFunctionCallItem);
           nextStreamOutputIndex += 1;
         }
 
-        const incompleteResponse = createResponseResource({
-          id: responseId,
+        const completedResponse = createResponseResource({
+          ...responseIdentity,
           model,
-          status: "incomplete",
+          status: "completed",
           output: [completedItem, ...functionCallItems],
           usage,
         });
@@ -1314,7 +1325,7 @@ export async function handleOpenResponsesHttpRequest(
         stopWatchingDisconnect();
         unsubscribe();
         rememberResponseSession();
-        writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
+        writeSseEvent(res, { type: "response.completed", response: completedResponse });
         writeDone(res);
         res.end();
         return;
@@ -1345,73 +1356,44 @@ export async function handleOpenResponsesHttpRequest(
       if (closed || abortController.signal.aborted) {
         return;
       }
+      terminalLifecyclePhase = "error";
       logWarn(`openresponses: streaming response failed: ${String(err)}`);
 
       finalUsage = finalUsage ?? createEmptyUsage();
       if (isClientToolNameConflictError(err)) {
-        const errorResponse = createResponseResource({
-          id: responseId,
-          model,
-          status: "failed",
-          output: [],
-          error: { code: "invalid_request_error", message: "invalid tool configuration" },
-          usage: finalUsage,
-        });
-
-        finalizeFailedResponse(errorResponse);
-        emitAgentEvent({
-          runId: responseId,
-          stream: "lifecycle",
-          data: { phase: "error" },
-        });
+        finalizeFailedResponse(
+          createFailedResponse(
+            { code: "invalid_request_error", message: "invalid tool configuration" },
+            finalUsage,
+          ),
+        );
         return;
       }
-      const errorResponse = createResponseResource({
-        id: responseId,
-        model,
-        status: "failed",
-        output: [],
-        error: { code: "api_error", message: "internal error" },
-        usage: finalUsage,
-      });
-
       const mapped = resolveOpenAiCompatError(err);
       if (mapped) {
-        const mappedResponse = createResponseResource({
-          id: responseId,
-          model,
-          status: "failed",
-          output: [],
-          error: {
+        const mappedResponse = createFailedResponse(
+          {
             code: mapped.error.type,
             message: mapped.error.message,
           },
-          usage: finalUsage,
-        });
+          finalUsage,
+        );
         rememberResponseSession();
         finalizeFailedResponse(mappedResponse);
-        emitAgentEvent({
-          runId: responseId,
-          stream: "lifecycle",
-          data: { phase: "error" },
-        });
         return;
       }
       rememberResponseSession();
-      finalizeFailedResponse(errorResponse);
-      emitAgentEvent({
-        runId: responseId,
-        stream: "lifecycle",
-        data: { phase: "error" },
-      });
+      finalizeFailedResponse(
+        createFailedResponse({ code: "api_error", message: "internal error" }, finalUsage),
+      );
     } finally {
-      releaseRootWork?.();
-      if (!closed) {
-        // Emit lifecycle end to trigger completion
+      releaseAgentRootWork?.();
+      // Existing provider terminals must not be replaced or emitted twice.
+      if (finalizeStatus === null && (terminalLifecyclePhase === "error" || !closed)) {
         emitAgentEvent({
           runId: responseId,
           stream: "lifecycle",
-          data: { phase: "end" },
+          data: { phase: terminalLifecyclePhase },
         });
       }
     }
@@ -1419,5 +1401,4 @@ export async function handleOpenResponsesHttpRequest(
 
   return true;
 }
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

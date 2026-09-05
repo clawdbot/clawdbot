@@ -1,6 +1,15 @@
 package ai.openclaw.app.chat
 
 import android.database.sqlite.SQLiteDatabase
+import androidx.room3.RoomDatabase
+import androidx.room3.executeSQL
+import androidx.room3.useReaderConnection
+import androidx.room3.useWriterConnection
+import androidx.room3.withWriteTransaction
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -18,22 +27,20 @@ class ClientDatabasesTest {
   fun deferredOutboxPersistsAtomicMutationDemotion() =
     runTest {
       val names = databaseNames()
-      val databases = open(names, registeredGatewayIds = setOf("gateway-a"))
-      try {
+      val scope = ChatOutboxScope("main", "main")
+      withDatabases(names) { databases ->
         val outbox = databases.commandOutbox()
-        val scope = ChatOutboxScope("main", "main")
         val lease = requireNotNull(outbox.beginSessionMutation("gateway-a", scope, nowMs = 1_000))
 
         val state = requireNotNull(outbox.demoteSessionMutationToReconciliationState("gateway-a", scope, lease))
 
         assertTrue(state.needsReconciliation)
         assertNull(state.switchPendingSinceMs)
-        val persisted = requireNotNull(outbox.branchState("gateway-a", scope))
+      }
+      withCleanDatabases(names) { reopened ->
+        val persisted = requireNotNull(reopened.commandOutbox().branchState("gateway-a", scope))
         assertTrue(persisted.needsReconciliation)
         assertNull(persisted.switchPendingSinceMs)
-      } finally {
-        databases.close()
-        delete(names)
       }
     }
 
@@ -44,20 +51,9 @@ class ClientDatabasesTest {
       val context = RuntimeEnvironment.getApplication()
       createV2Fixture(context.getDatabasePath(names.legacy).path)
 
-      val databases = open(names, registeredGatewayIds = setOf("gateway-test"))
-      try {
-        assertEquals(
-          2,
-          databases
-            .gatewayCacheDatabase()
-            .openHelper.writableDatabase.version,
-        )
-        assertEquals(
-          1,
-          databases
-            .clientStateDatabase()
-            .openHelper.writableDatabase.version,
-        )
+      withCleanDatabases(names, setOf("gateway-test")) { databases ->
+        assertEquals(3, databases.gatewayCacheDatabase().userVersion())
+        assertEquals(1, databases.clientStateDatabase().userVersion())
 
         val rows = databases.commandOutbox().load("gateway-test").associateBy { it.id }
         val pristine = rows.getValue("pristine")
@@ -95,9 +91,6 @@ class ClientDatabasesTest {
         assertFalse(context.getDatabasePath(names.legacy).exists())
         assertTrue(context.getDatabasePath(names.cache).exists())
         assertTrue(context.getDatabasePath(names.state).exists())
-      } finally {
-        databases.close()
-        delete(names)
       }
     }
 
@@ -110,27 +103,22 @@ class ClientDatabasesTest {
       val bytes = ByteArray((OUTBOX_ATTACHMENT_CHUNK_BYTES * 9) + 77) { (it % 127).toByte() }
       addV8AttachmentFixture(names.legacy, bytes)
 
-      val first = open(names, registeredGatewayIds = setOf("gateway-test"))
-      try {
+      withDatabases(names, setOf("gateway-test")) { first ->
         val loaded = first.commandOutbox().loadAttachments("media-command")
         assertEquals(1, loaded.size)
         assertTrue(bytes.contentEquals(loaded.single().bytes))
         assertTrue(first.commandOutbox().wasAdmitted("media-command"))
-      } finally {
-        first.close()
       }
 
-      // A fresh open reads only client-state.db. The completion marker prevents a stale legacy
-      // file from being imported twice if deletion was interrupted.
-      val reopened = open(names, registeredGatewayIds = setOf("gateway-test"))
-      try {
+      // Recreate stale legacy state to model an interrupted deletion after the import committed.
+      createV2Fixture(context.getDatabasePath(names.legacy).path)
+      addV8AttachmentFixture(names.legacy, byteArrayOf(99))
+      withCleanDatabases(names, setOf("gateway-test")) { reopened ->
         val loaded = reopened.commandOutbox().loadAttachments("media-command")
         assertEquals(1, loaded.size)
         assertTrue(bytes.contentEquals(loaded.single().bytes))
         assertTrue(reopened.commandOutbox().wasAdmitted("media-command"))
-      } finally {
-        reopened.close()
-        delete(names)
+        assertFalse(context.getDatabasePath(names.legacy).exists())
       }
     }
 
@@ -139,39 +127,23 @@ class ClientDatabasesTest {
     runTest {
       val names = databaseNames()
       val context = RuntimeEnvironment.getApplication()
-      val first = open(names, registeredGatewayIds = setOf("gateway-a"))
-      try {
+      withDatabases(names) { first ->
         first.transcriptCache().saveTranscript(
           gatewayId = "gateway-a",
           agentId = "main",
           sessionKey = "main",
           messages = listOf(cachedMessage("cache me")),
         )
-        assertTrue(
-          first.commandOutbox().enqueue(
-            gatewayId = "gateway-a",
-            sessionKey = "main",
-            text = "preserve me",
-            thinkingLevel = "off",
-            nowMs = 1,
-            ownerAgentId = "main",
-          ) is ChatOutboxEnqueueResult.Queued,
-        )
-      } finally {
-        first.close()
+        first.enqueue("gateway-a", "preserve me")
       }
 
       SQLiteDatabase.openDatabase(context.getDatabasePath(names.cache).path, null, SQLiteDatabase.OPEN_READWRITE).use {
         it.version = 99
       }
 
-      val reopened = open(names, registeredGatewayIds = setOf("gateway-a"))
-      try {
+      withCleanDatabases(names) { reopened ->
         assertTrue(reopened.transcriptCache().loadTranscript("gateway-a", "main", "main").isEmpty())
         assertEquals(listOf("preserve me"), reopened.commandOutbox().load("gateway-a").map { it.text })
-      } finally {
-        reopened.close()
-        delete(names)
       }
     }
 
@@ -180,11 +152,8 @@ class ClientDatabasesTest {
     runTest {
       val names = databaseNames()
       val context = RuntimeEnvironment.getApplication()
-      val first = open(names, registeredGatewayIds = setOf("gateway-a"))
-      try {
+      withDatabases(names) { first ->
         seedGateway(first, "gateway-a", "preserve")
-      } finally {
-        first.close()
       }
 
       val statePath = context.getDatabasePath(names.state).path
@@ -192,39 +161,121 @@ class ClientDatabasesTest {
         it.version = 99
       }
 
-      val failedOpen = open(names, registeredGatewayIds = setOf("gateway-a"))
+      val failedOpen = open(names)
       val failure = runCatching { failedOpen.clientStateDatabase() }
       failedOpen.close()
       assertTrue(failure.isFailure)
       assertTrue(context.getDatabasePath(names.state).exists())
       SQLiteDatabase.openDatabase(statePath, null, SQLiteDatabase.OPEN_READONLY).use {
         assertEquals(99, it.version)
+        it.rawQuery("SELECT text FROM outbox_commands", null).use { rows ->
+          assertTrue(rows.moveToFirst())
+          assertEquals("preserve", rows.getString(0))
+        }
       }
       delete(names)
+    }
+
+  @Test
+  fun cancelledCacheOpenPreservesTheExistingOfflineTranscript() =
+    runTest {
+      val names = databaseNames()
+      val context = RuntimeEnvironment.getApplication()
+      withDatabases(names) { first -> seedGateway(first, "gateway-a", "offline transcript") }
+
+      val attempt =
+        launch(start = CoroutineStart.UNDISPATCHED) {
+          currentCoroutineContext().cancel()
+          GatewayCacheDatabase.open(context, names.cache).close()
+        }
+      attempt.join()
+      assertTrue(attempt.isCancelled)
+      assertTrue(context.getDatabasePath(names.cache).exists())
+
+      withCleanDatabases(names) { reopened ->
+        assertEquals(
+          listOf("offline transcript"),
+          reopened.transcriptCache().loadTranscript("gateway-a", "main", "main").map { it.content.single().text },
+        )
+      }
+    }
+
+  @Test
+  fun failedGatewayRemovalRollsBackTheNestedOutboxPurgeAndItsPhase() =
+    runTest {
+      val names = databaseNames()
+      val bytes = byteArrayOf(1, 2, 3)
+      withDatabases(names) { first ->
+        seedGateway(first, "gateway-a", "keep cached")
+        first.commandOutbox().enqueue(
+          gatewayId = "gateway-a",
+          sessionKey = "main",
+          text = "keep attachment",
+          thinkingLevel = "off",
+          nowMs = 2,
+          ownerAgentId = "main",
+          idempotencyKey = "purge-admission",
+          attachments = listOf(OutboxAttachmentPayload("image", "image/png", "keep.png", null, bytes)),
+        )
+        first.stageGatewayRemoval("gateway-a")
+        val state = first.clientStateDatabase()
+        state.useWriterConnection {
+          it.executeSQL(
+            "CREATE TRIGGER fail_removal_commit BEFORE INSERT ON gateway_removals " +
+              "WHEN NEW.phase = 'cache-pending' BEGIN SELECT RAISE(ABORT, 'removal failed'); END",
+          )
+        }
+
+        val failure = runCatching { first.commitGatewayRemoval("gateway-a") }
+        assertTrue(
+          failure
+            .exceptionOrNull()
+            ?.message
+            .orEmpty()
+            .contains("removal failed"),
+        )
+        assertEquals(listOf(GatewayRemovalEntity("gateway-a", "staged")), state.controlDao().gatewayRemovals())
+        state.useWriterConnection { it.executeSQL("DROP TRIGGER fail_removal_commit") }
+      }
+
+      withCleanDatabases(names) { reopened ->
+        assertEquals(listOf("keep cached", "keep attachment"), reopened.commandOutbox().load("gateway-a").map { it.text })
+        assertTrue(
+          bytes.contentEquals(
+            reopened
+              .commandOutbox()
+              .loadAttachments("purge-admission")
+              .single()
+              .bytes,
+          ),
+        )
+        assertTrue(reopened.commandOutbox().wasAdmitted("purge-admission"))
+        assertEquals(listOf("keep cached"), reopened.transcriptCache().loadTranscript("gateway-a", "main", "main").map { it.content.single().text })
+        assertTrue(
+          reopened
+            .clientStateDatabase()
+            .controlDao()
+            .gatewayRemovals()
+            .isEmpty(),
+        )
+      }
     }
 
   @Test
   fun absentGatewayCommitsStagedRemovalAcrossBothDatabasesAndKeepsOtherGateway() =
     runTest {
       val names = databaseNames()
-      val first = open(names, registeredGatewayIds = setOf("gateway-a", "gateway-b"))
-      try {
+      withDatabases(names, setOf("gateway-a", "gateway-b")) { first ->
         seedGateway(first, "gateway-a", "remove")
         seedGateway(first, "gateway-b", "keep")
         first.stageGatewayRemoval("gateway-a")
-      } finally {
-        first.close()
       }
 
-      val reopened = open(names, registeredGatewayIds = setOf("gateway-b"))
-      try {
+      withCleanDatabases(names, setOf("gateway-b")) { reopened ->
         assertTrue(reopened.transcriptCache().loadTranscript("gateway-a", "main", "main").isEmpty())
         assertTrue(reopened.commandOutbox().load("gateway-a").isEmpty())
         assertEquals(listOf("keep"), reopened.transcriptCache().loadTranscript("gateway-b", "main", "main").map { it.content.single().text })
         assertEquals(listOf("keep"), reopened.commandOutbox().load("gateway-b").map { it.text })
-      } finally {
-        reopened.close()
-        delete(names)
       }
     }
 
@@ -232,33 +283,20 @@ class ClientDatabasesTest {
   fun cachePendingRemovalNeverDeletesNewDurableRowsOnResume() =
     runTest {
       val names = databaseNames()
-      val first = open(names, registeredGatewayIds = setOf("gateway-a", "gateway-b"))
-      try {
+      withDatabases(names, setOf("gateway-a", "gateway-b")) { first ->
         seedGateway(first, "gateway-a", "remove")
         seedGateway(first, "gateway-b", "keep")
         // Force only the disposable half to fail after the durable state transaction commits.
         first.gatewayCacheDatabase().close()
         first.commitGatewayRemoval("gateway-a")
         assertTrue(first.commandOutbox().load("gateway-a").isEmpty())
-        assertTrue(
-          first.commandOutbox().enqueue(
-            gatewayId = "gateway-a",
-            sessionKey = "main",
-            text = "new after purge",
-            thinkingLevel = "off",
-            nowMs = 2,
-            ownerAgentId = "main",
-          ) is ChatOutboxEnqueueResult.Queued,
-        )
+        first.enqueue("gateway-a", "new after purge", nowMs = 2)
         // A retry may stage again before restart; it must not downgrade cache-pending into a
         // cancelable marker that could strand the old derived rows.
         first.stageGatewayRemoval("gateway-a")
-      } finally {
-        first.close()
       }
 
-      val reopened = open(names, registeredGatewayIds = setOf("gateway-a", "gateway-b"))
-      try {
+      withCleanDatabases(names, setOf("gateway-a", "gateway-b")) { reopened ->
         assertTrue(reopened.transcriptCache().loadTranscript("gateway-a", "main", "main").isEmpty())
         assertEquals(listOf("new after purge"), reopened.commandOutbox().load("gateway-a").map { it.text })
         assertEquals(listOf("keep"), reopened.transcriptCache().loadTranscript("gateway-b", "main", "main").map { it.content.single().text })
@@ -270,9 +308,6 @@ class ClientDatabasesTest {
             .gatewayRemovals()
             .isEmpty(),
         )
-      } finally {
-        reopened.close()
-        delete(names)
       }
     }
 
@@ -280,21 +315,14 @@ class ClientDatabasesTest {
   fun stillRegisteredGatewayCancelsCancelableStagedRemoval() =
     runTest {
       val names = databaseNames()
-      val first = open(names, registeredGatewayIds = setOf("gateway-a"))
-      try {
+      withDatabases(names) { first ->
         seedGateway(first, "gateway-a", "keep")
         first.stageGatewayRemoval("gateway-a")
-      } finally {
-        first.close()
       }
 
-      val reopened = open(names, registeredGatewayIds = setOf("gateway-a"))
-      try {
+      withCleanDatabases(names) { reopened ->
         assertEquals(listOf("keep"), reopened.transcriptCache().loadTranscript("gateway-a", "main", "main").map { it.content.single().text })
         assertEquals(listOf("keep"), reopened.commandOutbox().load("gateway-a").map { it.text })
-      } finally {
-        reopened.close()
-        delete(names)
       }
     }
 
@@ -309,13 +337,21 @@ class ClientDatabasesTest {
       sessionKey = "main",
       messages = listOf(cachedMessage(text)),
     )
+    databases.enqueue(gatewayId, text)
+  }
+
+  private suspend fun AndroidClientDatabases.enqueue(
+    gatewayId: String,
+    text: String,
+    nowMs: Long = 1,
+  ) {
     assertTrue(
-      databases.commandOutbox().enqueue(
+      commandOutbox().enqueue(
         gatewayId = gatewayId,
         sessionKey = "main",
         text = text,
         thinkingLevel = "off",
-        nowMs = 1,
+        nowMs = nowMs,
         ownerAgentId = "main",
       ) is ChatOutboxEnqueueResult.Queued,
     )
@@ -329,48 +365,59 @@ class ClientDatabasesTest {
       timestampMs = 1,
     )
 
-  private fun addV8AttachmentFixture(
+  private suspend fun addV8AttachmentFixture(
     legacyName: String,
     bytes: ByteArray,
   ) {
     val context = RuntimeEnvironment.getApplication()
     val legacy = LegacyChatDatabase.open(context, legacyName)
     try {
-      val database = legacy.openHelper.writableDatabase
-      database.execSQL(
-        "INSERT INTO outbox_commands " +
-          "(id, gatewayId, sessionKey, text, thinkingLevel, createdAtMs, status, retryCount, lastError, gatedEpoch, ownerAgentId) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        arrayOf<Any?>("media-command", "gateway-test", "main", "media", "off", 100L, "queued", 0, null, null, "main"),
-      )
-      database.execSQL(
-        "INSERT INTO composer_send_admissions (id, gatewayId, ownerAgentId, sessionKey) VALUES (?, ?, ?, ?)",
-        arrayOf<Any?>("media-command", "gateway-test", "main", "main"),
-      )
-      database.execSQL(
-        "INSERT INTO outbox_attachments (id, commandId, position, type, mimeType, fileName, durationMs, byteLength) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        arrayOf<Any?>("media-attachment", "media-command", 0, "image", "image/jpeg", "a.jpg", null, bytes.size.toLong()),
-      )
-      var offset = 0
-      var index = 0
-      while (offset < bytes.size) {
-        val end = minOf(offset + OUTBOX_ATTACHMENT_CHUNK_BYTES, bytes.size)
-        database.execSQL(
-          "INSERT INTO outbox_attachment_chunks (attachmentId, chunkIndex, bytes) VALUES (?, ?, ?)",
-          arrayOf<Any?>("media-attachment", index, bytes.copyOfRange(offset, end)),
+      val dao = legacy.outboxDao()
+      legacy.withWriteTransaction {
+        dao.insert(
+          OutboxCommandEntity(
+            id = "media-command",
+            gatewayId = "gateway-test",
+            sessionKey = "main",
+            text = "media",
+            thinkingLevel = "off",
+            createdAtMs = 100L,
+            status = "queued",
+            retryCount = 0,
+            lastError = null,
+            gatedEpoch = null,
+            ownerAgentId = "main",
+          ),
         )
-        offset = end
-        index += 1
+        dao.insertAdmissionReceipt(ComposerSendAdmissionEntity("media-command", "gateway-test", "main", "main"))
+        dao.insertAttachment(
+          OutboxAttachmentEntity("media-attachment", "media-command", 0, "image", "image/jpeg", "a.jpg", null, bytes.size.toLong()),
+        )
+        var offset = 0
+        var index = 0
+        while (offset < bytes.size) {
+          val end = minOf(offset + OUTBOX_ATTACHMENT_CHUNK_BYTES, bytes.size)
+          dao.insertChunk(OutboxAttachmentChunkEntity("media-attachment", index, bytes.copyOfRange(offset, end)))
+          offset = end
+          index += 1
+        }
       }
     } finally {
       legacy.close()
     }
   }
 
+  private suspend fun RoomDatabase.userVersion(): Int =
+    useReaderConnection { connection ->
+      connection.usePrepared("PRAGMA user_version") { statement ->
+        check(statement.step())
+        statement.getLong(0).toInt()
+      }
+    }
+
   private fun open(
     names: DatabaseNames,
-    registeredGatewayIds: Set<String>,
+    registeredGatewayIds: Set<String> = setOf("gateway-a"),
   ): AndroidClientDatabases =
     AndroidClientDatabases.start(
       RuntimeEnvironment.getApplication(),
@@ -379,6 +426,30 @@ class ClientDatabasesTest {
       legacyName = names.legacy,
       registeredGatewayIds = registeredGatewayIds,
     )
+
+  private suspend fun <T> withDatabases(
+    names: DatabaseNames,
+    registeredGatewayIds: Set<String> = setOf("gateway-a"),
+    block: suspend (AndroidClientDatabases) -> T,
+  ): T {
+    val databases = open(names, registeredGatewayIds)
+    return try {
+      block(databases)
+    } finally {
+      databases.close()
+    }
+  }
+
+  private suspend fun <T> withCleanDatabases(
+    names: DatabaseNames,
+    registeredGatewayIds: Set<String> = setOf("gateway-a"),
+    block: suspend (AndroidClientDatabases) -> T,
+  ): T =
+    try {
+      withDatabases(names, registeredGatewayIds, block)
+    } finally {
+      delete(names)
+    }
 
   private fun databaseNames(): DatabaseNames {
     val id = UUID.randomUUID().toString()
@@ -433,76 +504,40 @@ class ClientDatabasesTest {
           "VALUES (?, ?, ?, ?, ?, ?, ?)",
         arrayOf<Any?>("gateway-test", "main", 0, "assistant", "[\"legacy transcript\"]", 10L, null),
       )
-      insertOutbox(database, id = "pristine", status = "queued", retryCount = 0, lastError = null, createdAtMs = now)
-      insertOutbox(
-        database,
-        id = "legacy-queued-error",
-        status = "queued",
-        retryCount = 0,
-        lastError = "socket closed after send",
-        createdAtMs = now + 1,
-      )
-      insertOutbox(
-        database,
-        id = "interrupted-send",
-        status = "sending",
-        retryCount = 1,
-        lastError = null,
-        createdAtMs = now + 2,
-      )
-      insertOutbox(
-        database,
-        id = "already-failed",
-        status = "failed",
-        retryCount = 3,
-        lastError = "original failure",
-        createdAtMs = now + 3,
-      )
-      insertOutbox(
-        database,
-        id = "legacy-command",
-        status = "queued",
-        retryCount = 0,
-        lastError = null,
-        createdAtMs = now + 4,
-        text = "/clear",
-      )
-      insertOutbox(
-        database,
-        id = "accepted",
-        status = "accepted",
-        retryCount = 0,
-        lastError = null,
-        createdAtMs = now + 5,
-      )
-      insertOutbox(
-        database,
-        id = "explicit-owner",
-        status = "queued",
-        retryCount = 0,
-        lastError = null,
-        createdAtMs = now + 6,
-        sessionKey = "agent:ops:side",
-      )
+      listOf(
+        LegacyOutboxFixture("pristine", "queued"),
+        LegacyOutboxFixture("legacy-queued-error", "queued", lastError = "socket closed after send"),
+        LegacyOutboxFixture("interrupted-send", "sending", retryCount = 1),
+        LegacyOutboxFixture("already-failed", "failed", retryCount = 3, lastError = "original failure"),
+        LegacyOutboxFixture("legacy-command", "queued", text = "/clear"),
+        LegacyOutboxFixture("accepted", "accepted"),
+        LegacyOutboxFixture("explicit-owner", "queued", sessionKey = "agent:ops:side"),
+      ).forEachIndexed { index, fixture -> insertOutbox(database, fixture, now + index) }
       database.version = 2
     }
   }
 
   private fun insertOutbox(
     database: SQLiteDatabase,
-    id: String,
-    status: String,
-    retryCount: Int,
-    lastError: String?,
+    fixture: LegacyOutboxFixture,
     createdAtMs: Long,
-    text: String = id,
-    sessionKey: String = "main",
   ) {
     database.execSQL(
       "INSERT INTO outbox_commands " +
         "(id, gatewayId, sessionKey, text, thinkingLevel, createdAtMs, status, retryCount, lastError) " +
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      arrayOf<Any?>(id, "gateway-test", sessionKey, text, "off", createdAtMs, status, retryCount, lastError),
+      fixture.run {
+        arrayOf<Any?>(id, "gateway-test", sessionKey, text, "off", createdAtMs, status, retryCount, lastError)
+      },
     )
   }
+
+  private data class LegacyOutboxFixture(
+    val id: String,
+    val status: String,
+    val retryCount: Int = 0,
+    val lastError: String? = null,
+    val text: String = id,
+    val sessionKey: String = "main",
+  )
 }

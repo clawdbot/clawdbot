@@ -2,7 +2,27 @@
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  AuthStorage as PublicAuthStorage,
+  ModelRegistry as PublicModelRegistry,
+} from "openclaw/plugin-sdk/agent-sessions";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const providerOAuthMocks = vi.hoisted(() => ({
+  login: vi.fn(),
+  resolveCredential: vi.fn(),
+}));
+
+vi.mock("../../plugins/provider-runtime.runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.runtime.js")>(
+    "../../plugins/provider-runtime.runtime.js",
+  );
+  return {
+    ...actual,
+    loginProviderOAuthWithPlugin: providerOAuthMocks.login,
+    resolveProviderOAuthCredentialWithPlugin: providerOAuthMocks.resolveCredential,
+  };
+});
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { clearAuthProfileMigrationDiagnostics } from "../auth-profiles/legacy-source-diagnostic.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
@@ -16,10 +36,22 @@ import {
   writePersistedAuthProfileStoreRaw,
 } from "../auth-profiles/sqlite.js";
 import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
-import { AuthStorage, FileAuthStorageBackend, type AuthStorageBackend } from "./auth-storage.js";
+import {
+  AuthStorage,
+  FileAuthStorageBackend,
+  OAuthProviderConfiguredUnavailableError,
+  type AuthStorageBackend,
+} from "./auth-storage.js";
 
 describe("SQLite auth storage", () => {
   const tempDirs: string[] = [];
+
+  beforeEach(() => {
+    providerOAuthMocks.login.mockReset();
+    providerOAuthMocks.login.mockResolvedValue({ status: "unowned" });
+    providerOAuthMocks.resolveCredential.mockReset();
+    providerOAuthMocks.resolveCredential.mockResolvedValue({ status: "unowned" });
+  });
 
   afterEach(() => {
     clearAuthProfileMigrationDiagnostics();
@@ -36,6 +68,55 @@ describe("SQLite auth storage", () => {
     tempDirs.push(agentDir);
     return agentDir;
   }
+
+  it("dispatches callback-based login to the owning provider plugin", async () => {
+    const agentDir = makeAgentDir();
+    const storage = AuthStorage.forAgent(agentDir);
+    const callbacks = {
+      onAuth: vi.fn(),
+      onPrompt: vi.fn(async () => ""),
+    };
+    providerOAuthMocks.login.mockResolvedValueOnce({
+      status: "available",
+      credentials: {
+        access: "fake-access",
+        refresh: "fake-refresh",
+        expires: Date.now() + 60_000,
+      },
+    });
+
+    await storage.login("plugin-oauth", callbacks);
+
+    expect(providerOAuthMocks.login).toHaveBeenCalledWith({
+      provider: "plugin-oauth",
+      context: callbacks,
+    });
+    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["plugin-oauth:default"]).toMatchObject(
+      {
+        type: "oauth",
+        provider: "plugin-oauth",
+        access: "fake-access",
+        refresh: "fake-refresh",
+      },
+    );
+  });
+
+  it("returns a typed actionable error when an owned OAuth plugin is unavailable", async () => {
+    const storage = AuthStorage.forAgent(makeAgentDir());
+    providerOAuthMocks.login.mockResolvedValueOnce({ status: "configured-unavailable" });
+
+    const login = storage.login("plugin-oauth", {
+      onAuth: vi.fn(),
+      onPrompt: vi.fn(async () => ""),
+    });
+    await expect(login).rejects.toMatchObject({
+      name: "OAuthProviderConfiguredUnavailableError",
+      code: "OAUTH_PROVIDER_CONFIGURED_UNAVAILABLE",
+      state: "configured-unavailable",
+      providerId: "plugin-oauth",
+    });
+    await expect(login).rejects.toBeInstanceOf(OAuthProviderConfiguredUnavailableError);
+  });
 
   it("persists provider defaults in the canonical agent database", async () => {
     const agentDir = makeAgentDir();
@@ -169,11 +250,70 @@ describe("SQLite auth storage", () => {
       },
     });
 
-    await expect(storage.getApiKey("test-oauth")).rejects.toThrow(
-      "requires legacy credential migration",
+    // The store already owns this profile, so a retired file appearing mid-call is
+    // leftover bytes: discarding a completed refresh over it would strand the agent
+    // on an expired token. Doctor never overwrites a usable stored credential.
+    await expect(storage.getApiKey("test-oauth")).resolves.toBe("not-a-real");
+    expect(
+      loadPersistedAuthProfileStore(agentDir)?.profiles["test-oauth:default"],
+    ).not.toMatchObject({ expires: 1 });
+  });
+
+  it("keeps stored OAuth identity fields through the published agent sessions SDK", async () => {
+    const agentDir = makeAgentDir();
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "test-oauth:default": {
+            type: "oauth",
+            provider: "test-oauth",
+            access: "fake-expired-access",
+            refresh: "fake-refresh",
+            expires: 1,
+            accountId: "fake-account-id",
+            email: "fake-user@example.com",
+            subscriptionType: "max",
+            rateLimitTier: "default_max_20x",
+          },
+        },
+      },
+      agentDir,
     );
+    const storage = PublicAuthStorage.forAgent(agentDir);
+    PublicModelRegistry.inMemory(storage).registerProvider("test-oauth", {
+      oauth: {
+        name: "Test OAuth",
+        async login() {
+          throw new Error("not used");
+        },
+        async refreshToken() {
+          return {
+            access: "fake-fresh-access",
+            refresh: "fake-rotated-refresh",
+            expires: Date.now() + 60_000,
+          };
+        },
+        getApiKey(credentials: { access: string }) {
+          return credentials.access;
+        },
+      },
+    });
+
+    await expect(storage.getApiKey("test-oauth")).resolves.toBe("fake-fresh-access");
     expect(loadPersistedAuthProfileStore(agentDir)?.profiles["test-oauth:default"]).toMatchObject({
-      expires: 1,
+      type: "oauth",
+      provider: "test-oauth",
+      access: "fake-fresh-access",
+      refresh: "fake-rotated-refresh",
+      accountId: "fake-account-id",
+      email: "fake-user@example.com",
+      subscriptionType: "max",
+      rateLimitTier: "default_max_20x",
+    });
+    expect(storage.get("test-oauth")).toMatchObject({
+      accountId: "fake-account-id",
+      email: "fake-user@example.com",
     });
   });
 
@@ -214,9 +354,9 @@ describe("SQLite auth storage", () => {
     });
     expect(fs.existsSync(legacyPath)).toBe(false);
     fs.writeFileSync(legacyPath, '{"openai":{"key":"fake-late"}}\n');
-    await expect(storage.getApiKey("openai")).rejects.toThrow(
-      "requires legacy credential migration",
-    );
+    // Never read the retired file, but keep serving the migrated store beside it.
+    await expect(storage.getApiKey("openai")).resolves.toBe("fake-openai-key");
+    expect(fs.existsSync(legacyPath)).toBe(true);
   });
 
   it("blocks ambient fallback when the compatibility backend cannot materialize SQLite refs", async () => {

@@ -10,13 +10,14 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import {
   type GoogleChatConfigAccessorAccount,
   inspectGoogleChatAccount,
+  isGoogleChatAccountConfigured,
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,
   resolveGoogleChatConfigAccessorAccount,
   resolveGoogleChatAccount,
   type ResolvedGoogleChatAccount,
 } from "./accounts.js";
-import { googlechatSetupAdapter, googlechatSetupContract } from "./setup-core.js";
+import { googlechatSetupContract } from "./setup-core.js";
 import { googlechatSetupWizard } from "./setup-surface.js";
 
 export const GOOGLECHAT_CHANNEL_ID = "googlechat" as const;
@@ -72,17 +73,10 @@ const googleChatConfigAdapter = createScopedChannelConfigAdapter<
   resolveDefaultTo: (account) => account.config.defaultTo,
 });
 
-function isGoogleChatAccountConfigured(account: ResolvedGoogleChatAccount): boolean {
-  return account.tokenStatus
-    ? account.tokenStatus !== "missing"
-    : account.credentialSource !== "none";
-}
-
 type GoogleChatPluginBase = Pick<
   ChannelPlugin<ResolvedGoogleChatAccount>,
   | "id"
   | "meta"
-  | "setup"
   | "setupContract"
   | "setupWizard"
   | "capabilities"
@@ -100,7 +94,6 @@ export function createGoogleChatPluginBase(
   return {
     id: GOOGLECHAT_CHANNEL_ID,
     meta: { ...googlechatMeta },
-    setup: googlechatSetupAdapter,
     setupContract: googlechatSetupContract,
     setupWizard: googlechatSetupWizard,
     capabilities: {

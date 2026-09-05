@@ -10,12 +10,16 @@ title: "Menu bar"
 - The current agent work state renders in the menu bar icon and in the first status row of the menu.
 - Health status is hidden while work is active; it returns once all sessions are idle.
 - A root "Context" item opens a submenu with recent sessions instead of expanding them in the root menu.
-- A "Nodes" block in the root menu lists paired **devices** only (from `node.list`), not client/presence entries.
+- A "Devices" block in the root menu lists paired **devices** only (from `node.list`), not client/presence entries.
 - A root "Usage" section appears below Context when provider usage snapshots are available, followed by cost details when available.
 - When two or more Gateways are available, the first status row includes the primary Gateway name and a root "Gateways" section lists every Gateway with its health and primary marker. Select a row to open or focus that Gateway's dashboard; hold Option to reveal "Set as Primary…" for eligible saved Gateways.
 - **Quick Chat** opens the floating main-session composer; its current global shortcut appears beside the item.
 
 Single-Gateway setups keep the existing menu unchanged. With two or more Gateways, the app's main **Gateways** menu also assigns Command-1 through Command-9 in catalog order. Its checkmark follows the frontmost dashboard window, and selecting an item switches that window in place or opens the selected Gateway when no dashboard window exists.
+
+The Devices and Automations summaries refresh while the menu is open. Closing it stops their menu-owned polling. An active native Cron Jobs settings pane keeps its own refresh running. Cached summaries remain available when reopening the same Primary Gateway. Changing Primary refreshes Devices, Usage, and cost details from the newly selected Gateway.
+
+Manual Cron refreshes and successful job changes supersede older reads, so an in-flight response cannot restore a deleted job to the list.
 
 ## State model
 

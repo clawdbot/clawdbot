@@ -20,7 +20,7 @@ export function setActiveRuntimeWebToolsMetadata(metadata: RuntimeWebToolsMetada
 /**
  * Returns active web-tool metadata without exposing mutable runtime state.
  */
-export function getActiveRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata | null {
+export function getActiveRuntimeWebToolsMetadataFromState(): RuntimeWebToolsMetadata | null {
   if (!activeRuntimeWebToolsMetadata) {
     return null;
   }

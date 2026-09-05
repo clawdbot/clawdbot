@@ -1,7 +1,13 @@
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { copyPluginToolMeta } from "../plugins/tool-metadata.js";
 import { isCompletionReportInputProvenance } from "../sessions/input-provenance.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { createRuntimeToolMatcher } from "./tool-policy-match.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { ToolAuthorizationError } from "./tools/common.js";
+
+const log = createSubsystemLogger("agents/delegation-capability");
 
 export type DelegationCapability = "full" | "report_only";
 
@@ -14,7 +20,7 @@ const NEW_DELEGATION_TOOL_NAMES = new Set([
 ]);
 
 const REPORT_ONLY_TOOL_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ["cron", new Set(["get", "list", "remove", "runs", "status"])],
+  [AUTOMATIONS_TOOL_NAME, new Set(["get", "list", "remove", "runs", "status"])],
   ["image_generate", new Set(["list", "status"])],
   ["music_generate", new Set(["list", "status"])],
   ["video_generate", new Set(["list", "status"])],
@@ -26,10 +32,25 @@ const REPORT_ONLY_ERROR =
 export function resolveDelegationCapability(params: {
   fallbackActive: boolean;
   inputProvenance: unknown;
+  disableTools?: boolean;
+  toolsAllow?: string[];
 }): DelegationCapability {
-  return params.fallbackActive && isCompletionReportInputProvenance(params.inputProvenance)
-    ? "report_only"
-    : "full";
+  if (!isCompletionReportInputProvenance(params.inputProvenance)) {
+    return "full";
+  }
+  if (params.fallbackActive || params.disableTools === true) {
+    return "report_only";
+  }
+  if (params.toolsAllow === undefined) {
+    return "full";
+  }
+
+  // Native harness delegation is outside the dynamic-tool allowlist, so carry
+  // its actual launch authority through the shared attempt capability.
+  const delegationAllowed = [...NEW_DELEGATION_TOOL_NAMES].some(
+    createRuntimeToolMatcher(params.toolsAllow),
+  );
+  return delegationAllowed ? "full" : "report_only";
 }
 
 function readToolAction(params: unknown): string {
@@ -41,7 +62,7 @@ function readToolAction(params: unknown): string {
 }
 
 function wrapReportOnlyTool(tool: AnyAgentTool, allowedActions: ReadonlySet<string>): AnyAgentTool {
-  return new Proxy(tool, {
+  const wrapped = new Proxy(tool, {
     get(target, property, receiver) {
       if (property !== "execute") {
         return Reflect.get(target, property, receiver);
@@ -55,15 +76,15 @@ function wrapReportOnlyTool(tool: AnyAgentTool, allowedActions: ReadonlySet<stri
         if (!allowedActions.has(readToolAction(params))) {
           throw new ToolAuthorizationError(REPORT_ONLY_ERROR);
         }
-        return await Reflect.apply(target.execute, undefined, [
-          toolCallId,
-          params,
-          signal,
-          onUpdate,
-        ]);
+        return await target.execute(toolCallId, params, signal, onUpdate);
       };
     },
   });
+  // Plugin ownership lives in a WeakMap keyed by tool identity, so the proxy
+  // needs its own entry; otherwise plugin-owned report-only tools drop out of
+  // the effective cron-creator allowlist for the rest of the run.
+  copyPluginToolMeta(tool, wrapped);
+  return wrapped;
 }
 
 /**
@@ -78,12 +99,29 @@ export function applyDelegationCapability(
   if (capability !== "report_only") {
     return tools;
   }
-  return tools.flatMap((tool) => {
-    const name = normalizeToolName(tool.name);
+  const removed: string[] = [];
+  const narrowed: string[] = [];
+  const gated = tools.flatMap((tool) => {
+    const name = normalizeToolPolicyName(tool.name);
     if (NEW_DELEGATION_TOOL_NAMES.has(name)) {
+      removed.push(name);
       return [];
     }
     const allowedActions = REPORT_ONLY_TOOL_ACTIONS.get(name);
-    return allowedActions ? [wrapReportOnlyTool(tool, allowedActions)] : [tool];
+    if (!allowedActions) {
+      return [tool];
+    }
+    narrowed.push(name);
+    return [wrapReportOnlyTool(tool, allowedActions)];
   });
+  if (removed.length > 0 || narrowed.length > 0) {
+    // Removal is otherwise invisible: the model simply never sees the tool and
+    // no error is raised. Record it so a fallback completion turn stays
+    // auditable after the fact.
+    log.debug("delegation capability restricted run tools", {
+      removed,
+      narrowed,
+    });
+  }
+  return gated;
 }

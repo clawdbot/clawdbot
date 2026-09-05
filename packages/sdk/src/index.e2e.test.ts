@@ -1,11 +1,12 @@
 // OpenClaw SDK tests cover index behavior.
 import type { AddressInfo } from "node:net";
 import net from "node:net";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer, type WebSocket } from "ws";
 import { installGatewayTestHooks, startServer } from "../../../src/gateway/test-helpers.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../../src/infra/agent-events.js";
-import { rawDataToString } from "../../../src/infra/ws.js";
+import { emitAgentEvent } from "../../../src/infra/agent-events.js";
+import { registerAgentRunContext } from "../../../src/infra/agent-run-registry.js";
 import { withTimeout } from "../../../src/utils/with-timeout.js";
 import { GatewayClientTransport, OpenClaw } from "./index.js";
 
@@ -58,7 +59,7 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
       type: "event",
       event: "connect.challenge",
       seq: seq++,
-      payload: { nonce: "sdk-e2e-nonce" },
+      payload: { nonce: "sdk-e2e-nonce", ts: Date.now() },
     });
 
     socket.on("message", (raw) => {

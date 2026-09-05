@@ -183,6 +183,7 @@ function createTraceTelegramDeps(captured: CapturedDispatch): TelegramBotDeps {
       providers: [],
       resolvedDefault: { provider: "openai", model: "gpt-test" },
       modelNames: new Map<string, string>(),
+      modelCatalog: [],
     })) as unknown as TelegramBotDeps["buildModelsProviderData"],
     listSkillCommandsForAgents:
       (() => []) as unknown as TelegramBotDeps["listSkillCommandsForAgents"],
@@ -191,7 +192,7 @@ function createTraceTelegramDeps(captured: CapturedDispatch): TelegramBotDeps {
       status: "unsupported",
       reason: "missing_outbound_handler",
     })) as unknown as TelegramBotDeps["deliverInboundReplyWithMessageSendContext"],
-    emitInternalMessageSentHook: (() => {}) as TelegramBotDeps["emitInternalMessageSentHook"],
+    emitTelegramMessageSentHooks: (() => {}) as TelegramBotDeps["emitTelegramMessageSentHooks"],
     recordOutboundMessageForPromptContext: (async () =>
       true) as TelegramBotDeps["recordOutboundMessageForPromptContext"],
   };

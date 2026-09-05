@@ -18,6 +18,10 @@ const pwAiMocks = vi.hoisted(() => {
   };
 });
 
+const chromeMocks = vi.hoisted(() => ({
+  stopOwnedOpenClawChrome: vi.fn(async () => false),
+}));
+
 vi.mock("./pw-ai.js", () => ({ pwAi: pwAiMocks }));
 vi.mock("./chrome.js", () => ({
   isChromeCdpOwnedByPid: vi.fn(async () => true),
@@ -27,6 +31,7 @@ vi.mock("./chrome.js", () => ({
     throw new Error("unexpected launch");
   }),
   resolveOpenClawUserDataDir: vi.fn(() => "/tmp/openclaw-test"),
+  stopOwnedOpenClawChrome: chromeMocks.stopOwnedOpenClawChrome,
   stopOpenClawChrome: vi.fn(async () => {}),
 }));
 vi.mock("./chrome-mcp.js", () => ({
@@ -38,6 +43,7 @@ vi.mock("./chrome-mcp.js", () => ({
 
 afterEach(() => {
   vi.clearAllMocks();
+  chromeMocks.stopOwnedOpenClawChrome.mockResolvedValue(false);
 });
 
 function createStopHarness(profile: ReturnType<typeof makeBrowserProfile>) {
@@ -58,6 +64,7 @@ describe("createProfileAvailability.stopRunningBrowser", () => {
 
     await expect(profileCtx.stopRunningBrowser()).resolves.toEqual({ stopped: true });
     expect(pwAiMocks.closePlaywrightBrowserConnection).not.toHaveBeenCalled();
+    expect(chromeMocks.stopOwnedOpenClawChrome).not.toHaveBeenCalled();
   });
 
   it("stops an unused remote CDP profile without loading Playwright", async () => {
@@ -71,6 +78,7 @@ describe("createProfileAvailability.stopRunningBrowser", () => {
 
     await expect(profileCtx.stopRunningBrowser()).resolves.toEqual({ stopped: true });
     expect(pwAiMocks.closePlaywrightBrowserConnection).not.toHaveBeenCalled();
+    expect(chromeMocks.stopOwnedOpenClawChrome).not.toHaveBeenCalled();
   });
 
   it("keeps never-started local managed profiles as not stopped", async () => {
@@ -80,4 +88,26 @@ describe("createProfileAvailability.stopRunningBrowser", () => {
     await expect(profileCtx.stopRunningBrowser()).resolves.toEqual({ stopped: false });
     expect(pwAiMocks.closePlaywrightBrowserConnection).not.toHaveBeenCalled();
   });
+
+  it("stops a local managed browser launched by another runtime", async () => {
+    chromeMocks.stopOwnedOpenClawChrome.mockResolvedValue(true);
+    const profile = makeBrowserProfile();
+    const { profileCtx } = createStopHarness(profile);
+
+    await expect(profileCtx.stopRunningBrowser()).resolves.toEqual({ stopped: true });
+    expect(chromeMocks.stopOwnedOpenClawChrome).toHaveBeenCalledOnce();
+    expect(pwAiMocks.closePlaywrightBrowserConnection).not.toHaveBeenCalled();
+  });
+
+  it.each(["existing-session", "extension"] as const)(
+    "does not attempt to terminate a personal %s browser",
+    async (driver) => {
+      const profile = makeBrowserProfile({ driver });
+      const { profileCtx } = createStopHarness(profile);
+
+      await profileCtx.stopRunningBrowser();
+
+      expect(chromeMocks.stopOwnedOpenClawChrome).not.toHaveBeenCalled();
+    },
+  );
 });

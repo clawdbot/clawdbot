@@ -1,11 +1,21 @@
 {
   "extends": "./tsconfig.test.json",
   "compilerOptions": {
+    // Follow explicit imports of retained plain-Node script exceptions only.
+    "allowJs": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "tsBuildInfoFile": ".artifacts/tsgo-cache/test-root.tsbuildinfo"
   },
-  "include": ["../../test/**/*", "../../src/**/*.d.ts", "../../packages/**/*.d.ts"],
+  "include": [
+    "../../test/**/*.ts",
+    "../../test/**/*.tsx",
+    "../../test/**/*.d.mts",
+    "../../test/**/*.d.cts",
+    "../../src/**/*.d.ts",
+    "../../packages/**/*.d.ts",
+    "../../ui/**/*.d.ts"
+  ],
   "exclude": [
     "../../node_modules",
     "../../dist",

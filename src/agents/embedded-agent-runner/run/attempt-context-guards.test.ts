@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -8,6 +9,8 @@ const hoisted = vi.hoisted(() => ({
   installToolResultContextGuard: vi.fn(),
   installHistoryImagePruneContextTransform: vi.fn(),
   invalidateComputerFrameIfMissing: vi.fn(),
+  isCacheTtlEligibleProvider: vi.fn(() => false),
+  readLastCacheTtlTimestamp: vi.fn(() => null as number | null),
 }));
 
 vi.mock("../tool-result-context-guard.js", () => ({
@@ -20,8 +23,13 @@ vi.mock("./history-image-prune.js", () => ({
 vi.mock("../../tools/computer-tool.js", () => ({
   invalidateComputerFrameIfMissing: hoisted.invalidateComputerFrameIfMissing,
 }));
+vi.mock("../cache-ttl.js", () => ({
+  readCacheTtlEntries: () => [],
+  isCacheTtlEligibleProvider: hoisted.isCacheTtlEligibleProvider,
+  readLastCacheTtlTimestamp: hoisted.readLastCacheTtlTimestamp,
+}));
 
-import { installEmbeddedAttemptContextGuards } from "./attempt-context-guards.js";
+import { installEmbeddedAttemptContextGuards } from "./attempt-setup.js";
 
 function createInput(overrides: Record<string, unknown> = {}) {
   const activeSession = {
@@ -45,11 +53,15 @@ function createInput(overrides: Record<string, unknown> = {}) {
       sessionFile: "/tmp/session.jsonl",
     },
     computerContextEpoch: { value: 3 },
+    dropThinkingBlocksForEstimate: false,
     effectiveCwd: "/tmp/workspace",
     effectiveWorkspace: "/tmp/workspace",
     getPrePromptMessageCount: () => 4,
     getPromptCache: () => undefined,
     getPromptCacheRetention: () => "short" as const,
+    getCompactionReplayEnabled: () => false,
+    getServerToolClearingEnabled: () => false,
+    toolResultPromptProjectionState: createToolResultPromptProjectionState(),
     getSystemPrompt: () => "system prompt",
     isOpenAIResponsesApi: false,
     repairToolUseResultPairing: false,
@@ -66,6 +78,8 @@ describe("installEmbeddedAttemptContextGuards", () => {
     hoisted.installContextEngineLoopHook.mockReturnValue(vi.fn());
     hoisted.installToolResultContextGuard.mockReturnValue(vi.fn());
     hoisted.installHistoryImagePruneContextTransform.mockReturnValue(vi.fn());
+    hoisted.isCacheTtlEligibleProvider.mockReturnValue(false);
+    hoisted.readLastCacheTtlTimestamp.mockReturnValue(null);
   });
 
   it("tracks mid-turn requests and restores attempt-local transforms", async () => {
@@ -139,4 +153,152 @@ describe("installEmbeddedAttemptContextGuards", () => {
     expect(removeToolResultGuard).toHaveBeenCalledOnce();
     expect(removeLoopHook).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    { name: "attempt configuration is absent", config: undefined },
+    {
+      name: "context pruning is not configured",
+      config: { agents: { defaults: {} } },
+    },
+    {
+      name: "context pruning has no mode",
+      config: { agents: { defaults: { contextPruning: {} } } },
+    },
+    {
+      name: "context pruning is explicitly off",
+      config: { agents: { defaults: { contextPruning: { mode: "off" } } } },
+    },
+  ])("does not inspect providers when $name", ({ config }) => {
+    hoisted.isCacheTtlEligibleProvider.mockReturnValue(true);
+    const input = createInput();
+    input.attempt = { ...input.attempt, config: config as never };
+
+    const guards = installEmbeddedAttemptContextGuards(input as never);
+
+    expect(hoisted.isCacheTtlEligibleProvider).not.toHaveBeenCalled();
+    expect(hoisted.readLastCacheTtlTimestamp).not.toHaveBeenCalled();
+    guards.remove();
+  });
+
+  it("does not install cache-TTL pruning for an ineligible provider", async () => {
+    const input = createInput();
+    input.attempt = {
+      ...input.attempt,
+      config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } } as never,
+    };
+    const originalTransform = vi.fn(async (messages: AgentMessage[]) => messages);
+    input.activeSession.agent.transformContext = originalTransform;
+
+    const guards = installEmbeddedAttemptContextGuards(input as never);
+
+    expect(hoisted.isCacheTtlEligibleProvider).toHaveBeenCalledExactlyOnceWith(
+      "provider-1",
+      "model-1",
+      "anthropic-messages",
+    );
+    expect(hoisted.readLastCacheTtlTimestamp).not.toHaveBeenCalled();
+    const messages: AgentMessage[] = [
+      { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 },
+    ];
+    expect(
+      await input.activeSession.agent.transformContext?.(messages, new AbortController().signal),
+    ).toBe(messages);
+    expect(originalTransform).toHaveBeenCalledOnce();
+
+    guards.remove();
+    expect(input.activeSession.agent.transformContext).toBe(originalTransform);
+  });
+
+  it.each([false, true])(
+    "keeps cache-TTL tool-loop bytes stable with server clearing=%s",
+    async (serverClearing) => {
+      const now = Date.now();
+      hoisted.isCacheTtlEligibleProvider.mockReturnValue(true);
+      hoisted.readLastCacheTtlTimestamp.mockReturnValue(now - 300_000);
+      const input = createInput({
+        activeContextEngine: { info: { id: "test-engine", ownsCompaction: true } },
+        getServerToolClearingEnabled: () => serverClearing,
+      });
+      const earlierProjection = "[trimmed by an earlier client-side prune]";
+      if (serverClearing) {
+        // A projection made before this route took over (proxy/OAuth turn, or restored
+        // from the transcript marker) must keep replaying under server clearing.
+        const key = "tool:old-tool:1";
+        input.toolResultPromptProjectionState.replacements.set(key, {
+          message: {
+            role: "toolResult",
+            toolCallId: "old-tool",
+            toolName: "read",
+            content: [{ type: "text", text: earlierProjection }],
+            timestamp: 1,
+          } as AgentMessage,
+          cacheTtl: "soft",
+        });
+        input.toolResultPromptProjectionState.sourceTextByKey.set(key, ["x".repeat(5_000)]);
+        input.toolResultPromptProjectionState.frozen.add(key);
+      }
+      input.attempt = {
+        ...input.attempt,
+        config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } } as never,
+        model: { api: "anthropic-messages", contextWindow: 2_048 },
+        modelId: "claude-sonnet-4-6",
+        provider: "anthropic",
+      };
+      const originalTransform = vi.fn(async (messages: AgentMessage[]) => messages);
+      input.activeSession.agent.transformContext = originalTransform;
+      let engineMessages: AgentMessage[] | undefined;
+      hoisted.installContextEngineLoopHook.mockImplementation(({ agent }) => {
+        const previous = agent.transformContext;
+        agent.transformContext = async (messages: AgentMessage[], signal: AbortSignal) => {
+          const projected = await previous(messages, signal);
+          engineMessages = projected;
+          return projected;
+        };
+        return vi.fn(() => {
+          agent.transformContext = previous;
+        });
+      });
+      const messages = [
+        { role: "user", content: "first", timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "a1" }], timestamp: 1 },
+        {
+          role: "toolResult",
+          toolCallId: "old-tool",
+          toolName: "read",
+          content: [{ type: "text", text: "x".repeat(5_000) }],
+          timestamp: 1,
+        },
+        { role: "assistant", content: [{ type: "text", text: "a2" }], timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "a3" }], timestamp: 1 },
+        { role: "assistant", content: [{ type: "text", text: "a4" }], timestamp: 1 },
+      ] as AgentMessage[];
+
+      const guards = installEmbeddedAttemptContextGuards(input as never);
+      expect(hoisted.isCacheTtlEligibleProvider).toHaveBeenCalledExactlyOnceWith(
+        "anthropic",
+        "claude-sonnet-4-6",
+        "anthropic-messages",
+      );
+      expect(hoisted.readLastCacheTtlTimestamp).toHaveBeenCalledExactlyOnceWith(
+        input.sessionManager,
+        {
+          provider: "anthropic",
+          modelId: "claude-sonnet-4-6",
+        },
+      );
+      await input.activeSession.agent.transformContext?.(messages, new AbortController().signal);
+      const firstTool = engineMessages?.find((message) => message.role === "toolResult");
+      expect(firstTool?.content[0]).toMatchObject({
+        type: "text",
+        text: serverClearing ? earlierProjection : expect.stringContaining("[Tool result trimmed:"),
+      });
+
+      await input.activeSession.agent.transformContext?.(messages, new AbortController().signal);
+      const secondTool = engineMessages?.find((message) => message.role === "toolResult");
+      expect(secondTool?.content).toEqual(firstTool?.content);
+
+      guards.remove();
+      expect(input.activeSession.agent.transformContext).toBe(originalTransform);
+    },
+  );
 });

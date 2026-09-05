@@ -49,6 +49,7 @@ function createProbe(
   params: {
     ok: boolean;
     connectLatencyMs: number | null;
+    gatewayReached?: true;
     error?: string | null;
   },
 ): GatewayProbeResult {
@@ -56,6 +57,7 @@ function createProbe(
     ok: params.ok,
     url: "ws://127.0.0.1:18789",
     connectLatencyMs: params.connectLatencyMs,
+    gatewayReached: params.gatewayReached,
     error: params.error ?? null,
     close: null,
     auth: {
@@ -65,6 +67,7 @@ function createProbe(
     },
     server: {
       version: "2026.4.24",
+      buildId: "build-test",
       connId: "conn-test",
     },
     health: null,
@@ -356,6 +359,7 @@ describe("gateway status output", () => {
           "reachable-read",
           createProbe("read_only", {
             ok: false,
+            gatewayReached: true,
             connectLatencyMs: 20,
             error: "missing scope: operator.read",
           }),
@@ -385,6 +389,7 @@ describe("gateway status output", () => {
           "detail-timeout",
           createProbe("read_only", {
             ok: false,
+            gatewayReached: true,
             connectLatencyMs: 40,
             error: "timeout",
           }),
@@ -448,6 +453,11 @@ describe("gateway status output", () => {
             role: "operator",
             scopes: ["operator.read"],
             capability: "read_only",
+          },
+          server: {
+            version: "2026.4.24",
+            buildId: "build-test",
+            connId: "conn-test",
           },
           self: null,
           config: null,

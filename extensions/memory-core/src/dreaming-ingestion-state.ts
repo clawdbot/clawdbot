@@ -1,6 +1,8 @@
 // Memory Core codecs normalize canonical and legacy dreaming ingestion state.
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { asRecord } from "./dreaming-shared.js";
+import {
+  asNullableRecord,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -23,6 +25,7 @@ export type SessionIngestionFileState = {
   contentHash: string;
   lineCount: number;
   lastContentLine: number;
+  excludedReason?: string;
 };
 
 export type SessionIngestionState = {
@@ -40,14 +43,14 @@ export function normalizeMemoryDay(value: unknown): string | undefined {
 }
 
 export function normalizeDailyIngestionState(raw: unknown): DailyIngestionState {
-  const record = asRecord(raw);
-  const filesRaw = asRecord(record?.files);
+  const record = asNullableRecord(raw);
+  const filesRaw = asNullableRecord(record?.files);
   if (!filesRaw) {
     return { version: 1, files: {} };
   }
   const files: Record<string, DailyIngestionFileState> = {};
   for (const [key, value] of Object.entries(filesRaw)) {
-    const file = asRecord(value);
+    const file = asNullableRecord(value);
     if (!file || typeof key !== "string" || key.trim().length === 0) {
       continue;
     }
@@ -67,12 +70,12 @@ export function normalizeDailyIngestionState(raw: unknown): DailyIngestionState 
 }
 
 export function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
-  const record = asRecord(raw);
-  const filesRaw = asRecord(record?.files);
+  const record = asNullableRecord(raw);
+  const filesRaw = asNullableRecord(record?.files);
   const files: Record<string, SessionIngestionFileState> = {};
   if (filesRaw) {
     for (const [key, value] of Object.entries(filesRaw)) {
-      const file = asRecord(value);
+      const file = asNullableRecord(value);
       if (!file || key.trim().length === 0) {
         continue;
       }
@@ -95,10 +98,13 @@ export function normalizeSessionIngestionState(raw: unknown): SessionIngestionSt
         contentHash: typeof file.contentHash === "string" ? file.contentHash.trim() : "",
         lineCount,
         lastContentLine: Math.min(lineCount, lastContentLine),
+        ...(typeof file.excludedReason === "string" && file.excludedReason.trim()
+          ? { excludedReason: file.excludedReason.trim() }
+          : {}),
       };
     }
   }
-  const seenMessagesRaw = asRecord(record?.seenMessages);
+  const seenMessagesRaw = asNullableRecord(record?.seenMessages);
   const seenMessages: Record<string, string[]> = {};
   if (seenMessagesRaw) {
     for (const [scope, value] of Object.entries(seenMessagesRaw)) {

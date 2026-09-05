@@ -72,6 +72,15 @@ describe("TuiStreamAssembler", () => {
     expect(second).toBe("[thinking]\nBrain\n\nHello");
   });
 
+  it("defers streamed terminal sanitization to the markdown boundary", () => {
+    const assembler = new TuiStreamAssembler();
+    const unsafe = "before\x1b]52;c;unsafe\x07after";
+
+    expect(assembler.ingestDelta("run-unsafe", messageWithContent([text(unsafe)]), false)).toBe(
+      unsafe,
+    );
+  });
+
   it("omits thinking when showThinking is false", () => {
     const assembler = new TuiStreamAssembler();
     const output = assembler.ingestDelta(
@@ -129,6 +138,63 @@ describe("TuiStreamAssembler", () => {
     );
     expect(finalText).toContain("HTTP 401");
     expect(finalText).toContain("Missing scopes: model.request");
+  });
+
+  it("renders attachment-only assistant finals without exposing media fields", () => {
+    const assembler = new TuiStreamAssembler();
+    const finalText = assembler.finalize(
+      "run-media-only",
+      messageWithContent([
+        {
+          type: "image",
+          data: "secret-image",
+          url: "file:///Users/operator/private/image.png",
+          artifactId: "secret-artifact",
+        },
+      ]),
+      false,
+    );
+    expect(finalText).toBe("Attached image");
+  });
+
+  it("keeps visible thinking ahead of an attachment-only final", () => {
+    const assembler = new TuiStreamAssembler();
+    const finalText = assembler.finalize(
+      "run-media-thinking",
+      messageWithContent([
+        thinking("Preparing the attachment"),
+        { type: "image", data: "secret-image" },
+      ]),
+      true,
+    );
+    expect(finalText).toBe("[thinking]\nPreparing the attachment\n\nAttached image");
+  });
+
+  it("keeps a streamed caption ahead of an attachment-only final", () => {
+    const assembler = new TuiStreamAssembler();
+    assembler.ingestDelta(
+      "run-media-caption",
+      messageWithContent([text("Generated chart")]),
+      false,
+    );
+    const finalText = assembler.finalize(
+      "run-media-caption",
+      messageWithContent([{ type: "image", data: "secret-image" }]),
+      false,
+    );
+    expect(finalText).toBe("Generated chart");
+  });
+
+  it("keeps an error ahead of an attachment summary", () => {
+    const assembler = new TuiStreamAssembler();
+    const finalText = assembler.finalize(
+      "run-media-error",
+      messageWithContent([{ type: "video", url: "file:///private/clip.mp4" }]),
+      false,
+      "media generation failed",
+    );
+    expect(finalText).toContain("media generation failed");
+    expect(finalText).not.toContain("Attached video");
   });
 
   it("returns null when delta text is unchanged", () => {

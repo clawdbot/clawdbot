@@ -1,9 +1,12 @@
+import { streamSimpleOpenAIResponses } from "@openclaw/ai/internal/openai";
 // Github Copilot tests cover models plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
+import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
 import { resolveCopilotRuntimeAuth } from "./runtime-auth.js";
+import { resolveCopilotStarterModel } from "./starter-model.js";
 import { fetchCopilotUsage } from "./usage.js";
 
 vi.mock("openclaw/plugin-sdk/provider-model-shared", async (importOriginal) => ({
@@ -21,7 +24,11 @@ vi.mock("openclaw/plugin-sdk/state-paths", () => ({
 }));
 
 import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/core";
-import { fetchCopilotModelCatalog, resolveCopilotForwardCompatModel } from "./models.js";
+import {
+  fetchCopilotModelCatalog,
+  resolveCopilotForwardCompatModel,
+  selectCopilotStarterModel,
+} from "./models.js";
 
 function createMockCtx(
   modelId: string,
@@ -71,6 +78,8 @@ describe("resolveCopilotForwardCompatModel", () => {
       contextWindow: 400_000,
       contextTokens: 272_000,
       maxTokens: 128_000,
+      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: null },
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
     });
   });
 
@@ -86,6 +95,8 @@ describe("resolveCopilotForwardCompatModel", () => {
       cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
       contextWindow: 1_050_000,
       maxTokens: 128_000,
+      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: null },
+      compat: { supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh"] },
     });
   });
 
@@ -102,6 +113,11 @@ describe("resolveCopilotForwardCompatModel", () => {
       contextWindow: 1_050_000,
       contextTokens: 272_000,
       maxTokens: 128_000,
+      thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: null },
+      compat: {
+        codeMode: "capable",
+        supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh"],
+      },
     });
   });
 
@@ -117,10 +133,10 @@ describe("resolveCopilotForwardCompatModel", () => {
   });
 
   it("creates synthetic model for arbitrary unknown model ID", () => {
-    const ctx = createMockCtx("gpt-5.4-mini");
+    const ctx = createMockCtx("future-model");
     const result = requireResolvedModel(ctx);
-    expect(result.id).toBe("gpt-5.4-mini");
-    expect(result.name).toBe("gpt-5.4-mini");
+    expect(result.id).toBe("future-model");
+    expect(result.name).toBe("future-model");
     expect((result as unknown as Record<string, unknown>).api).toBe("openai-responses");
     expect((result as unknown as Record<string, unknown>).input).toEqual(["text", "image"]);
   });
@@ -159,19 +175,19 @@ describe("resolveCopilotForwardCompatModel", () => {
   });
 
   it("sets reasoning=false for non-reasoning model IDs including mid-string o1/o3", () => {
-    for (const id of [
-      "gpt-5.4-mini",
-      "claude-sonnet-4.6",
-      "gpt-4o",
-      "mycodexmodel",
-      "audio-o1-hd",
-      "turbo-o3-voice",
-    ]) {
+    for (const id of ["gpt-4o", "mycodexmodel", "audio-o1-hd", "turbo-o3-voice"]) {
       const ctx = createMockCtx(id);
       const result = requireResolvedModel(ctx);
       expect((result as unknown as Record<string, unknown>).reasoning).toBe(false);
     }
   });
+
+  it.each(["gpt-5.4-mini", "claude-sonnet-5"])(
+    "uses manifest reasoning metadata for %s instead of synthesizing an unknown model",
+    (modelId) => {
+      expect(requireResolvedModel(createMockCtx(modelId)).reasoning).toBe(true);
+    },
+  );
 });
 
 describe("fetchCopilotUsage", () => {
@@ -431,21 +447,38 @@ describe("github-copilot runtime auth", () => {
     ).rejects.toThrow("untrusted endpoints.api URL");
   });
 
-  it("explains how to recover from forbidden authentication", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 403 }));
-    const rejection = resolveCopilotRuntimeAuth({
-      githubToken: "github-source-token",
-      fetchImpl: fetchImpl as typeof fetch,
-    });
+  it.each([false, true])(
+    "explains forbidden auth without waiting for capture (clone: %s)",
+    async (cloned) => {
+      const response = new Response(new ReadableStream<Uint8Array>(), { status: 403 });
+      const capture = cloned ? response.clone() : undefined;
+      const fetchImpl = vi.fn().mockResolvedValue(response);
+      const rejection = resolveCopilotRuntimeAuth({
+        githubToken: "github-source-token",
+        fetchImpl: fetchImpl as typeof fetch,
+      }).catch((error: unknown) => error);
 
-    await expect(rejection).rejects.toBeInstanceOf(CopilotRuntimeAuthError);
-    await expect(rejection).rejects.toMatchObject({
-      code: "github_copilot_auth_failed",
-      reason: "http_error",
-      status: 403,
-      message: expect.stringContaining("login-github-copilot"),
-    });
-  });
+      try {
+        const error = await Promise.race([
+          rejection,
+          new Promise<undefined>((resolve) => {
+            setImmediate(() => resolve(undefined));
+          }),
+        ]);
+        expect(error).toBeInstanceOf(CopilotRuntimeAuthError);
+        expect(error).toMatchObject({
+          code: "github_copilot_auth_failed",
+          reason: "http_error",
+          status: 403,
+          message: expect.stringContaining("login-github-copilot"),
+        });
+        expect(response.bodyUsed).toBe(true);
+      } finally {
+        await capture?.body?.cancel();
+        await rejection;
+      }
+    },
+  );
 
   it("maps a stalled response body to a runtime-auth timeout", async () => {
     const controller = new AbortController();
@@ -605,6 +638,215 @@ describe("fetchCopilotModelCatalog", () => {
     ],
   };
 
+  function selectableModelEntry(params: {
+    id: string;
+    category?: string;
+    contextWindow?: number;
+    maxTokens?: number;
+    pickerEnabled?: boolean;
+    policyState?: string;
+    preview?: boolean;
+    streaming?: boolean | "omit";
+    toolCalls?: boolean;
+  }) {
+    return {
+      id: params.id,
+      name: params.id,
+      object: "model",
+      model_picker_enabled: params.pickerEnabled ?? true,
+      model_picker_category: params.category ?? "versatile",
+      policy: { state: params.policyState ?? "enabled" },
+      preview: params.preview ?? false,
+      capabilities: {
+        type: "chat",
+        limits: {
+          max_context_window_tokens: params.contextWindow ?? 200_000,
+          max_output_tokens: params.maxTokens ?? 64_000,
+        },
+        supports: {
+          ...(params.streaming === "omit" ? {} : { streaming: params.streaming ?? true }),
+          tool_calls: params.toolCalls ?? true,
+        },
+      },
+    };
+  }
+
+  async function fetchSelectionFixture(data: unknown[]) {
+    return await fetchCopilotModelCatalog({
+      copilotApiToken: "tid=test",
+      baseUrl: "https://api.githubcopilot.com",
+      fetchImpl: vi.fn().mockResolvedValue(makeResponse(200, { data })) as unknown as typeof fetch,
+    });
+  }
+
+  it.each([
+    {
+      source: "live",
+      reasoning: "minimal",
+      efforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      expected: "low",
+    },
+    { source: "static", reasoning: "minimal", efforts: [], expected: "low" },
+    {
+      source: "native minimal live",
+      reasoning: "minimal",
+      efforts: ["minimal", "low", "high"],
+      expected: "minimal",
+    },
+    {
+      source: "live",
+      reasoning: "xhigh",
+      efforts: ["low", "high", "xhigh", "max"],
+      expected: "xhigh",
+    },
+    { source: "live", reasoning: "max", efforts: ["low", "high", "xhigh", "max"], expected: "max" },
+    { source: "static", reasoning: "xhigh", efforts: [], expected: "xhigh" },
+    { source: "static", reasoning: "max", efforts: [], expected: "max" },
+    {
+      source: "limited live",
+      reasoning: "xhigh",
+      efforts: ["low", "medium", "high"],
+      expected: "high",
+    },
+    {
+      source: "limited live",
+      reasoning: "max",
+      efforts: ["low", "medium", "high"],
+      expected: "high",
+    },
+    { source: "empty live", reasoning: "max", efforts: [], expected: undefined },
+  ] as const)(
+    "keeps $source catalog policy and $reasoning Responses effort aligned",
+    async ({ source, reasoning, efforts, expected }) => {
+      const [entry] = await fetchSelectionFixture([
+        {
+          id: "gpt-5.6-luna",
+          vendor: "OpenAI",
+          capabilities: {
+            type: "chat",
+            supports: { reasoning_effort: efforts },
+          },
+        },
+      ]);
+      const model = {
+        ...(source === "static"
+          ? requireResolvedModel(createMockCtx("gpt-5.6-luna"))
+          : expectDefined(entry, "discovered Copilot model")),
+        provider: "github-copilot",
+        api: "openai-responses" as const,
+        baseUrl: "https://api.githubcopilot.com",
+      };
+      const profile = resolveThinkingProfile({
+        provider: model.provider,
+        modelId: model.id,
+        api: model.api,
+        compat: model.compat,
+      });
+      expect(profile?.levels.some(({ id }) => id === reasoning)).toBe(
+        reasoning === "minimal" || expected === reasoning,
+      );
+      const onPayload = vi.fn(() => {
+        throw new Error("captured before sending");
+      });
+
+      const result = await streamSimpleOpenAIResponses(
+        model,
+        { messages: [{ role: "user", content: "Reply OK", timestamp: 1 }] },
+        { apiKey: "test-token", reasoning, onPayload },
+      ).result();
+
+      expect(result.errorMessage).toBe("captured before sending");
+      expect(onPayload).toHaveBeenCalledWith(
+        expected
+          ? expect.objectContaining({ reasoning: { effort: expected, summary: "auto" } })
+          : expect.not.objectContaining({ reasoning: expect.anything() }),
+        model,
+      );
+    },
+  );
+  it("selects onboarding's starter model using the configured integration identity", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      if (requestUrl.endsWith("/copilot_internal/user")) {
+        return Response.json({ endpoints: { api: "https://copilot-api.acme.ghe.com" } });
+      }
+      const headers = new Headers(init?.headers);
+      expect(headers.get("copilot-integration-id")).toBe("vscode-chat");
+      expect(headers.get("authorization")).toBe("Bearer setup-source-token");
+      expect(headers.has("x-private-header")).toBe(false);
+      return Response.json({ data: [selectableModelEntry({ id: "tenant-model" })] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await expect(
+        resolveCopilotStarterModel({
+          githubToken: "setup-source-token",
+          githubDomain: "acme.ghe.com",
+          config: {
+            models: {
+              providers: {
+                "github-copilot": {
+                  baseUrl: "https://copilot-api.acme.ghe.com",
+                  models: [],
+                  headers: {
+                    "copilot-integration-id": "vscode-chat",
+                    "X-Private-Header": "not-for-catalog",
+                  },
+                },
+              },
+            },
+          },
+        }),
+      ).resolves.toBe("github-copilot/tenant-model");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("selects the preferred model only when the authenticated catalog marks it eligible", async () => {
+    const models = await fetchSelectionFixture([
+      selectableModelEntry({ id: "fallback", contextWindow: 1_000_000 }),
+      selectableModelEntry({ id: "preferred", category: "powerful" }),
+    ]);
+
+    expect(selectCopilotStarterModel(models, "preferred")?.id).toBe("preferred");
+  });
+
+  it("uses a deterministic eligible fallback when the preferred model is policy-disabled", async () => {
+    const entries = [
+      selectableModelEntry({ id: "preferred", policyState: "disabled" }),
+      selectableModelEntry({ id: "preview", preview: true, contextWindow: 1_000_000 }),
+      selectableModelEntry({ id: "powerful", category: "powerful", contextWindow: 1_000_000 }),
+      selectableModelEntry({ id: "versatile-b", contextWindow: 400_000 }),
+      selectableModelEntry({ id: "versatile-a", contextWindow: 400_000 }),
+    ];
+    const forward = await fetchSelectionFixture(entries);
+    const reversed = await fetchSelectionFixture(entries.toReversed());
+
+    expect(selectCopilotStarterModel(forward, "preferred")?.id).toBe("versatile-a");
+    expect(selectCopilotStarterModel(reversed, "preferred")?.id).toBe("versatile-a");
+  });
+
+  it("rejects hidden, unconfigured, non-streaming, and tool-less setup candidates", async () => {
+    const models = await fetchSelectionFixture([
+      selectableModelEntry({ id: "hidden", pickerEnabled: false }),
+      selectableModelEntry({ id: "unconfigured", policyState: "unconfigured" }),
+      selectableModelEntry({ id: "no-stream", streaming: false }),
+      selectableModelEntry({ id: "no-tools", toolCalls: false }),
+    ]);
+
+    expect(selectCopilotStarterModel(models, "hidden")).toBeUndefined();
+  });
+
+  it("does not treat omitted streaming metadata as an explicit lack of support", async () => {
+    const models = await fetchSelectionFixture([
+      selectableModelEntry({ id: "omitted-streaming", streaming: "omit" }),
+    ]);
+
+    expect(selectCopilotStarterModel(models, "omitted-streaming")?.id).toBe("omitted-streaming");
+  });
+
   it("maps Copilot /models entries to ModelDefinitionConfig with real context windows", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse(200, sampleApiResponse));
 
@@ -645,6 +887,7 @@ describe("fetchCopilotModelCatalog", () => {
       contextTokens: 272000,
       maxTokens: 128000,
       compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+      thinkingLevelMap: { minimal: "low", xhigh: null, max: null },
     });
 
     const codex = out.find((m) => m.id === "gpt-5.3-codex");

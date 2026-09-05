@@ -9,6 +9,17 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 
 ## Global rules
 
+- Parallels is postpublish-confidence coverage by default, not a prerequisite
+  for the bounded beta-publish phase. Run it against one exact published
+  package version and record the Validation SHA + Tooling SHA run tuple that
+  authorized that package. Validation SHA maps to its Code SHA or Release SHA;
+  it is not a third release identity.
+- A failed postpublish Parallels lane does not retroactively unpublish a beta.
+  Classify it as product, harness/tooling/provenance, infrastructure/credential,
+  or wrapper failure. Only a confirmed product defect enters the next beta.
+- Use one coordinator and one lane per independent guest family. Diagnose and
+  retry one failed family once, then reassess; do not restart the aggregate
+  matrix automatically.
 - Inventory existing VMs and snapshots before provisioning anything. When a preconfigured pristine
   snapshot matches the requested baseline, switch to it and reuse its user, tools, and base setup.
   Do not create a new VM, reinstall macOS, or rebuild the guest baseline for a "fresh" run.

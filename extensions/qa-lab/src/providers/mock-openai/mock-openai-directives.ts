@@ -53,6 +53,35 @@ export function extractExactMarkerDirective(text: string) {
   );
 }
 
+export const QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE =
+  /\bSLACK-QA-COMMENTARY-(?!DONE-)[A-F0-9]{8}\b/u;
+
+export function extractSlackProgressCommentaryDirectives(text: string) {
+  const commentaryMarker = extractLastCapture(
+    text,
+    /\b(SLACK-QA-COMMENTARY-(?!DONE-)[A-F0-9]{8})\b/u,
+  );
+  const toolMarker = extractLastCapture(text, /\b(SLACK-QA-TOOL-[A-F0-9]{8})\b/u);
+  const finalMarker = extractLastCapture(text, /\b(SLACK-QA-COMMENTARY-DONE-[A-F0-9]{8})\b/u);
+  if (!commentaryMarker || !toolMarker || !finalMarker) {
+    return null;
+  }
+  const suffix = commentaryMarker.slice("SLACK-QA-COMMENTARY-".length);
+  const execCommand = `grep 'SLACK-QA-TOOL-${suffix}' /dev/null || sleep 5`;
+  const commandDirective = extractLastCapture(
+    text,
+    /\b(grep 'SLACK-QA-TOOL-[A-F0-9]{8}' \/dev\/null \|\| sleep 5)(?=[.`\s]|$)/u,
+  );
+  if (
+    toolMarker !== `SLACK-QA-TOOL-${suffix}` ||
+    finalMarker !== `SLACK-QA-COMMENTARY-DONE-${suffix}` ||
+    commandDirective !== execCommand
+  ) {
+    return null;
+  }
+  return { commentaryMarker, execCommand, finalMarker, toolMarker };
+}
+
 export function extractWhatsAppLocationMarkerDirective(text: string) {
   return extractLastCapture(
     text,
@@ -179,33 +208,16 @@ function extractBareToolArg(text: string, name: string) {
 }
 
 export function hasDeclaredTool(body: Record<string, unknown>, name: string) {
-  const tools = Array.isArray(body.tools) ? body.tools : [];
-  const dynamicTools = Array.isArray(body.dynamicTools) ? body.dynamicTools : [];
-  if (
-    [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name)) ||
+  return (
+    hasToolDefinition(body, name) ||
     instructionTextMentionsToolName(extractInstructionsText(body), name)
-  ) {
-    return true;
-  }
-  return false;
+  );
 }
 
 export function hasToolDefinition(body: Record<string, unknown>, name: string) {
   const tools = Array.isArray(body.tools) ? body.tools : [];
   const dynamicTools = Array.isArray(body.dynamicTools) ? body.dynamicTools : [];
   return [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name));
-}
-
-export function hasDeclaredCustomTool(body: Record<string, unknown>, name: string) {
-  const tools = Array.isArray(body.tools) ? body.tools : [];
-  return tools.some(
-    (tool) =>
-      tool !== null &&
-      typeof tool === "object" &&
-      !Array.isArray(tool) &&
-      (tool as Record<string, unknown>).type === "custom" &&
-      (tool as Record<string, unknown>).name === name,
-  );
 }
 
 function toolDefinitionMentionsName(value: unknown, name: string, depth = 0): boolean {
@@ -331,12 +343,17 @@ export function extractSessionStatusSessionKey(
   return /"sessionKey"\s*:\s*"([^"]+)"/.exec(toolOutput)?.[1]?.trim() ?? "";
 }
 
-export function isHeartbeatPrompt(text: string) {
+export function resolveHeartbeatPromptReply(text: string): "HEARTBEAT_OK" | "NO_REPLY" | undefined {
   const trimmed = text.trim();
   if (!trimmed || /remember this fact/i.test(trimmed)) {
-    return false;
+    return undefined;
   }
-  return /(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed);
+  if (/(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed)) {
+    return "HEARTBEAT_OK";
+  }
+  return /(?:^|[.\n]\s*)If nothing needs attention, reply NO_REPLY\b/i.test(trimmed)
+    ? "NO_REPLY"
+    : undefined;
 }
 
 export function readFirstMediaPath(value: unknown): string {

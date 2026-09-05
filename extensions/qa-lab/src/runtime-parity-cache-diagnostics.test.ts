@@ -1,7 +1,11 @@
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  formatSqliteSessionFileMarker,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildRuntimeParityCacheDiagnostics } from "./runtime-parity-cache-diagnostics.js";
 import { captureRuntimeParityCell, type RuntimeParityUsage } from "./runtime-parity.js";
@@ -10,6 +14,11 @@ import { createTempDirHarness } from "./temp-dir.test-helper.js";
 const tempDirs = createTempDirHarness();
 
 afterEach(async () => {
+  // Fixtures point a state dir at these temp workspaces, so the shared and per-agent
+  // SQLite handles stay cached and Windows fails the removal with EBUSY. The agent close
+  // releases its leases through shared state and reopens it, so the store is released second.
+  closeOpenClawAgentDatabasesForTest();
+  resetPluginStateStoreForTests();
   await tempDirs.cleanup();
 });
 
@@ -96,6 +105,114 @@ describe("runtime parity prompt-cache diagnostics", () => {
       cacheRead: 0,
       cacheWrite: 24_407,
     });
+  });
+
+  it("treats Ollama adapter cache zeros as unavailable telemetry", async () => {
+    const tempRoot = await seedRuntimeParityCacheTranscript([
+      { role: "user", content: "Inspect cache telemetry." },
+      {
+        role: "assistant",
+        content: "done",
+        api: "ollama",
+        provider: "ollama",
+        model: "qwen3.5:9b",
+        usage: {
+          input: 22,
+          output: 7,
+          total: 29,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cacheTelemetry: { state: "unavailable" },
+        },
+      },
+    ]);
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "openclaw",
+      gateway: { tempRoot },
+      scenarioResult: { status: "pass" },
+      wallClockMs: 10,
+    });
+
+    expect(cell.usage).toEqual({
+      inputTokens: 22,
+      outputTokens: 7,
+      totalTokens: 29,
+    });
+    expect(cell.cacheDiagnostics).toEqual({
+      assistantTurns: 1,
+      cacheTelemetryTurns: 0,
+      cacheHitTurns: 0,
+      cacheWriteTurns: 0,
+      cacheMisses: [],
+      cacheMissInputTokens: 0,
+      unmeasuredPostWarmTurns: [],
+    });
+  });
+
+  it("preserves unavailable cache telemetry from pre-marker Ollama transcripts", async () => {
+    const tempRoot = await seedRuntimeParityCacheTranscript([
+      { role: "user", content: "Inspect cache telemetry." },
+      {
+        role: "assistant",
+        content: "done",
+        api: "ollama",
+        provider: "ollama",
+        model: "qwen3.5:9b",
+        usage: { input: 22, output: 7, total: 29, cacheRead: 0, cacheWrite: 0 },
+      },
+    ]);
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "openclaw",
+      gateway: { tempRoot },
+      scenarioResult: { status: "pass" },
+      wallClockMs: 10,
+    });
+
+    expect(cell.usage).toEqual({
+      inputTokens: 22,
+      outputTokens: 7,
+      totalTokens: 29,
+    });
+    expect(cell.cacheDiagnostics?.cacheTelemetryTurns).toBe(0);
+  });
+
+  it("preserves an explicitly measured zero-cache result", async () => {
+    const tempRoot = await seedRuntimeParityCacheTranscript([
+      { role: "user", content: "Inspect cache telemetry." },
+      {
+        role: "assistant",
+        content: "done",
+        api: "ollama",
+        provider: "ollama",
+        model: "future-ollama",
+        usage: {
+          input: 22,
+          output: 7,
+          total: 29,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cacheTelemetry: { state: "available" },
+        },
+      },
+    ]);
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "openclaw",
+      gateway: { tempRoot },
+      scenarioResult: { status: "pass" },
+      wallClockMs: 10,
+    });
+
+    expect(cell.usage).toEqual({
+      inputTokens: 22,
+      outputTokens: 7,
+      totalTokens: 29,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+    expect(cell.cacheDiagnostics?.cacheTelemetryTurns).toBe(1);
   });
 
   it("identifies the first complete cache miss after a cache-warming write", () => {

@@ -14,6 +14,7 @@ import {
   validateApprovalHistoryParams,
   validateApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type {
   ExecApprovalDecision,
@@ -22,6 +23,7 @@ import type {
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
+import { prepareApprovalChannelCustody } from "../approval-channel-custody.js";
 import { normalizeControlUiBasePath } from "../control-ui-shared.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import {
@@ -31,7 +33,6 @@ import {
 } from "../operator-approval-authorization.js";
 import {
   getOperatorApprovalDetailed,
-  getOperatorApprovalDetailedByLocator,
   listTerminalOperatorApprovals,
   OperatorApprovalHistoryCursorError,
   type OperatorApprovalRecord,
@@ -42,12 +43,9 @@ import {
   type ExecApprovalIosPushDelivery,
   type PluginApprovalIosPushDelivery,
 } from "./approval-publication.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  GatewayRequestHandlers,
-  RespondFn,
-} from "./types.js";
+import { canAccessApprovalSession } from "./approval-record-lookup.js";
+import { respondApprovalStorageUnavailable } from "./approval-shared.js";
+import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type CreateApprovalHandlersParams = {
   execApprovalManager: ExecApprovalManager;
@@ -133,22 +131,6 @@ function respondApprovalNotFound(respond: RespondFn): void {
   );
 }
 
-function respondApprovalUnavailable(params: {
-  context: GatewayRequestContext;
-  respond: RespondFn;
-  operation: "history" | "lookup" | "resolve";
-  error: unknown;
-}): void {
-  params.context.logGateway?.error?.(
-    `approval ${params.operation} storage failure: ${String(params.error)}`,
-  );
-  params.respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.UNAVAILABLE, `approval ${params.operation} unavailable`),
-  );
-}
-
 function readExactApprovalId(params: unknown): string | null {
   if (!isRecord(params) || typeof params.id !== "string") {
     return null;
@@ -160,6 +142,7 @@ function readExactApprovalId(params: unknown): string | null {
 function loadVisibleApproval(params: {
   id: string;
   client: GatewayClient | null;
+  cfg: OpenClawConfig;
   allowApprovalRuntime?: boolean;
   allowTransportRef?: boolean;
   execApprovalManager: ExecApprovalManager;
@@ -181,6 +164,17 @@ function loadVisibleApproval(params: {
     params.systemAgentApprovalManager?.getLiveSnapshot(params.id);
   if (
     liveRecord &&
+    !canAccessApprovalSession({
+      cfg: params.cfg,
+      client: params.client,
+      sessionKey: liveRecord.request.sessionKey,
+      agentId: liveRecord.request.agentId,
+    })
+  ) {
+    return null;
+  }
+  if (
+    liveRecord &&
     !canAccessOperatorApproval({
       client: params.client,
       allowApprovalRuntime: params.allowApprovalRuntime,
@@ -191,15 +185,11 @@ function loadVisibleApproval(params: {
   }
   let lookup: ReturnType<typeof getOperatorApprovalDetailed>;
   try {
-    lookup = params.allowTransportRef
-      ? getOperatorApprovalDetailedByLocator({
-          locator: params.id,
-          databaseOptions: params.databaseOptions,
-        })
-      : getOperatorApprovalDetailed({
-          id: params.id,
-          databaseOptions: params.databaseOptions,
-        });
+    lookup = getOperatorApprovalDetailed({
+      id: params.id,
+      allowTransportRef: params.allowTransportRef,
+      databaseOptions: params.databaseOptions,
+    });
   } catch (error) {
     const corrupt = { outcome: "corrupt", id: params.id } as const;
     params.execApprovalManager.reconcileDurableLookup(corrupt);
@@ -208,6 +198,16 @@ function loadVisibleApproval(params: {
     throw error;
   }
   if (lookup.outcome === "found") {
+    if (
+      !canAccessApprovalSession({
+        cfg: params.cfg,
+        client: params.client,
+        sessionKey: lookup.record.source.sessionKey,
+        agentId: lookup.record.source.agentId,
+      })
+    ) {
+      return null;
+    }
     if (
       !canAccessOperatorApproval({
         client: params.client,
@@ -254,49 +254,6 @@ function resolveLiveRecord<TPayload>(params: {
   return params.liveRecord ?? params.manager.getLiveSnapshot(params.id) ?? undefined;
 }
 
-function applyForcedDeny<TPayload>(params: {
-  manager: ExecApprovalManager<TPayload>;
-  id: string;
-  resolver: OperatorApprovalResolver;
-  localResolvedBy: string | null;
-}): ApplyApprovalDecisionResult<TPayload> {
-  const result = params.manager.forceDenyDetailed(
-    params.id,
-    "malformed-verdict",
-    params.resolver,
-    "denied",
-    undefined,
-    false,
-    params.localResolvedBy,
-  );
-  switch (result.outcome) {
-    case "denied":
-      return {
-        ok: true,
-        applied: true,
-        record: result.record,
-        liveRecord: resolveLiveRecord({
-          manager: params.manager,
-          id: params.id,
-          liveRecord: result.liveRecord,
-        }),
-      };
-    case "expired":
-    case "already-terminal":
-    case "not-due":
-      return {
-        ok: true,
-        applied: false,
-        record: result.record,
-        liveRecord: result.liveRecord,
-      };
-    case "not-found":
-    case "corrupt":
-      return { ok: false };
-  }
-  return result satisfies never;
-}
-
 function applyApprovalDecision<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   id: string;
@@ -304,44 +261,41 @@ function applyApprovalDecision<TPayload>(params: {
   forceMalformedDeny: boolean;
   resolver: OperatorApprovalResolver;
   localResolvedBy: string | null;
+  grantExpiresAtMs?: number;
 }): ApplyApprovalDecisionResult<TPayload> {
-  if (params.forceMalformedDeny) {
-    return applyForcedDeny(params);
+  const result = params.forceMalformedDeny
+    ? params.manager.forceDenyDetailed(
+        params.id,
+        "malformed-verdict",
+        params.resolver,
+        "denied",
+        undefined,
+        false,
+        params.localResolvedBy,
+      )
+    : params.manager.resolveDetailed(
+        params.id,
+        params.decision as ExecApprovalDecision,
+        params.resolver,
+        params.localResolvedBy,
+        "operator",
+        params.grantExpiresAtMs !== undefined ? { grantExpiresAtMs: params.grantExpiresAtMs } : {},
+      );
+  if (result.outcome === "decision-not-allowed") {
+    return applyApprovalDecision({ ...params, forceMalformedDeny: true });
   }
-
-  const result = params.manager.resolveDetailed(
-    params.id,
-    params.decision as ExecApprovalDecision,
-    params.resolver,
-    params.localResolvedBy,
-  );
-  switch (result.outcome) {
-    case "resolved":
-      return {
-        ok: true,
-        applied: true,
-        record: result.record,
-        liveRecord: resolveLiveRecord({
-          manager: params.manager,
-          id: params.id,
-          liveRecord: result.liveRecord,
-        }),
-      };
-    case "expired":
-    case "already-resolved":
-      return {
-        ok: true,
-        applied: false,
-        record: result.record,
-        liveRecord: result.liveRecord,
-      };
-    case "decision-not-allowed":
-      return applyForcedDeny(params);
-    case "not-found":
-    case "corrupt":
-      return { ok: false };
+  if (result.outcome === "not-found" || result.outcome === "corrupt") {
+    return { ok: false };
   }
-  return result satisfies never;
+  const applied = result.outcome === "resolved" || result.outcome === "denied";
+  return {
+    ok: true,
+    applied,
+    record: result.record,
+    liveRecord: applied
+      ? resolveLiveRecord({ manager: params.manager, id: params.id, liveRecord: result.liveRecord })
+      : result.liveRecord,
+  };
 }
 
 /** Creates kind-agnostic approval lookup and resolution handlers. */
@@ -349,7 +303,7 @@ export function createApprovalHandlers(
   params: CreateApprovalHandlersParams,
 ): GatewayRequestHandlers {
   return {
-    "approval.history": ({ params: rawParams, respond, context }) => {
+    "approval.history": ({ params: rawParams, respond, client, context }) => {
       if (!validateApprovalHistoryParams(rawParams)) {
         respond(
           false,
@@ -376,13 +330,22 @@ export function createApprovalHandlers(
           );
           return;
         }
-        respondApprovalUnavailable({ context, respond, operation: "history", error });
+        respondApprovalStorageUnavailable({ context, respond, operation: "history", error });
         return;
       }
-      const controlUiBasePath = normalizeControlUiBasePath(
-        context.getRuntimeConfig()?.gateway?.controlUi?.basePath,
-      );
+      const cfg = context.getRuntimeConfig();
+      const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
       const items = history.records.flatMap((record) => {
+        if (
+          !canAccessApprovalSession({
+            cfg,
+            client,
+            sessionKey: record.source.sessionKey,
+            agentId: record.source.agentId,
+          })
+        ) {
+          return [];
+        }
         const snapshot = buildApprovalSnapshot(record, controlUiBasePath);
         return snapshot && snapshot.status !== "pending" ? [snapshot] : [];
       });
@@ -409,6 +372,7 @@ export function createApprovalHandlers(
           ? loadVisibleApproval({
               id,
               client,
+              cfg: context.getRuntimeConfig(),
               execApprovalManager: params.execApprovalManager,
               pluginApprovalManager: params.pluginApprovalManager,
               systemAgentApprovalManager: params.systemAgentApprovalManager,
@@ -416,7 +380,7 @@ export function createApprovalHandlers(
             })
           : null;
       } catch (error) {
-        respondApprovalUnavailable({ context, respond, operation: "lookup", error });
+        respondApprovalStorageUnavailable({ context, respond, operation: "lookup", error });
         return;
       }
       const controlUiBasePath = normalizeControlUiBasePath(
@@ -431,6 +395,13 @@ export function createApprovalHandlers(
     },
 
     "approval.resolve": async ({ params: rawParams, respond, client, context }) => {
+      const validParams = validateApprovalResolveParams(rawParams);
+      const resolveParams = validParams ? (rawParams as ApprovalResolveParams) : null;
+      const hasReviewer = isRecord(rawParams) && "reviewer" in rawParams;
+      if (hasReviewer && !resolveParams?.reviewer) {
+        respondApprovalNotFound(respond);
+        return;
+      }
       const id = readExactApprovalId(rawParams);
       let record: OperatorApprovalRecord | null;
       try {
@@ -438,6 +409,7 @@ export function createApprovalHandlers(
           ? loadVisibleApproval({
               id,
               client,
+              cfg: context.getRuntimeConfig(),
               allowApprovalRuntime: true,
               allowTransportRef: true,
               execApprovalManager: params.execApprovalManager,
@@ -447,10 +419,27 @@ export function createApprovalHandlers(
             })
           : null;
       } catch (error) {
-        respondApprovalUnavailable({ context, respond, operation: "lookup", error });
+        respondApprovalStorageUnavailable({ context, respond, operation: "lookup", error });
         return;
       }
       if (!id || !record) {
+        respondApprovalNotFound(respond);
+        return;
+      }
+      const custody = resolveParams?.reviewer
+        ? prepareApprovalChannelCustody({
+            cfg: context.getRuntimeConfig(),
+            approvalKind: record.kind,
+            reviewer: resolveParams.reviewer,
+          })
+        : null;
+      const liveRecord =
+        record.kind === "exec"
+          ? params.execApprovalManager.getLiveSnapshot(record.id)
+          : record.kind === "plugin"
+            ? params.pluginApprovalManager.getLiveSnapshot(record.id)
+            : params.systemAgentApprovalManager?.getLiveSnapshot(record.id);
+      if (resolveParams?.reviewer && (!custody || !liveRecord || !custody.authorizes(liveRecord))) {
         respondApprovalNotFound(respond);
         return;
       }
@@ -468,10 +457,10 @@ export function createApprovalHandlers(
         respond(true, { applied: false, approval }, undefined);
         return;
       }
-      const resolver = resolveApprovalResolver(client);
+      const resolver = custody
+        ? ({ kind: "channel", id: custody.resolverId } as const)
+        : resolveApprovalResolver(client);
       const localResolvedBy = resolveLegacyApprovalLabel(client);
-      const validParams = validateApprovalResolveParams(rawParams);
-      const resolveParams = validParams ? (rawParams as ApprovalResolveParams) : null;
       const requestedDecision = resolveParams?.decision ?? null;
       const decisionAllowed =
         requestedDecision === "deny" ||
@@ -495,6 +484,15 @@ export function createApprovalHandlers(
                 forceMalformedDeny,
                 resolver,
                 localResolvedBy,
+                // Grant terms freeze at resolve; an explicit per-resolve
+                // override (custom operator UIs, CLI) beats the config default.
+                ...(requestedDecision === "allow-always" &&
+                typeof resolveParams?.grantExpiresInDays === "number"
+                  ? {
+                      grantExpiresAtMs:
+                        Date.now() + Math.floor(resolveParams.grantExpiresInDays) * 86_400_000,
+                    }
+                  : {}),
               })
             : record.kind === "plugin"
               ? applyApprovalDecision({
@@ -514,7 +512,7 @@ export function createApprovalHandlers(
                   localResolvedBy,
                 });
       } catch (error) {
-        respondApprovalUnavailable({ context, respond, operation: "resolve", error });
+        respondApprovalStorageUnavailable({ context, respond, operation: "resolve", error });
         return;
       }
       if (!resolution.ok) {

@@ -1,5 +1,5 @@
 // Command bootstrap tests cover CLI command bootstrap sequencing and side effects.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
 const ensureCliPluginRegistryLoadedMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -15,10 +15,13 @@ vi.mock("./plugin-registry-loader.js", () => ({
 describe("ensureCliCommandBootstrap", () => {
   let ensureCliCommandBootstrap: typeof import("./command-bootstrap.js").ensureCliCommandBootstrap;
 
-  beforeEach(async () => {
-    vi.clearAllMocks();
+  beforeAll(async () => {
     vi.resetModules();
     ({ ensureCliCommandBootstrap } = await import("./command-bootstrap.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it("runs config guard and plugin loading with shared options", async () => {
@@ -35,6 +38,7 @@ describe("ensureCliCommandBootstrap", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime,
       commandPath: ["agents", "list"],
+      measure: expect.any(Function),
       allowInvalid: true,
       suppressDoctorStdout: true,
     });
@@ -58,6 +62,7 @@ describe("ensureCliCommandBootstrap", () => {
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime,
       commandPath: ["gateway"],
+      measure: expect.any(Function),
       skipPristineCoreStateMigrations: true,
       skipPristineStartupStateMigrations: true,
     });
@@ -66,16 +71,35 @@ describe("ensureCliCommandBootstrap", () => {
   it("skips config guard without skipping plugin loading", async () => {
     await ensureCliCommandBootstrap({
       runtime: {} as never,
-      commandPath: ["status"],
+      commandPath: ["memory", "search"],
       suppressDoctorStdout: true,
       skipConfigGuard: true,
       loadPlugins: true,
+      pluginRegistry: { scope: "memory" },
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
-      scope: "channels",
+      scope: "memory",
       routeLogsToStderr: true,
+    });
+  });
+
+  it("forwards validation-only config guards without state migration", async () => {
+    const runtime = {} as never;
+
+    await ensureCliCommandBootstrap({
+      runtime,
+      commandPath: ["nodes", "approve"],
+      validateConfigOnly: true,
+      loadPlugins: false,
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime,
+      commandPath: ["nodes", "approve"],
+      measure: expect.any(Function),
+      validateConfigOnly: true,
     });
   });
 
@@ -118,10 +142,23 @@ describe("ensureCliCommandBootstrap", () => {
     });
   });
 
-  it("does nothing extra when plugin loading is disabled", async () => {
+  it("loads configured and persisted backend owners for sandbox management", async () => {
     await ensureCliCommandBootstrap({
       runtime: {} as never,
-      commandPath: ["config", "validate"],
+      commandPath: ["sandbox", "list"],
+      loadPlugins: true,
+    });
+
+    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "sandbox-management",
+      routeLogsToStderr: undefined,
+    });
+  });
+
+  it("skips config and plugin activation for a gateway-backed agent turn", async () => {
+    await ensureCliCommandBootstrap({
+      runtime: {} as never,
+      commandPath: ["agent"],
       skipConfigGuard: true,
       loadPlugins: false,
     });

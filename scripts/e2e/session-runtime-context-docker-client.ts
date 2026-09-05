@@ -24,6 +24,14 @@ type TranscriptEntry = {
   };
 };
 
+type MigrationManifest = {
+  completedAt?: string;
+  failedAt?: string;
+  targets: {
+    completedMoves: { kind: string; sourcePath: string; archivePath: string }[];
+  }[];
+};
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
@@ -50,10 +58,8 @@ function messageText(content: unknown): string {
     .join("");
 }
 
-async function verifyRuntimeContextTranscriptShape(root: string) {
-  const sessionFile = path.join(root, ".openclaw", "agents", "main", "sessions", "runtime.jsonl");
-  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-  const sessionManager = SessionManager.open(sessionFile);
+async function verifyRuntimeContextTranscriptShape() {
+  const sessionManager = SessionManager.inMemory();
   const effectivePrompt = [
     "visible ask",
     "",
@@ -182,6 +188,8 @@ async function verifyDoctorRepair(root: string) {
   const stateDir = path.join(root, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
   const sessionFile = await seedBrokenSession(stateDir);
+  const originalSessionPath = await fs.realpath(sessionFile);
+  const originalSessionBytes = await fs.readFile(sessionFile);
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify({ plugins: { enabled: false } }, null, 2));
 
@@ -233,8 +241,7 @@ async function verifyDoctorRepair(root: string) {
   })) as TranscriptEntry[];
   const ids = entries.map((entryValue) => (entryValue as { id?: string }).id).filter(Boolean);
   assert(
-    JSON.stringify(ids) ===
-      JSON.stringify(["broken-session", "parent", "plain-user", "plain-assistant"]),
+    JSON.stringify(ids) === JSON.stringify(["broken", "parent", "plain-user", "plain-assistant"]),
     `doctor kept wrong active branch: ${JSON.stringify(ids)}`,
   );
   assert(
@@ -243,10 +250,41 @@ async function verifyDoctorRepair(root: string) {
     ),
     "doctor repair left runtime context in active transcript",
   );
-  const backups = (await fs.readdir(path.dirname(sessionFile))).filter((name) =>
-    name.includes(".pre-doctor-branch-repair-"),
+  const migrationRunsDir = path.join(stateDir, "session-sqlite-migration-runs");
+  const manifests = await Promise.all(
+    (await fs.readdir(migrationRunsDir))
+      .filter((name) => name.endsWith(".json") && !name.endsWith(".failure.json"))
+      .map(async (name) => {
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(migrationRunsDir, name), "utf-8"),
+        ) as MigrationManifest;
+        assert(manifest.completedAt && !manifest.failedAt, "doctor migration did not complete");
+        return manifest;
+      }),
   );
-  assert(backups.length === 1, `expected one doctor backup, got ${backups.length}`);
+  const archivedTranscripts = manifests.flatMap((manifest) =>
+    manifest.targets.flatMap((target) =>
+      target.completedMoves.filter(
+        (move) => move.kind === "transcript" && move.sourcePath === originalSessionPath,
+      ),
+    ),
+  );
+  const [archivedTranscript] = archivedTranscripts;
+  assert(
+    archivedTranscripts.length === 1 && archivedTranscript,
+    `expected one archived original transcript, got ${archivedTranscripts.length}`,
+  );
+  assert(
+    (await fs.readFile(archivedTranscript.archivePath)).equals(originalSessionBytes),
+    "doctor archive did not preserve the original transcript bytes",
+  );
+  assert(
+    await fs.lstat(sessionFile).then(
+      () => false,
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT",
+    ),
+    "doctor did not retire the imported transcript source",
+  );
 }
 
 async function main() {
@@ -256,7 +294,7 @@ async function main() {
   setEnvValue("OPENCLAW_STATE_DIR", stateDir);
   setEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
   try {
-    await verifyRuntimeContextTranscriptShape(root);
+    await verifyRuntimeContextTranscriptShape();
     await verifyDoctorRepair(root);
     console.log("session runtime context Docker E2E passed");
   } finally {

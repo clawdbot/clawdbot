@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { CronJob } from "../types.js";
@@ -50,7 +52,6 @@ function makeExecutor(overrides: Record<string, unknown>) {
       await executeCronRun(
         makeExecuteCronRunParams({
           resolvedDeliveryOk: true,
-          messageToolPromptEnabled: true,
           ...overrides,
           resolvedDelivery,
           commandBody,
@@ -327,6 +328,19 @@ describe("executeCronRun sourceDelivery mapping", () => {
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(true);
     expect(args.messageChannel).toBe("messagechat");
+    const finalizePromptForResolvedTools = args.finalizePromptForResolvedTools;
+    expect(finalizePromptForResolvedTools).toBeTypeOf("function");
+    expect(() =>
+      (
+        finalizePromptForResolvedTools as (params: {
+          prompt: string;
+          messageToolAvailable: boolean;
+        }) => string
+      )({
+        prompt: "send a message",
+        messageToolAvailable: false,
+      }),
+    ).toThrow("Cron source delivery requires the message tool");
   });
 
   it("forwards an explicit OpenClaw runtime override to cron execution", async () => {
@@ -346,7 +360,7 @@ describe("executeCronRun sourceDelivery mapping", () => {
       },
       liveSelection: { provider: "openai", model: "gpt-5.6-luna" },
       cronSession,
-      thinkLevel: "ultra",
+      immutableThinkLevel: "ultra",
     });
 
     await executor.runPrompt("run an Ultra task");
@@ -393,9 +407,16 @@ function makeExecuteCronRunParams(overrides: Record<string, unknown> = {}) {
     cronSession: makeCronSession() as unknown as MutableCronSession,
     commandBody: "run a task",
     persistSessionEntry: vi.fn().mockResolvedValue(undefined),
+    lifecycle: createAgentLifecycleTerminalBackstop({
+      runId: "test-session-id",
+      sessionKey: "cron:source-delivery-guard:run:test-session-id",
+      getLifecycleGeneration: getAgentEventLifecycleGeneration,
+      resolveTerminationFields: () => ({}),
+    }),
     abortReason: () => "aborted",
     isAborted: () => false,
-    thinkLevel: undefined,
+    immutableThinkLevel: undefined,
+    loadThinkingCatalog: async () => [],
     timeoutMs: 60_000,
     suppressExecNotifyOnExit: true,
     resolvedDelivery,

@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.core.test.shard.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-agents-other.tsbuildinfo"
+  },
+  "include": [
+    "../../src/agents/**/*.test.ts",
+    "../../src/agents/**/*.test.tsx"
+  ],
+  "exclude": [
+    "../../node_modules",
+    "../../dist",
+    "../../**/dist/**",
+    "../../src/agents/command/**/*.test.ts",
+    "../../src/agents/command/**/*.test.tsx",
+    "../../src/agents/*.test.ts",
+    "../../src/agents/*.test.tsx",
+    "../../src/agents/tools/**/*.test.ts",
+    "../../src/agents/tools/**/*.test.tsx"
+  ]
+}

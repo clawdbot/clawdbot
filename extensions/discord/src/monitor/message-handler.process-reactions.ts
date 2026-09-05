@@ -2,7 +2,6 @@
 import { resolveAckReaction } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
-  DEFAULT_TIMING,
   logAckFailure,
   shouldAckReaction as shouldAckReactionGate,
   type StatusReactionController,
@@ -49,7 +48,6 @@ export function createDiscordMessageReactionRuntime(params: {
     isGuildMessage,
     isDirectMessage,
     isGroupDm,
-    shouldRequireMention,
     canDetectMention,
     effectiveWasMentioned,
     shouldBypassMention,
@@ -67,7 +65,6 @@ export function createDiscordMessageReactionRuntime(params: {
       isDirect: isDirectMessage,
       isGroup: isGuildMessage || isGroupDm,
       isMentionableGroup: isGuildMessage,
-      requireMention: shouldRequireMention,
       canDetectMention,
       effectiveWasMentioned,
       shouldBypassMention,
@@ -92,15 +89,13 @@ export function createDiscordMessageReactionRuntime(params: {
     messageId: message.id,
     reactionContext: ackReactionContext,
   });
-  const statusReactionTiming = DEFAULT_TIMING;
   let statusReactionTarget = `${messageChannelId}/${message.id}`;
   let statusReactionsActive = statusReactionsEnabled;
   let statusReactions: StatusReactionController = createStatusReactionController({
     enabled: statusReactionsEnabled,
     adapter: discordAdapter,
     initialEmoji: ackReaction,
-    emojis: undefined,
-    timing: statusReactionTiming,
+    presentation: "acknowledgement",
     onError: (err) => {
       logAckFailure({
         log: logVerbose,
@@ -183,8 +178,7 @@ export function createDiscordMessageReactionRuntime(params: {
         reactionContext: ackReactionContext,
       }),
       initialEmoji: emoji,
-      emojis: undefined,
-      timing: statusReactionTiming,
+      presentation: "acknowledgement",
       onError: (err) => {
         logAckFailure({
           log: logVerbose,

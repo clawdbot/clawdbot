@@ -1,5 +1,6 @@
 // Channel outbound send tests cover CLI send runtime handoff to channel outbound adapters.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 
 const mocks = vi.hoisted(() => ({
   loadChannelOutboundAdapter: vi.fn(),
@@ -22,6 +23,32 @@ describe("createChannelOutboundRuntimeSend", () => {
     }
     return params;
   }
+
+  it.each(["discord", "telegram"] as const)(
+    "classifies unavailable %s adapters as definitely not dispatched",
+    async (channelId) => {
+      mocks.loadChannelOutboundAdapter.mockResolvedValue(undefined);
+      const unavailableMessage = `${channelId} outbound adapter is unavailable.`;
+
+      const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
+      const runtimeSend = createChannelOutboundRuntimeSend({
+        channelId,
+        unavailableMessage,
+      });
+
+      const error = await runtimeSend
+        .sendMessage("target", "hello", { cfg: {} })
+        .catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+      expect(error).toMatchObject({
+        name: "PlatformMessageNotDispatchedError",
+        message: unavailableMessage,
+        cause: expect.objectContaining({
+          message: unavailableMessage,
+        }),
+      });
+    },
+  );
 
   it("routes media sends through sendMedia and preserves media access", async () => {
     const sendMedia = vi.fn(async () => ({ channel: "whatsapp", messageId: "wa-1" }));
@@ -83,6 +110,8 @@ describe("createChannelOutboundRuntimeSend", () => {
       cfg: {},
       accountId: "default",
       deliveryQueueId: "queue-1",
+      deliveryPartIndex: 3,
+      deliveryPartCount: 4,
       onPlatformSendDispatch,
     });
 
@@ -92,6 +121,8 @@ describe("createChannelOutboundRuntimeSend", () => {
     expect(params.text).toBe("hello");
     expect(params.accountId).toBe("default");
     expect(params.deliveryQueueId).toBe("queue-1");
+    expect(params.deliveryPartIndex).toBe(3);
+    expect(params.deliveryPartCount).toBe(4);
     expect(params.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
   });
 

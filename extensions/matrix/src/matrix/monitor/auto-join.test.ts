@@ -22,6 +22,12 @@ function createClientStub() {
       }
       return client;
     }),
+    off: vi.fn((eventName: string, listener: unknown) => {
+      if (eventName === "room.invite" && inviteHandler === listener) {
+        inviteHandler = null;
+      }
+      return client;
+    }),
     joinRoom: vi.fn(async () => {}),
     resolveRoom: vi.fn(async () => null),
   } as unknown as import("../sdk.js").MatrixClient;
@@ -30,6 +36,7 @@ function createClientStub() {
     client,
     getInviteHandler: () => inviteHandler,
     joinRoom: (client as unknown as { joinRoom: ReturnType<typeof vi.fn> }).joinRoom,
+    off: (client as unknown as { off: ReturnType<typeof vi.fn> }).off,
     resolveRoom: (client as unknown as { resolveRoom: ReturnType<typeof vi.fn> }).resolveRoom,
   };
 }
@@ -41,6 +48,9 @@ function registerAutoJoinHarness(params: {
   error?: ReturnType<typeof vi.fn>;
 }) {
   const harness = createClientStub();
+  const runDetachedTask = vi.fn((_label: string, task: () => Promise<void>) =>
+    Promise.resolve().then(task),
+  );
   if (params.resolveRoomValues) {
     for (const value of params.resolveRoomValues) {
       harness.resolveRoom.mockResolvedValueOnce(value);
@@ -49,16 +59,17 @@ function registerAutoJoinHarness(params: {
     harness.resolveRoom.mockResolvedValue(params.resolveRoomValue);
   }
 
-  registerMatrixAutoJoin({
+  const dispose = registerMatrixAutoJoin({
     client: harness.client,
     accountConfig: params.accountConfig ?? {},
     runtime: {
       log: vi.fn(),
       error: params.error ?? vi.fn(),
     } as unknown as RuntimeEnv,
+    runDetachedTask,
   });
 
-  return harness;
+  return { ...harness, dispose, runDetachedTask };
 }
 
 async function triggerInvite(
@@ -212,5 +223,24 @@ describe("registerMatrixAutoJoin", () => {
     });
 
     await expect(triggerInvite(getInviteHandler, {})).resolves.toBeUndefined();
+  });
+
+  it("removes the exact invite listener on disposal", async () => {
+    const { dispose, getInviteHandler, joinRoom, off, runDetachedTask } = registerAutoJoinHarness({
+      accountConfig: {
+        autoJoin: "always",
+      },
+    });
+    const listener = getInviteHandler();
+    if (!listener) {
+      throw new Error("expected Matrix invite handler");
+    }
+
+    dispose();
+
+    expect(off).toHaveBeenCalledWith("room.invite", listener);
+    expect(getInviteHandler()).toBeNull();
+    expect(runDetachedTask).not.toHaveBeenCalled();
+    expect(joinRoom).not.toHaveBeenCalled();
   });
 });

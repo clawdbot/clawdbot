@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements gateway log redaction behavior.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
-import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { escapeRegExp, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   QA_PROVIDER_SECRET_ENV_KEY_PATTERNS,
   QA_PROVIDER_SECRET_ENV_VARS,
@@ -20,6 +21,8 @@ const QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS = Object.freeze([
   "client_secret",
   "cookie",
   "driverToken",
+  "privateKey",
+  "authTag",
   "sutToken",
   "leaseToken",
   "refreshToken",
@@ -58,21 +61,41 @@ function redactSecretEnvKeyPattern(text: string, pattern: RegExp) {
 
 function redactSecretValueKey(text: string, key: string) {
   const escapedKey = escapeRegExp(key);
+  const valuePattern = `[^\\s"';,]+|"(?:\\\\.|[^"\\\\])*"|'[^']*'`;
   return text
     .replace(new RegExp(`([?#&]${escapedKey}=)[^&\\s]+`, "gi"), "$1<redacted>")
     .replace(
-      new RegExp(`(^|\\s)(--${escapedKey})(\\s*[=:]\\s*)([^\\s"';,]+|"[^"]*"|'[^']*')`, "gi"),
+      new RegExp(`(^|\\s)(--${escapedKey})(\\s*[=:]\\s*)(${valuePattern})`, "gi"),
       `$1$2$3<redacted>`,
     )
     .replace(
-      new RegExp(`(^|[^\\w?#&-])(${escapedKey})(\\s*[=:]\\s*)([^\\s"';,]+|"[^"]*"|'[^']*')`, "gi"),
+      new RegExp(`(^|[^\\w?#&-])(${escapedKey})(\\s*[=:]\\s*)(${valuePattern})`, "gi"),
       `$1$2$3<redacted>`,
     )
-    .replace(new RegExp(`("${escapedKey}"\\s*:\\s*)"[^"]*"`, "gi"), `$1"<redacted>"`);
+    .replace(new RegExp(`("${escapedKey}"\\s*:\\s*)"(?:\\\\.|[^"\\\\])*"`, "gi"), `$1"<redacted>"`);
+}
+
+function redactStructuredSecretLine(text: string, key: string) {
+  const escapedKey = escapeRegExp(key);
+  return text.replace(
+    new RegExp(`(^|[\\r\\n])(\\s*"?${escapedKey}"?\\s*[:=]\\s*).*$`, "gim"),
+    `$1$2<redacted>`,
+  );
+}
+
+function redactStructuredSecretArray(text: string, key: string) {
+  const escapedKey = escapeRegExp(key);
+  const quotedString = `"(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'`;
+  const quotedStringArray = `\\[\\s*(?:${quotedString})(?:\\s*,\\s*(?:${quotedString}))*\\s*\\]`;
+  return text.replace(
+    new RegExp(`("?${escapedKey}"?\\s*[:=]\\s*)${quotedStringArray}`, "gi"),
+    `$1<redacted>`,
+  );
 }
 
 export function redactQaGatewayDebugText(text: string) {
   let redacted = redactSensitiveText(redactTelegramBotTokens(text), { mode: "tools" });
+  redacted = redactStructuredSecretArray(redacted, "authTag");
   for (const key of QA_GATEWAY_DEBUG_SECRET_HEADER_KEYS) {
     const escapedKey = escapeRegExp(key);
     redacted = redacted.replace(
@@ -97,6 +120,9 @@ export function redactQaGatewayDebugText(text: string) {
   for (const key of QA_GATEWAY_DEBUG_SECRET_VALUE_KEYS) {
     redacted = redactSecretValueKey(redacted, key);
   }
+  for (const key of ["authTag", "privateKey"]) {
+    redacted = redactStructuredSecretLine(redacted, key);
+  }
   return redacted
     .replaceAll(/\bsk-ant-oat01-[A-Za-z0-9_-]+\b/g, "<redacted>")
     .replaceAll(/\bBearer\s+[^\s"'<>]{8,}/gi, "Bearer <redacted>")
@@ -114,4 +140,20 @@ export function redactQaGatewayDebugText(text: string) {
 export function formatQaGatewayLogsForError(logs: string) {
   const sanitized = redactQaGatewayDebugText(logs).trim();
   return sanitized.length > 0 ? `\nGateway logs:\n${sanitized}` : "";
+}
+
+export function createQaGatewayCliError(error: unknown): Error {
+  // Candidate errors can carry credentials in nested causes, spawnargs, or output.
+  // Retain only a bounded, redacted message, including for lifecycle-held failures.
+  let message = redactQaGatewayDebugText(coerceErrorMessage(error));
+  const maxChars = 2_048;
+  if (message.length > maxChars) {
+    // Doctor can print setup panels before its terminal error. Preserve both
+    // ends after redaction so the bounded diagnostic retains the failure.
+    // Keep the tail on this line so slicing cannot create a workflow command.
+    const marker = "\n… output omitted … ";
+    const edgeChars = Math.floor((maxChars - marker.length) / 2);
+    message = `${sliceUtf16Safe(message, 0, edgeChars)}${marker}${sliceUtf16Safe(message, -edgeChars)}`;
+  }
+  return new Error(message);
 }

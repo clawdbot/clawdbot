@@ -1,8 +1,8 @@
-import { finalizeEvent, type Event, type Relay } from "nostr-tools";
+import { compareEvents, finalizeEvent, type Event, type Relay } from "nostr-tools";
+import { queryBuzzRelaySnapshot } from "./relay-subscription.js";
 
 const PROFILE_KIND = 0;
 const AGENT_PROFILE_KIND = 10_100;
-const PROFILE_QUERY_TIMEOUT_MS = 5_000;
 const DEFAULT_CHANNEL_ADD_POLICY = "anyone";
 const CHANNEL_ADD_POLICIES = new Set(["anyone", "owner_only", "nobody"]);
 
@@ -49,63 +49,31 @@ function readNonEmptyString(content: Record<string, unknown>, key: string): stri
 async function queryCurrentProfiles(params: {
   relay: Relay;
   publicKey: string;
+  onTimeout?: (error: Error) => void;
   signal?: AbortSignal;
 }): Promise<Map<number, Event>> {
   params.signal?.throwIfAborted();
-  return await new Promise<Map<number, Event>>((resolve, reject) => {
-    const latestByKind = new Map<number, Event>();
-    const state: {
-      settled: boolean;
-      timeout?: ReturnType<typeof setTimeout>;
-      subscription?: ReturnType<Relay["subscribe"]>;
-    } = { settled: false };
-    const finish = (error?: unknown) => {
-      if (state.settled) {
-        return;
+  const latestByKind = new Map<number, Event>();
+  return await queryBuzzRelaySnapshot({
+    relay: params.relay,
+    filters: [
+      { kinds: [PROFILE_KIND], authors: [params.publicKey], limit: 1 },
+      { kinds: [AGENT_PROFILE_KIND], authors: [params.publicKey], limit: 1 },
+    ],
+    signal: params.signal,
+    timeoutMessage: "Timed out loading current Buzz profile",
+    abortMessage: "Buzz profile query aborted",
+    failureMessage: "Buzz profile query failed",
+    closeReason: "profile query complete",
+    closeMessage: (reason) => `Buzz profile query closed: ${reason}`,
+    onEvent: (event) => {
+      const current = latestByKind.get(event.kind);
+      if (!current || compareEvents(event, current) < 0) {
+        latestByKind.set(event.kind, event);
       }
-      state.settled = true;
-      if (state.timeout) {
-        clearTimeout(state.timeout);
-      }
-      params.signal?.removeEventListener("abort", onAbort);
-      state.subscription?.close("profile query complete");
-      if (error !== undefined) {
-        reject(
-          error instanceof Error ? error : new Error("Buzz profile query failed", { cause: error }),
-        );
-        return;
-      }
-      resolve(latestByKind);
-    };
-    const onAbort = () => finish(params.signal?.reason ?? new Error("Buzz profile query aborted"));
-    params.signal?.addEventListener("abort", onAbort, { once: true });
-    state.timeout = setTimeout(
-      () => finish(new Error("Timed out querying the Buzz bot profile")),
-      PROFILE_QUERY_TIMEOUT_MS,
-    );
-    state.subscription = params.relay.subscribe(
-      [
-        { kinds: [PROFILE_KIND], authors: [params.publicKey], limit: 1 },
-        { kinds: [AGENT_PROFILE_KIND], authors: [params.publicKey], limit: 1 },
-      ],
-      {
-        onevent: (event) => {
-          const current = latestByKind.get(event.kind);
-          if (!current || event.created_at > current.created_at) {
-            latestByKind.set(event.kind, event);
-          }
-        },
-        oneose: () => finish(),
-        onclose: (reason) => {
-          if (reason !== "profile query complete") {
-            finish(new Error(`Buzz profile query closed: ${reason}`));
-          }
-        },
-      },
-    );
-    if (state.settled) {
-      state.subscription.close("profile query complete");
-    }
+    },
+    result: () => latestByKind,
+    onTimeout: params.onTimeout,
   });
 }
 
@@ -134,6 +102,7 @@ export async function syncBuzzProfile(params: {
   publicKey: string;
   displayName: string;
   authTag?: string[];
+  onFatalError?: (error: Error) => void;
   signal?: AbortSignal;
 }): Promise<BuzzProfileSyncResult> {
   const displayName = params.displayName.trim();
@@ -141,7 +110,11 @@ export async function syncBuzzProfile(params: {
     return { status: "unchanged" };
   }
 
-  const currentProfiles = await queryCurrentProfiles(params);
+  const currentProfiles = await queryCurrentProfiles({
+    ...params,
+    onTimeout: params.onFatalError,
+  });
+  params.signal?.throwIfAborted();
   const currentMetadata = currentProfiles.get(PROFILE_KIND);
   const currentAgentProfile = currentProfiles.get(AGENT_PROFILE_KIND);
   const metadataContent = parseProfileContent(currentMetadata);
@@ -199,12 +172,15 @@ export async function syncBuzzProfile(params: {
     );
   }
 
-  if (events.length === 0) {
+  const lastEvent = events.at(-1);
+  if (!lastEvent) {
     return { status: "unchanged" };
   }
   for (const event of events) {
+    // A previous publish acknowledgement can arrive after this account stopped.
+    params.signal?.throwIfAborted();
     await params.relay.publish(event);
   }
-  const lastEvent = events.at(-1);
-  return lastEvent ? { status: "published", eventId: lastEvent.id } : { status: "unchanged" };
+  params.signal?.throwIfAborted();
+  return { status: "published", eventId: lastEvent.id };
 }

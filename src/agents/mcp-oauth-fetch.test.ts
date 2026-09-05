@@ -1,11 +1,13 @@
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
+import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 
 const oauthMocks = vi.hoisted(() => ({
   recordAuthorizationRequired: vi.fn(),
   resolve: vi.fn(),
 }));
+const IDENTITY = operatorMcpOAuthIdentity("docs", "https://mcp.example.com/mcp");
 
 vi.mock("./mcp-oauth.js", () =>
   Object.fromEntries([
@@ -36,8 +38,7 @@ describe("MCP OAuth bearer fetch", () => {
     const wrapped = withMcpOAuthBearer({
       fetchFn,
       authFetchFn: fetchFn,
-      serverName: "docs",
-      resourceUrl: "https://mcp.example.com/mcp",
+      identity: IDENTITY,
     });
 
     await wrapped("https://mcp.example.com/mcp", { headers: { "x-tenant": "docs" } });
@@ -68,8 +69,7 @@ describe("MCP OAuth bearer fetch", () => {
     const wrapped = withMcpOAuthBearer({
       fetchFn,
       authFetchFn: fetchFn,
-      serverName: "docs",
-      resourceUrl: "https://mcp.example.com/mcp",
+      identity: IDENTITY,
       config: { scope: "fallback" },
     });
     const controller = new AbortController();
@@ -108,8 +108,7 @@ describe("MCP OAuth bearer fetch", () => {
     const wrapped = withMcpOAuthBearer({
       fetchFn,
       authFetchFn: fetchFn,
-      serverName: "docs",
-      resourceUrl: "https://mcp.example.com/mcp",
+      identity: IDENTITY,
     });
 
     await expect(wrapped("https://mcp.example.com/mcp")).resolves.toMatchObject({ status: 200 });
@@ -138,8 +137,7 @@ describe("MCP OAuth bearer fetch", () => {
     const wrapped = withMcpOAuthBearer({
       fetchFn,
       authFetchFn: fetchFn,
-      serverName: "docs",
-      resourceUrl: "https://mcp.example.com/mcp",
+      identity: IDENTITY,
     });
 
     const response = await wrapped(
@@ -173,8 +171,7 @@ describe("MCP OAuth bearer fetch", () => {
     const wrapped = withMcpOAuthBearer({
       fetchFn,
       authFetchFn: fetchFn,
-      serverName: "docs",
-      resourceUrl: "https://mcp.example.com/mcp",
+      identity: IDENTITY,
     });
 
     await expect(wrapped("https://mcp.example.com/mcp")).rejects.toBe(loginRequired);
@@ -199,8 +196,7 @@ describe("MCP OAuth bearer fetch", () => {
     const wrapped = withMcpOAuthBearer({
       fetchFn,
       authFetchFn: fetchFn,
-      serverName: "docs",
-      resourceUrl: "https://mcp.example.com/mcp",
+      identity: IDENTITY,
     });
 
     await expect(wrapped("https://mcp.example.com/mcp")).resolves.toMatchObject({ status: 401 });
@@ -208,9 +204,8 @@ describe("MCP OAuth bearer fetch", () => {
     expect(oauthMocks.resolve).toHaveBeenCalledTimes(2);
     expect(oauthMocks.recordAuthorizationRequired).toHaveBeenCalledWith(
       expect.objectContaining({
+        identity: IDENTITY,
         rejectedAccessToken: "test-auth-token",
-        serverName: "docs",
-        serverUrl: "https://mcp.example.com/mcp",
       }),
     );
   });

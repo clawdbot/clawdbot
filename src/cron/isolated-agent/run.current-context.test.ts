@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
+  dispatchCronDeliveryMock,
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   makeCronSessionEntry,
@@ -27,7 +28,10 @@ describe("runCronIsolatedAgentTurn — current conversation context", () => {
 
   it("prepends the bound source conversation to a current-target payload", async () => {
     mockRunCronFallbackPassthrough();
-    const sourceSessionEntry = makeCronSessionEntry({ sessionId: "source-session" });
+    const sourceSessionEntry = makeCronSessionEntry({
+      sessionId: "source-session",
+      lifecycleRevision: "source-revision",
+    });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({ store: { [sourceSessionKey]: sourceSessionEntry } }),
     );
@@ -57,6 +61,15 @@ describe("runCronIsolatedAgentTurn — current conversation context", () => {
     );
     expect(embeddedPrompt()).toContain(
       "Recent conversation:\n- User: Otters hold hands while sleeping.\n- Assistant: Got it.\n\nSummarize the animal fact.",
+    );
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceSessionKey,
+        sourceSessionGeneration: {
+          sessionId: "source-session",
+          lifecycleRevision: "source-revision",
+        },
+      }),
     );
   });
 

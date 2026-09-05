@@ -1,4 +1,5 @@
 // Msteams plugin module implements download behavior.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -18,6 +19,7 @@ import {
   isDownloadableAttachment,
   isRecord,
   isUrlAllowed,
+  isRedirectStatus,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
   type MSTeamsAttachmentResolveFn,
@@ -130,10 +132,6 @@ function scopeCandidatesForUrl(url: string): string[] {
   }
 }
 
-function isRedirectStatus(status: number): boolean {
-  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
-}
-
 async function resolveInlineDataImageMime(inline: {
   data: Buffer;
   contentType?: string;
@@ -178,8 +176,7 @@ async function fetchWithAuthFallback(params: {
   if (!isUrlAllowed(params.url, params.policy.authAllowHosts)) {
     return firstAttempt;
   }
-  await firstAttempt.body?.cancel();
-
+  let fallbackAttempt = firstAttempt;
   const scopes = scopeCandidatesForUrl(params.url);
   const fetchFn = params.fetchFn ?? fetch;
   for (const scope of scopes) {
@@ -203,25 +200,18 @@ async function fetchWithAuthFallback(params: {
         resolveFn: params.resolveFn,
         timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
       });
-      if (authAttempt.ok) {
-        return authAttempt;
-      }
-      if (isRedirectStatus(authAttempt.status)) {
+      await fallbackAttempt.body?.cancel().catch(() => undefined);
+      if (authAttempt.ok || isRedirectStatus(authAttempt.status)) {
         // Redirects in guarded fetch mode must propagate to the outer guard.
         return authAttempt;
       }
-      if (authAttempt.status !== 401 && authAttempt.status !== 403) {
-        // Preserve scope fallback semantics for non-auth failures.
-        await authAttempt.body?.cancel();
-        continue;
-      }
-      await authAttempt.body?.cancel();
+      fallbackAttempt = authAttempt;
     } catch {
       // Try the next scope.
     }
   }
 
-  return firstAttempt;
+  return fallbackAttempt;
 }
 
 /**
@@ -345,7 +335,7 @@ export async function downloadMSTeamsAttachments(params: {
       } catch (err) {
         out.push(withSourceId({ kind: candidate.mediaKind }, candidate.sourceId));
         params.logger?.warn?.("msteams inline attachment decode failed", {
-          error: err instanceof Error ? err.message : String(err),
+          error: coerceErrorMessage(err),
         });
       }
       continue;
@@ -381,7 +371,7 @@ export async function downloadMSTeamsAttachments(params: {
       out.push(withSourceId(media, candidate.sourceId));
     } catch (err) {
       out.push(withSourceId({ kind: candidate.mediaKind }, candidate.sourceId));
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = coerceErrorMessage(err);
       params.logger?.warn?.(
         `msteams attachment download failed host=${safeHostForLog(candidate.url)} error=${msg}`,
       );

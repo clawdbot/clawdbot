@@ -17,6 +17,7 @@ import {
 
 export {
   findMarkdownCodeSpans,
+  findMarkdownCodeRegions,
   scanReasoningTags,
   stripReasoningTagsFromMarkdown,
 } from "./reasoning-tag-parser.js";
@@ -81,6 +82,8 @@ export interface ReasoningTagTextPartitioner {
   pushVisible(chunk: string): ReasoningTagTextDelta[];
   flush(): ReasoningTagTextDelta[];
   hasPending(): boolean;
+  /** Whether more input can change buffered Markdown or reasoning-tag ownership. */
+  hasPendingSyntax(): boolean;
   isInsideReasoning(): boolean;
 }
 
@@ -573,6 +576,11 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         (holdStart !== undefined && holdStart < source.length) ||
         reduction.depth > 0 ||
         emitted < source.length
+      );
+    },
+    hasPendingSyntax() {
+      return (
+        pendingTagProbe !== undefined || heldBacktickStart !== undefined || reduction.depth > 0
       );
     },
     isInsideReasoning() {

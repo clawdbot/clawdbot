@@ -1,7 +1,12 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { resolveSessionNavigation, visibleSessionMatches } from "./navigation.ts";
+import {
+  compareSessionRowsByUpdatedAt,
+  isSystemCreatedSessionRow,
+  resolveSessionNavigation,
+  visibleSessionMatches,
+} from "./navigation.ts";
 
 function sessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
   return {
@@ -31,9 +36,17 @@ describe("resolveSessionNavigation", () => {
   });
 
   it("hides cron sessions unless showCron opts in", () => {
+    // Cron creation stamps a system actor; the automation toggle alone must
+    // reveal cron rows without also enabling showSystem.
     const rows: GatewaySessionRow[] = [
       { key: "agent:main:chat", kind: "direct", updatedAt: 300 },
-      { key: "agent:main:cron:job", kind: "cron" as never, updatedAt: 200 },
+      {
+        key: "agent:main:cron:job",
+        kind: "cron" as never,
+        updatedAt: 200,
+        createdVia: "cron",
+        createdActor: { type: "system" },
+      },
     ];
 
     const hidden = resolveSessionNavigation({
@@ -53,6 +66,61 @@ describe("resolveSessionNavigation", () => {
       "agent:main:chat",
       "agent:main:cron:job",
     ]);
+  });
+
+  it("hides system-created probe sessions unless showSystem opts in", () => {
+    const rows: GatewaySessionRow[] = [
+      { key: "agent:main:chat", kind: "direct", updatedAt: 300 },
+      {
+        key: "agent:main:explicit:healthcheck",
+        kind: "direct",
+        updatedAt: 200,
+        createdVia: "run",
+      },
+    ];
+
+    const hidden = resolveSessionNavigation({
+      result: sessionsResult(rows),
+      resultAgentId: "main",
+      sessionKey: "agent:main:chat",
+    });
+    expect(hidden.visibleSessions.map((row) => row.key)).toEqual(["agent:main:chat"]);
+
+    const shown = resolveSessionNavigation({
+      result: sessionsResult(rows),
+      resultAgentId: "main",
+      sessionKey: "agent:main:chat",
+      showSystem: true,
+    });
+    expect(shown.visibleSessions.map((row) => row.key)).toEqual([
+      "agent:main:chat",
+      "agent:main:explicit:healthcheck",
+    ]);
+  });
+
+  it("keeps a selected system-classified session visible with showSystem off", () => {
+    // Accepted-tradeoff escape hatch: a profile-less explicit CLI session
+    // matches the system classifier, but selecting it must always surface it.
+    const rows: GatewaySessionRow[] = [
+      { key: "agent:main:chat", kind: "direct", updatedAt: 300 },
+      {
+        key: "agent:main:explicit:incident-debug",
+        kind: "direct",
+        updatedAt: 200,
+        createdVia: "run",
+      },
+    ];
+
+    const navigation = resolveSessionNavigation({
+      result: sessionsResult(rows),
+      resultAgentId: "main",
+      sessionKey: "agent:main:explicit:incident-debug",
+    });
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([
+      "agent:main:chat",
+      "agent:main:explicit:incident-debug",
+    ]);
+    expect(navigation.activeRowKey).toBe("agent:main:explicit:incident-debug");
   });
 
   it("uses the caller's sort order before applying the recent-session projection", () => {
@@ -214,7 +282,7 @@ describe("resolveSessionNavigation", () => {
 describe("visibleSessionMatches", () => {
   const baseHost = {
     assistantAgentId: "work",
-    agentsList: { defaultId: "main", mainKey: "workspace" },
+    agentsList: { defaultId: "main", mainKey: "workspace", scope: "global" },
     hello: null,
   };
   const routeGroups: Array<{
@@ -227,7 +295,7 @@ describe("visibleSessionMatches", () => {
       hostKeys: [
         "main",
         "workspace",
-        "agent:main:global",
+
         "agent:main:main",
         "agent:main:workspace",
       ],
@@ -235,27 +303,27 @@ describe("visibleSessionMatches", () => {
         { sessionKey: "global", agentId: "main" },
         { sessionKey: "main" },
         { sessionKey: "workspace" },
-        { sessionKey: "agent:main:global" },
+
         { sessionKey: "agent:main:main" },
         { sessionKey: "agent:main:workspace" },
       ],
     },
     {
       owner: "work",
-      hostKeys: ["global", "agent:work:global", "agent:work:main", "agent:work:workspace"],
+      hostKeys: ["global", "agent:work:main", "agent:work:workspace"],
       candidates: [
         { sessionKey: "global", agentId: "work" },
-        { sessionKey: "agent:work:global" },
+
         { sessionKey: "agent:work:main" },
         { sessionKey: "agent:work:workspace" },
       ],
     },
     {
       owner: "alpha",
-      hostKeys: ["agent:alpha:global", "agent:alpha:main", "agent:alpha:workspace"],
+      hostKeys: ["agent:alpha:main", "agent:alpha:workspace"],
       candidates: [
         { sessionKey: "global", agentId: "alpha" },
-        { sessionKey: "agent:alpha:global" },
+
         { sessionKey: "agent:alpha:main" },
         { sessionKey: "agent:alpha:workspace" },
       ],
@@ -292,7 +360,7 @@ describe("visibleSessionMatches", () => {
       "global",
       "main",
       "workspace",
-      "agent:work:global",
+
       "agent:work:main",
       "agent:work:workspace",
     ];
@@ -304,7 +372,7 @@ describe("visibleSessionMatches", () => {
       const host = {
         ...baseHost,
         sessionKey: hostKey,
-        agentsList: { defaultId: "work", mainKey: "workspace" },
+        agentsList: { defaultId: "work", mainKey: "workspace", scope: "global" },
       };
       for (const candidate of candidates) {
         expect(visibleSessionMatches(host, candidate.sessionKey, candidate.agentId)).toBe(true);
@@ -339,5 +407,56 @@ describe("visibleSessionMatches", () => {
     expect(visibleSessionMatches(bareHost, "room:123", "main")).toBe(true);
     expect(visibleSessionMatches(bareHost, "room:123", "work")).toBe(false);
     expect(visibleSessionMatches(bareHost, "room:456", "main")).toBe(false);
+  });
+});
+
+describe("isSystemCreatedSessionRow", () => {
+  const base = { key: "agent:main:explicit:probe", kind: "direct", updatedAt: 1 } as const;
+  it("keeps a newly created operator-named CLI session visible", () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:incident-42",
+      kind: "direct",
+      updatedAt: 1,
+      createdVia: "run",
+      displayName: "incident-42",
+    };
+
+    expect(isSystemCreatedSessionRow(row)).toBe(false);
+  });
+
+  it.each([
+    ["run + no actor + unnamed is system", { createdVia: "run" }, true],
+    ["internal + no actor + unnamed is system", { createdVia: "internal" }, true],
+    ["system actor is system regardless of via", { createdActor: { type: "system" } }, true],
+    [
+      "run + human actor stays visible",
+      { createdVia: "run", createdActor: { type: "human" } },
+      false,
+    ],
+    ["run + label stays visible", { createdVia: "run", label: "My batch job" }, false],
+    ["operator creation stays visible", { createdVia: "operator" }, false],
+    ["legacy row without provenance stays visible", {}, false],
+    [
+      "cron row with system actor is owned by the automation toggle",
+      { key: "agent:main:cron:job", createdVia: "cron", createdActor: { type: "system" } },
+      false,
+    ],
+  ] as const)("%s", (_name, fields, expected) => {
+    expect(isSystemCreatedSessionRow({ ...base, ...fields } as GatewaySessionRow)).toBe(expected);
+  });
+});
+
+describe("compareSessionRowsByUpdatedAt", () => {
+  it("breaks updatedAt ties by key, matching the gateway list order", () => {
+    // Gateway compareSessionEntryPairs ends with an ascending key tie-break
+    // ("Stable key ties keep offset paging deterministic"); a UI order that
+    // differs makes tied rows visibly swap on the canonical refresh.
+    const rows = [
+      { key: "agent:main:zeta", kind: "direct", updatedAt: null },
+      { key: "agent:main:alpha", kind: "direct", updatedAt: null },
+      { key: "agent:main:mid", kind: "direct", updatedAt: null },
+    ] as GatewaySessionRow[];
+    const sorted = rows.toSorted(compareSessionRowsByUpdatedAt).map((row) => row.key);
+    expect(sorted).toEqual(["agent:main:alpha", "agent:main:mid", "agent:main:zeta"]);
   });
 });

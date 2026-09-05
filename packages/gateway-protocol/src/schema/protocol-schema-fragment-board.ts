@@ -1,7 +1,10 @@
 import * as agentsModelsSkills from "./agents-models-skills.js";
 import * as board from "./board.js";
+import * as canvas from "./canvas.js";
 
 export const BoardProtocolSchemas = {
+  CanvasDocumentViewParams: canvas.CanvasDocumentViewParamsSchema,
+  CanvasDocumentViewResult: canvas.CanvasDocumentViewResultSchema,
   BoardTab: board.BoardTabSchema,
   BoardWidget: board.BoardWidgetSchema,
   BoardWidgetDeclared: board.BoardWidgetDeclaredSchema,
@@ -19,12 +22,15 @@ export const BoardProtocolSchemas = {
   BoardWidgetMcpAppContent: board.BoardWidgetMcpAppContentSchema,
   BoardWidgetMcpAppPutContent: board.BoardWidgetMcpAppPutContentSchema,
   BoardWidgetPluginContent: board.BoardWidgetPluginContentSchema,
+  BoardWidgetRegisteredContent: board.BoardWidgetRegisteredContentSchema,
   BoardCanvasDocumentSource: board.BoardCanvasDocumentSourceSchema,
   BoardWidgetContent: board.BoardWidgetContentSchema,
   BoardWidgetPutContent: board.BoardWidgetPutContentSchema,
+  BoardWidgetGeneratedIdentity: board.BoardWidgetGeneratedIdentitySchema,
   BoardGetParams: board.BoardGetParamsSchema,
   BoardUpdateParams: board.BoardUpdateParamsSchema,
   BoardWidgetPutParams: board.BoardWidgetPutParamsSchema,
+  BoardWidgetPutResult: board.BoardWidgetPutResultSchema,
   BoardWidgetGrantParams: board.BoardWidgetGrantParamsSchema,
   BoardWidgetAppViewParams: board.BoardWidgetAppViewParamsSchema,
   BoardWidgetAppViewResult: board.BoardWidgetAppViewResultSchema,

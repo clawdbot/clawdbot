@@ -70,6 +70,7 @@ describe("browser action input batch command", () => {
       actions: SAMPLE_ACTIONS,
       targetId: "tab-1",
     });
+    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 65_000 });
   });
 
   it("omits stopOnError by default so the route applies its fail-fast default", async () => {
@@ -158,6 +159,23 @@ describe("browser action input batch command", () => {
       actionsFile: "-",
     });
     expect(getLastActionBody()).toMatchObject({ kind: "batch", actions: SAMPLE_ACTIONS });
+  });
+
+  it("rejects conflicting inline and file actions before reading either source", async () => {
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(
+        ["browser", "batch", "--actions", "[]", "--actions-file", "/tmp/browser-actions.json"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
+      "Specify only one of --actions or --actions-file",
+    );
+    expect(mocks.readActionsPayload).not.toHaveBeenCalled();
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 
   it("rejects malformed actions JSON before dispatch", async () => {

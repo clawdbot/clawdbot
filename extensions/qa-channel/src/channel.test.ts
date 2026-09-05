@@ -1,4 +1,5 @@
 // Qa Channel tests cover channel plugin behavior.
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -12,7 +13,7 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { extractToolPayload } from "openclaw/plugin-sdk/tool-payload";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
 import { listQaChannelAccountIds, resolveDefaultQaChannelAccountId } from "./accounts.js";
@@ -106,7 +107,11 @@ function createMockQaRuntime(params?: {
   } as unknown as PluginRuntime);
 }
 
-function createQaChannelConfig(params: { baseUrl: string; allowFrom?: string[] }) {
+function createQaChannelConfig(params: {
+  baseUrl: string;
+  allowFrom?: string[];
+  mediaMaxMb?: number;
+}) {
   return {
     channels: {
       "qa-channel": {
@@ -114,6 +119,7 @@ function createQaChannelConfig(params: { baseUrl: string; allowFrom?: string[] }
         botUserId: "openclaw",
         botDisplayName: "OpenClaw QA",
         allowFrom: params.allowFrom,
+        mediaMaxMb: params.mediaMaxMb,
       },
     },
   };
@@ -146,12 +152,17 @@ function requireQaActionHandler() {
 async function startQaChannelTestHarness(params?: {
   runtime?: PluginRuntime;
   allowFrom?: string[];
+  mediaMaxMb?: number;
 }) {
   installQaChannelTestRegistry();
   const state = createQaBusState();
   const bus = await startQaBusServer({ state });
   setQaChannelRuntime(params?.runtime ?? createMockQaRuntime());
-  const cfg = createQaChannelConfig({ baseUrl: bus.baseUrl, allowFrom: params?.allowFrom });
+  const cfg = createQaChannelConfig({
+    baseUrl: bus.baseUrl,
+    allowFrom: params?.allowFrom,
+    mediaMaxMb: params?.mediaMaxMb,
+  });
   const account = qaChannelPlugin.config.resolveAccount(cfg, "default");
   const abort = new AbortController();
   const startAccount = requireQaStartAccount();
@@ -291,7 +302,6 @@ describe("qa-channel plugin", () => {
           text: "hello",
           accountId: "default",
           replyToId: "parent-1",
-          threadId: "thread-1",
         });
         const receiptPart = result.receipt.parts[0];
         expect(receiptPart?.kind).toBe("text");
@@ -312,13 +322,17 @@ describe("qa-channel plugin", () => {
           },
           accountId: "default",
           replyToId: "parent-1",
-          threadId: "thread-1",
         };
         const result =
           kind === "payload"
             ? await adapter.send!.payload!({
                 ...context,
-                payload: { text: context.text, mediaUrl: mediaPath, mediaUrls: [mediaPath] },
+                payload: {
+                  text: context.text,
+                  mediaUrl: mediaPath,
+                  mediaUrls: [mediaPath],
+                  isError: true,
+                },
               })
             : await adapter.send!.media!(context);
         expect(result.receipt.parts[0]).toMatchObject({
@@ -326,6 +340,9 @@ describe("qa-channel plugin", () => {
           replyToId: "parent-1",
           threadId: "thread-1",
         });
+        if (kind === "payload") {
+          expect(harness.state.getSnapshot().messages.at(-1)?.isError).toBe(true);
+        }
       };
 
       await verifyChannelMessageAdapterCapabilityProofs({
@@ -604,103 +621,193 @@ describe("qa-channel plugin", () => {
     }
   });
 
-  it("exposes thread and message actions against the qa bus", async () => {
+  it.each(["inline", "remote"] as const)(
+    "rejects oversized %s inbound bytes without stopping subsequent messages",
+    async (source) => {
+      const dispatched: Record<string, unknown>[] = [];
+      const originalFetch = globalThis.fetch;
+      if (source === "remote") {
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = new URL(input instanceof Request ? input.url : String(input));
+            if (url.hostname === "93.184.216.34") {
+              return new Response(Buffer.alloc(Number(url.pathname.slice(1)), 0x61), {
+                headers: { "content-type": "text/plain" },
+              });
+            }
+            return originalFetch(input, init);
+          }),
+        );
+      }
+      const harness = await startQaChannelTestHarness({
+        allowFrom: ["*"],
+        mediaMaxMb: 1 / 1024,
+        runtime: createMockQaRuntime({ onDispatch: (ctx) => dispatched.push(ctx) }),
+      });
+      try {
+        for (const [text, bytes] of [
+          ["oversized", 1536],
+          ["small", 512],
+        ] as const) {
+          harness.state.addInboundMessage({
+            conversation: { id: "alice", kind: "direct" },
+            senderId: "alice",
+            text,
+            attachments: [
+              {
+                id: text,
+                kind: "file",
+                mimeType: "text/plain",
+                fileName: `${text}.txt`,
+                ...(source === "inline"
+                  ? { contentBase64: Buffer.alloc(bytes, 0x61).toString("base64") }
+                  : { url: `https://93.184.216.34/${bytes}` }),
+              },
+            ],
+          });
+          await harness.state.waitFor({
+            kind: "message-text",
+            textIncludes: `qa-echo: ${text}`,
+            direction: "outbound",
+            timeoutMs: 15_000,
+          });
+        }
+        expect(dispatched).toHaveLength(2);
+        expect(dispatched[0]?.media).toEqual([]);
+        expect(dispatched[0]?.BodyForAgent).toContain("attachment unavailable");
+        expect(dispatched[1]?.media).toHaveLength(1);
+        const media = dispatched[1]?.media as Array<{ path: string }>;
+        expect(await readFile(media[0]!.path)).toEqual(Buffer.alloc(512, 0x61));
+      } finally {
+        await harness.stop();
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it("keeps deleted messages out of channel actions and makes reactions idempotent", async () => {
     installQaChannelTestRegistry();
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
 
     try {
       const cfg = createQaChannelConfig({ baseUrl: bus.baseUrl });
-
       const handleAction = requireQaActionHandler();
-
-      const threadResult = await handleAction({
-        channel: "qa-channel",
-        action: "thread-create",
+      const live = state.addOutboundMessage({ to: "channel:qa-room", text: "needle live" });
+      const deleted = state.addOutboundMessage({ to: "channel:qa-room", text: "needle deleted" });
+      const actionContext = {
+        channel: "qa-channel" as const,
         cfg,
         accountId: "default",
-        params: {
-          channelId: "qa-room",
-          title: "QA thread",
-        },
-      });
-      const threadPayload = extractToolPayload(threadResult) as {
-        thread: { id: string };
-        target: string;
       };
-      expect(threadPayload.thread.id).toMatch(/^thread-/);
-      expect(threadPayload.target).toContain(threadPayload.thread.id);
-
-      const outbound = state.addOutboundMessage({
-        to: threadPayload.target,
-        text: "message",
-        threadId: threadPayload.thread.id,
-      });
-
-      await handleAction({
-        channel: "qa-channel",
-        action: "react",
-        cfg,
-        accountId: "default",
-        params: {
-          to: threadPayload.target,
-          messageId: outbound.id,
-          emoji: "white_check_mark",
-        },
-      });
-
-      await handleAction({
-        channel: "qa-channel",
-        action: "edit",
-        cfg,
-        accountId: "default",
-        params: {
-          to: threadPayload.target,
-          messageId: outbound.id,
-          text: "message (edited)",
-        },
-      });
-
-      const readResult = await handleAction({
-        channel: "qa-channel",
-        action: "read",
-        cfg,
-        accountId: "default",
-        params: {
-          to: threadPayload.target,
-          messageId: outbound.id,
-        },
-      });
-      const readPayload = extractToolPayload(readResult) as { message: { text: string } };
-      expect(readPayload.message.text).toContain("(edited)");
-
-      const searchResult = await handleAction({
-        channel: "qa-channel",
-        action: "search",
-        cfg,
-        accountId: "default",
-        params: {
-          query: "edited",
-          channelId: "qa-room",
-          threadId: threadPayload.thread.id,
-        },
-      });
-      const searchPayload = extractToolPayload(searchResult) as {
-        messages: Array<{ id: string }>;
+      const reactionParams = {
+        to: "channel:qa-room",
+        messageId: deleted.id,
+        emoji: "eyes",
       };
-      expect(searchPayload.messages.map((message) => message.id)).toContain(outbound.id);
+
+      await handleAction({ ...actionContext, action: "react", params: reactionParams });
+      const cursorAfterReaction = state.getSnapshot().cursor;
+      await handleAction({ ...actionContext, action: "react", params: reactionParams });
+      expect(state.getSnapshot().cursor).toBe(cursorAfterReaction);
+      expect(state.readMessage({ messageId: deleted.id }).reactions).toHaveLength(1);
 
       await handleAction({
-        channel: "qa-channel",
+        ...actionContext,
         action: "delete",
+        params: { to: "channel:qa-room", messageId: deleted.id },
+      });
+
+      for (const action of ["read", "reactions", "react", "edit", "delete"] as const) {
+        await expect(
+          handleAction({
+            ...actionContext,
+            action,
+            params: {
+              to: "channel:qa-room",
+              messageId: deleted.id,
+              ...(action === "react" ? { emoji: "eyes" } : {}),
+              ...(action === "edit" ? { text: "edited after deletion" } : {}),
+            },
+          }),
+        ).rejects.toThrow("qa-channel message was deleted");
+      }
+
+      const result = await handleAction({
+        ...actionContext,
+        action: "search",
+        params: { query: "needle", channelId: "qa-room" },
+      });
+      const payload = extractToolPayload(result) as { messages: Array<{ id: string }> };
+      expect(payload.messages.map((message) => message.id)).toEqual([live.id]);
+      expect(state.readMessage({ messageId: deleted.id }).deleted).toBe(true);
+    } finally {
+      await bus.stop();
+    }
+  });
+
+  it("rejects thread replies outside the owning account and conversation", async () => {
+    installQaChannelTestRegistry();
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+
+    try {
+      const cfg = {
+        channels: {
+          "qa-channel": {
+            baseUrl: bus.baseUrl,
+            accounts: { other: { baseUrl: bus.baseUrl } },
+          },
+        },
+      };
+      const handleAction = requireQaActionHandler();
+      const thread = state.createThread({ conversationId: "qa-room", title: "Owned thread" });
+
+      for (const attempt of [
+        { accountId: "other", channelId: "qa-room" },
+        { accountId: "default", channelId: "other-room" },
+      ]) {
+        await expect(
+          handleAction({
+            channel: "qa-channel",
+            action: "thread-reply",
+            cfg,
+            accountId: attempt.accountId,
+            params: {
+              channelId: attempt.channelId,
+              threadId: thread.id,
+              text: "foreign reply",
+            },
+          }),
+        ).rejects.toThrow("qa-bus thread not found in selected account and conversation");
+      }
+      expect(state.getSnapshot().messages).toEqual([]);
+      expect(state.getSnapshot().conversations).toEqual([
+        { accountId: "default", id: "qa-room", kind: "channel" },
+      ]);
+
+      const result = await handleAction({
+        channel: "qa-channel",
+        action: "thread-reply",
         cfg,
         accountId: "default",
-        params: {
-          to: threadPayload.target,
-          messageId: outbound.id,
-        },
+        params: { to: "channel:qa-room", threadId: thread.id, message: "owned reply" },
       });
-      expect(state.readMessage({ messageId: outbound.id }).deleted).toBe(true);
+      const payload = extractToolPayload(result) as {
+        message: { id: string; threadId: string };
+        receipt: {
+          primaryPlatformMessageId?: string;
+          threadId?: string;
+          parts: Array<{ threadId?: string }>;
+        };
+      };
+      expect(payload.message.threadId).toBe(thread.id);
+      expect(payload.receipt).toMatchObject({
+        primaryPlatformMessageId: payload.message.id,
+        threadId: thread.id,
+        parts: [{ threadId: thread.id }],
+      });
     } finally {
       await bus.stop();
     }
@@ -752,7 +859,7 @@ describe("qa-channel plugin", () => {
         { action: "read", params: {} },
         { action: "reactions", params: {} },
         { action: "react", params: { emoji: "eyes" } },
-        { action: "edit", params: { text: "foreign edit" } },
+        { action: "edit", params: { message: "foreign edit" } },
         { action: "delete", params: {} },
       ];
       for (const testCase of crossedActions) {

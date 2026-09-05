@@ -2,9 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { SessionEntry } from "../config/sessions.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
+import { readExistingAgentSchemaMeta } from "../state/openclaw-agent-db-schema-helpers.js";
+import { isErrno } from "./errors.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
+import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import {
   ensureMigrationDir,
-  fileExists,
+  migrationFileExists,
   readSessionStoreJson5,
   safeReadDir,
   type SessionEntryLike,
@@ -16,7 +21,7 @@ import {
   emptyDirOrMissing,
   isAmbiguousSharedStoreKey,
   isLegacyDefaultMainAliasKey,
-  mergeSessionEntry,
+  selectNewerSessionEntry,
   normalizeSessionEntry,
   pickLatestLegacyDirectEntry,
   removeDirIfEmpty,
@@ -24,25 +29,139 @@ import {
   saveSessionStoreStrict,
   unresolvedSessionStoreIdentityWarning,
 } from "./state-migrations.session-store.js";
+import type { PreparedLegacySessionSurfaces } from "./state-migrations.session-surfaces.js";
 import type { LegacyStateDetection } from "./state-migrations.types.js";
+
+const LEGACY_AGENT_DATABASE_BASENAME = "openclaw-agent.sqlite";
+
+function legacyAgentInspectionFailure(subject: string, error: unknown) {
+  return { status: "failed", warning: `Failed inspecting ${subject}: ${String(error)}` } as const;
+}
+
+export function inspectLegacyAgentDir(
+  legacyDir: string,
+): { status: "empty" | "payload" } | { status: "failed"; warning: string } {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(legacyDir, { withFileTypes: true });
+  } catch (error) {
+    if (isErrno(error) && error.code === "ENOENT") {
+      return { status: "empty" };
+    }
+    return legacyAgentInspectionFailure(`legacy agent directory ${legacyDir}`, error);
+  }
+  if (entries.length === 0) {
+    return { status: "empty" };
+  }
+
+  const databasePath = path.join(legacyDir, LEGACY_AGENT_DATABASE_BASENAME);
+  const databaseFiles = new Set(
+    resolveSqliteDatabaseFilePaths(databasePath).map((pathname) => path.basename(pathname)),
+  );
+  const hasFilePayload = entries.some((entry) => !databaseFiles.has(entry.name));
+  const hasDatabaseFiles = entries.some((entry) => databaseFiles.has(entry.name));
+  if (!hasDatabaseFiles) {
+    return { status: hasFilePayload ? "payload" : "empty" };
+  }
+  if (!migrationFileExists(databasePath)) {
+    return legacyAgentInspectionFailure(
+      `legacy agent database ${databasePath}`,
+      "main database is missing or not a regular file",
+    );
+  }
+
+  let database: ReturnType<typeof openNodeSqliteDatabase> | undefined;
+  try {
+    const opened = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    database = opened;
+    const schemaOwner = readExistingAgentSchemaMeta(opened);
+    if (!schemaOwner || schemaOwner.role !== "agent") {
+      return legacyAgentInspectionFailure(
+        `legacy agent database ${databasePath}`,
+        "agent schema ownership metadata is missing",
+      );
+    }
+    if (!schemaOwner.agentId) {
+      return legacyAgentInspectionFailure(
+        `legacy agent database ${databasePath}`,
+        "agent schema owner is missing or blank",
+      );
+    }
+    const tableNames = opened // sqlite-allow-raw -- Read-only legacy migration payload inspection.
+      .prepare(
+        // The excluded singleton rows are seeded schema controls, not user payload.
+        `SELECT name FROM pragma_table_list
+         WHERE schema = 'main' AND type IN ('table', 'virtual')
+           AND substr(name, 1, 7) <> 'sqlite_'
+           AND name NOT IN ('schema_meta', 'session_key_contract', 'memory_index_state')`,
+      )
+      .all()
+      .flatMap((row) =>
+        row && typeof row === "object" && "name" in row && typeof row.name === "string"
+          ? [row.name]
+          : [],
+      );
+    const hasPayload = tableNames.some((name) =>
+      opened // sqlite-allow-raw -- pragma-owned names stay quoted inside this bounded probe.
+        .prepare(`SELECT 1 FROM ${quoteSqliteIdentifier(name)} LIMIT 1`)
+        .get(),
+    );
+    return { status: hasPayload || hasFilePayload ? "payload" : "empty" };
+  } catch (error) {
+    return legacyAgentInspectionFailure(`legacy agent database ${databasePath}`, error);
+  } finally {
+    database?.close();
+  }
+}
+
+function normalizeMergedSessionStore(
+  merged: Record<string, SessionEntryLike>,
+  protectedKeys: ReadonlySet<string>,
+): {
+  store: Record<string, SessionEntry>;
+  rejectedProtectedKeyCount: number;
+} {
+  const store = Object.create(null) as Record<string, SessionEntry>;
+  let rejectedProtectedKeyCount = 0;
+  for (const [key, entry] of Object.entries(merged)) {
+    const normalizedEntry = normalizeSessionEntry(entry, key);
+    if (!normalizedEntry) {
+      if (protectedKeys.has(key)) {
+        rejectedProtectedKeyCount++;
+      }
+      continue;
+    }
+    store[key] = normalizedEntry;
+  }
+  return { store, rejectedProtectedKeyCount };
+}
 
 export async function migrateLegacySessions(
   detected: LegacyStateDetection,
   now: () => number,
-  options: { recoverCorruptTargetStore?: boolean } = {},
+  options: {
+    recoverCorruptTargetStore?: boolean;
+    legacySessionSurfaces: PreparedLegacySessionSurfaces;
+  },
 ): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
   if (!detected.sessions.hasLegacy) {
     return { changes, warnings };
   }
+  if (options.legacySessionSurfaces.failures.length > 0) {
+    return {
+      changes,
+      warnings: [...options.legacySessionSurfaces.failures],
+    };
+  }
 
   ensureMigrationDir(detected.sessions.targetDir);
 
-  const legacyParsed = fileExists(detected.sessions.legacyStorePath)
+  const legacyParsed = migrationFileExists(detected.sessions.legacyStorePath)
     ? readSessionStoreJson5(detected.sessions.legacyStorePath)
     : { store: {}, ok: true };
-  const targetParsed = fileExists(detected.sessions.targetStorePath)
+  const targetParsed = migrationFileExists(detected.sessions.targetStorePath)
     ? readSessionStoreJson5(detected.sessions.targetStorePath)
     : { store: {}, ok: true };
   const legacyStore = legacyParsed.store;
@@ -98,6 +217,7 @@ export async function migrateLegacySessions(
     preserveCanonicalAgentOwner: true,
     preserveAmbiguousKeys: detected.sessions.preserveAmbiguousKeys,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
+    legacySessionSurfaces: options.legacySessionSurfaces.surfaces,
   });
   const canonicalizedLegacy = canonicalizeSessionStore({
     store: legacyStore,
@@ -106,7 +226,9 @@ export async function migrateLegacySessions(
     scope: detected.targetScope,
     preserveCanonicalAgentOwner: true,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
+    legacySessionSurfaces: options.legacySessionSurfaces.surfaces,
   });
+  const targetKeys = new Set(Object.keys(canonicalizedTarget.store));
   const preservedLegacyForeignMainAliasCount = detected.sessions.preserveForeignMainAliases
     ? Object.keys(legacyStore).filter((key) =>
         isLegacyDefaultMainAliasKey(key, detected.targetMainKey),
@@ -131,7 +253,7 @@ export async function migrateLegacySessions(
     merged[key] = entry;
   }
   for (const [key, entry] of Object.entries(canonicalizedLegacy.store)) {
-    merged[key] = mergeSessionEntry({
+    merged[key] = selectNewerSessionEntry({
       existing: merged[key],
       incoming: entry,
       preferIncomingOnTie: false,
@@ -144,7 +266,7 @@ export async function migrateLegacySessions(
   });
   let migratedDirectChatKey: string | undefined;
   if (!merged[mainKey]) {
-    const latest = pickLatestLegacyDirectEntry(legacyStore);
+    const latest = pickLatestLegacyDirectEntry(legacyStore, options.legacySessionSurfaces.surfaces);
     if (latest?.sessionId) {
       merged[mainKey] = latest;
       migratedDirectChatKey = mainKey;
@@ -157,7 +279,7 @@ export async function migrateLegacySessions(
     );
   }
 
-  const targetExists = fileExists(detected.sessions.targetStorePath);
+  const targetExists = migrationFileExists(detected.sessions.targetStorePath);
   let targetReadable = !targetExists || targetParsed.ok;
   if (!targetReadable) {
     if (options.recoverCorruptTargetStore) {
@@ -183,15 +305,14 @@ export async function migrateLegacySessions(
     (legacyParsed.ok || targetParsed.ok) &&
     (Object.keys(legacyStore).length > 0 || Object.keys(targetStore).length > 0)
   ) {
-    const normalized = Object.create(null) as Record<string, SessionEntry>;
-    for (const [key, entry] of Object.entries(merged)) {
-      const normalizedEntry = normalizeSessionEntry(entry);
-      if (!normalizedEntry) {
-        continue;
-      }
-      normalized[key] = normalizedEntry;
+    const normalized = normalizeMergedSessionStore(merged, targetKeys);
+    if (normalized.rejectedProtectedKeyCount > 0) {
+      warnings.push(
+        `Refused legacy session migration because normalization rejected ${normalized.rejectedProtectedKeyCount} existing target session ${normalized.rejectedProtectedKeyCount === 1 ? "key" : "keys"}; left ${detected.sessions.targetStorePath} and ${detected.sessions.legacyStorePath} in place. Repair the conflicting rows, then rerun openclaw doctor --fix.`,
+      );
+      return { changes, warnings };
     }
-    await saveSessionStoreStrict(detected.sessions.targetStorePath, normalized);
+    await saveSessionStoreStrict(detected.sessions.targetStorePath, normalized.store);
     if (migratedDirectChatKey) {
       changes.push(`Migrated latest direct-chat session → ${migratedDirectChatKey}`);
     }
@@ -213,7 +334,6 @@ export async function migrateLegacySessions(
     return { changes, warnings };
   }
 
-  const movedSessionFiles = new Map<string, string>();
   const entries = safeReadDir(detected.sessions.legacyDir);
   for (const entry of entries) {
     if (!entry.isFile()) {
@@ -224,54 +344,21 @@ export async function migrateLegacySessions(
     }
     const from = path.join(detected.sessions.legacyDir, entry.name);
     let to = path.join(detected.sessions.targetDir, entry.name);
-    if (fileExists(to)) {
+    if (migrationFileExists(to)) {
       const parsed = path.parse(entry.name);
       to = path.join(detected.sessions.targetDir, `${parsed.name}.legacy-${now()}${parsed.ext}`);
     }
     try {
       fs.renameSync(from, to);
-      movedSessionFiles.set(path.resolve(from), to);
       changes.push(`Moved ${entry.name} → agents/${detected.targetAgentId}/sessions`);
     } catch (err) {
       warnings.push(`Failed moving ${from}: ${String(err)}`);
     }
   }
 
-  if (movedSessionFiles.size > 0) {
-    let rewroteSessionFiles = false;
-    for (const entry of Object.values(merged)) {
-      const rawSessionFile = entry.sessionFile;
-      const legacySessionFile =
-        typeof rawSessionFile === "string"
-          ? path.resolve(detected.sessions.legacyDir, rawSessionFile)
-          : typeof entry.sessionId === "string"
-            ? path.join(detected.sessions.legacyDir, `${entry.sessionId}.jsonl`)
-            : undefined;
-      const movedSessionFile = legacySessionFile
-        ? movedSessionFiles.get(path.resolve(legacySessionFile))
-        : undefined;
-      if (!movedSessionFile) {
-        continue;
-      }
-      entry.sessionFile = movedSessionFile;
-      rewroteSessionFiles = true;
-    }
-    if (rewroteSessionFiles) {
-      const normalized = Object.create(null) as Record<string, SessionEntry>;
-      for (const [key, entry] of Object.entries(merged)) {
-        const normalizedEntry = normalizeSessionEntry(entry);
-        if (normalizedEntry) {
-          normalized[key] = normalizedEntry;
-        }
-      }
-      await saveSessionStoreStrict(detected.sessions.targetStorePath, normalized);
-      changes.push("Rewrote migrated session transcript paths");
-    }
-  }
-
   if (legacyParsed.ok && targetReadable) {
     try {
-      if (fileExists(detected.sessions.legacyStorePath)) {
+      if (migrationFileExists(detected.sessions.legacyStorePath)) {
         fs.rmSync(detected.sessions.legacyStorePath, { force: true });
       }
     } catch {

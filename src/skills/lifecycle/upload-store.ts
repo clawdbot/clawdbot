@@ -319,7 +319,7 @@ function assembleArchive(
   return Buffer.concat(buffers, expectedSize);
 }
 
-function toRecord(row: SkillUploadRow, archivePath: string): SkillUploadRecord {
+function toSkillUploadRecord(row: SkillUploadRow, archivePath: string): SkillUploadRecord {
   return {
     version: 1,
     kind: "skill-archive",
@@ -704,7 +704,7 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
             async (tmp) => {
               const archivePath = path.join(tmp.dir, "archive.zip");
               await fs.writeFile(archivePath, Buffer.from(row.archive_blob), { mode: 0o600 });
-              return await action(toRecord(row, archivePath), {
+              return await action(toSkillUploadRecord(row, archivePath), {
                 remove: async () => {
                   // Only the callback that still owns the install lease may consume the upload.
                   // A stalled callback must not erase a successor Gateway's replacement lease.

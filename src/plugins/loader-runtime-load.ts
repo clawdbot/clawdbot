@@ -1,12 +1,12 @@
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
+import {
+  recordPluginInstallOwnerLookup,
+  resolvePluginCandidateInstallOwner,
+} from "./candidate-install-owner.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
-import {
-  getReusableCachedPluginRegistry,
-  pluginLoaderCacheState,
-  setCachedPluginRegistry,
-} from "./loader-cache.js";
+import { isPluginRegistryCacheEnabled } from "./loader-cache.js";
 import { resolvePluginLoadDiscovery } from "./loader-discovery.js";
 import {
   resolvePluginLoadCacheContext,
@@ -21,28 +21,67 @@ import {
 } from "./loader-runtime-candidate.js";
 import {
   activatePluginRegistry,
-  clearActivatedPluginRuntimeState,
   createPluginLoaderLogger,
   maybeThrowOnPluginLoadError,
   resolveAuthorizedDreamingSidecar,
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
-import {
-  createPluginRegistrationTransaction,
-  restorePluginProcessGlobalState,
-  snapshotPluginProcessGlobalState,
-} from "./plugin-registration-transaction.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { pluginLoaderCacheState } from "./registry-lifecycle.js";
+import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createPluginRegistry, type PluginRegistry } from "./registry.js";
+import { getActivePluginRegistry } from "./runtime.js";
+import type { PluginRuntime } from "./runtime/types.js";
+
+type PluginModuleLoaderOverrides = Pick<
+  Parameters<typeof createPluginModuleLoader>[0],
+  "tryNative" | "loaderFilename" | "installNativeSdkResolver"
+>;
+type InternalPluginLoadOverrides = {
+  moduleLoader: PluginModuleLoaderOverrides;
+  runtime: Pick<PluginRuntime, "config">;
+};
+
+function createDeferredGatewaySubagentRuntime(runtime: PluginRuntime): PluginRuntime["subagent"] {
+  return {
+    complete: (...args) => runtime.subagent.complete(...args),
+    run: (...args) => runtime.subagent.run(...args),
+    waitForRun: (...args) => runtime.subagent.waitForRun(...args),
+    getSessionMessages: (...args) => runtime.subagent.getSessionMessages(...args),
+    deleteSession: (...args) => runtime.subagent.deleteSession(...args),
+  };
+}
+
+function createDeferredGatewayNodesRuntime(runtime: PluginRuntime): PluginRuntime["nodes"] {
+  return {
+    list: (...args) => runtime.nodes.list(...args),
+    invoke: (...args) => runtime.nodes.invoke(...args),
+    openDuplex: (...args) => runtime.nodes.openDuplex(...args),
+  };
+}
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
+  return loadOpenClawPluginsInternal(options);
+}
+
+/** Internal entry for host-owned snapshots that need a narrow registration runtime. */
+export function loadOpenClawPluginsWithInternalOverrides(
+  options: PluginLoadOptions & { cache: false },
+  overrides: InternalPluginLoadOverrides,
+): PluginRegistry {
+  return loadOpenClawPluginsInternal(options, overrides);
+}
+
+function loadOpenClawPluginsInternal(
+  options: PluginLoadOptions,
+  overrides?: InternalPluginLoadOverrides,
+): PluginRegistry {
   const requestedOnlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
   const requestedOnlyPluginIdSet = createPluginIdScopeSet(requestedOnlyPluginIds);
   if (requestedOnlyPluginIdSet && requestedOnlyPluginIdSet.size === 0) {
     const emptyRegistry = createEmptyPluginRegistry();
     if (options.activate !== false) {
-      clearActivatedPluginRuntimeState();
       const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
       activatePluginRegistry(
         emptyRegistry,
@@ -58,61 +97,62 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const logger = options.logger ?? createPluginLoaderLogger();
   const validateOnly = options.mode === "validate";
   const onlyPluginIdSet = createPluginIdScopeSet(context.onlyPluginIds);
-  const cacheEnabled = options.cache !== false && options.resolveRawConfigEnvVars !== true;
+  const cacheEnabled = isPluginRegistryCacheEnabled(options);
   if (cacheEnabled) {
-    const cached = getReusableCachedPluginRegistry({
-      cacheKey: context.cacheKey,
-      onlyPluginIds: context.onlyPluginIds,
-      runtimeSubagentMode: context.runtimeSubagentMode,
-      options,
-    });
+    const cached = pluginLoaderCacheState.get(context.cacheKey);
     if (cached) {
+      maybeThrowOnPluginLoadError(cached, options.throwOnLoadError);
       if (context.shouldActivate) {
-        restorePluginProcessGlobalState(cached.state.processGlobalState);
         activatePluginRegistry(
-          cached.state.registry,
-          cached.cacheKey,
-          cached.runtimeSubagentMode,
+          cached,
+          context.cacheKey,
+          context.runtimeSubagentMode,
           options.workspaceDir,
         );
       }
-      return cached.state.registry;
+      return cached;
     }
   }
 
   pluginLoaderCacheState.beginLoad(context.cacheKey);
   let registryBuilder: ReturnType<typeof createPluginRegistry> | undefined;
-  const activatingLoadTransaction = context.shouldActivate
-    ? createPluginRegistrationTransaction({
-        rollbackGlobalSideEffects: () => {
-          const loadedPluginIds = (registryBuilder?.registry.plugins ?? [])
-            .filter((plugin) => plugin.status === "loaded")
-            .map((plugin) => plugin.id);
-          for (const pluginId of loadedPluginIds.toReversed()) {
-            registryBuilder?.rollbackPluginGlobalSideEffects(pluginId);
-          }
-        },
-      })
-    : null;
   try {
-    // Snapshot loads must not wipe global state registered by the active plugin set.
-    if (context.shouldActivate) {
-      clearActivatedPluginRuntimeState();
-    }
     // Module and runtime loading stay lazy for discovery-only or disabled-plugin paths.
     const loadPluginModule = createPluginModuleLoader({
       devSourceRoot: context.devSourceRoot,
       pluginSdkResolution: options.pluginSdkResolution,
+      ...overrides?.moduleLoader,
     });
-    const runtime = createLazyPluginRuntime({
-      devSourceRoot: context.devSourceRoot,
-      pluginSdkResolution: options.pluginSdkResolution,
-      runtimeOptions: options.runtimeOptions,
-      loadPluginModule,
-    });
+    const activeRuntime =
+      options.runtimeOptions?.allowGatewaySubagentBinding === true
+        ? getActivePluginRegistry()
+        : undefined;
+    const activeGatewayRuntime = activeRuntime
+      ? getPluginRegistryRuntime(activeRuntime)
+      : undefined;
+    const borrowedSubagent = activeGatewayRuntime
+      ? createDeferredGatewaySubagentRuntime(activeGatewayRuntime)
+      : undefined;
+    const borrowedNodes = activeGatewayRuntime
+      ? createDeferredGatewayNodesRuntime(activeGatewayRuntime)
+      : undefined;
+    const runtime = overrides?.runtime
+      ? // The registry wraps this discovery-only base with scoped lazy capabilities.
+        (overrides.runtime as unknown as PluginRuntime)
+      : createLazyPluginRuntime({
+          devSourceRoot: context.devSourceRoot,
+          pluginSdkResolution: options.pluginSdkResolution,
+          runtimeOptions: {
+            ...options.runtimeOptions,
+            subagent: options.runtimeOptions?.subagent ?? borrowedSubagent,
+            nodes: options.runtimeOptions?.nodes ?? borrowedNodes,
+          },
+          loadPluginModule,
+        });
     registryBuilder = createPluginRegistry({
       logger,
       runtime,
+      allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs ?? true,
       coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
       ...(options.coreGatewayMethodNames !== undefined && {
         coreGatewayMethodNames: options.coreGatewayMethodNames,
@@ -130,7 +170,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         onlyPluginIdSet,
         emitWarning: context.shouldActivate,
         warningCacheKey: context.cacheKey,
-        suppliedManifestRegistry: options.manifestRegistry,
       });
     const selectedMiddlewareOwnerManifests = new Map<
       string,
@@ -146,6 +185,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const activation = resolveEffectivePluginActivationState({
         id: record.id,
         origin: record.origin,
+        channelIds: record.channels,
         config: context.normalized,
         rootConfig: context.cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
@@ -212,14 +252,25 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         message: `memory slot plugin not found or not marked as memory: ${memorySlot}`,
       });
     }
-    warnAboutUntrackedLoadedPlugins({
-      registry,
-      provenance,
-      allowlist: context.normalized.allow,
-      emitWarning: context.shouldActivate,
-      logger,
-      env: context.env,
-    });
+    warnAboutUntrackedLoadedPlugins(
+      recordPluginInstallOwnerLookup(
+        {
+          registry,
+          provenance,
+          allowlist: context.normalized.allow,
+          emitWarning: context.shouldActivate,
+          logger,
+          env: context.env,
+        },
+        new Map(
+          orderedCandidates.flatMap((candidate) => {
+            const pluginId = manifestBySource.get(candidate.source)?.id;
+            const installOwner = resolvePluginCandidateInstallOwner(candidate);
+            return pluginId && installOwner ? [[pluginId, installOwner] as const] : [];
+          }),
+        ),
+      ),
+    );
     maybeThrowOnPluginLoadError(registry, options.throwOnLoadError);
     if (context.shouldActivate && options.mode !== "validate") {
       const failedPlugins = registry.plugins.filter((plugin) => plugin.failedAt != null);
@@ -231,20 +282,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         );
       }
     }
-    if (cacheEnabled) {
-      setCachedPluginRegistry(
-        context.cacheKey,
-        {
-          registry,
-          processGlobalState: snapshotPluginProcessGlobalState(),
-        },
-        context.onlyPluginIds,
-      );
-    }
     if (context.shouldActivate) {
-      // Activation installs the new registry before initializing its hook runner. Commit the
-      // rollback first so an activation throw cannot restore old globals under the new registry.
-      activatingLoadTransaction?.commit({ activate: true });
+      // Install the complete bundle before hook-runner initialization.
       activatePluginRegistry(
         registry,
         context.cacheKey,
@@ -252,13 +291,24 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         options.workspaceDir,
       );
     }
+    // Publish only complete registries: failed activation restores the prior runtime selection,
+    // then the catch below can discard this builder without poisoning a reusable cache value.
+    if (cacheEnabled) {
+      pluginLoaderCacheState.set(context.cacheKey, registry);
+    }
     return registry;
   } catch (error) {
-    activatingLoadTransaction?.rollback();
+    // Registration failures discard only an inactive builder. Activation is failure-atomic, and
+    // any later cache failure must not strip the registry already serving runtime consumers.
+    if (context.shouldActivate && registryBuilder?.registry !== getActivePluginRegistry()) {
+      for (const plugin of registryBuilder?.registry.plugins.toReversed() ?? []) {
+        if (plugin.status === "loaded") {
+          registryBuilder?.rollbackPluginGlobalSideEffects(plugin.id);
+        }
+      }
+    }
     throw error;
   } finally {
     pluginLoaderCacheState.finishLoad(context.cacheKey);
   }
 }
-
-export { clearActivatedPluginRuntimeState } from "./loader-shared.js";

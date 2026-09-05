@@ -136,6 +136,50 @@ describe("normalizeUsage", () => {
     });
   });
 
+  it.each([
+    {
+      name: "flat CLI cache fields",
+      raw: {
+        input_tokens: 100,
+        output_tokens: 10,
+        cached_input_tokens: 40,
+        cache_write_input_tokens: 60,
+      },
+    },
+    {
+      name: "nested CLI cache fields",
+      raw: {
+        input_tokens: 100,
+        output_tokens: 10,
+        input_tokens_details: { cached_tokens: 40, cache_write_tokens: 60 },
+      },
+    },
+  ])("normalizes $name without double-counting input", ({ raw }) => {
+    expect(normalizeUsage(raw)).toEqual({
+      input: 0,
+      output: 10,
+      cacheRead: 40,
+      cacheWrite: 60,
+      total: undefined,
+    });
+  });
+
+  it("preserves Gemini CLI's explicit uncached input", () => {
+    const raw = {
+      input: 5,
+      input_tokens: 13,
+      output_tokens: 5,
+      cached: 8,
+    };
+    expect(normalizeUsage(raw)).toEqual({
+      input: 5,
+      output: 5,
+      cacheRead: 8,
+      cacheWrite: undefined,
+      total: undefined,
+    });
+  });
+
   it("handles OpenAI Chat Completions reasoning token details", () => {
     const usage = normalizeUsage({
       prompt_tokens: 120,
@@ -151,6 +195,25 @@ describe("normalizeUsage", () => {
       reasoningTokens: 11,
       total: 150,
     });
+  });
+
+  it.each([
+    { provider: "Anthropic", details: { thinking_tokens: 17 }, expected: 17 },
+    { provider: "Anthropic zero", details: { thinking_tokens: 0 }, expected: 0 },
+    { provider: "OpenAI", details: { reasoning_tokens: 17 }, expected: 17 },
+    {
+      provider: "OpenAI precedence",
+      details: { reasoning_tokens: 17, thinking_tokens: 22 },
+      expected: 17,
+    },
+  ])("normalizes $provider output reasoning token details", ({ details, expected }) => {
+    expect(
+      normalizeUsage({
+        input_tokens: 30,
+        output_tokens: 40,
+        output_tokens_details: details,
+      }),
+    ).toMatchObject({ input: 30, output: 40, reasoningTokens: expected });
   });
 
   it("clamps negative input to zero (pre-subtracted cached_tokens > prompt_tokens)", () => {

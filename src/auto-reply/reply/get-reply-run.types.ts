@@ -4,6 +4,7 @@ import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
+import type { ExplicitSkillSelection } from "../../skills/types.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { buildCommandContext } from "./commands.js";
@@ -100,5 +101,6 @@ export type RunPreparedReplyParams = {
   storePath?: string;
   workspaceDir: string;
   abortedLastRun: boolean;
+  explicitSkillSelections?: ExplicitSkillSelection[];
   autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
 };

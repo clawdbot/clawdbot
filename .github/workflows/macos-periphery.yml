@@ -1,4 +1,7 @@
 name: macOS Periphery Dead Code
+# Job conclusions cannot distinguish passive draft events from scope loss.
+# Record source admission for the commenter before either job runs.
+run-name: ${{ github.workflow }} [${{ github.event_name == 'workflow_dispatch' && 'manual' || github.event.pull_request.draft == false && 'report' || github.event.action == 'converted_to_draft' && 'draft' || 'passive' }}]
 
 on:
   pull_request:
@@ -6,7 +9,12 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: macos-periphery-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  # Admission precedes scope skips: isolate passive drafts before they can cancel useful work.
+  # Keep conversion events in the PR group as an intentional cancellation signal.
+  group: >-
+    ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.action != 'converted_to_draft'
+      && format('{0}-passive-draft-{1}', github.workflow, github.run_id)
+      || format('macos-periphery-{0}-{1}', github.workflow, github.event.pull_request.number || github.sha) }}
   cancel-in-progress: true
 
 env:
@@ -24,7 +32,7 @@ jobs:
     steps:
       - name: Checkout
         if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
           fetch-tags: false
@@ -57,6 +65,7 @@ jobs:
               ".github/workflows/macos-periphery.yml",
               ".github/workflows/ios-periphery-comment.yml",
               "apps/macos/.periphery.yml",
+              "scripts/install-periphery.sh",
             ], { ignoreReturnCode: true, silent: true });
             if (result.exitCode !== 0 && result.exitCode !== 1) {
               throw new Error(`git diff failed with exit code ${result.exitCode}`);
@@ -67,11 +76,11 @@ jobs:
     name: Scan macOS dead code
     needs: scope
     if: ${{ needs.scope.outputs.should-scan == 'true' }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -81,7 +90,7 @@ jobs:
       - name: Verify Xcode
         run: |
           set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.5.app /Applications/Xcode-26.5.0.app; do
+          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
             if [ -d "$xcode_app/Contents/Developer" ]; then
               sudo xcode-select -s "$xcode_app/Contents/Developer"
               break
@@ -89,8 +98,8 @@ jobs:
           done
           xcodebuild -version
           xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [[ "$xcode_version" != 26.* ]]; then
-            echo "error: expected Xcode 26.x, got $xcode_version" >&2
+          if [[ "$xcode_version" != 26.6* ]]; then
+            echo "error: expected Xcode 26.6, got $xcode_version" >&2
             exit 1
           fi
           swift --version
@@ -98,12 +107,17 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
+
+      - name: Prepare Apple Mermaid assets
+        run: node scripts/prepare-apple-mermaid.mjs
 
       - name: Install Periphery
         run: |
-          brew update
-          brew install periphery
+          periphery_dir="$RUNNER_TEMP/openclaw-periphery"
+          ./scripts/install-periphery.sh "$periphery_dir"
+          echo "$periphery_dir" >> "$GITHUB_PATH"
 
       - name: Run Periphery
         run: |

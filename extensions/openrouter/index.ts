@@ -1,4 +1,6 @@
 // Openrouter plugin entrypoint registers its OpenClaw integration.
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
@@ -18,7 +20,11 @@ import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerc
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { isOpenRouterMistralModelId, normalizeOpenRouterApiModelId } from "./models.js";
+import {
+  isOpenRouterMistralModelId,
+  normalizeOpenRouterApiModelId,
+  normalizeOpenRouterModelFamilyId,
+} from "./models.js";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -28,7 +34,7 @@ import {
   buildOpenrouterProvider,
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
-  OPENROUTER_BASE_URL,
+  resolveOpenRouterApiBaseUrl,
 } from "./provider-catalog.js";
 import { resolveOpenRouterExtraParamsForTransport } from "./provider-routing.js";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
@@ -43,25 +49,11 @@ import {
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_FUSION_MODEL_ID = "openrouter/fusion";
-const OPENROUTER_CACHE_TTL_MODEL_PREFIXES = [
-  "anthropic/",
-  "deepseek/",
-  "moonshot/",
-  "moonshotai/",
-  "zai/",
-] as const;
+const OPENROUTER_CACHE_TTL_MODEL_FAMILY = /^(?:anthropic|deepseek|moonshot(?:ai)?|z-?ai)\//;
 const MAX_PROMPT_MODEL_ID_DISPLAY_CHARS = 256;
 
 type OpenRouterFusionPromptContext = {
-  config?: {
-    agents?: {
-      defaults?: {
-        params?: Record<string, unknown>;
-        models?: Record<string, { params?: Record<string, unknown> }>;
-      };
-      list?: Array<{ id?: string; params?: Record<string, unknown> }>;
-    };
-  };
+  config?: OpenClawConfig;
   agentId?: string;
   modelId: string;
 };
@@ -165,7 +157,7 @@ function findConfiguredOpenRouterAgentParams(
   if (!ctx.agentId) {
     return undefined;
   }
-  return readRecord(ctx.config?.agents?.list?.find((agent) => agent.id === ctx.agentId)?.params);
+  return readRecord(resolveAgentConfig(ctx.config ?? {}, ctx.agentId)?.params);
 }
 
 function resolveMergedOpenRouterPromptParams(
@@ -239,7 +231,9 @@ export default defineSingleProviderPluginEntry({
         name: capabilities?.name ?? ctx.modelId,
         api: "openai-completions",
         provider: PROVIDER_ID,
-        baseUrl: OPENROUTER_BASE_URL,
+        baseUrl: resolveOpenRouterApiBaseUrl(
+          ctx.providerConfig?.baseUrl ?? ctx.config?.models?.providers?.openrouter?.baseUrl,
+        ),
         reasoning:
           (capabilities?.reasoning ?? false) &&
           !isOpenRouterProxyReasoningUnsupportedModel(ctx.modelId),
@@ -251,10 +245,6 @@ export default defineSingleProviderPluginEntry({
         contextWindow: capabilities?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
         maxTokens: capabilities?.maxTokens ?? OPENROUTER_DEFAULT_MAX_TOKENS,
       };
-    }
-
-    function isOpenRouterCacheTtlModel(modelId: string): boolean {
-      return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
     }
 
     const passthroughGeminiReplayHooks = buildProviderReplayFamilyHooks({
@@ -294,10 +284,13 @@ export default defineSingleProviderPluginEntry({
           if (!apiKey) {
             return null;
           }
+          const providerConfig = ctx.config.models?.providers?.openrouter;
           return {
             provider: await buildOpenrouterLiveProvider({
               apiKey,
               discoveryApiKey: auth.discoveryApiKey,
+              baseUrl: providerConfig?.baseUrl,
+              request: providerConfig?.request,
             }),
           };
         },
@@ -327,6 +320,17 @@ export default defineSingleProviderPluginEntry({
             }
           : undefined;
       },
+      classifyFailoverReason: ({ provider, errorMessage }) => {
+        if (provider?.trim().toLowerCase() !== PROVIDER_ID) {
+          return undefined;
+        }
+        if (
+          /\b(?:api\s+key\s+budget|key)\s+limit\s*(?:exceeded|reached|hit)\b/i.test(errorMessage)
+        ) {
+          return "billing";
+        }
+        return /provider returned error/i.test(errorMessage) ? "timeout" : undefined;
+      },
       ...passthroughGeminiReplayHooks,
       buildReplayPolicy: buildOpenRouterReplayPolicy,
       resolveReasoningOutputMode: () => "native",
@@ -335,7 +339,8 @@ export default defineSingleProviderPluginEntry({
       resolveSystemPromptContribution: resolveOpenRouterFusionPromptContribution,
       extraParamsForTransport: resolveOpenRouterExtraParamsForTransport,
       wrapStreamFn: wrapOpenRouterProviderStream,
-      isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
+      isCacheTtlEligible: ({ modelId }) =>
+        OPENROUTER_CACHE_TTL_MODEL_FAMILY.test(normalizeOpenRouterModelFamilyId(modelId) ?? ""),
       resolveUsageAuth: async (ctx) => {
         const apiKey = ctx.resolveApiKeyFromConfigAndStore({
           envDirect: [ctx.env.OPENROUTER_API_KEY],
@@ -345,6 +350,8 @@ export default defineSingleProviderPluginEntry({
       fetchUsageSnapshot: async (ctx) =>
         await fetchOpenRouterUsage({
           token: ctx.token,
+          baseUrl: ctx.config.models?.providers?.openrouter?.baseUrl,
+          request: ctx.config.models?.providers?.openrouter?.request,
           timeoutMs: ctx.timeoutMs,
           fetchFn: ctx.fetchFn,
         }),

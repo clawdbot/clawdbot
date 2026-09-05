@@ -2,7 +2,28 @@
  * Tests text and Markdown chunking helpers exported by the plugin SDK.
  */
 import { describe, expect, it } from "vitest";
-import { chunkTextForOutbound, chunkTextRanges, tokenizeHtmlTags } from "./text-chunking.js";
+import {
+  chunkTextForOutbound,
+  chunkTextRanges,
+  findCodeRegions,
+  isInsideCode,
+  tokenizeHtmlTags,
+  type CodeRegion,
+} from "./text-chunking.js";
+
+it("accepts positional plugin ranges while retaining discovered block metadata", () => {
+  const ranges: CodeRegion[] = [{ start: 1, end: 5 }];
+  expect([0, 1, 4, 5].map((offset) => isInsideCode(offset, ranges))).toEqual([
+    false,
+    true,
+    true,
+    false,
+  ]);
+  const blockKinds: boolean[] = findCodeRegions("`inline`\n\n    indented\n").map(
+    (region) => region.block,
+  );
+  expect(blockKinds).toEqual([false, true]);
+});
 
 describe("tokenizeHtmlTags", () => {
   it("keeps quoted attribute delimiters inside one tag token", () => {
@@ -20,6 +41,13 @@ describe("tokenizeHtmlTags", () => {
 describe("chunkTextForOutbound", () => {
   it("keeps non-positive option limits finite", () => {
     expect(chunkTextForOutbound("abc", 0, { preserveWhitespace: false })).toEqual(["abc"]);
+  });
+
+  it("normalizes positive fractional limits across outbound modes", () => {
+    expect(chunkTextForOutbound("abc", 0.5)).toEqual(["a", "b", "c"]);
+    expect(chunkTextForOutbound("abc", 0.5, { preserveWhitespace: true })).toEqual(["a", "b", "c"]);
+    expect(chunkTextForOutbound("😀😀", 0.5)).toEqual(["😀", "😀"]);
+    expect(chunkTextForOutbound("😀😀", 0.5, { preserveWhitespace: true })).toEqual(["😀", "😀"]);
   });
 
   it.each([
@@ -77,6 +105,24 @@ describe("chunkTextRanges", () => {
     expect(chunkTextRanges("", { limit: 3 })).toEqual([]);
     expect(chunkTextRanges("abc", { limit: 0 })).toEqual([{ start: 0, end: 3 }]);
   });
+
+  it("normalizes positive fractional range limits", () => {
+    expect(chunkTextRanges("abc", { limit: 0.5 })).toEqual([
+      { start: 0, end: 1 },
+      { start: 1, end: 2 },
+      { start: 2, end: 3 },
+    ]);
+  });
+
+  it.each(["hard", "preferred"] as const)(
+    "keeps astral characters whole with fractional limits in %s mode",
+    (mode) => {
+      expect(chunkTextRanges("😀😀", { limit: 0.5, mode })).toEqual([
+        { start: 0, end: 2 },
+        { start: 2, end: 4 },
+      ]);
+    },
+  );
 
   it.each(["hard", "preferred"] as const)("keeps surrogate pairs intact in %s mode", (mode) => {
     expect(chunkTextRanges("a😀b", { limit: 2, mode })).toEqual([

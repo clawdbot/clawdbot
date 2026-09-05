@@ -29,6 +29,37 @@ function makeSnapshot(file: ExecApprovalsFile = { version: 1, agents: {} }) {
 }
 
 describe("exec approvals gateway methods", () => {
+  it("reports runtime defaults for fresh local approval state", async () => {
+    ensureExecApprovalsSnapshotMock.mockResolvedValueOnce(makeSnapshot({ version: 1, agents: {} }));
+    const respond = vi.fn();
+
+    await expectDefined(
+      execApprovalsHandlers["exec.approvals.get"],
+      'execApprovalsHandlers["exec.approvals.get"] test invariant',
+    )({
+      req: { type: "req", id: "req-fresh", method: "exec.approvals.get", params: {} },
+      params: {},
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        file: { version: 1, agents: {} },
+        resolvedDefaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "deny",
+          autoAllowSkills: false,
+        },
+      }),
+      undefined,
+    );
+  });
+
   it("returns a structured unavailable error when local approvals get cannot read state", async () => {
     ensureExecApprovalsSnapshotMock.mockRejectedValueOnce(
       new Error("permission denied while ensuring approvals"),
@@ -329,6 +360,7 @@ describe("exec approvals gateway methods", () => {
       expectedPairingGeneration: "generation-1",
       command,
       params: { includeResolvedDefaults: true },
+      onDispatchReady: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, payload, undefined);
   });
@@ -419,6 +451,7 @@ describe("exec approvals gateway methods", () => {
       expectedPairingGeneration: "generation-1",
       command,
       params: {},
+      onDispatchReady: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, payload, undefined);
   });
@@ -480,6 +513,7 @@ describe("exec approvals gateway methods", () => {
         rules: [{ pattern: "hostname", action: "allow" }],
         baseHash: "sha256:current",
       },
+      onDispatchReady: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, { updated: true, hash: "sha256:next" }, undefined);
   });
@@ -560,6 +594,7 @@ describe("exec approvals gateway methods", () => {
       nodeId: "missing-node",
       command: "system.execApprovals.get",
       params: {},
+      onDispatchReady: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(
       false,
@@ -568,6 +603,7 @@ describe("exec approvals gateway methods", () => {
         code: "UNAVAILABLE",
         details: {
           nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
+          nodeCommandDispatched: false,
         },
       }),
     );

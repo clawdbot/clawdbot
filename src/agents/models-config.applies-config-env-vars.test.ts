@@ -1,5 +1,5 @@
 // Verifies models.json planning applies config env vars and discovery scope.
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -8,7 +8,7 @@ import { testing as externalAuthTesting } from "./auth-profiles/external-auth.te
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
-} from "./auth-profiles/store.js";
+} from "./auth-profiles/runtime-snapshots.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import {
   planOpenClawModelsJsonWithDeps,
@@ -16,19 +16,31 @@ import {
 } from "./models-config.plan.test-support.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { encodePluginModelCatalogRelativePath } from "./plugin-model-catalog.js";
+import { AuthStorage, ModelRegistry } from "./sessions/index.js";
+
+const providerRuntimeMocks = vi.hoisted(() => ({
+  normalizeProviderConfigWithPlugin: vi.fn<
+    typeof import("../plugins/provider-runtime.js").normalizeProviderConfigWithPlugin
+  >(() => undefined),
+  resolveProviderConfigApiKeyWithPlugin: vi.fn<
+    typeof import("../plugins/provider-runtime.js").resolveProviderConfigApiKeyWithPlugin
+  >(() => undefined),
+}));
 
 vi.mock("./provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => Object.create(null) as Record<string, string>,
   resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
 }));
 
+vi.mock("../plugins/provider-external-auth.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
 // These planner tests exercise no plugin-owned auth policy. Keep their exact
 // provider markers local instead of loading the bundled plugin/runtime catalog.
 vi.mock("../plugins/provider-runtime.js", () => ({
-  applyProviderNativeStreamingUsageCompatWithPlugin: () => undefined,
-  normalizeProviderConfigWithPlugin: () => undefined,
-  resolveProviderConfigApiKeyWithPlugin: () => undefined,
-  resolveExternalAuthProfilesWithPlugins: () => [],
+  normalizeProviderConfigWithPlugin: providerRuntimeMocks.normalizeProviderConfigWithPlugin,
+  resolveProviderConfigApiKeyWithPlugin: providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin,
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
 }));
 
@@ -50,6 +62,13 @@ vi.mock("./model-auth-env-vars.js", () => ({
 }));
 
 const TEST_ENV_VAR = "OPENCLAW_MODELS_CONFIG_TEST_ENV";
+
+afterEach(() => {
+  providerRuntimeMocks.normalizeProviderConfigWithPlugin.mockReset();
+  providerRuntimeMocks.normalizeProviderConfigWithPlugin.mockReturnValue(undefined);
+  providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mockReset();
+  providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mockReturnValue(undefined);
+});
 
 function createImplicitOpenRouterProvider(): ProviderConfig {
   return {
@@ -222,11 +241,19 @@ beforeAll(async () => {
       agentDir: "/tmp/openclaw-models-config-env-vars-test",
       env: {},
       existingRaw: "",
-      existingParsed: null,
+      existingParsed: {
+        providers: {
+          retained: createImplicitOpenAiProvider({ auth: "oauth" }),
+          "empty-existing": createImplicitOpenAiProvider({ apiKey: "" }),
+        },
+      },
     },
     {
       resolveImplicitProviders: async () => ({
         openai: createImplicitOpenAiProvider(),
+        oauth: createImplicitOpenAiProvider({ auth: "oauth" }),
+        role: createImplicitOpenAiProvider({ auth: "aws-sdk" }),
+        empty: createImplicitOpenAiProvider({ apiKey: "" }),
         "auth-only": createImplicitOpenAiProvider({
           baseUrl: "https://auth.example/v1",
           api: "openai-responses",
@@ -393,10 +420,95 @@ describe("models-config", () => {
     expect(observedSnapshot).toBe(pluginMetadataSnapshot);
   });
 
-  it("does not write unauthenticated model providers that would invalidate models.json", async () => {
+  it.each([
+    { label: "full", pluginIds: undefined, expectedRegistry: true },
+    { label: "scoped", pluginIds: ["owner"], expectedRegistry: false },
+  ])(
+    "threads provider policy metadata only from a $label plugin snapshot",
+    async ({ pluginIds, expectedRegistry }) => {
+      const manifestRegistry = { plugins: [], diagnostics: [] };
+      const pluginMetadataSnapshot = {
+        index: { plugins: [] },
+        manifestRegistry,
+        owners: {
+          providers: new Map(),
+          modelCatalogProviders: new Map(),
+          setupProviders: new Map(),
+        },
+        ...(pluginIds ? { pluginIds } : {}),
+      } as unknown as Pick<
+        PluginMetadataSnapshot,
+        "index" | "manifestRegistry" | "owners" | "pluginIds"
+      >;
+      providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mockReturnValue(
+        "POLICY_ALIAS_API_KEY",
+      );
+
+      await planOpenClawModelsJsonWithDeps(
+        {
+          cfg: { models: { providers: {} } },
+          agentDir: "/tmp/openclaw-models-config-policy-registry-test",
+          env: {},
+          existingRaw: "",
+          existingParsed: null,
+          pluginMetadataSnapshot,
+        },
+        {
+          resolveImplicitProviders: async () => ({
+            "policy-alias": createImplicitOpenAiProvider({
+              baseUrl: "https://policy.example/v1",
+              apiKey: undefined,
+            }),
+          }),
+        },
+      );
+
+      const normalizeParams =
+        providerRuntimeMocks.normalizeProviderConfigWithPlugin.mock.calls.find(
+          ([params]) => params.provider === "policy-alias",
+        )?.[0];
+      const apiKeyParams =
+        providerRuntimeMocks.resolveProviderConfigApiKeyWithPlugin.mock.calls.find(
+          ([params]) => params.provider === "policy-alias",
+        )?.[0];
+      expect(normalizeParams?.manifestRegistry).toBe(
+        expectedRegistry ? manifestRegistry : undefined,
+      );
+      expect(apiKeyParams?.manifestRegistry).toBe(expectedRegistry ? manifestRegistry : undefined);
+    },
+  );
+
+  it.each(["openai", "oauth", "role", "retained"])(
+    "publishes %s catalog rows without requiring an inline API key",
+    (provider) => {
+      expect(unauthenticatedProviderParsed.providers?.[provider]).toMatchObject({
+        models: [{ id: "gpt-5.5" }],
+      });
+      expect(unauthenticatedProviderParsed.providers?.[provider]).not.toHaveProperty("apiKey");
+    },
+  );
+
+  it.each(["empty", "empty-existing"])("rejects an explicitly empty key in %s", (provider) => {
+    expect(unauthenticatedProviderParsed.providers?.[provider]).toBeUndefined();
+  });
+
+  it("leaves keyless catalog authentication to the registry auth owner", () => {
     expect(unauthenticatedProviderWritePlan.action).toBe("write");
-    expect(unauthenticatedProviderParsed.providers?.openai).toBeUndefined();
     expect(unauthenticatedProviderParsed.providers?.["auth-only"]).toBeDefined();
+    if (unauthenticatedProviderWritePlan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const auth = AuthStorage.inMemory();
+    const registry = ModelRegistry.create(auth, "/tmp/openclaw-keyless-catalog/models.json", {
+      includePluginCatalogs: false,
+      modelsJsonContents: unauthenticatedProviderWritePlan.contents,
+    });
+    const model = registry.find("openai", "gpt-5.5");
+    expect(registry.getError()).toBeUndefined();
+    expect(model).toBeDefined();
+    expect(registry.getAvailable()).not.toContain(model);
+    auth.setRuntimeApiKey("openai", "synthetic-runtime-key");
+    expect(registry.getAvailable()).toContain(model);
   });
 
   it("treats empty replace-mode provider sets as authoritative", async () => {

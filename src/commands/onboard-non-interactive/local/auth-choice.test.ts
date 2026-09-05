@@ -2,7 +2,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
+import * as apiProviderAuthChoices from "../../auth-choice.apply.api-providers.js";
+import { commitNonInteractiveOnboardConfig } from "../config-write.js";
 import { applyNonInteractiveAuthChoice } from "./auth-choice.js";
+
+const writeWizardConfigFile = vi.hoisted(() => vi.fn(async (config: OpenClawConfig) => config));
+vi.mock("../../../wizard/setup.shared.js", () => ({ writeWizardConfigFile }));
 
 const formatAuthChoiceChoicesForCli = vi.hoisted(() =>
   vi.fn(() => "custom-api-key|skip|demo-provider-api-key"),
@@ -63,19 +68,22 @@ describe("applyNonInteractiveAuthChoice", () => {
   it("rejects an unknown auth choice and lists the valid choices", async () => {
     const runtime = createRuntime();
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    const message =
+      'Unknown --auth-choice "definitely-not-a-provider". Valid choices: custom-api-key, skip, demo-provider-api-key.';
 
     const result = await applyNonInteractiveAuthChoice({
       nextConfig,
       authChoice: "definitely-not-a-provider",
-      opts: {} as never,
+      opts: { json: true },
       runtime: runtime as never,
       baseConfig: nextConfig,
       target,
     });
 
     expect(result).toBeNull();
-    expect(runtime.error).toHaveBeenCalledWith(
-      'Unknown --auth-choice "definitely-not-a-provider". Valid choices: custom-api-key, skip, demo-provider-api-key, oauth, setup-token, token, apiKey.',
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+      JSON.stringify({ ok: false, phase: "options", message }, null, 2),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
@@ -101,6 +109,34 @@ describe("applyNonInteractiveAuthChoice", () => {
     );
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("resolves generic provider auth from the selected agent workspace", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    const resolvedConfig = { auth: { profiles: { "demo-provider:default": { mode: "api_key" } } } };
+    applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(resolvedConfig as never);
+    const normalize = vi
+      .spyOn(apiProviderAuthChoices, "normalizeApiKeyTokenProviderAuthChoice")
+      .mockImplementation((params) =>
+        params.workspaceDir === target.workspaceDir ? "demo-provider-api-key" : params.authChoice,
+      );
+
+    try {
+      const result = await applyNonInteractiveAuthChoice({
+        nextConfig,
+        authChoice: "apiKey",
+        opts: { tokenProvider: "demo-provider" },
+        runtime: runtime as never,
+        baseConfig: nextConfig,
+        target,
+      });
+
+      expect(result).toBe(resolvedConfig);
+      expect(runtime.error).not.toHaveBeenCalled();
+    } finally {
+      normalize.mockRestore();
+    }
   });
 
   it("resolves plugin provider auth before builtin custom-provider handling", async () => {
@@ -232,6 +268,292 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(apiKeyParams?.envVarName).toBe("CUSTOM_API_KEY");
     expect(apiKeyParams?.agentDir).toBe(target.agentDir);
     expect(apiKeyParams?.secretInputMode).toBe("ref");
+  });
+
+  it("keeps a custom provider model on the configured explicit-fleet system agent", async () => {
+    const runtime = createRuntime();
+    const nextConfig: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          systemAgent: { agentId: "ops" },
+          model: { primary: "anthropic/global" },
+        },
+        entries: {
+          main: { model: { primary: "anthropic/main" } },
+          ops: { model: { primary: "openai/ops" } },
+        },
+      },
+    };
+    resolveNonInteractiveApiKey.mockResolvedValueOnce(null);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "custom-api-key",
+      opts: {
+        customBaseUrl: "https://models.custom.local/v1",
+        customModelId: "local-large",
+      } as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+      target: {
+        agentId: "ops",
+        agentDir: "/tmp/ops-agent",
+        workspaceDir: "/tmp/ops-workspace",
+      },
+    });
+
+    expect(result?.agents?.defaults?.model).toEqual({ primary: "anthropic/global" });
+    expect(result?.agents?.entries?.ops?.model).toEqual({
+      primary: "custom-models-custom-local/local-large",
+    });
+    expect(result?.agents?.entries?.main?.model).toEqual({ primary: "anthropic/main" });
+    expect(result?.models?.providers?.["custom-models-custom-local"]).toBeDefined();
+  });
+
+  it("never commits an existing profile key as plaintext during custom secret-ref onboarding", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    const profileKey = "fixture-custom-profile-secret";
+    resolveNonInteractiveApiKey.mockResolvedValueOnce({ key: profileKey, source: "profile" });
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "custom-api-key",
+      opts: {
+        customBaseUrl: "https://models.custom.local/v1",
+        customModelId: "local-large",
+        secretInputMode: "ref",
+      } as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+      target,
+    });
+
+    expect(result).not.toBeNull();
+    await commitNonInteractiveOnboardConfig({
+      nextConfig: result!,
+    });
+
+    const persistedConfig = writeWizardConfigFile.mock.calls.at(-1)?.[0];
+    expect(
+      persistedConfig?.models?.providers?.["custom-models-custom-local"]?.apiKey,
+    ).toBeUndefined();
+    expect(JSON.stringify(persistedConfig)).not.toContain(profileKey);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { source: "flag", key: "fixture-custom-literal-secret" },
+    { source: "env", key: "fixture-custom-anonymous-env-secret" },
+  ] as const)(
+    "never serializes an unreferenceable custom $source key in secret-ref mode",
+    async (resolved) => {
+      const runtime = createRuntime();
+      const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+      resolveNonInteractiveApiKey.mockResolvedValueOnce(resolved);
+
+      const result = await applyNonInteractiveAuthChoice({
+        nextConfig,
+        authChoice: "custom-api-key",
+        opts: {
+          customBaseUrl: "https://models.custom.local/v1",
+          customModelId: "local-large",
+          secretInputMode: "ref",
+        } as never,
+        runtime: runtime as never,
+        baseConfig: nextConfig,
+        target,
+      });
+
+      expect(result).toBeNull();
+      expect(writeWizardConfigFile).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      const errorText = runtime.error.mock.calls.map(([message]) => String(message)).join("\n");
+      expect(errorText).toContain("CUSTOM_API_KEY");
+      expect(errorText).toContain("--secret-input-mode ref");
+      expect(errorText).not.toContain(resolved.key);
+    },
+  );
+
+  it.each([
+    { source: "env", provider: "default", id: "EXISTING_CUSTOM_API_KEY" },
+    { source: "file", provider: "local", id: "/providers/custom" },
+    { source: "exec", provider: "vault", id: "custom-provider" },
+  ] as const)(
+    "preserves existing $source custom SecretRefs when reusing an auth profile",
+    async (ref) => {
+      const runtime = createRuntime();
+      const providerId = "custom-models-custom-local";
+      const nextConfig = {
+        models: {
+          providers: {
+            [providerId]: {
+              baseUrl: "https://models.custom.local/v1",
+              apiKey: ref,
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig;
+      resolveNonInteractiveApiKey.mockResolvedValueOnce({
+        key: "fixture-existing-profile-secret",
+        source: "profile",
+      });
+
+      const result = await applyNonInteractiveAuthChoice({
+        nextConfig,
+        authChoice: "custom-api-key",
+        opts: {
+          customBaseUrl: "https://models.custom.local/v1",
+          customModelId: "local-large",
+          secretInputMode: "ref",
+        } as never,
+        runtime: runtime as never,
+        baseConfig: nextConfig,
+        target,
+      });
+
+      expect(result?.models?.providers?.[providerId]?.apiKey).toEqual(ref);
+      expect(runtime.error).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves intentionally keyless custom setup in secret-ref mode", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    resolveNonInteractiveApiKey.mockResolvedValueOnce(null);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "custom-api-key",
+      opts: {
+        customBaseUrl: "https://models.custom.local/v1",
+        customModelId: "local-large",
+        secretInputMode: "ref",
+      } as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+      target,
+    });
+
+    expect(result?.models?.providers?.["custom-models-custom-local"]?.apiKey).toBeUndefined();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("preserves existing custom profile serialization in explicit plaintext mode", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    resolveNonInteractiveApiKey.mockResolvedValueOnce({
+      key: "fixture-plaintext-profile-key",
+      source: "profile",
+    });
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "custom-api-key",
+      opts: {
+        customBaseUrl: "https://models.custom.local/v1",
+        customModelId: "local-large",
+        secretInputMode: "plaintext",
+      } as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+      target,
+    });
+
+    expect(result?.models?.providers?.["custom-models-custom-local"]?.apiKey).toBe(
+      "fixture-plaintext-profile-key",
+    );
+  });
+
+  it.each([
+    { source: "profile", key: "fixture-plugin-profile-secret" },
+    { source: "flag", key: "fixture-plugin-literal-secret" },
+    { source: "env", key: "fixture-plugin-env-secret" },
+  ] as const)(
+    "rejects non-referenceable $source plugin credentials in secret-ref mode",
+    async (resolved) => {
+      const runtime = createRuntime();
+      const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+      applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(nextConfig as never);
+
+      await applyNonInteractiveAuthChoice({
+        nextConfig,
+        authChoice: "demo-provider-api-key",
+        opts: { secretInputMode: "ref" } as never,
+        runtime: runtime as never,
+        baseConfig: nextConfig,
+        target,
+      });
+
+      const [pluginParams] = applyNonInteractivePluginProviderChoice.mock.calls.at(
+        -1,
+      ) as unknown as [
+        {
+          toApiKeyCredential: (params: { provider: string; resolved: typeof resolved }) => unknown;
+        },
+      ];
+      const credential = pluginParams.toApiKeyCredential({
+        provider: "demo-provider",
+        resolved,
+      });
+
+      expect(credential).toBeNull();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      const errorText = runtime.error.mock.calls.map(([message]) => String(message)).join("\n");
+      expect(errorText).toContain("--secret-input-mode ref");
+      expect(errorText).toContain("demo-provider");
+      expect(errorText).not.toContain(resolved.key);
+    },
+  );
+
+  it("preserves env-backed plugin credentials and profile metadata in secret-ref mode", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(nextConfig as never);
+
+    await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "demo-provider-api-key",
+      opts: { secretInputMode: "ref" } as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+      target,
+    });
+
+    const [pluginParams] = applyNonInteractivePluginProviderChoice.mock.calls.at(-1) as unknown as [
+      {
+        toApiKeyCredential: (params: {
+          provider: string;
+          resolved: { key: string; source: "env"; envVarName: string };
+          email: string;
+          metadata: Record<string, string>;
+        }) => unknown;
+      },
+    ];
+    expect(
+      pluginParams.toApiKeyCredential({
+        provider: "demo-provider",
+        resolved: {
+          key: "fixture-valid-plugin-env-secret",
+          source: "env",
+          envVarName: "DEMO_PROVIDER_API_KEY",
+        },
+        email: "operator@example.test",
+        metadata: { account: "work" },
+      }),
+    ).toEqual({
+      type: "api_key",
+      provider: "demo-provider",
+      keyRef: { source: "env", provider: "default", id: "DEMO_PROVIDER_API_KEY" },
+      email: "operator@example.test",
+      metadata: { account: "work" },
+    });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("stores custom provider OpenAI Responses compatibility", async () => {

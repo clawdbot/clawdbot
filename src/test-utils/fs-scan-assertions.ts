@@ -43,20 +43,6 @@ export function expectNoFsSyncDuring<T>(run: () => T, counters: FsScanCounter[])
   }
 }
 
-export function captureReaddirSyncCallsDuring<T>(run: () => T): {
-  calls: unknown[][];
-  result: T;
-} {
-  const readDir = vi.spyOn(fs, "readdirSync");
-  try {
-    const before = readDir.mock.calls.length;
-    const result = run();
-    return { calls: readDir.mock.calls.slice(before), result };
-  } finally {
-    readDir.mockRestore();
-  }
-}
-
 export function expectNoNodeFsScans<T>(
   body: string,
   options?: {

@@ -1,15 +1,15 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_SKILL_PROPOSAL_ORIGIN_RUN_IDS } from "./types.js";
 
 function isValidOrigin(value: unknown): boolean {
   if (value === undefined) {
     return true;
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
-  const origin = value as Record<string, unknown>;
   return ["agentId", "sessionKey", "runId", "messageId"].every((key) => {
-    const item = origin[key];
+    const item = value[key];
     return item === undefined || typeof item === "string";
   });
 }
@@ -35,7 +35,7 @@ function isValidMutationCounts(value: unknown, originRunIds: string[] | undefine
   if (value === undefined) {
     return true;
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return false;
   }
   const allowedIds = new Set(originRunIds);

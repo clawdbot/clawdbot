@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   canonicalizePersistedUserMessageMedia,
+  isImageMediaFact,
+  isVideoMediaFact,
+  normalizeMediaFacts,
   PERSISTED_LEGACY_MEDIA_KEYS,
   readPersistedMediaFacts,
 } from "./media-facts.js";
@@ -72,6 +75,21 @@ describe("canonical persisted media", () => {
     expect(readPersistedMediaFacts(result.message)).toEqual(
       expected.map((fact) => expect.objectContaining(fact)),
     );
+  });
+
+  it("normalizes serialized sparse nulls without losing attachment positions", () => {
+    const media = readPersistedMediaFacts({
+      __openclaw: { media: [null, canonicalFact] },
+    });
+
+    expect(media).toHaveLength(2);
+    expect(media?.[0]).toMatchObject({
+      path: undefined,
+      contentType: undefined,
+      kind: undefined,
+      transcribed: false,
+    });
+    expect(media?.[1]).toMatchObject({ ...canonicalFact, kind: "image" });
   });
 
   it("copies transcription and workspace metadata while preserving adjacent metadata", () => {
@@ -197,5 +215,174 @@ describe("canonical persisted media", () => {
 
     expect(result.message).not.toHaveProperty("media");
     expect(readPersistedMediaFacts(result.message)?.[0]).toMatchObject(canonicalFact);
+  });
+});
+
+describe("canonical image media facts", () => {
+  it.each([
+    { name: "filename-only SVG", fact: { path: "/tmp/diagram.svg" }, expected: false },
+    {
+      name: "separate image filename with opaque source",
+      fact: {
+        url: "https://cdn.example.test/download/opaque",
+        fileName: "photo.png",
+        contentType: "application/octet-stream",
+      },
+      expected: true,
+    },
+    {
+      name: "separate TIFF filename with opaque source",
+      fact: {
+        url: "https://cdn.example.test/download/opaque",
+        fileName: "scan.TIFF",
+        contentType: "binary/octet-stream",
+      },
+      expected: true,
+    },
+    {
+      name: "separate SVG filename with opaque source",
+      fact: {
+        url: "https://cdn.example.test/download/opaque",
+        fileName: "diagram.svg",
+      },
+      expected: false,
+    },
+    {
+      name: "authoritative document with separate image filename",
+      fact: {
+        url: "https://cdn.example.test/download/opaque",
+        fileName: "photo.png",
+        contentType: "application/octet-stream",
+        kind: "document" as const,
+      },
+      expected: false,
+    },
+    {
+      name: "concrete document MIME with separate image filename",
+      fact: {
+        url: "https://cdn.example.test/download/opaque",
+        fileName: "photo.png",
+        contentType: "application/pdf",
+      },
+      expected: false,
+    },
+    {
+      name: "classified source before conflicting separate image filename",
+      fact: {
+        url: "https://cdn.example.test/download/voice.ogg",
+        fileName: "photo.png",
+        contentType: "application/octet-stream",
+      },
+      expected: false,
+    },
+    {
+      name: "classified URL before conflicting separate filename and opaque path",
+      fact: {
+        path: "/tmp/opaque",
+        url: "https://cdn.example.test/download/voice.ogg",
+        fileName: "photo.png",
+        contentType: "application/octet-stream",
+      },
+      expected: false,
+    },
+    {
+      name: "separate filename without an actual media source",
+      fact: { fileName: "photo.png", contentType: "application/octet-stream" },
+      expected: false,
+    },
+    {
+      name: "unknown-kind SVG with generic MIME",
+      fact: {
+        path: "/tmp/diagram.svg",
+        kind: "unknown" as const,
+        contentType: "application/octet-stream",
+      },
+      expected: false,
+    },
+    {
+      name: "explicit image-kind SVG",
+      fact: { path: "/tmp/diagram.svg", kind: "image" as const },
+      expected: true,
+    },
+    {
+      name: "explicit SVG image MIME",
+      fact: { path: "/tmp/diagram.svg", contentType: "image/svg+xml" },
+      expected: true,
+    },
+    { name: "filename-only TIFF", fact: { path: "/tmp/scan.tiff" }, expected: true },
+    {
+      name: "generic MIME TIFF",
+      fact: { path: "/tmp/scan.TIF", contentType: "binary/octet-stream" },
+      expected: true,
+    },
+    {
+      name: "authoritative document TIFF",
+      fact: { path: "/tmp/scan.tiff", contentType: "image/png", kind: "document" as const },
+      expected: false,
+    },
+    {
+      name: "unknown-kind PDF with image filename",
+      fact: { path: "/tmp/report.png", contentType: "application/pdf", kind: "unknown" as const },
+      expected: false,
+    },
+    {
+      name: "unknown-kind ZIP with image filename",
+      fact: { path: "/tmp/report.png", contentType: "application/zip", kind: "unknown" as const },
+      expected: false,
+    },
+    {
+      name: "unknown-kind text with image filename",
+      fact: { path: "/tmp/report.png", contentType: "text/plain", kind: "unknown" as const },
+      expected: false,
+    },
+    {
+      name: "legacy bare image kind",
+      fact: { path: "/tmp/photo.png", contentType: "image" },
+      expected: true,
+    },
+    {
+      name: "legacy bare sticker kind",
+      fact: { path: "/tmp/sticker.bin", contentType: "sticker" },
+      expected: true,
+    },
+  ])("classifies $name at the shared image-fact owner", ({ fact, expected }) => {
+    expect(isImageMediaFact(fact)).toBe(expected);
+  });
+
+  it("classifies video from separate filename metadata when its source is opaque", () => {
+    expect(
+      isVideoMediaFact({
+        url: "https://cdn.example.test/download/opaque",
+        fileName: "clip.mp4",
+        contentType: "application/octet-stream",
+      }),
+    ).toBe(true);
+  });
+
+  it("preserves generic binary provenance without inventing authoritative documents", () => {
+    const [inferredImage, explicitDocument] = normalizeMediaFacts([
+      { path: "/tmp/scan.tiff", contentType: "application/octet-stream" },
+      { path: "/tmp/report.png", contentType: "application/octet-stream", kind: "document" },
+    ]);
+
+    expect(inferredImage?.kind).toBeUndefined();
+    expect(inferredImage && isImageMediaFact(inferredImage)).toBe(true);
+    expect(explicitDocument?.kind).toBe("document");
+    expect(explicitDocument && isImageMediaFact(explicitDocument)).toBe(false);
+  });
+
+  it("keeps persisted filename SVG and TIFF aligned with the canonical image owner", () => {
+    const media = readPersistedMediaFacts({
+      __openclaw: {
+        media: [
+          { path: "/tmp/diagram.svg" },
+          { path: "/tmp/scan.tiff", contentType: "application/octet-stream" },
+          { path: "/tmp/explicit.svg", kind: "image" },
+        ],
+      },
+    });
+
+    expect(media?.map(isImageMediaFact)).toEqual([false, true, true]);
+    expect(media?.[1]?.kind).toBeUndefined();
   });
 });

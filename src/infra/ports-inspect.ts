@@ -1,10 +1,11 @@
 // Inspects gateway port listeners and connection state.
+import net from "node:net";
 import os from "node:os";
 import { expectDefined } from "@openclaw/normalization-core";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { buildPortHints } from "./ports-format.js";
 import {
   parseLsofListenerRecordsByPort,
@@ -12,7 +13,11 @@ import {
   type LsofListenerRecord,
 } from "./ports-lsof-listeners.js";
 import { resolveLsofCommand } from "./ports-lsof.js";
-import { parseTcpEndpoint, parseWindowsNetstatListeners } from "./ports-netstat.js";
+import {
+  parseTcpEndpoint,
+  parseTcpListenerEndpoint,
+  parseWindowsNetstatListeners,
+} from "./ports-netstat.js";
 import { probePortUsage } from "./ports-probe.js";
 import type {
   PortConnection,
@@ -22,6 +27,7 @@ import type {
   PortUsage,
   PortUsageStatus,
 } from "./ports-types.js";
+import { resolveDiagnosticProcessEnv } from "./process-env.js";
 import {
   getWindowsPowerShellExePath,
   getWindowsSystem32ExePath,
@@ -53,7 +59,11 @@ const PORT_PROCESS_ENRICHMENT_CONCURRENCY = 20;
 
 async function runCommandSafe(argv: string[], timeoutMs = 5_000): Promise<CommandResult> {
   try {
-    const res = await runCommandWithTimeout(argv, { timeoutMs });
+    // env overrides alone would merge the ambient application environment back in.
+    const res = await runCommandWithTimeout(argv, {
+      timeoutMs,
+      baseEnv: resolveDiagnosticProcessEnv(),
+    });
     return {
       stdout: res.stdout,
       stderr: res.stderr,
@@ -379,9 +389,11 @@ async function readUnixListenersFromSs(port: number): Promise<ListenerReadResult
   return { listeners: [], detail: undefined, errors };
 }
 
-async function readUnixListenerSnapshot(): Promise<UnixListenerSnapshot> {
+async function readUnixListenerSnapshot(port?: number): Promise<UnixListenerSnapshot> {
   const lsof = await resolveLsofCommand();
-  const res = await runCommandSafe([lsof, "-nP", "-iTCP", "-sTCP:LISTEN", "-FpFcn"]);
+  // Keep single-port lifecycle checks targeted; batches share one all-port scan.
+  const tcpSelector = port === undefined ? "-iTCP" : `-iTCP:${port}`;
+  const res = await runCommandSafe([lsof, "-nP", tcpSelector, "-sTCP:LISTEN", "-FpFcn"]);
   if (res.code === 0) {
     return {
       recordsByPort: parseLsofListenerRecordsByPort(res.stdout),
@@ -404,60 +416,15 @@ async function readUnixListenerSnapshot(): Promise<UnixListenerSnapshot> {
   return { recordsByPort: new Map(), errors, lsofUnavailable: true };
 }
 
-async function readUnixListenersFromLsof(port: number): Promise<
-  ListenerReadResult & {
-    lsofUnavailable: boolean;
-  }
-> {
-  const lsof = await resolveLsofCommand();
-  const res = await runCommandSafe([lsof, "-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-FpFcn"]);
-  if (res.code === 0) {
-    const result = readLsofListenersForPort(parseLsofListenerRecordsByPort(res.stdout), port);
-    await enrichUnixListenerProcessInfo(result.listeners);
-    return { ...result, errors: [], lsofUnavailable: false };
-  }
-
-  const errors: string[] = [];
-  const stderr = res.stderr.trim();
-  if (res.code === 1 && !res.error && !stderr) {
-    return { listeners: [], detail: undefined, errors, lsofUnavailable: false };
-  }
-  if (res.error) {
-    errors.push(res.error);
-  }
-  const detail = [stderr, res.stdout.trim()].filter(Boolean).join("\n");
-  if (detail) {
-    errors.push(detail);
-  }
-  return { listeners: [], detail: undefined, errors, lsofUnavailable: true };
-}
-
 async function readUnixListeners(
   port: number,
   snapshot?: UnixListenerSnapshot,
 ): Promise<ListenerReadResult> {
-  if (snapshot) {
-    if (!snapshot.lsofUnavailable) {
-      const result = readLsofListenersForPort(snapshot.recordsByPort, port);
-      await enrichUnixListenerProcessInfo(result.listeners);
-      return { ...result, errors: snapshot.errors };
-    }
-
-    const ssFallback = await readUnixListenersFromSs(port);
-    if (ssFallback.listeners.length > 0) {
-      return ssFallback;
-    }
-
-    return {
-      listeners: [],
-      detail: undefined,
-      errors: [...snapshot.errors, ...ssFallback.errors],
-    };
-  }
-
-  const lsofResult = await readUnixListenersFromLsof(port);
-  if (!lsofResult.lsofUnavailable) {
-    return lsofResult;
+  const listenerSnapshot = snapshot ?? (await readUnixListenerSnapshot(port));
+  if (!listenerSnapshot.lsofUnavailable) {
+    const result = readLsofListenersForPort(listenerSnapshot.recordsByPort, port);
+    await enrichUnixListenerProcessInfo(result.listeners);
+    return { ...result, errors: listenerSnapshot.errors };
   }
   const ssFallback = await readUnixListenersFromSs(port);
   if (ssFallback.listeners.length > 0) {
@@ -466,7 +433,7 @@ async function readUnixListeners(
   return {
     listeners: [],
     detail: undefined,
-    errors: [...lsofResult.errors, ...ssFallback.errors],
+    errors: [...listenerSnapshot.errors, ...ssFallback.errors],
   };
 }
 
@@ -515,18 +482,17 @@ async function resolveWindowsImageName(pid: number): Promise<string | undefined>
     "/FI",
     `PID eq ${pid}`,
     "/FO",
-    "LIST",
+    "CSV",
+    "/NH",
   ]);
   if (res.code !== 0) {
     return undefined;
   }
   for (const rawLine of res.stdout.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!normalizeLowercaseStringOrEmpty(line).startsWith("image name:")) {
-      continue;
+    const match = rawLine.trim().match(/^"([^"]+)","(\d+)",/);
+    if (match?.[1] && match[2] === String(pid)) {
+      return match[1];
     }
-    const value = line.slice("image name:".length).trim();
-    return value || undefined;
   }
   return undefined;
 }
@@ -620,25 +586,38 @@ async function readWindowsEstablishedConnections(
   return { connections: result.entries, detail: result.detail, errors: result.errors };
 }
 
-export async function inspectPortUsage(port: number): Promise<PortUsage> {
+export async function inspectPortUsage(
+  port: number,
+  options?: { probeHosts?: readonly string[] },
+): Promise<PortUsage> {
   const result =
     process.platform === "win32" ? await readWindowsListeners(port) : await readUnixListeners(port);
-  return buildPortUsage(port, result);
+  return buildPortUsage(port, result, options?.probeHosts);
 }
 
-async function buildPortUsage(port: number, result: ListenerReadResult): Promise<PortUsage> {
+async function buildPortUsage(
+  port: number,
+  result: ListenerReadResult,
+  probeHosts?: readonly string[],
+): Promise<PortUsage> {
   const errors: string[] = [];
   errors.push(...result.errors);
   let listeners = result.listeners;
-  let status: PortUsageStatus = listeners.length > 0 ? "busy" : "unknown";
-  if (listeners.length === 0) {
-    status = await probePortUsage(port);
-  }
+  const status: PortUsageStatus = probeHosts
+    ? await probePortUsage(port, probeHosts)
+    : listeners.length > 0
+      ? "busy"
+      : await probePortUsage(port);
   if (status !== "busy") {
     listeners = [];
+  } else if (probeHosts) {
+    listeners = listeners.filter((listener) =>
+      isListenerRelevantToProbeHosts(listener, port, probeHosts),
+    );
   }
   const hints = buildPortHints(listeners, port);
   if (status === "busy" && listeners.length === 0) {
+    // The bind probe is authoritative; filtered diagnostics must never turn busy into free.
     hints.push(
       "Port is in use but process details are unavailable (install lsof or run as an admin user).",
     );
@@ -653,11 +632,51 @@ async function buildPortUsage(port: number, result: ListenerReadResult): Promise
   };
 }
 
-export async function inspectPortUsages(ports: readonly number[]): Promise<Map<number, PortUsage>> {
+function isWildcardTcpHost(host: string): boolean {
+  return host === "0.0.0.0" || host === "::" || host === "*";
+}
+
+function isSameTcpAddressFamily(leftHost: string, rightHost: string): boolean {
+  const leftFamily = net.isIP(leftHost);
+  const rightFamily = net.isIP(rightHost);
+  return leftFamily === 0 || rightFamily === 0 || leftFamily === rightFamily;
+}
+
+function isListenerRelevantToProbeHosts(
+  listener: PortListener,
+  port: number,
+  probeHosts: readonly string[],
+): boolean {
+  const endpoint = parseTcpListenerEndpoint(listener.address);
+  if (!endpoint || endpoint.port !== port) {
+    return false;
+  }
+  return probeHosts.some((probeHost) => {
+    const normalizedProbeHost = normalizeLowercaseStringOrEmpty(probeHost);
+    if (isWildcardTcpHost(endpoint.host)) {
+      return isSameTcpAddressFamily(endpoint.host, normalizedProbeHost);
+    }
+    if (isWildcardTcpHost(normalizedProbeHost)) {
+      return isSameTcpAddressFamily(normalizedProbeHost, endpoint.host);
+    }
+    return normalizedProbeHost === endpoint.host;
+  });
+}
+
+export async function inspectPortUsages(
+  ports: readonly number[],
+  options?: { probeHostsByPort?: ReadonlyMap<number, readonly string[]> },
+): Promise<Map<number, PortUsage>> {
   const uniquePorts = Array.from(new Set(ports));
   if (process.platform === "win32") {
     const entries = await Promise.all(
-      uniquePorts.map(async (port) => [port, await inspectPortUsage(port)] as const),
+      uniquePorts.map(async (port) => {
+        const probeHosts = options?.probeHostsByPort?.get(port);
+        return [
+          port,
+          await inspectPortUsage(port, probeHosts ? { probeHosts } : undefined),
+        ] as const;
+      }),
     );
     return new Map(entries);
   }
@@ -666,7 +685,14 @@ export async function inspectPortUsages(ports: readonly number[]): Promise<Map<n
   const entries = await Promise.all(
     uniquePorts.map(
       async (port) =>
-        [port, await buildPortUsage(port, await readUnixListeners(port, snapshot))] as const,
+        [
+          port,
+          await buildPortUsage(
+            port,
+            await readUnixListeners(port, snapshot),
+            options?.probeHostsByPort?.get(port),
+          ),
+        ] as const,
     ),
   );
   return new Map(entries);

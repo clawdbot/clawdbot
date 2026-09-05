@@ -6,8 +6,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/schtasks-base-mocks.js";
 import {
-  inspectPortUsage,
-  killProcessTree,
+  gatewayServiceProbeHostsMock,
+  inspectPortUsageMock,
+  killProcessTreeMock,
   resetSchtasksBaseMocks,
   schtasksCalls,
   schtasksResponses,
@@ -23,8 +24,16 @@ const sleepMock = vi.hoisted(() =>
     timeState.now += ms;
   }),
 );
+type SpawnSyncResult = {
+  pid: number;
+  output: (string | null)[];
+  stdout: string;
+  stderr: string;
+  status: number;
+  signal: null;
+};
 const spawnSync = vi.hoisted(() =>
-  vi.fn(() => ({
+  vi.fn<(command: string, args?: readonly string[]) => SpawnSyncResult>(() => ({
     pid: 0,
     output: [null, "-2147024891", ""],
     stdout: "-2147024891",
@@ -52,14 +61,18 @@ vi.mock("../utils.js", async () => {
 });
 
 const {
+  resolveTaskScriptPath,
   restartScheduledTask,
   resumeScheduledTaskAutoStartAfterUpdate,
   startScheduledTask,
   stopScheduledTask,
   suspendScheduledTaskAutoStartForUpdate,
 } = await import("./schtasks.js");
+const { resolveScheduledTaskOwnedGatewayPids } = await import("./schtasks-process.js");
 const GATEWAY_PORT = 18789;
 const SUCCESS_RESPONSE = { code: 0, stdout: "", stderr: "" } as const;
+const INSTALLED_GATEWAY_COMMAND_LINE =
+  '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port 18789';
 
 function pushSuccessfulSchtasksResponses(count: number) {
   for (let i = 0; i < count; i += 1) {
@@ -90,6 +103,7 @@ function busyPortUsage(
       {
         pid,
         command: options.command ?? "node.exe",
+        address: `127.0.0.1:${GATEWAY_PORT}`,
         ...(options.commandLine ? { commandLine: options.commandLine } : {}),
       },
     ],
@@ -99,14 +113,14 @@ function busyPortUsage(
 
 function expectGatewayTermination(pid: number) {
   if (process.platform === "win32") {
-    expect(killProcessTree).not.toHaveBeenCalled();
+    expect(killProcessTreeMock).not.toHaveBeenCalled();
     return;
   }
-  expect(killProcessTree).toHaveBeenCalledWith(pid, { graceMs: 300 });
+  expect(killProcessTreeMock).toHaveBeenCalledWith(pid, { graceMs: 300 });
 }
 
 function setTaskStateProbeResult(state: number) {
-  const stdout = String(state);
+  const stdout = JSON.stringify({ state });
   spawnSync.mockReturnValueOnce({
     pid: 0,
     output: [null, stdout, ""],
@@ -146,7 +160,7 @@ beforeEach(() => {
     status: 1,
     signal: null,
   });
-  inspectPortUsage.mockResolvedValue(freePortUsage());
+  inspectPortUsageMock.mockResolvedValue(freePortUsage());
 });
 
 afterEach(() => {
@@ -441,23 +455,128 @@ describe("Scheduled Task stop/restart cleanup", () => {
     },
   );
 
-  it("kills lingering verified gateway listeners after schtasks stop", async () => {
+  it("kills the lingering gateway process owned by the persisted task command", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       const onMutation = vi.fn();
       pushSuccessfulSchtasksResponses(3);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
-      inspectPortUsage
-        .mockResolvedValueOnce(busyPortUsage(4242))
+      inspectPortUsageMock
+        .mockResolvedValueOnce(busyPortUsage(4242, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE }))
         .mockResolvedValueOnce(freePortUsage());
 
       await stopScheduledTask({ env, stdout, onMutation });
 
-      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
       expectGatewayTermination(4242);
-      expect(inspectPortUsage).toHaveBeenCalledTimes(2);
+      expect(inspectPortUsageMock).toHaveBeenCalledTimes(2);
+      expect(inspectPortUsageMock).toHaveBeenCalledWith(GATEWAY_PORT, {
+        probeHosts: ["127.0.0.1"],
+      });
       expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-stop" });
     });
   });
+
+  it("does not adopt a portless arbitrary task action", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      delete env.OPENCLAW_GATEWAY_PORT;
+      const scriptPath = resolveTaskScriptPath(env);
+      await fs.writeFile(
+        scriptPath,
+        '@echo off\r\n"C:\\Program Files\\nodejs\\node.exe" "C:\\probe.cjs"\r\n',
+        "utf8",
+      );
+
+      await expect(resolveScheduledTaskOwnedGatewayPids(env)).resolves.toEqual([]);
+
+      expect(inspectPortUsageMock).not.toHaveBeenCalled();
+      expect(gatewayServiceProbeHostsMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(["gateway", "task-supervisor", "gateway-with-supervisor"])(
+    "stops the exact installed Windows %s even before its port is bound",
+    async (owner) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        pushSuccessfulSchtasksResponses(3);
+        inspectPortUsageMock.mockResolvedValue(freePortUsage());
+        let forced = false;
+        spawnSync.mockImplementation((command, args) => {
+          const executable = command.toLowerCase();
+          if (executable.endsWith("taskkill.exe")) {
+            const argv = Array.isArray(args) ? args.map(String) : [];
+            if (argv.includes("/F")) {
+              forced = true;
+              return {
+                pid: 0,
+                output: [null, "", ""],
+                stdout: "",
+                stderr: "",
+                status: 0,
+                signal: null,
+              };
+            }
+            return {
+              pid: 0,
+              output: [null, "", ""],
+              stdout: "",
+              stderr: "",
+              status: 1,
+              signal: null,
+            };
+          }
+          const processes = [
+            ...(owner === "gateway-with-supervisor"
+              ? [
+                  {
+                    ProcessId: 4141,
+                    CommandLine: `${INSTALLED_GATEWAY_COMMAND_LINE} --task-supervisor`,
+                  },
+                ]
+              : []),
+            {
+              ProcessId: 3131,
+              CommandLine:
+                '"C:\\Program Files\\nodejs\\node.exe" "C:\\other-openclaw.cjs" gateway --port 18789',
+            },
+            ...(!forced
+              ? [
+                  {
+                    ProcessId: 4242,
+                    CommandLine:
+                      INSTALLED_GATEWAY_COMMAND_LINE +
+                      (owner === "task-supervisor" ? " --task-supervisor" : ""),
+                  },
+                ]
+              : []),
+            { ProcessId: 9999, CommandLine: "powershell.exe" },
+          ];
+          const output = JSON.stringify(processes);
+          return {
+            pid: 0,
+            output: [null, output, ""],
+            stdout: output,
+            stderr: "",
+            status: 0,
+            signal: null,
+          };
+        });
+
+        await stopScheduledTask({ env, stdout });
+
+        const taskkillCalls = spawnSync.mock.calls
+          .filter(([command]) => command.toLowerCase().endsWith("taskkill.exe"))
+          .map(([, args]) => args);
+        expect(taskkillCalls).toEqual([
+          ["/T", "/PID", "4242"],
+          ["/F", "/T", "/PID", "4242"],
+        ]);
+        expect(taskkillCalls.flat()).not.toContain("3131");
+        expect(taskkillCalls.flat()).not.toContain("4141");
+        expect(killProcessTreeMock).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("starts a registered task and ignores audit observer failures", async () => {
     await withPreparedGatewayTask(async ({ env }) => {
@@ -465,12 +584,8 @@ describe("Scheduled Task stop/restart cleanup", () => {
         { ...SUCCESS_RESPONSE },
         { ...SUCCESS_RESPONSE },
         { ...SUCCESS_RESPONSE },
-        { ...SUCCESS_RESPONSE },
-        {
-          ...SUCCESS_RESPONSE,
-          stdout: "Status: Running\r\nLast Run Result: 0x41301\r\n",
-        },
       );
+      setTaskStateProbeResult(4);
       const write = vi.fn();
       const onMutation = vi.fn(() => {
         throw new Error("audit failed");
@@ -508,27 +623,27 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
-  it("force-kills remaining busy port listeners when the first stop pass does not free the port", async () => {
+  it("does not kill an unrelated listener when the owned process leaves another required host busy", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       pushSuccessfulSchtasksResponses(3);
-      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
-      inspectPortUsage.mockResolvedValueOnce(busyPortUsage(4242));
-      for (let i = 0; i < 19; i += 1) {
-        inspectPortUsage.mockResolvedValueOnce(busyPortUsage(4242));
+      inspectPortUsageMock.mockResolvedValueOnce(
+        busyPortUsage(4242, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE }),
+      );
+      for (let i = 0; i < 20; i += 1) {
+        inspectPortUsageMock.mockResolvedValueOnce(busyPortUsage(5252));
       }
-      inspectPortUsage
-        .mockResolvedValueOnce(busyPortUsage(5252))
-        .mockResolvedValueOnce(freePortUsage());
 
-      await stopScheduledTask({ env, stdout });
+      await expect(stopScheduledTask({ env, stdout })).rejects.toThrow(
+        "remaining listener ownership could not be verified",
+      );
 
       if (process.platform !== "win32") {
-        expect(killProcessTree).toHaveBeenNthCalledWith(1, 4242, { graceMs: 300 });
-        expect(killProcessTree).toHaveBeenNthCalledWith(2, 5252, { graceMs: 300 });
+        expect(killProcessTreeMock).toHaveBeenCalledOnce();
+        expect(killProcessTreeMock).toHaveBeenCalledWith(4242, { graceMs: 300 });
       } else {
-        expect(killProcessTree).not.toHaveBeenCalled();
+        expect(killProcessTreeMock).not.toHaveBeenCalled();
       }
-      expect(inspectPortUsage.mock.calls.length).toBeGreaterThanOrEqual(22);
+      expect(killProcessTreeMock).not.toHaveBeenCalledWith(5252, { graceMs: 300 });
     });
   });
 
@@ -536,7 +651,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       pushSuccessfulSchtasksResponses(3);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
-      inspectPortUsage
+      inspectPortUsageMock
         .mockResolvedValueOnce(
           busyPortUsage(6262, {
             commandLine:
@@ -548,7 +663,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
       await stopScheduledTask({ env, stdout });
 
       expectGatewayTermination(6262);
-      expect(inspectPortUsage).toHaveBeenCalledTimes(2);
+      expect(inspectPortUsageMock).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -558,13 +673,13 @@ describe("Scheduled Task stop/restart cleanup", () => {
       env.OPENCLAW_SERVICE_KIND = "node";
       env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Node";
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
-      inspectPortUsage.mockResolvedValue(busyPortUsage(4242));
+      inspectPortUsageMock.mockResolvedValue(busyPortUsage(4242));
 
       await stopScheduledTask({ env, stdout });
 
       expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
-      expect(inspectPortUsage).not.toHaveBeenCalled();
-      expect(killProcessTree).not.toHaveBeenCalled();
+      expect(inspectPortUsageMock).not.toHaveBeenCalled();
+      expect(killProcessTreeMock).not.toHaveBeenCalled();
       expect(schtasksCalls).toEqual([
         ["/Query"],
         ["/Query", "/TN", "OpenClaw Node"],
@@ -573,32 +688,31 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
-  it("kills lingering verified gateway listeners and waits for port release before restart", async () => {
+  it("kills the owned gateway process and waits for port release before restart", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       const onMutation = vi.fn();
       pushSuccessfulSchtasksResponses(4);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
-      inspectPortUsage
-        .mockResolvedValueOnce(busyPortUsage(5151))
+      inspectPortUsageMock
+        .mockResolvedValueOnce(busyPortUsage(5151, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE }))
         .mockResolvedValueOnce(freePortUsage());
 
       await expect(restartScheduledTask({ env, stdout, onMutation })).resolves.toEqual({
         outcome: "completed",
       });
 
-      expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(GATEWAY_PORT);
+      expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
       expectGatewayTermination(5151);
-      expect(inspectPortUsage).toHaveBeenCalledTimes(2);
+      expect(inspectPortUsageMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(inspectPortUsageMock).toHaveBeenCalledWith(GATEWAY_PORT, {
+        probeHosts: ["127.0.0.1"],
+      });
       expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-restart" });
       expect(schtasksCalls).toEqual([
         ["/Query"],
         ["/Query", "/TN", "OpenClaw Gateway"],
         ["/End", "/TN", "OpenClaw Gateway"],
         ["/Run", "/TN", "OpenClaw Gateway"],
-        ["/Query"],
-        ["/Query", "/TN", "OpenClaw Gateway", "/V", "/FO", "LIST"],
-        ["/Query"],
-        ["/Query", "/TN", "OpenClaw Gateway", "/V", "/FO", "LIST"],
       ]);
     });
   });
@@ -609,24 +723,20 @@ describe("Scheduled Task stop/restart cleanup", () => {
       env.OPENCLAW_SERVICE_KIND = "node";
       env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Node";
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
-      inspectPortUsage.mockResolvedValue(busyPortUsage(5151));
+      inspectPortUsageMock.mockResolvedValue(busyPortUsage(5151));
 
       await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
         outcome: "completed",
       });
 
       expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
-      expect(inspectPortUsage).not.toHaveBeenCalled();
-      expect(killProcessTree).not.toHaveBeenCalled();
+      expect(inspectPortUsageMock).not.toHaveBeenCalled();
+      expect(killProcessTreeMock).not.toHaveBeenCalled();
       expect(schtasksCalls).toEqual([
         ["/Query"],
         ["/Query", "/TN", "OpenClaw Node"],
         ["/End", "/TN", "OpenClaw Node"],
         ["/Run", "/TN", "OpenClaw Node"],
-        ["/Query"],
-        ["/Query", "/TN", "OpenClaw Node", "/V", "/FO", "LIST"],
-        ["/Query"],
-        ["/Query", "/TN", "OpenClaw Node", "/V", "/FO", "LIST"],
       ]);
     });
   });

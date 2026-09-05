@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { asBoolean, parseBooleanValue } from "./boolean.js";
-import { chunkItems } from "./chunk-items.js";
 import { splitShellArgs } from "./shell-argv.js";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "./zod-parse.js";
 
@@ -56,8 +55,8 @@ describe("parseBooleanValue", () => {
 
 describe("splitShellArgs", () => {
   it("splits whitespace and respects quotes", () => {
-    expect(splitShellArgs(`qmd --foo "bar baz"`)).toEqual(["qmd", "--foo", "bar baz"]);
-    expect(splitShellArgs(`qmd --foo 'bar baz'`)).toEqual(["qmd", "--foo", "bar baz"]);
+    expect(splitShellArgs(`search --foo "bar baz"`)).toEqual(["search", "--foo", "bar baz"]);
+    expect(splitShellArgs(`search --foo 'bar baz'`)).toEqual(["search", "--foo", "bar baz"]);
   });
 
   it("supports backslash escapes inside double quotes", () => {
@@ -74,16 +73,6 @@ describe("splitShellArgs", () => {
     expect(splitShellArgs(`echo hi # comment && whoami`)).toEqual(["echo", "hi"]);
     expect(splitShellArgs(`echo "hi # still-literal"`)).toEqual(["echo", "hi # still-literal"]);
     expect(splitShellArgs(`echo hi#tail`)).toEqual(["echo", "hi#tail"]);
-  });
-});
-
-describe("chunkItems", () => {
-  it("splits items into fixed-size chunks", () => {
-    expect(chunkItems([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
-  });
-
-  it("keeps one row when the requested size is not positive", () => {
-    expect(chunkItems([1, 2, 3], 0)).toEqual([[1, 2, 3]]);
   });
 });
 

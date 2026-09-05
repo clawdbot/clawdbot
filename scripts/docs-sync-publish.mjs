@@ -4,11 +4,13 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
+import { renderDocsHeadingMap } from "./docs-list.js";
+import { requireOptionArgument } from "./lib/arg-utils.runtime.mjs";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(HERE, "..");
+const ROOT = resolveRepoRoot(import.meta.url);
 const SOURCE_DOCS_DIR = path.join(ROOT, "docs");
 const SOURCE_CONFIG_PATH = path.join(SOURCE_DOCS_DIR, "docs.json");
 const INTERNAL_DOCS_DIRS = ["internal"];
@@ -20,9 +22,39 @@ const DEFAULT_CLAWHUB_REPO_CANDIDATES = [
   path.resolve(ROOT, "..", "clawhub"),
 ];
 const SYNC_SUPPORT_FILES = [
+  // File URLs declare the copied runtime closure without executing modules:
+  // source sync runs before parser dependencies are installed.
+  {
+    source: new URL("./lib/docs-markdown.mjs", import.meta.url),
+    target: path.join(".openclaw-sync", "lib", "docs-markdown.mjs"),
+  },
+  {
+    source: new URL("./lib/docs-redirects.mjs", import.meta.url),
+    target: path.join(".openclaw-sync", "lib", "docs-redirects.mjs"),
+  },
   {
     source: path.join(ROOT, "scripts", "check-docs-mdx.mjs"),
     target: path.join(".openclaw-sync", "check-docs-mdx.mjs"),
+  },
+  {
+    source: path.join(ROOT, "scripts", "check-docs-mdx.mts"),
+    target: path.join(".openclaw-sync", "check-docs-mdx.mts"),
+  },
+  {
+    source: path.join(ROOT, "scripts", "lib", "arg-utils.runtime.mjs"),
+    target: path.join(".openclaw-sync", "lib", "arg-utils.runtime.mjs"),
+  },
+  {
+    source: path.join(ROOT, "scripts", "lib", "tsx-cli-shim.mjs"),
+    target: path.join(".openclaw-sync", "lib", "tsx-cli-shim.mjs"),
+  },
+  {
+    source: path.join(ROOT, "scripts", "lib", "local-check-runtime.mts"),
+    target: path.join(".openclaw-sync", "lib", "local-check-runtime.mts"),
+  },
+  {
+    source: path.join(ROOT, "scripts", "tsx.mjs"),
+    target: path.join(".openclaw-sync", "tsx.mjs"),
   },
   {
     source: path.join(ROOT, "scripts", "lib", "mintlify-accordion.mjs"),
@@ -184,14 +216,6 @@ const GENERATED_LOCALES = [
   },
 ];
 
-function readOptionValue(argv, index, optionName) {
-  const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("-")) {
-    throw new Error(`${optionName} requires a value`);
-  }
-  return value;
-}
-
 export function parseArgs(argv) {
   const args = {
     target: "",
@@ -207,27 +231,27 @@ export function parseArgs(argv) {
     const part = argv[index];
     switch (part) {
       case "--target":
-        args.target = readOptionValue(argv, index, part);
+        args.target = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       case "--source-repo":
-        args.sourceRepo = readOptionValue(argv, index, part);
+        args.sourceRepo = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       case "--source-sha":
-        args.sourceSha = readOptionValue(argv, index, part);
+        args.sourceSha = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       case "--clawhub-repo":
-        args.clawhubRepo = readOptionValue(argv, index, part);
+        args.clawhubRepo = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       case "--clawhub-source-repo":
-        args.clawhubSourceRepo = readOptionValue(argv, index, part);
+        args.clawhubSourceRepo = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       case "--clawhub-source-sha":
-        args.clawhubSourceSha = readOptionValue(argv, index, part);
+        args.clawhubSourceSha = requireOptionArgument(argv, index, part);
         index += 1;
         break;
       default:
@@ -784,6 +808,7 @@ function syncDocsTree(targetRoot, options = {}) {
     `${targetDocsDir}/`,
   ]);
   pruneInternalDocs(targetDocsDir);
+  writePublishedDocsMap(targetDocsDir);
 
   for (const locale of GENERATED_LOCALES) {
     const sourceTmPath = path.join(SOURCE_DOCS_DIR, ".i18n", locale.tmFile);
@@ -803,6 +828,13 @@ function syncDocsTree(targetRoot, options = {}) {
   repairGeneratedLocaleDocs(targetDocsDir);
   writeJson(path.join(targetDocsDir, "docs.json"), composeDocsConfig());
   return { clawhub: clawhubSource };
+}
+
+/** Writes the public heading map into the publish tree without committing an expanded mirror. */
+export function writePublishedDocsMap(targetDocsDir) {
+  const outputPath = path.join(targetDocsDir, "docs_map.md");
+  fs.writeFileSync(outputPath, renderDocsHeadingMap(SOURCE_DOCS_DIR), "utf8");
+  return outputPath;
 }
 
 function writeSyncMetadata(targetRoot, args, sources) {

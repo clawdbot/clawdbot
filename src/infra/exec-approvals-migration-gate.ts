@@ -1,10 +1,12 @@
 // Blocks runtime use while retired exec approval state still awaits Doctor import.
-import fs from "node:fs";
 import path from "node:path";
 import { resolveExecApprovalsPath } from "./exec-approvals-config.js";
+import { pathMayExistSync } from "./path-existence.js";
 
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
-const legacyPresenceCache = new Map<string, boolean>();
+// Doctor usually runs in another process, so cache only the steady-state absence;
+// a present verdict must be re-probed on the next attempt after Doctor finishes.
+const legacyAbsenceCache = new Set<string>();
 
 /**
  * Doctor repairs whichever state directory its own environment resolves to, so a bare
@@ -28,40 +30,25 @@ export class ExecApprovalsMigrationRequiredError extends Error {
   }
 }
 
-function pathMayExist(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
 /** Refuse runtime access until Doctor owns the one-time legacy import. */
 export function assertNoPendingLegacyExecApprovals(
   options: { pathMayExist?: (filePath: string) => boolean } = {},
 ): void {
   const sourcePath = resolveExecApprovalsPath();
-  let hasLegacy = legacyPresenceCache.get(sourcePath);
-  if (hasLegacy === undefined) {
-    const probe = options.pathMayExist ?? pathMayExist;
-    // Bound both Doctor rename directions: source -> claim and claim -> source.
-    const sourceBefore = probe(sourcePath);
-    const claim = probe(`${sourcePath}${DOCTOR_CLAIM_SUFFIX}`);
-    const sourceAfter = probe(sourcePath);
-    hasLegacy = sourceBefore || claim || sourceAfter;
-    legacyPresenceCache.set(sourcePath, hasLegacy);
+  if (legacyAbsenceCache.has(sourcePath)) {
+    return;
   }
-  if (hasLegacy) {
+  const probe = options.pathMayExist ?? pathMayExistSync;
+  // Bound both Doctor rename directions: source -> claim and claim -> source.
+  const sourceBefore = probe(sourcePath);
+  const claim = probe(`${sourcePath}${DOCTOR_CLAIM_SUFFIX}`);
+  const sourceAfter = probe(sourcePath);
+  if (sourceBefore || claim || sourceAfter) {
     throw new ExecApprovalsMigrationRequiredError(sourcePath);
   }
-}
-
-/** Forget one process-local legacy probe after Doctor resolves the source. */
-export function resetLegacyExecApprovalsPresenceCache(env: NodeJS.ProcessEnv = process.env): void {
-  legacyPresenceCache.delete(resolveExecApprovalsPath(env));
+  legacyAbsenceCache.add(sourcePath);
 }
 
 export function resetExecApprovalsMigrationGateForTest(): void {
-  legacyPresenceCache.clear();
+  legacyAbsenceCache.clear();
 }

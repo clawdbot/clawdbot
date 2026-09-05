@@ -2,37 +2,48 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createChannelProgressDraftCompositor,
-  createChannelProgressReceiptTracker,
+  createChannelProgressWorkCounter,
   PROGRESS_STATUS_PREAMBLE_FRESH_MS,
 } from "./progress-draft-compositor.js";
-import { DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS } from "./streaming.js";
+
+function createTestProgressDraftCompositor(
+  overrides: Omit<
+    Parameters<typeof createChannelProgressDraftCompositor>[0],
+    "mode" | "active" | "seed"
+  >,
+) {
+  return createChannelProgressDraftCompositor({
+    mode: "progress",
+    active: true,
+    seed: "test",
+    ...overrides,
+  });
+}
+
+const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
 
 describe("createChannelProgressDraftCompositor", () => {
-  it("tracks compact per-turn progress receipts", () => {
+  it("counts only work tool calls and resets per turn", () => {
     let now = 1_000;
-    const receipt = createChannelProgressReceiptTracker({ now: () => now });
+    const work = createChannelProgressWorkCounter({ now: () => now });
 
-    receipt.noteReasoning();
-    receipt.noteToolCall("exec");
-    receipt.noteCommentary("note-1", "First note");
-    receipt.noteCommentary("note-1", "Updated note");
-    receipt.noteReasoning();
+    work.noteToolCall("exec");
+    work.noteToolCall("progress_card");
     now = 43_000;
 
-    expect(receipt.buildSummaryLine()).toBe("🧠 2 thoughts · 💬 1 note · 🛠️ 1 tool call · ⏱️ 42s");
+    expect(work.toolCalls).toBe(1);
+    expect(work.elapsedSeconds).toBe(42);
 
-    receipt.reset();
+    work.reset();
     now = 43_500;
-    expect(receipt.buildSummaryLine()).toBe("⏱️ 1s");
+    expect(work.toolCalls).toBe(0);
+    expect(work.elapsedSeconds).toBe(1);
   });
 
   it("starts immediately for plans, replaces snapshots, and clears them on reset", async () => {
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: false } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { toolProgress: true, label: false } } },
       update,
     });
 
@@ -59,12 +70,50 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenLastCalledWith("🛠️ Next", expect.anything());
   });
 
-  it("returns detached structured state for channel-native renderers", async () => {
+  it("keeps plan task progress independent from tool progress", async () => {
+    const update = vi.fn();
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { label: false, commentary: true, toolProgress: false },
+        },
+      },
+      update,
+    });
+
+    expect(
+      await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }], {
+        explanation: "Applying the change.",
+      }),
+    ).toBe(true);
+    expect(update).toHaveBeenLastCalledWith("Applying the change.\n\n▸ Patch", {
+      flush: true,
+      lines: [],
+    });
+  });
+
+  it("publishes partial-preview tool lines without enabling progress-only plans", async () => {
+    const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: false } } },
-      mode: "progress",
+      entry: { streaming: { mode: "partial", progress: { label: false } } },
+      mode: "partial",
       active: true,
-      seed: "test",
+      seed: "preview",
+      update,
+    });
+
+    await progress.pushToolProgress("Inspecting files");
+    expect(update).toHaveBeenLastCalledWith("• Inspecting files", {
+      lines: ["Inspecting files"],
+    });
+    expect(await progress.pushPlanProgress([{ step: "Patch", status: "in_progress" }])).toBe(false);
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns detached structured state for channel-native renderers", async () => {
+    const progress = createTestProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { toolProgress: true, label: false } } },
       update: vi.fn(),
     });
 
@@ -117,13 +166,10 @@ describe("createChannelProgressDraftCompositor", () => {
 
   it("keeps the progress label visible when tool lines are hidden", async () => {
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
+    const progress = createTestProgressDraftCompositor({
       entry: {
         streaming: { mode: "progress", progress: { label: "Shelling", toolProgress: false } },
       },
-      mode: "progress",
-      active: true,
-      seed: "test",
       update,
     });
 
@@ -135,13 +181,10 @@ describe("createChannelProgressDraftCompositor", () => {
   it("gates window thinking on its own flag, independent of tool progress", async () => {
     // thinking: false hides thoughts even though toolProgress stays on…
     const hiddenUpdate = vi.fn();
-    const hidden = createChannelProgressDraftCompositor({
+    const hidden = createTestProgressDraftCompositor({
       entry: {
-        streaming: { mode: "progress", progress: { label: "Shelling" } },
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
       },
-      mode: "progress",
-      active: true,
-      seed: "test",
       reasoningGate: false,
       update: hiddenUpdate,
     });
@@ -149,45 +192,21 @@ describe("createChannelProgressDraftCompositor", () => {
     await hidden.pushReasoningProgress("Reading files");
     expect(hiddenUpdate.mock.calls.every(([text]) => !String(text).includes("Reading"))).toBe(true);
 
-    const defaultUpdate = vi.fn();
-    const sharedDefault = createChannelProgressDraftCompositor({
+    // …and a quiet draft (toolProgress off) still shows authored reasoning.
+    const quietUpdate = vi.fn();
+    const quiet = createTestProgressDraftCompositor({
       entry: {
         streaming: {
           mode: "progress",
           progress: { label: "Shelling", toolProgress: false },
         },
       },
-      mode: "progress",
-      active: true,
-      seed: "test",
-      update: defaultUpdate,
+      update: quietUpdate,
     });
-    await sharedDefault.pushToolProgress("🛠️ Exec", { startImmediately: true });
-    await sharedDefault.pushReasoningProgress("Reading files");
-    expect(defaultUpdate.mock.calls.every(([text]) => !String(text).includes("Reading"))).toBe(
-      true,
-    );
-
-    const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: {
-        streaming: {
-          mode: "progress",
-          progress: { label: "Shelling", toolProgress: false },
-        },
-      },
-      mode: "progress",
-      active: true,
-      seed: "test",
-      reasoningLinePrefix: "🧠 ",
-      reasoningGate: true,
-      update,
-    });
-    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
-    await progress.pushReasoningProgress("Reading files");
-    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🧠 _Reading files_", {
-      lines: ["🧠 _Reading files_"],
-    });
+    await quiet.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await quiet.pushReasoningProgress("Reading files");
+    expect(quietUpdate.mock.lastCall?.[0]).toBe("Shelling\n\n• _Reading files_");
+    expect(quietUpdate.mock.calls.every(([text]) => !String(text).includes("Exec"))).toBe(true);
   });
 
   it("shares reasoning merge state with legacy preview renderers", () => {
@@ -207,11 +226,10 @@ describe("createChannelProgressDraftCompositor", () => {
 
   it("re-arms the draft for a queued turn after the primary final settled", async () => {
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       update,
     });
 
@@ -231,11 +249,10 @@ describe("createChannelProgressDraftCompositor", () => {
 
   it("force-rearms an authoritative queued boundary without a prior final", async () => {
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       update,
     });
 
@@ -251,11 +268,10 @@ describe("createChannelProgressDraftCompositor", () => {
     vi.useFakeTimers();
     try {
       const update = vi.fn();
-      const progress = createChannelProgressDraftCompositor({
-        entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-        mode: "progress",
-        active: true,
-        seed: "test",
+      const progress = createTestProgressDraftCompositor({
+        entry: {
+          streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+        },
         update,
       });
 
@@ -272,11 +288,10 @@ describe("createChannelProgressDraftCompositor", () => {
 
   it("does not resurrect progress after suppression", async () => {
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       update,
     });
 
@@ -288,11 +303,10 @@ describe("createChannelProgressDraftCompositor", () => {
 
   it("composes reasoning deltas with tool progress", async () => {
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       reasoningLinePrefix: "🧠 ",
       update,
     });
@@ -308,11 +322,13 @@ describe("createChannelProgressDraftCompositor", () => {
 
   it("labels window narration with a 💬 prefix", async () => {
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: "Shelling", commentary: true },
+        },
+      },
       commentaryLinePrefix: "💬 ",
       update,
     });
@@ -331,21 +347,182 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(rendered).toContain("Shelling\n\n💬 _Checking the workspace_");
   });
 
-  it("interleaves reasoning bursts with tool calls in arrival order", async () => {
+  it("collapses cumulative id-less commentary snapshots onto one line", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
       entry: {
-        streaming: { mode: "progress", progress: { label: "Shelling", maxLines: 8 } },
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: "Shelling", commentary: true },
+        },
       },
       mode: "progress",
       active: true,
       seed: "test",
+      commentaryLinePrefix: "💬 ",
+      update,
+    });
+
+    expect(await progress.pushCommentaryProgress("Checking")).toBe(true);
+    expect(await progress.pushCommentaryProgress("Checking the workspace")).toBe(true);
+    expect(await progress.pushCommentaryProgress("Checking the workspace before answering.")).toBe(
+      true,
+    );
+
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n💬 _Checking the workspace before answering._",
+      {
+        lines: [
+          expect.objectContaining({
+            text: "💬 _Checking the workspace before answering._",
+            kind: "item",
+            label: "Commentary",
+          }),
+        ],
+      },
+    );
+    expect(progress.getSnapshot().lines).toHaveLength(1);
+  });
+
+  it("appends genuinely distinct id-less commentary as separate lines", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: "Shelling", commentary: true },
+        },
+      },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      commentaryLinePrefix: "💬 ",
+      update,
+    });
+
+    expect(await progress.pushCommentaryProgress("Checking the workspace")).toBe(true);
+    expect(await progress.pushCommentaryProgress("Writing the patch next")).toBe(true);
+
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n💬 _Checking the workspace_\n💬 _Writing the patch next_",
+      {
+        lines: [
+          expect.objectContaining({ text: "💬 _Checking the workspace_" }),
+          expect.objectContaining({ text: "💬 _Writing the patch next_" }),
+        ],
+      },
+    );
+  });
+
+  it("updates an id-less commentary line in place after a later tool line", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: "Shelling", commentary: true },
+        },
+      },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      commentaryLinePrefix: "💬 ",
+      update,
+    });
+
+    await progress.pushCommentaryProgress("Checking");
+    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await progress.pushCommentaryProgress("Checking the workspace");
+
+    expect(update).toHaveBeenLastCalledWith("Shelling\n\n💬 _Checking the workspace_\n🛠️ Exec", {
+      lines: [expect.objectContaining({ text: "💬 _Checking the workspace_" }), "🛠️ Exec"],
+    });
+  });
+
+  it("keeps id-less commentary when a later snapshot sanitizes to empty", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: "Shelling", commentary: true },
+        },
+      },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      commentaryLinePrefix: "💬 ",
+      update,
+    });
+
+    expect(await progress.pushCommentaryProgress("Checking the workspace")).toBe(true);
+    const callsAfterValid = update.mock.calls.length;
+    expect(
+      await progress.pushCommentaryProgress("[[reply_to_current]] _NO_REPLY_ [[audio_as_voice]]"),
+    ).toBe(false);
+
+    expect(update).toHaveBeenCalledTimes(callsAfterValid);
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n💬 _Checking the workspace_",
+      expect.objectContaining({
+        lines: [expect.objectContaining({ text: "💬 _Checking the workspace_" })],
+      }),
+    );
+    expect(progress.getSnapshot().lines).toHaveLength(1);
+  });
+
+  it("replaces and retracts commentary by itemId", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: "Shelling", commentary: true },
+        },
+      },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      commentaryLinePrefix: "💬 ",
+      update,
+    });
+
+    expect(await progress.pushCommentaryProgress("First note", { itemId: "c1" })).toBe(true);
+    expect(await progress.pushCommentaryProgress("Updated note", { itemId: "c1" })).toBe(true);
+    expect(await progress.pushCommentaryProgress("Other note", { itemId: "c2" })).toBe(true);
+    expect(progress.getSnapshot().lines).toHaveLength(2);
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n💬 _Updated note_\n💬 _Other note_",
+      expect.objectContaining({
+        lines: [
+          expect.objectContaining({ id: "commentary:c1", text: "💬 _Updated note_" }),
+          expect.objectContaining({ id: "commentary:c2", text: "💬 _Other note_" }),
+        ],
+      }),
+    );
+
+    expect(await progress.pushCommentaryProgress("", { itemId: "c1" })).toBe(false);
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n💬 _Other note_",
+      expect.objectContaining({
+        lines: [expect.objectContaining({ id: "commentary:c2", text: "💬 _Other note_" })],
+      }),
+    );
+  });
+
+  it("keeps reasoning bursts separate across tools", async () => {
+    const update = vi.fn();
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: "Shelling", maxLines: 8 },
+        },
+      },
       reasoningLinePrefix: "🧠 ",
       update,
     });
 
-    // thought1 → tool1 → thought2 → tool2: each thought is its own line,
-    // appended in order, not collapsed into a single replaced line.
     await progress.pushReasoningProgress("Listing the workspace");
     await progress.pushToolProgress("🛠️ ls", { startImmediately: true });
     await progress.pushReasoningProgress("Picking the largest");
@@ -353,19 +530,17 @@ describe("createChannelProgressDraftCompositor", () => {
 
     expect(update).toHaveBeenLastCalledWith(
       "Shelling\n\n🧠 _Listing the workspace_\n🛠️ ls\n🧠 _Picking the largest_\n🛠️ wc",
-      {
-        lines: ["🧠 _Listing the workspace_", "🛠️ ls", "🧠 _Picking the largest_", "🛠️ wc"],
-      },
+      { lines: ["🧠 _Listing the workspace_", "🛠️ ls", "🧠 _Picking the largest_", "🛠️ wc"] },
     );
+    progress.cancel();
   });
 
   it("preserves tagged reasoning content without leaking tags", async () => {
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       reasoningLinePrefix: "🧠 ",
       update,
     });
@@ -380,11 +555,10 @@ describe("createChannelProgressDraftCompositor", () => {
 
   it("waits for complete reasoning tags before showing tagged progress", async () => {
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       update,
     });
 
@@ -397,11 +571,10 @@ describe("createChannelProgressDraftCompositor", () => {
 
   it("preserves partial reasoning tag buffers across deltas", async () => {
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       reasoningLinePrefix: "🧠 ",
       update,
     });
@@ -417,11 +590,10 @@ describe("createChannelProgressDraftCompositor", () => {
 
   it("keeps literal reasoning tags inside code blocks", async () => {
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       reasoningLinePrefix: "🧠 ",
       update,
     });
@@ -439,11 +611,10 @@ describe("createChannelProgressDraftCompositor", () => {
 
   it("replaces repeated formatted reasoning snapshots", async () => {
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       reasoningLinePrefix: "🧠 ",
       update,
     });
@@ -457,10 +628,12 @@ describe("createChannelProgressDraftCompositor", () => {
     });
   });
 
-  it("replaces tool lines with narration and drops redundant edits", async () => {
+  it("keeps tool lines under narration and drops redundant edits", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       mode: "progress",
       active: true,
       seed: "test",
@@ -470,37 +643,39 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
     await progress.pushNarrationProgress("Updating the config file now.");
     expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\nUpdating the config file now.",
+      "Shelling\n\nUpdating the config file now.\n\n🛠️ Exec",
       expect.anything(),
     );
 
-    // Tool events keep accumulating underneath without editing the message.
-    const callsAfterNarration = update.mock.calls.length;
+    // Tool events stay visible under the headline, so each new line edits.
     await progress.pushToolProgress("🛠️ Wc", { startImmediately: true });
-    expect(update.mock.calls.length).toBe(callsAfterNarration);
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\nUpdating the config file now.\n\n🛠️ Exec\n🛠️ Wc",
+      expect.anything(),
+    );
 
     // Identical narration is dropped; changed narration edits once.
     expect(await progress.pushNarrationProgress("Updating the config file now.")).toBe(false);
     await progress.pushNarrationProgress("Restarting the gateway.");
     expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\nRestarting the gateway.",
+      "Shelling\n\nRestarting the gateway.\n\n🛠️ Exec\n🛠️ Wc",
       expect.anything(),
     );
 
-    // Narration stopping (empty update) falls back to the raw tool lines.
+    // Narration stopping (empty update) leaves the raw tool lines.
     await progress.pushNarrationProgress("");
     expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🛠️ Wc", expect.anything());
   });
 
   it("hands preambles to the commentary lane when it is enabled", async () => {
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
+    const progress = createTestProgressDraftCompositor({
       entry: {
-        streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } },
+        streaming: {
+          mode: "progress",
+          progress: { toolProgress: true, label: "Shelling", commentary: true },
+        },
       },
-      mode: "progress",
-      active: true,
-      seed: "test",
       update,
     });
 
@@ -512,11 +687,8 @@ describe("createChannelProgressDraftCompositor", () => {
 
   it("holds a preamble headline until the gate starts and hides the implicit label", async () => {
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress" } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { toolProgress: true } } },
       update,
     });
 
@@ -532,11 +704,8 @@ describe("createChannelProgressDraftCompositor", () => {
 
   it("publishes rolling tool-line changes beneath a stable preamble headline", async () => {
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { maxLines: 8 } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { toolProgress: true, maxLines: 8 } } },
       updateOnLineChange: true,
       update,
     });
@@ -545,7 +714,7 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushToolProgress("🛠️ Exec one", { startImmediately: true });
     await progress.pushToolProgress("🛠️ Exec two", { startImmediately: true });
 
-    expect(update).toHaveBeenLastCalledWith("Reading the workspace.", {
+    expect(update).toHaveBeenLastCalledWith("Reading the workspace.\n\n🛠️ Exec one\n🛠️ Exec two", {
       lines: ["🛠️ Exec one", "🛠️ Exec two"],
     });
   });
@@ -553,11 +722,8 @@ describe("createChannelProgressDraftCompositor", () => {
   it("rejects control-only preambles without clobbering a valid headline", async () => {
     let nowMs = 0;
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress" } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { toolProgress: true } } },
       now: () => nowMs,
       update,
     });
@@ -592,11 +758,10 @@ describe("createChannelProgressDraftCompositor", () => {
 
   it("retracts only the matching preamble headline", async () => {
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       update,
     });
 
@@ -617,11 +782,10 @@ describe("createChannelProgressDraftCompositor", () => {
   it("keeps a fresh preamble ahead of later narration", async () => {
     let nowMs = 0;
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       now: () => nowMs,
       update,
     });
@@ -640,11 +804,10 @@ describe("createChannelProgressDraftCompositor", () => {
   it("uses newer narration after the preamble becomes stale", async () => {
     let nowMs = 0;
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       now: () => nowMs,
       update,
     });
@@ -663,11 +826,10 @@ describe("createChannelProgressDraftCompositor", () => {
   it("uses a plan explanation after the preamble becomes stale", async () => {
     let nowMs = 0;
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       now: () => nowMs,
       update,
     });
@@ -688,11 +850,10 @@ describe("createChannelProgressDraftCompositor", () => {
   it("refreshes a new preamble item when its text matches the stale item", async () => {
     let nowMs = 0;
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       now: () => nowMs,
       update,
     });
@@ -713,11 +874,10 @@ describe("createChannelProgressDraftCompositor", () => {
     vi.useFakeTimers();
     try {
       const update = vi.fn();
-      const progress = createChannelProgressDraftCompositor({
-        entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-        mode: "progress",
-        active: true,
-        seed: "test",
+      const progress = createTestProgressDraftCompositor({
+        entry: {
+          streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+        },
         update,
       });
 
@@ -743,11 +903,8 @@ describe("createChannelProgressDraftCompositor", () => {
   it("cancels a pending preamble-expiry refresh when the final starts", async () => {
     vi.useFakeTimers();
     try {
-      const progress = createChannelProgressDraftCompositor({
-        entry: { streaming: { mode: "progress" } },
-        mode: "progress",
-        active: true,
-        seed: "test",
+      const progress = createTestProgressDraftCompositor({
+        entry: { streaming: { mode: "progress", progress: { toolProgress: true } } },
         update: vi.fn(),
       });
 
@@ -766,11 +923,10 @@ describe("createChannelProgressDraftCompositor", () => {
   it("returns to the retained preamble when narration clears", async () => {
     let nowMs = 0;
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       now: () => nowMs,
       update,
     });
@@ -790,11 +946,10 @@ describe("createChannelProgressDraftCompositor", () => {
   it("clears both status sources on reset", async () => {
     let nowMs = 0;
     const update = vi.fn();
-    const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-      mode: "progress",
-      active: true,
-      seed: "test",
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       now: () => nowMs,
       update,
     });
@@ -813,11 +968,8 @@ describe("createChannelProgressDraftCompositor", () => {
     vi.useFakeTimers();
     try {
       const update = vi.fn();
-      const progress = createChannelProgressDraftCompositor({
-        entry: { streaming: { mode: "progress" } },
-        mode: "progress",
-        active: true,
-        seed: "test",
+      const progress = createTestProgressDraftCompositor({
+        entry: { streaming: { mode: "progress", progress: { toolProgress: true } } },
         update,
       });
 
@@ -829,7 +981,7 @@ describe("createChannelProgressDraftCompositor", () => {
       expect(update).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(1);
-      expect(update).toHaveBeenCalledWith("Reading the gateway config.", {
+      expect(update).toHaveBeenCalledWith("Reading the gateway config.\n\n🛠️ Exec", {
         flush: true,
         lines: ["🛠️ Exec"],
       });
@@ -838,13 +990,89 @@ describe("createChannelProgressDraftCompositor", () => {
     }
   });
 
-  it("ignores status updates once the final reply started and clears both per turn", async () => {
+  it("normalizes transport-neutral agent events through the compositor", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      entry: { streaming: { mode: "progress", progress: { toolProgress: true } } },
       mode: "progress",
       active: true,
       seed: "test",
+      update,
+    });
+
+    await progress.start();
+    await progress.pushToolEvent({
+      itemId: "tool-1",
+      name: "exec",
+      phase: "start",
+      args: { command: "pnpm test" },
+      detailMode: "raw",
+    });
+    await progress.pushItemEvent({
+      itemId: "item-1",
+      kind: "search",
+      progressText: "found tests",
+    });
+    await progress.pushApprovalEvent({ phase: "requested", command: "pnpm test" });
+    await progress.pushCommandOutputEvent({
+      itemId: "command-1",
+      phase: "end",
+      name: "exec",
+      exitCode: 0,
+    });
+    await progress.pushPatchEvent({
+      itemId: "patch-1",
+      phase: "end",
+      modified: ["src/example.ts"],
+    });
+    await progress.pushApprovalEvent({ phase: "resolved", command: "ignored" });
+    await progress.pushApprovalEvent({ command: "ignored without phase" });
+    await progress.pushCommandOutputEvent({ phase: "start", title: "ignored" });
+    await progress.pushCommandOutputEvent({ title: "ignored without phase" });
+    await progress.pushPatchEvent({ phase: "start", modified: ["ignored.ts"] });
+    await progress.pushPatchEvent({ modified: ["ignored-without-phase.ts"] });
+
+    expect(progress.getSnapshot().lines).toEqual([
+      expect.objectContaining({ id: "tool-1", kind: "tool", toolName: "exec" }),
+      expect.objectContaining({ id: "item-1", kind: "item", toolName: "web_search" }),
+      expect.objectContaining({ kind: "approval", status: "requested" }),
+      expect.objectContaining({ id: "command-1", kind: "command-output", status: "completed" }),
+      expect.objectContaining({ id: "patch-1", kind: "patch", toolName: "apply_patch" }),
+    ]);
+    expect(progress.getSnapshot().diffStat).toBeUndefined();
+  });
+
+  it("wires successful mutation completions into the snapshot diff stat", async () => {
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Working" } },
+      },
+      update: vi.fn(),
+      updateOnLineChange: true,
+    });
+
+    await progress.pushToolEvent({
+      toolCallId: "write-1",
+      name: "write",
+      phase: "start",
+      args: { path: "src/example.ts", content: "one\ntwo" },
+    });
+    expect(progress.getSnapshot().diffStat).toBeUndefined();
+    await progress.pushItemEvent({
+      toolCallId: "write-1",
+      kind: "tool",
+      phase: "end",
+      status: "completed",
+    });
+    expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 2, removed: 0 });
+  });
+
+  it("ignores status updates once the final reply started and clears both per turn", async () => {
+    const update = vi.fn();
+    const progress = createTestProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+      },
       update,
     });
 
@@ -870,11 +1098,10 @@ describe("createChannelProgressDraftCompositor", () => {
     try {
       const error = new Error("send failed");
       const update = vi.fn().mockRejectedValue(error);
-      const progress = createChannelProgressDraftCompositor({
-        entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
-        mode: "progress",
-        active: true,
-        seed: "test",
+      const progress = createTestProgressDraftCompositor({
+        entry: {
+          streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
+        },
         update,
       });
 

@@ -2,8 +2,11 @@
 
 const TELEPHONY_SAMPLE_RATE = 8_000;
 const TELEPHONY_CHUNK_BYTES = 160;
-const TELEPHONY_CHUNK_MS = 20;
+// The lead absorbs event-loop timer lateness and network jitter in the telephony edge buffer.
+// Barge-in clear flushes both queues, so this cushion does not add interruption latency.
+const LEAD_MS = 160;
 const DEFAULT_MAX_QUEUED_AUDIO_BYTES = TELEPHONY_SAMPLE_RATE * 120;
+const QUEUE_COMPACT_HEAD_THRESHOLD = 256;
 
 /** Queue item sent over the realtime provider media stream. */
 type RealtimeAudioQueueItem =
@@ -30,9 +33,11 @@ interface RealtimeAudioSerializer {
 /** Paces outgoing mulaw audio frames at telephony cadence. */
 export class RealtimeAudioPacer {
   private queue: RealtimeAudioQueueItem[] = [];
+  private queueHead = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private queuedAudioBytes = 0;
   private closed = false;
+  private streamClockMs: number | null = null;
 
   constructor(
     private readonly params: {
@@ -58,7 +63,7 @@ export class RealtimeAudioPacer {
       this.queue.push({
         type: "audio",
         chunk,
-        durationMs: Math.max(1, Math.round((chunk.length / TELEPHONY_SAMPLE_RATE) * 1000)),
+        durationMs: chunk.length / 8,
       });
       this.queuedAudioBytes += chunk.length;
     }
@@ -81,8 +86,9 @@ export class RealtimeAudioPacer {
     }
     const clearedAudioBytes = this.queuedAudioBytes;
     this.clearTimer();
-    this.queue = [];
+    this.resetQueue();
     this.queuedAudioBytes = 0;
+    this.streamClockMs = null;
     this.params.send(this.params.serializer.clear());
     return clearedAudioBytes;
   }
@@ -96,8 +102,9 @@ export class RealtimeAudioPacer {
   close(): void {
     this.closed = true;
     this.clearTimer();
-    this.queue = [];
+    this.resetQueue();
     this.queuedAudioBytes = 0;
+    this.streamClockMs = null;
   }
 
   /** Clear the scheduled pump timer. */
@@ -122,34 +129,74 @@ export class RealtimeAudioPacer {
     this.params.onBackpressure?.();
   }
 
-  /** Send one queued item and schedule the next send based on audio duration. */
+  private get pendingQueueSize(): number {
+    return Math.max(0, this.queue.length - this.queueHead);
+  }
+
+  /** Take one queued item without shifting the remaining paced-audio backlog. */
+  private takeNextItem(): RealtimeAudioQueueItem | undefined {
+    if (this.queueHead >= this.queue.length) {
+      this.resetQueue();
+      return undefined;
+    }
+    const item = this.queue[this.queueHead];
+    this.queueHead += 1;
+    if (this.queueHead >= this.queue.length) {
+      this.resetQueue();
+    } else if (
+      this.queueHead > QUEUE_COMPACT_HEAD_THRESHOLD &&
+      this.queueHead * 2 > this.queue.length
+    ) {
+      this.queue.splice(0, this.queueHead);
+      this.queueHead = 0;
+    }
+    return item;
+  }
+
+  private resetQueue(): void {
+    this.queue.length = 0;
+    this.queueHead = 0;
+  }
+
+  /** Fill the provider playout cushion, then wake at the next timeline boundary. */
   private pump(): void {
     this.timer = null;
     if (this.closed) {
       return;
     }
-    const item = this.queue.shift();
-    if (!item) {
-      return;
+    const now = performance.now();
+    this.streamClockMs ??= now;
+
+    while (this.pendingQueueSize > 0 && this.streamClockMs < now + LEAD_MS) {
+      const item = this.takeNextItem();
+      if (!item) {
+        break;
+      }
+
+      const sent =
+        item.type === "audio"
+          ? this.sendAudioItem(item)
+          : this.params.send(this.params.serializer.mark(item.name));
+      if (!sent) {
+        this.resetQueue();
+        this.queuedAudioBytes = 0;
+        this.streamClockMs = null;
+        return;
+      }
     }
 
-    let delayMs = 0;
-    let sent;
-    if (item.type === "audio") {
-      this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
-      sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
-      delayMs = item.durationMs || TELEPHONY_CHUNK_MS;
-    } else {
-      sent = this.params.send(this.params.serializer.mark(item.name));
-    }
-
-    if (!sent) {
-      this.queue = [];
-      this.queuedAudioBytes = 0;
+    if (this.pendingQueueSize === 0) {
+      this.streamClockMs = null;
       return;
     }
-    if (this.queue.length > 0) {
-      this.timer = setTimeout(() => this.pump(), delayMs);
-    }
+    const delayMs = Math.max(1, this.streamClockMs - LEAD_MS - performance.now());
+    this.timer = setTimeout(() => this.pump(), delayMs);
+  }
+
+  private sendAudioItem(item: Extract<RealtimeAudioQueueItem, { type: "audio" }>): boolean {
+    this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
+    const sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
+    this.streamClockMs = (this.streamClockMs ?? performance.now()) + item.durationMs;
+    return sent;
   }
 }

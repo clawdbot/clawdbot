@@ -1,8 +1,10 @@
+import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agents/agent-run-terminal-outcome.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { hasAuthoritativeTaskBacking } from "./task-backing-authority.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
+import { recordTaskActivityEvent } from "./task-registry-activity.js";
 import {
   appendTaskEvent,
-  buildTaskLifecycleTerminalOutcome,
   mapAgentRunTerminalOutcomeToTaskStatus,
   resolveTaskLifecycleTerminalError,
 } from "./task-registry-common.js";
@@ -20,6 +22,9 @@ import {
 } from "./task-registry-state.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
+// Keep durable liveness well inside the 30-minute stale-task audit without writing every delta.
+const ACTIVITY_LIVENESS_WRITE_MS = 60_000;
+
 function ensureListener() {
   if (!claimTaskRegistryListenerStart()) {
     return;
@@ -35,12 +40,11 @@ function ensureListener() {
     }
     const now = evt.ts || Date.now();
     for (const current of scopedTasks) {
-      if (isTerminalTaskStatus(current.status)) {
+      if (isTerminalTaskStatus(current.status) || !hasAuthoritativeTaskBacking(current)) {
         continue;
       }
-      const patch: Partial<TaskRecord> = {
-        lastEventAt: now,
-      };
+      recordTaskActivityEvent(current, evt);
+      const patch: Partial<TaskRecord> = {};
       if (evt.stream === "lifecycle") {
         const phase = typeof evt.data?.phase === "string" ? evt.data.phase : undefined;
         const eventStartedAt = evt.data?.startedAt;
@@ -55,7 +59,7 @@ function ensureListener() {
         if (phase === "start") {
           patch.status = "running";
         } else if (phase === "end") {
-          const terminal = buildTaskLifecycleTerminalOutcome({
+          const terminal = buildAgentRunTerminalOutcomeFromLifecycleEvent({
             phase,
             data: evt.data,
             startedAt,
@@ -66,13 +70,14 @@ function ensureListener() {
           const error = resolveTaskLifecycleTerminalError({
             runtime: current.runtime,
             status: patch.status,
+            terminalReason: terminal.reason,
             error: terminal.error,
           });
           if (error) {
             patch.error = error;
           }
         } else if (phase === "error") {
-          const terminal = buildTaskLifecycleTerminalOutcome({
+          const terminal = buildAgentRunTerminalOutcomeFromLifecycleEvent({
             phase,
             data: evt.data,
             startedAt,
@@ -84,6 +89,7 @@ function ensureListener() {
             resolveTaskLifecycleTerminalError({
               runtime: current.runtime,
               status: patch.status,
+              terminalReason: terminal.reason,
               error: terminal.error,
             }) ?? current.error;
         }
@@ -98,6 +104,11 @@ function ensureListener() {
           patch.lastToolName = toolName;
         }
       }
+      const lastEventAt = current.lastEventAt ?? current.startedAt ?? current.createdAt;
+      if (Object.keys(patch).length === 0 && now - lastEventAt < ACTIVITY_LIVENESS_WRITE_MS) {
+        continue;
+      }
+      patch.lastEventAt = now;
       const stateChangeEvent =
         patch.status && patch.status !== current.status
           ? appendTaskEvent({

@@ -1,7 +1,6 @@
 import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronJob } from "../types.js";
 import {
-  computeJobPreviousRunAtMs,
   computeJobPreviousRunAtOrBeforeMs,
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   hasActiveCronRun,
@@ -9,9 +8,43 @@ import {
   isJobEnabled,
   resolveJobErrorBackoffUntilMs,
   resolveJobLastRunStatus,
-} from "./jobs.js";
+} from "./jobs-scheduling.js";
 import type { CronServiceState } from "./state.js";
 import { isScheduledTerminalOneShotRetry } from "./timer-trigger.js";
+
+/**
+ * Reports whether a cron job's last completed run is older than its previous
+ * effective slot, which is how restart catch-up detects a missed run once
+ * nextRunAtMs has already advanced past it.
+ */
+export function hasMissedCronSlotSinceLastRun(job: CronJob, nowMs: number): boolean {
+  const lastRunAtMs = job.state.lastRunAtMs;
+  // Only replay a "missed slot" when there is concrete run history.
+  if (typeof lastRunAtMs !== "number" || !Number.isFinite(lastRunAtMs)) {
+    return false;
+  }
+  let previousRunAtMs: number | undefined;
+  try {
+    previousRunAtMs = computeJobPreviousRunAtOrBeforeMs(job, nowMs);
+  } catch {
+    return false;
+  }
+  if (
+    typeof previousRunAtMs !== "number" ||
+    !Number.isFinite(previousRunAtMs) ||
+    previousRunAtMs <= lastRunAtMs
+  ) {
+    return false;
+  }
+  // Slots computed from freshly edited scheduling inputs never existed before
+  // those inputs took effect, so they are not missed runs. lastRunAtMs belongs
+  // to the retired schedule and would otherwise stay stale forever (#91944).
+  const activatedAtMs = job.state.scheduleActivatedAtMs;
+  if (typeof activatedAtMs !== "number" || !Number.isFinite(activatedAtMs)) {
+    return true;
+  }
+  return previousRunAtMs > activatedAtMs;
+}
 
 export function isRunnableJob(params: {
   state: CronServiceState;
@@ -34,8 +67,23 @@ export function isRunnableJob(params: {
   if (hasActiveCronRun(job)) {
     return false;
   }
+  const next = job.state.nextRunAtMs;
+  // A recorded startup deferral also owns the missed-slot path across restarts.
+  // Keep their dominant no-due path ahead of run-history normalization.
+  if (
+    hasScheduledNextRunAtMs(next) &&
+    nowMs < next &&
+    (!params.allowCronMissedRunByLastRun || job.state.startupCatchupAtMs === next)
+  ) {
+    return false;
+  }
   const lastRunStatus = resolveJobLastRunStatus(job);
   if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && lastRunStatus) {
+    // The recovery owner recorded pending work after checking the exact task
+    // identity. Its scheduled slot remains due even when the old run started later.
+    if (hasScheduledNextRunAtMs(next) && job.state.startupCatchupAtMs === next) {
+      return nowMs >= next;
+    }
     const lastRun = job.state.lastRunAtMs;
     const nextRun = job.state.nextRunAtMs;
     // Terminal history belongs to the old occurrence. A matching newer
@@ -55,8 +103,7 @@ export function isRunnableJob(params: {
     }
     return false;
   }
-  const next = job.state.nextRunAtMs;
-  if (isErrorBackoffPending(params.state, job, nowMs)) {
+  if (isErrorBackoffPending(job, nowMs, lastRunStatus)) {
     // Error retry windows are anchored at run end; persisted start-based
     // retry timestamps from older state must not bypass active backoff.
     return false;
@@ -86,25 +133,15 @@ export function isRunnableJob(params: {
   if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {
     return false;
   }
-  let previousRunAtMs: number | undefined;
-  try {
-    previousRunAtMs = computeJobPreviousRunAtMs(job, nowMs);
-  } catch {
-    return false;
-  }
-  if (typeof previousRunAtMs !== "number" || !Number.isFinite(previousRunAtMs)) {
-    return false;
-  }
-  const lastRunAtMs = job.state.lastRunAtMs;
-  if (typeof lastRunAtMs !== "number" || !Number.isFinite(lastRunAtMs)) {
-    // Only replay a "missed slot" when there is concrete run history.
-    return false;
-  }
-  return previousRunAtMs > lastRunAtMs;
+  return hasMissedCronSlotSinceLastRun(job, nowMs);
 }
 
-function isErrorBackoffPending(_state: CronServiceState, job: CronJob, nowMs: number): boolean {
-  if (job.schedule.kind === "at" || resolveJobLastRunStatus(job) !== "error") {
+function isErrorBackoffPending(
+  job: CronJob,
+  nowMs: number,
+  lastRunStatus: ReturnType<typeof resolveJobLastRunStatus>,
+): boolean {
+  if (job.schedule.kind === "at" || lastRunStatus !== "error") {
     return false;
   }
   const backoffUntilMs = resolveJobErrorBackoffUntilMs(job, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS);

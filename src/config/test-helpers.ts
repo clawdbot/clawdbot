@@ -35,6 +35,10 @@ export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise
   }
 }
 
+export function createProcessEnvFixture(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return { ...overrides };
+}
+
 export async function writeOpenClawConfig(home: string, config: unknown): Promise<string> {
   const configPath = path.join(home, ".openclaw", "openclaw.json");
   await fs.mkdir(path.dirname(configPath), { recursive: true });

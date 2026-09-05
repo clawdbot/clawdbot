@@ -1,12 +1,14 @@
 // Voice Call tests cover store plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { Command } from "commander";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerVoiceCallLogs } from "../cli-call-log.js";
 import {
   createTestStorePath,
   makePersistedCall,
@@ -14,12 +16,21 @@ import {
 } from "../manager.test-harness.js";
 import { setVoiceCallStateRuntime } from "../runtime-state.js";
 import { CallRecordSchema } from "../types.js";
+import { MAX_CALL_REPLAY_KEYS } from "./replay-keys.js";
 import {
-  findCallMatchesInStore,
+  findCallInStore,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
   persistCallRecord,
 } from "./store.js";
+
+const { sleepMock } = vi.hoisted(() => ({ sleepMock: vi.fn() }));
+vi.mock("../../api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../api.js")>()),
+  sleep: sleepMock,
+}));
+
+const MANAGER_REPLAY_KEY_LIMIT = 10_000;
 
 function installStateRuntime(): void {
   setVoiceCallStateRuntime({
@@ -49,6 +60,49 @@ describe("voice-call call record store", () => {
   afterEach(() => {
     vi.useRealTimers();
     resetPluginStateStoreForTests();
+  });
+
+  it.each([0, 1])("honors SQLite tail --since %s before following new snapshots", async (since) => {
+    const storePath = createTestStorePath();
+    const calls = ["first", "second", "third"].map((callId) =>
+      CallRecordSchema.parse(makePersistedCall({ callId })),
+    );
+    const added = CallRecordSchema.parse(makePersistedCall({ callId: "new" }));
+    for (const call of calls) {
+      persistCallRecord(storePath, call);
+    }
+    const stopped = new Error("SQLite tail test finished");
+    sleepMock
+      .mockReset()
+      .mockRejectedValue(stopped)
+      .mockImplementationOnce(async () => {
+        persistCallRecord(storePath, added);
+      });
+    let output = "";
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output += String(chunk);
+      return true;
+    });
+    const program = new Command();
+    registerVoiceCallLogs({
+      root: program,
+      defaultFile: path.join(storePath, "calls.jsonl"),
+      ensureHistoryStateRuntime: installStateRuntime,
+    });
+    try {
+      await expect(
+        program.parseAsync(["tail", "--since", String(since)], { from: "user" }),
+      ).rejects.toBe(stopped);
+      expect(
+        output
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line).callId),
+      ).toEqual(since === 0 ? ["new"] : ["third", "new"]);
+    } finally {
+      stdout.mockRestore();
+      fs.rmSync(storePath, { recursive: true, force: true });
+    }
   });
 
   it("does not import legacy JSONL records at runtime", async () => {
@@ -155,6 +209,78 @@ describe("voice-call call record store", () => {
     expect(restored.activeCalls.get("call-order")?.state).toBe("answered");
   });
 
+  it("persists and restores only the newest per-call replay keys", () => {
+    const storePath = createTestStorePath();
+    const replayKeys = Array.from(
+      { length: MAX_CALL_REPLAY_KEYS + 2 },
+      (_, index) => `evt-${index}`,
+    );
+    const call = CallRecordSchema.parse(
+      makePersistedCall({
+        callId: "call-bounded-replay",
+        processedEventIds: replayKeys,
+      }),
+    );
+
+    persistCallRecord(storePath, call);
+
+    const restored = loadActiveCallsFromStore(storePath);
+    const expected = replayKeys.slice(-MAX_CALL_REPLAY_KEYS);
+    expect(restored.activeCalls.get("call-bounded-replay")?.processedEventIds).toEqual(expected);
+    expect([...restored.processedEventIds]).toEqual(expected);
+  });
+
+  it("hydrates manager replay keys in latest-snapshot call order", () => {
+    const storePath = createTestStorePath();
+    persistCallRecord(
+      storePath,
+      CallRecordSchema.parse(
+        makePersistedCall({
+          callId: "call-latest",
+          providerCallId: "provider-latest",
+          processedEventIds: ["evt-latest-old"],
+        }),
+      ),
+    );
+    for (
+      let callIndex = 0;
+      callIndex < MANAGER_REPLAY_KEY_LIMIT / MAX_CALL_REPLAY_KEYS;
+      callIndex++
+    ) {
+      persistCallRecord(
+        storePath,
+        CallRecordSchema.parse(
+          makePersistedCall({
+            callId: `call-fill-${callIndex}`,
+            providerCallId: `provider-fill-${callIndex}`,
+            processedEventIds: Array.from(
+              { length: MAX_CALL_REPLAY_KEYS },
+              (_, eventIndex) => `evt-fill-${callIndex}-${eventIndex}`,
+            ),
+          }),
+        ),
+      );
+    }
+    persistCallRecord(
+      storePath,
+      CallRecordSchema.parse(
+        makePersistedCall({
+          callId: "call-latest",
+          providerCallId: "provider-latest",
+          processedEventIds: ["evt-latest-old", "evt-latest-new"],
+        }),
+      ),
+    );
+
+    const restored = loadActiveCallsFromStore(storePath);
+
+    expect(restored.processedEventIds.size).toBe(MANAGER_REPLAY_KEY_LIMIT);
+    expect(restored.processedEventIds.has("evt-latest-old")).toBe(true);
+    expect(restored.processedEventIds.has("evt-latest-new")).toBe(true);
+    expect(restored.processedEventIds.has("evt-fill-0-0")).toBe(false);
+    expect(restored.processedEventIds.has("evt-fill-0-1")).toBe(false);
+  });
+
   it("finds retained snapshots outside recent history and preserves internal-id precedence", async () => {
     const storePath = createTestStorePath();
     persistCallRecord(
@@ -185,15 +311,11 @@ describe("voice-call call record store", () => {
       );
     }
     expect(await getCallHistoryFromStore(storePath, 100)).toHaveLength(100);
-    const internalMatches = await findCallMatchesInStore(storePath, "call-target");
-    expect(internalMatches.byCallId).toMatchObject({
+    expect(findCallInStore(storePath, "call-target")).toMatchObject({
       callId: "call-target",
       state: "completed",
     });
-    expect(internalMatches.byProviderCallId).toMatchObject({ callId: "noise-100" });
-
-    const providerMatches = await findCallMatchesInStore(storePath, "provider-target");
-    expect(providerMatches.byProviderCallId).toMatchObject({
+    expect(findCallInStore(storePath, "provider-target")).toMatchObject({
       callId: "call-target",
       state: "completed",
     });

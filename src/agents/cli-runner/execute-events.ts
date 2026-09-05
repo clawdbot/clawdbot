@@ -1,14 +1,14 @@
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import type {
-  CliPlanUpdate,
+  CliCompactionDelta,
   CliStreamingDelta,
   CliThinkingDelta,
   CliThinkingProgress,
   CliToolUseStartDelta,
-} from "../cli-output.js";
+} from "../cli-output-contracts.js";
 import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
-import { sanitizeToolArgs, sanitizeToolResult } from "../embedded-agent-subscribe.tools.js";
+import { sanitizeToolArgs, sanitizeToolResult } from "../embedded-agent-tool-results.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
@@ -39,6 +39,9 @@ export function createCliEventHandlers(params: {
   let signaledAssistantOutputStarted = false;
   let commentaryCounter = 0;
   const toolSummaryById = new Map<string, { name: string; failed: boolean }>();
+  // CLI results report an outcome without repeating the request, so the terminal
+  // progress event would otherwise describe the output instead of the command.
+  const toolArgsByCallId = new Map<string, Record<string, unknown>>();
   const toolSummaryNames: string[] = [];
   const toolSummaryNameSet = new Set<string>();
   const activeParsedTools = new Map<
@@ -53,6 +56,9 @@ export function createCliEventHandlers(params: {
     toolSummaryNames.push(name);
   };
   const recordToolStart = (event: CliToolUseStartDelta) => {
+    if (event.args && Object.keys(event.args).length > 0) {
+      toolArgsByCallId.set(event.toolCallId, event.args);
+    }
     const current = toolSummaryById.get(event.toolCallId);
     if (!current) {
       toolSummaryById.set(event.toolCallId, { name: event.name, failed: false });
@@ -112,6 +118,8 @@ export function createCliEventHandlers(params: {
       const resultContentSource = context.resultContentSourceByToolName?.get(
         stripOpenClawMcpToolPrefix(event.name),
       );
+      const startedArgs = toolArgsByCallId.get(event.toolCallId);
+      toolArgsByCallId.delete(event.toolCallId);
       emitAgentEvent({
         runId: runParams.runId,
         stream: "tool",
@@ -121,6 +129,7 @@ export function createCliEventHandlers(params: {
           toolCallId: event.toolCallId,
           isError: event.isError,
           result: sanitizeToolResult(event.result),
+          ...(startedArgs ? { args: sanitizeToolArgs(startedArgs) } : {}),
           ...(resultContentSource ? { resultContentSource } : {}),
         },
       });
@@ -157,6 +166,7 @@ export function createCliEventHandlers(params: {
     observedCliActivity = true;
     recordToolResult(event);
     if (emitLiveEvents) {
+      toolArgsByCallId.delete(event.toolCallId);
       emitAgentEvent({
         runId: runParams.runId,
         stream: "tool",
@@ -279,6 +289,19 @@ export function createCliEventHandlers(params: {
     emitParsedToolTerminal(event);
     emitCliToolResult(event);
   };
+  const emitCliCompaction = (event: CliCompactionDelta) => {
+    observedCliActivity = true;
+    if (emitLiveEvents) {
+      emitAgentEvent({
+        runId: runParams.runId,
+        stream: "compaction",
+        data: {
+          ...event,
+          backend: context.backendResolved.id,
+        },
+      });
+    }
+  };
   const finalizeParsedTools = () => {
     for (const [toolCallId, activeTool] of Array.from(activeParsedTools)) {
       emitParsedToolTerminal({
@@ -300,7 +323,9 @@ export function createCliEventHandlers(params: {
       data: {
         kind: "preamble",
         itemId: `commentary-${runParams.runId}-${commentaryCounter}`,
-        phase: "update",
+        // The JSONL parser flushes a complete pre-tool text segment here.
+        // Mark its boundary so channels can safely create their first notification.
+        phase: "end",
         title: "commentary",
         status: "running",
         progressText: applyPluginTextReplacements(
@@ -361,17 +386,6 @@ export function createCliEventHandlers(params: {
     }
   };
 
-  const emitCliPlanUpdate = ({ steps }: CliPlanUpdate) => {
-    observedCliActivity = true;
-    if (emitLiveEvents) {
-      emitAgentEvent({
-        runId: runParams.runId,
-        stream: "plan",
-        data: { phase: "update", title: "Plan updated", source: "codex-exec", steps },
-      });
-    }
-  };
-
   return {
     emitLiveEvents,
     emitCliToolUseStart,
@@ -380,12 +394,12 @@ export function createCliEventHandlers(params: {
     emitCliDisplayToolResult,
     emitParsedToolUseStart,
     emitParsedToolResult,
+    emitCliCompaction,
     finalizeParsedTools,
     emitCliCommentaryText,
     emitCliAssistantDelta,
     emitCliThinkingDelta,
     emitCliThinkingProgress,
-    emitCliPlanUpdate,
     hasObservedCliActivity: () => observedCliActivity,
     activeParsedToolCount: () => activeParsedTools.size,
     getToolSummary,

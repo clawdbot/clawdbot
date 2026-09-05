@@ -1,8 +1,18 @@
-import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
-import { resolveGatewayLockDir } from "../config/paths.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import {
+  resolveDeviceIdentityCoordinatorPath,
+  resolveDeviceIdentityCoordinatorPaths,
+} from "./device-identity-coordinator-paths.js";
+import { tryAcquireExclusiveSqliteCoordinator } from "./node-sqlite.js";
+import {
+  ensurePrivateSqliteCoordinatorDirectory,
+  SqliteCoordinatorError,
+} from "./sqlite-coordinator.js";
+import {
+  acquireStateDatabaseCoordinator,
+  resolveStateDatabaseCoordinatorPath,
+  resolveStateLifecycleRuntimeDirectory,
+} from "./state-database-coordinator.js";
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5000;
 
@@ -16,95 +26,104 @@ class DeviceIdentityCoordinatorError extends Error {
   }
 }
 
-function canonicalizeDatabasePath(databasePath: string): string {
-  const resolved = path.resolve(databasePath);
-  try {
-    return fs.realpathSync.native(resolved);
-  } catch {
-    const missingSegments: string[] = [];
-    let current = resolved;
-    while (true) {
-      const parent = path.dirname(current);
-      if (parent === current) {
-        return resolved;
-      }
-      missingSegments.push(path.basename(current));
-      current = parent;
-      try {
-        return path.join(fs.realpathSync.native(current), ...missingSegments.toReversed());
-      } catch {
-        // Existing ancestors can still contain aliases even when the database is absent.
-      }
-    }
-  }
-}
-
-function resolveDeviceIdentityCoordinatorPath(
-  databasePath: string,
-  lockDir = resolveGatewayLockDir(),
-): string {
-  const canonicalPath = canonicalizeDatabasePath(databasePath);
-  const databaseHash = crypto.createHash("sha256").update(canonicalPath).digest("hex").slice(0, 8);
-  return path.join(lockDir, `device-identity.${databaseHash}.lock.sqlite`);
-}
-
-function ensurePrivateCoordinatorDirectory(lockDir: string): void {
-  let stats: fs.Stats;
-  try {
-    stats = fs.lstatSync(lockDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-    try {
-      fs.mkdirSync(lockDir, { mode: 0o700 });
-    } catch (mkdirError) {
-      if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") {
-        throw mkdirError;
-      }
-    }
-    stats = fs.lstatSync(lockDir);
-  }
-  if (stats.isSymbolicLink() || !stats.isDirectory()) {
-    throw new DeviceIdentityCoordinatorError(
-      "device identity coordinator directory must be a real directory",
-    );
-  }
-  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  if (uid !== undefined && stats.uid !== uid) {
-    throw new DeviceIdentityCoordinatorError(
-      "device identity coordinator directory belongs to another user",
-    );
-  }
-  if (process.platform !== "win32") {
-    fs.chmodSync(lockDir, 0o700);
-    const secured = fs.lstatSync(lockDir);
-    if (secured.isSymbolicLink() || !secured.isDirectory() || (secured.mode & 0o077) !== 0) {
-      throw new DeviceIdentityCoordinatorError(
-        "device identity coordinator directory permissions are not private",
-      );
-    }
-  }
-}
-
-export function acquireDeviceIdentityCoordinator(params: {
+type DeviceIdentityCoordinatorParams = {
   databasePath: string;
   busyTimeoutMs?: number;
-  lockDir?: string;
-}): { release: () => void } {
-  const coordinatorPath = resolveDeviceIdentityCoordinatorPath(params.databasePath, params.lockDir);
-  ensurePrivateCoordinatorDirectory(path.dirname(coordinatorPath));
-  const database = openNodeSqliteDatabase(coordinatorPath);
-  try {
-    const timeout = Math.max(0, Math.trunc(params.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS));
-    database.exec(`PRAGMA busy_timeout = ${timeout}; BEGIN EXCLUSIVE;`);
-  } catch (error) {
+} & ({ stateDir: string; lockDir?: never } | { lockDir: string; stateDir?: never });
+
+function releaseCoordinators(coordinators: Array<{ release: () => void }>): unknown[] {
+  const errors: unknown[] = [];
+  for (const coordinator of coordinators.toReversed()) {
     try {
-      database.close();
-    } catch {}
+      coordinator.release();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
+}
+
+function acquireCoordinator(
+  coordinatorPath: string,
+  busyTimeoutMs: number,
+): { release: () => void } {
+  const message = "device identity migration or creation already owns this state database";
+  try {
+    const coordinator = tryAcquireExclusiveSqliteCoordinator(coordinatorPath, { busyTimeoutMs });
+    if (coordinator) {
+      return coordinator;
+    }
+    throw new DeviceIdentityCoordinatorError(message);
+  } catch (error) {
+    if (error instanceof DeviceIdentityCoordinatorError) {
+      throw error;
+    }
+    throw new DeviceIdentityCoordinatorError(message, error);
+  }
+}
+
+function ensurePrivateDeviceIdentityCoordinatorDirectory(directoryPath: string): void {
+  try {
+    ensurePrivateSqliteCoordinatorDirectory(directoryPath, "device identity coordinator");
+  } catch (error) {
+    if (error instanceof SqliteCoordinatorError) {
+      throw new DeviceIdentityCoordinatorError(error.message, error.cause);
+    }
+    throw error;
+  }
+}
+
+export function acquireDeviceIdentityCoordinator(params: DeviceIdentityCoordinatorParams): {
+  release: () => void;
+} {
+  const timeout = Math.max(0, Math.trunc(params.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS));
+  const coordinatorPaths =
+    params.lockDir !== undefined
+      ? [resolveDeviceIdentityCoordinatorPath(params.databasePath, params.lockDir)]
+      : resolveDeviceIdentityCoordinatorPaths({
+          databasePath: params.databasePath,
+          stateDir: params.stateDir,
+          uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+        });
+  for (const coordinatorPath of coordinatorPaths) {
+    ensurePrivateDeviceIdentityCoordinatorDirectory(path.dirname(coordinatorPath));
+  }
+  const stateCoordinatorPath = resolveStateDatabaseCoordinatorPath({
+    databasePath: params.databasePath,
+    runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
+    uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+  });
+  const coordinators: Array<{ release: () => void }> = [];
+  try {
+    // The external lifecycle coordinator remains stable while cleanup detaches state-local locks.
+    coordinators.push(
+      acquireStateDatabaseCoordinator({
+        databasePath: params.databasePath,
+        coordinatorPath: stateCoordinatorPath,
+        busyTimeoutMs: timeout,
+      }),
+    );
+    for (const coordinatorPath of coordinatorPaths) {
+      coordinators.push(acquireCoordinator(coordinatorPath, timeout));
+    }
+  } catch (error) {
+    const cleanupErrors = releaseCoordinators(coordinators);
+    if (cleanupErrors.length === 0) {
+      if (error instanceof SqliteCoordinatorError) {
+        throw new DeviceIdentityCoordinatorError(
+          "device identity migration or creation already owns this state database",
+          error,
+        );
+      }
+      throw error;
+    }
+    const message =
+      error instanceof DeviceIdentityCoordinatorError
+        ? `${error.message}; failed to clean up a partially acquired coordinator`
+        : "failed to acquire and clean up device identity coordinators";
     throw new DeviceIdentityCoordinatorError(
-      "device identity migration or creation already owns this state database",
-      error,
+      message,
+      new AggregateError([error, ...cleanupErrors]),
     );
   }
 
@@ -115,21 +134,11 @@ export function acquireDeviceIdentityCoordinator(params: {
         return;
       }
       released = true;
-      let releaseError: unknown;
-      try {
-        database.exec("ROLLBACK");
-      } catch (error) {
-        releaseError = error;
-      }
-      try {
-        database.close();
-      } catch (error) {
-        releaseError ??= error;
-      }
-      if (releaseError) {
+      const releaseErrors = releaseCoordinators(coordinators);
+      if (releaseErrors.length > 0) {
         throw new DeviceIdentityCoordinatorError(
           "failed to release device identity coordinator",
-          releaseError,
+          releaseErrors.length === 1 ? releaseErrors[0] : new AggregateError(releaseErrors),
         );
       }
     },

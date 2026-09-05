@@ -7,8 +7,8 @@ title: "Synthetic"
 ---
 
 [Synthetic](https://synthetic.new) exposes Anthropic-compatible endpoints.
-OpenClaw bundles it as the `synthetic` provider and uses the Anthropic
-Messages API.
+OpenClaw provides it through the official `@openclaw/synthetic-provider`
+plugin and uses the Anthropic Messages API.
 
 | Property | Value                                 |
 | -------- | ------------------------------------- |
@@ -20,6 +20,12 @@ Messages API.
 ## Getting started
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/synthetic-provider
+    openclaw gateway restart
+    ```
+  </Step>
   <Step title="Get an API key">
     Get a `SYNTHETIC_API_KEY` from your Synthetic account, or let onboarding
     prompt you for one.
@@ -47,7 +53,7 @@ changes its base URL, override `models.providers.synthetic.baseUrl`.
 
 ```json5
 {
-  env: { SYNTHETIC_API_KEY: "sk-..." },
+  env: { vars: { SYNTHETIC_API_KEY: "sk-..." } },
   agents: {
     defaults: {
       model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M3" },
@@ -78,25 +84,26 @@ changes its base URL, override `models.providers.synthetic.baseUrl`.
 }
 ```
 
-## Built-in catalog
+## Model discovery
 
-All Synthetic models use cost `0` (input/output/cache). See Synthetic's
-[current model list](https://dev.synthetic.new/docs/api/models) for service availability.
+With a Synthetic credential, OpenClaw discovers current text models from
+Synthetic's [`/openai/v1/models` API](https://dev.synthetic.new/docs/openai/models).
+Inference still uses the Anthropic Messages API. Newly advertised models, including
+small models and `syn:` aliases, do not need an OpenClaw catalog update.
 
-| Model ID                                            | Context window | Max tokens | Reasoning | Input        |
-| --------------------------------------------------- | -------------- | ---------- | --------- | ------------ |
-| `hf:MiniMaxAI/MiniMax-M3`                           | 262,144        | 65,536     | yes       | text + image |
-| `hf:moonshotai/Kimi-K2.7-Code`                      | 262,144        | 8,192      | yes       | text + image |
-| `hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4` | 262,144        | 8,192      | yes       | text         |
-| `hf:openai/gpt-oss-120b`                            | 131,072        | 8,192      | yes       | text         |
-| `hf:Qwen/Qwen3.6-27B`                               | 262,144        | 81,920     | yes       | text + image |
-| `hf:zai-org/GLM-4.7-Flash`                          | 196,608        | 131,072    | yes       | text         |
-| `hf:zai-org/GLM-5.2`                                | 524,288        | 131,072    | yes       | text         |
+The live catalog supplies context and output limits, image input, reasoning,
+tool support, and usage-based token prices. Those prices are estimates, not a
+subscription bill. See Synthetic's [current model list](https://dev.synthetic.new/docs/api/models)
+for availability and its recommended aliases.
+
+Offline catalog generation and unavailable or unusable discovery responses use
+the bundled seed models. Your selected model is not changed automatically.
+When you override the inference base URL, OpenClaw skips Synthetic's fixed
+discovery URL so a proxy credential is not sent to Synthetic.
 
 <Tip>
 Model refs use the form `synthetic/<modelId>`. Use
-`openclaw models list --provider synthetic` to see all models available on your
-account.
+`openclaw models list --provider synthetic` to inspect your configured models.
 </Tip>
 
 <AccordionGroup>

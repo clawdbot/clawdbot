@@ -25,11 +25,13 @@ function buildMediaDedupeKey(messageId: string, mediaParts: string[]): string {
 }
 
 function resolvePostMediaParts(content: string): string[] {
-  const parsed = parsePostContent(content);
-  return [
-    ...parsed.imageKeys.map((imageKey) => `image_key:${imageKey}`),
-    ...parsed.mediaKeys.map((media) => `file_key:${media.fileKey}`),
-  ];
+  const { attachments } = parsePostContent(content);
+  // Replay keys live for 24 hours across restarts; keep their shipped grouped order and duplicates.
+  return (["image", "file"] as const).flatMap((kind) =>
+    attachments
+      .filter((attachment) => attachment.kind === kind)
+      .map((attachment) => `${kind}_key:${attachment.key}`),
+  );
 }
 
 function resolveMessageMediaParts(messageType: string, content: string): string[] {

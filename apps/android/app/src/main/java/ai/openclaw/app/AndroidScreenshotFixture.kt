@@ -1,7 +1,12 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.Question
+import ai.openclaw.app.gateway.QuestionListResult
+import ai.openclaw.app.gateway.QuestionRecord
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -17,10 +22,49 @@ internal object AndroidScreenshotFixture {
   }
 
   const val gatewayId = "android-screenshot-gateway"
+  const val controlUiBaseUrl = "http://127.0.0.1:18789"
   const val mainSessionKey = "agent:main:node-screenshot"
   const val primarySessionTitle = "Android release planning"
   const val cronJobId = "android-release-digest"
   const val cronJobName = "Android release digest"
+
+  fun createRequester(): (String, String?) -> String {
+    // A runtime gets a fresh lifetime; list refreshes and scene re-entry keep its exact record.
+    val pendingQuestion =
+      System.currentTimeMillis().let { nowMs ->
+        QuestionRecord(
+          id = "android-screenshot-question",
+          questions =
+            listOf(
+              Question(
+                questionId = "release_note",
+                header = "Release note",
+                question = "What should the release note mention?",
+                options = emptyList(),
+              ),
+            ),
+          agentId = "main",
+          sessionKey = mainSessionKey,
+          createdAtMs = nowMs,
+          expiresAtMs = nowMs + 600_000,
+          status = "pending",
+        )
+      }
+    return { method, paramsJson ->
+      when (method) {
+        "health" -> buildJsonObject { put("ok", JsonPrimitive(true)) }.toString()
+        "chat.history" -> chatHistory()
+        "sessions.list" -> sessionList(paramsJson)
+        "chat.metadata" -> chatMetadata()
+        "question.list" -> Json.encodeToString(QuestionListResult(listOf(pendingQuestion)))
+        "cron.list" -> cronList()
+        "cron.get" -> cronJob().toString()
+        "cron.runs" -> cronRuns()
+        "openclaw.chat" -> systemAgentChat(paramsJson)
+        else -> error("Screenshot fixture does not implement gateway method $method with params $paramsJson")
+      }
+    }
+  }
 
   val agents =
     listOf(
@@ -97,22 +141,6 @@ internal object AndroidScreenshotFixture {
           ),
         ),
     )
-
-  fun request(
-    method: String,
-    paramsJson: String?,
-  ): String =
-    when (method) {
-      "health" -> buildJsonObject { put("ok", JsonPrimitive(true)) }.toString()
-      "chat.history" -> chatHistory()
-      "sessions.list" -> sessionList(paramsJson)
-      "chat.metadata" -> chatMetadata()
-      "cron.list" -> cronList()
-      "cron.get" -> cronJob().toString()
-      "cron.runs" -> cronRuns()
-      "openclaw.chat" -> systemAgentChat(paramsJson)
-      else -> error("Screenshot fixture does not implement gateway method $method with params $paramsJson")
-    }
 
   private fun systemAgentChat(paramsJson: String?): String {
     val message =
@@ -258,6 +286,15 @@ internal object AndroidScreenshotFixture {
       put(
         "messages",
         buildJsonArray {
+          repeat(24) { index ->
+            add(
+              chatMessage(
+                role = "assistant",
+                content = "Earlier discussion ${index + 1}: keep the release note concise and describe the user-visible change.",
+                timestamp = 1_783_550_000_000 + index * 10_000L,
+              ),
+            )
+          }
           add(chatMessage("user", "What is blocking the Android release?", 1_783_555_020_000))
           add(
             chatMessage(
@@ -267,13 +304,55 @@ internal object AndroidScreenshotFixture {
               1_783_555_080_000,
             ),
           )
+          add(
+            chatMessage(
+              role = "user",
+              content = "[System] Continue the interrupted turn.",
+              timestamp = 1_783_555_100_000,
+              provenanceSourceTool = "main_session_restart_recovery",
+            ),
+          )
+          add(
+            chatMessage(
+              role = "user",
+              content = "[System] Gateway restarted during the Android release update.",
+              timestamp = 1_783_555_120_000,
+              provenanceSourceTool = "restart-sentinel",
+            ),
+          )
           add(chatMessage("user", "Summarize the open review feedback for me.", 1_783_555_140_000))
           add(
             chatMessage(
               "assistant",
-              "The main thread asks for a regression test around session restore, and the second one wants the new " +
-                "config key documented before merge. Both are small; I can draft patches for each if you want.",
+              "The release check is ready:\n\n```kotlin\nval ready = lint && tests\n```\n\n" +
+                "Review https://openclaw.ai before tagging.",
               1_783_555_200_000,
+            ),
+          )
+          add(
+            chatMessage(
+              role = "system",
+              content = "Compaction",
+              timestamp = 1_783_555_220_000,
+              marker =
+                buildJsonObject {
+                  put("kind", JsonPrimitive("compaction"))
+                  put("id", JsonPrimitive("android-screenshot-compaction"))
+                  put("tokensBefore", JsonPrimitive(900_000))
+                  put("tokensAfter", JsonPrimitive(24_700))
+                },
+            ),
+          )
+          add(
+            chatMessage(
+              role = "system",
+              content = "Reset",
+              timestamp = 1_783_555_240_000,
+              marker =
+                buildJsonObject {
+                  put("kind", JsonPrimitive("reset"))
+                  put("id", JsonPrimitive("android-screenshot-reset"))
+                },
             ),
           )
           add(chatMessage("user", "Draft a short status update for the team.", 1_783_555_260_000))
@@ -299,16 +378,35 @@ internal object AndroidScreenshotFixture {
           put("contextTokens", JsonPrimitive(200_000))
         },
       )
+      put(
+        "inFlightRun",
+        buildJsonObject {
+          put("runId", JsonPrimitive("android-screenshot-active-run"))
+          put("text", JsonPrimitive(""))
+        },
+      )
     }.toString()
 
   private fun chatMessage(
     role: String,
     content: String,
     timestamp: Long,
+    provenanceSourceTool: String? = null,
+    marker: JsonObject? = null,
   ) = buildJsonObject {
     put("role", JsonPrimitive(role))
     put("content", JsonPrimitive(content))
     put("timestamp", JsonPrimitive(timestamp))
+    provenanceSourceTool?.let { sourceTool ->
+      put(
+        "provenance",
+        buildJsonObject {
+          put("kind", JsonPrimitive("internal_system"))
+          put("sourceTool", JsonPrimitive(sourceTool))
+        },
+      )
+    }
+    marker?.let { put("__openclaw", it) }
   }
 
   private fun sessionList(paramsJson: String?): String {
@@ -399,13 +497,22 @@ internal object AndroidScreenshotFixture {
       put(
         "commands",
         buildJsonArray {
-          add(
-            buildJsonObject {
-              put("name", JsonPrimitive("status"))
-              put("description", JsonPrimitive("Show current OpenClaw status"))
-              put("acceptsArgs", JsonPrimitive(false))
-            },
-          )
+          listOf(
+            Triple("help", "Show available commands.", false),
+            Triple("commands", "List all slash commands.", false),
+            Triple("tools", "List available runtime tools.", true),
+            Triple("skill", "Run a skill by name.", true),
+            Triple("learn", "Draft a reusable skill from recent work or named sources.", true),
+            Triple("loop", "Loop a prompt: /loop [interval] <prompt> | /loop status | /loop stop [name]", true),
+          ).forEach { (name, description, acceptsArgs) ->
+            add(
+              buildJsonObject {
+                put("name", JsonPrimitive(name))
+                put("description", JsonPrimitive(description))
+                put("acceptsArgs", JsonPrimitive(acceptsArgs))
+              },
+            )
+          }
         },
       )
       put(

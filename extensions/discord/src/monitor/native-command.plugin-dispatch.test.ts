@@ -6,15 +6,16 @@ import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
-  clearPluginCommands,
-  executePluginCommand,
-  matchPluginCommand,
-  registerPluginCommand,
-} from "openclaw/plugin-sdk/plugin-runtime";
+  createPluginCommandRuntime,
+  PLUGIN_COMMAND_DISPATCH,
+} from "openclaw/plugin-sdk/plugin-command-runtime";
+import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createTestRegistry,
+  getActivePluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -22,6 +23,7 @@ import {
 import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
+import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import { nativeCommandRuntime } from "./native-command.runtime.js";
 import {
@@ -30,16 +32,44 @@ import {
 } from "./native-command.test-helpers.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
 
+const visibleFinalReceipt = {
+  counts: {
+    tool: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    block: {
+      delivered: 0,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+    final: {
+      delivered: 1,
+      deliveredNotVisible: 0,
+      cancelled: 0,
+      failedBeforeSend: 0,
+      failedAfterSend: 0,
+    },
+  },
+  anyVisibleDelivered: true,
+} as const;
+
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 const runtimeModuleMocks = vi.hoisted(() => ({
-  matchPluginCommand: vi.fn(),
-  executePluginCommand: vi.fn(),
+  pluginCommandHandler: vi.fn(),
   dispatchReplyWithDispatcher: vi.fn(),
   resolveDirectStatusReplyForSession: vi.fn(),
   getSessionEntry: vi.fn(),
 }));
+let observedNativeTurnDispatcher: unknown;
 
 const dispatchChannelInboundTurnForTest: typeof dispatchChannelInboundTurn = async (plan) => {
+  observedNativeTurnDispatcher = plan.dispatchReplyFromConfig;
   const dispatchResult = await runtimeModuleMocks.dispatchReplyWithDispatcher({
     ctx: plan.ctxPayload,
     cfg: plan.cfg,
@@ -145,7 +175,13 @@ function createConfiguredAcpCase(params: {
   };
 }
 
-async function createNativeCommand(cfg: OpenClawConfig, commandSpec: NativeCommandSpec) {
+async function createNativeCommand(
+  cfg: OpenClawConfig,
+  commandSpec: NativeCommandSpec,
+  dispatchReplyFromConfig?: Parameters<
+    typeof createDiscordNativeCommand
+  >[0]["dispatchReplyFromConfig"],
+) {
   return createDiscordNativeCommand({
     command: commandSpec,
     cfg,
@@ -154,6 +190,7 @@ async function createNativeCommand(cfg: OpenClawConfig, commandSpec: NativeComma
     sessionPrefix: "discord:slash",
     ephemeralDefault: true,
     threadBindings: createNoopThreadBindingManager("default"),
+    dispatchReplyFromConfig,
   });
 }
 
@@ -227,13 +264,13 @@ type MockCalls = {
   mock: { calls: unknown[][] };
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isObjectValue(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(isRecord(value), `${label} should be an object`).toBe(true);
-  if (!isRecord(value)) {
+  expect(isObjectValue(value), `${label} should be an object`).toBe(true);
+  if (!isObjectValue(value)) {
     throw new Error(`${label} should be an object`);
   }
   return value;
@@ -291,17 +328,38 @@ function expectFollowUpFields(
 
 function expectNoFollowUpContent(interaction: MockCommandInteraction, content: string) {
   const calls = (interaction.followUp as unknown as MockCalls).mock.calls;
-  const matched = calls.some(([payload]) => isRecord(payload) && payload.content === content);
+  const matched = calls.some(([payload]) => isObjectValue(payload) && payload.content === content);
   expect(matched).toBe(false);
 }
 
-async function createPluginCommand(params: { cfg: OpenClawConfig; name: string }) {
+async function createPluginCommand(params: {
+  cfg: OpenClawConfig;
+  name: string;
+  registeredName?: string;
+}) {
+  const registration = getActivePluginRegistry()?.commands.find(
+    (entry) =>
+      entry.command.name === (params.registeredName ?? params.name) ||
+      entry.command.nativeNames?.discord === params.name,
+  );
+  if (!registration) {
+    throw new Error(`expected plugin command registration ${params.name}`);
+  }
+  const originalHandler = registration.command.handler;
+  registration.command.handler = async (ctx) =>
+    await runtimeModuleMocks.pluginCommandHandler({
+      ...ctx,
+      command: { name: registration.command.name },
+      run: () => originalHandler(ctx),
+    });
+  const candidate = createPluginCommandRuntime()
+    .listNativeCandidates("discord")
+    .find((entry) => entry.name === params.name);
+  if (!candidate) {
+    throw new Error(`expected plugin command candidate ${params.name}`);
+  }
   return createDiscordNativeCommand({
-    command: {
-      name: params.name,
-      description: "Pair",
-      acceptsArgs: true,
-    } satisfies NativeCommandSpec,
+    command: candidate,
     cfg: params.cfg,
     discordConfig: params.cfg.channels?.discord ?? {},
     accountId: "default",
@@ -309,6 +367,19 @@ async function createPluginCommand(params: { cfg: OpenClawConfig; name: string }
     ephemeralDefault: true,
     threadBindings: createNoopThreadBindingManager("default"),
   });
+}
+
+async function createMockPluginNativeCommand(cfg: OpenClawConfig, spec: NativeCommandSpec) {
+  expect(
+    registerPluginCommand(`test-${spec.name}`, {
+      name: spec.name,
+      description: spec.description,
+      acceptsArgs: spec.acceptsArgs,
+      requireAuth: true,
+      handler: async () => ({ text: "ok" }),
+    }),
+  ).toEqual({ ok: true });
+  return await createPluginCommand({ cfg, name: spec.name });
 }
 
 function registerPairPlugin(params?: { discordNativeName?: string }) {
@@ -356,9 +427,10 @@ async function expectPairCommandReply(params: {
   const command = await createPluginCommand({
     cfg: params.cfg,
     name: params.commandName,
+    registeredName: params.expectedRegisteredName ?? "pair",
   });
   const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher;
-  const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+  const executeSpy = runtimeModuleMocks.pluginCommandHandler.mockResolvedValue({
     text: "paired:now",
   });
   await (command as { run: (interaction: unknown) => Promise<void> }).run(
@@ -404,7 +476,6 @@ async function expectBoundStatusCommandDirectReply(params: {
   interaction: MockCommandInteraction;
   expectedPattern: RegExp;
 }) {
-  runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
   const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher;
   const statusSpy = runtimeModuleMocks.resolveDirectStatusReplyForSession;
   const command = await createStatusCommand(params.cfg);
@@ -429,8 +500,6 @@ describe("Discord native plugin command dispatch", () => {
   afterAll(() => {
     clearPluginCommands();
     setActivePluginRegistry(createTestRegistry());
-    nativeCommandRuntime.matchPluginCommand = matchPluginCommand;
-    nativeCommandRuntime.executePluginCommand = executePluginCommand;
     nativeCommandRuntime.dispatchChannelInboundTurn = dispatchChannelInboundTurn;
     nativeCommandRuntime.resolveDirectStatusReplyForSession = resolveDirectStatusReplyForSession;
     nativeCommandRuntime.resolveDiscordNativeInteractionRouteState =
@@ -439,14 +508,15 @@ describe("Discord native plugin command dispatch", () => {
   });
 
   beforeEach(() => {
+    observedNativeTurnDispatcher = undefined;
     clearRuntimeConfigSnapshot();
     vi.clearAllMocks();
     clearPluginCommands();
     setActivePluginRegistry(createTestRegistry());
-    runtimeModuleMocks.matchPluginCommand.mockReset();
-    runtimeModuleMocks.matchPluginCommand.mockImplementation(matchPluginCommand);
-    runtimeModuleMocks.executePluginCommand.mockReset();
-    runtimeModuleMocks.executePluginCommand.mockImplementation(executePluginCommand);
+    runtimeModuleMocks.pluginCommandHandler.mockReset();
+    runtimeModuleMocks.pluginCommandHandler.mockImplementation(
+      async (params: { run?: () => Promise<unknown> }) => await params.run?.(),
+    );
     runtimeModuleMocks.dispatchReplyWithDispatcher.mockReset();
     runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
       counts: {
@@ -461,10 +531,6 @@ describe("Discord native plugin command dispatch", () => {
     });
     runtimeModuleMocks.getSessionEntry.mockReset();
     runtimeModuleMocks.getSessionEntry.mockReturnValue(undefined);
-    nativeCommandRuntime.matchPluginCommand =
-      runtimeModuleMocks.matchPluginCommand as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand;
-    nativeCommandRuntime.executePluginCommand =
-      runtimeModuleMocks.executePluginCommand as typeof import("openclaw/plugin-sdk/plugin-runtime").executePluginCommand;
     nativeCommandRuntime.dispatchChannelInboundTurn = dispatchChannelInboundTurnForTest;
     nativeCommandRuntime.resolveDirectStatusReplyForSession =
       runtimeModuleMocks.resolveDirectStatusReplyForSession as typeof resolveDirectStatusReplyForSession;
@@ -481,6 +547,24 @@ describe("Discord native plugin command dispatch", () => {
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
+  });
+
+  it("keeps the owning Gateway dispatcher on a native slash turn", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    const dispatchReplyFromConfig =
+      vi.fn<
+        NonNullable<Parameters<typeof createDiscordNativeCommand>[0]["dispatchReplyFromConfig"]>
+      >();
+    const command = await createNativeCommand(
+      cfg,
+      { name: "new", description: "Start a new session.", acceptsArgs: true },
+      dispatchReplyFromConfig,
+    );
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(observedNativeTurnDispatcher).toBe(dispatchReplyFromConfig);
   });
 
   it("refreshes native command routing config between invocations", async () => {
@@ -546,7 +630,42 @@ describe("Discord native plugin command dispatch", () => {
     });
   });
 
-  it("passes the active auth profile to Discord plugin commands", async () => {
+  it("carries the built-in catalog winner through the interaction", async () => {
+    const cfg = createConfig();
+    const pluginHandler = vi.fn(async () => ({ text: "wrong plugin" }));
+    getActivePluginRegistry()!.commands.push({
+      pluginId: "shadow-plugin",
+      source: "test",
+      command: {
+        name: "help",
+        description: "Shadow help",
+        channels: ["discord"],
+        requireAuth: false,
+        handler: pluginHandler,
+      },
+    });
+    const help: NativeCommandSpec = {
+      name: "help",
+      description: "Show help",
+      acceptsArgs: false,
+    };
+    const command = await createNativeCommand(cfg, help);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(
+      createInteraction() as unknown,
+    );
+
+    expect(pluginHandler).not.toHaveBeenCalled();
+    const dispatchParams = requireRecord(
+      firstMockArg(runtimeModuleMocks.dispatchReplyWithDispatcher, "core dispatch"),
+      "core dispatch",
+    );
+    expect(
+      (dispatchParams.replyOptions as Record<PropertyKey, unknown>)[PLUGIN_COMMAND_DISPATCH],
+    ).toEqual({ kind: "non-plugin" });
+  });
+
+  it("resolves the active auth profile before Discord plugin execution", async () => {
     const cfg = createConfig();
     const interaction = createInteraction();
     runtimeModuleMocks.getSessionEntry.mockReturnValue({
@@ -560,7 +679,7 @@ describe("Discord native plugin command dispatch", () => {
       cfg,
       name: "pair",
     });
-    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+    const executeSpy = runtimeModuleMocks.pluginCommandHandler.mockResolvedValue({
       text: "paired:now",
     });
 
@@ -577,11 +696,42 @@ describe("Discord native plugin command dispatch", () => {
     expectPluginCommandExecution({
       mock: executeSpy,
       commandName: "pair",
-      expected: {
-        authProfileId: "openai:owner@example.com",
-      },
+      expected: {},
     });
+    expect(runtimeModuleMocks.getSessionEntry).toHaveBeenCalled();
   });
+
+  it.each([
+    { ownerAllowFrom: ["discord:*"], senderIsOwner: false },
+    { ownerAllowFrom: ["discord:123456789012345678"], senderIsOwner: true },
+  ])(
+    "does not expose host owner status to ordinary plugins for $ownerAllowFrom",
+    async ({ ownerAllowFrom }) => {
+      const cfg = {
+        ...createConfig(),
+        commands: { ownerAllowFrom },
+      } as OpenClawConfig;
+      const interaction = createInteraction();
+      interaction.user.id = "123456789012345678";
+      interaction.options.getString.mockReturnValue("now");
+      registerPairPlugin();
+      const command = await createPluginCommand({ cfg, name: "pair" });
+      const executeSpy = runtimeModuleMocks.pluginCommandHandler.mockResolvedValue({
+        text: "paired:now",
+      });
+
+      await (command as { run: (interaction: unknown) => Promise<void> }).run(
+        interaction as unknown,
+      );
+
+      const payload = expectPluginCommandExecution({
+        mock: executeSpy,
+        commandName: "pair",
+        expected: {},
+      });
+      expect(payload.senderIsOwner).toBeUndefined();
+    },
+  );
 
   it("passes the configured binding agent to plugin-owned Discord command sessions", async () => {
     const cfg = createConfig();
@@ -612,7 +762,7 @@ describe("Discord native plugin command dispatch", () => {
       cfg,
       name: "pair",
     });
-    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+    const executeSpy = runtimeModuleMocks.pluginCommandHandler.mockResolvedValue({
       text: "paired:now",
     });
 
@@ -632,7 +782,6 @@ describe("Discord native plugin command dispatch", () => {
       expected: {
         agentId: "codex",
         sessionKey: pluginSessionKey,
-        authProfileId: "openai:owner@example.com",
       },
     });
     expect(runtimeModuleMocks.getSessionEntry).toHaveBeenCalledWith({
@@ -752,9 +901,9 @@ describe("Discord native plugin command dispatch", () => {
         handler: async ({ args }) => ({ text: `open:${args ?? ""}` }),
       }),
     ).toEqual({ ok: true });
-    const command = await createNativeCommand(cfg, commandSpec);
+    const command = await createPluginCommand({ cfg, name: commandSpec.name });
 
-    const executeSpy = runtimeModuleMocks.executePluginCommand;
+    const executeSpy = runtimeModuleMocks.pluginCommandHandler;
     const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue(
       {} as never,
     );
@@ -814,10 +963,10 @@ describe("Discord native plugin command dispatch", () => {
         handler: async ({ args }) => ({ text: `open:${args ?? ""}` }),
       }),
     ).toEqual({ ok: true });
-    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+    const executeSpy = runtimeModuleMocks.pluginCommandHandler.mockResolvedValue({
       text: "open:now",
     });
-    const command = await createNativeCommand(cfg, commandSpec);
+    const command = await createPluginCommand({ cfg, name: commandSpec.name });
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -874,10 +1023,10 @@ describe("Discord native plugin command dispatch", () => {
         handler: async ({ args }) => ({ text: `open:${args ?? ""}` }),
       }),
     ).toEqual({ ok: true });
-    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+    const executeSpy = runtimeModuleMocks.pluginCommandHandler.mockResolvedValue({
       text: "open:now",
     });
-    const command = await createNativeCommand(cfg, commandSpec);
+    const command = await createPluginCommand({ cfg, name: commandSpec.name });
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -932,25 +1081,13 @@ describe("Discord native plugin command dispatch", () => {
       acceptsArgs: false,
     };
     const interaction = createInteraction();
-    const pluginMatch = {
-      command: {
-        name: "cron_jobs",
-        description: "List cron jobs",
-        pluginId: "cron-jobs",
-        acceptsArgs: false,
-        handler: vi.fn().mockResolvedValue({ text: "jobs" }),
-      },
-      args: undefined,
-    };
-
-    runtimeModuleMocks.matchPluginCommand.mockReturnValue(pluginMatch as never);
-    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+    const executeSpy = runtimeModuleMocks.pluginCommandHandler.mockResolvedValue({
       text: "direct plugin output",
     });
     const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue(
       {} as never,
     );
-    const command = await createNativeCommand(cfg, commandSpec);
+    const command = await createMockPluginNativeCommand(cfg, commandSpec);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -964,7 +1101,6 @@ describe("Discord native plugin command dispatch", () => {
   it("returns an explicit warning instead of success when dispatch produces zero visible replies", async () => {
     const cfg = createConfig();
     const interaction = createInteraction();
-    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
     runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
       counts: { final: 0, block: 0, tool: 0 },
       queuedFinal: false,
@@ -982,21 +1118,132 @@ describe("Discord native plugin command dispatch", () => {
       ephemeral: true,
     });
     expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).not.toHaveBeenCalled();
   });
 
-  it("does not emit the empty warning when the routed reply hook cancels delivery", async () => {
+  it("settles an accepted active-run steer without an empty warning", async () => {
     const cfg = createConfig();
     const interaction = createInteraction();
-    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
+      counts: { final: 0, block: 0, tool: 0 },
+      queuedFinal: false,
+      deferredToActiveRun: "steer",
+    } as never);
+    const command = await createNativeCommand(cfg, {
+      name: "steer",
+      description: "Steer an active run.",
+      acceptsArgs: true,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.followUp).not.toHaveBeenCalled();
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns when the inbound turn is dropped before dispatch", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    nativeCommandRuntime.dispatchChannelInboundTurn = async () => ({
+      admission: { kind: "drop", reason: "ingest-null" },
+      dispatched: false,
+    });
+
+    const result = await dispatchDiscordNativeAgentReply({
+      cfg,
+      discordConfig: cfg.channels?.discord ?? {},
+      accountId: "default",
+      interaction: interaction as never,
+      ctxPayload: { SessionKey: "agent:main:discord:dm:owner" } as never,
+      effectiveRoute: {
+        accountId: "default",
+        agentId: "main",
+        sessionKey: "agent:main:discord:dm:owner",
+      },
+      channelConfig: null,
+      mediaLocalRoots: [],
+      preferFollowUp: true,
+      pluginCommandDispatch: { kind: "non-plugin" },
+      log: { error: vi.fn() } as never,
+    });
+
+    expect(result).toEqual({ dispatched: false });
+    expectFollowUpFields(interaction, {
+      content: "⚠️ Command produced no visible reply.",
+      ephemeral: true,
+    });
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).not.toHaveBeenCalled();
+  });
+
+  it("settles deliberate command silence without an empty warning", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
+      counts: { final: 0, block: 0, tool: 0 },
+      queuedFinal: false,
+      deliberateSilentTerminalReply: true,
+    } as never);
+    const command = await createNativeCommand(cfg, {
+      name: "new",
+      description: "Start a new session.",
+      acceptsArgs: true,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.followUp).not.toHaveBeenCalled();
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("warns when a final delivery observer does not report its outcome", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
     nativeCommandRuntime.dispatchChannelInboundTurn = async (plan) => {
-      await plan.delivery.onDelivered?.(
-        { text: "cancelled" },
-        { kind: "final" },
-        {
-          visibleReplySent: false,
-          suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+      await plan.delivery.onDelivered?.({ text: "unreported" }, { kind: "final" }, undefined);
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: {
+          counts: { final: 0, block: 0, tool: 0 },
+          queuedFinal: false,
         },
-      );
+      };
+    };
+    const command = await createNativeCommand(cfg, {
+      name: "new",
+      description: "Start a new session.",
+      acceptsArgs: true,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expectFollowUpFields(interaction, {
+      content: "⚠️ Command produced no visible reply.",
+      ephemeral: true,
+    });
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 2])("settles %i suppressed finals without an empty warning", async (count) => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    nativeCommandRuntime.dispatchChannelInboundTurn = async (plan) => {
+      for (let index = 0; index < count; index += 1) {
+        await plan.delivery.onDelivered?.(
+          { text: "cancelled" },
+          { kind: "final" },
+          {
+            visibleReplySent: false,
+            suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+          },
+        );
+      }
       return {
         admission: { kind: "dispatch" },
         dispatched: true,
@@ -1021,13 +1268,133 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
   });
 
+  it.each([false, true])("preserves a hidden final and metadata (isError=%s)", async (isError) => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    interaction.responseState = "deferred";
+    const finalReply = setReplyPayloadMetadata(
+      { text: "scope-aware model selection result", isError },
+      { assistantMessageIndex: 3 },
+    );
+    nativeCommandRuntime.dispatchChannelInboundTurn = async (plan) => {
+      if (!("deliver" in plan.delivery) || !plan.delivery.deliver) {
+        throw new Error("expected direct deliverer");
+      }
+      const info = { kind: "final" as const };
+      const deliveryResult = await plan.delivery.deliver(finalReply, info);
+      expect(deliveryResult).toEqual({
+        visibleReplySent: false,
+        suppression: { reason: "channel_transform" },
+      });
+      await plan.delivery.onDelivered?.(finalReply, info, deliveryResult);
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: {
+          counts: { final: 0, block: 0, tool: 0 },
+          queuedFinal: false,
+        },
+      };
+    };
+
+    const result = await dispatchDiscordNativeAgentReply({
+      cfg,
+      discordConfig: cfg.channels?.discord ?? {},
+      accountId: "default",
+      interaction: interaction as never,
+      ctxPayload: { SessionKey: "agent:main:discord:dm:owner" } as never,
+      effectiveRoute: {
+        accountId: "default",
+        agentId: "main",
+        sessionKey: "agent:main:discord:dm:owner",
+      },
+      channelConfig: null,
+      mediaLocalRoots: [],
+      preferFollowUp: true,
+      pluginCommandDispatch: { kind: "non-plugin" },
+      suppressReplies: true,
+      log: { error: vi.fn() } as never,
+    });
+
+    expect(result.hiddenFinalReply).toBe(finalReply);
+    expect(result.hiddenFinalReply?.isError).toBe(isError);
+    expect(interaction.followUp).not.toHaveBeenCalled();
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      label: "hook cancellation",
+      payload: { text: "cancelled core final" },
+      suppression: { reason: "cancelled_by_reply_payload_sending_hook" as const },
+    },
+    {
+      label: "empty final",
+      payload: { text: "  " },
+      suppression: { reason: "channel_transform" as const },
+    },
+    {
+      label: "ordinary invisible result",
+      payload: { text: "uncaptured fallback" },
+      suppression: { reason: "no_visible_result" as const },
+    },
+  ])("does not capture a hidden final for $label", async ({ payload, suppression }) => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    interaction.responseState = "deferred";
+    nativeCommandRuntime.dispatchChannelInboundTurn = async (plan) => {
+      await plan.delivery.onDelivered?.(
+        payload,
+        { kind: "final" },
+        {
+          visibleReplySent: false,
+          suppression,
+        },
+      );
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: {
+          counts: { final: 0, block: 0, tool: 0 },
+          queuedFinal: false,
+        },
+      };
+    };
+
+    const result = await dispatchDiscordNativeAgentReply({
+      cfg,
+      discordConfig: cfg.channels?.discord ?? {},
+      accountId: "default",
+      interaction: interaction as never,
+      ctxPayload: { SessionKey: "agent:main:discord:dm:owner" } as never,
+      effectiveRoute: {
+        accountId: "default",
+        agentId: "main",
+        sessionKey: "agent:main:discord:dm:owner",
+      },
+      channelConfig: null,
+      mediaLocalRoots: [],
+      preferFollowUp: true,
+      pluginCommandDispatch: { kind: "non-plugin" },
+      suppressReplies: true,
+      log: { error: vi.fn() } as never,
+    });
+
+    expect(result.hiddenFinalReply).toBeUndefined();
+    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps a native reply visible when a later Discord chunk expires", async () => {
     const cfg = createConfig();
     const interaction = createInteraction();
     interaction.followUp
       .mockResolvedValueOnce({ ok: true })
       .mockRejectedValueOnce({ discordCode: 10062, message: "Unknown interaction" });
-    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
     runtimeModuleMocks.dispatchReplyWithDispatcher.mockImplementation(async (params: unknown) => {
       const dispatcherOptions = (
         params as {
@@ -1062,15 +1429,37 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.deleteReply).not.toHaveBeenCalled();
   });
 
-  it("does not classify an already-deferred interaction as partial before this payload sends", async () => {
+  it.each([
+    { label: "no intermediate suppression" },
+    { label: "a suppressed block reply", kind: "block" as const },
+    { label: "a suppressed tool reply", kind: "tool" as const },
+    { label: "a prior suppressed final reply", kind: "final" as const },
+    { label: "a later suppressed final reply", suppressAfterFailure: true },
+    {
+      label: "suppressed final replies before and after failure",
+      kind: "final" as const,
+      suppressAfterFailure: true,
+    },
+  ])("warns when a deferred final fails with $label", async ({ kind, suppressAfterFailure }) => {
     const cfg = createConfig();
     const interaction = createInteraction();
     interaction.followUp.mockRejectedValue({
       discordCode: 10062,
       message: "Unknown interaction",
     });
-    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
     nativeCommandRuntime.dispatchChannelInboundTurn = async (plan) => {
+      const reportSuppressed = (suppressedKind: "block" | "final" | "tool") =>
+        plan.delivery.onDelivered?.(
+          { text: "cancelled intermediate reply" },
+          { kind: suppressedKind },
+          {
+            visibleReplySent: false,
+            suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+          },
+        );
+      if (kind) {
+        await reportSuppressed(kind);
+      }
       if (!("deliver" in plan.delivery)) {
         throw new Error("expected direct delivery adapter");
       }
@@ -1088,6 +1477,9 @@ describe("Discord native plugin command dispatch", () => {
         plan.delivery.onError?.(error, info);
       }
       expect(deliveryError).toBeInstanceOf(PlatformMessageNotDispatchedError);
+      if (suppressAfterFailure) {
+        await reportSuppressed("final");
+      }
       return {
         admission: { kind: "dispatch" },
         dispatched: true,
@@ -1118,13 +1510,80 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.deleteReply).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { label: "a suppressed final", outcomes: ["suppressed", "accepted"] as const },
+    { label: "an earlier failed final", outcomes: ["failed", "accepted"] as const },
+    { label: "a later failed final", outcomes: ["accepted", "failed"] as const },
+  ])("keeps an accepted final visible alongside $label", async ({ outcomes }) => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    for (const outcome of outcomes) {
+      if (outcome === "accepted") {
+        interaction.followUp.mockResolvedValueOnce({ ok: true });
+      } else if (outcome === "failed") {
+        interaction.followUp.mockRejectedValueOnce(new Error("provider connection failed"));
+      }
+    }
+    nativeCommandRuntime.dispatchChannelInboundTurn = async (plan) => {
+      if (!("deliver" in plan.delivery) || !plan.delivery.deliver) {
+        throw new Error("expected direct delivery adapter");
+      }
+      let failedFinals = 0;
+      for (const outcome of outcomes) {
+        const payload = { text: `${outcome} final` };
+        const info = { kind: "final" as const };
+        if (outcome === "suppressed") {
+          await plan.delivery.onDelivered?.(payload, info, {
+            visibleReplySent: false,
+            suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+          });
+          continue;
+        }
+        try {
+          const result = await plan.delivery.deliver(payload, info);
+          await plan.delivery.onDelivered?.(payload, info, result);
+        } catch (error) {
+          failedFinals += 1;
+          plan.delivery.onError?.(error, info);
+        }
+      }
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: plan.ctxPayload,
+        routeSessionKey: plan.route.sessionKey,
+        dispatchResult: {
+          counts: { final: 1, block: 0, tool: 0 },
+          failedCounts: { final: failedFinals, block: 0, tool: 0 },
+          queuedFinal: false,
+        },
+      };
+    };
+    const command = await createNativeCommand(cfg, {
+      name: "new",
+      description: "Start a new session.",
+      acceptsArgs: true,
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(interaction.followUp).toHaveBeenCalledTimes(
+      outcomes.filter((outcome) => outcome !== "suppressed").length,
+    );
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "accepted final" }),
+    );
+    expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
+    expect(interaction.reply).not.toHaveBeenCalled();
+    expect(interaction.deleteReply).not.toHaveBeenCalled();
+  });
+
   it("preserves partial delivery when a later Discord chunk fails without expiry", async () => {
     const cfg = createConfig();
     const interaction = createInteraction();
     interaction.followUp
       .mockResolvedValueOnce({ ok: true })
       .mockRejectedValueOnce(new Error("provider connection failed"));
-    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
     runtimeModuleMocks.dispatchReplyWithDispatcher.mockImplementation(async (params: unknown) => {
       const dispatcherOptions = (
         params as {
@@ -1158,13 +1617,13 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
-  it("does not warn when dispatch reports a queued final without visible counts", async () => {
+  it("does not warn when the settled receipt reports a visible final", async () => {
     const cfg = createConfig();
     const interaction = createInteraction();
-    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
     runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue({
       counts: { final: 0, block: 0, tool: 0 },
       queuedFinal: true,
+      settledReceipt: visibleFinalReceipt,
     } as never);
     const command = await createNativeCommand(cfg, {
       name: "new",
@@ -1186,23 +1645,11 @@ describe("Discord native plugin command dispatch", () => {
       acceptsArgs: false,
     };
     const interaction = createInteraction();
-    const pluginMatch = {
-      command: {
-        name: "cron_jobs",
-        description: "List cron jobs",
-        pluginId: "cron-jobs",
-        acceptsArgs: false,
-        handler: vi.fn().mockResolvedValue({ text: "" }),
-      },
-      args: undefined,
-    };
-
-    runtimeModuleMocks.matchPluginCommand.mockReturnValue(pluginMatch as never);
-    runtimeModuleMocks.executePluginCommand.mockResolvedValue({});
+    runtimeModuleMocks.pluginCommandHandler.mockResolvedValue({});
     const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue(
       {} as never,
     );
-    const command = await createNativeCommand(cfg, commandSpec);
+    const command = await createMockPluginNativeCommand(cfg, commandSpec);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -1219,23 +1666,11 @@ describe("Discord native plugin command dispatch", () => {
       acceptsArgs: false,
     };
     const interaction = createInteraction();
-    const pluginMatch = {
-      command: {
-        name: "cron_jobs",
-        description: "List cron jobs",
-        pluginId: "cron-jobs",
-        acceptsArgs: false,
-        handler: vi.fn().mockResolvedValue({ suppressReply: true }),
-      },
-      args: undefined,
-    };
-
-    runtimeModuleMocks.matchPluginCommand.mockReturnValue(pluginMatch as never);
-    runtimeModuleMocks.executePluginCommand.mockResolvedValue({ suppressReply: true });
+    runtimeModuleMocks.pluginCommandHandler.mockResolvedValue({ suppressReply: true });
     const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue(
       {} as never,
     );
-    const command = await createNativeCommand(cfg, commandSpec);
+    const command = await createMockPluginNativeCommand(cfg, commandSpec);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -1281,22 +1716,10 @@ describe("Discord native plugin command dispatch", () => {
       guildId: "345678901234567890",
       guildName: "Test Guild",
     });
-    const pluginMatch = {
-      command: {
-        name: "cron_jobs",
-        description: "List cron jobs",
-        pluginId: "cron-jobs",
-        acceptsArgs: false,
-        handler: vi.fn().mockResolvedValue({ text: "jobs" }),
-      },
-      args: undefined,
-    };
-
-    runtimeModuleMocks.matchPluginCommand.mockReturnValue(pluginMatch as never);
-    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+    const executeSpy = runtimeModuleMocks.pluginCommandHandler.mockResolvedValue({
       text: "direct plugin output",
     });
-    const command = await createNativeCommand(cfg, commandSpec);
+    const command = await createMockPluginNativeCommand(cfg, commandSpec);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -1361,22 +1784,10 @@ describe("Discord native plugin command dispatch", () => {
         return null;
       },
     );
-    const pluginMatch = {
-      command: {
-        name: "cron_jobs",
-        description: "List cron jobs",
-        pluginId: "cron-jobs",
-        acceptsArgs: false,
-        handler: vi.fn().mockResolvedValue({ text: "jobs" }),
-      },
-      args: undefined,
-    };
-
-    runtimeModuleMocks.matchPluginCommand.mockReturnValue(pluginMatch as never);
-    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+    const executeSpy = runtimeModuleMocks.pluginCommandHandler.mockResolvedValue({
       text: "direct plugin output",
     });
-    const command = await createNativeCommand(cfg, commandSpec);
+    const command = await createMockPluginNativeCommand(cfg, commandSpec);
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
@@ -1450,7 +1861,6 @@ describe("Discord native plugin command dispatch", () => {
         sessionKey: `agent:qwen:discord:channel:${channelId}`,
         agentId: "qwen",
       });
-    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
     const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher;
     const statusSpy = runtimeModuleMocks.resolveDirectStatusReplyForSession;
     const command = await createStatusCommand(cfg);
@@ -1523,7 +1933,6 @@ describe("Discord native plugin command dispatch", () => {
       }),
     );
     nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = resolveRouteState;
-    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
     const dispatchSpy = createDispatchSpy();
     const command = await createNativeCommand(cfg, {
       name: "new",
@@ -1553,7 +1962,6 @@ describe("Discord native plugin command dispatch", () => {
         sessionKey: "agent:codex:acp:binding:discord:default:recovery",
         agentId: "codex",
       });
-    runtimeModuleMocks.matchPluginCommand.mockReturnValue(null);
     const dispatchSpy = createDispatchSpy();
     const command = await createNativeCommand(cfg, {
       name: "new",
@@ -1574,7 +1982,7 @@ describe("Discord native plugin command dispatch", () => {
     const replyCalls = (interaction.reply as unknown as MockCalls).mock.calls;
     const blockedReply = replyCalls.some(
       ([payload]) =>
-        isRecord(payload) &&
+        isObjectValue(payload) &&
         payload.content === "Configured ACP binding is unavailable right now. Please try again.",
     );
     expect(blockedReply).toBe(false);

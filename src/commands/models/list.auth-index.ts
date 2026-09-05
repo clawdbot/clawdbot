@@ -1,64 +1,49 @@
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 /** Auth availability index for `openclaw models list` rows. */
+import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import {
   createModelAuthAvailabilityResolver,
+  applyCliRuntimeModelAuthAvailability,
   type ModelAuthAvailabilityEvaluation,
   type ModelAuthAvailabilityRef,
 } from "../../agents/model-auth-availability.js";
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { loadPluginRegistrySnapshotWithMetadata } from "../../plugins/plugin-registry.js";
 
 export type ModelListAuthRef = ModelAuthAvailabilityRef;
 export type ModelListAuthEvaluation = ModelAuthAvailabilityEvaluation;
 
 export type ModelListAuthIndex = {
+  providerDiscoveryProviderIds?: readonly string[];
   evaluateModelAuth(provider: string, ref?: ModelListAuthRef): ModelListAuthEvaluation;
 };
 
 type CreateModelListAuthIndexParams = {
   cfg: OpenClawConfig;
   authStore: AuthProfileStore;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   syntheticAuthProviderRefs?: readonly string[];
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot: PluginMetadataSnapshot;
   externalCliProviderIds?: readonly string[];
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
+  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
 };
 
 function listValidatedSyntheticAuthProviderRefs(params: {
-  cfg: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  metadataSnapshot?: PluginMetadataSnapshot;
+  metadataSnapshot: PluginMetadataSnapshot;
 }): readonly string[] {
-  if (params.metadataSnapshot) {
-    if (
-      params.metadataSnapshot.registryDiagnostics.length > 0 ||
-      (params.metadataSnapshot.registrySource !== "persisted" &&
-        params.metadataSnapshot.registrySource !== "provided")
-    ) {
-      return [];
-    }
-    return params.metadataSnapshot.index.plugins
-      .filter((plugin) => plugin.enabled)
-      .flatMap((plugin) => plugin.syntheticAuthRefs ?? []);
-  }
-  const result = loadPluginRegistrySnapshotWithMetadata({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
   if (
-    result.diagnostics.length > 0 ||
-    (result.source !== "persisted" && result.source !== "provided")
+    params.metadataSnapshot.registryDiagnostics.length > 0 ||
+    (params.metadataSnapshot.registrySource !== "persisted" &&
+      params.metadataSnapshot.registrySource !== "provided")
   ) {
     return [];
   }
-  return result.snapshot.plugins
+  return params.metadataSnapshot.index.plugins
     .filter((plugin) => plugin.enabled)
     .flatMap((plugin) => plugin.syntheticAuthRefs ?? []);
 }
@@ -77,16 +62,28 @@ export function createModelListAuthIndex(
     metadataSnapshot: params.metadataSnapshot,
     externalCliProviderIds: params.externalCliProviderIds,
     routeResolverFactory: params.routeResolverFactory,
+    preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
     syntheticAuthProviderRefs:
       params.syntheticAuthProviderRefs ??
       listValidatedSyntheticAuthProviderRefs({
-        cfg: params.cfg,
-        workspaceDir: params.workspaceDir,
-        env,
         metadataSnapshot: params.metadataSnapshot,
       }),
   });
   return {
-    evaluateModelAuth: (provider, ref) => resolver.evaluateModelAuth(provider, ref),
+    providerDiscoveryProviderIds: resolver.providerDiscoveryProviderIds,
+    evaluateModelAuth: (provider, ref) => {
+      const evaluation = resolver.evaluateModelAuth(provider, ref);
+      return applyCliRuntimeModelAuthAvailability({
+        authResolver: resolver,
+        evaluation,
+        cfg: params.cfg,
+        agentId: params.agentId,
+        metadataSnapshot: params.metadataSnapshot,
+        provider,
+        modelId: ref?.modelId,
+        preferredProfileId: ref?.preferredProfileId,
+        pinnedProfileId: ref?.pinnedProfileId,
+      });
+    },
   };
 }

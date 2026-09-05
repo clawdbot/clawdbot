@@ -14,7 +14,7 @@ import {
 } from "./send-context.js";
 import type { TelegramLocationSendOpts, TelegramSendResult } from "./send-message-types.js";
 import { finalizeTelegramOutbound, prepareTelegramOutbound } from "./send-outbound.js";
-import { resolveTelegramBotUserIdFromToken } from "./token.js";
+import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 type TelegramSendLocationParams = Parameters<TelegramApiContext["api"]["sendLocation"]>[3];
 type TelegramSendVenueParams = Parameters<TelegramApiContext["api"]["sendVenue"]>[5];
@@ -72,26 +72,27 @@ async function sendLocationTelegramWithContext(
   const delivery = await withTelegramNativeQuoteFallback({
     label,
     requestParams: commonParams,
-    request: (effectiveParams, retryLabel) =>
-      prepared.request(
-        () =>
-          hasName
-            ? api.sendVenue(
-                prepared.chatId,
-                location.latitude,
-                location.longitude,
-                location.name ?? "",
-                location.address ?? "",
-                effectiveParams as TelegramSendVenueParams,
-              )
-            : api.sendLocation(prepared.chatId, location.latitude, location.longitude, {
-                ...effectiveParams,
-                ...(location.accuracy !== undefined
-                  ? { horizontal_accuracy: location.accuracy }
-                  : {}),
-              } as TelegramSendLocationParams),
-        retryLabel,
-      ),
+    request: async (effectiveParams, retryLabel) => {
+      await opts.onPlatformSendDispatch?.();
+      return await prepared.request(() => {
+        opts.assertPlatformSendAuthorized?.();
+        return hasName
+          ? api.sendVenue(
+              prepared.chatId,
+              location.latitude,
+              location.longitude,
+              location.name ?? "",
+              location.address ?? "",
+              effectiveParams as TelegramSendVenueParams,
+            )
+          : api.sendLocation(prepared.chatId, location.latitude, location.longitude, {
+              ...effectiveParams,
+              ...(location.accuracy !== undefined
+                ? { horizontal_accuracy: location.accuracy }
+                : {}),
+            } as TelegramSendLocationParams);
+      }, retryLabel);
+    },
   });
   const result = delivery.result;
   const acceptedParams = toAcceptedThreadScopedParams(delivery.acceptedParams);

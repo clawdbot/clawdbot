@@ -6,7 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createTestRegistry,
-  releasePinnedPluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -82,7 +82,7 @@ describe("tlon outbound assistant-visible sanitization", () => {
   });
 
   afterEach(async () => {
-    releasePinnedPluginChannelRegistry();
+    resetPluginRuntimeStateForTest();
     vi.restoreAllMocks();
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {
@@ -97,6 +97,7 @@ describe("tlon outbound assistant-visible sanitization", () => {
           ship: "~zod",
           code: "test-code",
           url: baseUrl,
+          mediaMaxMb: 1,
           network: { dangerouslyAllowPrivateNetwork: true },
         },
       },
@@ -145,7 +146,10 @@ describe("tlon outbound assistant-visible sanitization", () => {
       ],
       skipQueue: true,
     });
-    expect(uploadImageFromUrl).toHaveBeenCalledWith("https://source.example/image.png");
+    expect(uploadImageFromUrl).toHaveBeenCalledWith(
+      "https://source.example/image.png",
+      1024 * 1024,
+    );
 
     expect(pokes).toHaveLength(3);
     expect(pokes.map(({ app, mark }) => ({ app, mark }))).toEqual([
