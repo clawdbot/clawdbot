@@ -103,6 +103,9 @@ function packagePreparation(): PackageUpdatePreparation {
     progress: {},
     jsonMode: true,
     invocationCwd: "/work",
+    validateCandidate: async () => [],
+    beforeActivate: async () => {},
+    onTransaction: () => {},
   };
 }
 
@@ -162,7 +165,7 @@ beforeEach(() => {
   mocks.hasSchemaRefusal.mockReturnValue(false);
   mocks.maybeRestartService.mockResolvedValue(undefined);
   mocks.maybeStopService.mockResolvedValue({
-    stopped: true,
+    stopped: false,
     inspected: true,
     runtimeInspected: true,
     running: true,
@@ -224,14 +227,14 @@ describe("package update executor contract", () => {
 });
 
 describe("mutable update execution", () => {
-  it("routes a real package update through prepare, stop, schema recheck, and activate", async () => {
+  it("prepares and inspects a package update without stopping the serving gateway", async () => {
     const events: string[] = [];
     const executor = observeExecutor(await actualPackageExecutor(), events);
     mocks.selectPackageExecutor.mockReturnValue(executor);
-    mocks.maybeStopService.mockImplementation(async () => {
-      events.push("stop");
+    mocks.maybeStopService.mockImplementation(async ({ phase }) => {
+      events.push(phase);
       return {
-        stopped: true,
+        stopped: phase === "prepare",
         inspected: true,
         runtimeInspected: true,
         running: true,
@@ -262,7 +265,8 @@ describe("mutable update execution", () => {
     }
     const execution = await pendingExecution;
 
-    expect(events).toEqual(["prepare", "stop", "schema", "activate"]);
+    expect(events).toEqual(["prepare", "inspect", "schema", "activate"]);
+    expect(execution?.preManagedServiceStop?.stopped).toBe(false);
     expect(execution?.result).toBe(successfulUpdate);
     expect(mocks.runPackageUpdate).toHaveBeenCalledOnce();
     expect(mocks.runPackageUpdate).toHaveBeenCalledWith(
@@ -273,7 +277,7 @@ describe("mutable update execution", () => {
     );
   });
 
-  it("discards preparation when the post-stop schema check refuses activation", async () => {
+  it("discards preparation when the inspected schema refuses activation", async () => {
     const events: string[] = [];
     mocks.selectPackageExecutor.mockReturnValue(
       observeExecutor(await actualPackageExecutor(), events),
@@ -284,6 +288,7 @@ describe("mutable update execution", () => {
 
     expect(events).toEqual(["prepare", "discard:pre-activation-failed"]);
     expect(execution?.result.reason).toBe("database-schema-preflight");
+    expect(execution?.preManagedServiceStop?.stopped).toBe(false);
     expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
   });
 
@@ -305,10 +310,10 @@ describe("mutable update execution", () => {
 
   it("leaves Git updates on their existing execution path", async () => {
     const events: string[] = [];
-    mocks.maybeStopService.mockImplementation(async () => {
-      events.push("stop");
+    mocks.maybeStopService.mockImplementation(async ({ phase }) => {
+      events.push(phase);
       return {
-        stopped: true,
+        stopped: phase === "prepare",
         inspected: true,
         runtimeInspected: true,
         running: true,
@@ -321,7 +326,7 @@ describe("mutable update execution", () => {
 
     const execution = await executeMutableUpdate(executionParams("git"));
 
-    expect(events).toEqual(["stop", "git"]);
+    expect(events).toEqual(["inspect", "git"]);
     expect(execution?.result.mode).toBe("git");
     expect(mocks.selectPackageExecutor).not.toHaveBeenCalled();
     expect(mocks.runPackageUpdate).not.toHaveBeenCalled();

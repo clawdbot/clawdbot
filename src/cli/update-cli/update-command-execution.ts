@@ -400,17 +400,17 @@ export async function executeMutableUpdate(params: {
     if (params.updateInstallKind === "package" || params.updateInstallKind === "git") {
       await stopManagedServiceBeforeMutableUpdate(gitMutationRoots ?? undefined, "inspect");
     }
-    const postStopPackageSchemaPreflight =
+    const inspectedPackageSchemaPreflight =
       params.updateInstallKind === "package"
         ? await checkTargetDatabaseSchemas(
             params.packageTargetSchemaVersions,
             preManagedServiceStop?.serviceEnv ?? process.env,
           )
         : { incompatible: [], indeterminate: [] };
-    if (hasSchemaRefusal(postStopPackageSchemaPreflight)) {
+    if (hasSchemaRefusal(inspectedPackageSchemaPreflight)) {
       throw new UpdatePreMutationError(
         "database-schema-preflight",
-        formatSchemaRefusalLines(postStopPackageSchemaPreflight).join("\n"),
+        formatSchemaRefusalLines(inspectedPackageSchemaPreflight).join("\n"),
       );
     }
     if (packageExecutor && preparedPackageUpdate) {
