@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { readConfigFileSnapshot } from "../config/config.js";
+import { withEnvOverride } from "../config/test-helpers.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { isTrustedOfficialPluginInstallRecord } from "../plugins/official-external-install-records.js";
@@ -10,6 +14,7 @@ import {
   hermeticEnv,
   readRequiredPersistedInstalledPluginIndex,
 } from "./doctor-plugin-registry.test-support.js";
+import { importShippedPluginInstallConfigForDoctor } from "./doctor/shared/plugin-registry-migration.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 
@@ -38,6 +43,20 @@ describe("doctor official plugin provenance", () => {
           { ...createCurrentIndex(), installRecords },
           { stateDir },
         );
+      } else {
+        const configPath = path.join(stateDir, "openclaw.json");
+        fs.writeFileSync(configPath, JSON.stringify(config));
+        await withEnvOverride(
+          {
+            ...hermeticEnv(),
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          },
+          async () => {
+            await importShippedPluginInstallConfigForDoctor(await readConfigFileSnapshot());
+          },
+        );
       }
       expect(
         isTrustedOfficialPluginInstallRecord({ pluginId, packageName, record: legacyRecord }),
@@ -47,7 +66,7 @@ describe("doctor official plugin provenance", () => {
         stateDir,
         candidates: [],
         env: hermeticEnv(),
-        config,
+        config: {},
         prompter: { shouldRepair: true },
       });
 
