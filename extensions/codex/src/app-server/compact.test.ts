@@ -269,6 +269,69 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(bindingStore.read(current)).toEqual(binding);
   });
 
+  it("rejects a queued compaction after admitted authority rotates before client acquisition", async () => {
+    const current = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionKey: "agent:main:queued-authority",
+      sessionId: "session-current",
+    };
+    const successor = { ...current, sessionId: "session-successor" };
+    const scope = {
+      agentId: current.agentId,
+      sessionKey: current.sessionKey,
+      storePath: path.join(tempDir, "admitted", "sessions.json"),
+    };
+    await upsertSessionEntry({
+      ...scope,
+      entry: { sessionId: current.sessionId, updatedAt: 1 },
+    });
+    const bindingStore = createCodexTestBindingStore();
+    const binding = { threadId: "thread-queued", cwd: tempDir };
+    await bindingStore.mutate(current, { kind: "set", binding });
+    const fake = createFakeCodexClient();
+    const clientFactory = vi.fn(async () => fake.client);
+    const queueEntered = createDeferred<void>();
+    const releaseQueue = createDeferred<void>();
+    const held = withCodexAppServerThreadMutation(binding.threadId, async () => {
+      queueEntered.resolve();
+      await releaseQueue.promise;
+    });
+    await queueEntered.promise;
+
+    const pending = maybeCompactCodexAppServerSessionImpl(
+      {
+        sessionId: current.sessionId,
+        sessionKey: current.sessionKey,
+        agentId: current.agentId,
+        sessionTarget: { ...scope, sessionId: current.sessionId },
+        sessionFile: path.join(tempDir, "queued-authority.jsonl"),
+        workspaceDir: tempDir,
+        trigger: "manual",
+      },
+      { bindingStore, clientFactory },
+    );
+    await flushAsyncTasks();
+    expect(clientFactory).not.toHaveBeenCalled();
+
+    await patchSessionEntry({ ...scope, update: () => ({ sessionId: successor.sessionId }) });
+    releaseQueue.resolve();
+    await held;
+
+    await expect(pending).rejects.toThrow("Codex session generation is no longer current");
+    expect(clientFactory).not.toHaveBeenCalled();
+    expect(fake.request).not.toHaveBeenCalled();
+    expect(bindingStore.read(current)).toEqual(binding);
+
+    const adopted = await resolveCodexSessionBinding({
+      bindingStore,
+      identity: successor,
+      storePath: scope.storePath,
+    });
+    expect(adopted.binding).toEqual(binding);
+    expect(bindingStore.read(successor)).toEqual(binding);
+  });
+
   it("waits for native app-server compaction completion", async () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
