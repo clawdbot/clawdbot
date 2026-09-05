@@ -179,18 +179,17 @@ export async function prepareCodexAttemptContext(
     ? (connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions ??
       workspaceBootstrapContext.threadDeveloperInstructions)
     : undefined;
+  // The catalog joins the thread developer carrier at request build; it stays out
+  // of the generic policy so a catalog refresh never reads as a policy change.
   const skillsInstructions = renderCodexSkillsInstructions({
     attempt: runtimeParams,
     skillsPrompt: params.skillsSnapshot?.prompt,
   });
-  // Model catalog collaboration messages override caller collaboration instructions.
-  // Keep the eligible catalog in the ordinary thread developer carrier instead.
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,
     }),
     agentWorkspaceDeveloperInstructions,
-    skillsInstructions,
   );
   const watchedSessionsContext = buildCodexWatchedSessionsContext({
     attempt: runtimeParams,

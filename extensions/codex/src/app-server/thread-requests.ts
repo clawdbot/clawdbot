@@ -30,6 +30,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { joinPresentSections } from "./run-attempt-state.js";
 import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
@@ -169,6 +170,7 @@ type CodexThreadConfigurationOptions = {
   dynamicTools?: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  skillsInstructions?: string;
   config?: JsonObject;
   nativeCodeModeEnabled?: boolean;
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
@@ -212,9 +214,14 @@ export function buildCodexThreadConfiguration(
       shellEnvironment: options.shellEnvironment,
       disableLoginShell: options.disableLoginShell,
     }),
-    developerInstructions:
+    // Catalog-owned collaboration messages replace caller collaboration instructions
+    // (codex-rs/core/src/context/world_state/collaboration_mode.rs), so the skill
+    // catalog rides the thread developer carrier after the immutable generic policy.
+    developerInstructions: joinPresentSections(
       options.developerInstructions ??
-      buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
+        buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
+      options.skillsInstructions,
+    ),
   };
 }
 
