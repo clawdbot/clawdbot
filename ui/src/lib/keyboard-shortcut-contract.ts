@@ -80,7 +80,7 @@ export function formatKeyboardShortcutCombo(
 // either-modifier behavior; it also makes mod-chords reachable on non-Apple
 // platforms where the previously meta-only sidebar/workspace chords were dead.
 export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: KeyboardEvent): boolean {
-  if (event.isComposing || event.keyCode === 229) {
+  if (event.isComposing || event.key === "Dead" || event.keyCode === 229) {
     return false;
   }
   const wantsMod = combo.modifiers.includes("mod");
@@ -119,11 +119,10 @@ export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: Keyboa
   ) {
     return event.key === combo.key;
   }
-  // Option can produce symbols or dead keys; explicitly Alt-bound chords still
-  // need their physical letter when no ASCII shortcut character is available.
+  // Only Command+Option uses physical letters; Ctrl+Alt may be AltGr text.
   const key = resolveAsciiShortcutKey(event);
-  return (
-    key === combo.key ||
-    (key === null && event.altKey && event.code === `Key${combo.key.toUpperCase()}`)
-  );
+  if (key !== null || !event.metaKey || !event.altKey) {
+    return key === combo.key;
+  }
+  return event.code === `Key${combo.key.toUpperCase()}`;
 }

@@ -53,6 +53,27 @@ describe("keyboard shortcut catalog matching", () => {
     expect(matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.keyboardShortcuts, zoomOut)).toBe(false);
   });
 
+  it.each([
+    { name: "a dead key", keyboard: { key: "Dead" } },
+    { name: "active composition", keyboard: { key: "U", isComposing: true } },
+    { name: "an IME key event", keyboard: { key: "U", keyCode: 229 } },
+  ])("does not match $name for either primary modifier", ({ keyboard }) => {
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      expect(
+        matchesShortcutCombo(
+          KEYBOARD_SHORTCUT_COMBOS.browserPanel,
+          new KeyboardEvent("keydown", {
+            code: "KeyU",
+            altKey: true,
+            shiftKey: true,
+            ...modifier,
+            ...keyboard,
+          }),
+        ),
+      ).toBe(false);
+    }
+  });
+
   it("matches physical Backquote and Comma keys independently of their produced characters", () => {
     const terminal = new KeyboardEvent("keydown", {
       key: "ö",
@@ -175,7 +196,7 @@ describe("keyboard shortcut catalog presentation", () => {
           matchesShortcutCombo(
             combo,
             new KeyboardEvent("keydown", {
-              key: "Dead",
+              key: "¨",
               code: `Key${combo.key.toUpperCase()}`,
               metaKey: true,
               altKey: true,

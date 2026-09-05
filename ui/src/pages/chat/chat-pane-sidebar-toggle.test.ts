@@ -32,7 +32,7 @@ function dispatchPanelShortcut(
 ) {
   const event = new KeyboardEvent("keydown", {
     cancelable: true,
-    key: "ж",
+    key: shortcut.altKey ? shortcut.key.toUpperCase() : "ж",
     code: `Key${shortcut.key.toUpperCase()}`,
     metaKey: true,
     shiftKey: true,
@@ -72,6 +72,75 @@ describe("chat pane sidebar toggles", () => {
     ]);
     expect(isSidebarSlotVisible(state.sidebarLayout, "workspace")).toBe(true);
   });
+
+  it.each([
+    {
+      name: "macOS Option symbol in the composer",
+      key: "¨",
+      code: "KeyU",
+      slot: "browser",
+      metaKey: true,
+      ctrlKey: false,
+      altKey: true,
+      accepted: true,
+    },
+    {
+      name: "AltGr text in the composer",
+      key: "Ę",
+      code: "KeyE",
+      slot: "detail",
+      metaKey: false,
+      ctrlKey: true,
+      altKey: true,
+      accepted: false,
+    },
+    {
+      name: "US Ctrl+Alt review chord in the composer",
+      key: "E",
+      code: "KeyE",
+      slot: "detail",
+      metaKey: false,
+      ctrlKey: true,
+      altKey: true,
+      accepted: true,
+    },
+    {
+      name: "plain workspace chord in the composer",
+      key: "B",
+      code: "KeyB",
+      slot: "workspace",
+      metaKey: true,
+      ctrlKey: false,
+      altKey: false,
+      accepted: true,
+    },
+  ] as const)(
+    "handles $name without consuming ordinary text",
+    ({ name: _name, slot, accepted, ...keyboard }) => {
+      const { pane, state } = createTestChatPane({
+        client: createGatewayBrowserClientFixture(),
+        sessions: createSessionCapabilityFixture(),
+      });
+      pane.active = true;
+      state.browserPanelAvailable = true;
+      state.sidebarLayout = { columns: [] };
+      const target = document.body.appendChild(document.createElement("textarea"));
+      target.addEventListener("keydown", pane.handleDocumentKeydown);
+      target.focus();
+      const event = new KeyboardEvent("keydown", {
+        ...keyboard,
+        shiftKey: true,
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      });
+
+      target.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(accepted);
+      expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(accepted);
+    },
+  );
 
   it.each(panelCases)("toggles the available $slot in the active pane", (shortcut) => {
     const { slot } = shortcut;

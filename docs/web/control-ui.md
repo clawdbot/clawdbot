@@ -509,6 +509,8 @@ and is omitted in compact panes. Conversation has no shortcut.
 | Dashboard  | ⌘⌥⇧G  | Ctrl+Alt+Shift+G |
 | Review     | ⌘⌥⇧E  | Ctrl+Alt+Shift+E |
 
+Command+Option chords accept Option symbols through the physical key; Ctrl+Alt chords require the matching ASCII letter to preserve non-ASCII AltGr text. Dead keys and composition are ignored.
+
 The new panel chords include Option/Alt to avoid browser actions such as developer
 tools, Read Aloud, and find previous, and OpenClaw's existing debug-overlay shortcut.
 The existing Terminal, Files, and Side chat bindings are unchanged.
