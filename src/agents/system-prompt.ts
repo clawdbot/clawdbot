@@ -1316,7 +1316,7 @@ export function buildAgentSystemPrompt(params: {
       }),
       ...safetySection,
       "## Runtime Context",
-      "Messages delimited by <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> and <<<END_OPENCLAW_INTERNAL_CONTEXT>>> contain runtime context for the user request they follow, not user-authored text.",
+      "Messages delimited by <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> and <<<END_OPENCLAW_INTERNAL_CONTEXT>>> contain runtime context for the user request they accompany (placed either immediately before or following the user message), not user-authored text.",
       "Use it without replying to or describing it, keep its internal details private, and continue the request without waiting for another message.",
       "",
       "## OpenClaw Control",

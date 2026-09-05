@@ -1,9 +1,11 @@
+import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 /**
  * Internal runtime-context delimiter and stripping helpers.
  * Protects runtime-generated prompt blocks from user text and removes old
  * context formats before replaying or comparing messages.
  */
 import { escapeRegExp } from "../shared/regexp.js";
+import { isLocalProviderBaseUrl, isSelfHostedProviderId } from "./model-provider-local.js";
 
 /** Opening delimiter for protected OpenClaw runtime context blocks. */
 export const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
@@ -405,4 +407,160 @@ export function relocateCurrentRuntimeContextCarrierToTail<T>(messages: T[]): T[
       .slice(boundary)
       .filter((message) => !isOpenClawRuntimeContextCustomMessage(message)),
   ];
+}
+
+const CLOUD_PROVIDER_ID_PREFIXES = [
+  "anthropic",
+  "openai",
+  "google",
+  "openrouter",
+  "azure",
+  "bedrock",
+  "mistral",
+  "groq",
+  "cerebras",
+  "xai",
+  "cohere",
+  "deepseek",
+];
+
+function isKnownCloudProvider(provider: string | undefined): boolean {
+  const normalized = provider?.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return CLOUD_PROVIDER_ID_PREFIXES.some(
+    (prefix) =>
+      normalized === prefix ||
+      normalized.startsWith(`${prefix}-`) ||
+      normalized.startsWith(`${prefix}/`),
+  );
+}
+
+function isHostedOllamaBaseUrl(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    return host === "ollama.com" || host.endsWith(".ollama.com");
+  } catch {
+    return false;
+  }
+}
+
+function isKnownCloudModelId(modelId: string | undefined): boolean {
+  if (!modelId) {
+    return false;
+  }
+  const normalized = modelId.trim().toLowerCase();
+
+  // Locally served open-weights models (e.g. gpt-oss-20b, openai/gpt-oss-20b, gpt-oss:20b)
+  // are self-hosted and must not be inferred as cloud models unless tagged (*:cloud, *-cloud)
+  if (normalized.includes("gpt-oss")) {
+    return isCloudModelRef(normalized);
+  }
+
+  if (isCloudModelRef(normalized)) {
+    return true;
+  }
+
+  return (
+    normalized.startsWith("claude") ||
+    normalized.startsWith("anthropic/") ||
+    normalized.startsWith("gpt-") ||
+    normalized.startsWith("chatgpt") ||
+    normalized.startsWith("o1-") ||
+    normalized.startsWith("o1/") ||
+    normalized.startsWith("o3-") ||
+    normalized.startsWith("o3/") ||
+    normalized.startsWith("o4-") ||
+    normalized.startsWith("o4/") ||
+    (normalized.startsWith("openai/") && !normalized.includes("gpt-oss")) ||
+    normalized.startsWith("gemini") ||
+    normalized.startsWith("google/")
+  );
+}
+
+export type RuntimeContextCarrierPlacementParams = {
+  provider?: string;
+  model?: {
+    id?: string;
+    api?: string;
+    baseUrl?: string;
+    provider?: string;
+  };
+};
+
+/**
+ * Resolves whether the current-turn runtime context carrier should be relocated to the tail.
+ * Local and self-hosted model backends (e.g. Ollama, vLLM, LM Studio, SGLang, llama.cpp, loopback/private endpoints)
+ * parse messages chronologically and do not use Anthropic-style prompt cache billing;
+ * relocating carriers to the tail causes models to treat internal metadata as the active user turn.
+ */
+export function shouldRelocateRuntimeContextCarrierToTail(
+  params?: RuntimeContextCarrierPlacementParams | string,
+): boolean {
+  if (!params) {
+    return true;
+  }
+  const input: RuntimeContextCarrierPlacementParams =
+    typeof params === "string" ? { provider: params } : params;
+  const modelId = input.model?.id;
+
+  // Explicit cloud model references (*:cloud, *-cloud) always relocate to tail
+  if (isCloudModelRef(modelId)) {
+    return true;
+  }
+
+  // Built-in ollama-cloud provider or hosted ollama.com endpoints always relocate to tail
+  const rawProvider = input.model?.provider ?? input.provider;
+  const normalizedProvider = rawProvider?.trim().toLowerCase();
+  if (normalizedProvider === "ollama-cloud") {
+    return true;
+  }
+
+  if (input.model?.baseUrl && isHostedOllamaBaseUrl(input.model.baseUrl)) {
+    return true;
+  }
+
+  // Self-hosted provider families (ollama, lmstudio, vllm, sglang, llama-cpp, local)
+  if (isSelfHostedProviderId(rawProvider)) {
+    return false;
+  }
+
+  // Ollama transport API is self-hosted
+  const modelApi = input.model?.api?.trim().toLowerCase();
+  if (modelApi === "ollama") {
+    return false;
+  }
+
+  // Cloud models behind local proxies (e.g. bundled LiteLLM route, Anthropic/OpenAI on localhost)
+  // preserve prompt cache tail placement
+  const normalizedModelId = modelId?.trim().toLowerCase();
+  const isSelfHostedModel =
+    normalizedModelId &&
+    (normalizedModelId.includes("gpt-oss") ||
+      isSelfHostedProviderId(modelId) ||
+      isSelfHostedProviderId(modelId.split("/")[0]) ||
+      normalizedModelId.startsWith("ollama/") ||
+      normalizedModelId.startsWith("vllm/") ||
+      normalizedModelId.startsWith("sglang/") ||
+      normalizedModelId.startsWith("llama-cpp/") ||
+      normalizedModelId.startsWith("lmstudio/"));
+
+  if (
+    !isSelfHostedModel &&
+    (isKnownCloudProvider(rawProvider) ||
+      normalizedProvider === "litellm" ||
+      isKnownCloudModelId(modelId) ||
+      modelApi === "anthropic-messages" ||
+      modelApi === "anthropic")
+  ) {
+    return true;
+  }
+
+  // Loopback / private / local LAN endpoints for custom local providers are self-hosted
+  if (input.model?.baseUrl && isLocalProviderBaseUrl(input.model.baseUrl)) {
+    return false;
+  }
+
+  return true;
 }

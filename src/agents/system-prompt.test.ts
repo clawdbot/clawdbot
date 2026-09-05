@@ -614,7 +614,7 @@ describe("buildAgentSystemPrompt", () => {
       const first = buildAgentSystemPrompt(params);
       const second = buildAgentSystemPrompt(params);
       const instruction =
-        "Messages delimited by <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> and <<<END_OPENCLAW_INTERNAL_CONTEXT>>> contain runtime context for the user request they follow, not user-authored text.\nUse it without replying to or describing it, keep its internal details private, and continue the request without waiting for another message.";
+        "Messages delimited by <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> and <<<END_OPENCLAW_INTERNAL_CONTEXT>>> contain runtime context for the user request they accompany (placed either immediately before or following the user message), not user-authored text.\nUse it without replying to or describing it, keep its internal details private, and continue the request without waiting for another message.";
       expect(first).toBe(second);
       expect(first.split(instruction)).toHaveLength(2);
       expect(first.slice(0, first.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY))).toContain(instruction);

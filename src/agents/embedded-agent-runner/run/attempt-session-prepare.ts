@@ -23,7 +23,10 @@ import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import { bootstrapHarnessContextEngine } from "../../harness/context-engine-lifecycle.js";
-import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
+import {
+  relocateCurrentRuntimeContextCarrierToTail,
+  shouldRelocateRuntimeContextCarrierToTail,
+} from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
@@ -350,7 +353,16 @@ type SessionBoundaryAttempt = Pick<
   | "suppressNextUserMessagePersistence"
   | "trigger"
   | "userTurnTranscriptRecorder"
->;
+> & {
+  model?: {
+    id?: string;
+    api?: string;
+    baseUrl?: string;
+    provider?: string;
+  };
+  provider?: string;
+  modelId?: string;
+};
 
 type LlmBoundaryOptions = NonNullable<Parameters<typeof normalizeMessagesForLlmBoundary>[1]>;
 
@@ -465,6 +477,20 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     };
   };
 
+  const shouldRelocate = shouldRelocateRuntimeContextCarrierToTail({
+    provider: attempt.provider,
+    model: attempt.model
+      ? {
+          id: attempt.model.id ?? attempt.modelId,
+          api: attempt.model.api,
+          baseUrl: attempt.model.baseUrl,
+          provider: attempt.model.provider ?? attempt.provider,
+        }
+      : attempt.modelId
+        ? { id: attempt.modelId, provider: attempt.provider }
+        : undefined,
+  });
+
   if (typeof activeSession.agent.convertToLlm === "function") {
     const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
     activeSession.agent.convertToLlm = async (messages) => {
@@ -472,7 +498,7 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
       return await baseConvertToLlm(
         // Persisted carriers stay after their user turn, including during tool loops;
         // moving one would change the prefix bound to later thinking signatures.
-        input.appendOnlyRuntimeContext
+        input.appendOnlyRuntimeContext || !shouldRelocate
           ? normalized
           : relocateCurrentRuntimeContextCarrierToTail(normalized),
       );
