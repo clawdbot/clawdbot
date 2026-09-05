@@ -49,6 +49,7 @@ import { renderApplicationShell, type ShellViewHost } from "./app-shell-view.ts"
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
+import { createGatewayControlUiReloadOptions } from "./gateway-control-ui-reload.ts";
 import {
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
@@ -582,11 +583,19 @@ class OpenClawShell
   readonly handleWindowResize = this.shellChrome.handleWindowResize;
   readonly handleDocumentKeydown = this.shellChrome.handleDocumentKeydown;
   readonly openPalette = this.shellChrome.openPalette;
-  readonly refreshControlUi = (): Promise<boolean> =>
-    retryStaleChunkReloadWhenReachable({
+  readonly refreshControlUi = (): Promise<boolean> => {
+    const context = this.context;
+    if (!context) {
+      return Promise.resolve(false);
+    }
+    return retryStaleChunkReloadWhenReachable({
       timeoutMs: 0,
-      canReload: () => this.context?.overlays.snapshot.controlUiRefreshRequired === true,
+      ...createGatewayControlUiReloadOptions(
+        context.gateway,
+        () => this.context === context && context.overlays.snapshot.controlUiRefreshRequired,
+      ),
     });
+  };
   readonly handleShellNavDrawerToggle = this.shellChrome.handleShellNavDrawerToggle;
   readonly openApprovals = this.shellChrome.openApprovals;
   readonly handleCommandPaletteSlashCommand = this.shellChrome.handleCommandPaletteSlashCommand;

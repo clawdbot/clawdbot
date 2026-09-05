@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSkillCollectionReviewMonitorSpecs } from "./skill-collection-review-monitor.js";
 
 describe("resolveSkillCollectionReviewMonitorSpecs", () => {
-  it("creates one stable seven-day job per canonical workspace", () => {
+  it("creates one stable seven-day job for every agent", () => {
     const cfg = {
       agents: {
         list: [
@@ -20,9 +20,10 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       schedulerSeed: "test-seed",
     });
 
-    expect(specs.map(({ agentId }) => agentId)).toEqual(["main", "solo"]);
+    expect(specs.map(({ agentId }) => agentId)).toEqual(["main", "ops", "solo"]);
     expect(specs.map(({ input }) => input.declarationKey)).toEqual([
       "skill-collection-review:main",
+      "skill-collection-review:ops",
       "skill-collection-review:solo",
     ]);
     expect(specs[0]?.input).toMatchObject({
@@ -41,7 +42,29 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
     const repeated = resolveSkillCollectionReviewMonitorSpecs(cfg, {
       schedulerSeed: "test-seed",
     });
-    expect(repeated[0]?.input.schedule).toEqual(specs[0]?.input.schedule);
+    expect(repeated.map(({ input }) => input.schedule)).toEqual(
+      specs.map(({ input }) => input.schedule),
+    );
+  });
+
+  it("creates jobs for every agent in an explicit fleet", () => {
+    const explicitFleet = {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    } as unknown as OpenClawConfig;
+    expect(
+      resolveSkillCollectionReviewMonitorSpecs(explicitFleet).map(({ agentId }) => agentId),
+    ).toEqual(["ops", "research"]);
+
+    const systemAgentFleet = {
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+        defaults: { systemAgent: { agentId: "research" } },
+      },
+    } as unknown as OpenClawConfig;
+    expect(
+      resolveSkillCollectionReviewMonitorSpecs(systemAgentFleet).map(({ agentId }) => agentId),
+    ).toEqual(["ops", "research"]);
   });
 
   it("retains monitor rows while autonomous review is disabled", () => {

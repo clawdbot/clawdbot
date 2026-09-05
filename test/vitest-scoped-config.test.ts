@@ -10,6 +10,7 @@ import { createAcpVitestConfig } from "./vitest/vitest.acp.config.ts";
 import { createAgentsCoreIsolatedVitestConfig } from "./vitest/vitest.agents-core-isolated.config.ts";
 import { createAgentsCoreVitestConfig } from "./vitest/vitest.agents-core.config.ts";
 import { agentVitestProjectOwners } from "./vitest/vitest.agents-paths.mjs";
+import { createAgentsSpawnProductionBoundaryVitestConfig } from "./vitest/vitest.agents-spawn-production-boundary.config.ts";
 import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
 import { createAutoReplyCoreVitestConfig } from "./vitest/vitest.auto-reply-core.config.ts";
 import { createAutoReplyReplyVitestConfig } from "./vitest/vitest.auto-reply-reply.config.ts";
@@ -569,6 +570,8 @@ describe("scoped vitest configs", () => {
   const defaultAgentsConfig = createAgentsVitestConfig({});
   const defaultAgentsCoreConfig = createAgentsCoreVitestConfig({});
   const defaultAgentsCoreIsolatedConfig = createAgentsCoreIsolatedVitestConfig({});
+  const defaultAgentsSpawnProductionBoundaryConfig =
+    createAgentsSpawnProductionBoundaryVitestConfig({});
   const defaultPluginsConfig = createPluginsVitestConfig({});
   const defaultProcessConfig = createProcessVitestConfig({});
   const defaultToolingDockerConfig = createToolingDockerVitestConfig({});
@@ -664,6 +667,7 @@ describe("scoped vitest configs", () => {
   it("isolates agent suites with conflicting shared-module mocks", () => {
     const sharedConfig = requireTestConfig(defaultAgentsCoreConfig);
     const isolatedConfig = requireTestConfig(defaultAgentsCoreIsolatedConfig);
+    const productionBoundaryConfig = requireTestConfig(defaultAgentsSpawnProductionBoundaryConfig);
 
     const scopedIsolatedFiles = agentVitestProjectOwners.coreIsolated.include.map((file) =>
       file.replace("src/agents/", ""),
@@ -672,6 +676,14 @@ describe("scoped vitest configs", () => {
     expect(isolatedConfig.include).toEqual(scopedIsolatedFiles);
     expect(isolatedConfig.isolate).toBe(true);
     expect(isolatedConfig.runner).toBeUndefined();
+    expect(productionBoundaryConfig.include).toEqual(
+      agentVitestProjectOwners.spawnProductionBoundary.include.map((file) =>
+        file.replace("src/agents/", ""),
+      ),
+    );
+    expect(productionBoundaryConfig.fileParallelism).toBe(false);
+    expect(productionBoundaryConfig.isolate).toBe(true);
+    expect(productionBoundaryConfig.runner).toBeUndefined();
   });
 
   it("keeps selected plugin-sdk and commands light lanes off the openclaw runtime setup", () => {

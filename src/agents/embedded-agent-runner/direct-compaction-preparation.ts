@@ -240,7 +240,7 @@ export async function prepareDirectCompactionAttempt(
   } catch (err) {
     return { ok: false as const, result: fail(formatErrorMessage(err), err) };
   }
-  let runtimeModel = resolvedAuthAttempt.model;
+  let runtimeModel: ProviderRuntimeModel = resolvedAuthAttempt.model;
   const apiKeyInfo = resolvedAuthAttempt.auth;
   const resolvedRuntimeAuthPlan = resolvedAuthAttempt.plan;
   let hasRuntimeAuthExchange = false;
@@ -301,6 +301,7 @@ export async function prepareDirectCompactionAttempt(
     provider: runtimeModel.provider,
     modelId: runtimeModel.id,
     inheritedLevel: params.thinkLevel,
+    compactionThinkingDefault: runtimeModel.compactionThinkingDefault,
     catalog: [thinkingCatalogEntry],
     agentId: runtimePolicyAgentId,
     sessionKey: runtimePolicySessionKey,

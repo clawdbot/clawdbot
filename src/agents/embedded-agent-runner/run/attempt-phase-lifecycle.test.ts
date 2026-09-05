@@ -10,7 +10,9 @@ import { createNestedToolActivity } from "../../../sessions/nested-tool-activity
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
+import { installSessionToolResultGuard } from "../../session-tool-result-guard.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -407,6 +409,7 @@ describe("embedded attempt phase lifecycle state", () => {
           sessionIdUsed: target.sessionId,
           messagesSnapshot: [{ role: "assistant", content: "done" }] as never,
           prePromptMessageCount: 0,
+          transcriptLeafId: null,
           contextEngineAfterTurnCheckpoint: null,
           compactionOccurredThisAttempt: false,
         },
@@ -451,6 +454,11 @@ describe("embedded attempt phase lifecycle state", () => {
         }),
       );
       expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
+      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
+        sessionManager.getSessionTarget()
+          ? { ...sessionManager.getSessionTarget(), entryId: terminalEntryId }
+          : undefined,
+      );
       expect(afterTurn).not.toHaveBeenCalled();
       expect(maintain).not.toHaveBeenCalled();
     },
@@ -467,7 +475,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionFile: "/tmp/session.jsonl",
       } as never,
       activeSession: {} as never,
-      sessionManager: { appendCustomEntry: vi.fn() } as never,
+      sessionManager: SessionManager.inMemory(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       state: {
         promptError: abortError,
@@ -475,6 +483,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionIdUsed: "session-1",
         messagesSnapshot: [],
         prePromptMessageCount: 0,
+        transcriptLeafId: null,
         contextEngineAfterTurnCheckpoint: null,
         compactionOccurredThisAttempt: false,
       },
@@ -506,6 +515,98 @@ describe("embedded attempt phase lifecycle state", () => {
     expect(event?.error).toBeUndefined();
   });
 
+  it.each(["blocked writes", "interrupted tool result"] as const)(
+    "selects review evidence after the pre-turn boundary with %s",
+    async (tail) => {
+      const dir = tempDirs.make("openclaw-attempt-review-boundary-");
+      const target = {
+        agentId: "main",
+        sessionId: "review-boundary",
+        sessionKey: "agent:main:review-boundary",
+        storePath: path.join(dir, "sessions.json"),
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const sessionManager = SessionManager.open(target, dir);
+      let currentTurn = false;
+      installSessionToolResultGuard(sessionManager, {
+        runId: "reused-run-id",
+        beforeMessageWriteHook: ({ message }) =>
+          currentTurn &&
+          (tail === "blocked writes" ||
+            (message.role === "assistant" && message.stopReason !== "toolUse"))
+            ? { block: true }
+            : undefined,
+      });
+      sessionManager.appendMessage(
+        makeAgentAssistantMessage({ content: [{ type: "text", text: "Previous turn." }] }),
+      );
+      const transcriptLeafId = sessionManager.appendCustomEntry("previous-turn-finished");
+      currentTurn = true;
+      sessionManager.appendMessage({ role: "user", content: "Current task.", timestamp: 2 });
+      sessionManager.appendMessage(
+        makeAgentAssistantMessage({
+          content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+          stopReason: "toolUse",
+        }),
+      );
+      const toolResultEntryId = sessionManager.appendMessage({
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "read",
+        content: [{ type: "text", text: "Current verified result." }],
+        isError: false,
+        timestamp: 3,
+      });
+      sessionManager.appendMessage(
+        makeAgentAssistantMessage({ content: [{ type: "text", text: "Suppressed terminal." }] }),
+      );
+
+      await completeEmbeddedAttemptAfterTurn({
+        attempt: { runId: "reused-run-id", sessionId: target.sessionId } as never,
+        activeSession: {} as never,
+        sessionManager,
+        withOwnedTranscriptWrite: async (operation) => await operation(),
+        state: {
+          promptError: null,
+          yieldAborted: false,
+          sessionIdUsed: target.sessionId,
+          messagesSnapshot: [],
+          prePromptMessageCount: 0,
+          transcriptLeafId,
+          contextEngineAfterTurnCheckpoint: null,
+          compactionOccurredThisAttempt: false,
+        },
+        readLifecycleState: () => ({
+          aborted: tail === "interrupted tool result",
+          timedOut: false,
+          idleTimedOut: false,
+          timedOutDuringCompaction: false,
+        }),
+        runtime: {
+          effectiveWorkspace: dir,
+          agentDir: dir,
+          sessionAgentId: "main",
+          resolveActiveContextEnginePluginId: () => undefined,
+          shouldRecordCompletedBootstrapTurn: true,
+          cacheTrace: null,
+          anthropicPayloadLogger: null,
+          hookAgentId: "main",
+          diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never,
+          skillWorkshopAvailable: true,
+          hookRunner: null,
+          promptStartedAt: Date.now(),
+        },
+      });
+
+      expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
+      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
+        tail === "interrupted tool result"
+          ? { ...sessionManager.getSessionTarget(), entryId: toolResultEntryId }
+          : undefined,
+      );
+    },
+  );
+
   it("re-reads abort state inside the post-turn session write", async () => {
     let aborted = false;
     await completeEmbeddedAttemptAfterTurn({
@@ -515,7 +616,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionFile: "/tmp/session.jsonl",
       } as never,
       activeSession: {} as never,
-      sessionManager: { appendCustomEntry: vi.fn() } as never,
+      sessionManager: SessionManager.inMemory(),
       withOwnedTranscriptWrite: async (operation) => {
         aborted = true;
         return await operation();
@@ -526,6 +627,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionIdUsed: "session-1",
         messagesSnapshot: [],
         prePromptMessageCount: 0,
+        transcriptLeafId: null,
         contextEngineAfterTurnCheckpoint: null,
         compactionOccurredThisAttempt: false,
       },
@@ -567,7 +669,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionFile: "/tmp/session.jsonl",
       } as never,
       activeSession: {} as never,
-      sessionManager: { appendCustomEntry: vi.fn() } as never,
+      sessionManager: SessionManager.inMemory(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       state: {
         promptError: null,
@@ -575,6 +677,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionIdUsed: "session-1",
         messagesSnapshot: [],
         prePromptMessageCount: 0,
+        transcriptLeafId: null,
         contextEngineAfterTurnCheckpoint: null,
         compactionOccurredThisAttempt: false,
       },
@@ -613,7 +716,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionFile: "/tmp/session.jsonl",
       } as never,
       activeSession: {} as never,
-      sessionManager: { appendCustomEntry: vi.fn() } as never,
+      sessionManager: SessionManager.inMemory(),
       withOwnedTranscriptWrite: async (operation) => await operation(),
       state: {
         promptError: null,
@@ -621,6 +724,7 @@ describe("embedded attempt phase lifecycle state", () => {
         sessionIdUsed: "session-1",
         messagesSnapshot: [],
         prePromptMessageCount: 0,
+        transcriptLeafId: null,
         contextEngineAfterTurnCheckpoint: null,
         compactionOccurredThisAttempt: false,
       },

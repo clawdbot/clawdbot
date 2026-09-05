@@ -137,6 +137,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         opts?.onDebug,
       );
       const sessionStartSync = this.claimSessionWarmSync(opts?.sessionKey);
+      const searchSyncEnabled =
+        (this.settings.sync.onSearch || sessionStartSync) &&
+        (this.purpose === "default" || this.purpose === "cli");
       if (
         !embeddingBootstrapKeywordOnly &&
         preflight.shouldInitializeProvider &&
@@ -176,9 +179,16 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         : this.refreshIndexIdentityDirty({
             providerKeyKnown: this.providerInitialized,
           });
-      if (indexIdentity.status === "missing" && hasIndexedContent) {
-        // Missing metadata cannot identify a safe published generation. Repair it
-        // synchronously before a detached handoff or a read-generation lease.
+      const shouldRepairIdentity =
+        hasIndexedContent &&
+        (indexIdentity.status === "missing" ||
+          (searchSyncEnabled &&
+            indexIdentity.status === "mismatched" &&
+            indexIdentity.owner === "openclaw" &&
+            indexIdentity.code === "chunking_version"));
+      if (shouldRepairIdentity) {
+        // Missing metadata has no safe generation; chunking upgrades need a full
+        // rebuild. Repair before a read-generation lease can block its writer.
         await this.syncAdmitted(
           { reason: "search", force: true },
           { allowEmbeddingBootstrapFallback: true },
@@ -186,14 +196,13 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           log.warn(`memory sync failed (search-identity-repair): ${formatErrorMessage(err)}`);
         });
       }
-      let repairedIndexIdentity =
-        indexIdentity.status === "missing" && hasIndexedContent
-          ? embeddingBootstrapKeywordOnly
-            ? this.refreshKeywordFallbackIndexIdentity()
-            : this.refreshIndexIdentityDirty({
-                providerKeyKnown: this.providerInitialized,
-              })
-          : indexIdentity;
+      let repairedIndexIdentity = shouldRepairIdentity
+        ? embeddingBootstrapKeywordOnly
+          ? this.refreshKeywordFallbackIndexIdentity()
+          : this.refreshIndexIdentityDirty({
+              providerKeyKnown: this.providerInitialized,
+            })
+        : indexIdentity;
       if (
         repairedIndexIdentity.status === "mismatched" &&
         !embeddingBootstrapKeywordOnly &&
@@ -207,9 +216,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         return [];
       }
       const backgroundSearchSync = startAsyncSearchSync({
-        enabled:
-          (this.settings.sync.onSearch || sessionStartSync) &&
-          (this.purpose === "default" || this.purpose === "cli"),
+        enabled: searchSyncEnabled,
         dirty: this.dirty,
         sessionsDirty: this.sessionsDirty,
         sync: async (params) => await this.syncPublishedIndexInBackground(params),

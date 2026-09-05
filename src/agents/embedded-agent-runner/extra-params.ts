@@ -1109,7 +1109,7 @@ export function applyExtraParamsToAgent(
     preparedExtraParams?: Record<string, unknown>;
     nativeWebSearchPolicyContext?: NativeWebSearchToolPolicyParams;
   },
-): { effectiveExtraParams: Record<string, unknown> } {
+) {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
     provider,
@@ -1192,6 +1192,6 @@ export function applyExtraParamsToAgent(
     providerWrapperHandled,
   });
 
-  return { effectiveExtraParams };
+  return { effectiveExtraParams, nativeWebSearchAllowedByToolPolicy };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
