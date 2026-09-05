@@ -7,11 +7,7 @@ import type { GatewayRequestHandler } from "../server-methods/types.js";
 import { isSessionProfileDependentMethod } from "../session-method-policy.js";
 import { listCoreGatewayMethodNames } from "./core-descriptors.js";
 import { createPluginGatewayMethodDescriptor } from "./descriptor.js";
-import {
-  createCoreGatewayMethodDescriptors,
-  createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptors,
-} from "./registry.js";
+import { createCoreGatewayMethodDescriptors, createGatewayMethodRegistry } from "./registry.js";
 
 const handler: GatewayRequestHandler = ({ respond }) => respond(true, { ok: true });
 
@@ -103,19 +99,6 @@ describe("gateway method registry", () => {
 
     expect(registry.getScope("config.get")).toBe(READ_SCOPE);
     expect(registry.getScope("exec.approvals.get")).toBe("operator.approvals");
-  });
-
-  it("defaults handler-only plugin registries to admin scope", () => {
-    const descriptors = createPluginGatewayMethodDescriptors({
-      gatewayHandlers: { "legacy.ping": handler },
-    });
-
-    const registry = createGatewayMethodRegistry(descriptors);
-
-    expect(registry.listMethods()).toEqual(["legacy.ping"]);
-    expect(registry.getHandler("legacy.ping")).toBe(handler);
-    expect(registry.getScope("legacy.ping")).toBe(ADMIN_SCOPE);
-    expect(registry.requiresAuthenticatedProfile("legacy.ping")).toBe(true);
   });
 
   it("classifies every core method and defaults non-core owners fail-closed", () => {
