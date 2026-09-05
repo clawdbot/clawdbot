@@ -9,7 +9,7 @@ import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js
 const managerRuntimeLoader = createLazyRuntimeModule(() => import("../../manager-runtime.js"));
 const loadManagerRuntime = managerRuntimeLoader;
 
-type MemorySearchManagerPurpose = "default" | "status" | "cli";
+type MemorySearchManagerPurpose = "default" | "status" | "cli" | "search";
 type MemorySearchManagerParams = {
   cfg: OpenClawConfig;
   agentId: string;

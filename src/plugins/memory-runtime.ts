@@ -178,7 +178,7 @@ function ensureMemoryRuntime(params?: {
 export async function getActiveMemorySearchManagerCore(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  purpose?: "default" | "status" | "cli";
+  purpose?: "default" | "status" | "cli" | "search";
   inspectSources?: boolean;
 }) {
   const owner = ensureMemoryRuntime(params);

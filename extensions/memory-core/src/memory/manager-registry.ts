@@ -18,16 +18,19 @@ const MEMORY_INDEX_MANAGER_GLOBAL_LIFECYCLE_KEY = Symbol.for(
 );
 const log = createSubsystemLogger("memory");
 
-export type MemoryIndexManagerPurpose = "default" | "status" | "cli" | "maintenance";
+export type MemoryIndexManagerPurpose = "default" | "status" | "cli" | "search" | "maintenance";
 
-export function isTransientMemoryIndexManagerPurpose(purpose: MemoryIndexManagerPurpose): boolean {
-  return purpose !== "default";
+function isTransientMemoryIndexManagerPurpose(purpose: MemoryIndexManagerPurpose): boolean {
+  return purpose !== "default" && purpose !== "search";
 }
 
 export function normalizeMemoryIndexManagerPurpose(
   purpose: MemoryIndexManagerPurpose | undefined,
 ): MemoryIndexManagerPurpose {
-  return purpose === "status" || purpose === "cli" || purpose === "maintenance"
+  return purpose === "status" ||
+    purpose === "cli" ||
+    purpose === "search" ||
+    purpose === "maintenance"
     ? purpose
     : "default";
 }

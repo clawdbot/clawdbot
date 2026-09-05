@@ -28,7 +28,7 @@ export const loadMemoryToolRuntime = createLazyRuntimeModule(() => import("./too
 export async function getMemoryManagerContextWithPurpose(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  purpose?: "default" | "status" | "cli";
+  purpose?: "default" | "status" | "cli" | "search";
   acquireLocalService?: MemoryCoreAcquireLocalService;
 }): Promise<
   | {

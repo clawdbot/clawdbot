@@ -473,7 +473,7 @@ describe("memory_search real manager", () => {
     });
     try {
       await searchStarted.promise;
-      await vi.advanceTimersByTimeAsync(15_100);
+      await vi.advanceTimersByTimeAsync(30_100);
       expect(executionSettled).toBe(true);
       await expect(execution).resolves.toMatchObject({
         details: { unavailable: true },
