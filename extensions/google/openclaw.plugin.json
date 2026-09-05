@@ -159,10 +159,7 @@
               "cacheWrite": 0
             },
             "contextWindow": 1048576,
-            "maxTokens": 65536,
-            "compat": {
-              "codeMode": "preferred"
-            }
+            "maxTokens": 65536
           },
           {
             "id": "gemini-3.6-flash",
@@ -180,10 +177,7 @@
               "cacheWrite": 0
             },
             "contextWindow": 1048576,
-            "maxTokens": 65536,
-            "compat": {
-              "codeMode": "preferred"
-            }
+            "maxTokens": 65536
           },
           {
             "id": "gemini-3.7-flash",
@@ -204,9 +198,6 @@
             "maxTokens": 65536,
             "thinkingLevelMap": {
               "minimal": null
-            },
-            "compat": {
-              "codeMode": "preferred"
             }
           },
           {
@@ -225,10 +216,7 @@
               "cacheWrite": 0
             },
             "contextWindow": 1048576,
-            "maxTokens": 65536,
-            "compat": {
-              "codeMode": "preferred"
-            }
+            "maxTokens": 65536
           },
           {
             "id": "gemini-3.1-pro-preview",
@@ -246,10 +234,7 @@
               "cacheWrite": 0
             },
             "contextWindow": 1048576,
-            "maxTokens": 65536,
-            "compat": {
-              "codeMode": "preferred"
-            }
+            "maxTokens": 65536
           },
           {
             "id": "gemini-3.1-flash-lite",
@@ -267,10 +252,7 @@
               "cacheWrite": 0
             },
             "contextWindow": 1048576,
-            "maxTokens": 65536,
-            "compat": {
-              "codeMode": "preferred"
-            }
+            "maxTokens": 65536
           },
           {
             "id": "gemini-3-flash-preview",
@@ -288,10 +270,7 @@
               "cacheWrite": 0
             },
             "contextWindow": 1048576,
-            "maxTokens": 65536,
-            "compat": {
-              "codeMode": "preferred"
-            }
+            "maxTokens": 65536
           }
         ]
       }
