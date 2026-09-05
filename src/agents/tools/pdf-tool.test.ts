@@ -684,6 +684,53 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("uses the prepared provider stream for extraction fallback", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, {
+        provider: "openai",
+        api: "openai-completions",
+        input: ["text"],
+      });
+      vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+        text: "Managed model content",
+        images: [],
+      });
+      const order: string[] = [];
+      const providerStreamFn = vi.fn(async () => {
+        order.push("request");
+        return {
+          result: async () => ({
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "managed summary" }],
+          }),
+        };
+      });
+      registerProviderStreamForModelMock.mockImplementationOnce(() => {
+        order.push("prepare");
+        return providerStreamFn;
+      });
+      completeMock.mockImplementationOnce(() => {
+        throw new Error("unprepared completion dispatched");
+      });
+
+      const cfg = withPdfModel(OPENAI_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+      const result = await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+      });
+
+      expect(order).toEqual(["prepare", "request"]);
+      expect(registerProviderStreamForModelMock).toHaveBeenCalledWith(
+        expect.objectContaining({ wrapProviderStream: true }),
+      );
+      expect(providerStreamFn).toHaveBeenCalledOnce();
+      expect(completeMock).not.toHaveBeenCalled();
+      expect(result.content).toEqual([{ type: "text", text: "managed summary" }]);
+    });
+  });
+
   it("uses the AWS SDK credential chain for Bedrock PDF models", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       const { setRuntimeApiKey } = await stubPdfToolInfra(agentDir, {
