@@ -2,10 +2,8 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import {
-  readConfigMachineState,
-  updateConfigMachineState,
-} from "../../state/config-machine-state.js";
+import { updateConfigMachineState } from "../../state/config-machine-state-write.js";
+import { readConfigMachineState } from "../../state/config-machine-state.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
