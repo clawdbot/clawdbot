@@ -125,6 +125,14 @@ describe("cron tool", () => {
     expect(tool.description).toContain('tz:"Asia/Shanghai"');
   });
 
+  it("documents scheduler auto-disable state in compact lists", () => {
+    const tool = createTestCronTool();
+
+    expect(tool.description).toContain(
+      "Compact rows include autoDisabled:true only when the scheduler disabled the job; operator-paused jobs omit it.",
+    );
+  });
+
   it("supports the promotion creation path: enabled add inherits conversation delivery, then a forced test run", async () => {
     // Promotion flow contract (the guidance itself lives in the system prompt,
     // since the repeat is noticed during ordinary work rather than while

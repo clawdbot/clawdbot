@@ -172,6 +172,9 @@ function isOlderGatewayWithoutCompactCronList(error: unknown): boolean {
   );
 }
 
+const COMPACT_CRON_AUTO_DISABLED_GUIDANCE =
+  "Compact rows include autoDisabled:true only when the scheduler disabled the job; operator-paused jobs omit it.";
+
 function buildCronToolDescription(params: { triggersEnabled: boolean }): string {
   const addFields = params.triggersEnabled
     ? "{name?,schedule,payload,sessionTarget?,pacing?,trigger?,delivery?,enabled?}"
@@ -189,6 +192,7 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
   return `Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
 
 ACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the next page) | get jobId | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId | run jobId (runMode "force"=now) | runs jobId = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
+LIST: ${COMPACT_CRON_AUTO_DISABLED_GUIDANCE}
 
 Authenticated Control UI administrator turns can list/get/update/run/remove any Gateway automation. Other turns have a restricted inventory; use a fresh admin Control UI turn or the Automations page for cross-session management.
 
@@ -228,7 +232,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     name: AUTOMATIONS_TOOL_NAME,
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
     description: managementAuthority?.managementOnly
-      ? 'Manage any existing automation on this Gateway as the authenticated Control UI administrator. Actions: list [includeDisabled,limit,offset] (follow nextOffset); get jobId; update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now); remove jobId. Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.'
+      ? `Manage any existing automation on this Gateway as the authenticated Control UI administrator. Actions: list [includeDisabled,limit,offset] (follow nextOffset); get jobId; update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now); remove jobId. ${COMPACT_CRON_AUTO_DISABLED_GUIDANCE} Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.`
       : buildCronToolDescription({ triggersEnabled }),
     parameters: createCronToolSchema({
       agentSessionKey: opts?.agentSessionKey,

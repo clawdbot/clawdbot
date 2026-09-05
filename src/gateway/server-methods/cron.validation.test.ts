@@ -966,6 +966,37 @@ describe("cron method validation", () => {
     );
   });
 
+  it("distinguishes scheduler auto-disable from an operator pause in compact cron.list", async () => {
+    const context = createCronContext([
+      createCronJob({ id: "paused", agentId: "ops", enabled: false }),
+      createCronJob({
+        id: "auto-disabled",
+        agentId: "ops",
+        enabled: false,
+        state: {
+          autoDisabled: {
+            reason: "consecutive-failures",
+            atMs: 1_000,
+            consecutiveErrors: 10,
+          },
+        },
+      }),
+    ]);
+
+    const { respond } = await invokeCron(
+      "cron.list",
+      { includeDisabled: true, compact: true },
+      { context, client: callerClient("ops") },
+    );
+
+    const payload = requireRecord(respond.mock.calls[0]?.[1], "compact cron.list payload");
+    const jobs = payload.jobs as Array<Record<string, unknown>>;
+    expect(jobs).toHaveLength(2);
+    expect(jobs[0]).toMatchObject({ id: "paused", enabled: false });
+    expect(jobs[0]).not.toHaveProperty("autoDisabled");
+    expect(jobs[1]).toMatchObject({ id: "auto-disabled", enabled: false, autoDisabled: true });
+  });
+
   it("filters operator command cron jobs from caller-scoped cron.list", async () => {
     const context = createCronContext([
       createCronJob({

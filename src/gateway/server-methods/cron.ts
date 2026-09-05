@@ -244,6 +244,7 @@ function compactCronListJob(job: CronJob) {
     ...(job.displayName ? { displayName: job.displayName } : {}),
     ...(job.owner ? { owner: job.owner } : {}),
     enabled: job.enabled,
+    ...(job.state.autoDisabled ? { autoDisabled: true } : {}),
     nextRunAtMs: job.state.nextRunAtMs ?? null,
     scheduleKind: job.schedule.kind,
     ...(job.trigger ? { trigger: true } : {}),
