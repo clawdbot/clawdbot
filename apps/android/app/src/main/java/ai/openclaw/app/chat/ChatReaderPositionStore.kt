@@ -5,6 +5,7 @@ import androidx.room3.Entity
 import androidx.room3.Insert
 import androidx.room3.OnConflictStrategy
 import androidx.room3.Query
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -60,17 +61,37 @@ internal class ChatReaderPositionFence {
 
   private val mutex = Mutex()
   private val generations = mutableMapOf<Key, Long>()
+  private val retirements = mutableMapOf<Key, CompletableDeferred<Unit>>()
   private var nextGeneration = 0L
+
+  private sealed interface BindResult {
+    data class Ready(
+      val generation: Long,
+    ) : BindResult
+
+    data class Waiting(
+      val retirement: CompletableDeferred<Unit>,
+    ) : BindResult
+  }
 
   suspend fun bind(
     gatewayId: String,
     sessionKey: String,
-  ): Long =
-    mutex.withLock {
-      val generation = ++nextGeneration
-      generations[Key(gatewayId, sessionKey)] = generation
-      generation
+  ): Long {
+    val key = Key(gatewayId, sessionKey)
+    while (true) {
+      when (
+        val result =
+          mutex.withLock {
+            retirements[key]?.let { BindResult.Waiting(it) }
+              ?: BindResult.Ready(++nextGeneration).also { generations[key] = it.generation }
+          }
+      ) {
+        is BindResult.Ready -> return result.generation
+        is BindResult.Waiting -> result.retirement.await()
+      }
     }
+  }
 
   suspend fun <T> load(
     gatewayId: String,
@@ -90,15 +111,45 @@ internal class ChatReaderPositionFence {
     if (generations[Key(binding.gatewayId, binding.sessionKey)] == binding.generation) write()
   }
 
+  suspend fun retireSession(
+    gatewayId: String,
+    sessionKey: String,
+  ): CompletableDeferred<Unit> =
+    mutex.withLock {
+      val key = Key(gatewayId, sessionKey)
+      generations.remove(key)
+      retirements.getOrPut(key) { CompletableDeferred() }
+    }
+
   suspend fun deleteSession(
     gatewayId: String,
     sessionKey: String,
+    retirement: CompletableDeferred<Unit>,
     delete: suspend () -> Unit,
   ) = mutex.withLock {
-    // Invalidate before deletion so work queued from the retired UI generation cannot
-    // recreate the row after this owner releases the mutex.
-    generations.remove(Key(gatewayId, sessionKey))
-    delete()
+    val key = Key(gatewayId, sessionKey)
+    try {
+      delete()
+    } finally {
+      completeRetirement(key, retirement)
+    }
+  }
+
+  suspend fun releaseRetirement(
+    gatewayId: String,
+    sessionKey: String,
+    retirement: CompletableDeferred<Unit>,
+  ) = mutex.withLock {
+    completeRetirement(Key(gatewayId, sessionKey), retirement)
+  }
+
+  private fun completeRetirement(
+    key: Key,
+    retirement: CompletableDeferred<Unit>,
+  ) {
+    if (retirements[key] !== retirement) return
+    retirements.remove(key)
+    retirement.complete(Unit)
   }
 
   suspend fun <T> clearGateway(
@@ -164,8 +215,16 @@ internal class ChatReaderPositionStore(
     gatewayId: String,
     sessionKey: String,
   ) {
-    val state = database()
-    fence.deleteSession(gatewayId, sessionKey) { state.readerPositionDao().deleteSession(gatewayId, sessionKey) }
+    val retirement = fence.retireSession(gatewayId, sessionKey)
+    try {
+      val state = database()
+      fence.deleteSession(gatewayId, sessionKey, retirement) {
+        state.readerPositionDao().deleteSession(gatewayId, sessionKey)
+      }
+    } catch (error: Throwable) {
+      fence.releaseRetirement(gatewayId, sessionKey, retirement)
+      throw error
+    }
   }
 
   suspend fun <T> clearGateway(

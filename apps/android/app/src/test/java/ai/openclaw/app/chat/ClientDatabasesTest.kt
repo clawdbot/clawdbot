@@ -142,6 +142,45 @@ class ClientDatabasesTest {
     }
 
   @Test
+  fun replacementBindingWaitsForPendingSessionRetirement() =
+    runTest {
+      val names = databaseNames()
+      withDatabases(names) { databases ->
+        val state = databases.clientStateDatabase()
+        val fence = ChatReaderPositionFence()
+        val databaseReady = CompletableDeferred<Unit>()
+        val retiringStore =
+          ChatReaderPositionStore(
+            database = {
+              databaseReady.await()
+              state
+            },
+            fence = fence,
+          )
+        val replacementStore = ChatReaderPositionStore({ state }, fence)
+
+        withContext(Dispatchers.IO) {
+          val deletion =
+            async(start = CoroutineStart.UNDISPATCHED) {
+              retiringStore.deleteSession("gateway-a", "main")
+            }
+          val replacement =
+            async(start = CoroutineStart.UNDISPATCHED) {
+              replacementStore.bind("gateway-a", "main")
+            }
+          assertFalse(replacement.isCompleted)
+
+          databaseReady.complete(Unit)
+          deletion.await()
+          val binding = replacement.await()
+          val position = ChatReaderPosition("message-new", 17)
+          replacementStore.save(binding, position)
+          assertEquals(position, replacementStore.bind("gateway-a", "main").position)
+        }
+      }
+    }
+
+  @Test
   fun readerPositionPersistsPerGatewayAndSessionAcrossReopen() =
     runTest {
       val names = databaseNames()
