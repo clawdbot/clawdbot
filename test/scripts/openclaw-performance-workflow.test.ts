@@ -42,6 +42,7 @@ type WorkflowJob = {
   outputs?: Record<string, string>;
   permissions?: Record<string, string>;
   "runs-on"?: string;
+  "timeout-minutes"?: number;
   steps?: WorkflowStep[];
   strategy?: {
     matrix?: {
@@ -150,6 +151,7 @@ describe("OpenClaw performance workflow", () => {
       "${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'vitest-pair' }}",
     );
     expect(benchmark?.["runs-on"]).toBe("ubuntu-24.04");
+    expect(benchmark?.["timeout-minutes"]).toBe(180);
     expect(benchmark?.permissions).toEqual({ contents: "read" });
     expect(JSON.stringify(benchmark)).not.toContain("secrets.");
     expect(JSON.stringify(benchmark)).not.toContain("cache-mode");

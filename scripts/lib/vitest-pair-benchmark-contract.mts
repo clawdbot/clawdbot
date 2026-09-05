@@ -57,6 +57,19 @@ export type ProcessSample = {
   atMs: number;
   processCount: number;
   rssBytes: number;
+  processes: Array<{
+    pid: number;
+    parentPid: number;
+    processGroup: number;
+    startTimeTicks: string;
+    rssBytes: number;
+  }>;
+};
+
+export type PackageManagerIdentity = {
+  executable: string;
+  resolvedExecutable: string;
+  version: string;
 };
 
 export type BenchmarkRunRecord = {
@@ -68,6 +81,7 @@ export type BenchmarkRunRecord = {
   pair: string | null;
   cacheMode: "fresh" | "warm";
   command: string[];
+  packageManager: PackageManagerIdentity;
   startedAt: string;
   durationMs: number;
   userCpuMs: number;

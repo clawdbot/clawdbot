@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -7,19 +7,29 @@ import {
   assertEquivalentInventories,
   assertInventoryAvailable,
   assertSingleWorkflowAttempt,
+  buildBenchmarkCommandEnv,
   buildBenchmarkSchedule,
   loadBenchmarkManifest,
+  resolvePackageManagerIdentity,
   runOwnedCommand,
   validateBenchmarkManifest,
+  VITEST_PAIR_HARNESS_DEADLINE_MS,
+  withVitestPairDeadline,
   withTerminalManifest,
   writeJsonAtomic,
   type BenchmarkManifest,
   type BenchmarkRunRecord,
 } from "../../scripts/lib/vitest-pair-benchmark.mts";
+import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { waitForDead, waitForFile } from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const packageManager = {
+  executable: "/opt/vitest-pair/pnpm",
+  resolvedExecutable: "/opt/vitest-pair/pnpm",
+  version: "12.1.0",
+};
 
 const manifest: BenchmarkManifest = {
   version: 1,
@@ -66,6 +76,7 @@ function recordsFor(candidateRatio: number | ((lane: string) => number)): Benchm
           pair,
           cacheMode: "warm",
           command: ["node"],
+          packageManager,
           startedAt: "2026-09-05T00:00:00.000Z",
           durationMs: 100 * ratio,
           userCpuMs: 50,
@@ -87,6 +98,7 @@ function recordsFor(candidateRatio: number | ((lane: string) => number)): Benchm
         pair: `cold-${lane.id}`,
         cacheMode: "fresh",
         command: ["node"],
+        packageManager,
         startedAt: "2026-09-05T00:00:00.000Z",
         durationMs: 100 * ratio,
         userCpuMs: 50,
@@ -106,6 +118,11 @@ function inventoryPaths(lane: BenchmarkManifest["lanes"][number]): string[] {
 
 function gatewayRegressionRatio(lane: string): number {
   return new Map([["gateway", 1.3]]).get(lane) ?? 1;
+}
+
+function writeExecutable(file: string, contents: string): void {
+  writeFileSync(file, contents);
+  chmodSync(file, 0o755);
 }
 
 describe("Vitest pair benchmark contract", () => {
@@ -224,6 +241,61 @@ describe("Vitest pair benchmark contract", () => {
     expect(improved.verdict).toBe("pass");
     expect(improved.performance).toBe("improved");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "pins pnpm despite poisoned ambient pnpm and Corepack state",
+    () => {
+      const root = tempDirs.make("vitest-pair-pnpm-");
+      const bin = path.join(root, "bin");
+      const marker = path.join(root, "invocations.txt");
+      const pinnedDir = path.join(root, "pinned");
+      mkdirSync(bin);
+      mkdirSync(pinnedDir);
+      for (const name of ["pnpm", "corepack"]) {
+        writeExecutable(
+          path.join(bin, name),
+          `#!/bin/sh\nprintf 'poison:${name}\\n' >> ${JSON.stringify(marker)}\nexit 97\n`,
+        );
+      }
+      const pinned = path.join(pinnedDir, "pnpm");
+      writeExecutable(
+        pinned,
+        `#!/bin/sh\nprintf 'pinned\\n' >> ${JSON.stringify(marker)}\nprintf '12.1.0\\n'\n`,
+      );
+      const ambientEnv = {
+        ...process.env,
+        COREPACK_HOME: path.join(root, "poison-corepack"),
+        PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+        npm_execpath: path.join(bin, "pnpm"),
+      };
+      const identity = resolvePackageManagerIdentity(pinned, path.join(root, "probe"), ambientEnv);
+      const cacheRoot = path.join(root, "run-cache");
+      const env = buildBenchmarkCommandEnv(
+        path.join(root, "home"),
+        cacheRoot,
+        identity,
+        ambientEnv,
+      );
+      const runner = resolvePnpmRunner({ env, pnpmArgs: ["--version"] });
+      const result = spawnSync(runner.command, runner.args, {
+        encoding: "utf8",
+        env,
+        shell: runner.shell,
+        windowsVerbatimArguments: runner.windowsVerbatimArguments,
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe("12.1.0");
+      expect(identity).toStrictEqual({
+        executable: pinned,
+        resolvedExecutable: pinned,
+        version: "12.1.0",
+      });
+      expect(env.npm_execpath).toBe(pinned);
+      expect(env.COREPACK_HOME).toBe(path.join(cacheRoot, "corepack"));
+      expect(readFileSync(marker, "utf8")).toBe("pinned\npinned\n");
+    },
+  );
 });
 
 describe("Vitest pair benchmark lifecycle", () => {
@@ -246,6 +318,64 @@ describe("Vitest pair benchmark lifecycle", () => {
       error: "injected benchmark failure",
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "aborts the active child at the aggregate deadline and starts no successor",
+    async () => {
+      expect(VITEST_PAIR_HARNESS_DEADLINE_MS).toBe(165 * 60 * 1000);
+      const root = tempDirs.make("vitest-pair-deadline-");
+      const pidFile = path.join(root, "active.pid");
+      const successor = path.join(root, "successor.txt");
+      const output = path.join(root, "output");
+      const activeScript = [
+        'const { writeFileSync } = require("node:fs");',
+        `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+
+      await expect(
+        withTerminalManifest(output, async () => {
+          await withVitestPairDeadline(async (deadline) => {
+            await expect(
+              runOwnedCommand({
+                bin: process.execPath,
+                args: ["-e", activeScript],
+                cwd: root,
+                env: { PATH: process.env.PATH },
+                logPath: path.join(root, "active.log"),
+                deadline,
+                timeoutMs: 10_000,
+              }),
+            ).rejects.toThrow("Vitest pair aggregate deadline exceeded");
+            await expect(
+              runOwnedCommand({
+                bin: process.execPath,
+                args: [
+                  "-e",
+                  `require("node:fs").writeFileSync(${JSON.stringify(successor)}, "started")`,
+                ],
+                cwd: root,
+                env: { PATH: process.env.PATH },
+                logPath: path.join(root, "successor.log"),
+                deadline,
+                timeoutMs: 10_000,
+              }),
+            ).rejects.toThrow("Vitest pair aggregate deadline exceeded");
+          }, 500);
+        }),
+      ).rejects.toThrow("Vitest pair aggregate deadline exceeded");
+
+      await waitForFile(pidFile, 3_000);
+      await waitForDead(Number.parseInt(readFileSync(pidFile, "utf8"), 10), 5_000);
+      expect(existsSync(successor)).toBe(false);
+      expect(
+        JSON.parse(readFileSync(path.join(output, "terminal-manifest.json"), "utf8")),
+      ).toMatchObject({
+        status: "failure",
+        error: "Vitest pair aggregate deadline exceeded after 500ms",
+      });
+    },
+  );
 
   it.runIf(process.platform !== "win32")("does not retry a failed benchmark child", async () => {
     const root = tempDirs.make("vitest-pair-no-retry-");
@@ -296,6 +426,109 @@ describe("Vitest pair benchmark lifecycle", () => {
       await waitForFile(pidFile, 3_000);
       const pid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
       await waitForDead(pid, 5_000);
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "attributes recursive detached RSS without including an unrelated process",
+    async () => {
+      const root = tempDirs.make("vitest-pair-rss-");
+      const unrelatedReady = path.join(root, "unrelated.ready");
+      const unrelatedScript = [
+        'const { writeFileSync } = require("node:fs");',
+        "global.buffer = Buffer.alloc(192 * 1024 * 1024, 1);",
+        `writeFileSync(${JSON.stringify(unrelatedReady)}, "ready");`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const unrelated = spawn(process.execPath, ["-e", unrelatedScript], {
+        detached: true,
+        stdio: "ignore",
+      });
+      const unrelatedPid = unrelated.pid;
+      if (!unrelatedPid) {
+        throw new Error("unrelated memory process did not acquire a PID");
+      }
+
+      try {
+        await waitForFile(unrelatedReady, 5_000);
+        const wrapperPidFile = path.join(root, "wrapper.pid");
+        const memoryPidFile = path.join(root, "memory.pid");
+        const memoryReady = path.join(root, "memory.ready");
+        const memoryScript = [
+          'const { writeFileSync } = require("node:fs");',
+          "global.buffer = Buffer.alloc(64 * 1024 * 1024, 1);",
+          `writeFileSync(${JSON.stringify(memoryReady)}, "ready");`,
+          "setInterval(() => {}, 1000);",
+        ].join("\n");
+        const wrapperScript = [
+          'const { spawn } = require("node:child_process");',
+          'const { writeFileSync } = require("node:fs");',
+          `const memory = spawn(process.execPath, ["-e", ${JSON.stringify(memoryScript)}], { detached: true, stdio: "ignore" });`,
+          `writeFileSync(${JSON.stringify(memoryPidFile)}, String(memory.pid));`,
+          "memory.unref();",
+          "setInterval(() => {}, 1000);",
+        ].join("\n");
+        const rootScript = [
+          'const { spawn } = require("node:child_process");',
+          'const { writeFileSync } = require("node:fs");',
+          `const wrapper = spawn(process.execPath, ["-e", ${JSON.stringify(wrapperScript)}], { detached: true, stdio: "ignore" });`,
+          `writeFileSync(${JSON.stringify(wrapperPidFile)}, String(wrapper.pid));`,
+          "wrapper.unref();",
+          "setTimeout(() => {}, 800);",
+        ].join("\n");
+        const samplePath = path.join(root, "samples.jsonl");
+
+        await expect(
+          runOwnedCommand({
+            bin: process.execPath,
+            args: ["-e", rootScript],
+            cwd: root,
+            env: { PATH: process.env.PATH },
+            logPath: path.join(root, "output.log"),
+            samplePath,
+            timeoutMs: 10_000,
+          }),
+        ).rejects.toThrow("attributed descendants remained active");
+
+        await waitForFile(memoryReady, 5_000);
+        const wrapperPid = Number.parseInt(readFileSync(wrapperPidFile, "utf8"), 10);
+        const memoryPid = Number.parseInt(readFileSync(memoryPidFile, "utf8"), 10);
+        await waitForDead(wrapperPid, 5_000);
+        await waitForDead(memoryPid, 5_000);
+        expect(() => process.kill(unrelatedPid, 0)).not.toThrow();
+
+        const samples = readFileSync(samplePath, "utf8")
+          .trim()
+          .split("\n")
+          .map(
+            (line) =>
+              JSON.parse(line) as {
+                processes: Array<{ pid: number; processGroup: number; rssBytes: number }>;
+                rssBytes: number;
+              },
+          );
+        expect(
+          samples.some((sample) => sample.processes.some((entry) => entry.pid === wrapperPid)),
+        ).toBe(true);
+        expect(
+          samples.some((sample) =>
+            sample.processes.some(
+              (entry) =>
+                entry.pid === memoryPid &&
+                entry.processGroup === memoryPid &&
+                entry.rssBytes >= 64 * 1024 * 1024,
+            ),
+          ),
+        ).toBe(true);
+        expect(
+          samples.every((sample) => sample.processes.every((entry) => entry.pid !== unrelatedPid)),
+        ).toBe(true);
+      } finally {
+        try {
+          process.kill(-unrelatedPid, "SIGKILL");
+        } catch {}
+        await waitForDead(unrelatedPid, 5_000);
+      }
     },
   );
 

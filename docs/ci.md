@@ -936,12 +936,22 @@ is created. The harness then runs one excluded warmup per side and lane, seven p
 alternating side order and rotated lane order, plus one separately labeled cold
 pair with fresh caches. Frozen installs are setup and are never timed.
 
-Each child has a fixed deadline and process-group owner. The artifact includes
-raw logs, sampled Linux process-tree RSS, GNU time user/system CPU, environment
-and Git identities, source/config hashes, per-run records, paired-ratio
-analysis, and a terminal success or failure manifest. The workflow always
-uploads the artifact, including failed runs. Mutable pnpm and runtime caches
-stay in an unuploaded scratch tree. Thresholds are fixed in
+Each child has a fixed deadline and process-group owner. A separate 165-minute
+harness deadline reserves 15 minutes inside the 180-minute job timeout for
+cleanup, terminal-manifest finalization, and artifact upload. It aborts and joins
+the active managed child before refusing further child starts. Every install,
+correctness, warmup, measured, and cold process receives the exact pinned pnpm
+executable through `npm_execpath`, with private Corepack and pnpm state; the
+resolved executable and version are recorded in the environment and run
+records.
+
+The artifact includes raw logs, sampled Linux recursive descendant RSS across
+process groups, GNU time user/system CPU, environment and Git identities,
+source/config hashes, per-run records, paired-ratio analysis, and a terminal
+success or failure manifest. The workflow attempts finalization and artifact
+upload after harness failures. Runner loss or external workflow cancellation
+can still prevent those steps from running. Mutable pnpm and runtime caches stay
+in an unuploaded scratch tree. Thresholds are fixed in
 `scripts/vitest-pair-benchmark-lanes.json`; the report claims an improvement
 only when every representative lane clears the improvement ratio in at least
 five of seven pairs. Otherwise it reports per-lane evidence without a broad
