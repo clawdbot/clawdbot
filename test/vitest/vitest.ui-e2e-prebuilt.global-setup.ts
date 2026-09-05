@@ -13,7 +13,7 @@ import {
   resolveBuildRequirement,
   resolveRuntimePostBuildRequirement,
 } from "../../scripts/run-node.mts";
-import { isControlUiStartupAssetsReady } from "../../src/infra/control-ui-assets.ts";
+import { inspectControlUiRootAssets } from "../../src/infra/control-ui-assets.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -71,7 +71,7 @@ export function assertPrebuiltUiE2eRuntime(repoRoot: string): string {
     fail(runtime.reason);
   }
   const uiRoot = path.join(distRoot, "control-ui");
-  if (!isControlUiStartupAssetsReady(uiRoot)) {
+  if (inspectControlUiRootAssets(uiRoot).kind !== "ready") {
     fail("canonical Control UI assets are not ready");
   }
   const digest = createHash("sha256").update(head);
