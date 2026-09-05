@@ -341,7 +341,8 @@ describe("setupPluginConfig", () => {
         intro: vi.fn(async () => {}),
         outro: vi.fn(async () => {}),
         note: vi.fn(async () => {}),
-        select: vi.fn(async () => "llm-context") as unknown as WizardPrompter["select"],
+        // enum ["web", "llm-context"]; select the member at index 1
+        select: vi.fn(async () => "__enum_1__") as unknown as WizardPrompter["select"],
         multiselect: vi.fn(async () => ["brave"]) as unknown as WizardPrompter["multiselect"],
         text: vi.fn(async () => ""),
         confirm: vi.fn(async () => true),
@@ -541,5 +542,81 @@ describe("setupPluginConfig", () => {
       scientific: 100,
       retries: 3,
     });
+  });
+
+  // Regression coverage for #127577: enum selections must preserve the JSON
+  // type of the chosen member instead of being stringified. Enum option values
+  // are opaque tokens; the wizard maps the selected token back to the original
+  // (typed) enum member.
+  it.each([
+    {
+      name: "an integer enum member as a number",
+      enumMembers: [1, 2],
+      schemaProp: { type: "integer", enum: [1, 2] },
+      selectedToken: "__enum_0__",
+      expected: 1,
+    },
+    {
+      name: "a boolean enum member as a boolean",
+      enumMembers: [true, false],
+      schemaProp: { type: "boolean", enum: [true, false] },
+      selectedToken: "__enum_0__",
+      expected: true,
+    },
+    {
+      name: "a later integer enum member selected by index",
+      enumMembers: [10, 20, 30],
+      schemaProp: { type: "integer", enum: [10, 20, 30] },
+      selectedToken: "__enum_2__",
+      expected: 30,
+    },
+    {
+      name: "distinct members sharing a string label keep distinct types",
+      enumMembers: ["1", 1],
+      schemaProp: { type: ["string", "integer"], enum: ["1", 1] },
+      selectedToken: "__enum_1__",
+      expected: 1,
+    },
+    {
+      name: "an object enum member by index",
+      enumMembers: [{ mode: "auto" }, { mode: "manual" }],
+      schemaProp: { type: "object", enum: [{ mode: "auto" }, { mode: "manual" }] },
+      selectedToken: "__enum_1__",
+      expected: { mode: "manual" },
+    },
+  ])("preserves the typed enum value for $name", async ({ enumMembers, schemaProp, selectedToken, expected }) => {
+    const pluginId = "typed-enum-plugin";
+    loadPluginManifestRegistryCore.mockReturnValue({
+      plugins: [
+        makeManifestPlugin(
+          pluginId,
+          { mode: { label: "Mode" } },
+          {
+            type: "object",
+            additionalProperties: false,
+            properties: { mode: schemaProp },
+          },
+        ),
+      ],
+    });
+
+    const result = await setupPluginConfig({
+      config: {
+        plugins: { entries: { [pluginId]: { enabled: true } } },
+      },
+      prompter: {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note: vi.fn(async () => {}),
+        select: vi.fn(async () => selectedToken) as unknown as WizardPrompter["select"],
+        multiselect: vi.fn(async () => [pluginId]) as unknown as WizardPrompter["multiselect"],
+        text: vi.fn(async () => ""),
+        confirm: vi.fn(async () => true),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+    });
+
+    expect(result.plugins?.entries?.[pluginId]?.config).toEqual({ mode: expected });
+    expect(typeof result.plugins?.entries?.[pluginId]?.config?.["mode"]).toBe(typeof expected);
   });
 });

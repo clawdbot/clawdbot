@@ -239,10 +239,14 @@ async function promptPluginFields(params: {
       continue;
     }
 
-    // Handle enum fields with select
+    // Handle enum fields with select. Option values are opaque per-index tokens
+    // (never the raw stringified member) so that typed enum members — numbers,
+    // booleans, objects — survive the round-trip without being coerced to
+    // strings. The selected token is mapped back to the original member, which is
+    // stored as a structured clone to preserve its JSON type.
     if (schemaProp?.enum && Array.isArray(schemaProp.enum)) {
-      const options = schemaProp.enum.map((v) => ({
-        value: String(v),
+      const options = schemaProp.enum.map((v, i) => ({
+        value: `__enum_${i}__`,
         label: String(v),
       }));
       if (hasValue) {
@@ -257,8 +261,13 @@ async function promptPluginFields(params: {
         initialValue: hasValue ? "__keep__" : undefined,
       });
       if (selected !== "__keep__") {
-        setPathCreateStrict(updatedConfig, pathSegments, selected);
-        changed = true;
+        const tokenMatch = /^__enum_(\d+)__$/.exec(selected);
+        const index = tokenMatch ? Number(tokenMatch[1]) : undefined;
+        const member = index !== undefined ? schemaProp.enum[index] : undefined;
+        if (index !== undefined && index < schemaProp.enum.length) {
+          setPathCreateStrict(updatedConfig, pathSegments, structuredClone(member));
+          changed = true;
+        }
       }
       continue;
     }
