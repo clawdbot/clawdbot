@@ -24,6 +24,8 @@ type ComparableHistoryMessage = {
   externalIdentityKey?: string;
   hasCliImageMentions: boolean;
   cliImageTurnKey?: string;
+  // Local user row (by order) that anchors this row's turn; undefined when unknown.
+  turn?: number;
   importedCliAssistantSegment?: boolean;
   role?: string;
   text?: string;
@@ -60,12 +62,13 @@ function stripTrailingCliImageMentions(text: string): {
     : { text: lines.slice(0, end).join("\n").trimEnd(), stripped: true };
 }
 
-function isClaudeCliImportedUserMessage(message: unknown, role: string | undefined): boolean {
-  if (role !== "user") {
-    return false;
-  }
+function isClaudeCliImportedMessage(message: unknown): boolean {
   const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
   return normalizeOptionalString(meta?.importedFrom) === "claude-cli";
+}
+
+function isClaudeCliImportedUserMessage(message: unknown, role: string | undefined): boolean {
+  return role === "user" && isClaudeCliImportedMessage(message);
 }
 
 function extractComparableText(
@@ -250,34 +253,17 @@ function compareHistoryMessages(a: ComparableHistoryMessage, b: ComparableHistor
   return a.order - b.order;
 }
 
-function readCliAssistantIdempotencyKey(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  // SAFETY: guarded as a non-null object above; idempotencyKey stays unknown until normalized.
-  const record = message as { idempotencyKey?: unknown };
-  const direct = normalizeOptionalString(record.idempotencyKey);
-  if (direct?.startsWith(CLI_ASSISTANT_IDEMPOTENCY_PREFIX)) {
-    return direct;
-  }
-  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
-  const nested = normalizeOptionalString(meta?.idempotencyKey);
-  return nested?.startsWith(CLI_ASSISTANT_IDEMPOTENCY_PREFIX) ? nested : undefined;
+// The durable reply keeps its key on the row; older transcript metadata nests it.
+function isCliAssistantAggregate(entry: ComparableHistoryMessage): boolean {
+  const record = asOptionalRecord(entry.message);
+  const key =
+    normalizeOptionalString(record?.idempotencyKey) ??
+    normalizeOptionalString(asOptionalRecord(record?.["__openclaw"])?.idempotencyKey);
+  return entry.role === "assistant" && key?.startsWith(CLI_ASSISTANT_IDEMPOTENCY_PREFIX) === true;
 }
 
 function hasComparableText(entry: ComparableHistoryMessage): entry is CliAssistantSegment {
   return typeof entry.text === "string" && entry.text.length > 0;
-}
-
-// Provenance is the importedFrom stamp, the same signal the user-row check
-// above uses. Claude records without a uuid get no externalId, only the
-// importer's line-based id, and they are segments all the same.
-function isImportedClaudeCliAssistantSegment(entry: ComparableHistoryMessage): boolean {
-  if (entry.role !== "assistant" || !hasComparableText(entry)) {
-    return false;
-  }
-  const meta = asOptionalRecord(asOptionalRecord(entry.message)?.["__openclaw"]);
-  return normalizeOptionalString(meta?.importedFrom) === "claude-cli";
 }
 
 // Comparable texts are already whitespace-collapsed, so joining with one space
@@ -306,45 +292,35 @@ function findCoveringSegmentRun(
   return undefined;
 }
 
-// The durable `cli-assistant:<runId>` row and the imported claude-cli segments
-// of the same run share nothing but their turn: the CLI transcript never sees
-// the runId. So coverage is only proven inside one turn, between the same user
-// rows, and each imported segment can stand in for one aggregate at most. Equal
-// text from a later turn is a different reply and keeps the earlier one.
+// The durable `cli-assistant:<runId>` row and its imported segments share
+// nothing but their turn (the CLI transcript never sees the runId), and turn
+// membership comes from each source's own order, never from timestamps.
+// Each segment stands in for one aggregate at most.
 function dropCoveredCliAssistantAggregates(
-  sorted: ComparableHistoryMessage[],
+  entries: ComparableHistoryMessage[],
 ): ComparableHistoryMessage[] {
-  const dropped = new Set<ComparableHistoryMessage>();
-  let aggregates: CliAssistantSegment[] = [];
-  let segments: CliAssistantSegment[] = [];
-  const reconcileTurn = () => {
-    const consumed = new Set<CliAssistantSegment>();
-    for (const aggregate of aggregates) {
-      const run = findCoveringSegmentRun(aggregate.text, segments, consumed);
-      if (!run) {
-        continue;
-      }
-      for (const segment of run) {
-        consumed.add(segment);
-      }
-      dropped.add(aggregate);
-    }
-    aggregates = [];
-    segments = [];
-  };
-  for (const entry of sorted) {
-    if (entry.role === "user") {
-      reconcileTurn();
-    } else if (!hasComparableText(entry)) {
+  const segmentsByTurn = new Map<number, CliAssistantSegment[]>();
+  const aggregates: Array<[number, CliAssistantSegment]> = [];
+  for (const entry of entries) {
+    if (entry.turn === undefined || !hasComparableText(entry)) {
       continue;
-    } else if (entry.importedCliAssistantSegment) {
-      segments.push(entry);
-    } else if (entry.role === "assistant" && readCliAssistantIdempotencyKey(entry.message)) {
-      aggregates.push(entry);
+    }
+    if (entry.importedCliAssistantSegment) {
+      segmentsByTurn.set(entry.turn, [...(segmentsByTurn.get(entry.turn) ?? []), entry]);
+    } else if (isCliAssistantAggregate(entry)) {
+      aggregates.push([entry.turn, entry]);
     }
   }
-  reconcileTurn();
-  return dropped.size === 0 ? sorted : sorted.filter((entry) => !dropped.has(entry));
+  const dropped = new Set<ComparableHistoryMessage>();
+  const consumed = new Set<CliAssistantSegment>();
+  for (const [turn, aggregate] of aggregates) {
+    const run = findCoveringSegmentRun(aggregate.text, segmentsByTurn.get(turn) ?? [], consumed);
+    if (run) {
+      run.forEach((segment) => consumed.add(segment));
+      dropped.add(aggregate);
+    }
+  }
+  return dropped.size === 0 ? entries : entries.filter((entry) => !dropped.has(entry));
 }
 
 /** Merges imported CLI transcript messages into local history without duplicating overlaps. */
@@ -370,8 +346,20 @@ export function mergeImportedChatHistoryMessages(params: {
     }
     addRoleTextCandidate(allMessageRoleTextIndex, entry);
   };
+  const localTurnsByUserText = new Map<string, number[]>();
+  let localTurn: number | undefined;
   for (const entry of merged) {
     indexEntry(entry);
+    if (entry.role === "user") {
+      localTurn = entry.order;
+      if (entry.text) {
+        localTurnsByUserText.set(entry.text, [
+          ...(localTurnsByUserText.get(entry.text) ?? []),
+          entry.order,
+        ]);
+      }
+    }
+    entry.turn = localTurn;
     if (!hasLocalImageMediaFacts(entry)) {
       continue;
     }
@@ -383,33 +371,53 @@ export function mergeImportedChatHistoryMessages(params: {
     }
   }
   let nextOrder = merged.length;
-  for (const message of params.importedMessages) {
-    const externalIdentityKey = resolveImportedExternalIdentityKey(message);
-    if (externalIdentityKey && exactExternalIdentityIndex.has(externalIdentityKey)) {
-      continue;
+  // A dropped imported user row joins the local turn it duplicates, taken in
+  // order so a repeated question maps to its own occurrence; a kept one starts
+  // a turn with no local aggregate to cover.
+  let importedTurn: number | undefined;
+  let lastAlignedTurn = -1;
+  const isDuplicateImport = (imported: ComparableHistoryMessage): boolean => {
+    if (exactExternalIdentityIndex.has(imported.externalIdentityKey ?? "")) {
+      return true;
     }
-    const imported = prepareComparableMessage(message, nextOrder, externalIdentityKey);
     const turnKey = imported.hasCliImageMentions ? imported.cliImageTurnKey : undefined;
     const matches = turnKey ? localImageMediaCounts.get(turnKey) : undefined;
     if (turnKey && matches) {
       // Each local image turn suppresses one import. Counts preserve repeated
       // keys without retaining or shifting rows that matching never inspects.
       localImageMediaCounts.set(turnKey, matches - 1);
-      continue;
+      return true;
     }
     const duplicate = imported.externalIdentityKey
       ? hasRoleTextCandidate(identitylessRoleTextIndex, imported)
       : hasRoleTextCandidate(allMessageRoleTextIndex, imported);
-    if (!imported.hasCliImageMentions && duplicate) {
-      continue;
-    }
-    if (isImportedClaudeCliAssistantSegment(imported)) {
+    return !imported.hasCliImageMentions && duplicate;
+  };
+  for (const message of params.importedMessages) {
+    const imported = prepareComparableMessage(
+      message,
+      nextOrder,
+      resolveImportedExternalIdentityKey(message),
+    );
+    const duplicate = isDuplicateImport(imported);
+    if (imported.role === "user") {
+      const candidates =
+        duplicate && imported.text ? localTurnsByUserText.get(imported.text) : undefined;
+      importedTurn = candidates?.find((turn) => turn > lastAlignedTurn);
+      lastAlignedTurn = importedTurn ?? lastAlignedTurn;
+    } else if (imported.role === "assistant" && isClaudeCliImportedMessage(imported.message)) {
+      // Provenance is the importedFrom stamp; uuid-less records have no externalId.
       imported.importedCliAssistantSegment = true;
+      imported.turn = importedTurn;
+    }
+    if (duplicate) {
+      continue;
     }
     merged.push(imported);
     indexEntry(imported);
     nextOrder += 1;
   }
-  merged.sort(compareHistoryMessages);
-  return dropCoveredCliAssistantAggregates(merged).map((entry) => entry.message);
+  const uncovered = dropCoveredCliAssistantAggregates(merged);
+  uncovered.sort(compareHistoryMessages);
+  return uncovered.map((entry) => entry.message);
 }

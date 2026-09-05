@@ -1776,12 +1776,20 @@ describe("cli session history", () => {
         },
       };
 
+      const localUser = { role: "user", content: "question", timestamp: timestamp - 1 };
+      const importedUser = {
+        role: "user",
+        content: "question",
+        timestamp: timestamp - 1,
+        __openclaw: { importedFrom: "claude-cli", externalId: "user-1", cliSessionId: "session-1" },
+      };
+
       const merged = mergeImportedChatHistoryMessages({
-        localMessages: [localAggregate],
-        importedMessages: [importedInterim, importedFinal],
+        localMessages: [localUser, localAggregate],
+        importedMessages: [importedUser, importedInterim, importedFinal],
       });
 
-      expect(merged).toEqual([importedInterim, importedFinal]);
+      expect(merged).toEqual([localUser, importedInterim, importedFinal]);
     },
   );
 
@@ -1814,12 +1822,20 @@ describe("cli session history", () => {
       __openclaw: uuidless(3),
     };
 
+    const localUser = { role: "user", content: "question", timestamp: timestamp - 1 };
+    const importedUser = {
+      role: "user",
+      content: "question",
+      timestamp: timestamp - 1,
+      __openclaw: uuidless(1),
+    };
+
     const merged = mergeImportedChatHistoryMessages({
-      localMessages: [localAggregate],
-      importedMessages: [importedInterim, importedFinal],
+      localMessages: [localUser, localAggregate],
+      importedMessages: [importedUser, importedInterim, importedFinal],
     });
 
-    expect(merged).toEqual([importedInterim, importedFinal]);
+    expect(merged).toEqual([localUser, importedInterim, importedFinal]);
   });
 
   it("keeps a local cli-assistant aggregate when only the final imported segment matches", () => {
@@ -2014,12 +2030,119 @@ describe("cli session history", () => {
       __openclaw: { importedFrom: "claude-cli", externalId: "final", cliSessionId: "s" },
     };
 
+    const localUser = { role: "user", content: "question", timestamp: timestamp - 1 };
+    const importedUser = {
+      role: "user",
+      content: "question",
+      timestamp: timestamp - 1,
+      __openclaw: { importedFrom: "claude-cli", externalId: "user", cliSessionId: "s" },
+    };
+
     const merged = mergeImportedChatHistoryMessages({
-      localMessages: [firstAggregate, retriedAggregate],
-      importedMessages: [importedInterim, importedFinal],
+      localMessages: [localUser, firstAggregate, retriedAggregate],
+      importedMessages: [importedUser, importedInterim, importedFinal],
     });
 
-    expect(merged).toEqual([importedInterim, importedFinal, retriedAggregate]);
+    expect(merged).toEqual([localUser, importedInterim, importedFinal, retriedAggregate]);
+  });
+
+  it("maps untimestamped imported segments to their own turn, not the last local one", () => {
+    const interim = "Thinking about the request";
+    const finalSegment = "Here is the finished answer.";
+    const meta = (externalId: string) => ({
+      __openclaw: { importedFrom: "claude-cli", externalId, cliSessionId: "s" },
+    });
+    const firstUser = { role: "user", content: "first question" };
+    const firstAggregate = {
+      role: "assistant",
+      content: [{ type: "text", text: `${interim}\n${finalSegment}` }],
+      idempotencyKey: "cli-assistant:run-1",
+    };
+    const secondUser = { role: "user", content: "second question" };
+    const secondAggregate = {
+      role: "assistant",
+      content: [{ type: "text", text: `${interim}\n${finalSegment}` }],
+      idempotencyKey: "cli-assistant:run-2",
+    };
+    const importedFirstUser = { role: "user", content: "first question", ...meta("u-1") };
+    const importedInterim = {
+      role: "assistant",
+      content: [{ type: "text", text: interim }],
+      ...meta("a-1-interim"),
+    };
+    const importedFinal = {
+      role: "assistant",
+      content: [{ type: "text", text: finalSegment }],
+      ...meta("a-1-final"),
+    };
+    const importedSecondUser = { role: "user", content: "second question", ...meta("u-2") };
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [firstUser, firstAggregate, secondUser, secondAggregate],
+      importedMessages: [importedFirstUser, importedInterim, importedFinal, importedSecondUser],
+    });
+
+    // Only run-1 is covered; the equal-text run-2 belongs to a turn nothing was imported for.
+    expect(merged).toEqual([
+      firstUser,
+      secondUser,
+      secondAggregate,
+      importedInterim,
+      importedFinal,
+    ]);
+  });
+
+  it("drops every covered cli-assistant aggregate across untimestamped turns", () => {
+    const meta = (externalId: string) => ({
+      __openclaw: { importedFrom: "claude-cli", externalId, cliSessionId: "s" },
+    });
+    const buildTurn = (turn: number, question: string, interim: string, finalSegment: string) => ({
+      localUser: { role: "user", content: question },
+      localAggregate: {
+        role: "assistant",
+        content: [{ type: "text", text: `${interim}\n${finalSegment}` }],
+        idempotencyKey: `cli-assistant:run-${turn}`,
+      },
+      importedUser: { role: "user", content: question, ...meta(`u-${turn}`) },
+      importedInterim: {
+        role: "assistant",
+        content: [{ type: "text", text: interim }],
+        ...meta(`interim-${turn}`),
+      },
+      importedFinal: {
+        role: "assistant",
+        content: [{ type: "text", text: finalSegment }],
+        ...meta(`final-${turn}`),
+      },
+    });
+    const first = buildTurn(1, "first question", "Checking the notes.", "Three steps.");
+    const second = buildTurn(2, "second question", "Nothing else to add.", "Ping me anytime.");
+
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [
+        first.localUser,
+        first.localAggregate,
+        second.localUser,
+        second.localAggregate,
+      ],
+      importedMessages: [
+        first.importedUser,
+        first.importedInterim,
+        first.importedFinal,
+        second.importedUser,
+        second.importedInterim,
+        second.importedFinal,
+      ],
+    });
+
+    expect(merged).toEqual([
+      first.localUser,
+      second.localUser,
+      first.importedInterim,
+      first.importedFinal,
+      second.importedInterim,
+      second.importedFinal,
+    ]);
   });
 
   it("augments chat history when a session has a claude-cli binding", async () => {
