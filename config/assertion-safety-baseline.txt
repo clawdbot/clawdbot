@@ -275,11 +275,11 @@ extensions/copilot/src/tool-bridge.ts	6
 extensions/copilot/src/workspace-bootstrap.ts	1
 extensions/crabbox/src/crabbox-worker-inspect.ts	3
 extensions/crabbox/src/crabbox-worker-provider.ts	1
-extensions/cua-computer/src/commands.ts	3
+extensions/cua-computer/src/commands.ts	2
 extensions/cua-computer/src/driver-artifact-verification.ts	2
 extensions/cua-computer/src/driver-artifacts.ts	1
 extensions/cua-computer/src/driver-client.ts	15
-extensions/cua-computer/src/driver-result.ts	10
+extensions/cua-computer/src/driver-result.ts	9
 extensions/cua-computer/src/mcp-driver-client.ts	5
 extensions/cua-computer/src/window-actions.ts	3
 extensions/deepinfra/provider-models.ts	3
@@ -2024,7 +2024,7 @@ src/agents/tools/automations-tool-name.ts	1
 src/agents/tools/chat-history-text.ts	3
 src/agents/tools/common.ts	2
 src/agents/tools/computer-tool-node.ts	2
-src/agents/tools/computer-tool-request.ts	5
+src/agents/tools/computer-tool-request.ts	3
 src/agents/tools/computer-tool.ts	2
 src/agents/tools/conversation-tools.ts	3
 src/agents/tools/cron-tool-context.ts	1
