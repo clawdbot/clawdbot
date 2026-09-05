@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1127,6 +1128,74 @@ describe("capability cli", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(firstJsonOutput()?.capability).toBe("model.run");
     expect(firstJsonOutput()?.transport).toBe("local");
+  });
+
+  it.each(["infer", "capability"])(
+    "reads an explicit stdin prompt through %s without prompt argv",
+    async (root) => {
+      const prompt = "synthetic-stdin-marker\nOlá 🦞\n";
+      const bytes = Buffer.from(prompt);
+      using stdin = vi
+        .spyOn(process, "stdin", "get")
+        .mockReturnValue(
+          Readable.from([bytes.subarray(0, -3), bytes.subarray(-3)]) as typeof process.stdin,
+        );
+      const argv = [root, "model", "run", "--prompt-stdin", "--local", "--json"];
+      const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+      await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
+      await program.parseAsync(argv, { from: "user" });
+
+      expect(firstCompletionCall()?.context?.messages?.[0]?.content).toBe(prompt);
+      expect(program.args.join(" ")).not.toContain("synthetic-stdin-marker");
+      expect(process.argv.join(" ")).not.toContain("synthetic-stdin-marker");
+      expect(stdin).toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(CAPABILITY_METADATA.find((entry) => entry.id === "model.run")?.flags).toContain(
+        "--prompt-stdin",
+      );
+    },
+  );
+
+  it.each([
+    { args: ["--prompt", "hello"], error: undefined },
+    { args: [], error: "Specify --prompt <text> or --prompt-stdin." },
+    {
+      args: ["--prompt", "hello", "--prompt-stdin"],
+      error: "Use either --prompt or --prompt-stdin, not both.",
+    },
+  ])("only reads stdin on explicit, non-conflicting input: $args", async ({ args, error }) => {
+    using stdin = vi.spyOn(process, "stdin", "get");
+    const run = runCapability("model", "run", ...args);
+    if (error) {
+      await expect(run).rejects.toThrow("exit 1");
+      expectRuntimeErrorContains(error);
+      expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    } else {
+      await run;
+      expect(firstCompletionCall()?.context?.messages?.[0]?.content).toBe("hello");
+    }
+    expect(stdin).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { text: " \n", error: "--prompt cannot be empty or whitespace-only." },
+    { text: "é".repeat(524_289), error: "--prompt-stdin exceeds 1048576 bytes." },
+    { text: undefined, error: "synthetic stdin read failure" },
+  ])("rejects invalid stdin before model dispatch: $error", async ({ text, error }) => {
+    const stream =
+      text === undefined
+        ? new Readable({
+            read() {
+              this.destroy(new Error(error));
+            },
+          })
+        : Readable.from([text]);
+    using stdin = vi.spyOn(process, "stdin", "get").mockReturnValue(stream as typeof process.stdin);
+    await expect(runCapability("model", "run", "--prompt-stdin")).rejects.toThrow("exit 1");
+    expectRuntimeErrorContains(error);
+    expect(stdin).toHaveBeenCalled();
+    expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("runs local model probes through the lean completion path", async () => {
