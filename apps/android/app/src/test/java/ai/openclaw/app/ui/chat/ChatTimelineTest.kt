@@ -249,7 +249,7 @@ class ChatTimelineTest {
   }
 
   @Test
-  fun finishedTurnRecapUsesNewestSlotWithoutChangingReaderAnchorRow() {
+  fun finishedTurnRecapAttachesToFinalAssistantWithoutChangingReaderAnchorRow() {
     val user = textMessage(id = "user-1", role = "user", text = "hello")
     val assistant = textMessage(id = "assistant-1", role = "assistant", text = "done")
     val timeline =
@@ -263,11 +263,15 @@ class ChatTimelineTest {
     val withRecap = timeline.withTurnRecap(TurnRecap(runtimeMs = 2_000L, outputTokens = 10L))
 
     assertEquals(
-      listOf("turn-recap", "message:assistant-1", "message:user-1"),
+      listOf("message:assistant-1", "message:user-1"),
       withRecap.items.map(::chatTimelineItemKey),
     )
+    assertEquals(
+      TurnRecap(runtimeMs = 2_000L, outputTokens = 10L),
+      (withRecap.items[0] as ChatTimelineItem.Message).turnRecap,
+    )
     assertEquals(0, withRecap.latestContentIndex)
-    assertEquals(2, withRecap.readAnchorIndex)
+    assertEquals(1, withRecap.readAnchorIndex)
     assertEquals("user-1", withRecap.latestUserMessageId)
   }
 
@@ -533,6 +537,58 @@ class ChatTimelineTest {
 
     assertEquals(initial.items.map(::chatTimelineItemKey), updated.items.map(::chatTimelineItemKey))
     assertTrue(initial.latestContentVersion != updated.latestContentVersion)
+  }
+
+  @Test
+  fun commentaryDisappearsAfterItsFinalAnswerArrives() {
+    val commentary =
+      textMessage(id = "commentary", role = "assistant", text = "Checking.")
+        .copy(phase = "commentary", runId = "run-1", isSyntheticDisplay = true)
+    val final =
+      textMessage(id = "final", role = "assistant", text = "Done.")
+        .copy(phase = "final_answer", runId = "run-1")
+
+    assertEquals(listOf(commentary), listOf(commentary).withCompletedCommentaryRemoved())
+    assertEquals(listOf(final), listOf(commentary, final).withCompletedCommentaryRemoved())
+  }
+
+  @Test
+  fun toolOnlyAssistantRecordsDoNotRetireOrSuppressLaterCommentary() {
+    val first =
+      textMessage(id = "commentary-1", role = "assistant", text = "Checking.")
+        .copy(phase = "commentary", runId = "run-1", isSyntheticDisplay = true)
+    val toolCall =
+      ChatMessage(
+        id = "tool-call-1",
+        role = "assistant",
+        content = emptyList(),
+        timestampMs = null,
+        runId = "run-1",
+      )
+    val second =
+      textMessage(id = "commentary-2", role = "assistant", text = "Still working.")
+        .copy(phase = "commentary", runId = "run-1", isSyntheticDisplay = true)
+
+    assertEquals(
+      listOf(first, toolCall, second),
+      listOf(first, toolCall, second).withCompletedCommentaryRemoved(),
+    )
+  }
+
+  @Test
+  fun interruptedCommentaryAndUnrelatedTurnsRemainVisible() {
+    val interrupted =
+      textMessage(id = "commentary-1", role = "assistant", text = "Partial work")
+        .copy(phase = "commentary", runId = "run-interrupted", isSyntheticDisplay = true)
+    val nextUser = textMessage(id = "user-2", role = "user", text = "Try again")
+    val laterFinal =
+      textMessage(id = "final-2", role = "assistant", text = "Finished")
+        .copy(phase = "final_answer", runId = "run-2")
+
+    assertEquals(
+      listOf(interrupted, nextUser, laterFinal),
+      listOf(interrupted, nextUser, laterFinal).withCompletedCommentaryRemoved(),
+    )
   }
 
   private fun subagentActivity(

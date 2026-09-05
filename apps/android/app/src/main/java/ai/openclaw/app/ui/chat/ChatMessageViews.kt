@@ -16,6 +16,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,8 +56,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.contentDescription
@@ -65,12 +72,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import kotlin.math.max
+import kotlin.math.min
 
 @Composable
 private fun ChatBubbleContainer(
@@ -487,19 +497,68 @@ private fun ChatImagePreview(
     }
   }
   if (previewVisible) {
+    var scale by rememberSaveable(stateKey) { mutableStateOf(1f) }
+    var offsetX by rememberSaveable(stateKey) { mutableStateOf(0f) }
+    var offsetY by rememberSaveable(stateKey) { mutableStateOf(0f) }
+    var viewport by remember { mutableStateOf(IntSize.Zero) }
+    val paddingPx = with(androidx.compose.ui.platform.LocalDensity.current) { 20.dp.toPx() }
+    fun clampOffsets(nextScale: Float, x: Float, y: Float): Pair<Float, Float> {
+      val bounds = imagePanBounds(viewport, image.width, image.height, nextScale, paddingPx)
+      return x.coerceIn(-bounds.x, bounds.x) to y.coerceIn(-bounds.y, bounds.y)
+    }
+    val transformState =
+      rememberTransformableState { _, zoomChange, panChange, _ ->
+        val nextScale = (scale * zoomChange).coerceIn(1f, 5f)
+        val (nextX, nextY) = clampOffsets(nextScale, offsetX + panChange.x, offsetY + panChange.y)
+        scale = nextScale
+        offsetX = if (nextScale == 1f) 0f else nextX
+        offsetY = if (nextScale == 1f) 0f else nextY
+      }
+    LaunchedEffect(viewport, scale) {
+      val (nextX, nextY) = clampOffsets(scale, offsetX, offsetY)
+      offsetX = nextX
+      offsetY = nextY
+    }
     Dialog(
       onDismissRequest = { previewVisible = false },
       properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
       Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.96f)).clickable { previewVisible = false },
+        modifier =
+          Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.96f))
+            .onSizeChanged { viewport = it }
+            .pointerInput(stateKey) {
+              detectTapGestures(
+                onTap = { previewVisible = false },
+                onDoubleTap = {
+                  if (scale > 1f) {
+                    scale = 1f
+                    offsetX = 0f
+                    offsetY = 0f
+                  } else {
+                    scale = 2.5f
+                  }
+                },
+              )
+            }.transformable(transformState),
         contentAlignment = Alignment.Center,
       ) {
         Image(
           bitmap = image,
           contentDescription = nativeString("Image preview"),
           contentScale = ContentScale.Fit,
-          modifier = Modifier.fillMaxSize().padding(20.dp),
+          modifier =
+            Modifier
+              .fillMaxSize()
+              .padding(20.dp)
+              .graphicsLayer(
+                scaleX = scale,
+                scaleY = scale,
+                translationX = offsetX,
+                translationY = offsetY,
+              ),
         )
         Surface(
           onClick = { previewVisible = false },
@@ -519,6 +578,26 @@ private fun ChatImagePreview(
       }
     }
   }
+}
+
+internal fun imagePanBounds(
+  viewport: IntSize,
+  imageWidth: Int,
+  imageHeight: Int,
+  scale: Float,
+  paddingPx: Float,
+): Offset {
+  if (viewport.width <= 0 || viewport.height <= 0 || imageWidth <= 0 || imageHeight <= 0 || scale <= 1f) return Offset.Zero
+  val availableWidth = (viewport.width - paddingPx * 2f).coerceAtLeast(0f)
+  val availableHeight = (viewport.height - paddingPx * 2f).coerceAtLeast(0f)
+  if (availableWidth == 0f || availableHeight == 0f) return Offset.Zero
+  val fit = min(availableWidth / imageWidth, availableHeight / imageHeight)
+  val fittedWidth = imageWidth * fit
+  val fittedHeight = imageHeight * fit
+  return Offset(
+    x = max(0f, (fittedWidth * scale - availableWidth) / 2f),
+    y = max(0f, (fittedHeight * scale - availableHeight) / 2f),
+  )
 }
 
 /** Shared code block renderer used by chat Markdown. */

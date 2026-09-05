@@ -525,6 +525,18 @@ internal class ConversationReplyNotifier(
   private fun notificationManager(): NotificationManager = context.getSystemService(NotificationManager::class.java)
 }
 
+/** Dreaming narration is archival background work, not a user-facing chat reply. */
+internal fun shouldPostConversationReplyNotification(
+  owner: ChatComposerOwner,
+  runId: String,
+): Boolean =
+  sequenceOf(owner.sessionKey, runId)
+    .map { it.trim().lowercase() }
+    .none { value ->
+      value.startsWith("dreaming-narrative-") ||
+        value.split(':', '/', '|').any { segment -> segment.startsWith("dreaming-narrative-") }
+    }
+
 class ConversationReplyReceiver : BroadcastReceiver() {
   override fun onReceive(
     context: Context,

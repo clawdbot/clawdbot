@@ -42,14 +42,15 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -113,8 +114,9 @@ internal enum class SidebarDestination(
   val icon: ImageVector,
 ) {
   Settings(stableId = "settings", icon = Icons.Outlined.Settings),
-  Work(stableId = "work", icon = Icons.Outlined.BarChart),
-  Home(stableId = "home", icon = Icons.Outlined.ChatBubbleOutline),
+  // Keep the established stable ids so upgrades preserve sidebar order/visibility.
+  Overview(stableId = "work", icon = Icons.Outlined.Home),
+  Chat(stableId = "home", icon = Icons.Outlined.ChatBubbleOutline),
   Skills(stableId = "skills", icon = Icons.Outlined.Build),
   Threads(stableId = "threads", icon = Icons.Outlined.Description),
 }
@@ -122,8 +124,8 @@ internal enum class SidebarDestination(
 internal fun SidebarDestination.localizedLabel(): String =
   when (this) {
     SidebarDestination.Settings -> nativeString("Settings")
-    SidebarDestination.Work -> nativeString("Work")
-    SidebarDestination.Home -> nativeString("Home")
+    SidebarDestination.Overview -> nativeString("Home")
+    SidebarDestination.Chat -> nativeString("Chat")
     SidebarDestination.Skills -> nativeString("Skills")
     SidebarDestination.Threads -> nativeString("Threads")
   }
@@ -266,11 +268,15 @@ internal fun sidebarCatalogSections(
 ): List<SidebarCatalogSection> =
   catalogs
     .filter { catalog ->
-      catalog.canCreateSession ||
+      val hasVisibleSessions = catalog.hosts.any { host -> host.sessions.any { !it.archived } }
+      val hasError = catalog.errorText != null || catalog.hosts.any { it.errorText != null }
+      val hideEmptyNativeCodex = catalog.id.equals("codex", ignoreCase = true) && !hasVisibleSessions && !hasError
+      !hideEmptyNativeCodex &&
+        (catalog.canCreateSession ||
         catalog.errorText != null ||
         catalog.hosts.any { host ->
           host.errorText != null || host.nextCursor != null || host.sessions.any { !it.archived }
-        }
+        })
     }.map { catalog ->
       SidebarCatalogSection(
         catalog = catalog,
@@ -716,31 +722,32 @@ internal fun OpenClawSidebar(
 
         if (catalogAvailable) {
           when {
-            catalogState.loading && catalogSections.isEmpty() -> {
-              SidebarCatalogStatus(nativeString("Loading"), palette, progress = true)
-            }
-
             catalogErrorText != null && catalogSections.isEmpty() -> {
               SidebarCatalogStatus(catalogErrorText, palette)
             }
 
-            catalogSections.isEmpty() -> {
-              SidebarCatalogStatus(nativeString("No sessions"), palette)
-            }
-
-            else -> {
-              if (catalogState.loading) {
-                SidebarCatalogStatus(nativeString("Loading"), palette, progress = true)
-              }
+            catalogSections.isNotEmpty() -> {
               catalogSections.forEach { section ->
                 val catalog = section.catalog
                 key("catalog:${catalog.id}") {
                   SidebarCollapsibleHeader(
-                    label = catalog.label,
+                    label = if (catalog.id.equals("codex", ignoreCase = true)) nativeString("Native Codex sessions") else catalog.label,
                     expanded = section.expanded,
                     palette = palette,
                     iconContent = {
-                      ProviderBrandIcon(provider = catalog.id, size = 18.dp)
+                      Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                      ) {
+                        ProviderBrandIcon(provider = catalog.id, size = 18.dp)
+                        if (catalogState.loading) {
+                          CircularProgressIndicator(
+                            modifier = Modifier.size(10.dp),
+                            color = palette.muted,
+                            strokeWidth = 1.5.dp,
+                          )
+                        }
+                      }
                     },
                     trailingContent =
                       if (
@@ -804,6 +811,8 @@ internal fun OpenClawSidebar(
               }
               catalogErrorText?.let { SidebarCatalogStatus(it, palette) }
             }
+
+            else -> Unit
           }
         }
 
@@ -950,8 +959,8 @@ private fun SidebarPagesHeader(
         modifier = Modifier.size(44.dp).testTag("sidebar-pages-menu"),
       ) {
         Icon(
-          painter = painterResource(R.drawable.ic_web_pen_line),
-          contentDescription = nativeString("Edit pinned items"),
+          imageVector = Icons.Default.MoreVert,
+          contentDescription = nativeString("Pages menu"),
           tint = palette.text,
           modifier = Modifier.size(18.dp),
         )
@@ -996,7 +1005,7 @@ private fun SidebarPagesHeader(
             }
             HorizontalDivider(color = palette.hairline)
             DropdownMenuItem(
-              text = { Text(nativeString("Edit pinned items"), maxLines = 1) },
+              text = { Text(nativeString("Customize pages"), maxLines = 1) },
               leadingIcon = {
                 Icon(
                   painter = painterResource(R.drawable.ic_web_pen_line),
@@ -1011,7 +1020,7 @@ private fun SidebarPagesHeader(
 
           SidebarPagesMenuMode.Edit -> {
             Text(
-              text = nativeString("EDIT PINNED ITEMS"),
+              text = nativeString("CUSTOMIZE PAGES"),
               style =
                 ClawTheme.type.caption.copy(
                   fontWeight = FontWeight.SemiBold,
@@ -1019,6 +1028,12 @@ private fun SidebarPagesHeader(
                 ),
               color = palette.muted,
               modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+            Text(
+              text = nativeString("Drag to reorder · Tap to show or hide"),
+              style = ClawTheme.type.caption,
+              color = palette.muted,
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
             )
             destinations.forEach { destination ->
               key(destination.stableId) {
@@ -1036,7 +1051,7 @@ private fun SidebarPagesHeader(
             }
             HorizontalDivider(color = palette.hairline)
             DropdownMenuItem(
-              text = { Text(nativeString("Reset pinned items"), maxLines = 1) },
+              text = { Text(nativeString("Reset pages"), maxLines = 1) },
               leadingIcon = {
                 Icon(
                   painter = painterResource(R.drawable.ic_web_refresh),

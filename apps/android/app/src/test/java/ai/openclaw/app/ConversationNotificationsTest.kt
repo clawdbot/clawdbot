@@ -227,4 +227,25 @@ class ConversationNotificationsTest {
     assertEquals("Reply", action.title.toString())
     assertEquals(1, action.remoteInputs.size)
   }
+
+  @Test
+  fun dreamingNarrativeRepliesAreNotNotificationEligible() {
+    val owner =
+      ai.openclaw.app.chat.ChatComposerOwner(
+        gatewayStableId = "gateway-a",
+        agentId = "main",
+        sessionKey = "agent:main:dreaming-narrative-2026-09-04",
+      )
+
+    assertFalse(shouldPostConversationReplyNotification(owner, "run-1"))
+    assertFalse(shouldPostConversationReplyNotification(targetOwner(), "dreaming-narrative-run-2"))
+    assertTrue(shouldPostConversationReplyNotification(targetOwner(), "ordinary-run"))
+  }
+
+  private fun targetOwner() =
+    ai.openclaw.app.chat.ChatComposerOwner(
+      gatewayStableId = target.gatewayStableId,
+      agentId = target.agentId,
+      sessionKey = target.sessionKey,
+    )
 }

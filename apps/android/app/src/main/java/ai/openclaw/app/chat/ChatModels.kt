@@ -35,6 +35,10 @@ data class ChatMessage(
   val provenance: ChatMessageProvenance? = null,
   val transcriptMarker: ChatTranscriptMarker? = null,
   val senderLabel: String? = null,
+  /** Assistant presentation phase supplied by the Gateway (for example commentary or final_answer). */
+  val phase: String? = null,
+  /** Gateway run identity used to retire commentary when its final answer arrives. */
+  val runId: String? = null,
 ) {
   // Synthetic mirrors and commentary borrow a transcript ID, not its canonical text.
   // Keep the ID for timeline actions, but never use it to recover or retain full text.

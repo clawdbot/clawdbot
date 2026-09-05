@@ -10,6 +10,8 @@ import android.view.ViewGroup
 import android.view.inspector.WindowInspector
 import android.widget.TextView
 import androidx.compose.foundation.layout.Column
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -34,6 +36,14 @@ import org.robolectric.RobolectricTestRunner
 class ChatMessageViewsTest {
   @get:Rule
   val composeRule = createComposeRule()
+
+  @Test
+  fun imagePanBoundsRespectFittedAspectRatioAndZoom() {
+    assertEquals(Offset.Zero, imagePanBounds(IntSize(1000, 1800), 1440, 980, 1f, 20f))
+    val bounds = imagePanBounds(IntSize(1000, 1800), 1440, 980, 2f, 20f)
+    assertEquals(480f, bounds.x, 0.01f)
+    assertEquals(0f, bounds.y, 0.01f)
+  }
 
   @Test
   fun transcriptBubblesExposeSpeakerWithoutReplacingMessageText() {

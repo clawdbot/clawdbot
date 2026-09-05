@@ -136,10 +136,16 @@ fun ShellScreen(
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
   val appearanceThemeFamily by viewModel.appearanceThemeFamily.collectAsState()
   val appearanceAccentArgb by viewModel.appearanceAccentArgb.collectAsState()
+  val appearanceTextScale by viewModel.appearanceTextScale.collectAsState()
   val gatewayAccentArgb by viewModel.gatewayAccentArgb.collectAsState()
   val shellDark = appearanceThemeMode.isDark(systemDark = isSystemInDarkTheme())
   OpenClawSystemBarAppearance(lightAppearance = !shellDark)
-  ClawDesignTheme(dark = shellDark, family = appearanceThemeFamily, accentArgb = appearanceAccentArgb ?: gatewayAccentArgb) {
+  ClawDesignTheme(
+    dark = shellDark,
+    family = appearanceThemeFamily,
+    accentArgb = appearanceAccentArgb ?: gatewayAccentArgb,
+    textScale = appearanceTextScale,
+  ) {
     val nav = rememberSaveable(saver = ShellNavigation.Saver) { ShellNavigation() }
     var commandOpen by rememberSaveable { mutableStateOf(false) }
     var conversationScreenWasActive by rememberSaveable { mutableStateOf(false) }
@@ -205,8 +211,8 @@ fun ShellScreen(
     val activeSidebarDestination =
       when {
         nav.activeTab == Tab.Settings && nav.settingsRoute != SettingsRoute.Skills -> SidebarDestination.Settings
-        nav.activeTab == Tab.Overview -> SidebarDestination.Work
-        nav.activeTab == Tab.Chat -> SidebarDestination.Home
+        nav.activeTab == Tab.Overview -> SidebarDestination.Overview
+        nav.activeTab == Tab.Chat -> SidebarDestination.Chat
         nav.activeTab == Tab.Settings && nav.settingsRoute == SettingsRoute.Skills -> SidebarDestination.Skills
         nav.activeTab == Tab.Sessions -> SidebarDestination.Threads
         else -> null
@@ -220,8 +226,8 @@ fun ShellScreen(
     val selectSidebarDestination: (SidebarDestination) -> Unit = { destination ->
       when (destination) {
         SidebarDestination.Settings -> nav.openSettingsRoute(SettingsRoute.Home)
-        SidebarDestination.Work -> nav.selectTab(Tab.Overview)
-        SidebarDestination.Home -> nav.selectTab(Tab.Chat)
+        SidebarDestination.Overview -> nav.selectTab(Tab.Overview)
+        SidebarDestination.Chat -> nav.selectTab(Tab.Chat)
         SidebarDestination.Skills -> nav.openSettingsRoute(SettingsRoute.Skills)
         SidebarDestination.Threads -> nav.selectTab(Tab.Sessions)
       }

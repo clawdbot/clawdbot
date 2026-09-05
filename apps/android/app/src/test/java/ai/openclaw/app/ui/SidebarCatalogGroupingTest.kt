@@ -243,8 +243,7 @@ class SidebarCatalogGroupingTest {
 
     val sections = sidebarCatalogSections(catalogs, expandedCatalogIds = listOf("claude"))
 
-    assertEquals(listOf("codex", "claude", "catalog-error", "host-error", "paged"), sections.map { it.catalog.id })
-    assertFalse(sections.first { it.catalog.id == "codex" }.expanded)
+    assertEquals(listOf("claude", "catalog-error", "host-error", "paged"), sections.map { it.catalog.id })
     assertTrue(sections.first { it.catalog.id == "claude" }.expanded)
     assertFalse(sections.any { it.catalog.id == "pi" })
     assertFalse(sections.any { it.catalog.id == "archived" })
@@ -353,17 +352,17 @@ class SidebarCatalogGroupingTest {
           )
         }
       }
-      composeRule.onNodeWithText("Work").assertDoesNotExist()
-      composeRule.onNodeWithText("Home").assertIsDisplayed()
+      composeRule.onNodeWithText("Home").assertDoesNotExist()
+      composeRule.onNodeWithText("Chat").assertIsDisplayed()
       composeRule.onNodeWithText("Settings").assertIsDisplayed().performTouchInput(dragOnePageDown)
 
       composeRule.runOnIdle {
         assertEquals(listOf(true, false), dragStates)
         assertEquals(listOf("home", "work", "settings", "skills", "threads"), prefs.sidebarPageOrder.value)
       }
-      val homeTop =
+      val chatTop =
         composeRule
-          .onNodeWithText("Home")
+          .onNodeWithText("Chat")
           .fetchSemanticsNode()
           .boundsInRoot.top
       val settingsTop =
@@ -371,12 +370,12 @@ class SidebarCatalogGroupingTest {
           .onNodeWithText("Settings")
           .fetchSemanticsNode()
           .boundsInRoot.top
-      assertTrue("One drag must move Settings below the next visible page", homeTop < settingsTop)
+      assertTrue("One drag must move Settings below the next visible page", chatTop < settingsTop)
 
       composeRule.onNodeWithTag("sidebar-pages-menu").performClick()
-      composeRule.onNodeWithText("Edit pinned items").performClick()
-      composeRule.onNodeWithText("EDIT PINNED ITEMS").assertIsDisplayed()
-      composeRule.onNodeWithText("Work").assertIsDisplayed().performTouchInput(dragOnePageDown)
+      composeRule.onNodeWithText("Customize pages").performClick()
+      composeRule.onNodeWithText("CUSTOMIZE PAGES").assertIsDisplayed()
+      composeRule.onNodeWithText("Home").assertIsDisplayed().performTouchInput(dragOnePageDown)
       composeRule.runOnIdle {
         assertEquals(listOf("home", "settings", "work", "skills", "threads"), prefs.sidebarPageOrder.value)
         assertEquals(listOf("settings", "home", "skills", "threads"), prefs.sidebarVisiblePages.value)
@@ -451,7 +450,7 @@ class SidebarCatalogGroupingTest {
             catalogs = listOf(SessionCatalog(id = "codex", label = "Codex", hosts = listOf(host("codex", sessions = listOf(pinned, recent))))),
           )
       }
-      composeRule.onNodeWithText("Codex").performScrollTo().assertIsDisplayed()
+      composeRule.onNodeWithText("Native Codex sessions").performScrollTo().assertIsDisplayed()
       composeRule.onNodeWithText("Ordinary recent session").performScrollTo().assertIsDisplayed()
       composeRule.onNodeWithText("Catalog recent session").assertDoesNotExist()
       composeRule
@@ -527,7 +526,7 @@ class SidebarCatalogGroupingTest {
           )
         }
       }
-      composeRule.onNodeWithText("Codex").performScrollTo().performClick()
+      composeRule.onNodeWithText("Native Codex sessions").performScrollTo().performClick()
       composeRule.onNodeWithText("Native title").performScrollTo().assertIsDisplayed()
       composeRule.onNodeWithText("notLoaded", substring = true).assertDoesNotExist()
       composeRule.onNodeWithText("topic/native").assertIsDisplayed()
