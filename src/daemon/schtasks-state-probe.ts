@@ -25,18 +25,18 @@ export function probeScheduledTaskState(
     "try { $result.lastRunTime=$task.LastRunTime.ToUniversalTime().ToString('o', [Globalization.CultureInfo]::InvariantCulture) } catch {}",
     "$result | ConvertTo-Json -Compress; exit 0",
   ].join("; ");
+  // -Command - (script piped over stdin) reads identically to -EncodedCommand but is not
+  // the base64-encoded-PowerShell pattern antivirus heuristics flag as malware evasion.
+  // Windows PowerShell 5.1's -File - echoes an interactive prompt/transcript ahead of the
+  // script's own stdout, corrupting the JSON/HRESULT parsing below; -Command - does not.
   const probe = spawnSync(
     getWindowsPowerShellExePath(),
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64"),
-    ],
+    ["-NoProfile", "-NonInteractive", "-Command", "-"],
     {
       encoding: "utf8",
       timeout: timeoutMs && timeoutMs > 0 ? Math.min(timeoutMs, 5_000) : 5_000,
       windowsHide: true,
+      input: script,
     },
   );
   if (probe.error) {

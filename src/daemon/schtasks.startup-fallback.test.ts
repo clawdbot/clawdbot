@@ -81,13 +81,10 @@ vi.mock("node:child_process", async () => {
     ...actual,
     spawn,
     spawnSync: (command: string, args?: readonly string[], options?: unknown) => {
-      const encoded = args?.indexOf("-EncodedCommand") ?? -1;
-      if (
-        encoded >= 0 &&
-        Buffer.from(args?.[encoded + 1] ?? "", "base64")
-          .toString("utf16le")
-          .includes("Schedule.Service")
-      ) {
+      const usesScriptStdin =
+        Array.isArray(args) && args.includes("-Command") && args.includes("-");
+      const input = (options as { input?: string } | undefined)?.input;
+      if (usesScriptStdin && typeof input === "string" && input.includes("Schedule.Service")) {
         return taskProbe();
       }
       return spawnSync(command, args, options);
