@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -33,7 +34,6 @@ import {
   removeProjectRegistry,
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import { listProfiles, resolveUserProfileId } from "../../state/user-profiles.js";
 import {
@@ -157,9 +157,8 @@ function sanitizeProjectRecord(project: ProjectRecord): ProjectRecord {
 function resolvePathProject(
   projects: readonly ProjectRegistryEntry[],
   folder: string,
-  sessionKey: string,
+  sessionAgentId: string,
 ): ProjectRegistryEntry | undefined {
-  const sessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;
   return projects
     .filter((project) => project.repoRoot === folder)
     .toSorted((left, right) => {
@@ -178,7 +177,9 @@ function listProjectRecents(
   profileIds: ReadonlySet<string>,
   projects: readonly ProjectRegistryEntry[],
 ): ProjectRecent[] {
-  const store = loadCombinedSessionStoreForGatewayCore(cfg, { projection: "list" }).store;
+  const { store, targetsBySessionKey } = loadCombinedSessionStoreForGatewayCore(cfg, {
+    projection: "list",
+  });
   const candidates = Object.entries(store)
     .filter(
       ([, entry]) =>
@@ -199,8 +200,15 @@ function listProjectRecents(
     const spawnedCwd = normalizeOptionalString(entry.spawnedCwd);
     const execCwd = normalizeOptionalString(entry.execCwd);
     const folder = worktreeRoot ?? spawnedCwd ?? execCwd;
+    // Reserved rows such as `global` carry no owner in their logical key. Keep the prepared
+    // combined-store owner so equal workspace paths still resolve to the session's agent.
+    const sessionAgentId = expectDefined(
+      targetsBySessionKey.get(sessionKey),
+      "recent session owner",
+    ).agentId;
     const project =
-      explicitProject ?? (folder ? resolvePathProject(projects, folder, sessionKey) : undefined);
+      explicitProject ??
+      (folder ? resolvePathProject(projects, folder, sessionAgentId) : undefined);
     const key = project
       ? `project:${project.id}`
       : folder

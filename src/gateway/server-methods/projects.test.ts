@@ -315,6 +315,43 @@ test("projects.list returns only the caller's deterministic resolved recents", a
   }
 });
 
+test("projects.list attributes global recents to the owning agent workspace", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
+  try {
+    const profile = ensureProfileForEmail("global-recents@example.test");
+    replaceSessionEntrySync(
+      { agentId: "work", sessionKey: "global" },
+      {
+        sessionId: "work-global",
+        updatedAt: 900,
+        createdActor: { type: "human", source: "profile", id: profile.id },
+        spawnedCwd: "/workspace/shared",
+      },
+    );
+    const result = await invokeProjectMethod(
+      "projects.list",
+      {},
+      {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: "/workspace/shared" },
+            { id: "work", workspace: "/workspace/shared" },
+          ],
+        },
+        session: { scope: "global" },
+      },
+      ["operator.write"],
+      profile.id,
+    );
+
+    expect((result?.payload as { recents?: unknown[] } | undefined)?.recents).toEqual([
+      { kind: "project", projectId: "workspace:work", displayName: "shared" },
+    ]);
+  } finally {
+    await state.cleanup();
+  }
+});
+
 test("projects.add returns an existing project for the same canonical remote", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
   try {
