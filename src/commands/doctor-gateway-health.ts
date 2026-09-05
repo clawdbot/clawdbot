@@ -98,15 +98,20 @@ function noteGatewayStateDirectory(
 }
 
 async function noteInstalledGatewayStateDirectory(cfg: OpenClawConfig, timeoutMs: number) {
-  if (!isLoopbackGatewayUrl(buildGatewayConnectionDetails({ config: cfg }).url)) {
+  // A remote Gateway can use a loopback tunnel or have no configured URL.
+  // Neither case makes the local installed service authoritative.
+  if (cfg.gateway?.mode === "remote") {
     return;
   }
-  const serviceEnv = { ...process.env };
-  // CLI path overrides select its store, not the installed service's environment.
-  delete serviceEnv.OPENCLAW_STATE_DIR;
-  delete serviceEnv.OPENCLAW_CONFIG_PATH;
-  delete serviceEnv.OPENCLAW_HOME;
   try {
+    if (!isLoopbackGatewayUrl(buildGatewayConnectionDetails({ config: cfg }).url)) {
+      return;
+    }
+    const serviceEnv = { ...process.env };
+    // CLI path overrides select its store, not the installed service's environment.
+    delete serviceEnv.OPENCLAW_STATE_DIR;
+    delete serviceEnv.OPENCLAW_CONFIG_PATH;
+    delete serviceEnv.OPENCLAW_HOME;
     const command = await resolveGatewayService().readCommand(serviceEnv, {
       timeoutMs: Math.min(timeoutMs, 3_000),
       requireEffective: true,

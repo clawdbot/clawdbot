@@ -182,31 +182,57 @@ describe("checkGatewayHealth", () => {
     );
   });
 
-  it("reports unavailable offline service inspection without guessing paths or exposing errors", async () => {
-    callGateway.mockRejectedValueOnce(new Error("ECONNREFUSED"));
-    readServiceCommand.mockRejectedValueOnce(new Error("secret-service-environment-canary"));
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  it.each(["connection details", "service environment"] as const)(
+    "reports unavailable offline %s without replacing the health failure or exposing errors",
+    async (source) => {
+      callGateway.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+      const inspectionError = new Error("secret-service-environment-canary");
+      if (source === "connection details") {
+        buildGatewayConnectionDetails.mockImplementationOnce(() => {
+          throw inspectionError;
+        });
+      } else {
+        readServiceCommand.mockRejectedValueOnce(inspectionError);
+      }
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await expect(checkGatewayHealth({ runtime, cfg })).resolves.toMatchObject({ healthOk: false });
+      await expect(checkGatewayHealth({ runtime, cfg })).resolves.toMatchObject({
+        healthOk: false,
+      });
 
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("could not be verified"),
-      "Gateway state directory",
-    );
-    const output = JSON.stringify(note.mock.calls);
-    expect(output).not.toContain("secret-service-environment-canary");
-    expect(output).not.toContain("Gateway state directory mismatch");
-  });
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining("could not be verified"),
+        "Gateway state directory",
+      );
+      const output = JSON.stringify(note.mock.calls);
+      expect(output).not.toContain("secret-service-environment-canary");
+      expect(output).not.toContain("Gateway state directory mismatch");
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("ECONNREFUSED"));
+    },
+  );
 
-  it("does not use a local service to diagnose a remote Gateway", async () => {
-    buildGatewayConnectionDetails.mockReturnValue({ url: "wss://gateway.example" });
-    callGateway.mockRejectedValueOnce(new Error("ECONNREFUSED"));
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  it.each([
+    { name: "remote URL override", config: {}, url: "wss://gateway.example" },
+    {
+      name: "remote loopback tunnel",
+      config: { gateway: { mode: "remote", remote: { url: TEST_GATEWAY_URL } } },
+      url: TEST_GATEWAY_URL,
+    },
+    { name: "missing remote URL", config: { gateway: { mode: "remote" } }, url: TEST_GATEWAY_URL },
+  ] satisfies Array<{ name: string; config: OpenClawConfig; url: string }>)(
+    "does not use a local service to diagnose $name",
+    async ({ config, url }) => {
+      buildGatewayConnectionDetails.mockReturnValue({ url });
+      callGateway.mockRejectedValueOnce(new Error("ECONNREFUSED"));
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await checkGatewayHealth({ runtime, cfg });
+      await expect(checkGatewayHealth({ runtime, cfg: config })).resolves.toMatchObject({
+        healthOk: false,
+      });
 
-    expect(readServiceCommand).not.toHaveBeenCalled();
-  });
+      expect(readServiceCommand).not.toHaveBeenCalled();
+    },
+  );
 
   it("reports startup migration warnings without marking the gateway unhealthy", async () => {
     const startupMigrationWarning = 'Retained legacy state. Run "openclaw doctor --fix".';

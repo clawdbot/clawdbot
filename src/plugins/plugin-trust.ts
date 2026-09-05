@@ -1,5 +1,4 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 /** Captured beside the trust decision; consumers never rediscover installation facts. */
@@ -13,7 +12,7 @@ export type PluginTrust = {
     | "install-path-mismatch"
     | "provenance-missing"
     | "provenance-invalid";
-  registryPath: string;
+  registryPath: string | null;
   origin: PluginOrigin | "unknown";
   installSource?: PluginInstallRecord["source"];
   installSpec?: string;
@@ -38,7 +37,7 @@ export function formatPluginTrustRefusal(params: {
 }): string {
   const trust = params.trust ?? {
     reason: "record-missing",
-    registryPath: resolveInstalledPluginIndexStorePath(),
+    registryPath: null,
     origin: params.origin ?? "unknown",
   };
   const remedy =
