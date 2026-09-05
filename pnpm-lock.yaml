@@ -211,8 +211,8 @@ importers:
         specifier: 0.3.4
         version: 0.3.4
       '@trycua/cua-driver':
-        specifier: 0.22.0
-        version: 0.22.0
+        specifier: 0.22.2
+        version: 0.22.2
       acorn:
         specifier: 8.18.0
         version: 8.18.0
@@ -395,8 +395,8 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
       '@sindresorhus/slugify':
-        specifier: 2.2.0
-        version: 2.2.0
+        specifier: 2.2.1
+        version: 2.2.1
       '@types/express':
         specifier: 5.0.6
         version: 5.0.6
@@ -876,8 +876,8 @@ importers:
   extensions/cua-computer:
     dependencies:
       '@trycua/cua-driver':
-        specifier: 0.22.0
-        version: 0.22.0
+        specifier: 0.22.2
+        version: 0.22.2
       rastermill:
         specifier: 0.3.2
         version: 0.3.2
@@ -4949,8 +4949,8 @@ packages:
     resolution: {integrity: sha512-tlqY9xq5ukxTUZBmoOp+m61cqwQD5pHJtFY3Mn8CA8ps6yghLH/Hw8UPdqg4OLmFW3IFlcXnQNmo/dh8HzXYIQ==}
     engines: {node: '>=18'}
 
-  '@sindresorhus/slugify@2.2.0':
-    resolution: {integrity: sha512-9Vybc/qX8Kj6pxJaapjkFbiUJPk7MAkCh/GFCxIBnnsuYCFPIXKvnLidG8xlepht3i24L5XemUmGtrJ3UWrl6w==}
+  '@sindresorhus/slugify@2.2.1':
+    resolution: {integrity: sha512-MkngSCRZ8JdSOCHRaYd+D01XhvU3Hjy6MGl06zhOk614hp9EOAp5gIkBeQg7wtmxpitU6eAL4kdiRMcJa2dlrw==}
     engines: {node: '>=12'}
 
   '@sindresorhus/transliterate@1.6.0':
@@ -5192,40 +5192,40 @@ packages:
   '@tokenizer/token@0.3.0':
     resolution: {integrity: sha512-OvjF+z51L3ov0OyAU0duzsYuvO01PH7x4t6DJx+guahgTnBHkhJdG7soQeTSFLWN3efnHyibZ4Z8l2EuWwJN3A==}
 
-  '@trycua/cua-driver-darwin-arm64@0.22.0':
-    resolution: {integrity: sha512-CD83Bvwx5XQtds+nxDOcY2CxKqSxr6spjjdpwYDb/34jtTt46jedt1A73QEEP/xkf9Ckw9Z7CWs68bt+bmGMYA==}
+  '@trycua/cua-driver-darwin-arm64@0.22.2':
+    resolution: {integrity: sha512-ASIEVbV/sytYQNuDWyFM91LjIhrU+E7AoeIyJaNZ418hriwcdhIDLFlBB86eH1uTOEP915jQi5OAXFb6AiCIYw==}
     cpu: [arm64]
     os: [darwin]
 
-  '@trycua/cua-driver-darwin-x64@0.22.0':
-    resolution: {integrity: sha512-uHqMAbYRqLs8MUHyODrAR0kX7rmgwFINcSGVGgrULr5E2OmeJHx6F/THQk/1lLV6jtrKX/bZsqxROehRJmtPNg==}
+  '@trycua/cua-driver-darwin-x64@0.22.2':
+    resolution: {integrity: sha512-aLRzCr9mx1mF+qETyb6H54SrYBKGTpEjFtdEi3I+Ve9XMod7ETxGCECtXK2MZ6gIukTrIWyq6xR90A+qfY/4Wg==}
     cpu: [x64]
     os: [darwin]
 
-  '@trycua/cua-driver-linux-arm64-gnu@0.22.0':
-    resolution: {integrity: sha512-UCGS0LRnySNwAYqymH+jShoyDUtqAkVPEMbCDDALu5R4BqtsyGfawxKYAYg9/tBya48Dkf4NcjE5lGDKs2ku9g==}
+  '@trycua/cua-driver-linux-arm64-gnu@0.22.2':
+    resolution: {integrity: sha512-yKWc4Xl5z19zXUkGM/77++d0OLXtI4t40pc3xwpO/4rDkprHFMh97ZjNGqrxQWmiy6AnBxjCorXzreRxWHzqHw==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@trycua/cua-driver-linux-x64-gnu@0.22.0':
-    resolution: {integrity: sha512-9wtKFGaDbQk0BHXnyWMLKKgkTvhNi0Qv8y39inbXL5mfhQoUvUUx1QnhD5SZiImE0GoGvLq/BcwoizmjO3pLNw==}
+  '@trycua/cua-driver-linux-x64-gnu@0.22.2':
+    resolution: {integrity: sha512-ObdBf07XVmIVNZVoVMCAvOGTdjyaVEH+vpo9auNa6Cjvi2Oh2vFfcBtRdf4WEl4f/HNwTnFtsSMZVFcJaBXkBA==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@trycua/cua-driver-win32-arm64-msvc@0.22.0':
-    resolution: {integrity: sha512-zJJuFJAYCchablDpgDv4ybbBaBVUiPNvt38XeoTKwIkZZHqfAYXUO0gWQ6tU2PpTfZHZAdidpwjln+xO0OUE5w==}
+  '@trycua/cua-driver-win32-arm64-msvc@0.22.2':
+    resolution: {integrity: sha512-jwPTasCQMv4dct32e3id9ZKDAmou15+OD321ItARZSGmrtCTkLvSWeREqN/F5PTeSmbxlkKgQQD16yCBSQo0pg==}
     cpu: [arm64]
     os: [win32]
 
-  '@trycua/cua-driver-win32-x64-msvc@0.22.0':
-    resolution: {integrity: sha512-32E9FZCrXKgXV9vg+2wsdJUarsrn3cj0nBMxcY8z1QyfXjuYKYX0J5XJUlxbNC8PJRbYPEBnd09F1qb05Rv64w==}
+  '@trycua/cua-driver-win32-x64-msvc@0.22.2':
+    resolution: {integrity: sha512-zv6FLknTAzcfQfTVaemn5+x9GvvKN04hl9hCjrLa59EGXWQcuDkqDK4KZ4lBFxb3Baeazxn7k3bmGdWS4b1qjQ==}
     cpu: [x64]
     os: [win32]
 
-  '@trycua/cua-driver@0.22.0':
-    resolution: {integrity: sha512-NElsgryvNTl7arPdx7trvYhz4geMhPztsi8RFeECY2XhuuhWWzSPPPHTC4cBVsb/gprqqPtb+Hy2I1kGGEGddg==}
+  '@trycua/cua-driver@0.22.2':
+    resolution: {integrity: sha512-LkBI+7sQL6mQTL+PxrtibKcdqxKTTrpTOk0mB79r/VqU6E+UKB6QW97git78QELk7ImQCB8fXjSRSYwbVs953g==}
 
   '@tufjs/canonical-json@2.0.0':
     resolution: {integrity: sha512-yVtV8zsdo8qFHe+/3kw81dSLyF7D576A5cCFCi4X7B39tWT7SekaEFUnvnWJHz+9qO7qJTah1JbrDjWKqFtdWA==}
@@ -12170,7 +12170,7 @@ snapshots:
 
   '@sindresorhus/merge-streams@4.0.0': {}
 
-  '@sindresorhus/slugify@2.2.0':
+  '@sindresorhus/slugify@2.2.1':
     dependencies:
       '@sindresorhus/transliterate': 1.6.0
       escape-string-regexp: 5.0.0
@@ -12420,35 +12420,35 @@ snapshots:
 
   '@tokenizer/token@0.3.0': {}
 
-  '@trycua/cua-driver-darwin-arm64@0.22.0':
+  '@trycua/cua-driver-darwin-arm64@0.22.2':
     optional: true
 
-  '@trycua/cua-driver-darwin-x64@0.22.0':
+  '@trycua/cua-driver-darwin-x64@0.22.2':
     optional: true
 
-  '@trycua/cua-driver-linux-arm64-gnu@0.22.0':
+  '@trycua/cua-driver-linux-arm64-gnu@0.22.2':
     optional: true
 
-  '@trycua/cua-driver-linux-x64-gnu@0.22.0':
+  '@trycua/cua-driver-linux-x64-gnu@0.22.2':
     optional: true
 
-  '@trycua/cua-driver-win32-arm64-msvc@0.22.0':
+  '@trycua/cua-driver-win32-arm64-msvc@0.22.2':
     optional: true
 
-  '@trycua/cua-driver-win32-x64-msvc@0.22.0':
+  '@trycua/cua-driver-win32-x64-msvc@0.22.2':
     optional: true
 
-  '@trycua/cua-driver@0.22.0':
+  '@trycua/cua-driver@0.22.2':
     dependencies:
       '@ubjs/core': 0.31.0-3
       '@ubjs/node': 0.31.0-3
     optionalDependencies:
-      '@trycua/cua-driver-darwin-arm64': 0.22.0
-      '@trycua/cua-driver-darwin-x64': 0.22.0
-      '@trycua/cua-driver-linux-arm64-gnu': 0.22.0
-      '@trycua/cua-driver-linux-x64-gnu': 0.22.0
-      '@trycua/cua-driver-win32-arm64-msvc': 0.22.0
-      '@trycua/cua-driver-win32-x64-msvc': 0.22.0
+      '@trycua/cua-driver-darwin-arm64': 0.22.2
+      '@trycua/cua-driver-darwin-x64': 0.22.2
+      '@trycua/cua-driver-linux-arm64-gnu': 0.22.2
+      '@trycua/cua-driver-linux-x64-gnu': 0.22.2
+      '@trycua/cua-driver-win32-arm64-msvc': 0.22.2
+      '@trycua/cua-driver-win32-x64-msvc': 0.22.2
 
   '@tufjs/canonical-json@2.0.0': {}
 
