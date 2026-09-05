@@ -60,22 +60,22 @@ export async function resolveCronDeliveryPreview(params: {
   const requestedChannel = plan.channel ?? "last";
   const agentId =
     params.job.agentId?.trim() || params.defaultAgentId || resolveDefaultAgentId(params.cfg);
+  const sessionTarget =
+    params.job.payload.kind === "agentTurn" ? params.job.sessionTarget : undefined;
   const deliverySessionKey = resolveCronDeliverySessionKey(params.job);
   const resolved = await resolveDeliveryTarget(
     params.cfg,
     agentId,
     {
-      channel: requestedChannel,
-      to: plan.to,
-      threadId: plan.threadId,
-      accountId: plan.accountId,
+      ...plan,
+      sessionTarget,
       sessionKey: deliverySessionKey,
     },
     { dryRun: true },
   );
   if (!resolved.ok) {
     if (
-      params.job.sessionTarget === "current" &&
+      sessionTarget === "current" &&
       plan.mode === "announce" &&
       !resolvedDeliveryTargetsExternalChannel(resolved)
     ) {

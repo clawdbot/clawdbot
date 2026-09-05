@@ -1,6 +1,5 @@
 /** Resolves isolated cron delivery requests into concrete outbound targets. */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
@@ -18,6 +17,8 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveCronStoredDeliveryContext } from "../delivery-context.js";
+import { hasExplicitCronDeliveryTarget, type CronDeliveryPlan } from "../delivery-plan.js";
+import type { CronJob } from "../types.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 
 /** Result of resolving a cron job delivery request into a sendable outbound channel target. */
@@ -132,14 +133,8 @@ function shouldStripResolvedTargetProviderPrefix(target: ResolvedMessagingTarget
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
   agentId: string,
-  jobPayload: {
-    channel?: ChannelId;
-    to?: string;
-    threadId?: string | number;
-    /** Explicit accountId from job.delivery — overrides session-derived and binding-derived values. */
-    accountId?: string;
-    sessionKey?: string;
-  },
+  jobPayload: Pick<CronDeliveryPlan, "channel" | "to" | "threadId" | "accountId"> &
+    Partial<Pick<CronJob, "sessionKey" | "sessionTarget">>,
   options?: { dryRun?: boolean; inheritSessionThread?: boolean },
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
@@ -196,7 +191,12 @@ export async function resolveDeliveryTarget(
   if (!preliminary.channel) {
     if (preliminary.lastChannel) {
       fallbackChannel = preliminary.lastChannel;
-    } else {
+    } else if (
+      jobPayload.sessionTarget !== "current" ||
+      hasExplicitCronDeliveryTarget(jobPayload)
+    ) {
+      // Current jobs without an external source route complete in their own
+      // conversation; an unrelated configured channel cannot create a delivery obligation.
       try {
         const { resolveMessageChannelSelection } = await channelSelectionRuntimeLoader.load();
         const selection = await resolveMessageChannelSelection({ cfg });
