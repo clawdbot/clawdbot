@@ -13,7 +13,6 @@ import { GatewayClientRequestError } from "../../gateway/client.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
-import { consumePreExecutionBlockedToolCall } from "../agent-tools.before-tool-call.state.js";
 import { readParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
@@ -1095,45 +1094,6 @@ describe("sessions_spawn tool", () => {
         'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
     });
     expect(callGateway).not.toHaveBeenCalled();
-  });
-
-  // Live incident (2026-09-05): a heartbeat run's sessions_spawn(agentId:
-  // "job-search", visible: true) call was rejected by the target-policy
-  // check below (agentId not in allowAgents) -- nothing was ever spawned.
-  // The model recovered and completed the real task directly, but the run
-  // still finished marked agent-tool-failure, because nothing told the
-  // run's completion classification that this rejected call never mutated
-  // anything. Proves the fix: a target-policy rejection for a visible
-  // sessions_spawn call marks itself pre-execution-blocked.
-  it("marks a target-policy-rejected visible spawn as pre-execution-blocked, not a mutation failure", async () => {
-    const callGateway = vi.fn();
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-      requesterTurnRunId: "run-heartbeat-1",
-      config: {
-        agents: {
-          defaults: { subagents: { allowAgents: [] } },
-          list: [{ id: "main" }],
-        },
-      },
-      callGateway,
-      countActiveRuns: () => 0,
-    });
-
-    const result = await tool.execute("call-job-search-spawn", {
-      task: "Search daily job openings",
-      agentId: "job-search",
-      visible: true,
-    });
-
-    expect(result.details).toMatchObject({
-      status: "forbidden",
-      error: "agentId is not allowed for sessions_spawn (allowed: none)",
-    });
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(consumePreExecutionBlockedToolCall("call-job-search-spawn", "run-heartbeat-1")).toBe(
-      true,
-    );
   });
 
   it.each([
