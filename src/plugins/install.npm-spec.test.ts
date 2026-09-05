@@ -2865,6 +2865,10 @@ describe("installPluginFromNpmSpec", () => {
     { payload: "empty", existingProject: false },
     { payload: "missing", existingProject: true },
     { payload: "empty", existingProject: true },
+    { payload: "ancestor", existingProject: false },
+    { payload: "ancestor", existingProject: true },
+    { payload: "outside-symlink", existingProject: false },
+    { payload: "outside-symlink", existingProject: true },
     { payload: "hoisted", existingProject: false },
     { payload: "optional", existingProject: false },
   ] as const)(
@@ -2902,6 +2906,16 @@ describe("installPluginFromNpmSpec", () => {
             fs.rmSync(dependencyDir, { recursive: true, force: true });
             if (payload === "empty") {
               fs.mkdirSync(dependencyDir);
+            } else if (payload === "ancestor" || payload === "outside-symlink") {
+              const outsideDir = path.join(npmRoot, "node_modules", "required-runtime");
+              fs.mkdirSync(outsideDir, { recursive: true });
+              fs.writeFileSync(
+                path.join(outsideDir, "package.json"),
+                JSON.stringify({ name: "required-runtime", version: "1.0.0" }),
+              );
+              if (payload === "outside-symlink") {
+                fs.symlinkSync(outsideDir, dependencyDir, "junction");
+              }
             } else if (payload === "hoisted") {
               const hoistedDir = path.join(npmProjectRoot, "node_modules", "required-runtime");
               fs.mkdirSync(hoistedDir, { recursive: true });
