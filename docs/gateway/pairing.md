@@ -35,9 +35,16 @@ removed.
    surface, subject to the normal command policy.
 
 Pending **node capability** requests do not expire just because time passes.
-They remain pending until approved, rejected, superseded by a changed surface,
-or cleared by the node lifecycle, such as removal of the node role or a
-successful reconnect that no longer needs that approval.
+They survive node disconnects and Gateway restarts, and remain pending until
+approved, rejected, superseded by a changed surface, or cleared by the node
+lifecycle, such as removal of the node role or a successful reconnect that no
+longer needs that approval.
+
+A pending capability request does not grant access. Approval still requires the
+operator scopes for the requested commands. A connected node adopts the
+approved surface only when its current pairing identity and generation match
+the request, and only up to the capabilities and commands declared by that
+connection.
 
 The **5-minute expiry** still applies to **device-pairing** requests,
 not to capability approvals on an already-paired device.

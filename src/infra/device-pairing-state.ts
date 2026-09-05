@@ -12,10 +12,11 @@ import { createAsyncLock, pruneExpiredPending } from "./pairing-files.js";
 const DEVICE_PAIRING_PENDING_TTL_MS = 5 * 60 * 1000;
 const withLock = createAsyncLock();
 
-function pruneExpiredPairingState(state: DevicePairingStoreState): void {
+function pruneExpiredDevicePairingRequests(state: DevicePairingStoreState): void {
   pruneExpiredPending(state.pendingById, Date.now(), DEVICE_PAIRING_PENDING_TTL_MS);
-  // Pending node surfaces belong to paired-device lifecycle state. Approval,
-  // rejection, node-role removal, or successful reconnect cleanup resolves them.
+  // Node capability requests are durable operator decisions. Their lifecycle
+  // owner resolves them on approval, rejection, replacement, reconnect cleanup,
+  // or node-role removal.
 }
 
 /** Run one pairing mutation under the process-wide device pairing lock. */
@@ -26,7 +27,7 @@ export async function withDevicePairingLock<T>(operate: () => Promise<T>): Promi
 /** Load one mutable pairing snapshot with expired pending state removed. */
 export async function loadDevicePairingState(baseDir?: string): Promise<DevicePairingStoreState> {
   const state = loadDevicePairingStoreState(baseDir);
-  pruneExpiredPairingState(state);
+  pruneExpiredDevicePairingRequests(state);
   return state;
 }
 
@@ -35,7 +36,7 @@ export async function loadDevicePairingStateReadOnly(
   baseDir?: string,
 ): Promise<DevicePairingStoreState> {
   const state = loadDevicePairingStoreStateReadOnly(baseDir);
-  pruneExpiredPairingState(state);
+  pruneExpiredDevicePairingRequests(state);
   return state;
 }
 
