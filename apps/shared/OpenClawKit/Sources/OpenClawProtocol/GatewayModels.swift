@@ -18887,6 +18887,8 @@ public struct CronRunLogEntry: Codable, Sendable {
     public let durationms: Int?
     public let nextrunatms: Int?
     public let triggerfired: Bool?
+    public let trigger: AnyCodable?
+    public let completioncause: AnyCodable?
     public let model: String?
     public let provider: String?
     public let usage: [String: AnyCodable]?
@@ -18915,6 +18917,8 @@ public struct CronRunLogEntry: Codable, Sendable {
         durationms: Int? = nil,
         nextrunatms: Int? = nil,
         triggerfired: Bool? = nil,
+        trigger: AnyCodable? = nil,
+        completioncause: AnyCodable? = nil,
         model: String? = nil,
         provider: String? = nil,
         usage: [String: AnyCodable]? = nil,
@@ -18942,6 +18946,8 @@ public struct CronRunLogEntry: Codable, Sendable {
         self.durationms = durationms
         self.nextrunatms = nextrunatms
         self.triggerfired = triggerfired
+        self.trigger = trigger
+        self.completioncause = completioncause
         self.model = model
         self.provider = provider
         self.usage = usage
@@ -18971,6 +18977,8 @@ public struct CronRunLogEntry: Codable, Sendable {
         case durationms = "durationMs"
         case nextrunatms = "nextRunAtMs"
         case triggerfired = "triggerFired"
+        case trigger
+        case completioncause = "completionCause"
         case model
         case provider
         case usage

@@ -27,6 +27,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   payloadText: "",
   payloadModel: "",
   payloadThinking: "",
+  payloadTokenBudget: "",
   payloadLightContext: false,
   deliveryMode: "none",
   deliveryChannel: "last",

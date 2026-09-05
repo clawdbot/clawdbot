@@ -1,3 +1,4 @@
+import { CRON_STARTUP_INTERRUPTED_ERROR as STARTUP_INTERRUPTED_ERROR } from "../completion-cause-constants.js";
 import { materializeLegacyDefaultCronJobOwners } from "../legacy-default-agent-owner-migration.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import {
@@ -20,7 +21,7 @@ import {
   type CronRunRecoveryResult,
 } from "./run-recovery.js";
 import { applyCronRuntimeRowsToState } from "./runtime-store.js";
-import { STARTUP_INTERRUPTED_ERROR, type InterruptedStartupRun } from "./startup-run-repair.js";
+import type { InterruptedStartupRun } from "./startup-run-repair.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import { armTimer, runMissedJobs, stopTimer } from "./timer.js";
@@ -42,6 +43,7 @@ function emitInterruptedRun(state: CronServiceState, interrupted: InterruptedSta
       runAtMs: interrupted.runAtMs,
       durationMs: interrupted.durationMs,
       nextRunAtMs: job?.state.nextRunAtMs,
+      completionCause: "gateway-restart",
     },
     undefined,
     interrupted.taskRunId,

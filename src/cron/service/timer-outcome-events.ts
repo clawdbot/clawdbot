@@ -26,9 +26,11 @@ function cronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome, runAtMs: nu
     durationMs: job.state.lastDurationMs,
     nextRunAtMs: job.state.nextRunAtMs,
     ...(result.triggerEval?.fired ? { triggerFired: true } : {}),
+    ...(result.trigger !== undefined ? { trigger: result.trigger } : {}),
     model: result.model,
     provider: result.provider,
     usage: result.usage,
+    ...(result.completionCause !== undefined ? { completionCause: result.completionCause } : {}),
   } as const;
 }
 

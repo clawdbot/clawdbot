@@ -123,6 +123,17 @@ export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode" | "bestEffort"
 /** Execution outcome, separate from delivery outcome. */
 export type CronRunStatus = "ok" | "error" | "skipped";
 
+/**
+ * How a run was initiated. `scheduled` covers time-based ticks (at/every/cron)
+ * and script/exit/stream event triggers; `manual` covers operator-initiated
+ * runs from `openclaw cron run` / `automations run` and the "Run now" action in
+ * the Control UI. Kept on run-history rows so the ledger can show trigger source.
+ */
+export type CronRunTriggerSource = "scheduled" | "manual" | "trigger-script" | "on-exit" | "stream";
+
+/** Why a run ended, orthogonal to completionStatus. Optional on persisted rows. */
+export type CronCompletionCause = "gateway-restart" | "owner-unavailable" | "budget-exhausted";
+
 /** Delivery outcome for completion or failure-notification sends. */
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 
@@ -312,6 +323,8 @@ type CronAgentTurnPayloadFields = {
   externalContentSource?: HookExternalContentSource;
   /** If true, run with lightweight bootstrap context. */
   lightContext?: boolean;
+  /** Per-job token budget cap for agent turns. Absent means Unlimited. */
+  tokenBudget?: number;
 };
 
 type CronAgentTurnPayload = {
@@ -320,11 +333,17 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "fallbacks" | "toolsAllow" | "thinking">> & {
+} & Partial<
+  Omit<
+    CronAgentTurnPayloadFields,
+    "model" | "fallbacks" | "toolsAllow" | "thinking" | "tokenBudget"
+  >
+> & {
     model?: string | null;
     fallbacks?: string[] | null;
     toolsAllow?: string[] | null;
     thinking?: string | null;
+    tokenBudget?: number | null;
   };
 
 type CronCommandPayloadFields = {

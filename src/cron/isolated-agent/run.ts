@@ -44,6 +44,7 @@ import { CronSessionLifecycleClaimError, type MutableCronSession } from "./run-s
 import { logWarn } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
+import { isCronTokenBudgetExhaustedError } from "./token-budget-guard.js";
 
 const cronExecutorRuntimeLoader = createLazyImportLoader(() => import("./run-executor.runtime.js"));
 
@@ -331,10 +332,18 @@ export async function runCronIsolatedAgentTurn(params: {
     const error = isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err);
     outcome = "error";
     outcomeError = error;
+    // A typed budget trip carries the producer-recorded usage total; surface it
+    // on the error result so the service layer can classify `budget-exhausted`
+    // (detectBudgetExhausted) and the finished event/history keep the typed
+    // stop reason and observed spend instead of a generic failure.
+    const budgetUsage = isCronTokenBudgetExhaustedError(err)
+      ? { usage: { total_tokens: err.usageTotal } }
+      : {};
     return prepared.context.withRunSession({
       status: "error",
       error,
       executionStarted,
+      ...budgetUsage,
       ...(!executionStarted
         ? {
             admissionDisposition:

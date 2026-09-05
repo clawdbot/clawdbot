@@ -164,6 +164,7 @@ export async function recordExternalFailure(
           runAtMs: now,
           durationMs: 0,
           failureNotificationDelivery: failureNotificationDeliveryFromJobState(current),
+          trigger: current.schedule.kind === "stream" ? "stream" : "scheduled",
         });
         return { upsertJobIds: [current.id], value: current };
       },

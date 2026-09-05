@@ -391,6 +391,11 @@ export type RunEmbeddedAgentParams = {
   /** Reports a committed generic recovery compaction before its retry starts. */
   onAutoCompactionSucceeded?: (count: number) => void;
   onAgentEvent?: (evt: EmbeddedAgentEvent) => void | Promise<void>;
+  /**
+   * Run-cumulative usage checkpoint, invoked after each usage commit. Callers
+   * that own a budget enforce it here by aborting their run abort signal.
+   */
+  onRunUsageTotals?: (usage: { total?: number }) => void;
   onToolStreamBoundary?: () => void | Promise<void>;
   /**
    * Emit lifecycle "finishing" when the attempt ends; the caller owns the

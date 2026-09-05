@@ -122,6 +122,29 @@ describe("cron view list pane", () => {
     }
   });
 
+  it("renders the token budget cell: finite, unlimited, not applicable", () => {
+    const budgeted = createJob("job-budget", {
+      payload: { kind: "agentTurn", message: "run", tokenBudget: 120000 },
+    });
+    const unlimited = createJob("job-unlimited", {
+      payload: { kind: "agentTurn", message: "run" },
+    });
+    const scripted = createJob("job-script", {
+      name: "Scripted",
+      payload: { kind: "script", script: "echo hi" },
+    });
+    const container = renderView({ jobs: [budgeted, unlimited, scripted] });
+
+    const rows = Array.from(container.querySelectorAll(".cron-table__row"));
+    const budgetCell = (row: Element | null | undefined) =>
+      row?.querySelector(".cron-table__budget .cron-table__cell-value")?.textContent?.trim();
+
+    expect(rows).toHaveLength(3);
+    expect(budgetCell(rows[0])).toBe("120000");
+    expect(budgetCell(rows[1])).toBe("Unlimited");
+    expect(budgetCell(rows[2])).toBe("Not applicable");
+  });
+
   it("renders table rows with independent native buttons for opening tasks", () => {
     const onSelectJob = vi.fn();
     const job = createJob("job-1", {

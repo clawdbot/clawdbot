@@ -21,6 +21,7 @@ import { resolveCronToolsAllowExecTargetRecoveryError } from "../scheduled-tool-
 import { cronScriptFailureMetadata } from "../script-failure.js";
 import { appendCronPayloadText, cronStreamScheduleKey } from "../stream-schedule.js";
 import type {
+  CronCompletionCause,
   CronDeliveryTrace,
   CronResolvedDeliveryState,
   CronJob,
@@ -62,6 +63,8 @@ export async function executeJobCore(
       scriptStateChanged?: boolean;
       scriptState?: unknown;
       triggerEval?: CronTriggerEvalOutcome;
+      /** Why the run ended; orthogonal to completionStatus. */
+      completionCause?: CronCompletionCause;
     }
 > {
   const resolveAbortError = () => ({
@@ -471,6 +474,27 @@ async function executeDetachedCronJob(
     return interrupted();
   }
 
+  /**
+   * Detects budget-exhausted when the run used at least as many tokens as the
+   * configured budget. Only attributed to non-ok runs: a run that succeeded
+   * within budget (or exactly at it) reports no cause; a genuine producer-set
+   * cause always wins.
+   */
+  function detectBudgetExhausted(run: {
+    status?: string;
+    usage?: { total_tokens?: number };
+    completionCause?: CronCompletionCause;
+  }): boolean {
+    return (
+      run.status !== "ok" &&
+      run.completionCause === undefined &&
+      job.payload.kind === "agentTurn" &&
+      typeof job.payload.tokenBudget === "number" &&
+      typeof run.usage?.total_tokens === "number" &&
+      run.usage.total_tokens >= job.payload.tokenBudget
+    );
+  }
+
   return {
     status: res.status,
     error: res.error,
@@ -494,6 +518,8 @@ async function executeDetachedCronJob(
     model: res.model,
     provider: res.provider,
     usage: res.usage,
+    ...(detectBudgetExhausted(res) ? { completionCause: "budget-exhausted" as const } : {}),
+    ...(res.completionCause !== undefined ? { completionCause: res.completionCause } : {}),
   };
 }
 

@@ -89,6 +89,13 @@ export function createEmbeddedModelState(
       return;
     }
     mergeUsageIntoAccumulator(totals, usage);
+    if (params.onRunUsageTotals) {
+      runBestEffortCallback({
+        label: "run usage totals callback",
+        log,
+        callback: () => params.onRunUsageTotals?.(toNormalizedUsage(totals) ?? {}),
+      });
+    }
     if (!hasNonzeroUsage(usage) || !params.lifecycleGeneration) {
       return;
     }

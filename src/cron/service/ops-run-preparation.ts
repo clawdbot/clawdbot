@@ -13,6 +13,7 @@ import type {
   CronJob,
   CronPayload,
   CronRunErrorClassification,
+  CronRunTriggerSource,
 } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
@@ -63,6 +64,7 @@ type PreparedManualRun =
       streamBatch?: string;
       streamScheduleKey?: string;
       streamSourceIdentity?: string;
+      triggerSource?: CronRunTriggerSource;
       onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
     }
   | { ok: false };
@@ -90,6 +92,7 @@ export type ManualRunOptions = {
   streamBatch?: string;
   streamScheduleKey?: string;
   streamSourceIdentity?: string;
+  triggerSource?: CronRunTriggerSource;
   onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
 };
 
@@ -228,6 +231,7 @@ function skipInvalidPersistedManualRun(params: {
       deliveryStatus: params.job.state.lastDeliveryStatus,
       deliveryError: params.job.state.lastDeliveryError,
       failureNotificationDelivery: failureNotificationDeliveryFromJobState(params.job),
+      trigger: "manual",
     },
     params.terminalTracker,
   );
@@ -376,6 +380,7 @@ export async function prepareManualRun(
       ...(opts?.streamSourceIdentity !== undefined
         ? { streamSourceIdentity: opts.streamSourceIdentity }
         : {}),
+      ...(opts?.triggerSource ? { triggerSource: opts.triggerSource } : {}),
       ...(opts?.onTriggerDisposition ? { onTriggerDisposition: opts.onTriggerDisposition } : {}),
     } as const;
   });

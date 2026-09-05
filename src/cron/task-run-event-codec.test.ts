@@ -32,4 +32,75 @@ describe("cronRunLogEntryFromEvent", () => {
 
     expect(entry).toMatchObject({ errorReason: "timeout", completionStatus: "failed" });
   });
+
+  it("leaves trigger undefined for legacy events without the field", () => {
+    const entry = cronRunLogEntryFromEvent(
+      {
+        jobId: "legacy-job",
+        action: "finished",
+        status: "ok",
+      },
+      1,
+    );
+
+    expect(entry.trigger).toBeUndefined();
+  });
+
+  it("preserves explicit trigger field when present", () => {
+    const entry = cronRunLogEntryFromEvent(
+      {
+        jobId: "manual-job",
+        action: "finished",
+        status: "ok",
+        trigger: "manual",
+      },
+      1,
+    );
+
+    expect(entry.trigger).toBe("manual");
+  });
+
+  it.each(["stream", "on-exit", "trigger-script"] as const)(
+    "preserves trigger=%s from the finished event",
+    (trigger) => {
+      const entry = cronRunLogEntryFromEvent(
+        {
+          jobId: `${trigger}-job`,
+          action: "finished",
+          status: "ok",
+          trigger,
+        },
+        1,
+      );
+
+      expect(entry.trigger).toBe(trigger);
+    },
+  );
+
+  it("leaves completionCause undefined for legacy events without the field", () => {
+    const entry = cronRunLogEntryFromEvent(
+      {
+        jobId: "legacy-job",
+        action: "finished",
+        status: "ok",
+      },
+      1,
+    );
+
+    expect(entry.completionCause).toBeUndefined();
+  });
+
+  it("preserves explicit completionCause field when present", () => {
+    const entry = cronRunLogEntryFromEvent(
+      {
+        jobId: "restart-job",
+        action: "finished",
+        status: "ok",
+        completionCause: "gateway-restart",
+      },
+      1,
+    );
+
+    expect(entry.completionCause).toBe("gateway-restart");
+  });
 });

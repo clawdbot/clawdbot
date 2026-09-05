@@ -319,4 +319,56 @@ describe("cron view run history", () => {
     expect(facts.textContent).not.toContain("abcdefghijkl");
     expect(facts.querySelector("img")).toBeNull();
   });
+
+  it("renders the recorded run origin for each trigger source", () => {
+    const container = renderView({
+      listTab: "activity",
+      runs: [
+        { ts: 6, jobId: "job-scheduled", action: "finished", status: "ok", trigger: "scheduled" },
+        { ts: 5, jobId: "job-manual", action: "finished", status: "ok", trigger: "manual" },
+        {
+          ts: 4,
+          jobId: "job-script",
+          action: "finished",
+          status: "ok",
+          trigger: "trigger-script",
+        },
+        { ts: 3, jobId: "job-exit", action: "finished", status: "ok", trigger: "on-exit" },
+        { ts: 2, jobId: "job-stream", action: "finished", status: "ok", trigger: "stream" },
+        { ts: 1, jobId: "job-legacy", action: "finished", status: "ok" },
+      ],
+    });
+    const entries = Array.from(container.querySelectorAll(".cron-run-entry"));
+    const factsFor = (jobId: string) => {
+      const entry = entries.find((candidate) =>
+        candidate.querySelector(".cron-run-entry__title")?.textContent?.includes(jobId),
+      );
+      expect(entry).toBeInstanceOf(HTMLDivElement);
+      return entry?.querySelector(".cron-run-entry__facts")?.textContent ?? "";
+    };
+    expect(factsFor("job-scheduled")).toContain("Scheduled — cron fire");
+    expect(factsFor("job-manual")).toContain("Manual run");
+    expect(factsFor("job-script")).toContain("Trigger script fired");
+    expect(factsFor("job-exit")).toContain("On-exit watcher");
+    expect(factsFor("job-stream")).toContain("Stream batch");
+    expect(factsFor("job-legacy")).not.toContain("Scheduled — cron fire");
+    expect(factsFor("job-legacy")).not.toContain("Manual run");
+  });
+
+  it("renders the legacy-unknown origin for unrecognized trigger values", () => {
+    const container = renderView({
+      listTab: "activity",
+      runs: [
+        {
+          ts: 1,
+          jobId: "job-weird",
+          action: "finished",
+          status: "ok",
+          trigger: "time-travel" as "manual",
+        },
+      ],
+    });
+    const facts = getElement(container, ".cron-run-entry__facts", HTMLDivElement);
+    expect(facts.textContent).toContain("Unknown (legacy)");
+  });
 });

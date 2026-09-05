@@ -78,6 +78,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
     source?: string;
   }) => void;
   onAgentEvent?: (evt: EmbeddedAgentEvent) => void | Promise<void>;
+  /** Run-cumulative usage checkpoint, invoked after each usage commit. */
+  onRunUsageTotals?: (usage: { total?: number }) => void;
   onToolStreamBoundary?: () => void | Promise<void>;
   onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
   /** "finishing" defers both success and error terminal ownership to the caller. */

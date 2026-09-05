@@ -139,6 +139,15 @@ export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch)
   if (typeof patch.timeoutSeconds === "number") {
     next.timeoutSeconds = patch.timeoutSeconds;
   }
+  if (patch.tokenBudget !== undefined) {
+    // Mirror the model/thinking override rules: a number sets the stored
+    // budget, an explicit null clears it, omission leaves it untouched.
+    if (patch.tokenBudget === null) {
+      delete next.tokenBudget;
+    } else {
+      next.tokenBudget = patch.tokenBudget;
+    }
+  }
   if (typeof patch.lightContext === "boolean") {
     next.lightContext = patch.lightContext;
   }
@@ -210,6 +219,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     ...(Array.isArray(patch.fallbacks) ? { fallbacks: patch.fallbacks } : {}),
     ...(typeof patch.thinking === "string" ? { thinking: patch.thinking } : {}),
     ...(patch.timeoutSeconds !== undefined ? { timeoutSeconds: patch.timeoutSeconds } : {}),
+    ...(typeof patch.tokenBudget === "number" ? { tokenBudget: patch.tokenBudget } : {}),
     ...(patch.lightContext !== undefined ? { lightContext: patch.lightContext } : {}),
     ...(patch.allowUnsafeExternalContent !== undefined
       ? { allowUnsafeExternalContent: patch.allowUnsafeExternalContent }

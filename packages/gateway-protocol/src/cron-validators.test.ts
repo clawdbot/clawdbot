@@ -150,6 +150,33 @@ describe("cron protocol validators", () => {
     ).toBe(false);
   });
 
+  it.each(["gateway-restart", "owner-unavailable", "budget-exhausted"] as const)(
+    "accepts additive cron completion cause %s",
+    (completionCause) => {
+      expect(
+        Value.Check(CronRunLogEntrySchema, {
+          ts: 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+          completionCause,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects unknown cron completion cause values", () => {
+    expect(
+      Value.Check(CronRunLogEntrySchema, {
+        ts: 1,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+        completionCause: "partial",
+      }),
+    ).toBe(false);
+  });
+
   it("rejects client-authored scheduled authority provenance", () => {
     const scheduledToolPolicy = { version: 1, mode: "trusted" } as const;
     expectCases(validateCronAddParams, false, [add({ scheduledToolPolicy })]);
@@ -453,6 +480,34 @@ describe("cron protocol validators", () => {
       { jobId: "..\\job-2" },
       { jobId: "nested\\job-2" },
     ]);
+  });
+
+  it("accepts all valid trigger source values on run log entries", () => {
+    for (const trigger of ["scheduled", "manual", "trigger-script", "on-exit", "stream"] as const) {
+      expect(
+        Value.Check(CronRunLogEntrySchema, {
+          ts: 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+          trigger,
+        }),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects invalid trigger source values on run log entries", () => {
+    for (const trigger of ["automatic", "command", "unknown", 123, null] as unknown[]) {
+      expect(
+        Value.Check(CronRunLogEntrySchema, {
+          ts: 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+          trigger,
+        }),
+      ).toBe(false);
+    }
   });
 
   it("accepts runs paging/filter/sort params", () => {

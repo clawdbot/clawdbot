@@ -21,6 +21,8 @@ import * as cronStoreModule from "../store.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import * as runReceiptStore from "../store/run-receipt-store.js";
+import { saveCronJobsStoreWithTransactionHooks } from "../store/transaction-hooks.js";
+import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import {
@@ -2700,6 +2702,243 @@ describe("cron service ops persist rollback", () => {
     } finally {
       computeSpy.mockRestore();
     }
+  });
+
+  describe("trigger source on run log entries", () => {
+    it("sets trigger=manual on a completed manual run event", async () => {
+      const { storePath } = await makeStorePath();
+      const now = Date.parse("2026-03-23T12:00:00.000Z");
+
+      await withStateDirForStorePath(storePath, async () => {
+        await writeDueIsolatedJobSnapshot(storePath, now);
+        const events: CronEvent[] = [];
+        const state = createCronServiceState({
+          storePath,
+          cronEnabled: true,
+          log: logger,
+          nowMs: () => now,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(async () => ({
+            status: "ok" as const,
+            summary: "manual ok",
+            provider: "openai",
+            model: "gpt-test",
+          })),
+          onEvent: (event) => events.push(structuredClone(event)),
+        });
+
+        await run(state, "isolated-timeout");
+
+        const finishedEvents = events.filter((e) => e.action === "finished");
+        expect(finishedEvents).toHaveLength(1);
+        expect(finishedEvents[0]).toMatchObject({
+          jobId: "isolated-timeout",
+          status: "ok",
+          trigger: "manual",
+        });
+      });
+    });
+
+    it("sets trigger=scheduled on a completed scheduled run event", async () => {
+      const { storePath } = await makeStorePath();
+      const now = Date.parse("2026-03-23T12:00:00.000Z");
+      const startedAt = now - 60_000;
+
+      await withStateDirForStorePath(storePath, async () => {
+        await writeDueIsolatedJobSnapshot(storePath, startedAt);
+        const events: CronEvent[] = [];
+        const state = createCronServiceState({
+          storePath,
+          cronEnabled: true,
+          log: logger,
+          nowMs: () => now,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(async () => ({
+            status: "ok" as const,
+            summary: "scheduled ok",
+            provider: "openai",
+            model: "gpt-test",
+          })),
+          onEvent: (event) => events.push(structuredClone(event)),
+        });
+
+        // Advance past due — the scheduler fires it.
+        await runMissedJobs(state);
+
+        const finishedEvents = events.filter((e) => e.action === "finished");
+        expect(finishedEvents).toHaveLength(1);
+        expect(finishedEvents[0]).toMatchObject({
+          jobId: "isolated-timeout",
+          status: "ok",
+          trigger: "scheduled",
+        });
+      });
+    });
+
+    it("sets trigger=stream when a stream batch fires a job", async () => {
+      const { storePath } = await makeStorePath();
+      const now = Date.parse("2026-03-23T12:00:00.000Z");
+
+      await withStateDirForStorePath(storePath, async () => {
+        const streamSchedule = { kind: "stream" as const, command: ["echo", "ready"] };
+        const job: CronJob = {
+          ...createDueIsolatedJob(now),
+          schedule: streamSchedule,
+          state: { ...createDueIsolatedJob(now).state, streamSourceIdentity: "src-1" },
+        };
+        await writeCronStoreSnapshot({ storePath, jobs: [job] });
+        const events: CronEvent[] = [];
+        const state = createCronServiceState({
+          storePath,
+          cronEnabled: true,
+          log: logger,
+          nowMs: () => now,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(async () => ({
+            status: "ok" as const,
+            summary: "stream ok",
+            provider: "openai",
+            model: "gpt-test",
+          })),
+          onEvent: (event) => events.push(structuredClone(event)),
+        });
+
+        await run(state, job.id, "force", {
+          streamBatch: "ready\n",
+          streamScheduleKey: cronStreamScheduleKey(streamSchedule),
+          streamSourceIdentity: "src-1",
+        });
+
+        const finishedEvents = events.filter((e) => e.action === "finished");
+        expect(finishedEvents).toHaveLength(1);
+        expect(finishedEvents[0]).toMatchObject({
+          jobId: job.id,
+          status: "ok",
+          trigger: "stream",
+        });
+      });
+    });
+
+    it("keeps trigger=manual for a direct run of an on-exit job", async () => {
+      const { storePath } = await makeStorePath();
+      const now = Date.parse("2026-03-23T12:00:00.000Z");
+
+      await withStateDirForStorePath(storePath, async () => {
+        const job: CronJob = {
+          ...createDueIsolatedJob(now),
+          schedule: { kind: "on-exit", command: "watch-1" },
+        };
+        await writeCronStoreSnapshot({ storePath, jobs: [job] });
+        const events: CronEvent[] = [];
+        const state = createCronServiceState({
+          storePath,
+          cronEnabled: true,
+          log: logger,
+          nowMs: () => now,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(async () => ({
+            status: "ok" as const,
+            summary: "on-exit ok",
+            provider: "openai",
+            model: "gpt-test",
+          })),
+          onEvent: (event) => events.push(structuredClone(event)),
+        });
+
+        await run(state, job.id, "force");
+
+        const finishedEvents = events.filter((e) => e.action === "finished");
+        expect(finishedEvents).toHaveLength(1);
+        expect(finishedEvents[0]).toMatchObject({
+          jobId: job.id,
+          status: "ok",
+          trigger: "manual",
+        });
+      });
+    });
+
+    it("sets trigger=on-exit when an on-exit watcher marks the run", async () => {
+      const { storePath } = await makeStorePath();
+      const now = Date.parse("2026-03-23T12:00:00.000Z");
+
+      await withStateDirForStorePath(storePath, async () => {
+        const job: CronJob = {
+          ...createDueIsolatedJob(now),
+          schedule: { kind: "on-exit", command: "watch-1" },
+        };
+        await writeCronStoreSnapshot({ storePath, jobs: [job] });
+        const events: CronEvent[] = [];
+        const state = createCronServiceState({
+          storePath,
+          cronEnabled: true,
+          log: logger,
+          nowMs: () => now,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(async () => ({
+            status: "ok" as const,
+            summary: "on-exit ok",
+            provider: "openai",
+            model: "gpt-test",
+          })),
+          onEvent: (event) => events.push(structuredClone(event)),
+        });
+
+        await run(state, job.id, "force", { triggerSource: "on-exit" });
+
+        const finishedEvents = events.filter((e) => e.action === "finished");
+        expect(finishedEvents).toHaveLength(1);
+        expect(finishedEvents[0]).toMatchObject({
+          jobId: job.id,
+          status: "ok",
+          trigger: "on-exit",
+        });
+      });
+    });
+
+    it("keeps trigger=manual for a direct run of a stream job", async () => {
+      const { storePath } = await makeStorePath();
+      const now = Date.parse("2026-03-23T12:00:00.000Z");
+
+      await withStateDirForStorePath(storePath, async () => {
+        const streamSchedule = { kind: "stream" as const, command: ["tail", "-f", "/tmp/log"] };
+        const job: CronJob = {
+          ...createDueIsolatedJob(now),
+          schedule: streamSchedule,
+        };
+        await writeCronStoreSnapshot({ storePath, jobs: [job] });
+        const events: CronEvent[] = [];
+        const state = createCronServiceState({
+          storePath,
+          cronEnabled: true,
+          log: logger,
+          nowMs: () => now,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(async () => ({
+            status: "ok" as const,
+            summary: "direct stream ok",
+            provider: "openai",
+            model: "gpt-test",
+          })),
+          onEvent: (event) => events.push(structuredClone(event)),
+        });
+
+        await run(state, job.id, "force");
+
+        const finishedEvents = events.filter((e) => e.action === "finished");
+        expect(finishedEvents).toHaveLength(1);
+        expect(finishedEvents[0]).toMatchObject({
+          jobId: job.id,
+          status: "ok",
+          trigger: "manual",
+        });
+      });
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

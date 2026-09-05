@@ -17,6 +17,7 @@ import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import type {
+  CronCompletionCause,
   CronCompletionStatus,
   CronTriggerEvaluationResult,
   CronAgentExecutionPhaseUpdate,
@@ -35,6 +36,7 @@ import type {
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
+  CronRunTriggerSource,
   CronStoredJob,
   CronStoreFile,
   CronToolsAllowExecTarget,
@@ -65,6 +67,10 @@ export type CronEvent = {
   runId?: string;
   nextRunAtMs?: number;
   triggerFired?: boolean;
+  /** How this run was initiated; surfaced on the run ledger. */
+  trigger?: CronRunTriggerSource;
+  /** Why the run ended; orthogonal to completionStatus. */
+  completionCause?: CronCompletionCause;
 } & CronRunTelemetry;
 
 /** Transient internal context delivered beside, but never projected into, a CronEvent. */
@@ -238,6 +244,8 @@ export type CronServiceDeps = {
       deliveryAttempted?: boolean;
       delivery?: CronDeliveryTrace;
       nextCheck?: CronNextCheckProposal;
+      /** Why the run ended; orthogonal to completionStatus. */
+      completionCause?: CronCompletionCause;
     } & CronRunOutcome &
       CronRunTelemetry
   >;

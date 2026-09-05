@@ -170,6 +170,42 @@ describe("mergeCronPayload trigger tool caps", () => {
     ).toEqual({ kind: "agentTurn", message: "after", toolsAllow: ["read", "cron"] });
   });
 
+  it("applies a tokenBudget override on a same-kind agentTurn update", () => {
+    expect(
+      mergeCronPayload(
+        { kind: "agentTurn", message: "before" },
+        { kind: "agentTurn", message: "after", tokenBudget: 120000 },
+      ),
+    ).toEqual({ kind: "agentTurn", message: "after", tokenBudget: 120000 });
+  });
+
+  it("clears a stored tokenBudget on an explicit null agentTurn patch", () => {
+    expect(
+      mergeCronPayload(
+        { kind: "agentTurn", message: "tick", tokenBudget: 120000 },
+        { kind: "agentTurn", tokenBudget: null },
+      ),
+    ).toEqual({ kind: "agentTurn", message: "tick" });
+  });
+
+  it("keeps a stored tokenBudget when the agentTurn patch omits it", () => {
+    expect(
+      mergeCronPayload(
+        { kind: "agentTurn", message: "tick", tokenBudget: 120000 },
+        { kind: "agentTurn", message: "changed" },
+      ),
+    ).toEqual({ kind: "agentTurn", message: "changed", tokenBudget: 120000 });
+  });
+
+  it("installs tokenBudget when a kind-change patch carries it", () => {
+    expect(
+      mergeCronPayload(
+        { kind: "systemEvent", text: "before" },
+        { kind: "agentTurn", message: "after", tokenBudget: 5000 },
+      ),
+    ).toEqual({ kind: "agentTurn", message: "after", tokenBudget: 5000 });
+  });
+
   it("preserves default-cap provenance across a kind change", () => {
     expect(
       mergeCronPayload(

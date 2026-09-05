@@ -7,7 +7,7 @@ import {
   finishCronRunReceipt,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
-import type { CronJob } from "../types.js";
+import type { CronJob, CronRunTriggerSource } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { locked } from "./locked.js";
@@ -66,6 +66,40 @@ import { wake } from "./wake.js";
 let nextManualRunId = 1;
 
 type ManualRunCoreResult = Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
+
+/**
+ * Resolves the trigger origin for a manual-path run. Event producers carry
+ * explicit provenance: stream watchers pass a `streamBatch` (kept authoritative
+ * even when the schedule has been edited out of `stream` between fire and
+ * admission) and exit watchers pass `triggerSource`. Direct operator runs
+ * through the same `run()` seam have neither and stay `"manual"`.
+ */
+function resolveManualRunTrigger(
+  prepared: Pick<ActivatedManualRun, "streamBatch" | "triggerSource">,
+): CronRunTriggerSource {
+  if (prepared.streamBatch !== undefined) {
+    return "stream";
+  }
+  if (prepared.triggerSource !== undefined) {
+    return prepared.triggerSource;
+  }
+  return "manual";
+}
+
+/**
+ * Terminal provenance for a finished run: an operator-initiated run whose
+ * trigger evaluation actually fired records the trigger-script origin, since
+ * the trigger — not the operator seam — produced the execution.
+ */
+function resolveRunTriggerOrigin(
+  prepared: Pick<ActivatedManualRun, "streamBatch" | "triggerSource">,
+  triggerFired: boolean | undefined,
+): CronRunTriggerSource {
+  if (triggerFired === true) {
+    return "trigger-script";
+  }
+  return resolveManualRunTrigger(prepared);
+}
 
 function applyManualRunOutcome(params: {
   state: CronServiceState;
@@ -179,6 +213,9 @@ async function finishPreparedManualRun(
         error:
           err instanceof CronRunReceiptRevisionError ? err.message : normalizeCronRunErrorText(err),
       });
+      if (receiptSettlementDisposition === "owner-unavailable") {
+        coreResult.completionCause = "owner-unavailable";
+      }
     }
     if (prepared.onTriggerDisposition) {
       const disposition = coreResult.triggerEval?.busy
@@ -231,9 +268,13 @@ async function finishPreparedManualRun(
           runAtMs: startedAt,
           durationMs: Math.max(0, endedAt - startedAt),
           nextRunAtMs: job?.state.nextRunAtMs,
+          trigger: resolveRunTriggerOrigin(prepared, coreResult.triggerEval?.fired),
           model: coreResult.model,
           provider: coreResult.provider,
           usage: coreResult.usage,
+          ...(coreResult.completionCause !== undefined
+            ? { completionCause: coreResult.completionCause }
+            : {}),
         },
         tracker,
         taskRunId,
@@ -294,6 +335,7 @@ async function finishPreparedManualRun(
           runReceipt: prepared.runReceipt,
           startedAt,
           endedAt,
+          trigger: resolveRunTriggerOrigin(prepared, coreResult.triggerEval?.fired),
         });
       }
       let removedJob: CronJob | undefined;
@@ -388,10 +430,14 @@ async function finishPreparedManualRun(
               runAtMs: startedAt,
               durationMs: committed.job.state.lastDurationMs,
               nextRunAtMs: committed.job.state.nextRunAtMs,
+              trigger: resolveRunTriggerOrigin(prepared, coreResult.triggerEval?.fired),
               ...(coreResult.triggerEval?.fired ? { triggerFired: true } : {}),
               model: coreResult.model,
               provider: coreResult.provider,
               usage: coreResult.usage,
+              ...(coreResult.completionCause !== undefined
+                ? { completionCause: coreResult.completionCause }
+                : {}),
             },
             prepared.terminalTracker,
             taskRunId,
@@ -547,6 +593,7 @@ export async function enqueueRun(
                   runAtMs: finishedAt,
                   durationMs: 0,
                   nextRunAtMs: job?.state.nextRunAtMs,
+                  trigger: "manual",
                 },
                 terminalTracker,
               );
@@ -591,6 +638,7 @@ export async function enqueueRun(
         runAtMs: finishedAt,
         durationMs: 0,
         nextRunAtMs: job?.state.nextRunAtMs,
+        trigger: "manual",
       },
       terminalTracker,
     );

@@ -33,6 +33,9 @@ export const DeliveryThreadIdFieldSchema = z.union([
 /** Accepts non-negative finite timeout seconds from cron delivery payloads. */
 export const TimeoutSecondsFieldSchema = z.number().finite().nonnegative();
 
+/** Accepts positive integer token budgets (>= 1) for agent turn budget caps. */
+export const TokenBudgetFieldSchema = z.number().finite().int().min(1);
+
 type ParsedDeliveryInput = {
   mode?: "announce" | "none" | "webhook";
   channel?: string;

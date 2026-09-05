@@ -114,6 +114,7 @@ type AttemptControl = {
   onRunProgress: NonNullable<EmbeddedRunAttemptParams["onRunProgress"]>;
   onToolResult: NonNullable<EmbeddedRunAttemptParams["onToolResult"]>;
   onAgentEvent: NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>;
+  onRunUsageTotals?: EmbeddedRunAttemptParams["onRunUsageTotals"];
   onUserMessagePersisted: NonNullable<EmbeddedRunAttemptParams["onUserMessagePersisted"]>;
   onUserMessagePersistenceInvalidated: NonNullable<
     EmbeddedRunAttemptParams["onUserMessagePersistenceInvalidated"]
@@ -451,6 +452,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onToolResult: control.onToolResult,
     onAgentToolResult: params.onAgentToolResult,
     onAgentEvent: control.onAgentEvent,
+    onRunUsageTotals: control.onRunUsageTotals,
     // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
     deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
     onDeferredLifecycleOwner: params.onDeferredLifecycleOwner,

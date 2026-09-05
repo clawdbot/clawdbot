@@ -16,7 +16,7 @@ import type {
   CronUpdateResult,
   CronWakeMode,
 } from "./service/state.js";
-import type { CronJob, CronPayload } from "./types.js";
+import type { CronJob, CronPayload, CronRunTriggerSource } from "./types.js";
 
 type CronWakeResult = { ok: true } | { ok: false; reason?: "unwakeable-session-key" };
 
@@ -28,6 +28,8 @@ export type CronServiceRunOptions = {
   evaluateTrigger?: boolean;
   /** Current stream batch exposed to trigger scripts as trigger.streamBatch. */
   streamBatch?: string;
+  /** Explicit origin marker supplied only by real event producers (e.g. exit watchers). */
+  triggerSource?: CronRunTriggerSource;
   /** Source schedule identity checked under the cron store lock before admission. */
   streamScheduleKey?: string;
   /** Logical source identity; rejects retired batches under same-schedule ABA. */

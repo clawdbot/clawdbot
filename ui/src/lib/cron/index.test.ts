@@ -659,6 +659,67 @@ describe("cron controller", () => {
       message: "do work",
       model: undefined,
       thinking: undefined,
+      tokenBudget: undefined,
+    });
+  });
+
+  it("sends a new job's tokenBudget and omits blank (unlimited)", async () => {
+    const { submit } = createCronSubmitHarness("job-budget-new", {
+      form: {
+        name: "budgeted job",
+        payloadText: "do work",
+        payloadTokenBudget: "120000",
+      },
+    });
+
+    const { call } = await submit();
+
+    expectNestedRecordFields(requestPayload(call), "payload", {
+      kind: "agentTurn",
+      tokenBudget: 120000,
+    });
+  });
+
+  it("clears a stored tokenBudget with an explicit null on update", async () => {
+    const { submit } = createCronSubmitHarness("job-budget-clear", {
+      method: "cron.update",
+      jobs: [
+        createCronJob({
+          id: "job-budget-clear",
+          name: "job-budget-clear",
+          payload: { kind: "agentTurn", message: "run", tokenBudget: 90000 },
+        }),
+      ],
+      form: { name: "budget clear", payloadText: "do work", payloadTokenBudget: "" },
+    });
+
+    const { call } = await submit();
+
+    expectNestedRecordFields(requestPatch(call), "payload", {
+      kind: "agentTurn",
+      tokenBudget: null,
+    });
+  });
+
+  it("preserves an unrelated stored tokenBudget when editing other fields", async () => {
+    const { submit } = createCronSubmitHarness("job-budget-keep", {
+      method: "cron.update",
+      jobs: [
+        createCronJob({
+          id: "job-budget-keep",
+          name: "job-budget-keep",
+          payload: { kind: "agentTurn", message: "run", tokenBudget: 250000 },
+        }),
+      ],
+      form: { name: "budget keep", payloadText: "changed prompt", payloadTokenBudget: "250000" },
+    });
+
+    const { call } = await submit();
+
+    expectNestedRecordFields(requestPatch(call), "payload", {
+      kind: "agentTurn",
+      message: "changed prompt",
+      tokenBudget: 250000,
     });
   });
 
@@ -1866,6 +1927,7 @@ describe("cron controller", () => {
         message: "hi",
         model: "opus",
         thinking: "high",
+        tokenBudget: 250000,
       },
       delivery: { mode: "announce", bestEffort: true },
     });
@@ -1881,6 +1943,7 @@ describe("cron controller", () => {
     expect(state.cronForm.triggerOnce).toBe(true);
     expect(state.cronForm.payloadModel).toBe("opus");
     expect(state.cronForm.payloadThinking).toBe("high");
+    expect(state.cronForm.payloadTokenBudget).toBe("250000");
     expect(state.cronForm.deliveryBestEffort).toBe(true);
   });
 
@@ -1919,6 +1982,7 @@ describe("cron controller", () => {
       payloadKind: "agentTurn",
       payloadText: "",
       timeoutSeconds: "-1",
+      payloadTokenBudget: "0",
       triggerEnabled: true,
       triggerScript: "",
       deliveryMode: "webhook",
@@ -1929,6 +1993,7 @@ describe("cron controller", () => {
     expect(errors.payloadText).toBe("cron.errors.agentMessageRequired");
     expect(errors.triggerScript).toBe("cron.errors.triggerScriptRequired");
     expect(errors.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
+    expect(errors.payloadTokenBudget).toBe("cron.errors.tokenBudgetInvalid");
     expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
   });
 
@@ -1957,6 +2022,48 @@ describe("cron controller", () => {
       });
 
       expect(errors.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
+    },
+  );
+
+  it.each(["120000", " 250 ", "1"])(
+    "accepts positive whole-number agent-turn token budgets: %j",
+    (payloadTokenBudget) => {
+      const errors = validateCronForm({
+        ...DEFAULT_CRON_FORM,
+        name: "Valid budget",
+        payloadText: "Run until complete",
+        payloadTokenBudget,
+      });
+
+      expect(errors.payloadTokenBudget).toBeUndefined();
+    },
+  );
+
+  it.each(["", "   "])(
+    "treats blank agent-turn token budget as unlimited: %j",
+    (payloadTokenBudget) => {
+      const errors = validateCronForm({
+        ...DEFAULT_CRON_FORM,
+        name: "Blank budget",
+        payloadText: "Run until complete",
+        payloadTokenBudget,
+      });
+
+      expect(errors.payloadTokenBudget).toBeUndefined();
+    },
+  );
+
+  it.each(["0", "-1", "2.5", "NaN", "Infinity", "not-a-number"])(
+    "rejects invalid agent-turn token budgets: %j",
+    (payloadTokenBudget) => {
+      const errors = validateCronForm({
+        ...DEFAULT_CRON_FORM,
+        name: "Invalid budget",
+        payloadText: "Run until complete",
+        payloadTokenBudget,
+      });
+
+      expect(errors.payloadTokenBudget).toBe("cron.errors.tokenBudgetInvalid");
     },
   );
 

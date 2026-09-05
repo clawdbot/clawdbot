@@ -214,13 +214,13 @@
 /* ── Jobs table (escape hatch inside the tasks group) ── */
 
 .cron-table {
-  --cron-table-columns: minmax(220px, 1.8fr) minmax(160px, 1.05fr) minmax(110px, 0.7fr)
-    minmax(130px, 0.8fr) 116px;
+  --cron-table-columns: minmax(220px, 1.8fr) minmax(80px, 0.55fr) minmax(160px, 1.05fr)
+    minmax(90px, 0.6fr) minmax(110px, 0.7fr) minmax(130px, 0.8fr) 116px;
 }
 
 .cron-table--read-only {
-  --cron-table-columns: minmax(220px, 1.8fr) minmax(160px, 1.05fr) minmax(110px, 0.7fr)
-    minmax(130px, 0.8fr);
+  --cron-table-columns: minmax(220px, 1.8fr) minmax(80px, 0.55fr) minmax(160px, 1.05fr)
+    minmax(90px, 0.6fr) minmax(110px, 0.7fr) minmax(130px, 0.8fr);
 }
 
 .cron-table__head,
@@ -372,6 +372,11 @@
 
 .cron-table__meta-separator {
   color: var(--muted);
+}
+
+/* Kind column is a badge, not prose — suppress overflow clipping on the cell */
+.cron-table__kind {
+  overflow: visible;
 }
 
 .cron-table__running {
@@ -755,6 +760,84 @@
 .cron-trigger-summary svg {
   width: 13px;
   height: 13px;
+}
+
+/* Kind badge — what executes (orthogonal to run origin / trigger source) */
+.cron-kind-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--accent-2-bg) 35%, transparent);
+  color: var(--accent-2);
+}
+
+.cron-kind-badge--neutral {
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+  color: var(--muted);
+}
+
+/* Upcoming panel — per-job ETAs for time-scheduled jobs */
+.cron-upcoming {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.cron-upcoming__heading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.cron-upcoming__title {
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.cron-upcoming__label {
+  font-size: var(--control-ui-text-xs);
+  color: var(--muted);
+}
+
+.cron-upcoming__items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.cron-upcoming__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 30%, transparent);
+  font-size: var(--control-ui-text-sm);
+}
+
+.cron-upcoming__item:last-child {
+  border-bottom: none;
+}
+
+.cron-upcoming__item-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-upcoming__item-eta {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
 }
 
 .cron-trigger-script {

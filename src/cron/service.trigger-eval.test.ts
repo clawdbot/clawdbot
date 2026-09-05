@@ -231,7 +231,11 @@ describe("cron trigger evaluation", () => {
         expect.objectContaining({ message: "base message\n\nCI became red" }),
       );
       const finished = harness.events.find((event) => event.action === "finished");
-      expect(finished).toMatchObject({ status: "ok", triggerFired: true });
+      expect(finished).toMatchObject({
+        status: "ok",
+        triggerFired: true,
+        trigger: "trigger-script",
+      });
       if (!finished) {
         throw new Error("missing finished event");
       }
@@ -240,7 +244,7 @@ describe("cron trigger evaluation", () => {
           storeKey: cronStoreKey(harness.storePath),
           jobId: job.id,
         }).entries,
-      ).toEqual([expect.objectContaining({ triggerFired: true })]);
+      ).toEqual([expect.objectContaining({ triggerFired: true, trigger: "trigger-script" })]);
       expect(harness.cron.getJob(job.id)?.state).toMatchObject({
         triggerEvalCount: 1,
         lastTriggerFireAtMs: expect.any(Number),

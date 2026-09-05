@@ -319,6 +319,7 @@ export function prepareEmbeddedAttemptStream(input: {
     onAssistantMessageStart: attempt.onAssistantMessageStart,
     onExecutionPhase: attempt.onExecutionPhase,
     onAgentEvent: attempt.onAgentEvent,
+    onRunUsageTotals: attempt.onRunUsageTotals,
     terminalLifecyclePhase: attempt.deferTerminalLifecycle ? "finishing" : "end",
     onToolStreamBoundary: attempt.onToolStreamBoundary,
     isTerminalAborted: () => input.getRunState().aborted,

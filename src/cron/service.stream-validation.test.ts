@@ -218,6 +218,7 @@ describe("cron stream schedule validation", () => {
             status: "error",
             error: "stream source exhausted restarts",
             durationMs: 0,
+            trigger: "stream",
           }),
         ],
       ]);

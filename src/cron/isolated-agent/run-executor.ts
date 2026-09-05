@@ -12,6 +12,7 @@ import {
   applyCliSessionBindingResult,
   assertCliSessionBindingResultCommitAllowed,
 } from "../../agents/cli-session.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { createContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
 import {
@@ -90,6 +91,11 @@ import {
 } from "./run-session-state.js";
 import { resolveEffectiveAgentRuntime, resolveThinkingDefault } from "./run.runtime.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
+import {
+  CronTokenBudgetExhaustedError,
+  createTokenBudgetGuard,
+  type TokenBudgetGuard,
+} from "./token-budget-guard.js";
 
 type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
 
@@ -397,6 +403,75 @@ function createCronPromptExecutor(
   let attemptedThinkingCatalogHydration = false;
   const currentAttemptCommittedMedia = () =>
     hasNewGeneratedMediaTaskForSessionKey(params.runSessionKey, attemptMediaTaskIds);
+  // One logical-run budget, constructed before candidate dispatch: a budgeted
+  // run stays capped across CLI-backed candidates, fallback candidates, and
+  // continuation attempts instead of resetting per embedded candidate. CLI
+  // usage surfaces only at candidate end, so CLI enforcement stops at the
+  // candidate boundary (mid-run stop needs stream-level usage).
+  const runTokenBudget = params.agentPayload?.tokenBudget;
+  const budgetAbortController =
+    typeof runTokenBudget === "number" ? new AbortController() : undefined;
+  const relayOwnerAbort = () => budgetAbortController?.abort();
+  if (budgetAbortController) {
+    params.abortSignal?.addEventListener("abort", relayOwnerAbort, { once: true });
+  }
+  const budgetArmedAbortSignal = budgetAbortController
+    ? params.abortSignal
+      ? AbortSignal.any([params.abortSignal, budgetAbortController.signal])
+      : budgetAbortController.signal
+    : params.abortSignal;
+  const budgetTripGuard =
+    budgetAbortController && typeof runTokenBudget === "number"
+      ? createTokenBudgetGuard({
+          budget: runTokenBudget,
+          onExceeded: () => budgetAbortController.abort(),
+          signal: params.abortSignal,
+        })
+      : undefined;
+  let carriedTokenUsageTotal = 0;
+  // Last usage total reported by the in-flight candidate (candidate-local
+  // cumulative, so a later report supersedes an earlier one within a
+  // candidate). Retained into `carriedTokenUsageTotal` when the candidate
+  // ends — on settle via the result's final total, on a throw via `onError` —
+  // so a candidate that reports spend and then throws still counts toward
+  // the next candidate's tripwire.
+  let currentCandidateUsage = 0;
+  const reportRunUsage: TokenBudgetGuard | undefined =
+    budgetTripGuard && budgetAbortController
+      ? (usage) => {
+          // Candidate-local totals restart per runtime candidate; carry the
+          // accumulated spend from earlier candidates into the tripwire.
+          if (typeof usage.total !== "number") {
+            return;
+          }
+          currentCandidateUsage = usage.total;
+          budgetTripGuard({ ...usage, total: usage.total + carriedTokenUsageTotal });
+        }
+      : undefined;
+  const settleCandidateUsage = (result: EmbeddedAgentRunResult) => {
+    if (!reportRunUsage || !budgetAbortController) {
+      return;
+    }
+    const usage = result.meta?.agentMeta?.usage;
+    if (usage && typeof usage.total === "number") {
+      reportRunUsage(usage);
+      carriedTokenUsageTotal += usage.total;
+      currentCandidateUsage = 0;
+    }
+  };
+  const totalObservedTokenUsage = () => carriedTokenUsageTotal + currentCandidateUsage;
+  // Candidate usage can surface only after the candidate already returned a
+  // successful result (CLI usage is post-hoc; some providers report usage only
+  // at stream end). A trip at that point must still fail the run, otherwise a
+  // successful result would survive a cap it exceeded.
+  const throwIfBudgetTripped = () => {
+    if (budgetAbortController?.signal.aborted && !params.abortSignal?.aborted) {
+      throw new CronTokenBudgetExhaustedError({
+        budget: runTokenBudget as number,
+        usageTotal: totalObservedTokenUsage(),
+      });
+    }
+  };
 
   const runPrompt = async (promptText: string) => {
     // A retry can fail during preparation, before any backend start callback.
@@ -502,7 +577,18 @@ function createCronPromptExecutor(
         params.liveSelection.authProfileIdSource === "user"
           ? params.liveSelection.authProfileId
           : undefined,
-      abortSignal: params.abortSignal,
+      abortSignal: budgetArmedAbortSignal,
+      // A candidate that reported usage and then threw a fallback-eligible
+      // error still spent those tokens; retain the observed total before the
+      // next candidate runs so its tripwire includes the spend. Settled
+      // candidates have already folded their total in (currentCandidateUsage
+      // reset to 0), so this is a no-op for them.
+      onError: () => {
+        if (currentCandidateUsage > 0) {
+          carriedTokenUsageTotal += currentCandidateUsage;
+          currentCandidateUsage = 0;
+        }
+      },
       resolveAgentHarnessRuntimeOverride: (provider) =>
         resolveSessionRuntimeOverrideForProvider({
           provider,
@@ -714,7 +800,7 @@ function createCronPromptExecutor(
                   params.agentPayload?.toolsAllowIsDefault,
                 ),
                 scheduledToolPolicy,
-                abortSignal: params.abortSignal,
+                abortSignal: budgetArmedAbortSignal,
                 onExecutionStarted: notifyExecutionStarted,
                 onExecutionPhase: notifyExecutionPhase,
                 bootstrapContextMode,
@@ -769,6 +855,8 @@ function createCronPromptExecutor(
             result.meta?.systemPromptReport,
           );
           acceptedContextEngineTurnCandidate = contextEngineTurnCandidate;
+          settleCandidateUsage(result);
+          throwIfBudgetTripped();
           return result;
         }
         const { resolveFastModeState, runEmbeddedAgent } = await cronEmbeddedRuntimeLoader.load();
@@ -784,6 +872,9 @@ function createCronPromptExecutor(
           to: params.resolvedDelivery.to,
           threadId: params.resolvedDelivery.threadId,
         });
+        // Budget enforcement owns its own signal: the guard aborts this
+        // controller when cumulative usage reaches the job's cap, so the run
+        // stops itself instead of only being relabeled after the fact.
         // Embedded runs receive both the explicit route and the current-channel
         // id so message-tool policy can target the same chat as fallback delivery.
         const result = await runEmbeddedAgent({
@@ -874,7 +965,8 @@ function createCronPromptExecutor(
           onContextEngineTurnCandidate: (facts) => {
             contextEngineTurnCandidate = facts;
           },
-          abortSignal: params.abortSignal,
+          abortSignal: budgetArmedAbortSignal,
+          onRunUsageTotals: reportRunUsage,
           onExecutionStarted: notifyExecutionStarted,
           onExecutionPhase: notifyExecutionPhase,
           onLaneWait: params.onLaneWait,
@@ -888,12 +980,24 @@ function createCronPromptExecutor(
           result.meta?.systemPromptReport,
         );
         acceptedContextEngineTurnCandidate = contextEngineTurnCandidate;
+        settleCandidateUsage(result);
+        throwIfBudgetTripped();
         return result;
       },
     })
       .catch(async (error: unknown) => {
         params.lifecycle.capture("error", error);
         await contextEngineLogicalTurnLease.dispose();
+        // A budget-only trip aborts the composite signal while the owner
+        // signal stays live: surface the budget, not a generic abort, as the
+        // terminal cause. Owner aborts keep their own reason.
+        if (budgetAbortController?.signal.aborted && !params.abortSignal?.aborted) {
+          throw new CronTokenBudgetExhaustedError({
+            budget: runTokenBudget as number,
+            usageTotal: totalObservedTokenUsage(),
+            cause: error,
+          });
+        }
         throw error;
       })
       .finally(() => {
