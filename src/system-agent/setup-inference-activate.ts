@@ -8,6 +8,7 @@ import {
 } from "../agents/cli-credentials.js";
 import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
 import { createMergePatch } from "../config/merge-patch.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -55,7 +56,6 @@ import {
   persistManualAuthProfiles,
   restoreSetupPluginMetadata,
   retainUnownedCodexInstall,
-  runSetupInferenceTest,
 } from "./setup-inference-persist.js";
 import {
   configureCodexCliPreparedAuth,
@@ -63,6 +63,7 @@ import {
   resolveSetupAgentRuntimeId,
 } from "./setup-inference-plan-helpers.js";
 import { buildTestPlan } from "./setup-inference-plan.js";
+import { runSetupInferenceTest } from "./setup-inference-test.js";
 import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 import {
   captureSystemAgentOwnerPluginArtifacts,
@@ -198,11 +199,19 @@ async function activateSetupInferenceUnredacted(
     }
 
     const hasPreparedAuthProfiles = (plan.manualAuth?.profiles.length ?? 0) > 0;
-    let testPlan = plan;
+    // Verify the same automatic tool surface that activation will persist. Provider
+    // preparation may already have selected the candidate; retain the prior owner.
+    const autoLocalModelLeanUpdate = applyAutoLocalModelLean({
+      config: plan.config,
+      providerId: plan.provider,
+      modelRef: plan.modelRef,
+      previousModelRef: resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model),
+    });
+    let testPlan = { ...plan, config: autoLocalModelLeanUpdate.config };
     if (plan.persistModelRef) {
       const agentRuntimeId = resolveSetupAgentRuntimeId(params.kind);
       const stagedConfig = await applySystemAgentModelSelection({
-        config: plan.config,
+        config: testPlan.config,
         model: plan.persistModelRef,
         ...(params.agentId ? { targetAgentId: testPlan.routeAgentId } : {}),
         ...(agentRuntimeId ? { agentRuntimeId } : {}),
@@ -462,6 +471,7 @@ async function activateSetupInferenceUnredacted(
           // already exist in the isolated store and every other route stays read-only.
           authProfileStateMode: "read-only",
           requireExecutionOwner: true,
+          verifyAgentTools: true,
           ...(params.signal ? { signal: params.signal } : {}),
         }),
       );
@@ -484,11 +494,6 @@ async function activateSetupInferenceUnredacted(
       };
     }
 
-    const autoLocalModelLeanUpdate = applyAutoLocalModelLean({
-      config: sourceCfg,
-      providerId: testPlan.provider,
-      modelRef: plan.modelRef,
-    });
     const needsPersistence =
       plan.persistModelRef !== undefined ||
       plan.manualAuth !== undefined ||

@@ -21,6 +21,7 @@ export type ChromeMcpToolResult = {
 export type ChromeMcpSession = {
   client: Client;
   transport: StdioClientTransport;
+  closeTransport: () => Promise<void>;
   ready: Promise<void>;
   processCleanup?: ChromeMcpProcessCleanupState;
   processCleanupRefresh?: Promise<void>;

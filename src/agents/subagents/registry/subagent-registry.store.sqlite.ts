@@ -135,6 +135,19 @@ export function upsertSubagentRunRowInDatabase(
   );
 }
 
+/** Deletes one run on the exact supplied shared-state handle. */
+export function deleteSubagentRunRowInDatabase(
+  database: OpenClawStateDatabase,
+  runId: string,
+): void {
+  executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
+      .deleteFrom("subagent_runs")
+      .where("run_id", "=", runId),
+  );
+}
+
 export function readSubagentRun(
   database: OpenClawStateDatabase,
   runId: string,

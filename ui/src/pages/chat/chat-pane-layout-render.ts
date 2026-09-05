@@ -17,7 +17,7 @@ import {
   sidebarPanelTemplates,
 } from "./chat-pane-embedded-panels.ts";
 import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
-import { CHAT_COMPOSER_TEXTAREA_SELECTOR, type ResolvedBoardView } from "./chat-pane-shared.ts";
+import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion, sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
@@ -30,7 +30,6 @@ import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
-import { appendChatDraftText } from "./input-history.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   isSidebarSlotVisible,
@@ -107,25 +106,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           : undefined,
       );
     }
-    // Accessories belong to the shared header and remain presented in visible,
-    // unfocused panes; docked chat must not mount another copy.
-    const header = this.compact
-      ? nothing
-      : html`${this.renderPaneHeader(
-            sessionWorkspace,
-            backgroundTasks,
-            selectedSession,
-            catalog,
-            agentWorkspace,
-            workspaceGit,
-            chatProps.placementStartup,
-            sidebarLayout,
-          )}<openclaw-plugin-contributions
-            .kind=${"session-header"}
-            .sessionKey=${state.sessionKey}
-            .agentId=${currentAgentId}
-            .presented=${this.visuallyPresented}
-          ></openclaw-plugin-contributions>`;
     const recovery = html`<openclaw-chat-outbox-recovery
       .host=${state}
       .identity=${JSON.stringify([
@@ -197,8 +177,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           this.requestUpdate();
         }
       },
-      dashboard:
-        !this.compact && board.hasBoard ? this.renderBoardPanel(board, sidebarLayout) : nothing,
+      dashboard: !this.compact ? this.renderBoardPanel(board, sidebarLayout) : nothing,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
       tasks: renderBackgroundTasksRail(backgroundTasks, { embedded: true }),
       renderDetail: (content) =>
@@ -236,6 +215,26 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const availableSlots = availableSidebarSlots(panelDefinitions);
     const panelTemplates = sidebarPanelTemplates(panelDefinitions);
     const panelActions = sidebarPanelActions(panelDefinitions);
+    // Main panel actions share the task toolbar. Content roots stay in the
+    // sidebar region so changing their presentation never reconnects them.
+    const header = this.compact
+      ? nothing
+      : html`${this.renderPaneHeader(
+            sessionWorkspace,
+            backgroundTasks,
+            selectedSession,
+            catalog,
+            agentWorkspace,
+            workspaceGit,
+            chatProps.placementStartup,
+            sidebarLayout,
+            panelDefinitions,
+          )}<openclaw-plugin-contributions
+            .kind=${"session-header"}
+            .sessionKey=${state.sessionKey}
+            .agentId=${currentAgentId}
+            .presented=${this.visuallyPresented}
+          ></openclaw-plugin-contributions>`;
     const content = renderSidebarRegion({
       availableWidth: this.paneWidth,
       availableSlots,
@@ -244,17 +243,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         layout: sidebarLayout,
         closePanelSlot,
         openPanelSlot,
-        appendComposerText: (text) => {
-          const nextDraft = appendChatDraftText(state, text);
-          state.requestUpdate?.();
-          queueMicrotask(() => {
-            const textarea = this.querySelector<HTMLTextAreaElement>(
-              CHAT_COMPOSER_TEXTAREA_SELECTOR,
-            );
-            textarea?.focus({ preventScroll: true });
-            textarea?.setSelectionRange(nextDraft.length, nextDraft.length);
-          });
-        },
         forgetDiscussionUrl: () => this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim()),
         resizePanel: (columnId, size) =>
           this.commitSidebarPanelResize(sidebarLayout, columnId, size),
@@ -265,13 +253,14 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       panelActions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
       panelTemplates,
+      header: html`${header}${recovery}`,
       primary,
       requestUpdate: state.requestUpdate!,
     });
-    return html`<div class="chat-pane-layout">${header}${recovery}${content}</div>
-      ${renderChatImageLightbox(
-        state.imageLightbox,
-        state.handleCloseImage,
-      )}${this.renderResetConfirmation()}`;
+    return html`${content}
+    ${renderChatImageLightbox(
+      state.imageLightbox,
+      state.handleCloseImage,
+    )}${this.renderResetConfirmation()}`;
   }
 }

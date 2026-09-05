@@ -199,7 +199,7 @@ function resolvePatterns(value?: readonly RedactPattern[]): RegExp[] {
     );
     return toolPayloadResolvedPatterns;
   }
-  if (!value?.length) {
+  if (!value?.length || value === DEFAULT_REDACT_PATTERNS) {
     defaultResolvedPatterns ??= DEFAULT_REDACT_PATTERNS.map(parsePattern).filter(
       (re): re is RegExp => Boolean(re),
     );
@@ -209,10 +209,7 @@ function resolvePatterns(value?: readonly RedactPattern[]): RegExp[] {
 }
 
 function includesDefaultRedactPatterns(value?: readonly RedactPattern[]): boolean {
-  if (value === TOOL_PAYLOAD_REDACT_PATTERNS) {
-    return true;
-  }
-  if (!value?.length) {
+  if (!value || usesBuiltInRedactPatterns(value)) {
     return true;
   }
   const source = new Set(value.filter((pattern): pattern is string => typeof pattern === "string"));

@@ -116,6 +116,7 @@ const requiredPathGroups = [
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/agents/compaction-planning.worker.js",
   "dist/config/sessions/session-model-context.worker.js",
+  "dist/config/sessions/disk-budget.worker.js",
   "dist/agents/model-provider-auth.worker.js",
   "dist/agents/prepared-model-catalog.worker.js",
   "dist/extensions/memory-core/memory-search-knn.child.js",

@@ -19,6 +19,7 @@ import "./chat-pane.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
+  closeSlot,
   openSlot,
   promoteSidebarPanel,
   setSidebarDock,
@@ -191,6 +192,42 @@ afterEach(() => {
 });
 
 describe("chat pane board shell", () => {
+  it.each(["agent:main:closed-dashboard", "global"])(
+    "keeps an explicitly closed empty dashboard closed when its first content arrives (%s)",
+    async (sessionKey) => {
+      const { pane, request } = createGatewayBoardPane({ sessionKey });
+      pane.sessionKey = sessionKey;
+      pane.routeFace = "chat";
+      pane.onFaceChange = vi.fn();
+      if (sessionKey === "global") {
+        pane.state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
+        pane.state.assistantAgentId = "work";
+      }
+      const snapshotKey = sessionKey === "global" ? "agent:work:global" : sessionKey;
+      request.mockResolvedValue({ sessionKey: snapshotKey, revision: 1, tabs: [], widgets: [] });
+      const provider = pane.resolveBoardProvider();
+      try {
+        await vi.waitFor(() => expect(provider.hasLoadedSnapshot).toBe(true));
+        pane.syncRetainedBoardSession(pane.resolveBoardView());
+        const closed = closeSlot(openSlot({ columns: [] }, "dashboard"), "dashboard");
+        pane.commitSidebarLayout(closed);
+        patchSettings({ sidebarSessionLayouts: { [sessionKey]: closed } });
+        request.mockResolvedValue({
+          sessionKey: snapshotKey,
+          revision: 2,
+          tabs: [{ tabId: "main", title: "Overview", position: 0, chatDock: "right" }],
+          widgets: [],
+        });
+        await provider.applyOps([{ kind: "tab_create", tabId: "main", title: "Overview" }]);
+        pane.syncRetainedBoardSession(pane.resolveBoardView());
+        expect(pane.state.sidebarLayout).toEqual(closed);
+        expect(pane.onFaceChange).not.toHaveBeenCalled();
+      } finally {
+        (Reflect.get(pane, "releaseBoardProviderLease") as () => void).call(pane);
+      }
+    },
+  );
+
   it("keeps side-panel presentation independent from persisted Board data", () => {
     const pane = createTestPane();
     const provider = mockBoardProvider("agent:main:current");

@@ -705,7 +705,7 @@ export async function failPendingDelivery(
     env: stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env,
   });
   let terminalized = false;
-  const terminalize = () => {
+  const terminalize = (): undefined => {
     terminalized =
       terminalizePendingDeliveryQueueEntryInDatabase(
         database,

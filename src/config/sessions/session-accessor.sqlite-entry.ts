@@ -333,7 +333,7 @@ export function listSessionEntriesByStatus(
 
 /** Lists transcript-bearing SQLite sessions, including retained rows from session-id rotation. */
 export function listSessionTranscriptInstances(
-  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
+  scope: SessionEntryListScope = {},
   options: SessionTranscriptInstanceListOptions = {},
 ): SessionTranscriptInstance[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
@@ -342,7 +342,7 @@ export function listSessionTranscriptInstances(
       options.sessionId !== undefined
         ? {
             get: (sessionKey: string) =>
-              readExactSessionEntryRowValidated(database, sessionKey)?.entry,
+              readExactSessionEntryRowValidated(database, sessionKey, scope.projection)?.entry,
           }
         : new Map(
             listSqliteSessionEntriesFromDatabase(database, resolved, {

@@ -77,13 +77,34 @@ describe("scanNodeHostedSkills", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("loads descriptors and preserves the full SKILL.md content", () => {
+  it("loads complete descriptors in skill-name order", () => {
     const root = createRoot();
     const content = writeSkill(root, "release-helper", "Prepare a release", "# Release\nDo it.");
+    const prefixContent = writeSkill(root, "release", "Release", "# Prefix skill");
 
     expect(scanNodeHostedSkills({ skillsDir: root })).toEqual([
+      { name: "release", description: "Release", content: prefixContent },
       { name: "release-helper", description: "Prepare a release", content },
     ]);
+  });
+
+  it("publishes the same bounded content that supplied the skill metadata", () => {
+    const root = createRoot();
+    const original = writeSkill(root, "a-stable", "Original description", "# Original");
+    const invalidDir = path.join(root, "b-invalid");
+    fs.mkdirSync(invalidDir);
+    const invalidFile = path.join(invalidDir, "SKILL.md");
+    fs.writeFileSync(invalidFile, "# Missing frontmatter\n");
+    const warn = vi.fn((message: string) => {
+      if (message.includes(invalidFile)) {
+        writeSkill(root, "a-stable", "Replacement description", "# Replacement");
+      }
+    });
+
+    expect(scanNodeHostedSkills({ skillsDir: root, warn })).toEqual([
+      { name: "a-stable", description: "Original description", content: original },
+    ]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(invalidFile));
   });
 
   it("loads JSON5-style metadata frontmatter", () => {
@@ -144,7 +165,7 @@ metadata:
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("directory, name, and frontmatter"));
   });
 
-  it("keeps nested diagnostics separate from the current candidate", () => {
+  it("does not inspect nested skills after rejecting the named candidate", () => {
     const root = createRoot();
     const candidateDir = path.join(root, "candidate");
     fs.mkdirSync(path.join(candidateDir, "nested"), { recursive: true });
@@ -155,7 +176,7 @@ metadata:
     const warn = vi.fn();
 
     expect(scanNodeHostedSkills({ skillsDir: root, warn })).toEqual([]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining(nestedFile));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining(nestedFile));
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining(`${candidateFile}): description is required`),
     );

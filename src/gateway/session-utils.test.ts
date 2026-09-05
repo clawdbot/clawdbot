@@ -3931,6 +3931,24 @@ describe("gateway session utils", () => {
     );
   });
 
+  test.each(["local", "data"])("keeps %s avatar bytes out of browser agent rows", (kind) => {
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-browser-avatar-"));
+    onTestFinished(() => fs.rmSync(workspace, { recursive: true, force: true }));
+    const dataUrl = `data:image/png;base64,${Buffer.from("avatar").toString("base64")}`;
+    fs.writeFileSync(path.join(workspace, "avatar-link.png"), "avatar");
+    const cfg = createSingleAgentAvatarConfig(workspace);
+    if (kind === "data") {
+      cfg.agents!.list![0]!.identity!.avatar = dataUrl;
+    }
+    const browser = listAgentsForGateway(cfg, undefined, { httpAvatarBasePath: "/control" });
+    expect(browser.agents[0]?.identity?.avatarUrl).toMatch(
+      /^\/control\/avatar\/main\?v=[a-f0-9]+$/,
+    );
+    expect(browser.agents[0]?.identity?.avatar).toBe(browser.agents[0]?.identity?.avatarUrl);
+    expect(JSON.stringify(browser)).not.toContain(dataUrl);
+    expect(listAgentsForGateway(cfg).agents[0]?.identity?.avatarUrl).toBe(dataUrl);
+  });
+
   test("listAgentsForGateway falls back to identity.name when name is unset", () => {
     const cfg = {
       session: { mainKey: "main" },

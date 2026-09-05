@@ -66,7 +66,9 @@ The default `browser` tool is a bundled plugin. Disable it to replace it with an
 
 Defaults need both `plugins.entries.browser.enabled` **and** `browser.enabled=true`. Disabling only the plugin removes the `openclaw browser` CLI, `browser.request` gateway method, agent tool, and control service as one unit; your `browser.*` config stays intact for a replacement.
 
-Profiles, launch settings, snapshot defaults, and tab cleanup hot-reload. Browser
+Profiles, launch settings, snapshot defaults, tab cleanup, and
+`browser.allowSystemProfileImport` hot-reload. Import permission changes apply to
+new imports; an import already in progress keeps its admission. Browser
 enablement, evaluation, SSRF policy, and extension relay settings require a Gateway
 restart. See [Config hot reload](/gateway/configuration#config-hot-reload).
 
@@ -818,6 +820,10 @@ Notes:
 - This path is higher-risk than the isolated `openclaw` profile because it can
   act inside your signed-in browser session.
 - OpenClaw does not launch the browser for this driver; it only attaches.
+- Stopping or failing an attach closes the owned MCP subprocess and its verified
+  descendants, not the already-running browser. Replacement attaches wait for
+  cleanup; if cleanup cannot be verified, OpenClaw reports an error instead of
+  treating the session as closed.
 - OpenClaw uses the official Chrome DevTools MCP `--autoConnect` flow here. If
   `userDataDir` is set, it is passed through to target that user data directory.
 - Existing-session can attach on the selected host or through a connected

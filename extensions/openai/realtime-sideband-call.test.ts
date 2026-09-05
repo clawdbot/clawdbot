@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { openAIRealtimeHost } from "./realtime-host.js";
 import {
   buildOpenAIRealtimeSidebandUrl,
   createOpenAIQuicksilverCall,
@@ -29,19 +30,22 @@ describe("OpenAI Realtime sideband call wire", () => {
     });
 
     await expect(
-      createOpenAIQuicksilverCall({
-        auth: { type: "api-key", token: "sk-platform" }, // pragma: allowlist secret
-        requestIds: {
-          realtimeSessionId: "realtime-test",
-          sessionId: "session-test",
-          threadId: "thread-test",
+      createOpenAIQuicksilverCall(
+        {
+          auth: { type: "api-key", token: "sk-platform" }, // pragma: allowlist secret
+          requestIds: {
+            realtimeSessionId: "realtime-test",
+            sessionId: "session-test",
+            threadId: "thread-test",
+          },
+          sdp: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n",
+          session: { type: "realtime", model: "gpt-realtime-2.1" },
+          gaSideband: true,
+          onCallAllocated,
+          fetchImpl: fetchImpl as typeof fetch,
         },
-        sdp: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n",
-        session: { type: "realtime", model: "gpt-realtime-2.1" },
-        gaSideband: true,
-        onCallAllocated,
-        fetchImpl: fetchImpl as typeof fetch,
-      }),
+        openAIRealtimeHost,
+      ),
     ).resolves.toEqual({
       kind: "ga-sideband",
       answerSdp: "v=0\r\na=answer\r\n",
@@ -62,25 +66,28 @@ describe("OpenAI Realtime sideband call wire", () => {
   ])("rejects an untrusted Location header", async (location, message) => {
     const onCallAllocated = vi.fn();
     await expect(
-      createOpenAIQuicksilverCall({
-        auth: { type: "api-key", token: "sk-platform" }, // pragma: allowlist secret
-        requestIds: {
-          realtimeSessionId: "realtime-location",
-          sessionId: "session-location",
-          threadId: "thread-location",
+      createOpenAIQuicksilverCall(
+        {
+          auth: { type: "api-key", token: "sk-platform" }, // pragma: allowlist secret
+          requestIds: {
+            realtimeSessionId: "realtime-location",
+            sessionId: "session-location",
+            threadId: "thread-location",
+          },
+          sdp: "v=0\r\n",
+          session: { type: "realtime", model: "gpt-realtime-2.1" },
+          gaSideband: true,
+          onCallAllocated,
+          fetchImpl: vi.fn(
+            async () =>
+              new Response("v=answer\r\n", {
+                status: 201,
+                ...(location === null ? {} : { headers: { Location: location } }),
+              }),
+          ) as typeof fetch,
         },
-        sdp: "v=0\r\n",
-        session: { type: "realtime", model: "gpt-realtime-2.1" },
-        gaSideband: true,
-        onCallAllocated,
-        fetchImpl: vi.fn(
-          async () =>
-            new Response("v=answer\r\n", {
-              status: 201,
-              ...(location === null ? {} : { headers: { Location: location } }),
-            }),
-        ) as typeof fetch,
-      }),
+        openAIRealtimeHost,
+      ),
     ).rejects.toThrow(message);
     expect(onCallAllocated).not.toHaveBeenCalled();
   });
@@ -95,11 +102,14 @@ describe("OpenAI Realtime sideband call wire", () => {
   it.each([200, 404, 503])("releases the hangup response body for HTTP %s", async (status) => {
     const cancel = vi.fn();
     const fetchImpl = vi.fn(async () => new Response(new ReadableStream({ cancel }), { status }));
-    const hangingUp = hangupOpenAIRealtimeCall({
-      apiKey: "sk-platform", // pragma: allowlist secret
-      callId: "call_test-123",
-      fetchImpl: fetchImpl as typeof fetch,
-    });
+    const hangingUp = hangupOpenAIRealtimeCall(
+      {
+        apiKey: "sk-platform", // pragma: allowlist secret
+        callId: "call_test-123",
+        fetchImpl: fetchImpl as typeof fetch,
+      },
+      openAIRealtimeHost,
+    );
     if (status === 503) {
       await expect(hangingUp).rejects.toThrow("hangup failed (503)");
     } else {
@@ -120,19 +130,22 @@ describe("OpenAI Realtime sideband call wire", () => {
     );
     let error: unknown;
     try {
-      await createOpenAIQuicksilverCall({
-        auth: { type: "api-key", token: "sk-platform" }, // pragma: allowlist secret
-        requestIds: {
-          realtimeSessionId: "realtime-error",
-          sessionId: "session-error",
-          threadId: "thread-error",
+      await createOpenAIQuicksilverCall(
+        {
+          auth: { type: "api-key", token: "sk-platform" }, // pragma: allowlist secret
+          requestIds: {
+            realtimeSessionId: "realtime-error",
+            sessionId: "session-error",
+            threadId: "thread-error",
+          },
+          sdp: "v=0\r\n",
+          session: { type: "realtime", model: "gpt-realtime-2.1" },
+          gaSideband: true,
+          onCallAllocated,
+          fetchImpl: fetchImpl as typeof fetch,
         },
-        sdp: "v=0\r\n",
-        session: { type: "realtime", model: "gpt-realtime-2.1" },
-        gaSideband: true,
-        onCallAllocated,
-        fetchImpl: fetchImpl as typeof fetch,
-      });
+        openAIRealtimeHost,
+      );
     } catch (caught) {
       error = caught;
     }

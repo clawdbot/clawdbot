@@ -444,8 +444,8 @@ export function splitMediaFromOutput(
       continue;
     }
 
-    const trimmedStart = line.trimStart();
-    if (!extractMediaDirectives || !trimmedStart.toUpperCase().startsWith("MEDIA:")) {
+    const linePrefix = line.trimStart().slice(0, "MEDIA:".length);
+    if (!extractMediaDirectives || !linePrefix.toUpperCase().startsWith("MEDIA:")) {
       const markdownImageResult = extractMarkdownImages
         ? collectMarkdownImageSegments({
             line,

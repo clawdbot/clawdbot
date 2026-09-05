@@ -201,6 +201,7 @@ export const browserPluginReload = {
     "browser.extraArgs",
     "browser.snapshotDefaults",
     "browser.tabCleanup",
+    "browser.allowSystemProfileImport",
   ],
 };
 

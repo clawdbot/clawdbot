@@ -88,14 +88,16 @@ type MemoryIndexEntry = {
   content?: string;
 };
 
-function createDbMock(): DatabaseSync {
-  return {
-    prepare: vi.fn(() => ({
-      all: vi.fn(() => []),
-      get: vi.fn(() => undefined),
-      run: vi.fn(),
-    })),
-  } as unknown as DatabaseSync;
+function createDb(): DatabaseSync {
+  const { DatabaseSync: NodeDatabaseSync } = requireNodeSqlite();
+  const db = new NodeDatabaseSync(":memory:");
+  ensureMemoryIndexSchema({
+    db,
+    cacheEnabled: true,
+    ftsEnabled: false,
+    ftsTokenizer: "unicode61",
+  });
+  return db;
 }
 
 class SessionSyncYieldHarness extends MemoryManagerSyncOps {
@@ -121,25 +123,22 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   protected readonly cache = { enabled: false };
   protected providerUnavailableReason?: string;
   protected providerLifecycle = { mode: "active" as const, providerId: "test" };
-  protected publishedDatabase = new MemoryIndexDatabase(createDbMock());
+  protected publishedDatabase: MemoryIndexDatabase;
 
   readonly indexedPaths: string[] = [];
   private corpusFiles: string[] = [];
 
-  constructor(private readonly onIndexFile: (count: number) => void) {
+  constructor(
+    db: DatabaseSync,
+    private readonly onIndexFile: (count: number) => void,
+  ) {
     super();
+    this.publishedDatabase = new MemoryIndexDatabase(db);
   }
 
   async syncTargetArchiveFiles(files: string[]): Promise<void> {
     this.corpusFiles = files;
-    await (
-      this as unknown as {
-        syncArchiveFiles: (params: {
-          needsFullReindex: boolean;
-          targetArchiveFiles: string[];
-        }) => Promise<void>;
-      }
-    ).syncArchiveFiles({
+    await this.syncArchiveFiles({
       needsFullReindex: false,
       targetArchiveFiles: files,
     });
@@ -195,8 +194,7 @@ class EmbeddingCacheSeedHarness extends SessionSyncYieldHarness {
   protected override readonly cache = { enabled: true };
 
   constructor(db: DatabaseSync) {
-    super(() => {});
-    this.publishedDatabase = new MemoryIndexDatabase(db);
+    super(db, () => {});
   }
 
   async seedCache(sourceDb: DatabaseSync): Promise<void> {
@@ -238,34 +236,25 @@ describe("session sync responsiveness", () => {
       });
     });
     const observedBeforeLastFile: boolean[] = [];
-    const harness = new SessionSyncYieldHarness((count) => {
+    const db = createDb();
+    const harness = new SessionSyncYieldHarness(db, (count) => {
       if (count === 11) {
         observedBeforeLastFile.push(immediateRan);
       }
     });
 
-    await harness.syncTargetArchiveFiles(files);
-
-    expect(harness.indexedPaths).toHaveLength(files.length);
-    expect(observedBeforeLastFile).toEqual([true]);
-    await immediate;
+    try {
+      await harness.syncTargetArchiveFiles(files);
+      expect(harness.indexedPaths).toHaveLength(files.length);
+      expect(observedBeforeLastFile).toEqual([true]);
+      await immediate;
+    } finally {
+      db.close();
+    }
   });
 });
 
 describe("embedding cache seed responsiveness", () => {
-  const { DatabaseSync: NodeDatabaseSync } = requireNodeSqlite();
-
-  function createCacheDb(): DatabaseSync {
-    const db = new NodeDatabaseSync(":memory:");
-    ensureMemoryIndexSchema({
-      db,
-      cacheEnabled: true,
-      ftsEnabled: false,
-      ftsTokenizer: "unicode61",
-    });
-    return db;
-  }
-
   function countCacheRows(db: DatabaseSync): number {
     const row = db.prepare("SELECT count(*) AS count FROM memory_embedding_cache").get() as {
       count: number;
@@ -274,8 +263,8 @@ describe("embedding cache seed responsiveness", () => {
   }
 
   it("commits each materialized page before yielding", async () => {
-    const sourceDb = createCacheDb();
-    const targetDb = createCacheDb();
+    const sourceDb = createDb();
+    const targetDb = createDb();
     try {
       const insert = sourceDb.prepare(
         `INSERT INTO memory_embedding_cache

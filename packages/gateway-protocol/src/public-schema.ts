@@ -621,6 +621,7 @@ export {
   QuestionWaitAnswerParamsSchema,
   QuestionWaitAnswerResultSchema,
   ChatHistoryParamsSchema,
+  ChatStartupParamsSchema,
   ChatMetadataParamsSchema,
   ChatSendParamsSchema,
   ChatInjectParamsSchema,

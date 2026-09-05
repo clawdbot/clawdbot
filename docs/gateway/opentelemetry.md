@@ -59,6 +59,20 @@ openclaw plugins install clawhub:@openclaw/diagnostics-otel
 
 Or enable the plugin from the CLI: `openclaw plugins enable diagnostics-otel`.
 
+With the plugin loaded, changes to `diagnostics.otel` hot-reload only its exporter
+service. The previous generation unsubscribes and flushes before the replacement
+starts with the new endpoint, headers, sampling, and signal settings. Other plugin
+services, channels, and Gateway connections stay running. A cleanup or startup
+failure requests Gateway recovery instead of leaving a partially replaced exporter.
+
+`diagnostics.enabled` also hot-applies to the shared dispatcher and its heartbeat.
+The Gateway owns that process-wide heartbeat; stopping a channel leaves it running.
+Standalone hosts using the plugin SDK own `startDiagnosticHeartbeat` and
+`stopDiagnosticHeartbeat` for their process, rather than each channel owning them.
+Disabling it stops diagnostic sampling and recovery listeners; enabling it starts
+them again. Preloaded OpenTelemetry SDKs keep ownership of their providers and
+transport: these changes do not shut down or reconfigure the host SDK.
+
 <Note>
 `diagnostics.otel.protocol` accepts only `http/protobuf`. If a persisted config,
 including a value supplied through `${VAR}` interpolation, still resolves this

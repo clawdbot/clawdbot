@@ -162,7 +162,7 @@ Automation jobs, pending runtime state, and run history live in the shared SQLit
 
 ```bash
 openclaw automations run <job-id>
-openclaw automations runs --id <job-id> --run-id <run-id>
+openclaw automations runs <job-id> --run-id <run-id>
 ```
 
 Add `--wait` when a script should block until that exact queued run records a terminal status:
@@ -319,10 +319,13 @@ openclaw automations run <job-id>
 openclaw automations run <job-id> --due
 openclaw automations run <job-id> --wait --wait-timeout 10m
 openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
-openclaw automations runs --id <job-id> --limit 50
-openclaw automations runs --id <job-id> --limit 50 --json
-openclaw automations runs --id <job-id> --run-id <run-id>
+openclaw automations runs <job-id> --limit 50
+openclaw automations runs <job-id> --limit 50 --json
+openclaw automations runs <job-id> --run-id <run-id>
 ```
+
+`automations runs` is the preferred spelling. `cron runs` and the leaf-local
+`--id <job-id>` form remain supported compatibility aliases.
 
 `openclaw automations list` shows enabled jobs by default. Pass `--all` to include disabled jobs, or `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.
 

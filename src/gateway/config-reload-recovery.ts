@@ -100,6 +100,7 @@ export function reloadPlanNeedsRecovery(plan: GatewayReloadPlan): boolean {
     plan.restartCron ||
     plan.restartGmailWatcher ||
     plan.reloadPlugins ||
+    (plan.restartServices?.size ?? 0) > 0 ||
     plan.restartChannels.size > 0 ||
     (plan.restartChannelAccounts?.size ?? 0) > 0 ||
     shouldRefreshContextWindowCache(plan)

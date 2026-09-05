@@ -1889,6 +1889,24 @@ public struct SetupAdmissionBusyErrorDetails: Codable, Sendable {
     }
 }
 
+public struct GitHubPublicationSelectionRejectedErrorDetails: Codable, Sendable {
+    public let code: String
+    public let idempotencykey: String
+
+    public init(
+        code: String,
+        idempotencykey: String)
+    {
+        self.code = code
+        self.idempotencykey = idempotencykey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case idempotencykey = "idempotencyKey"
+    }
+}
+
 public struct ProjectCloneErrorDetails: Codable, Sendable {
     public let code: String
     public let cause: String
@@ -22604,6 +22622,7 @@ public struct ChatHistoryParams: Codable, Sendable {
     public let agentid: String?
     public let cursor: String?
     public let limit: Int?
+    public let maxbytes: Int?
     public let offset: Int?
     public let pendingbefore: Int?
     public let inputrunids: [String]?
@@ -22616,6 +22635,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         agentid: String? = nil,
         cursor: String? = nil,
         limit: Int? = nil,
+        maxbytes: Int? = nil,
         offset: Int? = nil,
         pendingbefore: Int? = nil,
         inputrunids: [String]? = nil,
@@ -22627,6 +22647,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         self.agentid = agentid
         self.cursor = cursor
         self.limit = limit
+        self.maxbytes = maxbytes
         self.offset = offset
         self.pendingbefore = pendingbefore
         self.inputrunids = inputrunids
@@ -22640,6 +22661,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         case agentid = "agentId"
         case cursor
         case limit
+        case maxbytes = "maxBytes"
         case offset
         case pendingbefore = "pendingBefore"
         case inputrunids = "inputRunIds"
@@ -23816,6 +23838,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
     case unknownAgentId(UnknownAgentIdErrorDetails)
     case wizardNotFound(WizardNotFoundErrorDetails)
     case setupAdmissionBusy(SetupAdmissionBusyErrorDetails)
+    case githubPublicationSelectionRejected(GitHubPublicationSelectionRejectedErrorDetails)
 
     public init(code: String, missingscope: String, requiredscopes: [String]) {
         self = .missingScope(
@@ -23839,6 +23862,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .unknownAgentId(let value): value.code
         case .wizardNotFound(let value): value.code
         case .setupAdmissionBusy(let value): value.code
+        case .githubPublicationSelectionRejected(let value): value.code
         }
     }
 
@@ -23870,6 +23894,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case "UNKNOWN_AGENT_ID": self = try .unknownAgentId(UnknownAgentIdErrorDetails(from: decoder))
         case "WIZARD_NOT_FOUND": self = try .wizardNotFound(WizardNotFoundErrorDetails(from: decoder))
         case "SETUP_ADMISSION_BUSY": self = try .setupAdmissionBusy(SetupAdmissionBusyErrorDetails(from: decoder))
+        case "GITHUB_PUBLICATION_SELECTION_REJECTED": self = try .githubPublicationSelectionRejected(GitHubPublicationSelectionRejectedErrorDetails(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .discriminator,
@@ -23891,6 +23916,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .unknownAgentId(let value): try value.encode(to: encoder)
         case .wizardNotFound(let value): try value.encode(to: encoder)
         case .setupAdmissionBusy(let value): try value.encode(to: encoder)
+        case .githubPublicationSelectionRejected(let value): try value.encode(to: encoder)
         }
     }
 }

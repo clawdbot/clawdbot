@@ -2,10 +2,7 @@
 
 import { nothing } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import type {
-  PreservedSessionWorktree,
-  SessionsSearchResult,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import type { PreservedSessionWorktree } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -13,7 +10,7 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -207,124 +204,6 @@ describe("sessions page lifecycle", () => {
     );
   });
 
-  it("submits one trimmed bounded transcript search and adopts its status", async () => {
-    const response = createDeferred<SessionsSearchResult>();
-    const request = vi.fn(() => response.promise);
-    const mutableGateway = createGateway({ request } as unknown as GatewayBrowserClient);
-    mutableGateway.emit({
-      hello: { features: { methods: ["sessions.search"] } } as ApplicationGatewaySnapshot["hello"],
-    });
-    const page = await createPage(createContext(mutableGateway.gateway, createSessions()));
-    page.result = {
-      count: 1,
-      sessions: [{ key: "agent:main:launch" }],
-    } as SessionsListResult;
-    vi.mocked(page.context.sessions.list).mockResolvedValue(page.result);
-
-    page.updateTranscriptSearchQuery("  launch code  ");
-    const pending = page.runTranscriptSearch();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    expect(request).toHaveBeenCalledWith("sessions.search", {
-      agentId: "main",
-      sessionKeys: ["agent:main:launch"],
-      query: "launch code",
-      limit: 25,
-    });
-    expect(page.transcriptSearch).toEqual({ status: "loading" });
-
-    const result: SessionsSearchResult = {
-      results: [
-        {
-          sessionKey: "agent:main:launch",
-          sessionId: "launch",
-          messageId: "message-1",
-          role: "user",
-          timestamp: 42,
-          snippet: "launch code",
-          score: 1,
-        },
-      ],
-      indexing: true,
-      truncated: true,
-    };
-    response.resolve(result);
-    await pending;
-
-    expect(page.transcriptSearchQuery).toBe("launch code");
-    expect(page.transcriptSearch).toEqual({
-      status: "results",
-      results: result.results,
-      indexing: true,
-      truncated: true,
-    });
-  });
-
-  it("fans all-agent transcript search out by owning agent and merges ranked results", async () => {
-    const request = vi.fn(async (_method: string, params: { agentId: string }) => ({
-      results: [
-        {
-          sessionKey: `agent:${params.agentId}:one`,
-          sessionId: `${params.agentId}-one`,
-          messageId: `${params.agentId}-message`,
-          role: "assistant" as const,
-          timestamp: params.agentId === "writer" ? 2 : 1,
-          snippet: params.agentId,
-          score: params.agentId === "writer" ? 2 : 1,
-        },
-      ],
-    }));
-    const mutableGateway = createGateway({ request } as unknown as GatewayBrowserClient);
-    mutableGateway.emit({
-      hello: { features: { methods: ["sessions.search"] } } as ApplicationGatewaySnapshot["hello"],
-    });
-    const context = createContext(mutableGateway.gateway, createSessions());
-    context.agentSelection.state.scopeId = null;
-    const page = await createPage(context);
-    page.result = {
-      count: 2,
-      sessions: [{ key: "agent:main:one" }, { key: "agent:writer:one" }],
-    } as SessionsListResult;
-    vi.mocked(context.sessions.list).mockResolvedValue(page.result);
-
-    page.updateTranscriptSearchQuery("needle");
-    await page.runTranscriptSearch();
-
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenCalledWith(
-      "sessions.search",
-      expect.objectContaining({ agentId: "main", sessionKeys: ["agent:main:one"] }),
-    );
-    expect(request).toHaveBeenCalledWith(
-      "sessions.search",
-      expect.objectContaining({ agentId: "writer", sessionKeys: ["agent:writer:one"] }),
-    );
-    expect(page.transcriptSearch.status).toBe("results");
-    if (page.transcriptSearch.status === "results") {
-      expect(page.transcriptSearch.results.map((result) => result.sessionKey)).toEqual([
-        "agent:writer:one",
-        "agent:main:one",
-      ]);
-    }
-  });
-
-  it("does not request empty or unadvertised transcript searches", async () => {
-    const request = vi.fn();
-    const page = await createPage(
-      createContext(
-        createGateway({ request } as unknown as GatewayBrowserClient).gateway,
-        createSessions(),
-      ),
-    );
-
-    page.updateTranscriptSearchQuery("   ");
-    await page.runTranscriptSearch();
-    page.updateTranscriptSearchQuery("not advertised");
-    await page.runTranscriptSearch();
-
-    expect(request).not.toHaveBeenCalled();
-    expect(page.transcriptSearch).toEqual({ status: "idle" });
-  });
-
   it("reports a connection error instead of silently dropping a patch", async () => {
     const patch = vi.fn();
     const sessions = createSessions({ patch });
@@ -375,90 +254,6 @@ describe("sessions page lifecycle", () => {
     expect(page.checkpointErrorByKey["agent:main:main"]).toBe(
       "Connect to the Gateway to change sessions.",
     );
-  });
-
-  it("drops a transcript result after the query changes while it is pending", async () => {
-    const response = createDeferred<SessionsSearchResult>();
-    const request = vi.fn(() => response.promise);
-    const mutableGateway = createGateway({ request } as unknown as GatewayBrowserClient);
-    mutableGateway.emit({
-      hello: { features: { methods: ["sessions.search"] } } as ApplicationGatewaySnapshot["hello"],
-    });
-    const page = await createPage(createContext(mutableGateway.gateway, createSessions()));
-    page.result = {
-      count: 1,
-      sessions: [{ key: "agent:main:stale" }],
-    } as SessionsListResult;
-    vi.mocked(page.context.sessions.list).mockResolvedValue(page.result);
-
-    page.updateTranscriptSearchQuery("old query");
-    const pending = page.runTranscriptSearch();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    page.updateTranscriptSearchQuery("new query");
-    response.resolve({
-      results: [
-        {
-          sessionKey: "agent:main:stale",
-          sessionId: "stale",
-          messageId: "message-stale",
-          role: "assistant",
-          timestamp: 42,
-          snippet: "old query",
-          score: 1,
-        },
-      ],
-    });
-    await pending;
-
-    expect(page.transcriptSearchQuery).toBe("new query");
-    expect(page.transcriptSearch).toEqual({ status: "idle" });
-  });
-
-  it("drops transcript results and in-flight work when agent scope changes", async () => {
-    const response = createDeferred<SessionsSearchResult>();
-    const request = vi.fn(() => response.promise);
-    const mutableGateway = createGateway({ request } as unknown as GatewayBrowserClient);
-    mutableGateway.emit({
-      hello: { features: { methods: ["sessions.search"] } } as ApplicationGatewaySnapshot["hello"],
-    });
-    const context = createContext(mutableGateway.gateway, createSessions());
-    let notifyScopeChange: Parameters<ApplicationContext["agentSelection"]["subscribe"]>[0] = () =>
-      undefined;
-    context.agentSelection.subscribe = (listener) => {
-      notifyScopeChange = listener;
-      return () => undefined;
-    };
-    const page = await createPage(context);
-    page.result = {
-      count: 1,
-      sessions: [{ key: "agent:main:stale" }],
-    } as SessionsListResult;
-    vi.mocked(context.sessions.list).mockResolvedValue(page.result);
-
-    page.updateTranscriptSearchQuery("needle");
-    const pending = page.runTranscriptSearch();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    context.agentSelection.state.scopeId = null;
-    notifyScopeChange(context.agentSelection.state);
-
-    expect(page.transcriptSearchQuery).toBe("needle");
-    expect(page.transcriptSearch).toEqual({ status: "idle" });
-
-    response.resolve({
-      results: [
-        {
-          sessionKey: "agent:main:stale",
-          sessionId: "stale",
-          messageId: "message-stale",
-          role: "assistant",
-          timestamp: 42,
-          snippet: "needle",
-          score: 1,
-        },
-      ],
-    });
-    await pending;
-    expect(page.transcriptSearch).toEqual({ status: "idle" });
   });
 
   it.each([

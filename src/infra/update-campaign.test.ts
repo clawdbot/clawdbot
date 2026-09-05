@@ -2,6 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 
+const randomUUIDMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:crypto", async () => {
+  const actual = await vi.importActual<typeof import("node:crypto")>("node:crypto");
+  return {
+    ...actual,
+    randomUUID: () => randomUUIDMock(),
+  };
+});
+
 function createInspectors(
   readBusy: () => number,
   overrides: Partial<GatewayActiveWorkInspectors> = {},
@@ -27,6 +37,9 @@ function createInspectors(
 
 describe("UpdateCampaignController", () => {
   beforeEach(() => {
+    let nextId = 0;
+    randomUUIDMock.mockReset();
+    randomUUIDMock.mockImplementation(() => `campaign-${++nextId}`);
     vi.useFakeTimers();
     vi.setSystemTime(1_000_000);
   });
@@ -36,13 +49,7 @@ describe("UpdateCampaignController", () => {
   });
 
   function createController() {
-    let nextId = 0;
-    return new UpdateCampaignController({
-      now: Date.now,
-      setTimer: setTimeout,
-      clearTimer: clearTimeout,
-      createId: () => `campaign-${++nextId}`,
-    });
+    return new UpdateCampaignController();
   }
 
   it("counts down while idle and applies after one minute", async () => {

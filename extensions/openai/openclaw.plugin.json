@@ -1,5 +1,6 @@
 {
   "id": "openai",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "sessionRouteStateOwners": [
     {
       "id": "openai",
@@ -42,6 +43,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "openai": "openai"
+    },
     "providers": {
       "openai": {
         "baseUrl": "https://api.openai.com/v1",

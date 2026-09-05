@@ -232,6 +232,7 @@ export async function createCanonicalForkFixture(params: {
         // Tool factories, admitted composition, and schema projection remain real.
         const toolRuntime = {
           connection: {
+            assertCurrent: host.capabilities.assertActive,
             params: attempt,
             attemptClientFactory: getLeasedSharedCodexAppServerClient,
             startupClientAuthProfileId: null,

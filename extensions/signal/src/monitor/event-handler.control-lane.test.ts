@@ -268,6 +268,7 @@ describe("Signal active-run control lane", () => {
 
   it("does not promote or cancel an unauthorized abort", () => {
     const entry = {
+      cfg: {},
       senderName: "Alice",
       senderDisplay: "+15550001111",
       senderRecipient: "+15550001111",
@@ -291,6 +292,7 @@ describe("Signal active-run control lane", () => {
 
   it("shares one group control lane without merging normal sender batches", () => {
     const entry = {
+      cfg: {},
       senderName: "Alice",
       senderDisplay: "+15550001111",
       senderRecipient: "+15550001111",

@@ -77,7 +77,6 @@ const publications: Record<string, string | symbol> = {
   "src/auto-reply/reply/reply-run-registry.registry.ts": Symbol.for(
     "openclaw.replyRunRegistryTestApi",
   ),
-  "src/auto-reply/reply/stage-sandbox-media.ts": Symbol.for("openclaw.stageSandboxMediaTestApi"),
   "src/auto-reply/usage-bar/template.ts": Symbol.for("openclaw.usageBarTemplateTestApi"),
   "src/cli/command-secret-gateway.ts": Symbol.for("openclaw.commandSecretGatewayTestApi"),
   "src/cli/gateway-cli/run.ts": Symbol.for("openclaw.gatewayRunTestApi"),

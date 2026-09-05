@@ -26,6 +26,7 @@ export function resolveAssistantLiveChatInput(data: unknown):
       text: string;
       delta: string;
       itemId?: string;
+      replaceStream: boolean;
       managedMediaUrls?: string[];
     }
   | undefined {
@@ -36,6 +37,8 @@ export function resolveAssistantLiveChatInput(data: unknown):
     text?: unknown;
     delta?: unknown;
     itemId?: unknown;
+    replace?: unknown;
+    replaceable?: unknown;
     managedMediaUrls?: unknown;
   };
   if (typeof record.text !== "string" && typeof record.delta !== "string") {
@@ -44,6 +47,7 @@ export function resolveAssistantLiveChatInput(data: unknown):
   return {
     text: typeof record.text === "string" ? record.text : "",
     delta: typeof record.delta === "string" ? record.delta : "",
+    replaceStream: record.replace === true && record.replaceable === true,
     ...(typeof record.itemId === "string" && record.itemId ? { itemId: record.itemId } : {}),
     ...(Array.isArray(record.managedMediaUrls)
       ? {
@@ -55,13 +59,6 @@ export function resolveAssistantLiveChatInput(data: unknown):
   };
 }
 
-function capLiveAssistantBuffer(text: string): string {
-  if (text.length <= MAX_LIVE_CHAT_BUFFER_CHARS) {
-    return text;
-  }
-  return sliceUtf16Safe(text, -MAX_LIVE_CHAT_BUFFER_CHARS);
-}
-
 /** Merges assistant full-text and delta events into a capped live buffer. */
 export function resolveMergedAssistantText(params: {
   previousText: string;
@@ -70,29 +67,30 @@ export function resolveMergedAssistantText(params: {
   scope?: { prefix: string };
 }): string {
   const { previousText, nextText, nextDelta, scope } = params;
+  let text: string;
   if (scope) {
-    const combined = scope.prefix + nextText;
-    const capped = capLiveAssistantBuffer(combined);
+    text = scope.prefix + nextText;
+  } else if (
+    previousText &&
+    nextText.length > previousText.length &&
+    nextText.startsWith(previousText)
+  ) {
+    text = nextText;
+  } else if (nextDelta) {
+    text = previousText + nextDelta;
+  } else {
+    text = previousText.startsWith(nextText) ? previousText : nextText;
+  }
+  const capped =
+    text.length > MAX_LIVE_CHAT_BUFFER_CHARS
+      ? sliceUtf16Safe(text, -MAX_LIVE_CHAT_BUFFER_CHARS)
+      : text;
+  if (scope) {
     // Retire discarded prefix text with the active scope; a later shorter
     // snapshot must not resurrect text that already fell out of the run cap.
-    scope.prefix = sliceUtf16Safe(scope.prefix, combined.length - capped.length);
-    return capped;
+    scope.prefix = sliceUtf16Safe(scope.prefix, text.length - capped.length);
   }
-  if (nextText && previousText) {
-    if (nextText.startsWith(previousText) && nextText.length > previousText.length) {
-      return capLiveAssistantBuffer(nextText);
-    }
-    if (previousText.startsWith(nextText) && !nextDelta) {
-      return capLiveAssistantBuffer(previousText);
-    }
-  }
-  if (nextDelta) {
-    return capLiveAssistantBuffer(previousText + nextDelta);
-  }
-  if (nextText) {
-    return capLiveAssistantBuffer(nextText);
-  }
-  return capLiveAssistantBuffer(previousText);
+  return capped;
 }
 
 /** Removes runtime-only context/directive tags from the merged live assistant buffer. */

@@ -23,6 +23,11 @@ function createContext(
   };
 }
 
+const validOptions = [
+  { label: "A", description: "First option." },
+  { label: "B", description: "Second option." },
+];
+
 const input = {
   questions: [
     {
@@ -123,19 +128,129 @@ describe("Claude Agent SDK user input adapter", () => {
     });
   });
 
-  it("rejects malformed questions before invoking the host", async () => {
-    const requestUserInput = vi.fn();
+  it("guides a malformed question retry without replaying the rejected call", async () => {
+    const requestUserInput = vi.fn(async () => ({
+      status: "answered" as const,
+      answers: { question_1: ["Vitest"], question_2: ["Unit tests"] },
+    }));
     const authorizer = createClaudeAgentSdkUserInputAuthorizer(createContext(requestUserInput));
+    const signal = new AbortController().signal;
+    const rejected = {
+      behavior: "deny",
+      message:
+        "OpenClaw rejected malformed Claude user questions: questions[0].header must be at most 12 characters. Correct the invalid field and retry AskUserQuestion.",
+    };
 
     await expect(
       authorizer.authorize({
-        input: { questions: [{ header: "Too long for Claude", question: "Missing options" }] },
-        signal: new AbortController().signal,
+        input: { questions: [{ ...input.questions[0], header: "Too long for Claude" }] },
+        signal,
+        toolUseId: "rejected-question",
       }),
-    ).resolves.toEqual({
-      behavior: "deny",
-      message: "OpenClaw rejected malformed Claude user questions.",
-    });
+    ).resolves.toEqual(rejected);
+    await expect(
+      authorizer.authorize({ input, signal, toolUseId: "rejected-question" }),
+    ).resolves.toEqual(rejected);
     expect(requestUserInput).not.toHaveBeenCalled();
+
+    await expect(
+      authorizer.authorize({ input, signal, toolUseId: "corrected-question" }),
+    ).resolves.toMatchObject({
+      behavior: "allow",
+      updatedInput: {
+        answers: {
+          "Which test runner should we use?": "Vitest",
+          "Which proof should we collect?": "Unit tests",
+        },
+      },
+    });
+    expect(requestUserInput).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    ["missing questions array", {}, "questions must be an array of 1 to 4 questions"],
+    [
+      "too many questions",
+      {
+        questions: [
+          { header: "A", question: "Q?", options: validOptions, multiSelect: false },
+          { header: "B", question: "Q?", options: validOptions, multiSelect: false },
+          { header: "C", question: "Q?", options: validOptions, multiSelect: false },
+          { header: "D", question: "Q?", options: validOptions, multiSelect: false },
+          { header: "E", question: "Q?", options: validOptions, multiSelect: false },
+        ],
+      },
+      "questions must be an array of 1 to 4 questions",
+    ],
+    [
+      "non-boolean multiSelect",
+      {
+        questions: [{ header: "Stack", question: "Q?", options: validOptions, multiSelect: "no" }],
+      },
+      "questions[0].multiSelect must be a boolean",
+    ],
+    [
+      "too few options",
+      {
+        questions: [
+          {
+            header: "Stack",
+            question: "Q?",
+            options: [{ label: "A", description: "a" }],
+            multiSelect: false,
+          },
+        ],
+      },
+      "questions[0].options must be an array of 2 to 4 options",
+    ],
+    [
+      "empty option description",
+      {
+        questions: [
+          {
+            header: "Stack",
+            question: "Q?",
+            options: [
+              { label: "A", description: "a" },
+              { label: "B", description: "" },
+            ],
+            multiSelect: false,
+          },
+        ],
+      },
+      "questions[0].options[1].description must not be empty",
+    ],
+    [
+      "missing option label",
+      {
+        questions: [
+          {
+            header: "Stack",
+            question: "Q?",
+            options: validOptions.map((option) => ({ description: option.description })),
+            multiSelect: false,
+          },
+        ],
+      },
+      "questions[0].options[0].label must be a string",
+    ],
+    ["non-record question", { questions: ["not a question"] }, "questions[0] must be an object"],
+  ])(
+    "reports the failed constraint for %s without echoing payload text",
+    async (_case, malformedInput, expectedDetail) => {
+      const requestUserInput = vi.fn();
+      const authorizer = createClaudeAgentSdkUserInputAuthorizer(createContext(requestUserInput));
+
+      const result = await authorizer.authorize({
+        input: malformedInput as Record<string, unknown>,
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toEqual({
+        behavior: "deny",
+        message: `OpenClaw rejected malformed Claude user questions: ${expectedDetail}. Correct the invalid field and retry AskUserQuestion.`,
+      });
+      expect(requestUserInput).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -11,6 +11,7 @@ import {
   preparedModelRuntimeConfigsMatch,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
+  retirePreparedModelRuntimeOwnerIfUnused,
   resolveConfiguredOwner,
   resolveConfiguredOwnerPublication,
   type PreparedModelRuntimeInput,
@@ -43,6 +44,42 @@ function throwIfLeaseAdmissionAborted(signal?: AbortSignal): void {
       cause: signal.reason,
     });
   }
+}
+
+function createPreparedModelRuntimeAdmissionClaim(context: PreparedModelRuntimeLeaseContext) {
+  let claimed: { key: string; owner: PreparedModelRuntimeOwner } | undefined;
+  const release = () => {
+    if (!claimed) {
+      return;
+    }
+    const { key, owner } = claimed;
+    claimed = undefined;
+    owner.admissionCount = Math.max(0, (owner.admissionCount ?? 1) - 1);
+    retirePreparedModelRuntimeOwnerIfUnused(
+      context.owners,
+      key,
+      owner,
+      context.retainedDirectRunOwners.has(key, owner) ||
+        context.retainedGatewayRunOwners.has(key, owner),
+    );
+  };
+  return {
+    claim: (key: string, owner: PreparedModelRuntimeOwner) => {
+      if (claimed?.key === key && claimed.owner === owner) {
+        return;
+      }
+      release();
+      if (
+        (owner.provenance !== "run" && owner.provenance !== "ephemeral") ||
+        context.owners.get(key) !== owner
+      ) {
+        return;
+      }
+      owner.admissionCount = (owner.admissionCount ?? 0) + 1;
+      claimed = { key, owner };
+    },
+    release,
+  };
 }
 
 export async function acquirePreparedModelRuntimeLeaseFromOwners(
@@ -80,7 +117,9 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   let key = ownerKey(input);
   let owner: PreparedModelRuntimeOwner;
   let snapshot: PreparedModelRuntimeSnapshot;
+  const admission = createPreparedModelRuntimeAdmissionClaim(context);
   for (;;) {
+    admission.release();
     throwIfLeaseAdmissionAborted(options.abortSignal);
     // Replacement owns publication from synchronous staling through atomic generation commit.
     // Dynamic work arriving inside that window must retry after the new owners become visible.
@@ -203,6 +242,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       if (existing?.pending && !ownerGenerationChanged) {
         // Matching callers lease the immutable generation they joined even if a queued
         // mismatched caller publishes the next owner immediately after this one settles.
+        admission.claim(key, existing);
         snapshot = await racePromiseWithAbortSignal(existing.pending, options.abortSignal);
         if (existing.snapshot !== snapshot || existing.needsRefresh) {
           continue;
@@ -211,6 +251,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         break;
       }
       if (existing && !staleDynamicOwner && !ownerGenerationChanged) {
+        admission.claim(key, existing);
         snapshot = await racePromiseWithAbortSignal(
           context.prepareSnapshot(input),
           options.abortSignal,
@@ -219,22 +260,26 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         // Fresh keys publish a first generation; stale dynamic owners publish a distinct
         // replacement owner because existing leases retain their immutable snapshot, so
         // their release cannot delete the generation admitted for new work at this key.
-        snapshot = await racePromiseWithAbortSignal(
-          publishModelRuntimeSnapshot(
-            input,
-            context.owners,
-            context.agentBuildCompletions,
-            context.getBuildTimeoutMs(),
-            undefined,
-            provenance,
-            options.catalogMode,
-            options.pluginGeneration,
-            options.pluginMetadataSnapshot,
-          ),
-          options.abortSignal,
+        const publication = publishModelRuntimeSnapshot(
+          input,
+          context.owners,
+          context.agentBuildCompletions,
+          context.getBuildTimeoutMs(),
+          undefined,
+          provenance,
+          options.catalogMode,
+          options.pluginGeneration,
+          options.pluginMetadataSnapshot,
         );
+        // Publication installs its exact owner synchronously before exposing the pending promise.
+        const publishingOwner = context.owners.get(key);
+        if (publishingOwner) {
+          admission.claim(key, publishingOwner);
+        }
+        snapshot = await racePromiseWithAbortSignal(publication, options.abortSignal);
       }
     } catch (error) {
+      admission.release();
       if (error instanceof PreparedModelRuntimePublicationSupersededError) {
         continue;
       }
@@ -250,41 +295,46 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     ) {
       continue;
     }
+    admission.claim(key, published);
     owner = published;
     break;
   }
-  throwIfLeaseAdmissionAborted(options.abortSignal);
-  const pluginGeneration = owner.pluginGeneration!;
-  if (owner.provenance !== provenance) {
-    return { snapshot, pluginGeneration, release: () => {} };
-  }
-  throwIfLeaseAdmissionAborted(options.abortSignal);
-  if (provenance === "run" && options.retainIdleRunOwner) {
-    context.retainedDirectRunOwners.retain(key, owner, context.owners);
-  } else if (provenance === "run" && context.getGatewayLifecycleActive()) {
-    context.retainedGatewayRunOwners.retain(key, owner, context.owners);
-  }
-  owner.leaseCount = (owner.leaseCount ?? 0) + 1;
-  let released = false;
-  return {
-    snapshot,
-    pluginGeneration,
-    release: () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      owner.leaseCount = Math.max(0, (owner.leaseCount ?? 1) - 1);
-      // Direct runs retain one idle generation; gateways retain a bounded LRU so repeated selections
-      // reuse workspace facts. Identity checks keep old releases from deleting replacements.
-      if (owner.leaseCount === 0 && context.owners.get(key) === owner) {
-        if (
-          !context.retainedDirectRunOwners.has(key, owner) &&
-          !context.retainedGatewayRunOwners.has(key, owner)
-        ) {
-          context.owners.delete(key);
+  try {
+    throwIfLeaseAdmissionAborted(options.abortSignal);
+    const pluginGeneration = owner.pluginGeneration!;
+    if (owner.provenance !== provenance) {
+      return { snapshot, pluginGeneration, release: () => {} };
+    }
+    throwIfLeaseAdmissionAborted(options.abortSignal);
+    if (provenance === "run" && options.retainIdleRunOwner) {
+      context.retainedDirectRunOwners.retain(key, owner, context.owners);
+    } else if (provenance === "run" && context.getGatewayLifecycleActive()) {
+      context.retainedGatewayRunOwners.retain(key, owner, context.owners);
+    }
+    owner.leaseCount = (owner.leaseCount ?? 0) + 1;
+    admission.release();
+    let released = false;
+    return {
+      snapshot,
+      pluginGeneration,
+      release: () => {
+        if (released) {
+          return;
         }
-      }
-    },
-  };
+        released = true;
+        owner.leaseCount = Math.max(0, (owner.leaseCount ?? 1) - 1);
+        // Direct runs retain one idle generation; gateways retain a bounded LRU so repeated selections
+        // reuse workspace facts. Identity checks keep old releases from deleting replacements.
+        retirePreparedModelRuntimeOwnerIfUnused(
+          context.owners,
+          key,
+          owner,
+          context.retainedDirectRunOwners.has(key, owner) ||
+            context.retainedGatewayRunOwners.has(key, owner),
+        );
+      },
+    };
+  } finally {
+    admission.release();
+  }
 }

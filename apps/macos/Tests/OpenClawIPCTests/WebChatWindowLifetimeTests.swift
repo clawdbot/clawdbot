@@ -22,16 +22,8 @@ struct WebChatWindowLifetimeTests {
                 let previousWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
                 manager.show(sessionKey: "existing-primary")
                 let window = try #require(NSApp.windows.first { !previousWindows.contains(ObjectIdentifier($0)) })
-                let release = DispatchSemaphore(value: 0)
-                let gateEntered = AsyncStream.makeStream(of: Void.self)
-                let blockedConnection = Task.detached {
-                    await fixture.gateway.holdForPendingPrimaryOpenRegression(
-                        entered: gateEntered.continuation,
-                        release: release)
-                }
-                defer { release.signal() }
-                var gateIterator = gateEntered.stream.makeAsyncIterator()
-                await gateIterator.next()
+                // Primary opens enqueue MainActor work. Close before yielding so the
+                // pending admission cannot run until its owner is gone.
                 var rejected = false
                 if admission == "ordinary" {
                     // Explicit-session presentation does not populate the preferred main-session cache.
@@ -45,8 +37,6 @@ struct WebChatWindowLifetimeTests {
                     window.close()
                 }
                 #expect(manager.activeSessionKey == nil)
-                release.signal()
-                #expect(await blockedConnection.value)
                 #expect(await !self.eventually { manager.activeSessionKey != nil })
                 #expect(!rejected)
             }
@@ -188,17 +178,6 @@ func withWebChatManagerLifetime(
     }
     #expect(retiredManager == nil)
     if let failure { throw failure }
-}
-
-extension GatewayConnection {
-    fileprivate func holdForPendingPrimaryOpenRegression(
-        entered: AsyncStream<Void>.Continuation,
-        release: DispatchSemaphore) -> Bool
-    {
-        entered.yield()
-        entered.finish()
-        return release.wait(timeout: .now() + 5) == .success
-    }
 }
 
 private final class ClosingWindowChatTransport: @unchecked Sendable, OpenClawChatTransport {

@@ -619,7 +619,9 @@ export function projectChatTranscript(
     JSON.stringify([...latestBrowserTabs]),
     props.sessionKey,
     props.presented,
-    props.selectedSession,
+    // Session activity/title patches do not change settled rows. Their visible
+    // session facts (gutter, reasoning, context window, recap) own invalidation.
+    isDirectThread,
     props.boardProvider,
     props.boardProvider?.canPinWidgets,
     props.boardProvider?.canPinMcpApps,

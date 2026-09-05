@@ -1,13 +1,15 @@
 // Logbook SQLite store: frames on disk, everything else in one plugin-owned DB.
-// Uses node:sqlite prepared statements directly (extension-local store, same
-// pattern as memory-core/imessage); the shared Kysely helpers are core-only.
 import { chmodSync, mkdirSync, rmdirSync, rmSync } from "node:fs";
 import path from "node:path";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   configureSqliteConnectionPragmas,
   migrateSqliteSchemaToStrict,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -127,6 +129,7 @@ type CardRow = {
   app_secondary: string | null;
   distractions: string;
   keyframe_id: number | null;
+  updated_ms: number;
 };
 
 function toFrame(row: FrameRow): LogbookFrame {
@@ -202,6 +205,7 @@ export function dayKeyFor(ms: number): string {
 
 export class LogbookStore {
   private readonly db: Database;
+  private readonly cardsQuery;
   private readonly walMaintenance: ReturnType<typeof configureSqliteConnectionPragmas>;
   readonly framesDir: string;
 
@@ -251,6 +255,7 @@ export class LogbookStore {
     }
     this.db = db;
     this.walMaintenance = walMaintenance;
+    this.cardsQuery = getNodeSqliteKysely<{ cards: CardRow }>(db).selectFrom("cards");
   }
 
   close(): void {
@@ -494,24 +499,20 @@ export class LogbookStore {
     }));
   }
 
-  cardsForDay(day: string): LogbookCard[] {
-    const rows = this.db
-      .prepare(
-        `SELECT id, day, start_ms, end_ms, title, summary, detail, category, app_primary, app_secondary, distractions, keyframe_id
-         FROM cards WHERE day = ? ORDER BY start_ms ASC`,
-      )
-      .all(day) as CardRow[];
-    return rows.map(toCard);
+  cardsForDay(day: string, window?: { startMs: number; endMs: number }): LogbookCard[] {
+    let query = this.cardsQuery.selectAll().where("day", "=", day).orderBy("start_ms", "asc");
+    if (window) {
+      query = query.where("end_ms", ">", window.startMs).where("start_ms", "<", window.endMs);
+    }
+    return executeSqliteQuerySync(this.db, query).rows.map(toCard);
   }
 
-  cardById(id: number): LogbookCard | null {
-    const row = this.db
-      .prepare(
-        `SELECT id, day, start_ms, end_ms, title, summary, detail, category, app_primary, app_secondary, distractions, keyframe_id
-         FROM cards WHERE id = ?`,
-      )
-      .get(id) as CardRow | undefined;
-    return row ? toCard(row) : null;
+  countCardsForDay(day: string): number {
+    const row = executeSqliteQueryTakeFirstSync(
+      this.db,
+      this.cardsQuery.select((eb) => eb.fn.countAll<number>().as("count")).where("day", "=", day),
+    );
+    return expectDefined(row, "Logbook card count").count;
   }
 
   /**
@@ -577,7 +578,7 @@ export class LogbookStore {
     }));
   }
 
-  dayStats(day: string): LogbookDayStats {
+  timelineForDay(day: string): { day: string; cards: LogbookCard[]; stats: LogbookDayStats } {
     const cards = this.cardsForDay(day);
     const categories = new Map<string, number>();
     const apps = new Map<string, number>();
@@ -596,12 +597,16 @@ export class LogbookStore {
     }
     const byMsDesc = (a: { ms: number }, b: { ms: number }) => b.ms - a.ms;
     return {
-      trackedMs,
-      distractionMs,
-      categories: [...categories.entries()]
-        .map(([category, ms]) => ({ category, ms }))
-        .toSorted(byMsDesc),
-      apps: [...apps.entries()].map(([domain, ms]) => ({ domain, ms })).toSorted(byMsDesc),
+      day,
+      cards,
+      stats: {
+        trackedMs,
+        distractionMs,
+        categories: [...categories.entries()]
+          .map(([category, ms]) => ({ category, ms }))
+          .toSorted(byMsDesc),
+        apps: [...apps.entries()].map(([domain, ms]) => ({ domain, ms })).toSorted(byMsDesc),
+      },
     };
   }
 

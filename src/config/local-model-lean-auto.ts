@@ -1,20 +1,29 @@
 import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const AUTO_LOCAL_MODEL_LEAN_PROVIDER_IDS = new Set(["lmstudio", "ollama"]);
 
 /** Returns true only for local runtimes that onboarding can identify without model-name guesses. */
-function shouldAutoEnableLocalModelLean(providerId: string, modelRef: string): boolean {
+function shouldAutoEnableLocalModelLean(
+  config: OpenClawConfig,
+  providerId: string,
+  modelRef: string,
+): boolean {
   const normalizedProviderId = normalizeProviderId(providerId);
-  if (!AUTO_LOCAL_MODEL_LEAN_PROVIDER_IDS.has(normalizedProviderId)) {
+  // A managed daemon can still serve a hosted model; source ownership wins.
+  if (normalizedProviderId === "ollama" && isCloudModelRef(modelRef)) {
     return false;
   }
-  if (normalizedProviderId !== "ollama") {
-    return true;
-  }
-  // Hosted source-tagged models can be routed through the same local daemon.
-  return !isCloudModelRef(modelRef);
+  return (
+    AUTO_LOCAL_MODEL_LEAN_PROVIDER_IDS.has(normalizedProviderId) ||
+    Boolean(
+      findNormalizedProviderValue(config.models?.providers, normalizedProviderId)?.localService,
+    )
+  );
 }
 
 function resolveDefaultModelRef(config: OpenClawConfig): string | undefined {
@@ -44,7 +53,7 @@ export function applyAutoLocalModelLean(params: {
   const onboardingOwnsSetting =
     autoModel !== undefined &&
     (params.previousModelRef ?? resolveDefaultModelRef(params.config)) === autoModel;
-  if (!shouldAutoEnableLocalModelLean(params.providerId, params.modelRef)) {
+  if (!shouldAutoEnableLocalModelLean(params.config, params.providerId, params.modelRef)) {
     if (!autoModel) {
       return { config: params.config, changed: false, enabled: false };
     }

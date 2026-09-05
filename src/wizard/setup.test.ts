@@ -2962,29 +2962,78 @@ describe("runSetupWizard", () => {
     );
   });
 
-  it("offers a live AI check after classic model setup", async () => {
-    applyAuthChoice.mockImplementationOnce(async (args) => ({
-      config: {
-        ...args.config,
-        agents: {
-          ...args.config.agents,
-          defaults: {
-            ...args.config.agents?.defaults,
-            model: { primary: "openai/gpt-5.5" },
+  it.each([
+    { provider: "openai", explicitLean: undefined, expectedLean: undefined },
+    { provider: "managed-local", explicitLean: undefined, expectedLean: true },
+    { provider: "managed-local", explicitLean: false, expectedLean: false },
+    { provider: "managed-local", explicitLean: true, expectedLean: true },
+  ])(
+    "verifies and persists classic $provider setup with lean=$explicitLean",
+    async ({ provider, explicitLean, expectedLean }) => {
+      const managed = provider === "managed-local";
+      const modelRef = `${provider}/test-model`;
+      readConfigFileSnapshot.mockResolvedValue(
+        configSnapshot({
+          agents: { defaults: { experimental: { localModelLean: explicitLean } } },
+        }),
+      );
+      replaceConfigFile.mockImplementation(async ({ nextConfig }) => {
+        readConfigFileSnapshot.mockResolvedValue(configSnapshot(nextConfig));
+        return { config: nextConfig };
+      });
+      applyAuthChoice.mockImplementationOnce(async (args) => ({
+        config: {
+          ...args.config,
+          agents: {
+            ...args.config.agents,
+            defaults: {
+              ...args.config.agents?.defaults,
+              model: { primary: modelRef },
+            },
           },
+          ...(managed
+            ? {
+                models: {
+                  providers: {
+                    [provider]: {
+                      baseUrl: "http://127.0.0.1:8080/v1",
+                      models: [],
+                      localService: { command: "/fixture/server" },
+                    },
+                  },
+                },
+              }
+            : {}),
         },
-      },
-    }));
-    const confirm = vi.fn(async () => true) as unknown as WizardPrompter["confirm"];
-    const prompter = buildWizardPrompter({ confirm });
+      }));
+      verifySetupInferenceConfig.mockImplementationOnce(async ({ config, verifyAgentTools }) => {
+        expect(config.agents?.defaults?.experimental?.localModelLean).toBe(expectedLean);
+        expect(verifyAgentTools).toBe(true);
+        expect(replaceConfigFile).not.toHaveBeenCalled();
+        return { ok: true, modelRef, latencyMs: 1 };
+      });
+      const confirm = vi.fn(async () => true) as unknown as WizardPrompter["confirm"];
+      const prompter = buildWizardPrompter({ confirm });
 
-    await runWizard({ authChoice: "demo-provider" }, createRuntime(), prompter);
+      await runWizard({ authChoice: "demo-provider" }, createRuntime(), prompter);
 
-    expect(confirm).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Test AI access now with a live completion?" }),
-    );
-    expect(verifySetupInferenceConfig).toHaveBeenCalledOnce();
-  });
+      const optionalCheck = expect.objectContaining({
+        message: "Test AI access now with a live completion?",
+      });
+      if (managed) {
+        expect(confirm).not.toHaveBeenCalledWith(optionalCheck);
+      } else {
+        expect(confirm).toHaveBeenCalledWith(optionalCheck);
+      }
+      expect(verifySetupInferenceConfig).toHaveBeenCalledOnce();
+      expect(persistedWizardConfigs().at(-1)?.agents?.defaults?.experimental?.localModelLean).toBe(
+        expectedLean,
+      );
+      expect(persistedWizardConfigs().at(-1)?.wizard?.localModelLeanAutoModel).toBe(
+        managed && explicitLean === undefined ? modelRef : undefined,
+      );
+    },
+  );
 
   it("continues classic setup when live AI verification fails", async () => {
     applyAuthChoice.mockImplementationOnce(async (args) => ({

@@ -29,7 +29,6 @@ import type { CodexAttemptNotificationController } from "./run-attempt-notificat
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import {
   clearCodexBindingAfterInvalidImagePayload,
-  markCodexAppServerBindingCoveredThroughTurn,
   shouldUseFreshCodexThreadAfterContextEngineOverflow,
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
@@ -375,7 +374,7 @@ export async function finalizeCodexAttempt(
             settledMessages: result.messagesSnapshot,
             turnId: activeTurnId,
             signal: params.abortSignal,
-            assertActive: () => params.hostCapabilities.assertActive(),
+            assertActive: connection.assertCurrent,
           })
         : undefined) ?? Object.freeze({ source: "unavailable" as const }))
     : undefined;
@@ -446,35 +445,39 @@ export async function finalizeCodexAttempt(
     !finalPromptError;
   if (state.shouldDelayNativeHookRelayUnregister) {
     try {
-      await markCodexAppServerBindingCoveredThroughTurn({
-        bindingStore,
-        identity: bindingIdentity,
-        threadId: resourceState.thread.threadId,
-        // Only turns whose prompt WAS a no-engine continuity projection may
-        // calibrate: a dense direct or active-engine prompt must never persist a
-        // sample that later shrinks continuity history it did not measure.
-        // Normalized usage splits total input into uncached + cacheRead + cacheWrite;
-        // the density sample needs the full input cost, or the derived ratio loosens
-        // the continuity cap in the unsafe direction.
-        continuityCalibration: context.promptState.noEngineContinuityProjectionApplied
-          ? buildCodexContinuityCalibration({
-              promptChars: prompt.turnState.codexTurnPromptText.length,
-              inputTokens:
-                (result.attemptUsage?.input ?? 0) +
-                (result.attemptUsage?.cacheRead ?? 0) +
-                (result.attemptUsage?.cacheWrite ?? 0),
-            })
-          : undefined,
-      });
+      // Only no-engine continuity prompts may calibrate their measured history.
+      // Billing spans every model call; density needs only the latest full prompt.
+      const continuityCalibration = context.promptState.noEngineContinuityProjectionApplied
+        ? buildCodexContinuityCalibration({
+            promptChars: prompt.turnState.codexTurnPromptText.length,
+            inputTokens:
+              result.attemptUsage?.contextUsage?.state === "available"
+                ? (result.attemptUsage.contextUsage.promptTokens ?? 0)
+                : 0,
+          })
+        : undefined;
+      await bindingStore.mutate(
+        bindingIdentity,
+        {
+          kind: "patch",
+          threadId: resourceState.thread.threadId,
+          patch: {
+            historyCoveredThrough: new Date().toISOString(),
+            ...(continuityCalibration ? { continuityCalibration } : {}),
+          },
+        },
+        connection.assertCurrent,
+      );
     } catch (error) {
       if (resourceState.thread.connectionScope === "supervision") {
         throw error;
       }
       if (canClearBindingForRecovery("clearing native coverage after a completed turn")) {
-        const cleared = await bindingStore.mutate(bindingIdentity, {
-          kind: "clear",
-          threadId: resourceState.thread.threadId,
-        });
+        const cleared = await bindingStore.mutate(
+          bindingIdentity,
+          { kind: "clear", threadId: resourceState.thread.threadId },
+          connection.assertCurrent,
+        );
         if (!cleared) {
           throw error;
         }

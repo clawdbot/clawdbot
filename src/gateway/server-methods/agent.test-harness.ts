@@ -17,6 +17,7 @@ import type {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskRegistryForTests,
@@ -400,6 +401,7 @@ vi.mock("../../channels/message/runtime.js", async () => {
 
 export const makeContext = (): GatewayRequestContext =>
   ({
+    trackExecution: trackAsyncWork,
     dedupe: new Map(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
@@ -1077,6 +1079,7 @@ export async function invokeAgentIdentityGet(
     respond?: ReturnType<typeof vi.fn>;
     reqId?: string;
     context?: GatewayRequestContext;
+    client?: AgentHandlerArgs["client"];
   },
 ) {
   const respond = options?.respond ?? vi.fn();
@@ -1092,7 +1095,7 @@ export async function invokeAgentIdentityGet(
       id: options?.reqId ?? "agent-identity-test-req",
       method: "agent.identity.get",
     },
-    client: null,
+    client: options?.client ?? null,
     isWebchatConnect: () => false,
   });
   return respond;

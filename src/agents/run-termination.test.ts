@@ -1,4 +1,10 @@
 import { describe, expect, it } from "vitest";
+import {
+  buildAgentRunTerminalOutcomeFromAttempt,
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+} from "./agent-run-terminal-outcome.js";
+import { createCliTimeoutError } from "./cli-runner/no-output-timeout-policy.js";
+import { coerceToFailoverError } from "./failover-error.js";
 import { FailoverError } from "./failover/error.js";
 import {
   createAgentRunDirectAbortError,
@@ -9,6 +15,19 @@ import {
   resolveAgentRunErrorLifecycleFields,
   resolveCliToolTerminalReason,
 } from "./run-termination.js";
+
+function createCliWatchdogError() {
+  return createCliTimeoutError(
+    {},
+    {
+      mode: "no-output",
+      timeoutSeconds: 30,
+      observedActivity: false,
+      activeToolCount: 0,
+      backgroundTaskCount: 0,
+    },
+  );
+}
 
 describe("resolveCliToolTerminalReason", () => {
   it.each([
@@ -42,14 +61,14 @@ describe("resolveCliToolTerminalReason", () => {
       expected: "cancelled",
     },
     {
-      name: "FailoverError timeout",
+      name: "CLI watchdog timeout",
       setup: () => ({
-        error: new FailoverError("CLI timed out", { reason: "timeout" }),
+        error: createCliWatchdogError(),
       }),
       expected: "timed_out",
     },
     {
-      name: "isTimeoutError error",
+      name: "intentional TimeoutError",
       setup: () => {
         const error = new Error("request timed out");
         error.name = "TimeoutError";
@@ -69,6 +88,16 @@ describe("resolveCliToolTerminalReason", () => {
     {
       name: "plain Error",
       setup: () => ({ error: new Error("tool failed") }),
+      expected: "failed",
+    },
+    {
+      name: "retryable HTTP 500 is a failure rather than a deadline",
+      setup: () => ({
+        error: coerceToFailoverError({
+          status: 500,
+          message: "500 Fixture request needs a task header",
+        }),
+      }),
       expected: "failed",
     },
     {
@@ -196,6 +225,68 @@ describe("resolveAgentRunAbortLifecycleFields", () => {
 });
 
 describe("resolveAgentRunErrorLifecycleFields", () => {
+  it("preserves an unphased provider-started timeout from the public harness result", () => {
+    const outcome = buildAgentRunTerminalOutcomeFromAttempt({
+      terminal: { kind: "timeout", phase: "compaction", source: "runtime" },
+      promptTimeoutOutcome: { providerStarted: true },
+    });
+    expect(outcome).toMatchObject({
+      reason: "hard_timeout",
+      status: "timeout",
+      providerStarted: true,
+    });
+    expect(outcome).not.toHaveProperty("timeoutPhase");
+    const error = new FailoverError("Attempt timed out", {
+      reason: "timeout",
+      timeout: { timeoutPhase: outcome.timeoutPhase, providerStarted: outcome.providerStarted },
+    });
+
+    const fields = resolveAgentRunErrorLifecycleFields(error, undefined);
+
+    expect(fields).toEqual({ stopReason: "timeout", providerStarted: true });
+    expect(
+      buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase: "error", data: fields }).reason,
+    ).toBe("hard_timeout");
+  });
+
+  it.each(["direct", "fallback summary"])(
+    "does not promote a retryable HTTP 500 to a provider timeout through %s",
+    (wrapper) => {
+      const failure = coerceToFailoverError({
+        status: 500,
+        message: "500 Fixture request needs a task header",
+      });
+      expect(failure).toMatchObject({ reason: "timeout", status: 500 });
+      const error =
+        wrapper === "direct"
+          ? failure
+          : new Error("All model fallback candidates failed", { cause: failure });
+
+      expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({});
+    },
+  );
+
+  it("keeps a retryable connection reset as a failure for run and tool terminals", () => {
+    const failure = coerceToFailoverError(new Error("fetch failed: ECONNRESET"));
+    expect(failure?.reason).toBe("timeout");
+
+    expect(resolveAgentRunErrorLifecycleFields(failure, undefined)).toEqual({});
+    expect(resolveCliToolTerminalReason({ error: failure })).toBe("failed");
+  });
+
+  it("preserves an intentional TimeoutError through provider coercion", () => {
+    const cause = Object.assign(new Error("provider request deadline elapsed"), {
+      name: "TimeoutError",
+    });
+    const failure = coerceToFailoverError(cause);
+
+    expect(failure?.cause).toBe(cause);
+    expect(resolveAgentRunErrorLifecycleFields(failure, undefined)).toEqual({
+      stopReason: "timeout",
+      timeoutPhase: "provider",
+    });
+  });
+
   it.each([false, true])("preserves direct cancellation with caller signal=%s", (hasSignal) => {
     const signal = hasSignal ? new AbortController().signal : undefined;
     expect(resolveAgentRunErrorLifecycleFields(createAgentRunDirectAbortError(), signal)).toEqual({
@@ -205,7 +296,7 @@ describe("resolveAgentRunErrorLifecycleFields", () => {
   });
 
   it("attributes structured provider watchdog timeouts", () => {
-    const error = new FailoverError("CLI timed out", { reason: "timeout" });
+    const error = createCliWatchdogError();
 
     expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({
       stopReason: "timeout",
@@ -227,14 +318,38 @@ describe("resolveAgentRunErrorLifecycleFields", () => {
   });
 
   it("reads the final structured timeout from a fallback summary cause", () => {
-    const timeout = new FailoverError("CLI timed out", { reason: "timeout" });
-    const error = new Error("All model fallback candidates failed", { cause: timeout });
+    const timeout = createCliWatchdogError();
+    const error = new FailoverError("All model fallback candidates failed", {
+      reason: "timeout",
+      cause: timeout,
+    });
 
     expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({
       stopReason: "timeout",
       timeoutPhase: "provider",
     });
   });
+
+  it.each(["direct", "fallback summary"])(
+    "preserves a recorded unphased timeout through %s without inferring a provider phase",
+    (wrapper) => {
+      const cause = Object.assign(new Error("inner operation exceeded its deadline"), {
+        name: "TimeoutError",
+      });
+      const failure = new FailoverError("Attempt timed out", {
+        reason: "timeout",
+        timeout: {},
+        cause,
+      });
+      const error =
+        wrapper === "direct" ? failure : new Error("Fallback exhausted", { cause: failure });
+
+      expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({
+        stopReason: "timeout",
+      });
+      expect(resolveCliToolTerminalReason({ error })).toBe("timed_out");
+    },
+  );
 
   it.each(["cause", "code"])("contains throwing %s accessors", (property) => {
     const error = Object.defineProperty(new Error("provider failed"), property, {
@@ -262,10 +377,24 @@ describe("resolveAgentRunErrorLifecycleFields", () => {
     expect(resolveAgentRunErrorLifecycleFields(hostileReason, undefined)).toEqual({});
   });
 
+  it.each(["timeoutPhase", "providerStarted"])(
+    "contains a throwing recorded timeout %s getter",
+    (property) => {
+      const timeout = Object.defineProperty({}, property, {
+        get() {
+          throw new Error("hostile timeout metadata");
+        },
+      });
+      const error = new FailoverError("attempt failed", { reason: "timeout", timeout });
+
+      expect(resolveAgentRunErrorLifecycleFields(error, undefined)).toEqual({});
+    },
+  );
+
   it("preserves explicit cancellation over a concurrent timeout error", () => {
     const controller = new AbortController();
     controller.abort();
-    const error = new FailoverError("CLI timed out", { reason: "timeout" });
+    const error = createCliWatchdogError();
 
     expect(resolveAgentRunErrorLifecycleFields(error, controller.signal)).toEqual({
       aborted: true,

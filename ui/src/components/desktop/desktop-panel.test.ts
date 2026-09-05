@@ -33,6 +33,18 @@ function createPanel() {
   return document.createElement("openclaw-desktop-panel");
 }
 
+function createConnectionHandle(overrides: Partial<DesktopConnectionHandle> = {}) {
+  return {
+    disconnect: vi.fn(),
+    disableInput: vi.fn(),
+    sendBackspace: vi.fn(),
+    sendKeyboardEvent: vi.fn(),
+    sendText: vi.fn(),
+    setScaleViewport: vi.fn(),
+    ...overrides,
+  } satisfies DesktopConnectionHandle;
+}
+
 function clickPanelButton(
   panel: DesktopPanelElement,
   selector = ".desktop-environment button",
@@ -102,7 +114,7 @@ describe("embedded desktop panel presentation", () => {
     const disconnect = vi.fn();
     const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
       options.onConnect?.();
-      return { disconnect, disableInput: vi.fn() };
+      return createConnectionHandle({ disconnect });
     });
     const panel = createPanel();
     panel.client = createGatewayClient(request).client;
@@ -196,7 +208,7 @@ describe("embedded desktop panel presentation", () => {
       const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
         expect(options.credentials).toBeUndefined();
         options.onConnect?.();
-        return { disconnect, disableInput: vi.fn() };
+        return createConnectionHandle({ disconnect });
       });
       const panel = createPanel();
       panel.client = gateway.client;
@@ -295,7 +307,7 @@ describe("embedded desktop panel presentation", () => {
     const disconnect = vi.fn();
     const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
       options.onConnect?.();
-      return { disconnect, disableInput: vi.fn() };
+      return createConnectionHandle({ disconnect });
     });
     const panel = createPanel();
     panel.client = gateway.client;
@@ -348,7 +360,7 @@ describe("embedded desktop panel presentation", () => {
       const disconnect = vi.fn();
       const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
         options.onConnect?.();
-        return { disconnect, disableInput: vi.fn() };
+        return createConnectionHandle({ disconnect });
       });
       const panel = createPanel();
       panel.client = gateway.client;
@@ -458,7 +470,7 @@ describe("embedded desktop panel presentation", () => {
     const disconnect = vi.fn();
     const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
       options.onConnect?.();
-      return { disconnect, disableInput: vi.fn() };
+      return createConnectionHandle({ disconnect });
     });
     const panel = createPanel();
     panel.client = gateway.client;
@@ -547,7 +559,7 @@ describe("embedded desktop panel presentation", () => {
       const disconnect = vi.fn();
       const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
         options.onConnect?.();
-        return { disconnect, disableInput: vi.fn() };
+        return createConnectionHandle({ disconnect });
       });
       const gateway = createGatewayClient(request);
       const panel = createPanel();
@@ -661,8 +673,8 @@ describe("embedded desktop panel presentation", () => {
     async ({ initialControl, handleTiming }) => {
       const observe = createDeferred<unknown>();
       const replacement = createDeferred<DesktopConnectionHandle>();
-      const previous = { disconnect: vi.fn(), disableInput: vi.fn(), sendKeyboardEvent: vi.fn() };
-      const next = { disconnect: vi.fn(), disableInput: vi.fn(), sendKeyboardEvent: vi.fn() };
+      const previous = createConnectionHandle();
+      const next = createConnectionHandle();
       let pending: Parameters<DesktopClient["connect"]>[0] | undefined;
       const request = vi.fn(async (method: string, params?: { control?: boolean }) => {
         if (method === "environments.list") {
@@ -774,8 +786,8 @@ describe("embedded desktop panel presentation", () => {
     "unmount",
   ] as const)("releases the retained viewer and pending replacement on %s", async (outcome) => {
     const observe = createDeferred<unknown>();
-    const previous = { disconnect: vi.fn(), disableInput: vi.fn() };
-    const next = { disconnect: vi.fn(), disableInput: vi.fn() };
+    const previous = createConnectionHandle();
+    const next = createConnectionHandle();
     let pending: Parameters<DesktopClient["connect"]>[0] | undefined;
     const request = vi.fn(async (method: string, params?: { control?: boolean }) => {
       if (method === "environments.list") {
@@ -914,7 +926,7 @@ describe("embedded desktop panel presentation", () => {
     const disconnect = vi.fn();
     const connect = vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
       options.onConnect?.();
-      return { disconnect, disableInput: vi.fn() };
+      return createConnectionHandle({ disconnect });
     });
     const panel = createPanel();
     panel.client = createGatewayClient(request).client;
@@ -963,7 +975,7 @@ describe("embedded desktop panel presentation", () => {
       }
       return observe;
     });
-    const connect = vi.fn(async () => ({ disconnect: vi.fn(), disableInput: vi.fn() }));
+    const connect = vi.fn(async () => createConnectionHandle());
     const panel = createPanel();
     panel.client = createGatewayClient(request).client;
     panel.available = true;
