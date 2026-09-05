@@ -60,6 +60,7 @@ struct SettingsRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(NotificationCenter.default.publisher(for: .openclawSelectSettingsTab)) { note in
             if let tab = note.object as? SettingsTab {
+                SettingsTabRouter.clearIfMatching(tab)
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
                     self.selectRequestedTab(tab)
                 }
@@ -573,6 +574,15 @@ enum SettingsTabRouter {
     static func consumePending() -> SettingsTab? {
         defer { self.pending = nil }
         return self.pending
+    }
+
+    /// Retires a request once its notification is admitted while mounted, so a stale
+    /// notification cannot later be consumed by `.onAppear` and override a newer selection.
+    /// Only clears when it still matches, so an older notification can't erase a newer request.
+    static func clearIfMatching(_ tab: SettingsTab) {
+        if self.pending == tab {
+            self.pending = nil
+        }
     }
 }
 
