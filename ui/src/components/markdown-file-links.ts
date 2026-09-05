@@ -11,8 +11,10 @@ function fileGrammar(extension: string) {
   const prefixed = `(?:~\\/|\\.\\.\\/|\\.\\/|\\/)(?:${FILE_SEGMENT_SOURCE}\\/)*${name}`;
   const unprefixed = `${FILE_SEGMENT_SOURCE}(?:\\/${FILE_SEGMENT_SOURCE})*\\/${name}`;
   const windowsAbsolute = `[A-Za-z]:[\\\\/](?:${FILE_SEGMENT_SOURCE}[\\\\/])*${name}`;
-  const multiSegment = `(?:${prefixed}|${windowsAbsolute}|${unprefixed})(?:${FILE_LINE_SUFFIX_SOURCE})?`;
-  const bareWithLine = `${name}${FILE_LINE_SUFFIX_SOURCE}`;
+  // A reference may not stop early inside a longer token ("logs/app.log.1" must not link "logs/app.log").
+  const end = "(?!\\.?[A-Za-z0-9_])";
+  const multiSegment = `(?:${prefixed}|${windowsAbsolute}|${unprefixed})(?:${FILE_LINE_SUFFIX_SOURCE})?${end}`;
+  const bareWithLine = `${name}${FILE_LINE_SUFFIX_SOURCE}${end}`;
   return {
     scan: new RegExp(`${multiSegment}|${bareWithLine}`, "g"),
     exact: new RegExp(`^(?:${multiSegment}|${bareWithLine})$`),

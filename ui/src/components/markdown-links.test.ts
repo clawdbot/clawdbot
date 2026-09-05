@@ -306,6 +306,17 @@ describe("toSanitizedMarkdownHtml links", () => {
       expect(link?.dataset.fileLine).toBe("26");
     });
 
+    it("does not link a shorter prefix of a numeric-suffix filename", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("rotated logs/app.log.1 but see src/lib/foo.ts.", {
+          fileLinks: true,
+        }),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a[data-file-path]")];
+      expect(links.map((link) => link.dataset.filePath)).toEqual(["src/lib/foo.ts"]);
+      expect(fragment.textContent).toContain("logs/app.log.1");
+    });
+
     it("does not link dotted version numbers but keeps authored digit-led extensions", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml(
