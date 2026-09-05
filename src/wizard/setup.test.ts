@@ -2995,7 +2995,11 @@ describe("runSetupWizard", () => {
             ? {
                 models: {
                   providers: {
-                    [provider]: { models: [], localService: { command: "/fixture/server" } },
+                    [provider]: {
+                      baseUrl: "http://127.0.0.1:8080/v1",
+                      models: [],
+                      localService: { command: "/fixture/server" },
+                    },
                   },
                 },
               }

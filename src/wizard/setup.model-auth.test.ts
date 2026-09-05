@@ -458,7 +458,11 @@ describe("runSetupModelAuthStep", () => {
         agents: { defaults: { ...config.agents?.defaults, model: "managed-local/prepared" } },
         models: {
           providers: {
-            "managed-local": { models: [], localService: { command: "/fixture/server" } },
+            "managed-local": {
+              baseUrl: "http://127.0.0.1:8080/v1",
+              models: [],
+              localService: { command: "/fixture/server" },
+            },
           },
         },
       };
@@ -492,7 +496,11 @@ describe("runSetupModelAuthStep", () => {
         agents: { defaults: { model: "managed-local/model" } },
         models: {
           providers: {
-            "managed-local": { models: [], localService: { command: "/fixture/server" } },
+            "managed-local": {
+              baseUrl: "http://127.0.0.1:8080/v1",
+              models: [],
+              localService: { command: "/fixture/server" },
+            },
           },
         },
       };

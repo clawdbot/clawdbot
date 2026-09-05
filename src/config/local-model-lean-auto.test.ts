@@ -37,6 +37,7 @@ describe("local model lean onboarding defaults", () => {
       models: {
         providers: {
           ollama: {
+            baseUrl: "http://127.0.0.1:11434",
             models: [],
             localService: { command: "/usr/bin/ollama" },
           },
@@ -103,7 +104,11 @@ describe("local model lean onboarding defaults", () => {
       agents: { defaults: { experimental: { localModelLean } } },
       models: {
         providers: {
-          "managed-local": { models: [], localService: { command: "/usr/bin/model-server" } },
+          "managed-local": {
+            baseUrl: "http://127.0.0.1:8080/v1",
+            models: [],
+            localService: { command: "/usr/bin/model-server" },
+          },
         },
       },
     };
