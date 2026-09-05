@@ -412,6 +412,7 @@ describe("Control UI E2E resource ownership", () => {
       "chat-widget-sandbox.real-gateway",
       "control-ui-auth-transports",
       "cron-duration-save.real-gateway",
+      "device-alias-rename.real-gateway",
       "logs-lifecycle",
       "mcp-app-conformance",
       "session-progress-hovercard.real-gateway",
