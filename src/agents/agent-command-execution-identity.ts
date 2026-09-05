@@ -224,6 +224,7 @@ export function sanitizePublicAgentCommandIngressOpts(
     cronCreatorAuthorityCapability: undefined,
     onAdmittedRunContext: undefined,
     onPostAdmittedRunContext: undefined,
+    promptModeFromToolsProfile: undefined,
   });
 }
 

@@ -90,10 +90,10 @@ On channels with native approval cards/buttons, the prompt tells the agent to re
 
 ## Prompt modes
 
-OpenClaw renders smaller system prompts for sub-agents. The runtime sets a `promptMode` per run (not user-facing config):
+OpenClaw renders smaller system prompts for sub-agents, cron sessions, and OpenAI-compatible HTTP chat or OpenResponses turns when the attempt model's effective tools profile is `minimal`. The runtime sets a `promptMode` per run (not user-facing config):
 
 - `full` (default): all sections above.
-- `minimal`: used for sub-agents; omits the memory prompt section (bundled as **Memory Recall**), **Model Aliases**, **User Identity**, **Assistant Output Directives**, **Messaging**, **Collapsible Details**, and **Silent Replies**. Tooling, **Safety**, **Skills** (when supplied), Workspace, Sandbox, Current Date & Time (when known), Runtime, and injected context stay available.
+- `minimal`: used for sub-agents, cron sessions, and HTTP Chat Completions or OpenResponses turns whose effective tools profile is `minimal` (`tools.profile` or `tools.byProvider.<provider>.profile` for the actual attempt model, including fallbacks). It omits the memory prompt section (bundled as **Memory Recall**), **Model Aliases**, **User Identity**, **Assistant Output Directives**, **Messaging**, **Collapsible Details**, and **Silent Replies**. Tooling, **Safety**, **Skills** (when supplied), Workspace, Sandbox, Current Date & Time (when known), Runtime, and injected context stay available.
 - `none`: returns only the base identity line.
 
 Under `promptMode=minimal`, extra injected prompts are labeled **Subagent Context** instead of **Group Chat Context**.

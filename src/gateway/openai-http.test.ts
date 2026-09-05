@@ -164,6 +164,8 @@ type FirstAgentCommandOptions = {
   onAdmittedRunContext?: (context: object) => void | Promise<void>;
   senderIsOwner?: boolean;
   sessionKey?: string;
+  promptMode?: string;
+  promptModeFromToolsProfile?: boolean;
   streamParams?: {
     frequencyPenalty?: number;
     maxTokens?: number;
@@ -1710,6 +1712,33 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       }
     } finally {
       testState.agentsConfig = undefined;
+      resetConfigRuntimeState();
+    }
+  });
+
+  it("defers HTTP promptMode to each attempt model's tools profile", async () => {
+    const port = enabledPort;
+    await writeGatewayConfig({
+      tools: {
+        profile: "minimal",
+        byProvider: { openai: { profile: "coding" } },
+      },
+      agents: { list: [{ id: "main" }] },
+    });
+    resetConfigRuntimeState();
+    try {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        messages: [{ role: "user", content: "PONG" }],
+      });
+      expect(res.status).toBe(200);
+      expect(firstAgentCommandOptions()?.promptMode).toBeUndefined();
+      expect(firstAgentCommandOptions()?.promptModeFromToolsProfile).toBe(true);
+      await res.text();
+    } finally {
+      await writeGatewayConfig({});
       resetConfigRuntimeState();
     }
   });

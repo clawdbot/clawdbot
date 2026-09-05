@@ -441,6 +441,36 @@ describe("OpenResponses HTTP API (e2e)", () => {
     },
   );
 
+  it.each([{ stream: false }, { stream: true }])(
+    "defers HTTP promptMode to each attempt model's tools profile (stream: $stream)",
+    async ({ stream }) => {
+      await writeGatewayConfig({
+        tools: {
+          profile: "minimal",
+          byProvider: { openai: { profile: "coding" } },
+        },
+        agents: { list: [{ id: "main" }] },
+      });
+      resetConfigRuntimeState();
+      try {
+        agentCommandMock.mockClear();
+        agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+        const res = await postResponses(enabledPort, {
+          stream,
+          model: "openclaw",
+          input: "PONG",
+        });
+        expect(res.status).toBe(200);
+        expect(firstAgentOpts().promptMode).toBeUndefined();
+        expect(firstAgentOpts().promptModeFromToolsProfile).toBe(true);
+        await ensureResponseConsumed(res);
+      } finally {
+        await writeGatewayConfig({});
+        resetConfigRuntimeState();
+      }
+    },
+  );
+
   it("preserves buffered leading text in official SDK streaming snapshots", async () => {
     const expected = "<tag>ok</tag>";
     agentCommandMock.mockClear();

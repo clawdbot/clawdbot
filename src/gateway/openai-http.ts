@@ -176,6 +176,7 @@ function buildAgentCommandInput(params: {
   senderIsOwner: boolean;
   abortSignal?: AbortSignal;
   streamParams?: AgentStreamParams;
+  promptModeFromToolsProfile?: boolean;
 }) {
   return {
     message: params.prompt.message,
@@ -192,6 +193,7 @@ function buildAgentCommandInput(params: {
     allowModelOverride: params.modelOverride !== undefined,
     abortSignal: params.abortSignal,
     streamParams: params.streamParams,
+    promptModeFromToolsProfile: params.promptModeFromToolsProfile,
   };
 }
 
@@ -1031,6 +1033,7 @@ export async function handleOpenAiHttpRequest(
     senderIsOwner,
     abortSignal: abortController.signal,
     streamParams,
+    promptModeFromToolsProfile: true,
   });
   const gatewayCommandInput = opts.resolveGatewayContext
     ? {

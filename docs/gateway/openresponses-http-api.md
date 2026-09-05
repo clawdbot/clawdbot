@@ -8,7 +8,7 @@ title: "OpenResponses API"
 
 The Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint. It is **disabled by default** and shares its port with the Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/v1/responses`.
 
-Requests run as a normal Gateway agent run (same codepath as `openclaw agent`), so routing, permissions, and config match your Gateway.
+Requests run as a normal Gateway agent run (same codepath as `openclaw agent`), so routing, permissions, and config match your Gateway. When the attempt model's effective tools profile is `minimal`, the run uses the compact system prompt (see [Prompt modes](/concepts/system-prompt#prompt-modes)).
 
 Enable or disable with `gateway.http.endpoints.responses.enabled`. When enabled, the same compatibility surface also serves `GET /v1/models`, `GET /v1/models/{id}`, and `POST /v1/embeddings`.
 

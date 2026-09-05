@@ -5,6 +5,7 @@
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   formatAgentInternalEventsForPlainPrompt,
   formatAgentInternalEventsForPrompt,
@@ -13,6 +14,7 @@ import {
   hasInternalRuntimeContext,
   stripInternalRuntimeContext,
 } from "../internal-runtime-context.js";
+import { resolveCandidatePromptMode } from "./prompt-mode-from-tools-profile.js";
 import type { AgentCommandOpts } from "./types.js";
 
 /** Parameters for merging and persisting a session entry update. */
@@ -119,4 +121,25 @@ export function resolveInternalEventTranscriptBody(
     return body;
   }
   return resolvePlainInternalEventBody(body, events);
+}
+
+/** Merge per-candidate promptMode so fallbacks recompute tools.profile, not a frozen pre-selector value. */
+export function withCandidatePromptMode(
+  opts: AgentCommandOpts,
+  candidate: {
+    cfg?: OpenClawConfig;
+    agentId?: string;
+    sessionKey?: string;
+    modelProvider?: string;
+    modelId?: string;
+  },
+): AgentCommandOpts {
+  return {
+    ...opts,
+    promptMode: resolveCandidatePromptMode({
+      ...candidate,
+      promptMode: opts.promptMode,
+      promptModeFromToolsProfile: opts.promptModeFromToolsProfile,
+    }),
+  };
 }
