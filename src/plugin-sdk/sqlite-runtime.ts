@@ -1,5 +1,7 @@
 // Narrow SQLite schema, path, and transaction helpers for first-party runtime.
 
+export type { Generated, Selectable } from "kysely";
+
 export {
   borrowOpenClawAgentDatabase,
   ensureOpenClawAgentDatabaseSchema,
