@@ -8,7 +8,6 @@ import {
   configWriteMock,
   enablePluginInConfigMock,
   loadPluginManifestRegistryMock,
-  pluginsCliRuntimeLogs,
   resetPluginsCliTestState,
   setInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
@@ -28,10 +27,6 @@ function requireMockCallArg(
     throw new Error(`expected ${label} call #${index + 1}`);
   }
   return arg;
-}
-
-function expectRuntimeLogIncludes(fragment: string) {
-  expect(pluginsCliRuntimeLogs.join("\n")).toContain(fragment);
 }
 
 function createManifestRecord(
@@ -86,7 +81,7 @@ describe("persistPluginInstall enablement", () => {
       diagnostics: [],
     });
 
-    const next = await persistPluginInstall({
+    const { config: next } = await persistPluginInstall({
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
@@ -156,7 +151,7 @@ describe("persistPluginInstall enablement", () => {
       };
     }) as (...args: unknown[]) => unknown);
 
-    const next = await persistPluginInstall({
+    const { config: next } = await persistPluginInstall({
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
@@ -177,10 +172,9 @@ describe("persistPluginInstall enablement", () => {
         onlyPluginIds: ["legacy-memory"],
       }),
     );
-    expect(
-      requireMockCallArg(loadPluginManifestRegistryMock, "loadPluginManifestRegistryMock", 1)
-        .config,
-    ).toBe(enabledConfig);
+    expect(loadPluginManifestRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ config: enabledConfig }),
+    );
     expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(true);
     expect(next.plugins?.slots?.memory).toBe("legacy-memory");
   });
@@ -232,7 +226,7 @@ describe("persistPluginInstall enablement", () => {
       };
     }) as (...args: unknown[]) => unknown);
 
-    const next = await persistPluginInstall({
+    const { config: next } = await persistPluginInstall({
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
@@ -247,10 +241,9 @@ describe("persistPluginInstall enablement", () => {
     });
 
     expect(buildPluginDiagnosticsReportMock).not.toHaveBeenCalled();
-    expect(
-      requireMockCallArg(loadPluginManifestRegistryMock, "loadPluginManifestRegistryMock", 1)
-        .config,
-    ).toBe(enabledConfig);
+    expect(loadPluginManifestRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ config: enabledConfig }),
+    );
     expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(true);
     expect(next.plugins?.slots?.memory).toBe("memory-b");
   });
@@ -284,7 +277,7 @@ describe("persistPluginInstall enablement", () => {
       changed: false,
     });
 
-    const next = await persistPluginInstall({
+    const { config: next } = await persistPluginInstall({
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
@@ -305,10 +298,9 @@ describe("persistPluginInstall enablement", () => {
         onlyPluginIds: ["plain"],
       }),
     );
-    expect(
-      requireMockCallArg(loadPluginManifestRegistryMock, "loadPluginManifestRegistryMock", 1)
-        .config,
-    ).toBe(enabledConfig);
+    expect(loadPluginManifestRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ config: enabledConfig }),
+    );
     expect(next).toEqual(enabledConfig);
   });
 
@@ -341,7 +333,7 @@ describe("persistPluginInstall enablement", () => {
       diagnostics: [],
     });
 
-    const next = await persistPluginInstall({
+    const { config: next, warnings } = await persistPluginInstall({
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
@@ -365,9 +357,9 @@ describe("persistPluginInstall enablement", () => {
     });
     expect(enablePluginInConfigMock).not.toHaveBeenCalled();
     expect(applyExclusiveSlotSelectionMock).not.toHaveBeenCalled();
-    expectRuntimeLogIncludes(
-      'Installed plugin "needs-config" without enabling it because it requires configuration first.',
-    );
+    expect(warnings).toEqual([
+      'Installed plugin "needs-config" without enabling it because it requires configuration first. Configure it, then run `openclaw plugins enable needs-config`.',
+    ]);
     const persistedRecords = requireMockCallArg(
       writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
       "writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock",
@@ -419,7 +411,6 @@ describe("persistPluginInstall enablement", () => {
 
   it("rejects invalid authored plugin config even for a disabled install", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
-    let committed = false;
     const baseConfig = {
       plugins: {
         entries: {
@@ -457,10 +448,6 @@ describe("persistPluginInstall enablement", () => {
           writeOptions: installWriteOptions,
         },
         pluginId: "needs-config",
-        enable: false,
-        onCommitted: () => {
-          committed = true;
-        },
         install: {
           source: "npm",
           spec: "needs-config@1.0.0",
@@ -469,28 +456,26 @@ describe("persistPluginInstall enablement", () => {
       }),
     ).rejects.toThrow("has invalid configured settings");
 
-    expect(committed).toBe(false);
     expect(enablePluginInConfigMock).not.toHaveBeenCalled();
     expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
     expect(configWriteMock).not.toHaveBeenCalled();
   });
 
-  it("can persist an install record without enabling a plugin that needs config first", async () => {
+  it("preserves explicit disablement when reinstalling a plugin", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
-        entries: {},
+        entries: { "memory-lancedb": { enabled: false } },
       },
     } as OpenClawConfig;
 
-    const next = await persistPluginInstall({
+    const { config: next } = await persistPluginInstall({
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
         writeOptions: installWriteOptions,
       },
       pluginId: "memory-lancedb",
-      enable: false,
       install: {
         source: "path",
         spec: "memory-lancedb",
@@ -516,23 +501,23 @@ describe("persistPluginInstall enablement", () => {
     expect(configWriteMock).toHaveBeenCalledWith(baseConfig);
   });
 
-  it("does not add disabled installs to restrictive allowlists", async () => {
+  it("restores package policy without overriding explicit child disablement", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
     const baseConfig = {
       plugins: {
         allow: ["memory-core"],
         deny: ["memory-lancedb"],
+        entries: { "memory-lancedb": { enabled: false } },
       },
     } as OpenClawConfig;
 
-    const next = await persistPluginInstall({
+    const { config: next } = await persistPluginInstall({
       snapshot: {
         config: baseConfig,
         baseHash: "config-1",
         writeOptions: installWriteOptions,
       },
       pluginId: "memory-lancedb",
-      enable: false,
       install: {
         source: "path",
         spec: "memory-lancedb",
@@ -541,8 +526,9 @@ describe("persistPluginInstall enablement", () => {
       },
     });
 
-    expect(next.plugins?.allow).toEqual(["memory-core"]);
-    expect(next.plugins?.deny).toEqual(["memory-lancedb"]);
-    expect(next.plugins?.entries?.["memory-lancedb"]).toBeUndefined();
+    expect(next.plugins?.allow).toEqual(["memory-core", "memory-lancedb"]);
+    expect(next.plugins?.deny).toBeUndefined();
+    expect(next.plugins?.entries?.["memory-lancedb"]).toEqual({ enabled: false });
+    expect(enablePluginInConfigMock).not.toHaveBeenCalled();
   });
 });

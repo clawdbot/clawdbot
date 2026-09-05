@@ -130,7 +130,8 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
 
   override willUpdate(): void {
     const client = this.context?.gateway.snapshot.client;
-    if (!client || !this.docId) {
+    // Lit also updates detached elements after disconnect cleanup.
+    if (!this.isConnected || !client || !this.docId) {
       this.clearView();
       return;
     }

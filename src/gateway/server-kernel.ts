@@ -4,6 +4,7 @@ import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
+import { createPluginRegistryOwner } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
@@ -138,6 +139,7 @@ export async function createGatewayKernel(
   const bootId = suppliedBootId ?? randomUUID();
   ensureOpenClawCliOnPath();
   const releasePluginMetadata = retainGatewayPluginMetadata();
+  let pluginRegistryOwner: ReturnType<typeof createPluginRegistryOwner> | undefined;
   let lifecycleRuntime: Awaited<ReturnType<typeof prepareGatewayLifecycle>> | undefined;
   let kernelState: Awaited<ReturnType<typeof prepareGatewayKernelState>> | undefined;
   try {
@@ -149,10 +151,16 @@ export async function createGatewayKernel(
       loadWorkerEnvironmentStartupModule,
       formatRuntimeGatewayAuthTokenWarning,
     });
+    pluginRegistryOwner = createPluginRegistryOwner(
+      bootstrap.pluginBootstrap.pluginRegistry,
+      bootstrap.pluginBootstrap.pluginWorkspaceDir,
+    );
+    const preparedPluginRegistryOwner = pluginRegistryOwner;
     const runtime = await bootstrap.startupTrace.measure("gateway.kernel-state", () =>
       prepareGatewayKernelState({
         bootstrap,
         bootId,
+        pluginRegistryOwner: preparedPluginRegistryOwner,
         port,
         opts,
         log,
@@ -219,9 +227,11 @@ export async function createGatewayKernel(
         await lifecycleRuntime.closeOnStartupFailure();
       } else {
         kernelState?.mentionInbox.dispose();
-        clearGatewayAgentCliShim();
-        clearSecretsRuntimeSnapshotState();
-        releasePluginMetadata();
+        await pluginRegistryOwner?.close();
+        if (releasePluginMetadata()) {
+          clearGatewayAgentCliShim();
+          clearSecretsRuntimeSnapshotState();
+        }
       }
     });
   }

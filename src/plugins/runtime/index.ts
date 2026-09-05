@@ -2,13 +2,10 @@ import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace
 // Plugin runtime entrypoint assembles runtime helpers available to activated plugins.
 import { getRuntimeConfig } from "../../config/config.js";
 import {
-  generateImage as generateRuntimeImage,
-  listRuntimeImageGenerationProviders,
-} from "../../image-generation/runtime.js";
-import {
-  generateMusic as generateRuntimeMusic,
-  listRuntimeMusicGenerationProviders,
-} from "../../music-generation/runtime.js";
+  listImageGenerationProviders,
+  listMusicGenerationProviders,
+  listVideoGenerationProviders,
+} from "../../media-generation/registry.js";
 import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
 import {
   createLazyRuntimeMethod,
@@ -17,14 +14,9 @@ import {
   createLazyRuntimeSurface,
 } from "../../shared/lazy-runtime.js";
 import { VERSION } from "../../version.js";
-import {
-  generateVideo as generateRuntimeVideo,
-  listRuntimeVideoGenerationProviders,
-} from "../../video-generation/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { createRuntimeBase } from "./runtime-base.js";
-import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
 import { createRuntimeEvents } from "./runtime-events.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
@@ -88,27 +80,6 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
     ),
     describeVideoFile: bindMediaUnderstandingRuntime((runtime) => runtime.describeVideoFile),
     transcribeAudioFile: bindMediaUnderstandingRuntime((runtime) => runtime.transcribeAudioFile),
-  };
-}
-
-function createRuntimeImageGeneration(): PluginRuntime["imageGeneration"] {
-  return {
-    generate: (params) => generateRuntimeImage(params),
-    listProviders: (params) => listRuntimeImageGenerationProviders(params),
-  };
-}
-
-function createRuntimeVideoGeneration(): PluginRuntime["videoGeneration"] {
-  return {
-    generate: (params) => generateRuntimeVideo(params),
-    listProviders: (params) => listRuntimeVideoGenerationProviders(params),
-  };
-}
-
-function createRuntimeMusicGeneration(): PluginRuntime["musicGeneration"] {
-  return {
-    generate: (params) => generateRuntimeMusic(params),
-    listProviders: (params) => listRuntimeMusicGenerationProviders(params),
   };
 }
 
@@ -262,13 +233,12 @@ export const createPluginRuntime: PluginRuntimeFactory = (
   _options = {},
   base = createRuntimeBase(),
 ) => {
-  const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const taskFlow = createRuntimeTaskFlow();
   const tasks = createRuntimeTasks({
     managedTaskFlow: taskFlow,
   });
   const agent = createRuntimeAgent();
-  const runtime = {
+  return {
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
@@ -299,38 +269,27 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     logging: createRuntimeLogging(),
     state: base.state,
     tasks,
-  } satisfies Omit<
-    PluginRuntime,
-    | "tts"
-    | "mediaUnderstanding"
-    | "modelAuth"
-    | "imageGeneration"
-    | "videoGeneration"
-    | "musicGeneration"
-    | "llm"
-  > &
-    Partial<
-      Pick<
-        PluginRuntime,
-        | "tts"
-        | "mediaUnderstanding"
-        | "modelAuth"
-        | "imageGeneration"
-        | "videoGeneration"
-        | "musicGeneration"
-        | "llm"
-      >
-    >;
-
-  defineCachedValue(runtime, "tts", createRuntimeTts);
-  defineCachedValue(runtime, "mediaUnderstanding", () => mediaUnderstanding);
-  defineCachedValue(runtime, "modelAuth", createRuntimeModelAuth);
-  defineCachedValue(runtime, "imageGeneration", createRuntimeImageGeneration);
-  defineCachedValue(runtime, "videoGeneration", createRuntimeVideoGeneration);
-  defineCachedValue(runtime, "musicGeneration", createRuntimeMusicGeneration);
-  defineCachedValue(runtime, "llm", createRuntimeLlmFacade);
-
-  return runtime as unknown as PluginRuntime;
+    tts: createRuntimeTts(),
+    mediaUnderstanding: createRuntimeMediaUnderstandingFacade(),
+    modelAuth: createRuntimeModelAuth(),
+    // Listings stay synchronous; execution loads only when requested.
+    imageGeneration: {
+      generate: async (params) =>
+        (await import("../../image-generation/runtime.js")).generateImage(params),
+      listProviders: (params) => listImageGenerationProviders(params?.config),
+    },
+    videoGeneration: {
+      generate: async (params) =>
+        (await import("../../video-generation/runtime.js")).generateVideo(params),
+      listProviders: (params) => listVideoGenerationProviders(params?.config),
+    },
+    musicGeneration: {
+      generate: async (params) =>
+        (await import("../../music-generation/runtime.js")).generateMusic(params),
+      listProviders: (params) => listMusicGenerationProviders(params?.config),
+    },
+    llm: createRuntimeLlmFacade(),
+  };
 };
 
 export type { PluginRuntime } from "./types.js";

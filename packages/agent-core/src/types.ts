@@ -194,6 +194,8 @@ export interface ShouldStopAfterTurnContext {
 
 /** Replacement runtime state used by the agent loop before starting another provider request. */
 export interface AgentLoopTurnUpdate {
+  /** Commit accepted steering and settle this invocation without another model request. */
+  stop?: boolean;
   /** Context for the next provider request. */
   context?: AgentContext;
   /** Model for the next provider request. */

@@ -9,7 +9,7 @@ type PluginsCommand =
   | { action: "list" }
   | { action: "inspect"; name?: string }
   | { action: "install"; acceptCapabilities: boolean; force: boolean; spec: string }
-  | { action: "enable"; acceptCapabilities: boolean; name: string }
+  | { action: "enable" | "reload"; acceptCapabilities: boolean; name: string }
   | { action: "disable"; name: string }
   | { action: "error"; message: string };
 
@@ -33,7 +33,7 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
     return name
       ? {
           action: "error",
-          message: "Usage: /plugins list|inspect|show|get|enable|disable [plugin]",
+          message: "Usage: /plugins list|inspect|show|get|enable|disable|reload [plugin]",
         }
       : { action: "list" };
   }
@@ -71,14 +71,14 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
     return { action: "install", acceptCapabilities, force, spec };
   }
 
-  if (action === "enable") {
+  if (action === "enable" || action === "reload") {
     const acceptCapabilities = rest.at(-1) === "--accept-capabilities";
     const nameParts = acceptCapabilities ? rest.slice(0, -1) : rest;
     const pluginName = nameParts.join(" ").trim();
     if (!pluginName || nameParts.includes("--accept-capabilities")) {
       return {
         action: "error",
-        message: "Usage: /plugins enable <plugin-id-or-name> [--accept-capabilities]",
+        message: `Usage: /plugins ${action} <plugin-id-or-name> [--accept-capabilities]`,
       };
     }
     return { action, acceptCapabilities, name: pluginName };
@@ -96,6 +96,6 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
 
   return {
     action: "error",
-    message: "Usage: /plugins list|inspect|show|get|install|enable|disable [plugin]",
+    message: "Usage: /plugins list|inspect|show|get|install|enable|disable|reload [plugin]",
   };
 }

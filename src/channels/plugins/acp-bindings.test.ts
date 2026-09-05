@@ -137,32 +137,17 @@ describe("configured binding registry", () => {
     });
   });
 
-  it("primes compiled ACP bindings from the already loaded channel registry", () => {
-    const plugin = createDiscordAcpPlugin();
+  it("rejects a failed plugin binding compilation before activation", () => {
+    const plugin = createDiscordAcpPlugin({
+      compileConfiguredBinding: vi.fn(() => {
+        throw new Error("invalid plugin binding");
+      }),
+    });
     const cfg = createConfig({ bindingAgentId: "codex" });
     getLoadedChannelPluginMock.mockReturnValue(plugin);
-
-    const primed = bindingRegistry.primeConfiguredBindingRegistry({
-      cfg: cfg as never,
-    });
-    const resolved = bindingRegistry.resolveConfiguredBindingRecord({
-      cfg: cfg as never,
-      channel: "discord",
-      accountId: "default",
-      conversationId: "1479098716916023408",
-    });
-
-    expect(primed).toEqual({ bindingCount: 1, channelCount: 1 });
-    expect(resolved?.statefulTarget.agentId).toBe("codex");
-
-    const second = bindingRegistry.resolveConfiguredBindingRecord({
-      cfg: cfg as never,
-      channel: "discord",
-      accountId: "default",
-      conversationId: "1479098716916023408",
-    });
-
-    expect(second?.statefulTarget.agentId).toBe("codex");
+    expect(() => bindingRegistry.validateConfiguredBindings(cfg as never)).toThrow(
+      "invalid plugin binding",
+    );
   });
 
   it("resolves wildcard binding session keys from the compiled registry", () => {

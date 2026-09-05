@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForDead, waitForPidFile } from "../../test/helpers/process-wait.js";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-error.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
@@ -18,6 +19,7 @@ import {
 } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   buildExecRunConfig,
   resolveAgentExecPrompt,
@@ -196,6 +198,100 @@ describe("agent exec strict result classification", () => {
 });
 
 describe("agent exec command composition", () => {
+  it("projects a supervised CLI timeout and removes its child through the shipped command", async () => {
+    const root = tempDirs.make("openclaw-agent-exec-service-timeout-");
+    const pluginDir = path.join(root, "plugin");
+    const commandPath = path.join(root, "command.cjs");
+    const pidPath = path.join(root, "command.pid");
+    const configPath = path.join(root, "openclaw.json");
+    await fs.mkdir(pluginDir);
+    await Promise.all([
+      fs.writeFile(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "exec-proof-cli",
+          cliBackends: ["exec-proof-cli"],
+          configSchema: { type: "object", additionalProperties: false },
+        }),
+        "utf8",
+      ),
+      fs.writeFile(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "exec-proof-cli",
+          version: "1.0.0",
+          openclaw: { extensions: ["./index.cjs"], setupEntry: "./index.cjs" },
+        }),
+        "utf8",
+      ),
+      fs.writeFile(
+        path.join(pluginDir, "index.cjs"),
+        `module.exports = { register(api) { api.registerCliBackend(${JSON.stringify({
+          id: "exec-proof-cli",
+          config: {
+            command: process.execPath,
+            args: [commandPath],
+            output: "text",
+            input: "arg",
+            sessionMode: "none",
+          },
+        })}); } };`,
+        "utf8",
+      ),
+      fs.writeFile(
+        commandPath,
+        `require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+setTimeout(() => {}, 60_000);
+`,
+        "utf8",
+      ),
+    ]);
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        plugins: {
+          allow: ["exec-proof-cli"],
+          load: { paths: [pluginDir] },
+          entries: { "exec-proof-cli": { enabled: true } },
+        },
+        agents: { defaults: { model: { primary: "exec-proof-cli/proof-model" } } },
+      }),
+      "utf8",
+    );
+
+    const completed = await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+      },
+      async () => {
+        const { runtime } = createRuntime();
+        const finished = await agentExecCommand(
+          "probe",
+          { config: configPath, cwd: root, timeout: "1", json: true },
+          runtime,
+        );
+        // Cold plugin loading is outside the PID observation budget; only this command writes it.
+        let commandPid: number;
+        try {
+          commandPid = await waitForPidFile(pidPath, 3_000);
+        } catch (error) {
+          throw new Error(
+            `agent exec did not start the fixture CLI: ${String(error)} exit=${String(finished.exitCode)} envelope=${JSON.stringify(finished.envelope)}`,
+            { cause: error },
+          );
+        }
+        expect(commandPid).toBeGreaterThan(0);
+        await waitForDead(commandPid, 5_000);
+        return finished;
+      },
+    );
+    expect(completed.exitCode).toBe(2);
+    expect(completed.envelope).toMatchObject({
+      ok: false,
+      status: "timeout",
+    });
+  });
+
   it("writes plain final text to stdout when diagnostics are routed to stderr", async () => {
     const source = `
       import { agentExecCommand } from "./src/commands/agent-exec.ts";

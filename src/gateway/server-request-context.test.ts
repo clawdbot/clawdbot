@@ -121,7 +121,7 @@ function makeContextParams(
     channelWizardRunner: vi.fn(async () => undefined),
     broadcastVoiceWakeChanged: vi.fn(),
     broadcastVoiceWakeRoutingChanged: vi.fn(),
-    notifyPluginMetadataChanged: vi.fn(),
+    applyPluginLifecycleChange: vi.fn<GatewayRequestContextParams["applyPluginLifecycleChange"]>(),
     getConfigReloaderHotReloadStatus: vi.fn(() => undefined),
     unavailableGatewayMethods: new Set(),
     ...overrides,
@@ -239,15 +239,6 @@ describe("createGatewayRequestContext", () => {
     );
 
     expect(context.workerPlacementDiskSpaceReader).toBe(workerPlacementDiskSpaceReader);
-  });
-
-  it("routes plugin metadata changes through the kernel bridge", () => {
-    const notifyPluginMetadataChanged = vi.fn();
-    const context = createGatewayRequestContext(makeContextParams({ notifyPluginMetadataChanged }));
-
-    context.notifyPluginMetadataChanged();
-
-    expect(notifyPluginMetadataChanged).toHaveBeenCalledOnce();
   });
 
   it("does not treat scoped CLI or backend callers as approval delivery routes", () => {

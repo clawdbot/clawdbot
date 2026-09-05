@@ -4,11 +4,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTempHome } from "../../config/home-env.test-harness.js";
+import { metadataSnapshot } from "../../plugins/management-service.test-helpers.js";
 import { invokePluginArtifactInstallMock } from "../../plugins/test-helpers/install-fixtures.js";
 import { mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
 import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
-import { handlePluginsCommand } from "./commands-plugins.js";
+import { runPluginsCommand as handlePluginsCommand } from "./commands-plugins.test-support.js";
 import { buildPluginsCommandParams } from "./commands.test-harness.js";
+
+type PersistPluginInstall =
+  typeof import("../../plugins/install-persistence.js").persistPluginInstall;
 
 const {
   installPluginFromNpmPackArchiveMock,
@@ -23,7 +27,7 @@ const {
   installPluginFromPathMock: vi.fn(),
   installPluginFromClawHubMock: vi.fn(),
   installPluginFromGitSpecMock: vi.fn(),
-  persistPluginInstallMock: vi.fn(),
+  persistPluginInstallMock: vi.fn<PersistPluginInstall>(),
 }));
 
 vi.mock("../../plugins/install.js", async (importOriginal) => ({
@@ -51,8 +55,53 @@ vi.mock("../../plugins/git-install.js", async (importOriginal) => ({
 
 vi.mock("../../plugins/install-persistence.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/install-persistence.js")>()),
-  persistPluginInstall: persistPluginInstallMock,
+  persistPluginInstall: async (params: Parameters<PersistPluginInstall>[0]) => {
+    const persisted = await persistPluginInstallMock(params);
+    return {
+      ...persisted,
+      application: await params.applyRuntime?.({
+        config: persisted.config,
+        pluginIds: [params.pluginId],
+        reason: "install",
+      }),
+    };
+  },
 }));
+
+vi.mock("../../plugins/official-external-plugin-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/official-external-plugin-catalog.js")>()),
+  loadConfiguredHostedOfficialExternalPluginCatalogEntries: async () => ({
+    source: "bundled",
+    entries: [],
+  }),
+}));
+
+vi.mock("../../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/plugin-metadata-snapshot.js")>();
+  return {
+    ...actual,
+    loadPluginMetadataSnapshot: (...args: Parameters<typeof actual.loadPluginMetadataSnapshot>) => {
+      const installed = persistPluginInstallMock.mock.calls.at(-1)?.[0];
+      if (!installed) {
+        return actual.loadPluginMetadataSnapshot(...args);
+      }
+      const rootDir = installed.install.installPath;
+      if (!rootDir) {
+        throw new Error("Expected installed fixture directory");
+      }
+      const snapshot = metadataSnapshot({
+        enabled: true,
+        id: installed.pluginId,
+        origin: "global",
+        installRecord: installed.install,
+      });
+      for (const record of [...snapshot.plugins, ...snapshot.index.plugins]) {
+        record.rootDir = rootDir;
+      }
+      return snapshot;
+    },
+  };
+});
 
 const workspaceHarness = createCommandWorkspaceHarness("openclaw-command-plugins-clawhub-");
 
@@ -170,7 +219,7 @@ describe("chat plugin install release stream", () => {
           resolvedSpec: "@openclaw/brave-plugin@1.0.0",
         },
       });
-      persistPluginInstallMock.mockResolvedValue({});
+      persistPluginInstallMock.mockResolvedValue({ config: {}, warnings: [] });
 
       await withTempHome("openclaw-command-plugins-home-", async (home) => {
         await fs.writeFile(

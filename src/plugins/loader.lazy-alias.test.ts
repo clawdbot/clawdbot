@@ -489,33 +489,29 @@ describe("native plugin alias preparation", () => {
     });
   });
 
-  it.each([undefined, "shared", ""])(
-    "preserves explicit alias contents and shared scope %s",
-    (sharedCacheScopeKey) => {
-      const f = fixture();
-      const owner = createPluginCache();
-      const target = writeFile(
-        f.root,
-        "target.ts",
-        'import { value } from "fixture-alias"; export const marker = value;',
-      );
-      const params = {
-        modulePath: target,
-        importerUrl: import.meta.url,
-        tryNative: false,
-        sharedCacheScopeKey,
-      };
-      withPluginCache(owner, () => {
-        const aliases = { "fixture-alias": f.used };
-        const first = getCachedPluginModuleLoader({ ...params, aliasMap: aliases });
-        const same = getCachedPluginModuleLoader({ ...params, aliasMap: { ...aliases } });
-        expect(same).toBe(first);
-        aliases["fixture-alias"] = f.unused;
-        expect(first(target)).toMatchObject({ marker: "dist" });
-        const next = getCachedPluginModuleLoader({ ...params, aliasMap: aliases });
-        expect(next === first).toBe(sharedCacheScopeKey !== undefined);
-        expect(getPluginCache().sdk.contexts.size).toBe(0);
-      });
-    },
-  );
+  it("preserves explicit alias contents", () => {
+    const f = fixture();
+    const owner = createPluginCache();
+    const target = writeFile(
+      f.root,
+      "target.ts",
+      'import { value } from "fixture-alias"; export const marker = value;',
+    );
+    const params = {
+      modulePath: target,
+      importerUrl: import.meta.url,
+      tryNative: false,
+    };
+    withPluginCache(owner, () => {
+      const aliases = { "fixture-alias": f.used };
+      const first = getCachedPluginModuleLoader({ ...params, aliasMap: aliases });
+      const same = getCachedPluginModuleLoader({ ...params, aliasMap: { ...aliases } });
+      expect(same).toBe(first);
+      aliases["fixture-alias"] = f.unused;
+      expect(first(target)).toMatchObject({ marker: "dist" });
+      const next = getCachedPluginModuleLoader({ ...params, aliasMap: aliases });
+      expect(next).not.toBe(first);
+      expect(getPluginCache().sdk.contexts.size).toBe(0);
+    });
+  });
 });

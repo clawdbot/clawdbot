@@ -669,6 +669,9 @@ export async function finalizeCodexAttempt(
       ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
       ...(terminalAnchor ? { contextEngineTerminalAnchor: terminalAnchor } : {}),
       ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
+      ...(turnSucceeded && params.pluginRuntimeRefreshPending?.() === true
+        ? { pluginRuntimeRefreshMessages: result.messagesSnapshot }
+        : {}),
       ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
       ...(resourceState.runtimeContinuationStarted ? { runtimeContinuationStarted: true } : {}),
       ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding

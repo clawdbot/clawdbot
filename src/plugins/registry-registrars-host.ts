@@ -1,9 +1,6 @@
 import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
 import { createPluginBoardWidgetContentKindRegistrar } from "./board-widget-content-kinds.js";
-import {
-  getPluginSessionSchedulerJobGeneration,
-  registerPluginSessionSchedulerJob,
-} from "./host-hook-runtime.js";
+import { publishPluginSessionSchedulerJobs } from "./host-hook-runtime.js";
 import {
   isPluginJsonValue,
   normalizePluginHostHookId,
@@ -17,6 +14,11 @@ import {
   type PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 import { validateControlUiNativeRoutePlacement } from "./registry-control-ui-policy.js";
+import {
+  getPluginRecordRegistry,
+  isPluginRecordActive,
+  isPluginRegistryRetired,
+} from "./registry-lifecycle.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type {
   PluginRecord,
@@ -70,7 +72,7 @@ function normalizeHostHookStringList(value: unknown): string[] | undefined | nul
 }
 
 export function createHostRegistrars(state: PluginRegistryState) {
-  const { registry, registryParams, pushDiagnostic, reportRegistrationError } = state;
+  const { registry, createRegistration, pushDiagnostic, reportRegistrationError } = state;
 
   const validateSessionActionSchema = (
     record: PluginRecord,
@@ -167,20 +169,18 @@ export function createHostRegistrars(state: PluginRegistryState) {
         return;
       }
     }
-    registry.sessionExtensions.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      extension: {
-        ...extension,
-        namespace,
-        description,
-        ...(normalizedSessionEntrySlotKey
-          ? { sessionEntrySlotKey: normalizedSessionEntrySlotKey }
-          : {}),
-      },
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.sessionExtensions.push(
+      createRegistration(record, {
+        extension: {
+          ...extension,
+          namespace,
+          description,
+          ...(normalizedSessionEntrySlotKey
+            ? { sessionEntrySlotKey: normalizedSessionEntrySlotKey }
+            : {}),
+        },
+      }),
+    );
   };
 
   const registerTrustedToolPolicy = (
@@ -232,14 +232,10 @@ export function createHostRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    const registration: PluginTrustedToolPolicyRegistryRegistration = {
-      pluginId: record.id,
-      pluginName: record.name,
+    const registration: PluginTrustedToolPolicyRegistryRegistration = createRegistration(record, {
       policy: { ...policy, id, description, ...(matcher ? { matcher } : {}) },
       origin: record.origin,
-      source: record.source,
-      rootDir: record.rootDir,
-    };
+    });
     if (record.origin === "bundled") {
       const firstInstalledPolicyIndex = policies.findIndex((entry) => entry.origin !== "bundled");
       if (firstInstalledPolicyIndex === -1) {
@@ -295,19 +291,17 @@ export function createHostRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    registry.toolMetadata.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      metadata: {
-        ...metadata,
-        toolName,
-        ...(displayName !== undefined ? { displayName } : {}),
-        ...(description !== undefined ? { description } : {}),
-        ...(tags !== undefined ? { tags } : {}),
-      },
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.toolMetadata.push(
+      createRegistration(record, {
+        metadata: {
+          ...metadata,
+          toolName,
+          ...(displayName !== undefined ? { displayName } : {}),
+          ...(description !== undefined ? { description } : {}),
+          ...(tags !== undefined ? { tags } : {}),
+        },
+      }),
+    );
   };
 
   const registerControlUiDescriptor = (
@@ -382,27 +376,25 @@ export function createHostRegistrars(state: PluginRegistryState) {
       typeof descriptor.order === "number" && Number.isFinite(descriptor.order)
         ? descriptor.order
         : undefined;
-    registry.controlUiDescriptors.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      descriptor: {
-        ...descriptor,
-        id,
-        surface,
-        label,
-        ...(description !== undefined ? { description } : {}),
-        ...(placement !== undefined ? { placement } : {}),
-        ...(requiredScopes !== undefined
-          ? { requiredScopes: requiredScopes as OperatorScope[] }
-          : {}),
-        icon,
-        path: tabPath,
-        group,
-        order,
-      },
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.controlUiDescriptors.push(
+      createRegistration(record, {
+        descriptor: {
+          ...descriptor,
+          id,
+          surface,
+          label,
+          ...(description !== undefined ? { description } : {}),
+          ...(placement !== undefined ? { placement } : {}),
+          ...(requiredScopes !== undefined
+            ? { requiredScopes: requiredScopes as OperatorScope[] }
+            : {}),
+          icon,
+          path: tabPath,
+          group,
+          order,
+        },
+      }),
+    );
   };
 
   const registerRuntimeLifecycle = (
@@ -425,13 +417,11 @@ export function createHostRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `runtime lifecycle cleanup must be a function: ${id}`);
       return;
     }
-    registry.runtimeLifecycles.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      lifecycle: { ...lifecycle, id },
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.runtimeLifecycles.push(
+      createRegistration(record, {
+        lifecycle: { ...lifecycle, id },
+      }),
+    );
   };
 
   const registerAgentEventSubscription = (
@@ -461,25 +451,28 @@ export function createHostRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `agent event subscription already registered: ${id}`);
       return;
     }
-    registry.agentEventSubscriptions.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      subscription: { ...subscription, id, ...(streams !== undefined ? { streams } : {}) },
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.agentEventSubscriptions.push(
+      createRegistration(record, {
+        subscription: { ...subscription, id, ...(streams !== undefined ? { streams } : {}) },
+      }),
+    );
   };
 
   const registerSessionSchedulerJob = (
     record: PluginRecord,
     job: PluginSessionSchedulerJobRegistration,
   ) => {
+    const owner = getPluginRecordRegistry(registry, record);
+    const active = isPluginRecordActive(registry, record);
+    if (!active && isPluginRegistryRetired(registry)) {
+      return undefined;
+    }
     const jobId = normalizeHostHookString(job.id);
     const sessionKey = normalizeHostHookString(job.sessionKey);
     const kind = normalizeHostHookString(job.kind);
     if (
       jobId &&
-      registry.sessionSchedulerJobs.some(
+      owner.sessionSchedulerJobs.some(
         (entry) => entry.pluginId === record.id && entry.job.id === jobId,
       )
     ) {
@@ -497,42 +490,16 @@ export function createHostRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `session scheduler job cleanup must be a function: ${jobId}`);
       return undefined;
     }
-    if (registryParams.activateGlobalSideEffects === false) {
-      registry.sessionSchedulerJobs.push({
-        pluginId: record.id,
-        pluginName: record.name,
+    // Publication owns scheduler registration; candidate validation cannot replace live jobs.
+    owner.sessionSchedulerJobs.push(
+      createRegistration(record, {
         job: { ...job, id: jobId, sessionKey, kind },
-        source: record.source,
-        rootDir: record.rootDir,
-      });
-      return { id: jobId, pluginId: record.id, sessionKey, kind };
-    }
-    const handle = registerPluginSessionSchedulerJob({
-      pluginId: record.id,
-      pluginName: record.name,
-      ownerRegistry: registry,
-      job: { ...job, id: jobId, sessionKey, kind },
-    });
-    if (!handle) {
-      reportRegistrationError(
-        record,
-        "session scheduler job registration requires unique id, sessionKey, and kind",
-      );
-      return undefined;
-    }
-    registry.sessionSchedulerJobs.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      job: { ...job, id: handle.id, sessionKey: handle.sessionKey, kind: handle.kind },
-      generation: getPluginSessionSchedulerJobGeneration({
-        pluginId: record.id,
-        jobId: handle.id,
-        sessionKey: handle.sessionKey,
       }),
-      source: record.source,
-      rootDir: record.rootDir,
-    });
-    return handle;
+    );
+    if (active) {
+      publishPluginSessionSchedulerJobs(owner);
+    }
+    return { id: jobId, pluginId: record.id, sessionKey, kind };
   };
 
   const registerSessionAction = (record: PluginRecord, action: PluginSessionActionRegistration) => {
@@ -571,34 +538,30 @@ export function createHostRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `session action already registered: ${id}`);
       return;
     }
-    registry.sessionActions.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      action: {
-        ...action,
-        id,
-        ...(description !== undefined ? { description } : {}),
-        ...(requiredScopes !== undefined
-          ? { requiredScopes: requiredScopes as OperatorScope[] }
-          : {}),
-      },
-      source: record.source,
-      rootDir: record.rootDir,
-    } satisfies PluginSessionActionRegistryRegistration);
+    registry.sessionActions.push(
+      createRegistration(record, {
+        action: {
+          ...action,
+          id,
+          ...(description !== undefined ? { description } : {}),
+          ...(requiredScopes !== undefined
+            ? { requiredScopes: requiredScopes as OperatorScope[] }
+            : {}),
+        },
+      }) satisfies PluginSessionActionRegistryRegistration,
+    );
   };
 
   const registerConversationBindingResolvedHandler = (
     record: PluginRecord,
     handler: (event: PluginConversationBindingResolvedEvent) => void | Promise<void>,
   ) => {
-    registry.conversationBindingResolvedHandlers.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      pluginRoot: record.rootDir,
-      handler,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
+    registry.conversationBindingResolvedHandlers.push(
+      createRegistration(record, {
+        pluginRoot: record.rootDir,
+        handler,
+      }),
+    );
   };
 
   return {

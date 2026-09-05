@@ -73,7 +73,11 @@ function expectAuthoredSource(source: OpenClawConfig) {
   ).toBe("none");
 }
 
-async function createReload(canonicalActivator: boolean, commit: () => Promise<void>) {
+async function createReload(
+  canonicalActivator: boolean,
+  commit: () => Promise<void>,
+  beforePublication?: () => Promise<void>,
+) {
   const initial = configPair("openclaw");
   activateSecretsRuntimeSnapshotWithSource(await prepare(initial.config), initial.source);
   expectAuthoredSource(initial.source);
@@ -102,6 +106,7 @@ async function createReload(canonicalActivator: boolean, commit: () => Promise<v
       expectedRevision: getActiveSecretsRuntimeSnapshotRevision(),
     }),
     applyHotReload: async (_plan, _config, publication) => {
+      await beforePublication?.();
       let committed = false;
       await publication!.publish(
         async () => {
@@ -126,12 +131,36 @@ async function createReload(canonicalActivator: boolean, commit: () => Promise<v
     ["agents.defaults.models.openai/gpt-5.6-luna.agentRuntime.id"],
     { candidateConfig: next.config },
   );
-  return { initial, next, run: () => onHotReload(plan, next.config, ownership, next.source) };
+  return {
+    initial,
+    next,
+    ownership,
+    run: () => onHotReload(plan, next.config, ownership, next.source),
+  };
 }
 
 describe.each([true, false])(
   "managed reload authored source (canonical activator: %s)",
   (canonical) => {
+    it("rejects a closed plugin invoker before activating its prepared secrets", async () => {
+      const failure = new Error("plugin invoker closed");
+      const commit = vi.fn(async () => {});
+      let invokerOpen = true;
+      const { initial, ownership, run } = await createReload(canonical, commit, async () => {
+        invokerOpen = false;
+      });
+      const revision = getActiveSecretsRuntimeSnapshotRevision();
+      ownership.assertInvokerOwned = () => {
+        if (!invokerOpen) {
+          throw failure;
+        }
+      };
+      await expect(run()).rejects.toBe(failure);
+      expect(commit).not.toHaveBeenCalled();
+      expect(getActiveSecretsRuntimeSnapshotRevision()).toBe(revision);
+      expectAuthoredSource(initial.source);
+    });
+
     it("preserves generated model metadata across a successful hot reload", async () => {
       const { next, run } = await createReload(canonical, async () => {});
       await expect(run()).resolves.toBe("applied");

@@ -1298,32 +1298,129 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("config.schema, config.apply");
   });
 
-  it.each(["full", "minimal"] as const)(
-    "delegates system changes without overriding tool-owned approval policy in %s prompts",
-    (promptMode) => {
-      const prompt = buildAgentSystemPrompt({
-        workspaceDir: "/tmp/openclaw",
-        promptMode,
+  it.each(
+    typedCases<{
+      name: string;
+      toolNames: string[];
+      capabilityToolNames?: string[];
+      codeModeActive?: boolean;
+      directPlugins: boolean;
+      delegate: boolean;
+      gateway?: boolean;
+    }>([
+      {
+        name: "openclaw with plugins gated out",
         toolNames: ["openclaw", "sessions_spawn"],
-      });
+        directPlugins: false,
+        delegate: true,
+      },
+      {
+        name: "plugins only",
+        toolNames: ["plugins"],
+        directPlugins: true,
+        delegate: false,
+      },
+      {
+        name: "plugins and gateway",
+        toolNames: ["plugins", "gateway"],
+        directPlugins: true,
+        delegate: false,
+        gateway: true,
+      },
+      {
+        name: "openclaw and plugins",
+        toolNames: ["openclaw", "plugins"],
+        directPlugins: true,
+        delegate: true,
+      },
+      {
+        name: "deferred plugin schemas",
+        toolNames: ["tool_search"],
+        capabilityToolNames: ["openclaw", "plugins"],
+        directPlugins: true,
+        delegate: true,
+      },
+      {
+        name: "Code Mode plugin capabilities",
+        toolNames: ["exec"],
+        capabilityToolNames: ["openclaw", "plugins"],
+        codeModeActive: true,
+        directPlugins: true,
+        delegate: true,
+      },
+      {
+        name: "Code Mode with plugins gated out",
+        toolNames: ["exec"],
+        capabilityToolNames: ["openclaw"],
+        codeModeActive: true,
+        directPlugins: false,
+        delegate: true,
+      },
+    ]).flatMap((surface) =>
+      (["full", "minimal"] as const).map((promptMode) => ({
+        name: surface.name,
+        surface,
+        promptMode,
+      })),
+    ),
+  )("routes plugin and system changes for $name ($promptMode)", ({ surface, promptMode }) => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode,
+      toolNames: surface.toolNames,
+      capabilityToolNames: surface.capabilityToolNames,
+      codeModeActive: surface.codeModeActive,
+    });
 
+    expect(prompt).not.toContain("changes need human approval");
+    if (surface.toolNames.includes("openclaw")) {
       expect(prompt).toContain("- openclaw: Gateway restart/system setup/config\n");
-      expect(prompt).not.toContain("changes need human approval");
+    } else {
+      expect(prompt).not.toContain("- openclaw:");
+    }
+    expect(prompt.includes("Plugin management: use `plugins`.")).toBe(surface.directPlugins);
+    if (surface.delegate) {
       expect(prompt).toContain(
-        "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`.",
+        surface.directPlugins
+          ? "Gateway restart, config, channels, agents, models/providers: ask `openclaw`."
+          : "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`.",
+      );
+      expect(prompt).not.toContain("System controls unavailable");
+    } else {
+      expect(prompt).not.toContain("ask `openclaw`");
+    }
+    if (surface.gateway) {
+      expect(prompt).toContain(
+        "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human.",
+      );
+      expect(prompt).toContain(
+        "Update OpenClaw: `gateway` action update.run, only on explicit user request; restart and completion notice are automatic.",
+      );
+      expect(prompt).toContain(
+        "Never run openclaw update, npm install -g openclaw, or stop/restart the gateway service via exec.",
+      );
+      expect(prompt).not.toContain("Other system controls unavailable");
+    } else {
+      expect(prompt).toContain(
+        surface.delegate
+          ? "Updates need the OpenClaw owner: tell the user to run `openclaw update` in a terminal or use the Control UI."
+          : "Other system controls unavailable. Updates and restarts need the OpenClaw owner: tell the user to run `openclaw update` in a terminal or use the Control UI.",
       );
       expect(prompt).toContain(
         "Never run npm install -g openclaw or stop the gateway service via exec.",
       );
-      expect(prompt).toContain(
-        "Updates need the OpenClaw owner: tell the user to run `openclaw update` in a terminal or use the Control UI.",
-      );
-      expect(prompt).not.toContain("System controls unavailable");
+      expect(prompt).not.toContain("update.run");
+    }
+    expect(prompt).not.toContain("models/providers, updates: ask `openclaw`");
+    if (surface.directPlugins) {
+      expect(prompt).not.toContain("channels, plugins, agents");
+    }
+    if (surface.toolNames.includes("sessions_spawn")) {
       expect(prompt).toContain(
         "`visible:true` for work the user follows or asked for; else hidden.",
       );
-    },
-  );
+    }
+  });
 
   it.each([{ toolNames: ["exec"] }, { toolNames: [] }])(
     "keeps updates out of exec without gateway ($toolNames)",

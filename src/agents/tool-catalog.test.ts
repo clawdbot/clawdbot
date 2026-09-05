@@ -79,6 +79,7 @@ describe("tool-catalog", () => {
       "terminal",
       "portal",
       "automations",
+      "plugins",
       "get_goal",
       "create_goal",
       "update_goal",

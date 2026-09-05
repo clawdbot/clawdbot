@@ -1,5 +1,3 @@
-// Gateway shutdown and restart close orchestration.
-// Coordinates hooks, drains, sockets, sidecars, plugins, and runtime cleanup.
 import type { Server as HttpServer } from "node:http";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import type { WebSocketServer } from "ws";
@@ -13,7 +11,6 @@ import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateDatabase } from "../plugin-state/plugin-state-store.js";
-import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
@@ -232,6 +229,8 @@ async function closeHttpListener(params: {
 }
 
 export type GatewayCloseParams = {
+  closePluginRegistry: () => Promise<void>;
+  releasePluginMetadata: () => boolean;
   bonjourStop: (() => Promise<void>) | null;
   tailscaleCleanup: (() => Promise<void>) | null;
   clearSecretsRuntimeSnapshot?: (() => void) | null;
@@ -611,21 +610,21 @@ export async function completeGatewayClose(
     // shared state. Its rejection was reported by the disposal policy above.
     await pluginServicesCleanup?.catch(() => {});
     await params.finishRequestEntries?.();
-    if (mediaCleanupStopResult === "drained") {
-      await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);
-    }
-    await shutdownStep("plugin-host-registry", clearActivePluginRegistry, warnings);
-    // Channel and plugin teardown still resolve account credentials. Keep the
-    // active snapshot until every teardown owner is done, then always scrub it.
-    try {
-      // Plugin cleanup may still read ambient slots. A failed owner drain must
-      // stop restart so the next lifecycle cannot reuse incomplete shutdown.
-      await drainGlobalSingletonLifecycleState(restartExpectedMs === null ? "close" : "restart");
-    } finally {
+    await shutdownStep("plugin-host-registry", params.closePluginRegistry, warnings);
+    // A sibling Gateway retains metadata before its registry exists. Only the
+    // final owner may retire shared state and process-wide plugin caches.
+    if (params.releasePluginMetadata()) {
+      if (mediaCleanupStopResult === "drained") {
+        await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);
+      }
       try {
-        params.clearSecretsRuntimeSnapshot?.();
-      } catch {
-        /* ignore */
+        await drainGlobalSingletonLifecycleState(restartExpectedMs === null ? "close" : "restart");
+      } finally {
+        try {
+          params.clearSecretsRuntimeSnapshot?.();
+        } catch {
+          /* ignore */
+        }
       }
     }
   }

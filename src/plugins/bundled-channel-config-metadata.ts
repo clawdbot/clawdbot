@@ -93,10 +93,9 @@ function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelCo
   return null;
 }
 
-function getModuleLoader(modulePath: string, rootDir: string) {
+function getModuleLoader(modulePath: string) {
   return getCachedPluginModuleLoader({
     modulePath,
-    rootDir,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
     loaderFilename: import.meta.url,
@@ -121,12 +120,9 @@ function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undef
   return undefined;
 }
 
-function loadChannelConfigSurfaceModuleSync(
-  modulePath: string,
-  rootDir: string,
-): ChannelConfigSurface | null {
+function loadChannelConfigSurfaceModuleSync(modulePath: string): ChannelConfigSurface | null {
   try {
-    const imported = getModuleLoader(modulePath, rootDir)(modulePath) as Record<string, unknown>;
+    const imported = getModuleLoader(modulePath)(modulePath) as Record<string, unknown>;
     return resolveConfigSchemaExport(imported);
   } catch {
     return null;
@@ -156,9 +152,7 @@ export function collectBundledChannelConfigsCore(params: {
   }
 
   const surfaceModulePath = resolveChannelConfigSchemaModulePath(params.pluginDir);
-  const surface = surfaceModulePath
-    ? loadChannelConfigSurfaceModuleSync(surfaceModulePath, params.pluginDir)
-    : null;
+  const surface = surfaceModulePath ? loadChannelConfigSurfaceModuleSync(surfaceModulePath) : null;
 
   for (const channelId of channelIds) {
     const existing = existingChannelConfigs[channelId];

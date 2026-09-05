@@ -23,7 +23,7 @@ export async function settleEmbeddedRun(input: {
   runInput: Pick<PreparedEmbeddedRunInput, "runParams" | "progressController">;
   runtime: Pick<
     Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>,
-    "admittedRunContext" | "stopRuntimeAuthRefreshTimer"
+    "runAdmission" | "stopRuntimeAuthRefreshTimer"
   >;
   compaction: {
     state: Pick<EmbeddedRunContextRecoveryState, "autoCompactionCount" | "currentContextSnapshot">;
@@ -90,7 +90,8 @@ export async function settleEmbeddedRun(input: {
         // Cancellation preserves bookkeeping, but a reused run id cannot lend a new admission.
         authorize: () =>
           compaction.authority !== undefined &&
-          getAdmittedRunDelegatedAuthority(runtime.admittedRunContext) === compaction.authority,
+          getAdmittedRunDelegatedAuthority(runtime.runAdmission.admittedRunContext) ===
+            compaction.authority,
       });
     } catch (error) {
       log.warn(`compaction accounting failed: ${formatErrorMessage(error)}`);

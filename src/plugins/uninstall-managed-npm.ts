@@ -20,8 +20,12 @@ export async function pruneManagedNpmPeerDependenciesAfterUninstall(params: {
   packageName: string;
   managedOverrides: Record<string, unknown>;
   runCommand?: typeof runCommandWithTimeout;
+  beforePersistentApply?: () => void;
 }): Promise<string | undefined> {
-  const command = params.runCommand ?? runCommandWithTimeout;
+  const command: typeof runCommandWithTimeout = (...args) => {
+    params.beforePersistentApply?.();
+    return (params.runCommand ?? runCommandWithTimeout)(...args);
+  };
   const commandOptions = {
     cwd: params.npmRoot,
     timeoutMs: 300_000,
@@ -39,6 +43,7 @@ export async function pruneManagedNpmPeerDependenciesAfterUninstall(params: {
       managedOverrides: params.managedOverrides,
       omitNpmAliasOverrides,
       runCommand: command,
+      beforePersistentApply: params.beforePersistentApply,
     });
 
   if (!(await syncPeerDependencies())) {

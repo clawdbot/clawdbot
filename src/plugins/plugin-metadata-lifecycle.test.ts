@@ -30,18 +30,18 @@ it("keeps boot metadata and process memos until the final Gateway releases them"
     clearMemo.mockClear();
 
     clearPluginMetadataLifecycleCaches();
-    releaseSecond();
-    releaseSecond();
+    expect(releaseSecond()).toBe(false);
+    expect(releaseSecond()).toBe(false);
 
     expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(snapshot);
     expect(clearMemo).not.toHaveBeenCalled();
     expect(getPluginCache()).toBe(firstAccessCache);
 
-    releaseFirst();
+    expect(releaseFirst()).toBe(true);
     expect(getCurrentPluginMetadataSnapshotState().snapshot).toBeUndefined();
     expect(clearMemo).toHaveBeenCalledOnce();
     expect(getPluginCache()).not.toBe(firstAccessCache);
-    releaseFirst();
+    expect(releaseFirst()).toBe(false);
     expect(clearMemo).toHaveBeenCalledOnce();
   } finally {
     releaseSecond();

@@ -129,6 +129,7 @@ export async function startGatewayServerCore(
                 name: "gateway_stop plugin hooks",
                 run: async () => {
                   await shutdownRuntime.runGlobalGatewayStopSafely({
+                    registry: gatewayKernel.pluginRuntime.registry,
                     event: { reason: optsLocal?.reason ?? "gateway stopping" },
                     ctx: { port },
                     onError: (error) =>

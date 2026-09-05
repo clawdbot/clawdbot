@@ -27,7 +27,7 @@ import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import { getPluginCache } from "../../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { getCachedPluginModuleLoader } from "../../plugins/plugin-module-loader-cache.js";
+import { getPluginSetupModuleLoader } from "../../plugins/plugin-setup-module.js";
 import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -353,15 +353,11 @@ function loadSetupChannelPluginFromManifestRecord(params: {
     return {};
   }
   try {
-    const moduleLoader = getCachedPluginModuleLoader({
-      modulePath: params.record.setupSource,
-      rootDir: params.record.rootDir,
-      importerUrl: import.meta.url,
-      preferBuiltDist: true,
-      loaderFilename: import.meta.url,
-      tryNative: true,
-      cacheScopeKey: "read-only-setup-entry",
-    });
+    const moduleLoader = getPluginSetupModuleLoader(
+      params.record,
+      params.record.setupSource,
+      params.record.rootDir,
+    );
     const registration = resolveSetupChannelRegistration(moduleLoader(params.record.setupSource));
     if (registration.loadError) {
       return {

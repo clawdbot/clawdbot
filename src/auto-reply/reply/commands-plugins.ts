@@ -1,18 +1,15 @@
 // Implements plugin command listing and configuration helpers.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolvePluginCapabilityConsentCliOptions } from "../../cli/plugin-capability-consent.js";
-import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/nix-mode-write-guard.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  resolveInstallConfigMutationPreflights,
-  selectInstallMutationWriteOptions,
-  type ConfigSnapshotForInstallPersist,
-} from "../../plugins/install-persistence.js";
 import { createInstalledPluginOwnershipResolver } from "../../plugins/installed-plugin-package-ownership.js";
-import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import {
+  reloadManagedPlugin,
+  setManagedPluginEnabled,
+} from "../../plugins/management-mutations.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
-import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
   buildAllPluginInspectReports,
@@ -32,9 +29,9 @@ import {
 import {
   formatPluginCommandCapabilityConsentError,
   installPluginFromPluginsCommand,
+  resolvePluginCommandRuntimeApply,
 } from "./commands-plugins-install.js";
 import type { CommandHandler } from "./commands-types.js";
-import { AutoReplyConfigMutationError, setPluginEnabledFromCommand } from "./config-mutations.js";
 import { parsePluginsCommand } from "./plugins-commands.js";
 
 function renderJsonBlock(label: string, value: unknown): string {
@@ -83,7 +80,7 @@ function formatPluginsList(report: PluginStatusReport): string {
 }
 
 function isPluginsWriteAction(action: string): boolean {
-  return action === "install" || action === "enable" || action === "disable";
+  return action === "install" || action === "enable" || action === "disable" || action === "reload";
 }
 
 function hasGatewayAdminScope(params: Parameters<CommandHandler>[0]): boolean {
@@ -117,43 +114,6 @@ function findPlugin(report: PluginStatusReport, rawName: string): PluginRecord |
   );
 }
 
-async function loadPluginCommandConfig(): Promise<
-  | { ok: true; path: string; snapshot: ConfigSnapshotForInstallPersist }
-  | { ok: false; path: string; error: string }
-> {
-  const prepared = await readConfigFileSnapshotForWrite();
-  const snapshot = prepared.snapshot;
-  if (!snapshot.valid) {
-    return {
-      ok: false,
-      path: snapshot.path,
-      error: "Config file is invalid; fix it before using /plugins.",
-    };
-  }
-  const writeOptions = selectInstallMutationWriteOptions(prepared.writeOptions);
-  const { pluginMutation } = resolveInstallConfigMutationPreflights({
-    parsed: (snapshot.parsed ?? {}) as Record<string, unknown>,
-    snapshotPath: snapshot.path,
-    writeOptions,
-  });
-  if (pluginMutation.mode === "blocked") {
-    return {
-      ok: false,
-      path: snapshot.path,
-      error: pluginMutation.reason,
-    };
-  }
-  return {
-    ok: true,
-    path: snapshot.path,
-    snapshot: {
-      config: structuredClone(snapshot.sourceConfig),
-      baseHash: snapshot.hash,
-      writeOptions,
-    },
-  };
-}
-
 export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
   { label: "/plugins", match: parsePluginsCommand },
   async (params, pluginsCommand) => {
@@ -173,7 +133,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
         label: "/plugins write",
         allowedScopes: ["operator.admin"],
         missingText:
-          "❌ /plugins install|enable|disable requires operator.admin for gateway clients.",
+          "❌ /plugins install|enable|disable|reload requires operator.admin for gateway clients.",
       });
       if (missingAdminScope) {
         return missingAdminScope;
@@ -184,34 +144,32 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           return nonOwner;
         }
       }
-      const nixModeWrite = rejectNixModePluginWrite();
+      const nixModeWrite = pluginsCommand.action === "reload" ? null : rejectNixModePluginWrite();
       if (nixModeWrite) {
         return nixModeWrite;
       }
     }
 
     if (pluginsCommand.action === "install") {
-      return await withPluginLifecycleLease({}, async () => {
-        const loadedConfig = await loadPluginCommandConfig();
-        if (!loadedConfig.ok) {
-          return commandReply(`⚠️ ${loadedConfig.error}`);
-        }
+      try {
         const installed = await installPluginFromPluginsCommand({
           raw: pluginsCommand.spec,
           acceptCapabilities: pluginsCommand.acceptCapabilities,
           force: pluginsCommand.force,
-          snapshot: loadedConfig.snapshot,
+          applyRuntime: resolvePluginCommandRuntimeApply(),
         });
         if (!installed.ok) {
           return commandReply(`⚠️ ${installed.error}`);
         }
         return commandReply(
           [
-            `🔌 Installed plugin "${installed.pluginId}". Gateway restart will load the new plugin source.`,
+            `🔌 Installed plugin "${installed.pluginId}". Applied Gateway generation ${installed.application?.generation}.`,
             ...(installed.warnings ?? []).map((warning) => `⚠️ ${warning}`),
           ].join("\n"),
         );
-      });
+      } catch (error) {
+        return commandReply(`⚠️ ${formatErrorMessage(error)}`);
+      }
     }
 
     const handleLoadedCommand = async () => {
@@ -265,51 +223,43 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
         return commandReply(`🔌 No plugin named "${pluginsCommand.name}" found.`);
       }
 
-      let registryWarning: string | undefined;
       try {
-        const committedConfig = await setPluginEnabledFromCommand({
+        const common = {
           pluginId: plugin.id,
-          enabled: pluginsCommand.action === "enable",
-          action: pluginsCommand.action,
+          applyRuntime: resolvePluginCommandRuntimeApply(),
           ...resolvePluginCapabilityConsentCliOptions({
             acceptCapabilities:
-              pluginsCommand.action === "enable" && pluginsCommand.acceptCapabilities,
+              pluginsCommand.action !== "disable" && pluginsCommand.acceptCapabilities,
             action: "enable",
             allowPrompt: false,
           }),
-        });
-        await refreshPluginRegistryAfterConfigMutation({
-          config: committedConfig,
-          reason: "policy-changed",
-          logger: {
-            warn: (message) => {
-              registryWarning = message;
-            },
-          },
-        });
-      } catch (error) {
-        const consentError = formatPluginCommandCapabilityConsentError(
-          error,
-          `/plugins enable ${plugin.id}`,
+        };
+        const result =
+          pluginsCommand.action === "reload"
+            ? await reloadManagedPlugin(common)
+            : await setManagedPluginEnabled({
+                ...common,
+                enabled: pluginsCommand.action === "enable",
+              });
+        const verb = pluginsCommand.action === "reload" ? "reloaded" : `${pluginsCommand.action}d`;
+        return commandReply(
+          [
+            `🔌 Plugin "${plugin.id}" ${verb}. Applied Gateway generation ${result.application?.generation}.`,
+            ...("warnings" in result ? (result.warnings ?? []) : []),
+          ].join("\n"),
         );
-        if (consentError) {
-          return commandReply(`⚠️ ${consentError}`);
-        }
-        if (error instanceof AutoReplyConfigMutationError) {
-          return commandReply(`⚠️ ${error.message}`);
-        }
-        throw error;
+      } catch (error) {
+        return commandReply(
+          `⚠️ ${
+            formatPluginCommandCapabilityConsentError(
+              error,
+              `/plugins ${pluginsCommand.action} ${plugin.id}`,
+            ) ?? formatErrorMessage(error)
+          }`,
+        );
       }
-
-      return commandReply(
-        `🔌 Plugin "${plugin.id}" ${pluginsCommand.action}d in ${snapshot.path}. Gateway reload will apply it to new agent turns.` +
-          (registryWarning ? `\n${registryWarning}` : ""),
-      );
     };
 
-    if (pluginsCommand.action === "enable" || pluginsCommand.action === "disable") {
-      return await withPluginLifecycleLease({}, handleLoadedCommand);
-    }
     return await handleLoadedCommand();
   },
 );

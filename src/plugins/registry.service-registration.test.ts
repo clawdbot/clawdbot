@@ -1,8 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createPluginRecord } from "./loader-records.js";
 import { createPluginRegistry } from "./registry.js";
+import {
+  clearActivePluginRegistry,
+  disposePluginRegistryInstances,
+  setActivePluginRegistry,
+} from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { startPluginServices } from "./services.js";
+
+const registries: ReturnType<typeof createPluginRegistry>["registry"][] = [];
+
+afterEach(async () => {
+  await clearActivePluginRegistry();
+  for (const registry of registries.splice(0)) {
+    await disposePluginRegistryInstances(registry);
+  }
+});
 
 class ClassBackedLifecycleService {
   starts = 0;
@@ -30,14 +44,18 @@ function createRegistrationFixture() {
     runtime: {} as PluginRuntime,
     activateGlobalSideEffects: false,
   });
-  const createRecord = (id: string) =>
-    createPluginRecord({
+  registries.push(builder.registry);
+  const createRecord = (id: string) => {
+    const record = createPluginRecord({
       id,
       source: `/plugins/${id}/index.ts`,
       origin: "global",
       enabled: true,
       configSchema: false,
     });
+    builder.registry.plugins.push(record);
+    return record;
+  };
   return { builder, createRecord };
 }
 
@@ -124,7 +142,11 @@ describe("plugin service registration identity", () => {
           ? builder.registry.services
           : builder.registry.gatewayDiscoveryServices;
       expect(registrations).toHaveLength(1);
-      expect(registrations[0]?.service).toBe(firstService);
+      expect(registrations[0]).toMatchObject({
+        pluginId: firstRecord.id,
+        source: firstRecord.source,
+        service: { id: firstService.id },
+      });
       expect(registrations[0]?.service).toBeInstanceOf(ClassBackedLifecycleService);
 
       const recordIds =
@@ -148,13 +170,23 @@ describe("plugin service registration identity", () => {
         ).toEqual([]);
       }
 
+      setActivePluginRegistry(builder.registry);
       if (surface === "service") {
         const handle = await startPluginServices({ registry: builder.registry, config: {} });
-        expect(firstService.starts).toBe(1);
-        expect(secondService.starts).toBe(0);
-        await handle.stop();
+        try {
+          expect(firstService.starts).toBe(1);
+          expect(secondService.starts).toBe(0);
+        } finally {
+          await handle.stop();
+        }
       } else {
-        await builder.registry.gatewayDiscoveryServices[0]?.service.advertise({} as never);
+        await builder.registry.gatewayDiscoveryServices[0]!.service.advertise({
+          machineDisplayName: "fixture",
+          gatewayPort: 18789,
+          gatewayTlsEnabled: false,
+          gatewayDirectReachable: true,
+          minimal: true,
+        });
         expect(firstService.advertisements).toBe(1);
         expect(secondService.advertisements).toBe(0);
       }

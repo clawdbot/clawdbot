@@ -26,7 +26,7 @@ vi.mock("../version.js", async (importOriginal) => ({
 const resolveBundledInstallPlanForCatalogEntry = vi.hoisted(() =>
   vi.fn<(...args: unknown[]) => unknown>(() => undefined),
 );
-vi.mock("../cli/plugin-install-plan.js", () => ({
+vi.mock("../plugins/install-source-plan.js", () => ({
   resolveBundledInstallPlanForCatalogEntry,
 }));
 

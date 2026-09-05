@@ -70,8 +70,10 @@ npm install
 npm run build
 npm run validate
 openclaw plugins install .
-openclaw gateway restart
 ```
+
+Installation applies through the running local Gateway and waits for its runtime
+receipt. If the Gateway is stopped, the plugin is saved for its next startup.
 
 The scaffold includes a draft-analysis operation, an agent tool, a native page,
 and a composer replacement. Open Draft Review from the Control UI sidebar, or
@@ -260,8 +262,11 @@ recover a replaced view.
 Advertised asset revisions remain available for the lifetime of their backend
 plugin, including imports needed by an older tab or a retained working view.
 The shared cache holds at most 256 revisions and 64 MiB across all native
-plugins. When it fills, reload refuses the new build and preserves advertised
-assets. Restart the Gateway, then retry the reload.
+plugins. When it fills, UI reload refuses the new build and preserves advertised
+assets. Run `openclaw plugins reload <id>` to reload that plugin's backend and
+release its retained browser revisions, then retry **Reload plugin UI**. Other
+plugins may still hold enough revisions to fill the shared cache. A Gateway
+restart clears all revisions.
 
 On first activation, plugin pages and dashboard widgets show a loading state
 while the catalog, asset authorization, and initializer complete. Each plugin
@@ -282,9 +287,12 @@ Custom element definitions belong to the browser document. If a plugin changes
 an existing custom element class, reload the browser tab as well, or use a new
 versioned tag name.
 
-Backend changes still use the normal plugin update and Gateway restart. Browser
-reload does not replace backend services or change an already running agent's
-tool catalog.
+For backend changes, install or update the plugin, or run
+`openclaw plugins reload <id>` after editing its installed source. The Gateway
+stays running; affected plugin services or channel accounts restart within that
+process. See [Reload](/cli/plugins#reload) for requirements and compiled-core
+limits. Browser-only reload does not replace backend services or change an
+already running agent's tool catalog.
 
 ## Approve an agent-built artifact
 
@@ -315,8 +323,11 @@ The system agent can propose activation with that path and digest. Before
 approval, OpenClaw verifies and retains the exact archive and inspects its
 declared capabilities and native UI presence without executing the plugin.
 Approved application uses those retained bytes through the managed plugin
-installer. Changing the source file while approval is pending cannot change
-what is installed. Existing install policy and capability checks still apply.
+installer. In a running Gateway, it also applies the plugin through the runtime
+lifecycle. The result reports the applied Gateway generation or that installation
+was saved for the next startup. Changing the source file while approval is
+pending cannot change what is installed. Existing install policy and capability
+checks still apply.
 
 Artifact approval does not enable the Custom plugin UI lab. The installed
 backend can run with that setting off; its native browser UI remains gated.
@@ -337,7 +348,7 @@ layouts; adjust those layouts before installation.
 Artifact activation also refuses to replace the plugin backing OpenClaw's active
 inference route. Stop OpenClaw and install that artifact from a trusted shell.
 
-After the Gateway restarts, inspect `plugins.controlUi.status` to see activation
+After activation, inspect `plugins.controlUi.status` to see activation
 reports from currently connected Control UI clients. A report names the plugin
 revision and either `activated` or `failed`; it is a browser activation receipt,
 not proof that every feature operation has been exercised. No connected browser

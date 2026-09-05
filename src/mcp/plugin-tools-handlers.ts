@@ -7,7 +7,7 @@ import {
   rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "../agents/agent-tools.before-tool-call.js";
-import { BEFORE_TOOL_CALL_HOOK_CONTEXT } from "../agents/before-tool-call-metadata.js";
+import { getBeforeToolCallHookContext } from "../agents/before-tool-call-metadata.js";
 import { isToolResultError } from "../agents/tool-result-error.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -17,10 +17,6 @@ import { coerceChatContentText } from "../shared/chat-content.js";
 type CallPluginToolParams = {
   name: string;
   arguments?: unknown;
-};
-
-type ToolWithBeforeToolCallHookContext = AnyAgentTool & {
-  [BEFORE_TOOL_CALL_HOOK_CONTEXT]?: unknown;
 };
 
 function toMcpContentBlock(block: unknown): unknown {
@@ -61,8 +57,8 @@ function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
 }
 
 function resolveBeforeToolCallRunId(tool: AnyAgentTool): string | undefined {
-  const context = (tool as ToolWithBeforeToolCallHookContext)[BEFORE_TOOL_CALL_HOOK_CONTEXT];
-  return isRecord(context) && typeof context.runId === "string" ? context.runId : undefined;
+  const runId = getBeforeToolCallHookContext(tool)?.runId;
+  return typeof runId === "string" ? runId : undefined;
 }
 
 export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {

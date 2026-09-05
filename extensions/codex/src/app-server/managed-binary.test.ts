@@ -2,6 +2,7 @@
 import { access, chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PluginInstance } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
@@ -260,6 +261,38 @@ describe("managed Codex app-server binary", () => {
         platform: "linux",
       }),
     ).resolves.toMatchObject({ command: launcher });
+  });
+
+  it("keeps the active launcher while a different-root candidate is prepared and discarded", async () => {
+    const activeRoot = path.join(root, "active");
+    const candidateRoot = path.join(root, "candidate");
+    const activeLauncher = await writePackageLauncher(activeRoot);
+    const candidateLauncher = await writePackageLauncher(candidateRoot);
+    const active = new PluginInstance("codex");
+    const candidate = new PluginInstance("codex");
+    vi.resetModules();
+    const runtimeCopy = await import("./managed-binary.js");
+    const resolve = async () => {
+      await Promise.resolve();
+      return runtimeCopy.resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+        platform: "linux",
+      });
+    };
+    const resolveActive = active.wrap(resolve);
+    const resolveCandidate = candidate.wrap(resolve);
+    try {
+      active.run(() => setManagedCodexPluginRoot(activeRoot));
+      await expect(resolveActive()).resolves.toMatchObject({ command: activeLauncher });
+      candidate.run(() => setManagedCodexPluginRoot(candidateRoot));
+      await expect(resolveCandidate()).resolves.toMatchObject({ command: candidateLauncher });
+      await expect(resolveActive()).resolves.toMatchObject({ command: activeLauncher });
+      await candidate.dispose();
+      await expect(resolveActive()).resolves.toMatchObject({ command: activeLauncher });
+      expect(() => resolveCandidate()).toThrow("reloaded or disabled");
+    } finally {
+      await candidate.dispose();
+      await active.dispose();
+    }
   });
 
   it.each(["config", "env"] as const)(

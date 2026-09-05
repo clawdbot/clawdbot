@@ -59,7 +59,7 @@ async function startService(getCronService?: () => CronService) {
   if (!context) {
     throw new Error("Service did not start");
   }
-  return { context, handle };
+  return { context, handle, registry };
 }
 
 function createJob(name = family.name) {
@@ -110,7 +110,51 @@ describe("plugin service scheduler ownership", () => {
     ]);
   });
 
-  it.each(["service stop", "service reload", "scheduler replacement"] as const)(
+  it("keeps a transferred service scheduler active until its successor handle stops", async () => {
+    const { cron } = await createScheduler();
+    const first = await startService(() => cron);
+    const service = expectDefined(first.context.getCron?.(), "retained service scheduler");
+    const registry = createEmptyPluginRegistry();
+    const addedService = { id: "added", start: vi.fn(), stop: vi.fn() };
+    registry.services.push(...first.registry.services, {
+      pluginId: "added-plugin",
+      origin: "workspace",
+      source: "test",
+      service: addedService,
+    });
+    const successor = await startPluginServices({
+      registry,
+      config: {},
+      getCronService: () => cron,
+      previous: first.handle,
+      onHandle: (handle) => handles.add(handle),
+    });
+
+    await first.handle.stop();
+    expect(first.context.getCron?.()).toBe(service);
+    await service.add(createJob());
+    expect(await service.list({ includeDisabled: true })).toMatchObject([
+      { declarationKey: family.declarationKey, name: family.name },
+    ]);
+    expect(addedService.start).toHaveBeenCalledOnce();
+    expect(addedService.stop).not.toHaveBeenCalled();
+
+    const stopping = successor.stop();
+    try {
+      expect(() => first.context.getCron?.()).toThrow("stopping");
+    } finally {
+      await stopping;
+    }
+    await expect(service.list()).rejects.toThrow("no longer active");
+    expect(addedService.stop).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "service stop",
+    "selective service stop",
+    "service reload",
+    "scheduler replacement",
+  ] as const)(
     "rejects reads and writes queued before %s without changing stored rows",
     async (retirement) => {
       const original = await createScheduler();
@@ -139,17 +183,30 @@ describe("plugin service scheduler ownership", () => {
         service.removeStaleJobFamily(family),
       ];
       const results = Promise.allSettled(queued);
+      let stopping: Promise<void> | undefined;
       try {
-        if (retirement === "service stop") {
-          await handle.stop();
+        if (retirement === "scheduler replacement") {
+          current = replacement.cron;
+          expect(context.getCron?.()).not.toBe(service);
         } else if (retirement === "service reload") {
           await handle.reload({}, new Set(["maintenance"]));
         } else {
-          current = replacement.cron;
-          expect(context.getCron?.()).not.toBe(service);
+          stopping = handle.stop(
+            retirement === "selective service stop"
+              ? {
+                  strict: true,
+                  deadlineAtMs: Date.now() + 5_000,
+                  pluginIds: new Set(["test-plugin"]),
+                }
+              : undefined,
+          );
+          expect(() => context.getCron?.()).toThrow("stopping");
         }
       } finally {
         release.resolve();
+        await stopping;
+        await blocker;
+        await results;
       }
       await blocker;
       expect((await results).map((result) => result.status)).toEqual([

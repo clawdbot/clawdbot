@@ -1,7 +1,7 @@
-/** Converts loaded plugin registries into stable plugin records for status and diagnostics. */
 import { collectErrorGraphCandidates, extractErrorCode, readErrorCause } from "../infra/errors.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { VERSION } from "../version.js";
+import { isBundleCapabilitySupported } from "./bundle-capability-support.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
 import type {
@@ -117,6 +117,8 @@ export function createPluginRecord(params: {
 
 /** Marks a discovered plugin inactive without discarding its metadata record. */
 export function markPluginActivationDisabled(record: PluginRecord, reason?: string): void {
+  record.status = "disabled";
+  record.error = reason;
   record.activated = false;
   record.activationSource = "disabled";
   record.activationReason = reason;
@@ -324,4 +326,55 @@ export function formatMissingPluginRegisterError(
     return message;
   }
   return `${message} (module shape: ${describePluginModuleExportShape(moduleExport).join("; ")})`;
+}
+
+export function recordBundleDiagnostics(params: {
+  record: PluginRecord;
+  registry: PluginRegistry;
+  inspectMcp: typeof import("./bundle-mcp.js").inspectBundleMcpRuntimeSupport;
+}): void {
+  const unsupportedCapabilities = (params.record.bundleCapabilities ?? []).filter(
+    (capability) =>
+      !params.record.bundleFormat ||
+      !isBundleCapabilitySupported(params.record.bundleFormat, capability),
+  );
+  for (const capability of unsupportedCapabilities) {
+    params.registry.diagnostics.push({
+      level: "warn",
+      pluginId: params.record.id,
+      source: params.record.source,
+      message: `bundle capability detected but not wired into OpenClaw yet: ${capability}`,
+    });
+  }
+  if (
+    params.record.enabled &&
+    params.record.rootDir &&
+    params.record.bundleFormat &&
+    (params.record.bundleCapabilities ?? []).includes("mcpServers")
+  ) {
+    const runtimeSupport = params.inspectMcp({
+      pluginId: params.record.id,
+      rootDir: params.record.rootDir,
+      bundleFormat: params.record.bundleFormat,
+    });
+    for (const message of runtimeSupport.diagnostics) {
+      params.registry.diagnostics.push({
+        level: "warn",
+        pluginId: params.record.id,
+        source: params.record.source,
+        message,
+      });
+    }
+    if (runtimeSupport.unsupportedServerNames.length > 0) {
+      params.registry.diagnostics.push({
+        level: "warn",
+        pluginId: params.record.id,
+        source: params.record.source,
+        message:
+          "bundle MCP servers use unsupported transports or incomplete configs " +
+          `(${runtimeSupport.unsupportedServerNames.join(", ")})`,
+      });
+    }
+  }
+  params.registry.plugins.push(params.record);
 }

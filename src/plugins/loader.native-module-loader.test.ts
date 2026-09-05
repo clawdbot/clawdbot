@@ -6,6 +6,7 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { resetPluginCache } from "./plugin-cache.js";
 import { getPluginModuleLoaderStats } from "./plugin-module-loader-cache.js";
+import { clearActivePluginRegistry, disposePluginRegistryInstances } from "./runtime.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -123,7 +124,8 @@ function writePreSplitSdkBridgeConsumerFixture() {
   return pluginRoot;
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await clearActivePluginRegistry();
   resetPluginCache();
   vi.unstubAllEnvs();
   tempDirs.cleanup();
@@ -161,12 +163,16 @@ describe("createPluginModuleLoader", () => {
     expect(after.sourceTransformFallbacks).toBe(before.sourceTransformFallbacks);
   });
 
-  it("loads packaged JavaScript natively without source transformation", () => {
+  it("reloads packaged JavaScript and its transitive helpers in a new generation", async () => {
     const pluginRoot = writePackagedPluginFixture("npm-demo");
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", tempDirs.make("openclaw-plugin-loader-"));
-
-    const before = getPluginModuleLoaderStats();
-    const registry = loadOpenClawPlugins({
+    const helper = path.join(pluginRoot, "name.cjs");
+    fs.writeFileSync(helper, 'module.exports = "Before reload";');
+    fs.writeFileSync(
+      path.join(pluginRoot, "index.cjs"),
+      'module.exports = { id: "npm-demo", name: require("./name.cjs"), register() {} };',
+    );
+    const options = {
       cache: false,
       installRecords: {},
       onlyPluginIds: ["npm-demo"],
@@ -184,13 +190,26 @@ describe("createPluginModuleLoader", () => {
           },
         },
       },
-    });
+    };
+    const previous = loadOpenClawPlugins(options);
+    const previousRecord = previous.plugins.find((plugin) => plugin.id === "npm-demo");
+    expect(previousRecord).toMatchObject({ status: "loaded", name: "Before reload" });
 
-    const after = getPluginModuleLoaderStats();
-    expect(registry.plugins.find((plugin) => plugin.id === "npm-demo")?.status).toBe("loaded");
-    expect(after.nativeHits).toBeGreaterThan(before.nativeHits);
-    expect(after.sourceTransformForced).toBe(before.sourceTransformForced);
-    expect(after.sourceTransformFallbacks).toBe(before.sourceTransformFallbacks);
+    fs.writeFileSync(helper, 'module.exports = "After reload";');
+    const next = loadOpenClawPlugins({
+      ...options,
+      activate: false,
+      runtimeSideEffects: true,
+      previousRegistry: previous,
+      replacePluginIds: ["npm-demo"],
+      throwOnLoadError: true,
+    });
+    expect(next.plugins.find((plugin) => plugin.id === "npm-demo")).toMatchObject({
+      status: "loaded",
+      name: "After reload",
+    });
+    expect(previousRecord?.name).toBe("Before reload");
+    await disposePluginRegistryInstances(next, previous);
   });
 
   it("loads published pre-split SDK bridge imports (doctor repair, WhatsApp ack, Slack render)", () => {

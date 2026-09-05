@@ -8,6 +8,22 @@ export type FormatErrorMessageOptions = {
 const STRUCTURED_ERROR_OWNED_FIELDS = new Set(["cause", "message", "name", "stack"]);
 const STRUCTURED_ERROR_PROTOTYPE_FIELDS = new Set(["__proto__", "constructor", "prototype"]);
 
+/** Recognizes plugin-realm errors without replacing their identity or prototypes. */
+export function isErrorObject(value: unknown): value is Error {
+  if (value instanceof Error) {
+    return true;
+  }
+  if ("isError" in Error && typeof Error.isError === "function") {
+    return Error.isError(value) === true;
+  }
+  // Node 22 needs its native brand check; browser consumers cannot import node:util.
+  return (
+    typeof process !== "undefined" &&
+    typeof process.getBuiltinModule === "function" &&
+    process.getBuiltinModule("node:util").types.isNativeError(value)
+  );
+}
+
 function readProperty(value: object, key: "cause" | "code" | "status" | "errors"): unknown {
   try {
     return (value as Record<string, unknown>)[key];
@@ -75,7 +91,7 @@ function stringifyUnknown(value: unknown): string {
 /** Formats unknown errors with cause/aggregate details, structured codes, and secret redaction. */
 export function formatErrorMessage(value: unknown, options: FormatErrorMessageOptions): string {
   let formatted: string;
-  if (value instanceof Error) {
+  if (isErrorObject(value)) {
     formatted = value.message || value.name || "Error";
     const seenMessages = new Set<string>([formatted]);
     const appendCauseMessage = (message: string | undefined): void => {
@@ -103,7 +119,7 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
       }
     }
     const causes = collectErrorGraphCandidates(value, (current) => {
-      if (!(current instanceof Error)) {
+      if (!isErrorObject(current)) {
         return [];
       }
       const cause = readProperty(current, "cause");
@@ -112,7 +128,7 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
       return [cause || undefined, ...(Array.isArray(errors) ? errors : [])];
     });
     for (const cause of causes.slice(1)) {
-      if (cause instanceof Error) {
+      if (isErrorObject(cause)) {
         appendCauseErrorMessage(cause.message);
         const code = readProperty(cause, "code");
         if (typeof code === "string" || typeof code === "number") {
@@ -139,7 +155,7 @@ export function formatErrorMessage(value: unknown, options: FormatErrorMessageOp
  * (codes, statuses) survive the coercion.
  */
 export function toErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
+  if (isErrorObject(value)) {
     return value;
   }
   if (typeof value === "string") {
@@ -154,7 +170,7 @@ export function toErrorObject(value: unknown, fallbackMessage: string): Error {
 
 /** Preserves structured details while isolating hostile object field access. */
 export function toStructuredErrorObject(value: unknown): Error {
-  if (value instanceof Error) {
+  if (isErrorObject(value)) {
     return value;
   }
   const message = String(value);
@@ -190,12 +206,12 @@ export function toStructuredErrorObject(value: unknown): Error {
 
 /** Preserves Error values and stringifies every other value into a new Error. */
 export function toStringifiedError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
+  return isErrorObject(value) ? value : new Error(String(value));
 }
 
 /** Reads Error messages unchanged and stringifies every other value. */
 export function coerceErrorMessage(value: unknown): string {
-  return value instanceof Error ? value.message : String(value);
+  return isErrorObject(value) ? value.message : String(value);
 }
 
 /** Renders a non-Error cause as useful text without throwing. */

@@ -1,4 +1,3 @@
-// Capability-token helpers for plugin-hosted node surfaces.
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
@@ -32,10 +31,68 @@ export type PluginNodeCapabilitySurface = {
 export type PluginNodeCapabilityClient = {
   /** Retired clients cannot back HTTP capability auth or its renewal while close is pending. */
   invalidated?: boolean;
+  /** Handshake-resolved host, retained so newly enabled surfaces need no reconnect. */
+  pluginSurfaceBaseUrl?: string;
   pluginSurfaceUrls?: Record<string, string>;
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;
 };
+
+/** Prepare credentials before publication; the returned commit only swaps owned records. */
+export function prepareClientPluginNodeCapabilities(params: {
+  client: PluginNodeCapabilityClient;
+  surfaces: readonly PluginNodeCapabilitySurface[];
+  changedPluginIds: ReadonlySet<string>;
+  allowedSurfaces?: ReadonlySet<string>;
+}): () => void {
+  const client: PluginNodeCapabilityClient = {
+    invalidated: params.client.invalidated,
+    pluginSurfaceBaseUrl: params.client.pluginSurfaceBaseUrl,
+    pluginSurfaceUrls: { ...params.client.pluginSurfaceUrls },
+    pluginNodeCapabilities: { ...params.client.pluginNodeCapabilities },
+  };
+  const surfaces = indexPluginNodeCapabilitySurfaces(
+    params.surfaces.filter(
+      (surface) => !params.allowedSurfaces || params.allowedSurfaces.has(surface.surface),
+    ),
+  );
+  const previousSurfaces = params.client.pluginNodeCapabilitySurfaces ?? {};
+  for (const [id, previous] of Object.entries(previousSurfaces)) {
+    const next = surfaces[id];
+    if (
+      !next ||
+      next.scopeKey !== previous.scopeKey ||
+      [...params.changedPluginIds].some((pluginId) => previous.scopeKey?.startsWith(`${pluginId}:`))
+    ) {
+      const key = resolvePluginNodeCapabilityStorageKey(previous);
+      if (key) {
+        delete client.pluginNodeCapabilities?.[key];
+      }
+      delete client.pluginSurfaceUrls?.[id];
+    }
+  }
+  client.pluginNodeCapabilitySurfaces = surfaces;
+  for (const surface of client.invalidated || !client.pluginSurfaceBaseUrl
+    ? []
+    : Object.values(surfaces)) {
+    if (client.pluginSurfaceUrls?.[surface.surface]) {
+      continue;
+    }
+    const capability = mintPluginNodeCapabilityToken();
+    const expiresAtMs = resolvePluginNodeCapabilityExpiresAtMs(surface);
+    const url = buildPluginNodeCapabilityScopedHostUrl(client.pluginSurfaceBaseUrl!, capability);
+    if (expiresAtMs === undefined || !url) {
+      continue;
+    }
+    (client.pluginSurfaceUrls ??= {})[surface.surface] = url;
+    setClientPluginNodeCapability({ client, surface, capability, expiresAtMs });
+  }
+  return () => {
+    params.client.pluginNodeCapabilitySurfaces = client.pluginNodeCapabilitySurfaces;
+    params.client.pluginNodeCapabilities = client.pluginNodeCapabilities;
+    params.client.pluginSurfaceUrls = client.pluginSurfaceUrls;
+  };
+}
 
 /** Index surfaces by normalized surface id, keeping the strictest TTL per surface. */
 export function indexPluginNodeCapabilitySurfaces(

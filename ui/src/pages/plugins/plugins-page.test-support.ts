@@ -51,9 +51,8 @@ type TestPluginsPage = HTMLElement & {
   activeTab: "installed" | "discover";
   searchResults: PluginSearchResult[] | null;
   applyMutationResult: (result: PluginMutationResult) => void;
-  consentController: Pick<PluginsConsentController, "install">;
+  consentController: Pick<PluginsConsentController, "install" | "updateEnabled">;
   refreshCatalog: () => Promise<void>;
-  updateEnabled: (pluginId: string, enabled: boolean, key?: string) => Promise<void>;
   uninstall: (pluginId: string, rowKey: string) => Promise<void>;
 };
 

@@ -379,6 +379,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(args.pluginToolDenylist).toEqual([
       "automations",
       "gateway",
+      "plugins",
       "sessions",
       "screen",
       "terminal",
@@ -394,6 +395,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(args.inheritedToolDenylist).toEqual([
       "automations",
       "gateway",
+      "plugins",
       "sessions",
       "screen",
       "terminal",

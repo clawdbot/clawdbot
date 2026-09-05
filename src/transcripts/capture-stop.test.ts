@@ -22,6 +22,7 @@ describe("transcript provider cleanup custody", () => {
     { owner: "tool", failure: "thrown", registryChange: "none" },
     { owner: "service", failure: "returned", registryChange: "none" },
     { owner: "service", failure: "thrown", registryChange: "none" },
+    { owner: "concurrent-service", failure: "returned", registryChange: "none" },
     { owner: "manual-service", failure: "returned", registryChange: "none" },
     { owner: "tool", failure: "returned", registryChange: "removed" },
     { owner: "tool", failure: "thrown", registryChange: "replaced" },
@@ -32,7 +33,13 @@ describe("transcript provider cleanup custody", () => {
       const requests: TranscriptStartRequest[] = [];
       let subscribed = false;
       let failing = true;
+      const stopEntered = Promise.withResolvers<void>();
+      const releaseStop = Promise.withResolvers<void>();
       const stop = vi.fn<NonNullable<TranscriptSourceProvider["stop"]>>(async ({ sessionId }) => {
+        if (owner === "concurrent-service" && failing) {
+          stopEntered.resolve();
+          await releaseStop.promise;
+        }
         if (failing) {
           if (failure === "thrown") {
             throw new Error("cleanup unavailable");
@@ -92,8 +99,17 @@ describe("transcript provider cleanup custody", () => {
           }
           const request = requests[0]!;
           await request.onUtterance({ text: "Saved before stop" });
-          if (owner === "service") {
-            await service.stop();
+          if (owner === "service" || owner === "concurrent-service") {
+            if (owner === "concurrent-service") {
+              const globalStop = service.stop();
+              await stopEntered.promise;
+              const selectiveStop = service.stop(new Set([provider.id]));
+              const rejected = expect.soft(selectiveStop).rejects.toBeInstanceOf(AggregateError);
+              releaseStop.resolve();
+              await Promise.all([globalStop, rejected]);
+            } else {
+              await service.stop();
+            }
             expect
               .soft(ctx.logger.warn)
               .toHaveBeenCalledWith(expect.stringMatching(/stop failed.*cleanup unavailable/));
@@ -140,6 +156,7 @@ describe("transcript provider cleanup custody", () => {
           ]);
         } finally {
           failing = false;
+          releaseStop.resolve();
           ctx.config.plugins.enabled = true;
           registry.transcriptSourceProviders.splice(
             0,

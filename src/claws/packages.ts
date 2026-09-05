@@ -11,7 +11,6 @@ import {
   preflightPluginInstall,
   resolveInstalledClawHubPlugin,
 } from "../plugins/plugin-install-preflight.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { installSkillFromClawHub, preflightSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
 import {
@@ -288,26 +287,6 @@ export async function installClawPackages(
   plan: ClawAddPlan,
   options: InstallClawPackagesOptions = {},
 ): Promise<PersistedClawPackageRef[]> {
-  const includesPlugin = plan.actions.some(
-    (action) => action.kind === "package" && action.details?.kind === "plugin",
-  );
-  if (!includesPlugin) {
-    return await installClawPackagesUnlocked(plan, options);
-  }
-  return await withPluginLifecycleLease(
-    {
-      ...(options.env ? { env: options.env } : {}),
-      ...(options.path ? { path: options.path } : {}),
-      ...(options.database ? { database: options.database } : {}),
-    },
-    async () => await installClawPackagesUnlocked(plan, options),
-  );
-}
-
-async function installClawPackagesUnlocked(
-  plan: ClawAddPlan,
-  options: InstallClawPackagesOptions,
-): Promise<PersistedClawPackageRef[]> {
   const deps = options.deps ?? {};
   const installPlugin = deps.installPlugin ?? runPluginInstallCommand;
   const uninstallPlugin = deps.uninstallPlugin ?? runPluginUninstallCommand;
@@ -561,7 +540,6 @@ async function installClawPackagesUnlocked(
           expectedIntegrity: pkg.integrity,
           expectedPluginId: pkg.installId,
         },
-        invalidateRuntimeCache: false,
         clawManaged: true,
         runtime: installerRuntime(runtime),
       });

@@ -511,15 +511,18 @@ openclaw config set channels.discord.token \
 
 ## Applying changes
 
-After every successful `config set` / `config patch` / `config unset`, the CLI prints one of three hints so you know whether the gateway needs a restart:
+After a successful `config set` / `config patch` / `config unset`, the CLI prints a hint explaining how the change applies:
 
-| Hint                                                | Meaning                                |
-| --------------------------------------------------- | -------------------------------------- |
-| `Restart the gateway to apply.`                     | The changed path needs a full restart. |
-| `Change will apply without restarting the gateway.` | Hot reload picks it up automatically.  |
-| `No gateway restart needed.`                        | Nothing runtime-relevant changed.      |
+| Hint                                                                                                        | Meaning                                                                                                   |
+| ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `Restart the gateway to apply.`                                                                             | The changed path needs a full restart, or automatic reload is disabled.                                   |
+| `Plugin changes follow the Gateway reload policy. To reload explicitly, run: openclaw plugins reload <id>.` | The running Gateway applies its plugin reload policy; the explicit command waits for runtime application. |
+| `Change will apply without restarting the gateway.`                                                         | Hot reload picks it up automatically.                                                                     |
+| `No gateway restart needed.`                                                                                | Nothing runtime-relevant changed.                                                                         |
 
-Effective changes to `plugins.entries` (or any subpath) require a restart, since the CLI cannot prove every plugin's reload metadata is loaded. Successful `config set` or `config unset` operations that produce no effective config diff print `No change` and leave the JSON5 file byte-for-byte untouched. A `config unset` target that is absent from the authored config exits with status 1 and also leaves the file untouched. Setting an absent key to a value equal to its runtime default is still an authored change and persists the explicit value.
+Config commands persist changes; they do not wait for a Gateway runtime acknowledgment. Plugin changes follow the running Gateway's reload policy, including any plugin-declared restart prefixes. Use `openclaw plugins reload <id>` to wait for an applied runtime receipt. Explicit plugin management also works when automatic reload is disabled, but rejects unrelated config changes that require a Gateway restart.
+
+Successful `config set` or `config unset` operations that produce no effective config diff print `No change` and leave the JSON5 file byte-for-byte untouched. A `config unset` target that is absent from the authored config exits with status 1 and also leaves the file untouched. Setting an absent key to a value equal to its runtime default is still an authored change and persists the explicit value.
 
 ## Write safety
 

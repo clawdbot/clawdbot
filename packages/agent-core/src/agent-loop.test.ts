@@ -1578,6 +1578,62 @@ describe("agentLoop tool termination", () => {
     expect(getSteeringMessages).toHaveBeenCalled();
   });
 
+  it("commits drained steering and settled tools before a host-requested model-step stop", async () => {
+    const steer = { role: "user" as const, content: "verify the new version", timestamp: 2 };
+    const queued: AgentMessage[] = [];
+    const requestMessages: Message[][] = [];
+    const execute = vi.fn(async () => {
+      queued.push(steer);
+      return { content: [{ type: "text" as const, text: "reload committed" }], details: {} };
+    });
+    let refresh = false;
+    const context: AgentContext = {
+      systemPrompt: "",
+      messages: [],
+      tools: [{ ...makeTool("reload", []), execute }],
+    };
+    const events: AgentEvent[] = [];
+    const result = await runAgentLoop(
+      [{ role: "user", content: "edit and reload", timestamp: 1 }],
+      context,
+      {
+        ...config,
+        getSteeringMessages: async () => queued.splice(0),
+        afterToolCall: async () => {
+          refresh = true;
+        },
+        prepareNextTurn: async () => (refresh ? { stop: true } : undefined),
+      },
+      (event) => {
+        events.push(event);
+      },
+      undefined,
+      createTurnSequenceStream(
+        [
+          [{ type: "toolCall", id: "reload-once", name: "reload", arguments: {} }],
+          [{ type: "text", text: "must not run on the old catalog" }],
+        ],
+        requestMessages,
+      ),
+    );
+
+    expect(requestMessages).toHaveLength(1);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(result.at(-1)).toBe(steer);
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId: "reload-once",
+        content: [{ type: "text", text: "reload committed" }],
+      }),
+    );
+    expect(events.at(-1)).toMatchObject({ type: "agent_end", messages: result });
+    expect(
+      events.filter((event) => event.type === "message_end" && event.message === steer),
+    ).toHaveLength(1);
+    expect(queued).toEqual([]);
+  });
+
   it("delivers steering admitted while the final follow-up drain is pending", async () => {
     const followUpDrainStarted = createDeferred();
     const releaseFollowUpDrain = createDeferred();

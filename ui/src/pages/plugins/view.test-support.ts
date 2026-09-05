@@ -70,6 +70,7 @@ export function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsV
     onRetryConsentInspection: () => undefined,
     onDismissMessage: () => undefined,
     onUninstall: () => undefined,
+    onReload: () => undefined,
     onAddConnector: () => undefined,
     onSearchClawHub: () => undefined,
     onMcpToggle: () => undefined,

@@ -118,7 +118,7 @@ afterEach(() => {
 });
 
 describe("plugin-sdk facade runtime", () => {
-  it("refreshes browser SDK surfaces only when the plugin cache generation changes", async () => {
+  it("keeps core-shipped browser surfaces process-stable and checks current activation", async () => {
     const dir = createTrustedBundledFixtureRoot("openclaw-browser-generation-");
     const pluginDir = path.join(dir, "browser");
     writePluginPackageJson(pluginDir, "browser", "commonjs");
@@ -160,7 +160,7 @@ describe("plugin-sdk facade runtime", () => {
     clearPluginMetadataLifecycleCaches();
     testing.setFacadeActivationCheckRuntimeForTest(facadeActivationRuntime);
 
-    expect(await readSurfaces()).toEqual(["fixture-2", "fixture-2", 2]);
+    expect(await readSurfaces()).toEqual(["fixture-1", "fixture-1", 1]);
     setRuntimeConfigSnapshot({ plugins: { entries: { browser: { enabled: false } } } });
     expect(
       await maintenance.closeTrackedBrowserTabsForSessions({ sessionKeys: ["fixture-session"] }),

@@ -983,20 +983,18 @@ extension RealtimeTalkRelaySession {
             guard let self else { return }
             guard self.outputSessionId == sessionId, !self.isClosed, !Task.isCancelled else { return }
             let result = await self.pcmPlayer.play(stream: stream, sampleRate: self.outputSampleRateHz)
-            await MainActor.run {
-                guard self.outputSessionId == sessionId else { return }
-                self.outputTask = nil
-                self.outputContinuation = nil
-                if !result.finished {
-                    if let interruptedAt = result.interruptedAt {
-                        self.logger.info("realtime output interrupted at \(interruptedAt, privacy: .public)s")
-                    }
-                    self.handleOutputPlaybackFailure(
-                        String(localized: "Realtime audio playback failed. Reconnecting…"))
-                    return
+            guard self.outputSessionId == sessionId else { return }
+            self.outputTask = nil
+            self.outputContinuation = nil
+            if !result.finished {
+                if let interruptedAt = result.interruptedAt {
+                    self.logger.info("realtime output interrupted at \(interruptedAt, privacy: .public)s")
                 }
-                self.markOutputPlaybackFinished()
+                self.handleOutputPlaybackFailure(
+                    String(localized: "Realtime audio playback failed. Reconnecting…"))
+                return
             }
+            self.markOutputPlaybackFinished()
         }
     }
 

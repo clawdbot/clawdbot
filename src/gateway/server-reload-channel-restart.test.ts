@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import {
+  createPluginRegistryOwner,
   requireActivePluginChannelRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
@@ -10,7 +11,36 @@ import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js"
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
-import { rollbackStoppedGatewayChannels } from "./server-reload-channel-restart.js";
+import { restartGatewayChannels } from "./server-reload-channel-restart.js";
+
+async function reloadChannels(
+  owner: ChannelManager,
+  getPluginRegistry: typeof requireActivePluginChannelRegistry,
+  channels: Set<ChannelKind>,
+  logChannels: Parameters<typeof restartGatewayChannels>[0]["params"]["logChannels"],
+  scheduleRecoveryRestart: Parameters<typeof restartGatewayChannels>[0]["scheduleRecoveryRestart"],
+) {
+  await restartGatewayChannels({
+    params: {
+      startChannel: owner.startChannel,
+      stopChannel: owner.stopChannel,
+      getPluginRegistry,
+      releaseChannelRouteHandoffs: owner.releaseChannelRouteHandoffs,
+      logChannels,
+    },
+    nextConfig: {},
+    channelsToRestart: channels,
+    restartChannelAccounts: new Map(),
+    activePluginChannelsAfterReload: null,
+    shouldSkipChannelRestart: false,
+    skipChannelRestartLogMessage: "",
+    isLifecycleReloadAborted: () => false,
+    getChannelAutostartSuppression: () => null,
+    channelReloadTargets: () => channels,
+    logSuppressedChannelRestart: vi.fn(),
+    scheduleRecoveryRestart,
+  });
+}
 
 let manager: ChannelManager | undefined;
 afterEach(async () => {
@@ -20,7 +50,12 @@ afterEach(async () => {
   resetGatewayWorkAdmission();
 });
 
-it("retains a failed teardown target when rollback cannot admit its replacement", async () => {
+it("retries failed teardown before admitting a replacement", async () => {
+  const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+    await new Promise<void>((resolve) => {
+      abortSignal.addEventListener("abort", () => resolve(), { once: true });
+    });
+  });
   const stopAccount = vi
     .fn()
     .mockResolvedValue(undefined)
@@ -34,10 +69,7 @@ it("retains a failed teardown target when rollback cannot admit its replacement"
       },
     }),
     gateway: {
-      startAccount: async ({ abortSignal }) =>
-        new Promise<void>((resolve) => {
-          abortSignal.addEventListener("abort", () => resolve(), { once: true });
-        }),
+      startAccount,
       stopAccount,
     },
   };
@@ -55,20 +87,27 @@ it("retains a failed teardown target when rollback cannot admit its replacement"
 
   const channels = new Set<ChannelKind>(["discord"]);
   const logChannels = { info: vi.fn(), error: vi.fn() };
-  expect(
-    await rollbackStoppedGatewayChannels(
-      { startChannel: manager.startChannel, logChannels },
-      channels,
-      "failed plugin runtime publication",
-    ),
-  ).toEqual(["discord"]);
-  expect([...channels]).toEqual(["discord"]);
-  expect(logChannels.error).toHaveBeenCalledWith(expect.stringContaining("stop-in-flight"));
+  const scheduleRecoveryRestart = vi.fn();
+  await reloadChannels(
+    manager,
+    requireActivePluginChannelRegistry,
+    channels,
+    logChannels,
+    scheduleRecoveryRestart,
+  );
+  expect(stopAccount).toHaveBeenCalledTimes(2);
+  expect(startAccount).toHaveBeenCalledTimes(2);
+  expect(scheduleRecoveryRestart).not.toHaveBeenCalled();
+  expect(logChannels.error).not.toHaveBeenCalled();
 });
 
-it.each(["idle", "stopped", "racing"] as const)(
-  "channel rollback preserves %s manual stops while explicit starts resume",
-  async (state) => {
+it.each(
+  (["channel", "accounts"] as const).flatMap((scope) =>
+    (["idle", "stopped", "racing"] as const).map((state) => ({ scope, state })),
+  ),
+)(
+  "$scope config reload preserves $state manual stops while explicit starts resume",
+  async ({ scope, state }) => {
     const starts: string[] = [];
     const configuring = createDeferred();
     const releaseConfiguration = createDeferred();
@@ -111,21 +150,40 @@ it.each(["idle", "stopped", "racing"] as const)(
     if (state !== "racing") {
       await manager.stopChannel("discord", "manual");
     }
-    const channels = new Set<ChannelKind>(["discord"]);
-    const logChannels = { info: vi.fn(), error: vi.fn() };
-    const reload = rollbackStoppedGatewayChannels(
-      { startChannel: manager.startChannel, logChannels },
-      channels,
-      "cancelled plugin reload",
+    const channels = new Set<ChannelKind>(scope === "channel" ? ["discord"] : []);
+    const accounts = new Map<ChannelKind, Set<string>>(
+      scope === "accounts" ? [["discord", new Set(["manual", "running"])]] : [],
     );
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+    const scheduleRecoveryRestart = vi.fn();
+    const reload = restartGatewayChannels({
+      params: {
+        startChannel: manager.startChannel,
+        stopChannel: manager.stopChannel,
+        getPluginRegistry: requireActivePluginChannelRegistry,
+        releaseChannelRouteHandoffs: manager.releaseChannelRouteHandoffs,
+        logChannels,
+      },
+      nextConfig: {},
+      channelsToRestart: channels,
+      restartChannelAccounts: accounts,
+      activePluginChannelsAfterReload: null,
+      shouldSkipChannelRestart: false,
+      skipChannelRestartLogMessage: "",
+      isLifecycleReloadAborted: () => false,
+      getChannelAutostartSuppression: () => null,
+      channelReloadTargets: () => channels,
+      logSuppressedChannelRestart: vi.fn(),
+      scheduleRecoveryRestart,
+    });
     if (state === "racing") {
       await configuring.promise;
       await manager.stopChannel("discord", "manual");
       blockConfiguration = false;
       releaseConfiguration.resolve();
     }
-    expect(await reload).toEqual([]);
-    expect(channels.size).toBe(0);
+    await reload;
+    expect(scheduleRecoveryRestart).not.toHaveBeenCalled();
     expect(logChannels.error).not.toHaveBeenCalled();
     expect(manager.isManuallyStopped("discord", "manual")).toBe(true);
     expect(manager.getRuntimeSnapshot().channelAccounts.discord?.manual?.running).toBe(false);
@@ -171,6 +229,8 @@ it("channel rollback uses the attached registry while another Gateway is active"
   let attached = createRegistry("A-original", ownedIds);
   const current = createRegistry("A-current", ownedIds);
   const foreign = createRegistry("B", ["collision", "foreign-only"]);
+  const registryOwnerA = createPluginRegistryOwner(attached);
+  const registryOwnerB = createPluginRegistryOwner(foreign);
   const ownerA = createChannelManager({
     getRuntimeConfig: () => ({}),
     getPluginRegistry: () => attached,
@@ -197,6 +257,7 @@ it("channel rollback uses the attached registry while another Gateway is active"
 
     attached = current;
     setActivePluginRegistry(current);
+    registryOwnerA.publish(current);
     await ownerA.startChannels();
     expect(monitors.slice(2).map(({ owner }) => owner)).toEqual(["A-current", "A-current"]);
     // Rollback must resume this generation, not the manager's original registry.
@@ -210,13 +271,9 @@ it("channel rollback uses the attached registry while another Gateway is active"
     const beforeRollback = monitors.length;
     const channels = new Set<ChannelKind>(ownedIds);
     const logChannels = { info: vi.fn(), error: vi.fn() };
-    const failures = await rollbackStoppedGatewayChannels(
-      { startChannel: ownerA.startChannel, logChannels },
-      channels,
-      "cancelled plugin reload",
-    );
-    expect(failures).toEqual([]);
-    expect(channels.size).toBe(0);
+    const scheduleRecoveryRestart = vi.fn();
+    await reloadChannels(ownerA, () => attached, channels, logChannels, scheduleRecoveryRestart);
+    expect(scheduleRecoveryRestart).not.toHaveBeenCalled();
     expect(logChannels.error).not.toHaveBeenCalled();
     const resumed = monitors
       .slice(beforeRollback)
@@ -247,6 +304,8 @@ it("channel rollback uses the attached registry while another Gateway is active"
         await owner.stopChannel(id);
       }
     }
+    await registryOwnerA.close();
+    await registryOwnerB.close();
     expect(monitors.every(({ abortSignal, joined }) => abortSignal.aborted && joined)).toBe(true);
   }
 });

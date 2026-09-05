@@ -254,19 +254,17 @@ describe("registerMxcPlugin", () => {
     const record = createPluginRecord({ id: "mxc" });
     registry.registry.plugins.push(record);
     registerMxcPlugin(registry.createApi(record, { config: {}, pluginConfig: {} }));
+    setActivePluginRegistry(registry.registry);
     try {
       expect(readBackend().factory).toEqual(expect.any(Function));
-      setActivePluginRegistry(registry.registry);
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      await expect.poll(readBackend).toEqual(original);
     } finally {
-      for (const { lifecycle } of registry.registry.runtimeLifecycles.toReversed()) {
-        await lifecycle.cleanup?.({ reason: "disable" });
-      }
-      if (originalRegistry) {
-        setActivePluginRegistry(originalRegistry);
-      } else {
-        resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(originalRegistry ?? createEmptyPluginRegistry());
+      try {
+        await expect.poll(readBackend).toEqual(original);
+      } finally {
+        if (!originalRegistry) {
+          resetPluginRuntimeStateForTest();
+        }
       }
     }
   });

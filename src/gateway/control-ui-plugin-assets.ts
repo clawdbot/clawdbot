@@ -40,42 +40,44 @@ const MAX_CONTROL_UI_CATALOG_BYTES = 64 * 1024 * 1024;
 const MAX_CONTROL_UI_CATALOG_REVISIONS = 256;
 
 type BrowserBuild = {
-  owner: PluginRecord;
   isCurrent: () => boolean;
   module: PluginControlUiModule;
   assets: ReadonlyMap<string, PluginControlUiAsset>;
   bytes: number;
 };
-type BrowserCatalogState = {
+type BrowserPluginState = {
   isCurrent: () => boolean;
-  builds: Map<string, BrowserBuild>;
+  build?: BrowserBuild;
   revisions: Map<string, BrowserBuild>;
-  diagnostics: Map<string, PluginControlUiDiagnostic>;
-  activations: WeakMap<object, Map<string, PluginControlUiActivation>>;
-  pending?: Promise<void>;
+  diagnostic?: PluginControlUiDiagnostic;
+  activations: WeakMap<object, PluginControlUiActivation>;
   initialized: boolean;
 };
 
-// Files are read only on first catalog use or explicit UI reload. Registry retirement
-// fences these snapshots, and weak ownership releases bytes with the backend generation.
-const browserCatalogs = new WeakMap<PluginRegistry, BrowserCatalogState>();
+// Exact backend records retain advertised bytes and browser receipts across unrelated
+// registry publications. Replaced records cannot inherit their predecessor's snapshots.
+const browserPluginStates = new WeakMap<PluginRecord, BrowserPluginState>();
+let pendingCatalogOperation: Promise<void> | undefined;
 
-function catalogState(registry: PluginRegistry): BrowserCatalogState {
-  let state = browserCatalogs.get(registry);
+function getActiveBrowserRegistry(): PluginRegistry | null {
+  const registry = getPluginRegistryForContext();
+  return registry && capturePluginLifecycleAuthority(registry)?.() ? registry : null;
+}
+
+function pluginState(registry: PluginRegistry, record: PluginRecord): BrowserPluginState {
+  let state = browserPluginStates.get(record);
   if (!state?.isCurrent()) {
-    const isCurrent = capturePluginLifecycleAuthority(registry);
+    const isCurrent = capturePluginLifecycleAuthority(registry, record);
     if (!isCurrent?.()) {
-      throw new Error("plugin registry is no longer active");
+      throw new Error("plugin is no longer active");
     }
     state = {
       isCurrent,
-      builds: new Map(),
       revisions: new Map(),
-      diagnostics: new Map(),
       activations: new WeakMap(),
       initialized: false,
     };
-    browserCatalogs.set(registry, state);
+    browserPluginStates.set(record, state);
   }
   return state;
 }
@@ -115,7 +117,6 @@ async function snapshotBrowserBuild(
     throw new Error("plugin was replaced while its browser assets loaded");
   }
   return {
-    owner: record,
     isCurrent,
     assets,
     bytes,
@@ -131,11 +132,11 @@ async function snapshotBrowserBuild(
 
 async function refreshBrowserCatalog(
   registry: PluginRegistry,
-  state: BrowserCatalogState,
+  isCurrent: () => boolean,
   pluginId?: string,
   reloadManifest = false,
 ): Promise<void> {
-  if (!state.isCurrent()) {
+  if (!isCurrent()) {
     throw new Error("plugin registry is no longer active");
   }
   const owners = browserOwners(registry);
@@ -147,9 +148,11 @@ async function refreshBrowserCatalog(
   }
   for (const record of owners) {
     if (!isControlUiPluginAllowed(record)) {
+      browserPluginStates.delete(record);
       continue;
     }
-    if (state.initialized && pluginId && record.id !== pluginId) {
+    const state = pluginState(registry, record);
+    if (state.initialized && (!reloadManifest || (pluginId && record.id !== pluginId))) {
       continue;
     }
     try {
@@ -166,76 +169,74 @@ async function refreshBrowserCatalog(
         declaration = loaded.manifest.controlUi;
       }
       const build = await snapshotBrowserBuild(registry, record, declaration);
-      // Old tabs and failed activations retain revisions until the backend owner
-      // retires or native UI admission is withdrawn; browser receipts are observations.
-      for (const [key, retained] of state.revisions) {
-        if (!retained.isCurrent()) {
-          state.revisions.delete(key);
-          if (state.builds.get(retained.owner.id) === retained) {
-            state.builds.delete(retained.owner.id);
+      if (!isCurrent()) {
+        throw new Error("plugin registry was replaced while its browser assets loaded");
+      }
+      const revisionKey = build.module.revision;
+      if (!state.revisions.has(revisionKey)) {
+        let bytes = build.bytes;
+        let revisionCount = 0;
+        for (const owner of owners) {
+          const retained = browserPluginStates.get(owner);
+          if (!isControlUiPluginAllowed(owner) || !retained?.isCurrent()) {
+            continue;
+          }
+          revisionCount += retained.revisions.size;
+          for (const retainedBuild of retained.revisions.values()) {
+            bytes += retainedBuild.bytes;
           }
         }
-      }
-      const revisionKey = `${record.id}/${build.module.revision}`;
-      if (!state.revisions.has(revisionKey)) {
-        const bytes = [...state.revisions.values()].reduce(
-          (sum, retained) => sum + retained.bytes,
-          build.bytes,
-        );
         if (
           bytes > MAX_CONTROL_UI_CATALOG_BYTES ||
-          state.revisions.size >= MAX_CONTROL_UI_CATALOG_REVISIONS
+          revisionCount >= MAX_CONTROL_UI_CATALOG_REVISIONS
         ) {
-          state.diagnostics.set(record.id, {
+          state.diagnostic = {
             pluginId: record.id,
             message:
-              "Control UI revision cache is full. Restart the Gateway to load another browser build.",
-          });
+              "Control UI revision cache is full. Reload this plugin's backend or restart the Gateway before loading another browser build.",
+          };
           continue;
         }
       }
       // Publish complete immutable bytes at once; refused reloads preserve every advertised URL.
       state.revisions.set(revisionKey, build);
-      state.builds.set(record.id, build);
-      state.diagnostics.delete(record.id);
+      state.build = build;
+      delete state.diagnostic;
     } catch {
-      if (!state.isCurrent()) {
+      if (!isCurrent()) {
         throw new Error("plugin registry was replaced while its browser assets loaded");
       }
-      state.diagnostics.set(record.id, {
+      state.diagnostic = {
         pluginId: record.id,
         message: "Control UI assets could not be loaded. Build the plugin and reload its UI.",
-      });
+      };
+    } finally {
+      if (isCurrent()) {
+        state.initialized = true;
+      }
     }
   }
-  state.initialized = true;
 }
 
-function projectBrowserCatalog(
-  registry: PluginRegistry | null,
-  state?: BrowserCatalogState,
-): PluginsControlUiCatalog {
-  if (state && !state.isCurrent()) {
-    throw new Error("plugin registry is no longer active");
-  }
+function projectBrowserCatalog(registry: PluginRegistry | null): PluginsControlUiCatalog {
   const active = registry ? browserOwners(registry) : [];
-  const owners = new Set(active.filter(isControlUiPluginAllowed).map((record) => record.id));
-  const plugins = [...(state?.builds.values() ?? [])]
-    .filter((build) => owners.has(build.owner.id) && build.isCurrent())
-    .map((build) => build.module)
-    .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
-  const diagnostics: PluginControlUiDiagnostic[] = [
-    ...[...(state?.diagnostics.values() ?? [])].filter((diagnostic) =>
-      owners.has(diagnostic.pluginId),
-    ),
-    ...active
-      .filter((record) => !isControlUiPluginAllowed(record))
-      .map((record): PluginControlUiDiagnostic => ({
-        pluginId: record.id,
-        code: "custom-plugin-ui-disabled",
-        message: CUSTOM_PLUGIN_UI_DISABLED_MESSAGE,
-      })),
-  ].toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
+  const plugins = active.flatMap((record) => {
+    const build = browserPluginStates.get(record)?.build;
+    return build?.isCurrent() ? [build.module] : [];
+  });
+  const diagnostics = active.flatMap((record): PluginControlUiDiagnostic[] => {
+    if (!isControlUiPluginAllowed(record)) {
+      return [
+        {
+          pluginId: record.id,
+          code: "custom-plugin-ui-disabled",
+          message: CUSTOM_PLUGIN_UI_DISABLED_MESSAGE,
+        },
+      ];
+    }
+    const diagnostic = browserPluginStates.get(record)?.diagnostic;
+    return diagnostic ? [diagnostic] : [];
+  });
   const revision = createHash("sha256")
     .update(JSON.stringify({ plugins, diagnostics }))
     .digest("hex");
@@ -253,25 +254,29 @@ async function loadControlUiPluginCatalog(
     }
     return projectBrowserCatalog(null);
   }
-  const state = catalogState(registry);
-  const operation = (state.pending ?? Promise.resolve()).then(async () => {
-    if (reloadManifest || !state.initialized) {
-      await refreshBrowserCatalog(registry, state, pluginId, reloadManifest);
+  const isCurrent = capturePluginLifecycleAuthority(registry);
+  if (!isCurrent?.()) {
+    throw new Error("plugin registry is no longer active");
+  }
+  const operation = (pendingCatalogOperation ?? Promise.resolve()).then(async () => {
+    await refreshBrowserCatalog(registry, isCurrent, pluginId, reloadManifest);
+    if (!isCurrent()) {
+      throw new Error("plugin registry is no longer active");
     }
-    return projectBrowserCatalog(registry, state);
+    return projectBrowserCatalog(registry);
   });
-  // A failed request owns its rejection; later readers and reloads wait only for
-  // settlement. Check initialization inside this lane so cold readers cannot race.
+  // Serialize the shared byte budget and retained owners across registry publications.
+  // Failed requests own their rejection; later readers wait only for settlement.
   const pending = operation.then(
     () => undefined,
     () => undefined,
   );
-  state.pending = pending;
+  pendingCatalogOperation = pending;
   try {
     return await operation;
   } finally {
-    if (state.pending === pending) {
-      state.pending = undefined;
+    if (pendingCatalogOperation === pending) {
+      pendingCatalogOperation = undefined;
     }
   }
 }
@@ -290,15 +295,14 @@ export function reportControlUiPluginActivation(
   client: object,
   report: PluginControlUiActivation,
 ): boolean {
-  const registry = getPluginRegistryForContext();
-  const state = registry && browserCatalogs.get(registry);
-  const build = state && state.builds.get(report.pluginId);
+  const registry = getActiveBrowserRegistry();
+  const owner = registry?.plugins.find((record) => record.id === report.pluginId);
+  const state = owner && browserPluginStates.get(owner);
+  const build = state?.build;
   if (!state || !build?.isCurrent() || build.module.revision !== report.revision) {
     return false;
   }
-  const activations = state.activations.get(client) ?? new Map<string, PluginControlUiActivation>();
-  activations.set(report.pluginId, { ...report });
-  state.activations.set(client, activations);
+  state.activations.set(client, { ...report });
   return true;
 }
 
@@ -306,21 +310,17 @@ export function listControlUiPluginActivations(
   client: object,
   pluginId?: string,
 ): PluginControlUiActivation[] {
-  const registry = getPluginRegistryForContext();
-  const state = registry && browserCatalogs.get(registry);
-  if (!state?.isCurrent()) {
-    return [];
-  }
-  return [...(state.activations.get(client)?.values() ?? [])]
-    .filter((report) => {
-      const build = state.builds.get(report.pluginId);
-      return (
-        (!pluginId || pluginId === report.pluginId) &&
-        build?.isCurrent() &&
-        build.module.revision === report.revision
-      );
-    })
-    .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
+  const registry = getActiveBrowserRegistry();
+  return (registry ? browserOwners(registry) : []).flatMap((record) => {
+    const state = browserPluginStates.get(record);
+    const report = state?.activations.get(client);
+    return report &&
+      (!pluginId || pluginId === record.id) &&
+      state?.build?.isCurrent() &&
+      state.build.module.revision === report.revision
+      ? [report]
+      : [];
+  });
 }
 
 /** Serves only snapshot bytes after scoped plugin-cookie or explicit read authentication. */
@@ -351,10 +351,10 @@ export async function handleControlUiPluginAssetRequest(
     respondNotFound(res);
     return true;
   }
-  const [pluginId, revision, ...fileParts] = segments;
+  const [pluginId, revision = "", ...fileParts] = segments;
   if (
     !pluginId ||
-    !/^[a-f0-9]{64}$/u.test(revision ?? "") ||
+    !/^[a-f0-9]{64}$/u.test(revision) ||
     fileParts.length === 0 ||
     fileParts.some((part) => !part || part === "." || part === ".." || /[\\/\0]/u.test(part))
   ) {
@@ -378,9 +378,9 @@ export async function handleControlUiPluginAssetRequest(
   } else if (!(await authorizeControlUiReadRequestOrReply({ req, res, ...params }))) {
     return true;
   }
-  const registry = getPluginRegistryForContext();
-  const state = registry && browserCatalogs.get(registry);
-  const build = state?.revisions.get(`${pluginId}/${revision}`);
+  const registry = getActiveBrowserRegistry();
+  const owner = registry?.plugins.find((record) => record.id === pluginId);
+  const build = owner && browserPluginStates.get(owner)?.revisions.get(revision);
   const asset =
     build && build.module.revision === revision && build.isCurrent()
       ? build.assets.get(fileParts.join("/"))

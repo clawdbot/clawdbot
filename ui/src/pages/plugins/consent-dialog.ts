@@ -9,7 +9,8 @@ import "../../components/modal-dialog.ts";
 import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { registerPluginConsentEnglish } from "../../i18n/locales/en-plugin-consent.ts";
+import { enPlugins } from "../../i18n/locales/en-plugins.ts";
+import { en } from "../../i18n/locales/en.ts";
 import type {
   PluginDeclaredSurface,
   PluginHookGrant,
@@ -20,11 +21,12 @@ import type {
 } from "../../lib/plugins/index.ts";
 import { pluginArtPath, pluginFallbackGradient, pluginMonogram } from "./presentation.ts";
 
-registerPluginConsentEnglish();
+en.pluginConsent = enPlugins.pluginConsent;
+Object.assign(en.pluginsPage, enPlugins.pluginsPage);
 
 export type PluginConsentIntent =
   | { kind: "install"; request: PluginInstallRequest; installIdentity: string }
-  | { kind: "enable"; pluginId: string; rowKey: string };
+  | { kind: "enable" | "reload"; pluginId: string; rowKey: string };
 
 type PluginConsentFallback = {
   name: string;
@@ -400,7 +402,9 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): Temp
         : t("pluginsPage.installNamed", { name })
       : props.busy
         ? t("pluginsPage.working")
-        : t("pluginConsent.enableNamed", { name });
+        : consent.intent.kind === "reload"
+          ? t("pluginsPage.reload")
+          : t("pluginConsent.enableNamed", { name });
   const confirmUnavailable =
     !props.canMutate || props.busy || props.loading || Boolean(props.error) || !inspection;
   const confirm = html`

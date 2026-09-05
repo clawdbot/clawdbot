@@ -230,8 +230,11 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
     ).toBeUndefined();
   });
 
-  it("surfaces a failed service while continuing healthy siblings", async () => {
+  it("keeps service failures visible until a successful restart while continuing healthy siblings", async () => {
     const credential = "synthetic-service-credential";
+    const brokenStart = vi.fn().mockImplementationOnce(() => {
+      throw new Error(`listen EADDRINUSE: address already in use; password=${credential}`);
+    });
     const siblingStart = vi.fn();
     const registry = {
       ...createTestRegistry([]),
@@ -249,9 +252,7 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
           pluginName: "Service Plugin",
           service: {
             id: "broken",
-            start: () => {
-              throw new Error(`listen EADDRINUSE: address already in use; password=${credential}`);
-            },
+            start: brokenStart,
           },
           source: "test",
           origin: "workspace" as const,
@@ -294,6 +295,14 @@ describe("collectGatewayHealthSnapshot plugin state", () => {
       timeoutMs: 10,
       probe: false,
     });
-    expect(stopped.plugins?.errors).toEqual([]);
+    expect(stopped.plugins?.errors).toEqual(failed.plugins?.errors);
+    pluginServicesHandle = await startPluginServices({ registry, config: {} });
+    const restarted = await collectGatewayHealthSnapshot({
+      audience: "admin",
+      timeoutMs: 10,
+      probe: false,
+    });
+    expect(brokenStart).toHaveBeenCalledTimes(2);
+    expect(restarted.plugins?.errors).toEqual([]);
   });
 });

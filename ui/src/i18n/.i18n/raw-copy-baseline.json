@@ -450,7 +450,7 @@
       "text": "exec host=gateway/node"
     },
     {
-      "count": 4,
+      "count": 3,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/plugins/view.ts",

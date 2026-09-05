@@ -1,5 +1,3 @@
-// Gateway request context factory.
-// Wires live runtime state into method handlers and client management helpers.
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
@@ -125,7 +123,7 @@ type GatewayRequestContextParams = {
   channelWizardRunner: GatewayRequestContext["channelWizardRunner"];
   broadcastVoiceWakeChanged: GatewayRequestContext["broadcastVoiceWakeChanged"];
   broadcastVoiceWakeRoutingChanged: GatewayRequestContext["broadcastVoiceWakeRoutingChanged"];
-  notifyPluginMetadataChanged: GatewayRequestContext["notifyPluginMetadataChanged"];
+  applyPluginLifecycleChange: NonNullable<GatewayRequestContext["applyPluginLifecycleChange"]>;
   getConfigReloaderHotReloadStatus: GatewayRequestContext["getConfigReloaderHotReloadStatus"];
   unavailableGatewayMethods: ReadonlySet<string>;
 };
@@ -199,7 +197,7 @@ export function createGatewayRequestContext(
     sessionCompanion: params.sessionCompanion,
     sessionObserver: params.sessionObserver,
     mentionInbox: params.mentionInbox,
-    notifyPluginMetadataChanged: params.notifyPluginMetadataChanged,
+    applyPluginLifecycleChange: params.applyPluginLifecycleChange,
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
     ensureSandboxHostPort: params.ensureSandboxHostPort,
     get portalService() {

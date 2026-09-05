@@ -1,4 +1,3 @@
-// Runtime channel helpers adapt channel plugin APIs into core channel send and reply flows.
 import { convertMarkdownTables } from "../../../packages/markdown-core/src/tables.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import {
@@ -16,20 +15,21 @@ import {
   shouldComputeCommandAuthorized,
 } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
-import { settleReplyDispatcher, withReplyDispatcher } from "../../auto-reply/dispatch.js";
+import {
+  settleReplyDispatcher,
+  withReplyDispatcher,
+} from "../../auto-reply/dispatch-dispatcher.js";
 import { formatAgentEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
-import { dispatchLowLevelChannelReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
-import { dispatchReplyWithBufferedBlockDispatcherCore } from "../../auto-reply/reply/provider-dispatcher.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
   createAckReactionHandle,
@@ -49,12 +49,6 @@ import {
 } from "../../channels/plugins/conversation-bindings.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
-import { runPreparedChannelTurn } from "../../channels/turn/execution.js";
-import {
-  dispatchAssembledChannelTurn,
-  dispatchRoutedChannelTurn,
-} from "../../channels/turn/lifecycle.js";
-import { runChannelTurn } from "../../channels/turn/run-channel-turn.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -77,14 +71,43 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.js";
 import type { PluginRuntime } from "./types.js";
+
+// Text and registration helpers must not initialize the agent dispatch graph.
+const dispatchLowLevelChannelReplyFromConfig = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("../../auto-reply/reply/dispatch-from-config.js")),
+  (runtime) => runtime.dispatchLowLevelChannelReplyFromConfig,
+);
+const dispatchReplyWithBufferedBlockDispatcherCore = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("../../auto-reply/reply/provider-dispatcher.js")),
+  (runtime) => runtime.dispatchReplyWithBufferedBlockDispatcherCore,
+);
+const loadChannelTurnLifecycle = createLazyRuntimeModule(
+  () => import("../../channels/turn/lifecycle.js"),
+);
+const dispatchAssembledChannelTurn = createLazyRuntimeMethod(
+  loadChannelTurnLifecycle,
+  (runtime) => runtime.dispatchAssembledChannelTurn,
+);
+const loadPreparedChannelTurn = createLazyRuntimeModule(
+  () => import("../../channels/turn/execution.js"),
+);
+const runPreparedChannelTurn: PluginRuntime["channel"]["inbound"]["runPreparedReply"] = async (
+  params,
+) => (await loadPreparedChannelTurn()).runPreparedChannelTurn(params);
+const runChannelTurn = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("../../channels/turn/run-channel-turn.js")),
+  (runtime) => runtime.runChannelTurn,
+  // SAFETY: Forwarding async overloads unchanged preserves the raw-event and dispatch-result generics.
+) as PluginRuntime["channel"]["inbound"]["run"];
 
 export function createRuntimeChannel(options?: {
   dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
 }): PluginRuntime["channel"] {
-  const dispatchInbound: typeof dispatchRoutedChannelTurn = (params) =>
-    dispatchRoutedChannelTurn({
+  const dispatchInbound: PluginRuntime["channel"]["inbound"]["dispatch"] = async (params) =>
+    (await loadChannelTurnLifecycle()).dispatchRoutedChannelTurn({
       ...params,
       ...(options?.dispatchReplyFromConfig
         ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }

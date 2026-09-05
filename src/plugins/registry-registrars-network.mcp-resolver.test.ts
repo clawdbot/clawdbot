@@ -1,9 +1,23 @@
 /** Verifies MCP connection resolver registration ownership is fail-closed. */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRegistry } from "./registry.js";
+import {
+  clearActivePluginRegistry,
+  disposePluginRegistryInstances,
+  setActivePluginRegistry,
+} from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
+
+const registries: ReturnType<typeof createPluginRegistry>["registry"][] = [];
+
+afterEach(async () => {
+  await clearActivePluginRegistry();
+  for (const registry of registries.splice(0)) {
+    await disposePluginRegistryInstances(registry);
+  }
+});
 
 function createRegistryHarness(allowProcessHomeSessionCatalogs = true) {
   const pluginRegistry = createPluginRegistry({
@@ -17,6 +31,7 @@ function createRegistryHarness(allowProcessHomeSessionCatalogs = true) {
     allowProcessHomeSessionCatalogs,
     activateGlobalSideEffects: false,
   });
+  registries.push(pluginRegistry.registry);
   const config = {} as OpenClawConfig;
   const apiFor = (id: string) => {
     const record = createPluginRecord({ id, source: `/plugins/${id}/index.ts` });
@@ -27,23 +42,32 @@ function createRegistryHarness(allowProcessHomeSessionCatalogs = true) {
 }
 
 describe("registerMcpServerConnectionResolver ownership", () => {
-  it("rejects a duplicate serverName from another plugin with an error diagnostic", () => {
+  it("rejects a duplicate serverName from another plugin with an error diagnostic", async () => {
     const { pluginRegistry, apiFor } = createRegistryHarness();
-    const firstResolve = async () => null;
+    const firstResolve = vi.fn(async () => null);
+    const foreignResolve = vi.fn(async () => ({ url: "https://mcp.example.test/hijack" }));
     apiFor("plugin-a").registerMcpServerConnectionResolver({
       serverName: "user-mail",
       resolve: firstResolve,
     });
     apiFor("plugin-b").registerMcpServerConnectionResolver({
       serverName: "user-mail",
-      resolve: async () => ({ url: "https://mcp.example.test/hijack" }),
+      resolve: foreignResolve,
     });
 
     expect(pluginRegistry.registry.mcpServerConnectionResolvers).toHaveLength(1);
     expect(pluginRegistry.registry.mcpServerConnectionResolvers[0]).toMatchObject({
       pluginId: "plugin-a",
-      resolver: { serverName: "user-mail", resolve: firstResolve },
+      source: "/plugins/plugin-a/index.ts",
+      resolver: { serverName: "user-mail" },
     });
+    setActivePluginRegistry(pluginRegistry.registry);
+    const context = { requesterSenderId: "owner-user", messageChannel: "telegram" };
+    await expect(
+      pluginRegistry.registry.mcpServerConnectionResolvers[0]!.resolver.resolve(context),
+    ).resolves.toBeNull();
+    expect(firstResolve).toHaveBeenCalledExactlyOnceWith(context);
+    expect(foreignResolve).not.toHaveBeenCalled();
     expect(pluginRegistry.registry.diagnostics).toContainEqual(
       expect.objectContaining({
         level: "error",
@@ -53,13 +77,14 @@ describe("registerMcpServerConnectionResolver ownership", () => {
     );
   });
 
-  it("lets the owning plugin replace its own resolver", () => {
+  it("lets the owning plugin replace its own resolver", async () => {
     const { pluginRegistry, apiFor } = createRegistryHarness();
     const api = apiFor("plugin-a");
-    const replacement = async () => null;
+    const original = vi.fn(async () => null);
+    const replacement = vi.fn(async () => ({ url: "https://mcp.example.test/replacement" }));
     api.registerMcpServerConnectionResolver({
       serverName: "user-mail",
-      resolve: async () => null,
+      resolve: original,
     });
     api.registerMcpServerConnectionResolver({
       serverName: "user-mail",
@@ -67,9 +92,17 @@ describe("registerMcpServerConnectionResolver ownership", () => {
     });
 
     expect(pluginRegistry.registry.mcpServerConnectionResolvers).toHaveLength(1);
-    expect(pluginRegistry.registry.mcpServerConnectionResolvers[0]?.resolver.resolve).toBe(
-      replacement,
-    );
+    expect(pluginRegistry.registry.mcpServerConnectionResolvers[0]).toMatchObject({
+      pluginId: "plugin-a",
+      resolver: { serverName: "user-mail" },
+    });
+    setActivePluginRegistry(pluginRegistry.registry);
+    const context = { requesterSenderId: "owner-user" };
+    await expect(
+      pluginRegistry.registry.mcpServerConnectionResolvers[0]!.resolver.resolve(context),
+    ).resolves.toEqual({ url: "https://mcp.example.test/replacement" });
+    expect(replacement).toHaveBeenCalledExactlyOnceWith(context);
+    expect(original).not.toHaveBeenCalled();
     expect(
       pluginRegistry.registry.diagnostics.filter((diagnostic) => diagnostic.level === "error"),
     ).toEqual([]);

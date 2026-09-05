@@ -1,4 +1,3 @@
-// Maintains interactive plugin registry entries discovered from manifests.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizePluginInteractiveNamespace,
@@ -7,6 +6,7 @@ import {
   validatePluginInteractiveNamespace,
 } from "./interactive-shared.js";
 import { clearPluginInteractiveHandlersState } from "./interactive-state.js";
+import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
   getPluginRegistrationContext,
@@ -77,7 +77,7 @@ function registerPluginInteractiveHandlerWithOptions(
     };
   }
   registrations.push({
-    ...registration,
+    ...wrapCurrentPluginInstance(registration),
     namespace,
     channel: normalizeOptionalLowercaseString(registration.channel) ?? "",
     pluginId,

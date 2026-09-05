@@ -153,10 +153,11 @@ plugin identity, detail identity, or app-readiness evidence. If a connector
 requires additional sign-in, complete that authorization before expecting the
 plugin's tools to become available.
 
-After a `codexPlugins` change, new Codex conversations pick up the updated
-app set automatically. Run `/new` or `/reset` to refresh the current
-conversation. A gateway restart is not required for plugin enable/disable
-changes.
+OpenClaw-managed conversations apply configured `codexPlugins` changes on the
+next message by rebuilding the native thread from the committed conversation.
+Imported or supervised native sessions preserve their existing thread and
+native tool catalog; start a new session to change that catalog. A gateway
+restart is not required for plugin enable/disable changes.
 
 ## Scheduled automations
 

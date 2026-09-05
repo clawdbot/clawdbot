@@ -1,6 +1,7 @@
 // Zalo test support covers monitor.polling.media reply plugin behavior.
 import type { ServerResponse } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
+import { withPluginRuntimeRegistryScope } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -624,7 +625,7 @@ describe("Zalo polling media replies", () => {
     },
   );
 
-  it("cleans each active registry when its own route holder stops", async () => {
+  it("cleans each scoped registry when its own route holder stops", async () => {
     const firstRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(firstRegistry);
     getUpdatesMock.mockImplementation(() => new Promise(() => {}));
@@ -639,13 +640,15 @@ describe("Zalo polling media replies", () => {
       dmPolicy: "open",
       webhookUrl: "https://example.com/hooks/zalo",
     });
-    const firstRun = monitorZaloProvider({
-      token: "zalo-token",
-      account,
-      config,
-      runtime: firstRuntime,
-      abortSignal: firstAbort.signal,
-    });
+    const firstRun = withPluginRuntimeRegistryScope(firstRegistry, () =>
+      monitorZaloProvider({
+        token: "zalo-token",
+        account,
+        config,
+        runtime: firstRuntime,
+        abortSignal: firstAbort.signal,
+      }),
+    );
 
     const secondRegistry = createEmptyPluginRegistry();
     const secondAbort = new AbortController();
@@ -656,14 +659,15 @@ describe("Zalo polling media replies", () => {
       await settleAsyncWork();
       expect(firstRegistry.httpRoutes).toHaveLength(1);
 
-      setActivePluginRegistry(secondRegistry);
-      secondRun = monitorZaloProvider({
-        token: "zalo-token",
-        account,
-        config,
-        runtime: secondRuntime,
-        abortSignal: secondAbort.signal,
-      });
+      secondRun = withPluginRuntimeRegistryScope(secondRegistry, () =>
+        monitorZaloProvider({
+          token: "zalo-token",
+          account,
+          config,
+          runtime: secondRuntime,
+          abortSignal: secondAbort.signal,
+        }),
+      );
 
       await settleAsyncWork();
       expect(secondRegistry.httpRoutes).toHaveLength(1);

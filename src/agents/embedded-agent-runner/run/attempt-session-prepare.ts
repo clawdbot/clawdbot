@@ -280,6 +280,9 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   });
   const previousPrepareNextTurn = activeSession.agent.prepareNextTurn;
   activeSession.agent.prepareNextTurn = async (signal) => {
+    if (attempt.pluginRuntimeRefreshPending?.()) {
+      return { stop: true };
+    }
     const snapshot = await previousPrepareNextTurn?.call(activeSession.agent, signal);
     const refreshedPrompt = await refreshPermissionPrompt(snapshot?.context?.systemPrompt, signal);
     return snapshot?.context && refreshedPrompt !== undefined

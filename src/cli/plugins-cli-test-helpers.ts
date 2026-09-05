@@ -6,17 +6,18 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install-types.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
+import { loadInstalledPluginIndexWithDiscovery } from "../plugins/installed-plugin-index.js";
 import { recordPluginManifestInstallOwner } from "../plugins/manifest-install-owner.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { invokePluginArtifactInstallMock } from "../plugins/test-helpers/install-fixtures.js";
 import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 type LoadConfigFn = (typeof import("../config/config.js"))["loadConfig"];
-type ParseClawHubPluginSpecFn =
-  (typeof import("../infra/clawhub-spec.js"))["parseClawHubPluginSpec"];
 type ReportClawHubPluginInstallTelemetryFn =
   (typeof import("../infra/clawhub-packages.js"))["reportClawHubPluginInstallTelemetry"];
 type InstallPluginFromMarketplaceFn =
@@ -99,6 +100,9 @@ export const pluginCliConfigMock: Mock<LoadConfigFn> = vi.fn<LoadConfigFn>(
 export const readConfigFileSnapshotMock: AsyncUnknownMock = vi.fn();
 export const readConfigFileSnapshotForWriteMock: AsyncUnknownMock = vi.fn();
 export const configWriteMock: AsyncUnknownMock = vi.fn(async () => undefined);
+export const resolvePluginLifecycleGatewayMock = vi.fn<
+  () => Promise<import("./plugins-lifecycle-client.js").PluginLifecycleGateway | null>
+>(async () => null);
 export const replaceConfigFileMock: AsyncUnknownMock = vi.fn(
   async (params: { nextConfig: OpenClawConfig }) => await configWriteMock(params.nextConfig),
 ) as AsyncUnknownMock;
@@ -148,7 +152,16 @@ export const buildPluginDiagnosticsReportMock: UnknownMock = vi.fn();
 export const buildPluginCompatibilityNoticesMock: UnknownMock = vi.fn();
 export const inspectPluginRegistryMock: AsyncUnknownMock = vi.fn();
 export const refreshPluginRegistryMock: AsyncUnknownMock = vi.fn();
-export const notifyGatewayPluginMetadataChangedMock: AsyncUnknownMock = vi.fn();
+
+export function pluginRegistryRefreshInputs() {
+  return refreshPluginRegistryMock.mock.calls.map(([input]) => {
+    const { config, installRecords, reason, policyPluginIds } = input as Parameters<
+      (typeof import("../plugins/plugin-registry-refresh.js"))["refreshPluginRegistry"]
+    >[0];
+    return { config, installRecords, reason, ...(policyPluginIds ? { policyPluginIds } : {}) };
+  });
+}
+
 export const clearPluginRegistryLoadCacheMock: UnknownMock = vi.fn();
 export const applyExclusiveSlotSelectionMock: UnknownMock = vi.fn();
 export const planPluginUninstallMock: UnknownMock = vi.fn();
@@ -167,9 +180,9 @@ export const installPluginFromNpmSpecMock: AsyncUnknownMock = vi.fn();
 export const installPluginFromNpmPackArchiveMock: AsyncUnknownMock = vi.fn();
 export const installPluginFromPathMock: AsyncUnknownMock = vi.fn();
 export const installPluginFromClawHubMock: AsyncUnknownMock = vi.fn();
-export const parseClawHubPluginSpecMock: Mock<ParseClawHubPluginSpecFn> = vi.fn();
 export const reportClawHubPluginInstallTelemetryMock: Mock<ReportClawHubPluginInstallTelemetryFn> =
   vi.fn(async () => undefined);
+export const parseClawHubPluginSpecMock = vi.mocked(parseClawHubPluginSpec);
 export const findBundledPluginSourceMock: UnknownMock = vi.fn();
 export const installHooksFromNpmSpecMock: AsyncUnknownMock = vi.fn();
 export const installHooksFromPathMock: AsyncUnknownMock = vi.fn();
@@ -212,7 +225,7 @@ const { defaultRuntime, pluginsCliRuntimeLogs, runtimeErrors, resetRuntimeCaptur
   },
 );
 
-export { runtimeErrors, pluginsCliRuntimeLogs };
+export { runtimeErrors, pluginsCliRuntimeLogs, defaultRuntime as pluginsCliRuntimeMock };
 
 export function setInstalledPluginIndexInstallRecords(records: PluginInstallRecordMap): void {
   mockInstalledPluginIndexInstallRecords = clonePluginInstallRecords(records);
@@ -251,9 +264,8 @@ vi.mock("../runtime.js", () => ({
     runtime.writeJson(value, space),
 }));
 
-vi.mock("./plugins-update-gateway-signal.js", () => ({
-  notifyGatewayPluginMetadataChanged: (...args: unknown[]) =>
-    notifyGatewayPluginMetadataChangedMock(...args),
+vi.mock("./plugins-lifecycle-client.js", () => ({
+  resolvePluginLifecycleGateway: () => resolvePluginLifecycleGatewayMock(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -439,6 +451,62 @@ vi.mock("../plugins/installed-plugin-index-store-write.js", async (importOrigina
         restorePersistedInstalledPluginIndexIfCurrentMock,
         ...args,
       )) as (...args: unknown[]) => unknown,
+  };
+});
+
+vi.mock("../plugins/official-external-plugin-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/official-external-plugin-catalog.js")>()),
+  loadConfiguredHostedOfficialExternalPluginCatalogEntries: async () => ({
+    source: "bundled",
+    entries: [],
+  }),
+}));
+
+vi.mock("../plugins/installed-plugin-index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/installed-plugin-index.js")>();
+  const { buildInstalledPluginIndexRecords } =
+    await import("../plugins/installed-plugin-index-record-builder.js");
+  // One fixture inventory feeds metadata and package ownership; the production
+  // index builder still owns policy, aliases, and the owner/child projection.
+  const loadWithDiscovery: typeof actual.loadInstalledPluginIndexWithDiscovery = (params) => {
+    const installRecords = params?.installRecords ?? mockInstalledPluginIndexInstallRecords;
+    const manifestRegistry = invokeMock<[unknown], PluginManifestRegistry>(
+      loadPluginManifestRegistryMock,
+      { ...params, installRecords },
+    );
+    const diagnostics = [...manifestRegistry.diagnostics];
+    const index = actual.loadInstalledPluginIndex({ ...params, candidates: [], installRecords });
+    index.plugins = buildInstalledPluginIndexRecords({
+      ...params,
+      candidates: [],
+      registry: manifestRegistry,
+      diagnostics,
+      installRecords,
+    });
+    index.diagnostics = diagnostics;
+    return { index, manifestRegistry, discovery: undefined };
+  };
+  return {
+    ...actual,
+    loadInstalledPluginIndex: (params: Parameters<typeof actual.loadInstalledPluginIndex>[0]) =>
+      loadWithDiscovery(params).index,
+    loadInstalledPluginIndexWithDiscovery: loadWithDiscovery,
+  };
+});
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
+  return {
+    ...actual,
+    loadPluginMetadataSnapshot: (
+      params: Parameters<typeof actual.loadPluginMetadataSnapshot>[0],
+    ) => {
+      const { index, manifestRegistry } = loadInstalledPluginIndexWithDiscovery(params);
+      return actual.rebasePluginMetadataSnapshotManifestRegistry(
+        actual.loadPluginMetadataSnapshot({ ...params, index, allowCurrent: false }),
+        manifestRegistry,
+      );
+    },
   };
 });
 
@@ -821,18 +889,7 @@ vi.mock("../plugins/clawhub.js", () => ({
     )) as (typeof import("../plugins/clawhub.js"))["installPluginFromClawHub"],
 }));
 
-vi.mock("../infra/clawhub-spec.js", () => ({
-  parseClawHubPluginSpec: ((
-    ...args: Parameters<(typeof import("../infra/clawhub-spec.js"))["parseClawHubPluginSpec"]>
-  ) =>
-    invokeMock<
-      Parameters<(typeof import("../infra/clawhub-spec.js"))["parseClawHubPluginSpec"]>,
-      ReturnType<(typeof import("../infra/clawhub-spec.js"))["parseClawHubPluginSpec"]>
-    >(
-      parseClawHubPluginSpecMock,
-      ...args,
-    )) as (typeof import("../infra/clawhub-spec.js"))["parseClawHubPluginSpec"],
-}));
+vi.mock("../infra/clawhub-spec.js", { spy: true });
 
 vi.mock("../infra/clawhub-packages.js", () => ({
   reportClawHubPluginInstallTelemetry: ((
@@ -869,6 +926,7 @@ export function resetPluginsCliTestState() {
   readConfigFileSnapshotMock.mockReset();
   readConfigFileSnapshotForWriteMock.mockReset();
   configWriteMock.mockReset();
+  resolvePluginLifecycleGatewayMock.mockReset().mockResolvedValue(null);
   replaceConfigFileMock.mockReset();
   resolveStateDir.mockReset();
   installPluginFromMarketplaceMock.mockReset();
@@ -892,7 +950,6 @@ export function resetPluginsCliTestState() {
   buildPluginCompatibilityNoticesMock.mockReset();
   inspectPluginRegistryMock.mockReset();
   refreshPluginRegistryMock.mockReset();
-  notifyGatewayPluginMetadataChangedMock.mockReset();
   clearPluginRegistryLoadCacheMock.mockReset();
   applyExclusiveSlotSelectionMock.mockReset();
   planPluginUninstallMock.mockReset();
@@ -999,6 +1056,12 @@ export function resetPluginsCliTestState() {
     return {
       plugins: Object.entries(installRecords).map(([pluginId, record]) => {
         const rootDir = record.installPath ?? record.sourcePath ?? `/tmp/${pluginId}`;
+        const source = findBundledPluginSourceMock({
+          lookup: { kind: "pluginId", value: pluginId },
+        }) as
+          | { pluginId?: string; localPath?: string; configSchema?: Record<string, unknown> }
+          | undefined;
+        const bundled = source?.pluginId === pluginId && source.localPath === rootDir;
         return recordPluginManifestInstallOwner(
           {
             id: pluginId,
@@ -1007,7 +1070,8 @@ export function resetPluginsCliTestState() {
             cliBackends: [],
             skills: [],
             hooks: [],
-            origin: "global",
+            origin: bundled ? "bundled" : "global",
+            ...(bundled && source.configSchema ? { configSchema: source.configSchema } : {}),
             rootDir,
             source: `${rootDir}/index.js`,
             manifestPath: `${rootDir}/openclaw.plugin.json`,
@@ -1048,7 +1112,6 @@ export function resetPluginsCliTestState() {
     current: defaultRegistryIndex,
   });
   refreshPluginRegistryMock.mockResolvedValue(defaultRegistryIndex);
-  notifyGatewayPluginMetadataChangedMock.mockResolvedValue(true);
   applyExclusiveSlotSelectionMock.mockImplementation((({ config }: { config: OpenClawConfig }) => ({
     config,
     warnings: [],
@@ -1114,7 +1177,6 @@ export function resetPluginsCliTestState() {
     ok: false,
     error: "clawhub install disabled in test",
   });
-  parseClawHubPluginSpecMock.mockReturnValue(null);
   installHooksFromPathMock.mockResolvedValue({
     ok: false,
     error: "hook path install disabled in test",

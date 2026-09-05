@@ -377,8 +377,8 @@ OpenClaw supports both surfaces independently. You can run either, both, or neit
   <Accordion title="`openclaw_prometheus_series_dropped_total` is climbing">
     A new attribute is exceeding the **2048**-series cap. Inspect recent metrics for an unexpectedly high-cardinality label and fix it at the source. The exporter intentionally drops new series instead of silently rewriting labels.
   </Accordion>
-  <Accordion title="Prometheus shows stale series after a restart">
-    The plugin keeps state in memory only. After a Gateway restart, counters reset to zero and gauges restart at their next reported value. Use PromQL `rate()` and `increase()` to handle resets cleanly.
+  <Accordion title="Metrics reset after a restart or reload">
+    The plugin keeps state in memory only. Restarting the Gateway, reloading the plugin, or disabling `diagnostics-prometheus` clears its counters and gauges. New events populate the metrics after the plugin starts again. Use PromQL `rate()` and `increase()` to handle resets cleanly.
   </Accordion>
 </AccordionGroup>
 

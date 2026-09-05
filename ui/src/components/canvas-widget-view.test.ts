@@ -119,6 +119,23 @@ describe("Canvas widget view", () => {
     expect(client.request).toHaveBeenCalledTimes(2);
   });
 
+  it("reloads the same element after its detached update has settled", async () => {
+    const client = { request: vi.fn().mockResolvedValue(documentView) };
+    const view = mount(client);
+    await frameFor(view);
+    view.remove();
+    await view.updateComplete;
+    expect(view.documentHtml).toBeUndefined();
+
+    const refreshedView = { ...documentView, html: "<p>Refreshed widget</p>" };
+    client.request.mockResolvedValue(refreshedView);
+    document.body.append(view);
+    await view.updateComplete;
+    expect(view.documentHtml).toBe(refreshedView.html);
+    await frameFor(view);
+    expect(client.request).toHaveBeenCalledTimes(2);
+  });
+
   it("discards an old connection's read even when the Gateway client object is reused", async () => {
     let resolveOld!: (value: CanvasDocumentViewResult) => void;
     const client = {

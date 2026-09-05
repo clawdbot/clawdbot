@@ -284,7 +284,8 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - Loaded from package or bundle directories under `~/.openclaw/extensions` and `<workspace>/.openclaw/extensions`, plus files or directories listed in `plugins.load.paths`.
 - Put standalone plugin files in `plugins.load.paths`; auto-discovered extension roots ignore top-level `.js`, `.mjs`, and `.ts` files so helper scripts in those roots do not block startup.
 - Discovery accepts native OpenClaw plugins plus compatible Codex bundles and Claude bundles, including manifestless Claude default-layout bundles.
-- With the default hybrid reload mode, ordinary plugin policy and entry changes hot-reload the plugin runtime. Plugin code, metadata, and discovery-root changes require a Gateway restart; active plugins can also declare restart-triggering config prefixes.
+- With the default `hybrid` reload mode, plugin policy, entry, and `plugins.load.paths` changes hot-reload the plugin runtime. Active plugins can declare restart-triggering config prefixes.
+- Plugin code and metadata stay fixed between explicit refreshes. After editing source or a manifest, run [`openclaw plugins reload <id>`](/cli/plugins#reload); explicit plugin management also works when automatic config reload is off. Native addon binary changes and compiled OpenClaw chunk changes still require the normal update and Gateway restart. The Gateway's selected plugin workspace stays fixed until restart; changing an agent's workspace alone does not switch that discovery root.
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
@@ -389,9 +390,11 @@ readiness requirements.
 
 `app/installed` readiness checks (with authorized metadata from batched
 `app/read`) are cached for one hour and refreshed
-asynchronously when stale. Codex thread app config is computed at Codex harness
-session establishment, not on every turn; use `/new`, `/reset`, or a gateway
-restart after changing native plugin config.
+asynchronously when stale. OpenClaw-managed conversations apply configured
+`codexPlugins` changes on the next message by rebuilding the native thread from
+the committed conversation. Imported or supervised native sessions preserve
+their existing thread and native tool catalog; start a new session to change
+that catalog.
 
 `codexPlugins.allow_all_plugins` snapshots every currently accessible account
 app into each new native Codex thread. It does not install plugins or apps, and

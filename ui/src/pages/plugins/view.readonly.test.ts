@@ -50,6 +50,7 @@ describe("renderPlugins read-only actions", () => {
   it("keeps discovery actions reachable without allowing mutations", async () => {
     const onInstall = vi.fn();
     const onSetEnabled = vi.fn();
+    const onReload = vi.fn();
     const onUninstall = vi.fn();
     const onAddConnector = vi.fn();
     const available = createPlugin({
@@ -69,6 +70,7 @@ describe("renderPlugins read-only actions", () => {
         mutationBlockedReason: blockedReason,
         onInstall,
         onSetEnabled,
+        onReload,
         onUninstall,
         onAddConnector,
       }),
@@ -78,18 +80,29 @@ describe("renderPlugins read-only actions", () => {
     const install = container.querySelector<HTMLButtonElement>('[aria-label="Install Lobster"]');
     const installedRow = container.querySelector<HTMLElement>('[data-plugin-id="workboard"]')!;
     const enable = actionButton(installedRow, "Enable");
+    const reload = actionButton(installedRow, "Reload");
     const connector = container.querySelector<HTMLElement>('[data-connector-id="github"]')!;
     const connectorAdd = actionButton(connector, "Add");
     const detail = container.querySelector<HTMLElement>(".plugins-detail")!;
     const detailEnable = actionButton(detail, "Enable");
+    const detailReload = actionButton(detail, "Reload");
     const detailRemove = actionButton(detail, "Remove");
-    for (const action of [install, enable, connectorAdd, detailEnable, detailRemove]) {
+    for (const action of [
+      install,
+      enable,
+      reload,
+      connectorAdd,
+      detailEnable,
+      detailReload,
+      detailRemove,
+    ]) {
       await expectReasonedBlockedAction(action);
       action?.click();
     }
 
     expect(onInstall).not.toHaveBeenCalled();
     expect(onSetEnabled).not.toHaveBeenCalled();
+    expect(onReload).not.toHaveBeenCalled();
     expect(onUninstall).not.toHaveBeenCalled();
     expect(onAddConnector).not.toHaveBeenCalled();
   });

@@ -1,6 +1,5 @@
 /** Prepared embedded-agent loop. */
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
-import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -8,14 +7,12 @@ import {
 } from "../admitted-run-context.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import {
-  createContextEngineLogicalTurnLease,
-  selectContextEngineForTranscriptHost,
-} from "../harness/context-engine-logical-turn.js";
-import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
+  continueAgentAfterPluginRuntimeRefresh,
+  hasAgentPluginRuntimeRefresh,
+} from "../plugin-runtime-refresh.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
 import { log } from "./logger.js";
@@ -51,7 +48,10 @@ import {
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch.js";
 import { settleEmbeddedRun } from "./run/run-settlement.js";
-import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
+import {
+  prepareEmbeddedContextEngine,
+  prepareEmbeddedRunRuntime,
+} from "./run/runtime-preparation.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./run/settled-turn-finalization.js";
 import {
@@ -105,13 +105,11 @@ export async function runPreparedEmbeddedLoop(
       }),
     { config: params.config },
   );
-  params = { ...params, admittedRunContext: preparedRuntime.admittedRunContext };
+  params = { ...params, ...preparedRuntime.runAdmission };
+  const { admittedRunContext } = preparedRuntime.runAdmission;
   const abortSignal = params.abortSignal;
-  const accountingAuthority = getAdmittedRunDelegatedAuthority(preparedRuntime.admittedRunContext);
-  const assertAdmittedActive = resolveAdmittedRunActiveAssertion(
-    preparedRuntime.admittedRunContext,
-    abortSignal,
-  );
+  const accountingAuthority = getAdmittedRunDelegatedAuthority(admittedRunContext);
+  const assertAdmittedActive = resolveAdmittedRunActiveAssertion(admittedRunContext, abortSignal);
   // Admission is resolved once before the retry loop. Carry that exact object through every
   // attempt/recovery owner so downstream dispatch cannot lose the admitted context.
   const admittedRunInput: PreparedEmbeddedRunInput = { ...input, runParams: params };
@@ -157,8 +155,8 @@ export async function runPreparedEmbeddedLoop(
     tokenBudget?: number | null;
     maxOutputTokens?: number | null;
     degradedReason?: string | null;
-  }) => {
-    return buildContextEngineRuntimeSettings({
+  }) =>
+    buildContextEngineRuntimeSettings({
       contextEngineHost: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
       provider,
       requestedModel: preparedRuntime.requestedModelId,
@@ -170,7 +168,6 @@ export async function runPreparedEmbeddedLoop(
       fallbackReason: resolveRuntimeFallbackReason(),
       degradedReason: settingsParams.degradedReason,
     });
-  };
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
@@ -245,6 +242,9 @@ export async function runPreparedEmbeddedLoop(
     resolvedSessionKey,
     lifecycleGeneration,
   });
+  if (params.pluginRuntimeRefreshMessages) {
+    sessionPromptState.activateInternalPrompt(params.prompt);
+  }
   const originalCompactionTarget = { ...sessionPromptState.sessionTarget };
   const durableCompactionAccounting =
     params.sessionPersistence !== "detached" &&
@@ -265,43 +265,8 @@ export async function runPreparedEmbeddedLoop(
     getApiKeyInfo,
     advanceAuthProfile: preparedRuntime.advanceAttemptAuthProfile,
   });
-  const ownsContextEngineLogicalTurnLease = params.contextEngineLogicalTurnLease === undefined;
-  const contextEngineLogicalTurnLease =
-    params.contextEngineLogicalTurnLease ??
-    (await measureEmbeddedAgentPreparation(
-      "context-engine",
-      () =>
-        createContextEngineLogicalTurnLease({
-          config: params.config,
-          agentDir,
-          workspaceDir: resolvedWorkspace,
-        }),
-      { config: params.config },
-    ));
-  const ownedContextEngineLease = ownsContextEngineLogicalTurnLease
-    ? contextEngineLogicalTurnLease
-    : undefined;
-  selectContextEngineForTranscriptHost({
-    lease: contextEngineLogicalTurnLease,
-    host: {
-      id: `agent-harness:${agentHarness.id}`,
-      label: `agent harness "${agentHarness.id}"`,
-      capabilities: agentHarness.contextEngineHostCapabilities ?? [],
-    },
-    operation: "agent-run",
-    recorder: params.userTurnTranscriptRecorder,
-  });
-  await drainPendingContextEngineTurnsBeforeRun({
-    admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
-    isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
-    lease: contextEngineLogicalTurnLease,
-    recorder: params.userTurnTranscriptRecorder,
-    sessionTarget: params.sessionTarget,
-  });
-  const contextEngine = contextEngineLogicalTurnLease.begin().engine;
-  const resolveContextEnginePluginId = () =>
-    contextEngineLogicalTurnLease.effectiveEnginePluginId ??
-    resolveContextEngineOwnerPluginId(contextEngine);
+  const { contextEngine, ownedContextEngineLease, resolveContextEnginePluginId } =
+    await prepareEmbeddedContextEngine(params, agentHarness, agentDir, resolvedWorkspace);
   startupStages.mark("context-engine");
   notifyExecutionPhase("context_engine", { provider, model: modelId });
   try {
@@ -439,6 +404,45 @@ export async function runPreparedEmbeddedLoop(
         replayState: accumulatedReplayState,
         lastRetryFailoverReason,
       });
+      if (dispatchedAttempt.rawAttempt.terminal.kind === "ok" && hasAgentPluginRuntimeRefresh()) {
+        assertAdmittedActive();
+        continueAgentAfterPluginRuntimeRefresh(
+          {
+            ...params,
+            sessionId: sessionPromptState.sessionId,
+            sessionFile: sessionPromptState.sessionFile,
+            sessionTarget: {
+              ...params.sessionTarget,
+              ...sessionPromptState.sessionTarget,
+              ...sessionPromptState.sessionWriterFence,
+            },
+            initialTurnTainted: turnTaintState.isTainted(),
+          },
+          dispatchedAttempt.rawAttempt.pluginRuntimeRefreshMessages,
+        );
+        return {
+          meta: {
+            durationMs: Date.now() - started,
+            agentMeta: {
+              ...buildErrorAgentMeta({
+                sessionId: sessionPromptState.sessionId,
+                sessionFile: sessionPromptState.sessionFile,
+                provider,
+                model: modelId,
+                usageAccumulator,
+                lastRunPromptUsage:
+                  normalizedAttempt.action === "complete"
+                    ? lastRunPromptUsage
+                    : normalizedAttempt.lastRunPromptUsage,
+              }),
+              assistantTurns: usageAccumulator.assistantTurns,
+              ...(usageAccumulator.bridgeCalls
+                ? { bridgeCalls: usageAccumulator.bridgeCalls }
+                : {}),
+            },
+          },
+        };
+      }
       if (normalizedAttempt.action === "complete") {
         return normalizedAttempt.result;
       }

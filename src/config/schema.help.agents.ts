@@ -29,7 +29,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.entries":
     "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
   "plugins.entries.*.enabled":
-    "Per-plugin enablement override for a specific entry, applied on top of global plugin policy. With the default hybrid reload mode, changes hot-reload the plugin runtime for new agent turns without restarting the Gateway unless the plugin requires a restart for this path. Use this to stage plugin rollout gradually across environments.",
+    "Per-plugin enablement override on top of global plugin policy. The Plugins page and `openclaw plugins enable <id>` / `openclaw plugins disable <id>` apply changes without restarting a running Gateway. Raw config edits follow the Gateway reload policy.",
   "plugins.entries.*.hooks":
     "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
   "plugins.entries.*.hooks.allowPromptInjection":
@@ -201,7 +201,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "commands.mcp":
     "Allow /mcp chat command to manage OpenClaw MCP server config under mcp.servers (default: false).",
   "commands.plugins":
-    "Allow /plugins chat command to list discovered plugins and toggle plugin enablement in config (default: false).",
+    "Allow /plugins chat command to list or inspect plugins and install, enable, disable, or reload them in the running Gateway without restarting it (default: false).",
   "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
   "commands.restart":
     "Allow /restart, /update, and external SIGUSR1 restart requests (default: true).",

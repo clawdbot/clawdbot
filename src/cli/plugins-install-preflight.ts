@@ -1,15 +1,15 @@
+import {
+  resolvePluginInstallRequestContext,
+  type PluginInstallRequestContext,
+} from "../plugins/install-request-context.js";
 // Resolve and validate plugin install requests without opening mutable runtime state.
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
+import { resolvePluginInstallSourcePlan } from "../plugins/install-source-plan.js";
 import { resolveMarketplaceInstallShortcut } from "../plugins/marketplace.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 import { NON_CLAWHUB_INSTALL_FORCE_FLAG } from "./non-clawhub-install-acknowledgement.js";
-import {
-  resolvePluginInstallRequestContext,
-  type PluginInstallRequestContext,
-} from "./plugin-install-config-policy.js";
-import { resolvePluginInstallSourcePlan } from "./plugin-install-plan.js";
 
 export type RunPluginInstallCommandParams = {
   raw: string;
@@ -24,11 +24,8 @@ export type RunPluginInstallCommandParams = {
     pin?: boolean;
     marketplace?: string;
   };
-  invalidateRuntimeCache?: boolean;
   clawManaged?: boolean;
   runtime?: RuntimeEnv;
-  /** Synchronous authority guard at the final plugin/config mutation. */
-  beforePersistentApply?: () => void;
 };
 
 type ResolvedPluginInstallSourcePlan = Extract<
@@ -76,12 +73,7 @@ function resolveSourceOptionError(
   if (sourcePlan.request.source === "git" && opts.pin) {
     return `--pin is not supported with git: installs. Pin the ref in the spec instead, for example ${formatCliCommand(`openclaw plugins install git:<repo>@<ref> ${NON_CLAWHUB_INSTALL_FORCE_FLAG}`)}.`;
   }
-  if (
-    opts.pin &&
-    sourcePlan.request.source !== "npm" &&
-    sourcePlan.request.source !== "official" &&
-    sourcePlan.request.source !== "bundled"
-  ) {
+  if (opts.pin && !["npm", "official", "bundled"].includes(sourcePlan.request.source)) {
     return "--pin is only supported with npm registry installs.";
   }
   if (opts.link && sourcePlan.request.source !== "local") {
@@ -150,7 +142,7 @@ export async function resolvePluginInstallPreflight(
   }
   const source = sourcePlan?.request.source;
   const request =
-    source && ["npm-pack", "git", "clawhub", "bundled", "official"].includes(source)
+    source && ["npm-pack", "git", "clawhub", "bundled"].includes(source)
       ? { ...requestResolution.request, installKind: "plugin" as const }
       : requestResolution.request;
 

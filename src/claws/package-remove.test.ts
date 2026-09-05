@@ -1,8 +1,10 @@
+import { AsyncResource } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { digestClawHubSkillTree } from "../skills/lifecycle/skill-tree-digest.js";
 import { applyClawPackageRemovals, planClawPackageRemovals } from "./package-remove.js";
 import type { PersistedClawInstall, PersistedClawPackageRef } from "./provenance.js";
@@ -121,10 +123,15 @@ describe("Claw package removal", () => {
     ]);
   });
 
-  it("requires separate selection before invoking the canonical plugin lifecycle", async () => {
+  it("lets selected removal acquire its plugin lease in the Gateway request scope", async () => {
     const ref = packageRef();
     const store = packageRefStore(ref);
-    const uninstallPlugin = vi.fn().mockResolvedValue(undefined);
+    const gatewayScope = new AsyncResource("claw-plugin-gateway");
+    const uninstallPlugin = vi.fn(() =>
+      gatewayScope.runInAsyncScope(() =>
+        withPluginLifecycleLease({ waitMs: 0 }, async () => undefined),
+      ),
+    );
     const decisions = await planClawPackageRemovals(install, [ref], {
       deps: {
         ...store,

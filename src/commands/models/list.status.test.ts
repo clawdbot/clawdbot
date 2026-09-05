@@ -670,31 +670,34 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
-  it("does not restore over plugin metadata published while status is running", async () => {
+  it("keeps status metadata scoped while preserving a newer publication", async () => {
     const originalLoadModelCatalog = mocks.loadModelCatalog.getMockImplementation();
     const config = mocks.loadConfig();
     const workspaceDir = "/tmp/openclaw-agent/workspace";
     const catalogStarted = createDeferred();
     const releaseCatalog = createDeferred();
-    let replacement: ReturnType<typeof getCurrentPluginMetadataSnapshot> = undefined;
+    let captured: ReturnType<typeof getCurrentPluginMetadataSnapshot> = undefined;
+    let resumed: ReturnType<typeof getCurrentPluginMetadataSnapshot> = undefined;
     clearPluginMetadataLifecycleCaches();
     mocks.loadModelCatalog.mockImplementationOnce(async () => {
-      replacement = getCurrentPluginMetadataSnapshot({
+      captured = getCurrentPluginMetadataSnapshot({
         config,
         workspaceDir,
         env: process.env,
       });
       catalogStarted.resolve();
       await releaseCatalog.promise;
+      resumed = getCurrentPluginMetadataSnapshot({ config, workspaceDir, env: process.env });
       return [];
     });
     const commandPromise = modelsStatusCommand({ json: true }, createRuntime() as never);
 
     try {
       await catalogStarted.promise;
-      expect(replacement).toBeDefined();
+      expect(captured).toBeDefined();
+      const replacement = { ...captured! };
       clearPluginMetadataLifecycleCaches();
-      setCurrentPluginMetadataSnapshot(replacement!, {
+      setCurrentPluginMetadataSnapshot(replacement, {
         config,
         workspaceDir,
         env: process.env,
@@ -702,6 +705,8 @@ describe("modelsStatusCommand auth overview", () => {
       releaseCatalog.resolve();
       await commandPromise;
 
+      expect(resumed).toBe(captured);
+      expect(resumed).not.toBe(replacement);
       expect(
         getCurrentPluginMetadataSnapshot({
           config,

@@ -18,4 +18,30 @@ describe("browser error formatting", () => {
   ])("redacts common credential forms in %s", (message, expected) => {
     expect(formatErrorMessage(new Error(message))).toBe(expected);
   });
+
+  it("formats and redacts without process or Error.isError", () => {
+    const processDescriptor = Object.getOwnPropertyDescriptor(globalThis, "process");
+    const isErrorDescriptor = Object.getOwnPropertyDescriptor(Error, "isError");
+    const error = new Error("request failed: Bearer browser-token-credential", {
+      cause: { status: 401 },
+    });
+    let formatted: string;
+    try {
+      Object.defineProperty(globalThis, "process", { configurable: true, value: undefined });
+      Object.defineProperty(Error, "isError", { configurable: true, value: undefined });
+      formatted = formatErrorMessage(error);
+    } finally {
+      if (processDescriptor) {
+        Object.defineProperty(globalThis, "process", processDescriptor);
+      } else {
+        Reflect.deleteProperty(globalThis, "process");
+      }
+      if (isErrorDescriptor) {
+        Object.defineProperty(Error, "isError", isErrorDescriptor);
+      } else {
+        Reflect.deleteProperty(Error, "isError");
+      }
+    }
+    expect(formatted).toBe("request failed: Bearer [redacted] | status=401 code=unknown");
+  });
 });

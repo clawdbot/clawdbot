@@ -57,12 +57,9 @@ command pack, or a Codex skill bundle and use it immediately.
 
   </Step>
 
-  <Step title="Restart and use">
-    ```bash
-    openclaw gateway restart
-    ```
-
-    Mapped features (skills, hooks, MCP tools, LSP defaults) are available in the next session.
+  <Step title="Use the bundle">
+    Installation applies to the running Gateway. Mapped features (skills, hooks,
+    MCP tools, LSP defaults) are available in the next session.
 
   </Step>
 </Steps>

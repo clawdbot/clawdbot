@@ -8,11 +8,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { hashConfigIncludeRaw } from "../config/includes.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
+import { loadConfigForInstall } from "../plugins/install-config.js";
 import {
   resolvePluginInstallRequestContext,
   type PluginInstallRequestContext,
-} from "./plugin-install-config-policy.js";
-import { loadConfigForInstall } from "./plugins-install-config.js";
+} from "../plugins/install-request-context.js";
 
 const hoisted = vi.hoisted(() => ({
   assertConfigPathForWriteMock: vi.fn(),
@@ -55,7 +55,7 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
   };
 });
 
-vi.mock("./plugins-location-bridges.js", () => ({
+vi.mock("../plugins/location-bridges.js", () => ({
   listPersistedBundledPluginRecoveryLocations: () =>
     listPersistedBundledPluginRecoveryLocationsMock(),
 }));
@@ -530,9 +530,12 @@ describe("loadConfigForInstall", () => {
       }),
     );
 
-    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
+    const result = loadConfigForInstall(discordNpmRequest);
+    await expect(result).rejects.toThrow(
       "Config plugins are stored in an external or unresolved top-level $include",
     );
+    await expect(result).rejects.toMatchObject({ code: "INVALID_CONFIG" });
+    await expect(result).rejects.not.toHaveProperty("blockedSnapshot.config");
   });
 
   it("rejects external include aliases even when their target is under the config directory", async () => {
@@ -598,7 +601,10 @@ describe("loadConfigForInstall", () => {
       "external-openclaw",
       "plugins.json5",
     );
-    const snapshotCfg = { plugins: {} } as OpenClawConfig;
+    const snapshotCfg = {
+      plugins: {},
+      gateway: { auth: { token: "fixture-config-secret" } },
+    } satisfies OpenClawConfig;
     includeFileTargetsForWriteMock.mockReturnValue({
       [externalPluginsPath]: externalPluginsPath,
     });
@@ -612,9 +618,17 @@ describe("loadConfigForInstall", () => {
       }),
     );
 
-    await expect(loadConfigForInstall(discordNpmRequest)).rejects.toThrow(
-      "external or unresolved top-level $include",
-    );
+    const failure = await loadConfigForInstall(discordNpmRequest).catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      message: expect.stringContaining("external or unresolved top-level $include"),
+      code: "INVALID_CONFIG",
+      blockedSnapshot: {
+        config: snapshotCfg,
+        hookMutation: { mode: "allowed" },
+        pluginMutation: { mode: "blocked" },
+      },
+    });
+    expect(JSON.stringify(failure)).not.toMatch(/blockedSnapshot|fixture-config-secret/);
   });
 
   it("carries a hook-mutation block through an external hooks include", async () => {

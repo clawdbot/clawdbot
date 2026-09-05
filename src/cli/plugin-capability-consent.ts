@@ -89,7 +89,7 @@ export function formatPluginCapabilityConsentLines(
 /** Resolve explicit or interactive plugin capability consent at the CLI boundary. */
 export function resolvePluginCapabilityConsentCliOptions(params: {
   acceptCapabilities?: boolean;
-  action: "install" | "enable" | "update";
+  action: "install" | "enable" | "update" | "reload";
   allowPrompt?: boolean;
   runtime?: RuntimeEnv;
 }): PluginCapabilityConsentCliOptions {

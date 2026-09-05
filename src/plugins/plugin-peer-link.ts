@@ -1,4 +1,4 @@
-// Links plugin peer packages for local development installs.
+import { symlinkSync, unlinkSync, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -8,6 +8,7 @@ import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePluginInstallDir } from "./install-paths.js";
+import { listNpmPackageDirs } from "./npm-package-dirs.js";
 
 type PluginPeerLinkLogger = {
   info?: (message: string) => void;
@@ -104,43 +105,9 @@ async function readPackageOpenClawLinkDependencies(
 }
 
 async function listManagedNpmRootPackageDirs(npmRoot: string): Promise<string[]> {
-  const nodeModulesDir = path.join(npmRoot, "node_modules");
-  let entries: import("node:fs").Dirent[];
-  try {
-    entries = await fs.readdir(nodeModulesDir, { withFileTypes: true });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-
-  const packageDirs: string[] = [];
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name === ".bin") {
-      continue;
-    }
-    const entryPath = path.join(nodeModulesDir, entry.name);
-    if (entry.name.startsWith("@")) {
-      const scopedEntries = await fs
-        .readdir(entryPath, { withFileTypes: true })
-        .catch((error: unknown) => {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-            return [];
-          }
-          throw error;
-        });
-      for (const scopedEntry of scopedEntries) {
-        if (scopedEntry.isDirectory()) {
-          packageDirs.push(path.join(entryPath, scopedEntry.name));
-        }
-      }
-      continue;
-    }
-    if (!entry.name.startsWith(".")) {
-      packageDirs.push(entryPath);
-    }
-  }
+  const packageDirs = await listNpmPackageDirs(npmRoot, {
+    includeEntry: (entry, scoped) => entry.isDirectory() && (scoped || !entry.name.startsWith(".")),
+  });
   return packageDirs.toSorted((a, b) => a.localeCompare(b));
 }
 
@@ -253,26 +220,23 @@ export async function auditDeclaredOpenClawHostDependency(params: {
 async function ensureRealNodeModulesDir(params: {
   installedDir: string;
   logger: PluginPeerLinkLogger;
+  beforePersistentApply?: () => void;
 }): Promise<string | null> {
   const nodeModulesDir = path.join(params.installedDir, "node_modules");
+  let existing: Stats | undefined;
   try {
-    const existing = await fs.lstat(nodeModulesDir);
-    if (!existing.isDirectory() || existing.isSymbolicLink()) {
-      params.logger.warn?.(
-        `Skipping openclaw peerDependency link because ${nodeModulesDir} is not a real directory.`,
-      );
-      return null;
-    }
-    return nodeModulesDir;
+    existing = await fs.lstat(nodeModulesDir);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+    if (!hasErrnoCode(error, "ENOENT")) {
       throw error;
     }
   }
-
-  await fs.mkdir(nodeModulesDir, { recursive: true });
-  const created = await fs.lstat(nodeModulesDir);
-  if (!created.isDirectory() || created.isSymbolicLink()) {
+  if (!existing) {
+    params.beforePersistentApply?.();
+    await fs.mkdir(nodeModulesDir, { recursive: true });
+    existing = await fs.lstat(nodeModulesDir);
+  }
+  if (!existing.isDirectory() || existing.isSymbolicLink()) {
     params.logger.warn?.(
       `Skipping openclaw peerDependency link because ${nodeModulesDir} is not a real directory.`,
     );
@@ -286,11 +250,9 @@ async function linkOpenClawPeerDependency(params: {
   installedDir: string;
   peerName: string;
   logger: PluginPeerLinkLogger;
+  beforePersistentApply?: () => void;
 }): Promise<OpenClawPeerLinkResult> {
-  const nodeModulesDir = await ensureRealNodeModulesDir({
-    installedDir: params.installedDir,
-    logger: params.logger,
-  });
+  const nodeModulesDir = await ensureRealNodeModulesDir(params);
   if (!nodeModulesDir) {
     return "skipped";
   }
@@ -302,39 +264,52 @@ async function linkOpenClawPeerDependency(params: {
     return "unchanged";
   }
 
+  const warn = (error: unknown): "skipped" => {
+    params.logger.warn?.(`Failed to symlink peerDependency "${params.peerName}": ${String(error)}`);
+    return "skipped";
+  };
+  let existing: Stats | null;
   try {
-    const existing = await fs.lstat(linkPath).catch((err: unknown) => {
-      if (hasErrnoCode(err, "ENOENT")) {
+    existing = await fs.lstat(linkPath).catch((error: unknown) => {
+      if (hasErrnoCode(error, "ENOENT")) {
         return null;
       }
-      throw err;
+      throw error;
     });
-    if (existing) {
-      if (!existing.isSymbolicLink()) {
-        if (params.peerName === "openclaw" && existing.isDirectory()) {
-          const existingPackageName = await readPackageName(linkPath);
-          if (existingPackageName === "openclaw") {
-            await fs.rm(linkPath, { recursive: true, force: true });
-            await fs.symlink(params.hostRoot, linkPath, "junction");
-            params.logger.info?.(
-              `Linked peerDependency "${params.peerName}" -> ${params.hostRoot}`,
-            );
-            return "linked";
-          }
-        }
-        params.logger.warn?.(
-          `Skipping openclaw peerDependency link because ${linkPath} already exists and is not a symlink.`,
-        );
-        return "skipped";
-      }
-      await fs.unlink(linkPath);
+    if (
+      existing &&
+      !existing.isSymbolicLink() &&
+      (params.peerName !== "openclaw" ||
+        !existing.isDirectory() ||
+        (await readPackageName(linkPath)) !== "openclaw")
+    ) {
+      params.logger.warn?.(
+        `Skipping openclaw peerDependency link because ${linkPath} already exists and is not a symlink.`,
+      );
+      return "skipped";
     }
-    await fs.symlink(params.hostRoot, linkPath, "junction");
+  } catch (error) {
+    return warn(error);
+  }
+  if (existing && !existing.isSymbolicLink()) {
+    params.beforePersistentApply?.();
+    try {
+      await fs.rm(linkPath, { recursive: true, force: true });
+    } catch (error) {
+      return warn(error);
+    }
+  }
+  // No await between approval revalidation and replacing the inspected link.
+  params.beforePersistentApply?.();
+  try {
+    if (existing?.isSymbolicLink()) {
+      unlinkSync(linkPath);
+    }
+    symlinkSync(params.hostRoot, linkPath, "junction");
     params.logger.info?.(`Linked peerDependency "${params.peerName}" -> ${params.hostRoot}`);
     return "linked";
-  } catch (err) {
-    params.logger.warn?.(`Failed to symlink peerDependency "${params.peerName}": ${String(err)}`);
-    return "skipped";
+  } catch (error) {
+    return warn(error);
   }
 }
 
@@ -354,9 +329,9 @@ export async function linkOpenClawPeerDependencies(params: {
   logger: PluginPeerLinkLogger;
   /** Explicit source setup uses its selected checkout instead of the running host. */
   hostRoot?: string;
+  beforePersistentApply?: () => void;
 }): Promise<{ repaired: number; skipped: number }> {
-  const peers = Object.keys(params.peerDependencies).filter((name) => name === "openclaw");
-  if (peers.length === 0) {
+  if (!Object.keys(params.peerDependencies).includes("openclaw")) {
     return { repaired: 0, skipped: 0 };
   }
 
@@ -371,25 +346,17 @@ export async function linkOpenClawPeerDependencies(params: {
     params.logger.warn?.(
       "Could not locate openclaw package root to symlink peerDependencies; plugin may fail to resolve openclaw at runtime.",
     );
-    return { repaired: 0, skipped: peers.length };
+    return { repaired: 0, skipped: 1 };
   }
 
-  let repaired = 0;
-  let skipped = 0;
-  for (const peerName of peers) {
-    const result = await linkOpenClawPeerDependency({
-      hostRoot,
-      installedDir: params.installedDir,
-      peerName,
-      logger: params.logger,
-    });
-    if (result === "linked") {
-      repaired += 1;
-    } else if (result === "skipped") {
-      skipped += 1;
-    }
-  }
-  return { repaired, skipped };
+  const result = await linkOpenClawPeerDependency({
+    hostRoot,
+    installedDir: params.installedDir,
+    peerName: "openclaw",
+    logger: params.logger,
+    beforePersistentApply: params.beforePersistentApply,
+  });
+  return { repaired: result === "linked" ? 1 : 0, skipped: result === "skipped" ? 1 : 0 };
 }
 
 /**
@@ -490,6 +457,7 @@ export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(params: {
   npmRoot: string;
   logger: PluginPeerLinkLogger;
   onPackageReadError?: (error: unknown, packageDir: string) => void;
+  beforePersistentApply?: () => void;
 }): Promise<RelinkManagedNpmRootResult> {
   let checked = 0;
   let attempted = 0;
@@ -515,6 +483,7 @@ export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(params: {
       installedDir: packageDir,
       peerDependencies: openClawLinkDependencies,
       logger: params.logger,
+      beforePersistentApply: params.beforePersistentApply,
     });
     attempted += 1;
     repaired += result.repaired;

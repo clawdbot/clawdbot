@@ -1,19 +1,56 @@
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
+import { captureAgentPluginRuntimeRefresh } from "../../agents/plugin-runtime-refresh.js";
 import {
   formatPluginCapabilityConsentLines,
   resolvePluginCapabilityConsentCliOptions,
 } from "../../cli/plugin-capability-consent.js";
-import { resolvePluginInstallSourcePlan } from "../../cli/plugin-install-plan.js";
-import { createPluginInstallLogger } from "../../cli/plugins-command-helpers.js";
 import { resolvePendingPluginCapabilityReview } from "../../plugins/capability-consent.js";
-import type { ConfigSnapshotForInstallPersist } from "../../plugins/install-persistence.js";
 import {
   formatNonClawHubInstallWarning,
   NON_CLAWHUB_INSTALL_FORCE_FLAG,
   type NonClawHubInstallSourceClass,
 } from "../../plugins/install-provenance.js";
-import { installManagedPluginSource } from "../../plugins/management-install.js";
+import { resolvePluginInstallSourcePlan } from "../../plugins/install-source-plan.js";
+import {
+  capturePluginRuntimeApplications,
+  PluginRuntimeApplicationError,
+  projectPluginRuntimeFailure,
+  type PluginLifecycleRuntimeApply,
+  type PluginRuntimeApplication,
+} from "../../plugins/lifecycle.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
+import { installManagedPlugin } from "../../plugins/management-mutations.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+
+/** Bind chat mutations to the admitted Gateway; recheck after consent and persistence await points. */
+export function resolvePluginCommandRuntimeApply(): PluginLifecycleRuntimeApply {
+  const scope = getPluginRuntimeGatewayRequestScope();
+  const resolve = scope?.resolveGatewayContext ?? scope?.context?.resolveGatewayContext;
+  const admitted = resolve?.();
+  const apply = admitted?.applyPluginLifecycleChange;
+  if (!admitted || !apply) {
+    throw new Error(
+      "Plugin changes require an active Gateway. Retry this command after reconnecting.",
+    );
+  }
+  const refresh = captureAgentPluginRuntimeRefresh();
+  refresh.assertCurrent();
+  return async (params) => {
+    if (resolve?.() !== admitted) {
+      throw new Error("Gateway changed during the plugin operation. Reconnect and retry.");
+    }
+    try {
+      const application = await apply(params);
+      refresh.request(application);
+      return application;
+    } catch (error) {
+      if (error instanceof PluginRuntimeApplicationError && error.details.committed) {
+        refresh.request(error.details);
+      }
+      throw error;
+    }
+  };
+}
 
 export function formatPluginCommandCapabilityConsentError(
   error: unknown,
@@ -51,9 +88,15 @@ export async function installPluginFromPluginsCommand(params: {
   raw: string;
   acceptCapabilities: boolean;
   force: boolean;
-  snapshot: ConfigSnapshotForInstallPersist;
+  applyRuntime: PluginLifecycleRuntimeApply;
 }): Promise<
-  { ok: true; pluginId: string; warnings?: readonly string[] } | { ok: false; error: string }
+  | {
+      ok: true;
+      pluginId: string;
+      warnings?: readonly string[];
+      application?: PluginRuntimeApplication;
+    }
+  | { ok: false; error: string }
 > {
   const installMode = params.force ? "update" : "install";
   const plan = resolvePluginInstallSourcePlan({ raw: params.raw, mode: installMode });
@@ -69,53 +112,41 @@ export async function installPluginFromPluginsCommand(params: {
   if (acknowledgement && !acknowledgement.ok) {
     return acknowledgement;
   }
-  const warnings: string[] = [];
-  const logger = createPluginInstallLogger();
-  const clawhub = plan.request.source === "clawhub";
-  let result: Awaited<ReturnType<typeof installManagedPluginSource>>;
+  const captured = capturePluginRuntimeApplications(params.applyRuntime);
   try {
-    result = await installManagedPluginSource({
+    const result = await installManagedPlugin({
       request: plan.request,
-      snapshot: params.snapshot,
+      applyRuntime: captured.applyRuntime,
       ...resolvePluginCapabilityConsentCliOptions({
         acceptCapabilities: params.acceptCapabilities,
         action: "install",
         allowPrompt: false,
       }),
-      logger: clawhub
-        ? {
-            info: logger.info,
-            warn: (message) => {
-              warnings.push(stripAnsi(message));
-              logger.warn(message);
-            },
-            terminalLinks: false,
-          }
-        : logger,
     });
+    return {
+      ok: true,
+      pluginId: result.plugin.id,
+      application: result.application,
+      warnings: [
+        ...(result.warnings ?? []),
+        ...(plan.warning ? [plan.warning] : []),
+        ...(acknowledgement?.ok ? [acknowledgement.warning] : []),
+      ].map(stripAnsi),
+    };
   } catch (error) {
     const forceFlag = params.force ? " --force" : "";
-    const consentError = formatPluginCommandCapabilityConsentError(
-      error,
-      `/plugins install ${params.raw}${forceFlag}`,
-    );
-    if (consentError) {
-      return { ok: false, error: consentError };
-    }
-    throw error;
+    const { message } = projectPluginRuntimeFailure(error, captured.application);
+    const failure =
+      error instanceof ManagedPluginLifecycleError && error.warning
+        ? `${error.warning} ${message}`
+        : message;
+    return {
+      ok: false,
+      error:
+        formatPluginCommandCapabilityConsentError(
+          error,
+          `/plugins install ${params.raw}${forceFlag}`,
+        ) ?? stripAnsi(failure),
+    };
   }
-  if (!result.ok) {
-    const warning = "warning" in result ? result.warning : warnings.join("\n");
-    const warningPrefix = warning ? `${warning} ` : "";
-    return { ok: false, error: `${warningPrefix}${result.error}` };
-  }
-  warnings.push(...(result.warnings ?? []));
-  if (acknowledgement?.ok) {
-    warnings.push(acknowledgement.warning);
-  }
-  return {
-    ok: true,
-    pluginId: result.pluginId,
-    ...(warnings.length > 0 ? { warnings } : {}),
-  };
 }

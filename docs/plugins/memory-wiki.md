@@ -21,7 +21,6 @@ Enable the plugin before using its CLI, tools, or runtime integration:
 
 ```bash
 openclaw plugins enable memory-wiki
-openclaw gateway restart
 ```
 
 | Layer                | Owns                                                                              |

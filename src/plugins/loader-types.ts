@@ -5,7 +5,7 @@ import type { PluginCapabilityCatalogContext } from "./capability-catalog-contex
 import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginRegistryParams } from "./registry-types.js";
+import type { PluginRegistry, PluginRegistryParams } from "./registry-types.js";
 import type { CreatePluginRuntimeOptions } from "./runtime/types.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 import type { PluginLogger } from "./types.js";
@@ -36,7 +36,7 @@ export type PluginLoadOptions = {
   };
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cache?: boolean;
-  mode?: "full" | "validate";
+  mode?: "full" | "validate" | "cli-metadata";
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
   forceSetupOnlyChannelPlugins?: boolean;
@@ -52,6 +52,10 @@ export type PluginLoadOptions = {
     context: PluginCapabilityCatalogContext;
   };
   activate?: boolean;
+  /** Staged Gateway candidates expose runtime APIs only after publication or owner preparation. */
+  runtimeSideEffects?: boolean;
+  previousRegistry?: PluginRegistry;
+  replacePluginIds?: readonly string[];
   loadModules?: boolean;
   throwOnLoadError?: boolean;
   manifestRegistry?: PluginManifestRegistry;

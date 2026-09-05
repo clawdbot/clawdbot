@@ -1,4 +1,3 @@
-// Gateway WebSocket connection handler owns pre-auth limits, handshake auth, presence, and message-handler attachment.
 import { randomUUID } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { WebSocket, WebSocketServer } from "ws";
@@ -189,7 +188,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const pluginNodeCapabilities =
       connectionKind === "gateway" ? (getPluginNodeCapabilities?.() ?? []) : [];
     const pluginSurfaceBaseUrl =
-      pluginNodeCapabilities.length > 0
+      connectionKind === "gateway"
         ? resolveHostedPluginSurfaceUrl({
             port,
             forwardedHost: upgradeReq.headers["x-forwarded-host"],

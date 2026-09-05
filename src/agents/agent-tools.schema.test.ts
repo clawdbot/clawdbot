@@ -25,14 +25,9 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { execSchema, processSchema } from "./bash-tools.schemas.js";
 import {
-  BEFORE_TOOL_CALL_HOOK_CONTEXT,
-  BEFORE_TOOL_CALL_SOURCE_TOOL,
+  getBeforeToolCallHookContext,
+  getBeforeToolCallSourceTool,
 } from "./before-tool-call-metadata.js";
-
-const beforeToolCallTesting = {
-  BEFORE_TOOL_CALL_HOOK_CONTEXT,
-  BEFORE_TOOL_CALL_SOURCE_TOOL,
-};
 
 const TEST_USAGE = {
   input: 0,
@@ -1026,11 +1021,9 @@ describe("normalizeToolParameters", () => {
     const wrapped = wrapToolWithBeforeToolCallHook(source, hookContext);
 
     const normalized = normalizeToolParameters(wrapped);
-    const tagged = normalized as unknown as Record<symbol, unknown>;
-
     expect(isToolWrappedWithBeforeToolCallHook(normalized)).toBe(true);
-    expect(tagged[beforeToolCallTesting.BEFORE_TOOL_CALL_SOURCE_TOOL]).toBe(source);
-    expect(tagged[beforeToolCallTesting.BEFORE_TOOL_CALL_HOOK_CONTEXT]).toBe(hookContext);
+    expect(getBeforeToolCallSourceTool(normalized)).toBe(source);
+    expect(getBeforeToolCallHookContext(normalized)).toBe(hookContext);
   });
 
   it("normalizes truly empty schemas to type:object with properties:{} (MCP parameter-free tools)", () => {

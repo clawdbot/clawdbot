@@ -352,88 +352,49 @@ export async function runPluginUpdateAttempt(params: {
   logger: PluginUpdateLogger;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<PluginUpdateAttemptResult> {
-  const dryRunOption = params.dryRun ? { dryRun: true } : {};
   const phase = params.dryRun ? "check" : "update";
   const installNpmSpec = params.dryRun ? installPluginFromNpmSpec : params.installNpmSpecForUpdate;
-  const installParams = <T extends object>(value: T): T =>
-    copyPluginInstallTransactionRequest(params, value);
+  // The enumerable deferred-transaction request follows each source and fallback spread.
+  const common = copyPluginInstallTransactionRequest(params, {
+    config: params.config,
+    mode: "update" as const,
+    extensionsDir: params.extensionsDir,
+    timeoutMs: params.timeoutMs,
+    ...(params.dryRun ? { dryRun: true } : {}),
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
+    onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+    expectedPluginId: params.pluginId,
+    logger: params.logger,
+  });
   let result: PluginUpdateInstallResult;
   try {
     result =
       params.record.source === "npm"
-        ? await installNpmSpec(
-            installParams({
-              spec: params.effectiveSpec!,
-              config: params.config,
-              mode: "update",
-              extensionsDir: params.extensionsDir,
-              timeoutMs: params.timeoutMs,
-              ...dryRunOption,
-              dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-              onInstallPolicyWarning: params.onInstallPolicyWarning,
-              onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
-              trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-              expectedPluginId: params.pluginId,
-              expectedReplacementPluginId: params.expectedReplacementPluginId,
-              expectedIntegrity: params.expectedIntegrity,
-              onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
-                pluginId: params.pluginId,
-                dryRun: params.dryRun,
-                logger: params.logger,
-                onIntegrityDrift: params.onIntegrityDrift,
-              }),
-              logger: params.logger,
-            }),
-          )
+        ? await installNpmSpec({
+            ...common,
+            spec: params.effectiveSpec!,
+            trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+            expectedReplacementPluginId: params.expectedReplacementPluginId,
+            expectedIntegrity: params.expectedIntegrity,
+            onIntegrityDrift: createPluginUpdateIntegrityDriftHandler(params),
+          })
         : params.record.source === "clawhub"
-          ? await installPluginFromClawHub(
-              installParams({
-                spec: params.effectiveSpec ?? `clawhub:${params.record.clawhubPackage!}`,
-                config: params.config,
-                baseUrl: params.record.clawhubUrl,
-                mode: "update",
-                extensionsDir: params.extensionsDir,
-                timeoutMs: params.timeoutMs,
-                ...dryRunOption,
-                dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-                onInstallPolicyWarning: params.onInstallPolicyWarning,
-                onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
-                expectedPluginId: params.pluginId,
-                logger: params.logger,
-              }),
-            )
+          ? await installPluginFromClawHub({
+              ...common,
+              spec: params.effectiveSpec ?? `clawhub:${params.record.clawhubPackage!}`,
+              baseUrl: params.record.clawhubUrl,
+            })
           : params.record.source === "git"
-            ? await installPluginFromGitSpec(
-                installParams({
-                  spec: params.effectiveSpec!,
-                  config: params.config,
-                  mode: "update",
-                  extensionsDir: params.extensionsDir,
-                  timeoutMs: params.timeoutMs,
-                  ...dryRunOption,
-                  dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-                  onInstallPolicyWarning: params.onInstallPolicyWarning,
-                  onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
-                  expectedPluginId: params.pluginId,
-                  logger: params.logger,
-                }),
-              )
-            : await installPluginFromMarketplace(
-                installParams({
-                  marketplace: params.record.marketplaceSource!,
-                  plugin: params.record.marketplacePlugin!,
-                  config: params.config,
-                  mode: "update",
-                  extensionsDir: params.extensionsDir,
-                  timeoutMs: params.timeoutMs,
-                  ...dryRunOption,
-                  dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-                  onInstallPolicyWarning: params.onInstallPolicyWarning,
-                  onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
-                  expectedPluginId: params.pluginId,
-                  logger: params.logger,
-                }),
-              );
+            ? await installPluginFromGitSpec({
+                ...common,
+                spec: params.effectiveSpec!,
+              })
+            : await installPluginFromMarketplace({
+                ...common,
+                marketplace: params.record.marketplaceSource!,
+                plugin: params.record.marketplacePlugin!,
+              });
   } catch (error) {
     return {
       kind: "exception",
@@ -475,30 +436,14 @@ export async function runPluginUpdateAttempt(params: {
       fallbackSpec: params.npmSpecs.fallbackSpec,
       verb: params.dryRun ? "would use" : "used",
     });
-    result = await installNpmSpec(
-      installParams({
-        spec: params.npmSpecs.fallbackSpec,
-        config: params.config,
-        mode: "update",
-        extensionsDir: params.extensionsDir,
-        timeoutMs: params.timeoutMs,
-        ...dryRunOption,
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-        onInstallPolicyWarning: params.onInstallPolicyWarning,
-        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
-        trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-        expectedPluginId: params.pluginId,
-        expectedReplacementPluginId: params.expectedReplacementPluginId,
-        expectedIntegrity: await params.getFallbackExpectedIntegrity(),
-        onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
-          pluginId: params.pluginId,
-          dryRun: params.dryRun,
-          logger: params.logger,
-          onIntegrityDrift: params.onIntegrityDrift,
-        }),
-        logger: params.logger,
-      }),
-    );
+    result = await installNpmSpec({
+      ...common,
+      spec: params.npmSpecs.fallbackSpec,
+      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+      expectedReplacementPluginId: params.expectedReplacementPluginId,
+      expectedIntegrity: await params.getFallbackExpectedIntegrity(),
+      onIntegrityDrift: createPluginUpdateIntegrityDriftHandler(params),
+    });
   }
 
   if (
@@ -515,22 +460,11 @@ export async function runPluginUpdateAttempt(params: {
     params.logger.warn?.(
       `Plugin "${params.pluginId}" has no beta ClawHub release for ${params.clawhubSpecs.fallbackLabel ?? params.effectiveSpec}; using ${params.clawhubSpecs.fallbackSpec} instead. Core update can still complete.`,
     );
-    result = await installPluginFromClawHub(
-      installParams({
-        spec: params.clawhubSpecs.fallbackSpec,
-        config: params.config,
-        baseUrl: params.record.clawhubUrl,
-        mode: "update",
-        extensionsDir: params.extensionsDir,
-        timeoutMs: params.timeoutMs,
-        ...dryRunOption,
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-        onInstallPolicyWarning: params.onInstallPolicyWarning,
-        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
-        expectedPluginId: params.pluginId,
-        logger: params.logger,
-      }),
-    );
+    result = await installPluginFromClawHub({
+      ...common,
+      spec: params.clawhubSpecs.fallbackSpec,
+      baseUrl: params.record.clawhubUrl,
+    });
     activeClawHubInstallSpec = params.clawhubSpecs.fallbackSpec;
   }
 

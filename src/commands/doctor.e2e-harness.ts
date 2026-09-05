@@ -347,7 +347,6 @@ vi.mock("../skills/discovery/status.js", () => ({
 }));
 
 vi.mock("../plugins/loader.js", () => ({
-  getRuntimePluginRegistryForLoadOptions: () => null,
   isPluginRegistryLoadInFlight: () => false,
   loadOpenClawPlugins: () => createEmptyPluginRegistry(),
   loadPluginRegistryHandle: () => createEmptyPluginRegistry(),

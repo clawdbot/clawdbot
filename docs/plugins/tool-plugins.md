@@ -137,8 +137,8 @@ tool({
 
 Use `factory` when a tool needs the runtime tool context before it can be
 created - to opt out for a specific run, inspect sandbox state, or bind
-runtime helpers. Metadata stays static even though the concrete tool is built
-at runtime.
+runtime helpers. The declared metadata used for manifest and catalog generation
+stays static; concrete runtime fields come from each factory call.
 
 ```typescript
 tool({
@@ -174,13 +174,14 @@ call ID string instead.
 Concrete tools can provide `prepareArguments(args)` to normalize input before
 schema validation. The native agent loop also honors
 `executionMode: "sequential"` when tool calls must run one at a time. These
-runtime properties come from the current factory context even when the tool's
-descriptor is cached; argument preparation and execution use the same instance.
+runtime properties, schemas, and display fields come from the current factory
+context. Argument preparation and execution use the same instance. OpenClaw
+reuses the owning plugin registry without reusing another context's concrete tool.
 
 Set `hideFromChannelProgress: true` on the concrete factory tool to keep its
 transient activity out of channel progress drafts. Lifecycle events and the
 final tool result still flow normally. OpenClaw preserves this flag when
-reusing a cached tool or normalizing its schema; omitted or `false` leaves
+normalizing the current tool's schema; omitted or `false` leaves
 normal progress behavior in place. See [Progress drafts](/concepts/progress-drafts).
 
 Factories still declare a fixed tool name up front. Use `definePluginEntry`
@@ -427,9 +428,11 @@ openclaw plugins install npm-pack:./openclaw-plugin-stock-quotes-0.1.0.tgz
 openclaw plugins inspect stock-quotes --runtime --json
 ```
 
-After installing, restart or reload the Gateway and ask the agent to use the
-tool. If the tool is not visible, inspect the plugin runtime and the effective
-tool catalog before changing code (see [Troubleshooting](#troubleshooting)).
+Installation applies to the running Gateway. Ask the agent to use the tool.
+After editing an installed plugin or a linked source directory, run
+`openclaw plugins reload <plugin-id>`. If the tool is not visible, inspect the
+plugin runtime and the effective tool catalog before changing code (see
+[Troubleshooting](#troubleshooting)).
 
 ## Publish
 
@@ -497,7 +500,7 @@ Check these in order:
 2. `openclaw plugins validate --root <plugin-root> --entry ./dist/index.js`
 3. `openclaw.plugin.json` has `contracts.tools` with the expected tool names.
 4. `package.json` has `openclaw.extensions: ["./dist/index.js"]`.
-5. The Gateway was restarted or reloaded after installing the plugin.
+5. The install completed runtime activation. Check the connected Gateway's plugin state in the Control UI and resolve any reported activation error.
 
 ## See also
 

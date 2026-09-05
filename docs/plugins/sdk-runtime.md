@@ -28,6 +28,27 @@ register(api) {
 
 `api.runtime.version` is the current OpenClaw product version, sourced from the shared version resolver so plugins see the same value the CLI reports.
 
+## Instance lifecycle
+
+The Gateway can replace a plugin instance without restarting. Keep work owned by that instance and release it when the instance retires:
+
+```typescript
+register(api) {
+  const timer = setInterval(() => api.logger.debug("Plugin heartbeat"), 60_000);
+  api.lifecycle.onDispose?.(() => clearInterval(timer));
+}
+```
+
+`api.lifecycle.signal` is an optional `AbortSignal` supplied by the managed runtime. It aborts after legacy session/runtime cleanup hooks finish and before disposal callbacks run. `onDispose(cleanup)` accepts synchronous or asynchronous cleanup and returns a function that removes that registration. Cleanup runs in reverse registration order and must settle within the host shutdown budget. These fields are optional for hosts that only construct a registration API without a managed instance; `registerRuntimeLifecycle` remains available for plugin-owned session and host-state cleanup.
+
+Registered callbacks and callables accessed through ordinary plugin API members belong to their instance. Reload stops new calls to the retiring instance, waits for admitted calls, then releases its resources. An unchanged plugin retains its instance when another plugin reloads. Avoid process-global mutable state for installed plugins; use the injected runtime and instance-owned cleanup. The module host tracks ordinary timers, HTTP servers, TCP sockets, file watchers, child processes, and workers. Plugin-specific background work still needs an explicit cleanup callback.
+
+Promise-based timers and file watchers use instance cancellation. Handle `AbortError` when a background task's pending timer or watch ends during retirement. Polling watchers created with `fs.watchFile` release only that instance's subscriptions; other owners watching the same file remain active.
+
+Keep lifecycle-dependent operations on ordinary API objects or registered callbacks. Errors, dates, regular expressions, array buffers, and byte views pass through unchanged to preserve native branding, shared buffers, and `structuredClone` behavior. Functions attached to those native payloads are not wrapped for retirement.
+
+Reacquire plugin APIs after reload and call their public members. JavaScript prototype reflection preserves the original prototype identities needed by `instanceof` and native libraries; it can reach unwrapped constructors and methods. Instance lifecycle management governs supported calls and owned resources, rather than revoking every reference in a JavaScript object graph. Plugins remain trusted in-process code, as described in the [execution model](/plugins/architecture#execution-model).
+
 ## Config loading and writes
 
 Prefer config that was already passed into the active call path, for example `api.config` during registration or a `cfg` argument on channel/provider callbacks. This keeps one process snapshot flowing through the work instead of reparsing config on hot paths.
@@ -964,7 +985,7 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
       cfg: api.config,
     });
 
-    const providers = api.runtime.imageGeneration.listProviders({ cfg: api.config });
+    const providers = api.runtime.imageGeneration.listProviders({ config: api.config });
     ```
 
   </Accordion>
@@ -977,7 +998,7 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
       cfg: api.config,
     });
 
-    const providers = api.runtime.videoGeneration.listProviders({ cfg: api.config });
+    const providers = api.runtime.videoGeneration.listProviders({ config: api.config });
     ```
 
   </Accordion>
@@ -990,7 +1011,7 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
       cfg: api.config,
     });
 
-    const providers = api.runtime.musicGeneration.listProviders({ cfg: api.config });
+    const providers = api.runtime.musicGeneration.listProviders({ config: api.config });
     ```
 
   </Accordion>

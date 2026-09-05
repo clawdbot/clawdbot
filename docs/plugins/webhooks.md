@@ -19,8 +19,9 @@ hooks](/automation/cron-jobs#webhooks). To react to internal agent events, use
 [internal hooks](/automation/hooks). Those surfaces do not share this plugin's routes or authentication.
 
 The plugin runs inside the Gateway process. For a remote Gateway, install and
-configure it on that host, then restart the Gateway. It ships with no routes
-configured, so it is a no-op until you add at least one route.
+configure it on that host. Apply route config changes with
+`openclaw plugins reload webhooks`. It ships with no routes configured, so it is
+a no-op until you add at least one route.
 
 ## Configure routes
 
@@ -66,12 +67,14 @@ Route fields:
 
 `secret` accepts a plain string or a SecretRef: `{ source: "env" | "file" | "exec" | "store", provider: "default", id: "..." }`.
 
-SecretRefs resolve into the Gateway's startup config snapshot. When one route's
+SecretRefs resolve into the Gateway's runtime config snapshot. When one route's
 secret cannot resolve, the Gateway keeps running and that exact route stays
 registered but cold: requests receive a generic authentication failure (`401`).
-Other routes remain available. Fix the SecretRef source, then reload or restart
-the Gateway to activate the new snapshot. SecretRef values are never resolved
-on the public request path.
+Other routes remain available. Fix the SecretRef source, then run
+`openclaw plugins reload webhooks` to activate the new snapshot. If you changed
+the environment inherited by the Gateway service, restart that service with
+the new environment. SecretRef values are never resolved on the public request
+path.
 
 ## Security model
 
@@ -266,16 +269,16 @@ reason not covered by the named codes above.
 
 ### Errors and troubleshooting
 
-| Response              | Next check                                                                                              |
-| --------------------- | ------------------------------------------------------------------------------------------------------- |
-| `401`                 | Use the route secret. An unresolved SecretRef leaves that route cold; repair it and reload/restart.     |
-| `405` / `415`         | Send `POST` with `Content-Type: application/json`.                                                      |
-| `408` / `413`         | Send the JSON body within 15 seconds and below 256 KiB.                                                 |
-| `429`                 | Reduce request rate or concurrent requests, including clients sharing a proxy.                          |
-| `400 invalid_request` | Check the action's fields and types; unknown fields are rejected.                                       |
-| `404 not_found`       | The mutation target does not exist in the route's bound session.                                        |
-| `409`                 | Inspect `code`: reconcile revisions, managed-flow status, cancellation state, or backing-run ownership. |
-| `503 persist_failed`  | The record could not be persisted; investigate Gateway storage/logs before retrying.                    |
+| Response              | Next check                                                                                                                         |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `401`                 | Use the route secret. Repair an unresolved SecretRef, then run `openclaw plugins reload webhooks`; see the environment note above. |
+| `405` / `415`         | Send `POST` with `Content-Type: application/json`.                                                                                 |
+| `408` / `413`         | Send the JSON body within 15 seconds and below 256 KiB.                                                                            |
+| `429`                 | Reduce request rate or concurrent requests, including clients sharing a proxy.                                                     |
+| `400 invalid_request` | Check the action's fields and types; unknown fields are rejected.                                                                  |
+| `404 not_found`       | The mutation target does not exist in the route's bound session.                                                                   |
+| `409`                 | Inspect `code`: reconcile revisions, managed-flow status, cancellation state, or backing-run ownership.                            |
+| `503 persist_failed`  | The record could not be persisted; investigate Gateway storage/logs before retrying.                                               |
 
 Failures before action validation can be plain text, not the JSON envelope
 above. A Bearer header takes precedence over `x-openclaw-webhook-secret`;

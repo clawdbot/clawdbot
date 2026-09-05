@@ -72,18 +72,14 @@ function isTrustedForDurableStores(record: PluginManifestRegistryRecord): boolea
 
 type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
 
-function loadPluginDoctorContractModule(params: {
-  modulePath: string;
-  rootDir: string;
-}): PluginDoctorContractModule {
+function loadPluginDoctorContractModule(modulePath: string): PluginDoctorContractModule {
   return getCachedPluginModuleLoader({
-    modulePath: params.modulePath,
-    rootDir: params.rootDir,
+    modulePath,
     importerUrl: import.meta.url,
     ...(pluginDoctorContractRegistryLoaderState.moduleLoaderFactory
       ? { createLoader: pluginDoctorContractRegistryLoaderState.moduleLoaderFactory }
       : {}),
-  })(params.modulePath) as PluginDoctorContractModule;
+  })(modulePath) as PluginDoctorContractModule;
 }
 
 function hasLegacyElevenLabsTalkFields(raw: unknown): boolean {
@@ -304,7 +300,7 @@ function loadPluginDoctorContractEntry(
   }
   let mod: PluginDoctorContractModule;
   try {
-    mod = loadPluginDoctorContractModule({ modulePath: contractSource, rootDir: record.rootDir });
+    mod = loadPluginDoctorContractModule(contractSource);
   } catch (error) {
     log.warn(
       `failed to load doctor contract for ${record.id} from ${contractSource}: ${formatErrorMessage(error)}`,
@@ -486,10 +482,7 @@ function loadLegacyChannelStateMigrationDetector(
   }
   try {
     const entry = unwrapDefaultModuleExport(
-      loadPluginDoctorContractModule({
-        modulePath: record.setupSource,
-        rootDir: record.rootDir,
-      }),
+      loadPluginDoctorContractModule(record.setupSource),
     ) as Partial<BundledChannelSetupEntryContract> | null;
     if (
       entry?.kind !== "bundled-channel-setup-entry" ||

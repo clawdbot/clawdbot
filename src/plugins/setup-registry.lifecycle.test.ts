@@ -3,6 +3,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snapshot.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
+import {
+  adoptProcessPluginCache,
+  createPluginCache,
+  retirePluginCache,
+  transferPluginCacheSetupModules,
+  waitForPluginCacheRetirement,
+  withPluginCache,
+} from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { resolvePluginSetupProviderCore, resolvePluginSetupRegistry } from "./setup-registry.js";
@@ -10,11 +18,12 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 
 const tempDirs: string[] = [];
 
-afterEach(() => {
+afterEach(async () => {
+  vi.restoreAllMocks();
   clearPluginMetadataLifecycleCaches();
+  await waitForPluginCacheRetirement();
   cleanupTrackedTempDirs(tempDirs);
   vi.unstubAllEnvs();
-  vi.restoreAllMocks();
 });
 
 describe("plugin setup registry artifact lifecycle", () => {
@@ -71,14 +80,10 @@ describe("plugin setup registry artifact lifecycle", () => {
     { artifactDir: ".", declared: false },
     { artifactDir: "dist", declared: false },
     { artifactDir: ".", declared: false, competingDist: "setup-api.ts" },
-    {
-      artifactDir: ".",
-      declared: false,
-      competingDist: "setup-api.js",
-    },
+    { artifactDir: ".", declared: false, competingDist: "setup-api.js" },
   ])(
-    "reloads installed $artifactDir setup artifacts (declared: $declared, dist conflict: $competingDist)",
-    ({ artifactDir, declared, competingDist }) => {
+    "reloads and retires $artifactDir setup graphs (declared: $declared, dist conflict: $competingDist)",
+    async ({ artifactDir, declared, competingDist }) => {
       const rootDir = fs.realpathSync(makeTrackedTempDir("openclaw-setup-lifecycle", tempDirs));
       const artifactRoot = path.join(rootDir, artifactDir);
       fs.mkdirSync(artifactRoot, { recursive: true });
@@ -93,10 +98,15 @@ describe("plugin setup registry artifact lifecycle", () => {
         );
       }
       const writeSetupArtifact = (version: string) => {
+        fs.writeFileSync(
+          path.join(artifactRoot, "lazy.cjs"),
+          `module.exports = "lazy-${version}";\n`,
+          "utf8",
+        );
         fs.writeFileSync(dependencyPath, `module.exports = "dependency-${version}";\n`, "utf8");
         fs.writeFileSync(
           setupSource,
-          `module.exports = { register(api) { api.registerProvider({ id: "setup-lifecycle", label: "entry-${version}:" + require("./setup-dependency.cjs") }); } };\n`,
+          `process.on("openclaw.setup-lifecycle-proof", () => {}); module.exports = { register(api) { api.registerProvider({ id: "setup-lifecycle", label: "entry-${version}:" + require("./setup-dependency.cjs") }); api.registerConfigMigration(config => ({ config, changes: [require("./lazy.cjs")] })); } };\n`,
           "utf8",
         );
       };
@@ -121,21 +131,126 @@ describe("plugin setup registry artifact lifecycle", () => {
       } satisfies PluginManifestRegistry;
 
       writeSetupArtifact("before");
-      expect(resolvePluginSetupRegistry({ manifestRegistry }).providers[0]?.provider.label).toBe(
-        "entry-before:dependency-before",
-      );
-
+      const before = resolvePluginSetupRegistry({ manifestRegistry });
+      expect(before.providers[0]?.provider.label).toBe("entry-before:dependency-before");
+      expect(process.listenerCount("openclaw.setup-lifecycle-proof")).toBe(1);
       writeSetupArtifact("after");
+      expect(before.configMigrations[0]?.migrate({})?.changes).toEqual(["lazy-before"]);
       clearPluginMetadataLifecycleCaches();
-
-      expect(resolvePluginSetupRegistry({ manifestRegistry }).providers[0]?.provider.label).toBe(
-        "entry-after:dependency-after",
-      );
+      expect(() => before.configMigrations[0]?.migrate({})).toThrow(/reloaded|disabled/);
+      await waitForPluginCacheRetirement();
+      expect(process.listenerCount("openclaw.setup-lifecycle-proof")).toBe(0);
+      const after = resolvePluginSetupRegistry({ manifestRegistry });
+      expect(after.providers[0]?.provider.label).toBe("entry-after:dependency-after");
+      expect(after.configMigrations[0]?.migrate({})?.changes).toEqual(["lazy-after"]);
     },
   );
 
+  it("routes new setup queries from retained runtime scopes to the published cache", async () => {
+    const rootDir = fs.realpathSync(makeTrackedTempDir("openclaw-setup-retained", tempDirs));
+    const source = path.join(rootDir, "setup-api.cjs");
+    const write = (value: string) =>
+      fs.writeFileSync(
+        source,
+        `module.exports = { register(api) { api.registerConfigMigration(config => ({ config, changes: [${JSON.stringify(value)}] })); } };`,
+      );
+    const manifestRegistry = {
+      plugins: [
+        {
+          id: "retained-setup",
+          rootDir,
+          source,
+          setupSource: source,
+          manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+          origin: "global",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          setup: { requiresRuntime: true },
+        },
+      ],
+      diagnostics: [],
+    } satisfies PluginManifestRegistry;
+    const previous = createPluginCache({ kind: "process" });
+    adoptProcessPluginCache(previous);
+    write("original");
+    const before = resolvePluginSetupRegistry({ manifestRegistry }).configMigrations[0]!;
+    write("edited");
+    const next = createPluginCache({ kind: "process" });
+    transferPluginCacheSetupModules(previous, next, new Set());
+    adoptProcessPluginCache(next);
+    await retirePluginCache(previous);
+    const retained = withPluginCache(previous, () =>
+      resolvePluginSetupRegistry({ manifestRegistry }),
+    );
+    expect(retained.diagnostics).toEqual([]);
+    expect(retained.configMigrations[0]?.migrate({})?.changes).toEqual(["original"]);
+    expect(before.migrate({})?.changes).toEqual(["original"]);
+    const operation = createPluginCache();
+    const candidate = withPluginCache(operation, () =>
+      resolvePluginSetupRegistry({ manifestRegistry }),
+    );
+    expect(candidate.configMigrations[0]?.migrate({})?.changes).toEqual(["edited"]);
+    await retirePluginCache(operation);
+    expect(() => candidate.configMigrations[0]?.migrate({})).toThrow(/reloaded|disabled/);
+    expect(before.migrate({})?.changes).toEqual(["original"]);
+  });
+
+  it("isolates cached mutable setup values from a managed TypeScript module", () => {
+    const rootDir = fs.realpathSync(makeTrackedTempDir("openclaw-setup-mutable", tempDirs));
+    const source = path.join(rootDir, "setup-api.ts");
+    fs.writeFileSync(
+      source,
+      `const label: string = "Original";
+      export default { register(api) {
+        api.registerProvider({ id: "mutable-setup", label, aliases: ["original"], auth: [] });
+        api.registerCliBackend({ id: "mutable-cli", config: { command: "fixture", args: ["run"] } });
+        api.registerConfigMigration(config => ({ config, changes: [label] }));
+      } };`,
+    );
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "mutable-setup",
+          rootDir,
+          source,
+          setupSource: source,
+          origin: "global",
+          providers: ["mutable-setup"],
+          cliBackends: ["mutable-cli"],
+          setup: {
+            requiresRuntime: true,
+            providers: [{ id: "mutable-setup" }],
+            cliBackends: ["mutable-cli"],
+          },
+        },
+      ],
+    });
+    withPluginMetadataSnapshotScope(
+      snapshot,
+      () => {
+        const first = resolvePluginSetupRegistry();
+        first.providers[0]!.provider.label = "Changed";
+        first.providers[0]!.provider.aliases!.push("changed");
+        first.cliBackends[0]!.backend.config!.args!.push("changed");
+        const second = resolvePluginSetupRegistry();
+        expect(second.providers[0]?.provider).toMatchObject({
+          label: "Original",
+          aliases: ["original"],
+        });
+        expect(second.cliBackends[0]?.backend.config?.args).toEqual(["run"]);
+        expect(second.configMigrations[0]?.migrate({})?.changes).toEqual(["Original"]);
+        clearPluginMetadataLifecycleCaches();
+        expect(() => second.configMigrations[0]?.migrate({})).toThrow(/reloaded|disabled/);
+      },
+      { trustConfigIdentity: true },
+    );
+  });
+
   it.each(["dist", "dist-runtime"])(
-    "reloads bundled setup artifacts and their dependencies from %s",
+    "reruns bundled %s setup registration while preserving process module identity",
     (artifactRootName) => {
       const packageRoot = fs.realpathSync(
         makeTrackedTempDir("openclaw-bundled-setup-lifecycle", tempDirs),
@@ -161,7 +276,7 @@ describe("plugin setup registry artifact lifecycle", () => {
         fs.writeFileSync(dependencyPath, `module.exports = "dependency-${version}";\n`, "utf8");
         fs.writeFileSync(
           artifactPath,
-          `module.exports = { register(api) { api.registerProvider({ id: "bundled-setup", label: "entry-${version}:" + require(${JSON.stringify(dependencyImport)}) }); } };\n`,
+          `let calls = 0; module.exports = { register(api) { api.registerProvider({ id: "bundled-setup", label: "entry-${version}:" + require(${JSON.stringify(dependencyImport)}) + ":" + ++calls }); } };\n`,
           "utf8",
         );
       };
@@ -187,14 +302,14 @@ describe("plugin setup registry artifact lifecycle", () => {
 
       writeBundledArtifact("before");
       expect(resolvePluginSetupRegistry({ manifestRegistry }).providers[0]?.provider.label).toBe(
-        "entry-before:dependency-before",
+        "entry-before:dependency-before:1",
       );
 
       writeBundledArtifact("after");
       clearPluginMetadataLifecycleCaches();
 
       expect(resolvePluginSetupRegistry({ manifestRegistry }).providers[0]?.provider.label).toBe(
-        "entry-after:dependency-after",
+        "entry-before:dependency-before:2",
       );
     },
   );

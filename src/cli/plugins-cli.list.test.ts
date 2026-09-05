@@ -482,7 +482,7 @@ describe("plugins cli list", () => {
             "openclaw plugins inspect broken",
             "edit or remove the config-selected plugin source",
             "openclaw plugins registry --refresh",
-            "openclaw gateway restart --force",
+            "openclaw plugins reload broken",
           ],
         },
       ],
@@ -881,6 +881,7 @@ describe("plugins cli list", () => {
     expect(output).toContain("active: /tmp/openclaw-upstream/extensions/discord/index.ts");
     expect(output).toContain("shadowed: /tmp/openclaw/npm/node_modules/@openclaw/discord/index.ts");
     expect(output).toContain("openclaw plugins registry --refresh");
+    expect(output).toContain("openclaw plugins reload discord");
   });
 
   it("does not report healthy config-selected plugin source shadowing as doctor issue", async () => {

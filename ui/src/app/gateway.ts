@@ -1,4 +1,5 @@
 import type { GatewaySuspension } from "../../../packages/gateway-protocol/src/schema/gateway-suspend.js";
+import type { PluginsUiDescriptorsResult } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
@@ -20,6 +21,7 @@ export type ApplicationGatewaySnapshot = {
   restartPending?: boolean;
   suspensionPhase?: GatewaySuspension["phase"];
   hello: GatewayHelloOk | null;
+  pluginCapabilities?: PluginsUiDescriptorsResult | null;
   canvasPluginSurfaceUrl: string | null;
   assistantAgentId: string | null;
   sessionKey: string;

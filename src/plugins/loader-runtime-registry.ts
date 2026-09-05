@@ -20,9 +20,3 @@ export function resolveRuntimePluginRegistry(
   // loadAndActivateRootPluginRegistry at the composition boundary.
   return loadOpenClawPlugins({ ...options, activate: false });
 }
-
-export function getRuntimePluginRegistryForLoadOptions(
-  options?: PluginLoadOptions,
-): PluginRegistry | undefined {
-  return resolveRuntimePluginRegistry(options);
-}

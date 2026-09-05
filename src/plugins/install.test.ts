@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 // Covers plugin install flows, manifests, and install records.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -29,6 +30,7 @@ import {
   PLUGIN_INSTALL_ERROR_CODE,
   resolvePluginInstallDir,
 } from "./install.js";
+import { RETAINED_MANAGED_NPM_KEEP_FILES_REASON } from "./managed-npm-retention-contract.js";
 import { markRetainedManagedNpmInstall } from "./managed-npm-retention.js";
 import { packToArchive } from "./test-helpers/archive-fixtures.js";
 import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
@@ -2624,64 +2626,135 @@ describe("installPluginFromNpmSpec", () => {
     expect(requests[0]?.request.mode).toBe("install");
   });
 
-  it("reports update mode to policy when npm update installs a new artifact generation", async () => {
-    const root = suiteTempRootTracker.makeTempDir();
-    const npmDir = path.join(root, "npm");
-    const extensionsDir = path.join(root, "extensions");
-    const packageName = "@acme/policy-generation-plugin";
-    const existingProjectRoot = resolvePluginNpmProjectDir({ npmDir, packageName });
-    const existingPackageDir = path.join(
-      existingProjectRoot,
-      "node_modules",
-      ...packageName.split("/"),
-    );
-    fs.mkdirSync(existingPackageDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(existingPackageDir, "package.json"),
-      JSON.stringify({
-        name: packageName,
-        version: "0.9.0",
-        openclaw: { extensions: ["index.js"] },
-      }),
-    );
-    fs.writeFileSync(path.join(existingPackageDir, "index.js"), "export {};\n");
-    const { scriptPath, logPath } = writeInstallOnlyBlockingPolicyScript(root);
-    mockNpmViewMetadata({ name: packageName, version: "1.2.3" });
-    mockSuccessfulManagedNpmInstall({ packageName, version: "1.2.3" });
-    const captured = captureSecurityEvents();
+  it.each(["canonical", "canonical-with-legacy", "legacy", "kept-canonical"] as const)(
+    "preserves the active package until a validated npm update replaces its %s project",
+    async (location) => {
+      const root = suiteTempRootTracker.makeTempDir();
+      const npmDir = path.join(root, "npm");
+      const extensionsDir = path.join(root, "extensions");
+      const packageName = "@acme/policy-generation-plugin";
+      const canonicalProjectRoot = resolvePluginNpmProjectDir({ npmDir, packageName });
+      const canonicalPackageDir = path.join(
+        canonicalProjectRoot,
+        "node_modules",
+        ...packageName.split("/"),
+      );
+      const existingProjectRoot =
+        location === "canonical" || location === "canonical-with-legacy"
+          ? canonicalProjectRoot
+          : location === "legacy"
+            ? npmDir
+            : resolvePluginNpmGenerationProjectDir({
+                npmDir,
+                packageName,
+                generationKey: "active",
+              });
+      if (location === "kept-canonical") {
+        fs.mkdirSync(canonicalPackageDir, { recursive: true });
+        writeMinimalPackagePlugin(canonicalPackageDir, packageName);
+        await markRetainedManagedNpmInstall({
+          packageDir: canonicalPackageDir,
+          pluginId: packageName,
+          reason: RETAINED_MANAGED_NPM_KEEP_FILES_REASON,
+        });
+      }
+      const existingPackageDir = path.join(
+        existingProjectRoot,
+        "node_modules",
+        ...packageName.split("/"),
+      );
+      fs.mkdirSync(existingPackageDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(existingPackageDir, "package.json"),
+        JSON.stringify({
+          name: packageName,
+          version: "0.9.0",
+          openclaw: { extensions: ["index.js"] },
+        }),
+      );
+      fs.writeFileSync(
+        path.join(existingPackageDir, "index.js"),
+        'module.exports = () => "0.9.0";\n',
+      );
+      const legacyPackageDir = path.join(npmDir, "node_modules", ...packageName.split("/"));
+      if (location === "canonical-with-legacy") {
+        fs.mkdirSync(legacyPackageDir, { recursive: true });
+        writeMinimalPackagePlugin(legacyPackageDir, packageName);
+      }
+      const { scriptPath, logPath } = writeInstallOnlyBlockingPolicyScript(root);
+      mockNpmViewMetadata({ name: packageName, version: "1.2.3" });
+      mockSuccessfulManagedNpmInstall({ packageName, version: "1.2.3" });
+      const captured = captureSecurityEvents();
+      let previousVersionAtCommit: unknown;
 
-    let result: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
-    try {
-      result = await installPluginFromNpmSpec({
-        spec: `${packageName}@1.2.3`,
-        extensionsDir,
-        npmDir,
-        config: configWithInstallPolicy(scriptPath, logPath),
-        mode: "update",
+      let result: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
+      try {
+        result = await installPluginFromNpmSpec({
+          spec: `${packageName}@1.2.3`,
+          extensionsDir,
+          npmDir,
+          config: configWithInstallPolicy(scriptPath, logPath),
+          mode: "update",
+          onBeforePluginArtifactCommit: async ({ currentArtifactDir, stagedArtifactDir }) => {
+            expect(currentArtifactDir).toBe(existingPackageDir);
+            expect(stagedArtifactDir).not.toBe(existingPackageDir);
+            const readPreviousVersion = createRequire(import.meta.url)(
+              path.join(existingPackageDir, "index.js"),
+            );
+            previousVersionAtCommit = readPreviousVersion();
+            expect(
+              JSON.parse(fs.readFileSync(path.join(stagedArtifactDir, "package.json"), "utf8"))
+                .version,
+            ).toBe("1.2.3");
+          },
+        });
+      } finally {
+        captured.stop();
+      }
+
+      expect(result!.ok).toBe(true);
+      if (!result!.ok) {
+        return;
+      }
+      expect(previousVersionAtCommit).toBe("0.9.0");
+      if (location === "kept-canonical") {
+        expect(result.targetDir).not.toBe(canonicalPackageDir);
+        expect(result.targetDir).not.toBe(existingPackageDir);
+        expect(fs.readFileSync(path.join(canonicalPackageDir, "index.js"), "utf8")).toBe(
+          "export {};\n",
+        );
+      } else {
+        expect(result.targetDir).toBe(canonicalPackageDir);
+      }
+      if (location === "canonical-with-legacy") {
+        expect(fs.readFileSync(path.join(legacyPackageDir, "index.js"), "utf8")).toBe(
+          "export {};\n",
+        );
+      }
+      if (location === "legacy" || location === "kept-canonical") {
+        expect(
+          JSON.parse(fs.readFileSync(path.join(existingPackageDir, "package.json"), "utf8"))
+            .version,
+        ).toBe("0.9.0");
+      }
+      expect(
+        JSON.parse(fs.readFileSync(path.join(result.targetDir, "package.json"), "utf8")).version,
+      ).toBe("1.2.3");
+      const requests = readCapturedInstallPolicyRequests(logPath);
+      expect(requests.length).toBeGreaterThan(0);
+      expect(requests.map((request) => request.request.mode)).toEqual(requests.map(() => "update"));
+      expect(captured.events).toHaveLength(1);
+      expect(captured.events[0]).toMatchObject({
+        action: "plugin.updated",
+        outcome: "success",
+        target: { kind: "plugin", name: packageName },
+        attributes: {
+          source_family: "npm",
+          mode: "update",
+        },
       });
-    } finally {
-      captured.stop();
-    }
-
-    expect(result!.ok).toBe(true);
-    if (!result!.ok) {
-      return;
-    }
-    expect(result.targetDir).not.toBe(existingPackageDir);
-    const requests = readCapturedInstallPolicyRequests(logPath);
-    expect(requests.length).toBeGreaterThan(0);
-    expect(requests.map((request) => request.request.mode)).toEqual(requests.map(() => "update"));
-    expect(captured.events).toHaveLength(1);
-    expect(captured.events[0]).toMatchObject({
-      action: "plugin.updated",
-      outcome: "success",
-      target: { kind: "plugin", name: packageName },
-      attributes: {
-        source_family: "npm",
-        mode: "update",
-      },
-    });
-  });
+    },
+  );
 
   it("reports install mode to policy when a retained npm legacy target needs a new generation", async () => {
     const root = suiteTempRootTracker.makeTempDir();
@@ -2722,7 +2795,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(requests[0]?.request.kind).toBe("plugin-npm");
   });
 
-  it("reports install mode to policy when update-mode reactivates retained generations", async () => {
+  it("reports install mode to policy when update-mode only finds retained projects", async () => {
     const root = suiteTempRootTracker.makeTempDir();
     const npmDir = path.join(root, "npm");
     const extensionsDir = path.join(root, "extensions");
@@ -2735,17 +2808,6 @@ describe("installPluginFromNpmSpec", () => {
         "\n",
       ),
     });
-    const activeGenerationProjectRoot = resolvePluginNpmGenerationProjectDir({
-      npmDir,
-      packageName,
-      generationKey: [
-        packageName,
-        "2.0.0",
-        `${packageName}@2.0.0`,
-        "sha512-active",
-        "active123",
-      ].join("\n"),
-    });
     const legacyPackageDir = path.join(
       legacyProjectRoot,
       "node_modules",
@@ -2756,13 +2818,9 @@ describe("installPluginFromNpmSpec", () => {
       "node_modules",
       ...packageName.split("/"),
     );
-    const activeGenerationPackageDir = path.join(
-      activeGenerationProjectRoot,
-      "node_modules",
-      ...packageName.split("/"),
-    );
     for (const packageDir of [legacyPackageDir, generationPackageDir]) {
       fs.mkdirSync(packageDir, { recursive: true });
+      writeMinimalPackagePlugin(packageDir, packageName);
       await markRetainedManagedNpmInstall({
         packageDir,
         pluginId: "policy-generation-plugin",
@@ -2770,7 +2828,6 @@ describe("installPluginFromNpmSpec", () => {
         reason: "test-retained-generation",
       });
     }
-    fs.mkdirSync(activeGenerationPackageDir, { recursive: true });
     const { scriptPath, logPath } = writeInstallOnlyBlockingPolicyScript(root);
     mockNpmViewMetadata({
       name: packageName,

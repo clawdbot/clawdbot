@@ -667,10 +667,15 @@ describe("bundled channel ingress runtime ownership", () => {
         ingressState: "unknown",
         invoker: { state: "unknown" },
       });
-      const reactivatedBuildContext = bundled.resolveBuildContext();
+      const reactivated = createRuntimeBuilder({ origin: "bundled", id: bundled.record.id });
+      expect(reactivated.record).not.toBe(bundled.record);
+      expect(inspect(bundled.resolveBuildContext()(contextParams({ ingress })))).toMatchObject({
+        ingressState: "unknown",
+        invoker: { state: "unknown" },
+      });
       const reactivatedIngress = await resolveIngress("person-a");
       expect(
-        inspect(reactivatedBuildContext(contextParams({ ingress: reactivatedIngress }))),
+        inspect(reactivated.buildContext(contextParams({ ingress: reactivatedIngress }))),
       ).toMatchObject({
         ingressState: "present",
         invoker: { state: "present" },

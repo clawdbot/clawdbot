@@ -2,6 +2,10 @@
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type {
+  PluginCatalogEntry,
+  PluginsListResult,
+} from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -9,7 +13,6 @@ import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   resolveTrustedOfficialClawHubPackageName,
   resolveTrustedSourceLinkedOfficialClawHubSpec,
@@ -34,32 +37,8 @@ import {
 } from "./plugin-cache.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
-export type ManagedPluginCatalogEntry = {
-  id: string;
-  name: string;
-  packageName?: string;
-  description?: string;
-  version?: string;
-  kind?: string[];
-  origin?: string;
-  installed: boolean;
-  enabled: boolean;
-  state: "enabled" | "disabled" | "not-installed" | "error";
-  featured?: boolean;
-  featuredAt?: number;
-  order?: number;
-  hasIcon?: boolean;
-  install?: { source: "clawhub"; packageName: string } | { source: "official"; pluginId: string };
-  error?: string;
-  category?: string;
-  removable?: boolean;
-};
-
-export type ManagedPluginCatalog = {
-  plugins: ManagedPluginCatalogEntry[];
-  diagnostics: unknown[];
-  mutationAllowed: boolean;
-};
+export type ManagedPluginCatalogEntry = PluginCatalogEntry;
+export type ManagedPluginCatalog = PluginsListResult;
 
 export type OfficialCatalogResult = Pick<
   HostedOfficialExternalPluginCatalogLoadResult,
@@ -85,7 +64,7 @@ export function getManagedPluginCache(metadata?: PluginMetadataSnapshot) {
 }
 
 export function withManagedPluginCache<
-  TParams extends { config: OpenClawConfig; metadata?: PluginMetadataSnapshot },
+  TParams extends { config?: OpenClawConfig; metadata?: PluginMetadataSnapshot },
   TResult,
 >(run: (params: TParams) => Promise<TResult>): (params: TParams) => Promise<TResult> {
   return (params) => withPluginCache(getManagedPluginCache(params.metadata), () => run(params));
@@ -298,15 +277,6 @@ export function derivePluginCategory(
   return undefined;
 }
 
-export function firstPluginError(
-  diagnostics: readonly PluginDiagnostic[],
-  pluginId: string,
-): string | undefined {
-  return diagnostics.find(
-    (diagnostic) => diagnostic.level === "error" && diagnostic.pluginId === pluginId,
-  )?.message;
-}
-
 export function compareCatalogEntries(
   left: ManagedPluginCatalogEntry,
   right: ManagedPluginCatalogEntry,
@@ -315,23 +285,11 @@ export function compareCatalogEntries(
   if (featured !== 0) {
     return featured;
   }
-  if (left.featured && right.featured) {
-    const leftFeaturedAt = left.featuredAt;
-    const rightFeaturedAt = right.featuredAt;
-    if (leftFeaturedAt !== undefined || rightFeaturedAt !== undefined) {
-      if (leftFeaturedAt === undefined) {
-        return 1;
-      }
-      if (rightFeaturedAt === undefined) {
-        return -1;
-      }
-      if (leftFeaturedAt !== rightFeaturedAt) {
-        return rightFeaturedAt - leftFeaturedAt;
-      }
-    }
-  }
+  // Normalized timestamps are nonnegative; undated featured entries follow dated ones.
+  const featuredAt =
+    left.featured && right.featured ? (right.featuredAt ?? -1) - (left.featuredAt ?? -1) : 0;
   const order = (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER);
-  return order !== 0 ? order : left.name.localeCompare(right.name);
+  return featuredAt || order || left.name.localeCompare(right.name);
 }
 
 function resolveInstalledOfficialCatalogEntry(params: {

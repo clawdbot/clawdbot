@@ -137,6 +137,7 @@ export function createApplicationGateway(
     selfUser: null,
   };
   let client: GatewayBrowserClient | null = null;
+  let pluginCapabilityConnection = 0;
   let canvasSurfaceLease: CanvasSurfaceLease | null = null;
   let canvasSurfaceLeaseLoad: Promise<CanvasSurfaceLease> | null = null;
   let canvasSurfaceLeaseClient: GatewayBrowserClient | null = null;
@@ -306,29 +307,38 @@ export function createApplicationGateway(
   };
   const recordGatewayEvent = (event: Parameters<GatewayEventListener>[0]) => {
     const eventClient = client;
-    if (event.event === "gateway.suspension") {
+    if (event.event === "plugins.changed" && eventClient) {
+      const eventConnection = pluginCapabilityConnection;
+      const readCurrent = () =>
+        isCurrentClient(eventClient) &&
+        eventConnection === pluginCapabilityConnection &&
+        snapshot.phase === "connected"
+          ? snapshot
+          : null;
+      void import("./plugin-capabilities.runtime.ts")
+        .then(({ refreshPluginCapabilities }) =>
+          refreshPluginCapabilities(event.payload, eventClient, readCurrent, setSnapshot, (url) =>
+            startCanvasSurfaceLease(eventClient, canvasSurfaceLeaseGeneration, url),
+          ),
+        )
+        .catch((error: unknown) => {
+          if (readCurrent()) {
+            setSnapshot({ ...snapshot, lastError: formatUiError(error) });
+          }
+        });
+    } else if (event.event === "gateway.suspension") {
       const suspensionPhase = readSuspensionPhase(event.payload);
       if (suspensionPhase) {
         setSnapshot({ ...snapshot, suspensionPhase });
-        if (!isCurrentClient(eventClient)) {
-          return;
-        }
       }
     } else if (event.event === "shutdown") {
       // Only a restart-bearing shutdown arms the amber state; an ordinary stop
       // (restartExpectedMs absent) flows through the normal offline pill so the
       // retry action stays reachable. Hostile values fall to the timer clamp.
-      const payload = event.payload;
-      const expected =
-        payload && typeof payload === "object" && "restartExpectedMs" in payload
-          ? payload.restartExpectedMs
-          : undefined;
+      const expected = asOptionalRecord(event.payload)?.restartExpectedMs;
       if (typeof expected === "number") {
         scheduleRestartDeadline(expected);
         setSnapshot({ ...snapshot, restartPending: true });
-        if (!isCurrentClient(eventClient)) {
-          return;
-        }
       }
     } else if (event.event === "presence") {
       const entries = readPresenceEntries(event.payload);
@@ -338,12 +348,12 @@ export function createApplicationGateway(
         // gateways can omit still-connected clients after presence TTL pruning.
         if (selfUser && !sameSelfUser(snapshot.selfUser, selfUser)) {
           setSnapshot({ ...snapshot, selfUser });
-          // A presence observer can replace its client before this event reaches the log.
-          if (!isCurrentClient(eventClient)) {
-            return;
-          }
         }
       }
+    }
+    // Snapshot observers can replace the client before this event reaches the log.
+    if (!isCurrentClient(eventClient)) {
+      return;
     }
     eventLog = [{ ts: Date.now(), event: event.event, payload: event.payload }, ...eventLog].slice(
       0,
@@ -464,6 +474,7 @@ export function createApplicationGateway(
         if (client !== nextClient) {
           return;
         }
+        pluginCapabilityConnection += 1;
         // A successful hello retires bootstrap; the client has processed any issued device grant.
         connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
         const exactBuildIdentityAvailable = Boolean(hello.server?.buildId?.trim());
@@ -519,9 +530,7 @@ export function createApplicationGateway(
           });
         }
         everConnected = true;
-        const canvasPluginSurfaceUrl = normalizeCanvasPluginSurfaceUrl(
-          hello.pluginSurfaceUrls?.canvas,
-        );
+        const canvasPluginSurfaceUrl = hello.pluginSurfaceUrls?.canvas?.trim() || null;
         const canvasLeaseGeneration = beginCanvasSurfaceLease(nextClient);
         clearRestartDeadlineTimer();
         setSnapshot({
@@ -531,6 +540,7 @@ export function createApplicationGateway(
           restartPending: false,
           suspensionPhase: readSuspensionPhase(asOptionalRecord(hello.snapshot)?.suspension),
           hello,
+          pluginCapabilities: null,
           canvasPluginSurfaceUrl,
           // Trim guards a whitespace-only defaultId from becoming a truthy selection.
           assistantAgentId: sessionDefaults?.defaultAgentId?.trim() || null,
@@ -559,6 +569,7 @@ export function createApplicationGateway(
         if (client !== nextClient) {
           return;
         }
+        pluginCapabilityConnection += 1;
         stopCanvasSurfaceLease();
         const mismatchedBuildId = readControlUiBuildMismatchId(error?.details);
         if (mismatchedBuildId) {
@@ -601,6 +612,7 @@ export function createApplicationGateway(
                     ? "connecting"
                     : "stopped",
           hello: null,
+          pluginCapabilities: null,
           canvasPluginSurfaceUrl: null,
           selfUser: null,
           restartPending: restartPending || snapshot.restartPending === true,
@@ -652,6 +664,7 @@ export function createApplicationGateway(
       // recovery or a manual retry when a session already existed.
       phase: everConnected ? "reconnecting" : "connecting",
       hello: null,
+      pluginCapabilities: null,
       canvasPluginSurfaceUrl: null,
       assistantAgentId: null,
       selfUser: null,
@@ -706,6 +719,7 @@ export function createApplicationGateway(
         offlineStable: false,
         restartPending: false,
         hello: null,
+        pluginCapabilities: null,
         canvasPluginSurfaceUrl: null,
         assistantAgentId: null,
         selfUser: null,
@@ -734,9 +748,4 @@ export function createApplicationGateway(
     },
   };
   return gateway;
-}
-
-function normalizeCanvasPluginSurfaceUrl(value: string | undefined): string | null {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
 }

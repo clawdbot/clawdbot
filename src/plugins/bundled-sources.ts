@@ -1,6 +1,4 @@
-// Resolves bundled plugin source metadata from package manifests.
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
@@ -11,8 +9,6 @@ export type BundledPluginSource = {
   localPath: string;
   npmSpec?: string;
   version?: string;
-  configSchema?: Record<string, unknown>;
-  requiresConfig?: boolean;
 };
 
 type BundledPluginLookup =
@@ -88,8 +84,6 @@ export function resolveBundledPluginSources(params: {
       localPath: candidate.rootDir,
       npmSpec,
       version,
-      ...(isRecord(manifest.configSchema) ? { configSchema: manifest.configSchema } : {}),
-      requiresConfig: pluginConfigSchemaHasRequiredFields(manifest.configSchema),
     });
   }
 
@@ -99,14 +93,6 @@ export function resolveBundledPluginSources(params: {
 /** Projects bundled sources from the current generation's shared discovery facts. */
 export function getProcessBundledPluginSources(): ReadonlyMap<string, BundledPluginSource> {
   return resolveBundledPluginSources({});
-}
-
-function pluginConfigSchemaHasRequiredFields(schema: unknown): boolean {
-  if (!isRecord(schema)) {
-    return false;
-  }
-  const required = schema.required;
-  return Array.isArray(required) && required.some((entry) => typeof entry === "string");
 }
 
 export function findBundledPluginSource(params: {

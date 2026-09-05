@@ -17,6 +17,17 @@ export type PluginRegistrationPlan = {
   runFullActivationOnlyRegistrations: boolean;
 };
 
+function createRegistrationPlan(mode: PluginRegistrationMode): PluginRegistrationPlan {
+  const loadSetupEntry = mode === "setup-only" || mode === "setup-runtime";
+  return {
+    mode,
+    loadSetupEntry,
+    loadSetupRuntimeEntry: mode === "setup-runtime",
+    runRuntimeCapabilityPolicy: !loadSetupEntry,
+    runFullActivationOnlyRegistrations: mode === "full",
+  };
+}
+
 /** Converts loader intent into explicit entrypoint and activation behavior. */
 export function resolvePluginRegistrationPlan(params: {
   canLoadScopedSetupOnlyChannelPlugin: boolean;
@@ -31,15 +42,13 @@ export function resolvePluginRegistrationPlan(params: {
   env: NodeJS.ProcessEnv;
   channelPluginLoadIntent: ChannelPluginLoadIntent;
   toolDiscovery: boolean;
+  cliMetadata?: boolean;
 }): PluginRegistrationPlan | null {
+  if (params.cliMetadata) {
+    return params.enableStateEnabled ? createRegistrationPlan("cli-metadata") : null;
+  }
   if (params.canLoadScopedSetupOnlyChannelPlugin) {
-    return {
-      mode: "setup-only",
-      loadSetupEntry: true,
-      loadSetupRuntimeEntry: false,
-      runRuntimeCapabilityPolicy: false,
-      runFullActivationOnlyRegistrations: false,
-    };
+    return createRegistrationPlan("setup-only");
   }
   if (
     params.scopedSetupOnlyChannelPluginRequested &&
@@ -51,13 +60,7 @@ export function resolvePluginRegistrationPlan(params: {
     return null;
   }
   if (params.toolDiscovery) {
-    return {
-      mode: "tool-discovery",
-      loadSetupEntry: false,
-      loadSetupRuntimeEntry: false,
-      runRuntimeCapabilityPolicy: true,
-      runFullActivationOnlyRegistrations: false,
-    };
+    return createRegistrationPlan("tool-discovery");
   }
   const loadSetupRuntimeEntry =
     params.shouldLoadModules &&
@@ -70,20 +73,7 @@ export function resolvePluginRegistrationPlan(params: {
       channelPluginLoadIntent: params.channelPluginLoadIntent,
     });
   if (loadSetupRuntimeEntry) {
-    return {
-      mode: "setup-runtime",
-      loadSetupEntry: true,
-      loadSetupRuntimeEntry: true,
-      runRuntimeCapabilityPolicy: false,
-      runFullActivationOnlyRegistrations: false,
-    };
+    return createRegistrationPlan("setup-runtime");
   }
-  const mode = params.shouldActivate ? "full" : "discovery";
-  return {
-    mode,
-    loadSetupEntry: false,
-    loadSetupRuntimeEntry: false,
-    runRuntimeCapabilityPolicy: true,
-    runFullActivationOnlyRegistrations: mode === "full",
-  };
+  return createRegistrationPlan(params.shouldActivate ? "full" : "discovery");
 }

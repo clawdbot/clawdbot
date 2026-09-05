@@ -144,7 +144,6 @@ function loadLegacySessionSurface(params: {
   fs.closeSync(opened.fd);
   const moduleExport = getCachedPluginModuleLoader({
     modulePath: safeSource,
-    rootDir: moduleRoot,
     importerUrl: import.meta.url,
     loaderFilename: import.meta.url,
   })(safeSource);

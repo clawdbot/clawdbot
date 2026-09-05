@@ -8,4 +8,11 @@
 // can detect silent degradation instead of assuming reloads still fire.
 export type GatewayHotReloadStatus = "active" | "disabled";
 
-export type GatewayHotReloadApplicationStatus = "applied" | "applied-restart-required";
+type GatewayHotReloadApplicationStatus = "applied" | "applied-restart-required";
+
+export type GatewayHotReloadApplication =
+  | GatewayHotReloadApplicationStatus
+  | {
+      status: GatewayHotReloadApplicationStatus;
+      runtime: import("../plugins/lifecycle.js").PluginRuntimeApplication;
+    };

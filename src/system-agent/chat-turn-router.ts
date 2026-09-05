@@ -47,6 +47,7 @@ export type SystemAgentChatTurnOptions = {
 };
 
 type ChatTurnRouterOptions = {
+  applyPluginRuntime?: import("../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
   yes?: boolean;
   deps?: SystemAgentCommandDeps;
   runAgentTurn?: SystemAgentTurnRunner;
@@ -510,6 +511,15 @@ export class ChatTurnRouter {
     beforePersistentApply?: PersistentApplyGuard,
   ): Promise<SystemAgentOperationResult | undefined> {
     try {
+      if (
+        (operation.kind === "plugin-install" ||
+          operation.kind === "plugin-uninstall" ||
+          operation.kind === "plugin-activate-artifact") &&
+        this.options.surface === "gateway" &&
+        !this.options.applyPluginRuntime
+      ) {
+        throw new Error("Plugin lifecycle is unavailable in this Gateway context.");
+      }
       const execute = this.dependencies.executeOperation ?? executeSystemAgentOperation;
       if (approved) {
         await this.callbacks.requirePersistentApplyInference(capture);
@@ -517,6 +527,7 @@ export class ChatTurnRouter {
       return await execute(operation, capture, {
         approved,
         deps: this.commandDeps(),
+        applyPluginRuntime: this.options.applyPluginRuntime,
         beforePersistentApply,
         onVerifiedInferenceChanged: this.callbacks.rebindVerifiedInference,
       });

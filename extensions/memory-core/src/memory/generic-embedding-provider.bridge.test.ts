@@ -46,7 +46,6 @@ afterEach(() => {
 
 describe("memory-core generic embedding provider contract", () => {
   it("preserves a contract-declared provider and its identity metadata", async () => {
-    let createdProvider: EmbeddingProvider | undefined;
     const { config, registry } = createPluginRegistryFixture({
       plugins: {
         enabled: false,
@@ -88,7 +87,7 @@ describe("memory-core generic embedding provider contract", () => {
             expect(options.model).toBe("virtual-model");
             expect(options.dimensions).toBe(7);
             expect(options.config).toBe(config);
-            createdProvider = {
+            const provider: EmbeddingProvider = {
               id: "virtual-generic",
               model: options.model,
               dimensions: options.dimensions,
@@ -97,7 +96,7 @@ describe("memory-core generic embedding provider contract", () => {
               embedBatch: async (inputs) => inputs.map((_input, index) => [index, 7]),
             };
             return {
-              provider: createdProvider,
+              provider,
               runtime: {
                 id: "virtual-generic",
                 inlineQueryTimeoutMs: 1234,
@@ -179,6 +178,10 @@ describe("memory-core generic embedding provider contract", () => {
       ],
     });
 
-    expect(result.provider).toBe(createdProvider);
+    await expect(result.provider!.embed("query")).resolves.toEqual([1, 2, 3]);
+    await expect(result.provider!.embedBatch(["first", "second"])).resolves.toEqual([
+      [0, 7],
+      [1, 7],
+    ]);
   });
 });

@@ -453,14 +453,14 @@ struct ExecApprovalQueueStoreTests {
             systemRequests: { [ApprovalFixtureRequest(id: "system-pending", command: "echo recovered")] },
             advertisedMethods: supportsSystemList ? ["openclaw.approval.list"] : [])
         try await fixture.withStore { store in
+            let expectedIDs: Set<String> = supportsSystemList
+                ? ["exec-pending", "system-pending"]
+                : ["exec-pending"]
+            // Hello owns each list admission; an explicit refresh can start another
+            // after hello reconciliation finishes.
             store.start()
             let initialLease = try await fixture.gateway.acquireServerLease()
-            // Startup may finish before the menu opens; its refresh need not coalesce.
-            try #require(await self.waitUntil {
-                Set(store.requests.map(\.id)) ==
-                    (supportsSystemList ? ["exec-pending", "system-pending"] : ["exec-pending"])
-            })
-            await store.refresh()
+            try #require(await self.waitUntil { Set(store.requests.map(\.id)) == expectedIDs })
             var captured: ExecApprovalQueueItem?
             if supportsSystemList {
                 let event = ApprovalFixtureRequest(id: "system-pending", command: "echo before-reconnect")
@@ -468,22 +468,23 @@ struct ExecApprovalQueueStoreTests {
                 try #require(await self.waitUntil {
                     store.requests.contains { $0.request.command == "echo before-reconnect" }
                 })
-                await store.refresh()
                 captured = try #require(store.requests.first { $0.kind == .systemAgent })
             }
             await fixture.gateway.shutdown()
             #expect(!fixture.gateway.serverLeaseMatchesCurrentState(initialLease))
+            try #require(await self.waitUntil { store.requests.isEmpty })
             let listsBeforeReconnect = await fixture.requestLog.requests(method: "openclaw.approval.list")
-            await store.refresh()
-            let recoveredLease = try #require(await fixture.gateway.captureServerLease())
+            let recoveredLease = try await fixture.gateway.acquireServerLease()
             #expect(recoveredLease != initialLease)
             #expect(fixture.gateway.serverLeaseMatchesCurrentState(recoveredLease))
+            try #require(await self.waitUntil { Set(store.requests.map(\.id)) == expectedIDs })
             #expect(fixture.session.snapshotMakeCount() == 2)
             if let captured {
                 await store.resolve(request: captured, decision: .deny)
             }
             #expect(await fixture.requestLog.requests(method: "approval.resolve").isEmpty)
             let systemLists = await fixture.requestLog.requests(method: "openclaw.approval.list")
+            #expect(systemLists.count == (supportsSystemList ? 2 : 0))
 
             if supportsSystemList {
                 #expect(systemLists.count > listsBeforeReconnect.count)

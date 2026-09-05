@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, assert, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { createTerminalTool } from "../agents/tools/terminal-tool.js";
 import {
   getGlobalPluginRegistry,
@@ -13,16 +13,20 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
+import type { PluginLoadOptions } from "../plugins/loader-types.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
+import { projectPluginContributions } from "../plugins/registry-contributions.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import type { PluginRegistry } from "../plugins/registry.js";
+import { createPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.test-fixtures.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import type { OpenClawPluginApi } from "../plugins/types.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { withEnv } from "../test-utils/env.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
+import { NodeRegistry } from "./node-registry.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
@@ -37,9 +41,7 @@ const loadPluginLookUpTable = vi.hoisted(() =>
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn(({ config }) => ({ config, changes: [], autoEnabledReasons: {} })),
 );
-const primeConfiguredBindingRegistry = vi.hoisted(() =>
-  vi.fn(() => ({ bindingCount: 0, channelCount: 0 })),
-);
+const validateConfiguredBindings = vi.hoisted(() => vi.fn());
 const normalizeProviderModelIdWithRuntime = vi.hoisted(() => vi.fn(() => undefined));
 const pluginRuntimeLoaderLogger = vi.hoisted(() => ({
   info: vi.fn(),
@@ -90,7 +92,7 @@ vi.mock("../channels/plugins/configured-binding-registry.js", async () => {
   >("../channels/plugins/configured-binding-registry.js");
   return {
     ...actual,
-    primeConfiguredBindingRegistry,
+    validateConfiguredBindings,
   };
 });
 
@@ -494,10 +496,10 @@ function loadGatewayPluginsForTest(
 }
 
 function loadGatewayStartupPluginsForTest(
-  overrides: Partial<Parameters<ServerPluginBootstrapModule["loadGatewayStartupPlugins"]>[0]> = {},
+  overrides: Partial<Parameters<ServerPluginBootstrapModule["prepareGatewayPluginLoad"]>[0]> = {},
 ) {
   const log = createTestLog();
-  const loaded = serverPluginBootstrapModule.loadGatewayStartupPlugins({
+  const loaded = serverPluginBootstrapModule.prepareGatewayPluginLoad({
     cfg: {},
     workspaceDir: "/tmp",
     log,
@@ -524,7 +526,7 @@ beforeEach(() => {
   applyPluginAutoEnable
     .mockReset()
     .mockImplementation(({ config }) => ({ config, changes: [], autoEnabledReasons: {} }));
-  primeConfiguredBindingRegistry.mockClear().mockReturnValue({ bindingCount: 0, channelCount: 0 });
+  validateConfiguredBindings.mockClear();
   normalizeProviderModelIdWithRuntime.mockReset().mockReturnValue(undefined);
   dispatchReplyFromConfig.mockClear();
   pluginRuntimeLoaderLogger.info.mockClear();
@@ -2031,69 +2033,173 @@ describe("loadGatewayPlugins", () => {
     expect(() => channel.onMessage(vi.fn())).toThrow(/authority.*no longer current/i);
   });
 
-  test("cancels an open node duplex invocation before retiring its plugin runtime", async () => {
-    const registry = createDuplexPluginRegistry("plugin.duplex.v1");
-    loadOpenClawPlugins.mockReturnValue(registry);
-    const context = {
-      nodeRegistry: { sendInvokeInput: vi.fn() },
-    } as unknown as GatewayRequestContext;
-    serverPluginsModule.setFallbackGatewayContext(context);
-    const loaded = serverPluginsModule.loadGatewayPlugins({
-      cfg: {},
-      workspaceDir: "/tmp",
-      log: createTestLog(),
-      coreGatewayHandlers: {},
-      baseMethods: [],
-      pluginIds: ["duplex-plugin"],
-      resolveGatewayContext: () => resolveTestGatewayContext(),
-    });
-    runtimeRegistryModule.setActivePluginRegistry(loaded.pluginRegistry);
-
-    let invokeSignal: AbortSignal | undefined;
-    handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
-      invokeSignal = opts.signal;
-      const stream = opts.client?.internal as
-        | {
-            nodeInvokeStream?: {
-              onDispatchReady: (invokeId: string) => void;
-              onProgress: (chunk: string) => void;
-            };
-          }
-        | undefined;
-      stream?.nodeInvokeStream?.onDispatchReady("duplex-retire-invoke");
-      stream?.nodeInvokeStream?.onProgress(JSON.stringify({ v: 1, kind: "ready" }));
-      await new Promise<void>((resolve) => {
-        opts.signal?.addEventListener(
-          "abort",
-          () => {
-            opts.respond(false, undefined, { code: "ABORTED", message: "node invoke cancelled" });
-            resolve();
-          },
-          { once: true },
-        );
+  test.each(["binding", "publication", "instance", "scoped", "late-borrower"] as const)(
+    "cancels an open node duplex invocation through %s lifetime ownership",
+    async (retirement) => {
+      const registrations = new Map<
+        string,
+        { record: PluginRegistry["plugins"][number]; api: OpenClawPluginApi }
+      >();
+      loadOpenClawPlugins.mockImplementationOnce((options: PluginLoadOptions) => {
+        const builder = createPluginRegistry({
+          logger: createTestLog(),
+          runtime: runtimeModule.createPluginRuntime(options.runtimeOptions),
+          activateGlobalSideEffects: true,
+        });
+        for (const id of ["duplex-plugin", "retained-plugin"]) {
+          const record = createPluginRecord({
+            id,
+            source: `/tmp/${id}/index.js`,
+            origin: "bundled",
+            enabled: true,
+            configSchema: false,
+          });
+          const api = builder.createApi(record, { config: {} });
+          builder.registry.plugins.push(record);
+          api.registerNodeHostCommand({
+            command: `${id}.duplex`,
+            duplex: true,
+            handle: async () => "{}",
+          });
+          registrations.set(id, { record, api });
+        }
+        return builder.registry;
       });
-    });
+      const context = createTestContext("instance-duplex-retirement");
+      context.nodeRegistry = new NodeRegistry();
+      serverPluginsModule.setFallbackGatewayContext(context);
+      const resolveGatewayContext = () => resolveTestGatewayContext();
+      const closeGateway = () =>
+        gatewayRequestScopeModule
+          .getGatewayContextLifetime(resolveGatewayContext)
+          .abort(new Error("Gateway fixture closed"));
+      const loaded = serverPluginsModule.loadGatewayPlugins({
+        cfg: {},
+        workspaceDir: "/tmp",
+        log: createTestLog(),
+        coreGatewayHandlers: {},
+        baseMethods: [],
+        pluginIds: ["duplex-plugin", "retained-plugin"],
+        resolveGatewayContext,
+      });
+      runtimeRegistryModule.setActivePluginRegistry(loaded.pluginRegistry);
+      const replaced = registrations.get("duplex-plugin");
+      const retained = registrations.get("retained-plugin");
+      assert(replaced && retained, "The loader registered both real plugin instances");
+      const sharedRuntime = createRuntimeFromLastGatewayLoad();
+      const scoped =
+        retirement === "scoped" || retirement === "late-borrower"
+          ? createPluginRegistry({
+              logger: createTestLog(),
+              runtime: sharedRuntime,
+              activateGlobalSideEffects: false,
+            })
+          : undefined;
+      let runtimeOwner = replaced;
+      if (scoped) {
+        const record = createPluginRecord({
+          id: "scoped-duplex-plugin",
+          source: "/tmp/scoped-duplex-plugin/index.js",
+          origin: "bundled",
+          enabled: true,
+          configSchema: false,
+        });
+        const api = scoped.createApi(record, { config: {} });
+        scoped.registry.plugins.push(record);
+        api.registerNodeHostCommand({
+          command: `${record.id}.duplex`,
+          duplex: true,
+          handle: async () => "{}",
+        });
+        runtimeOwner = { record, api };
+      }
+      const callerAbort = new AbortController();
+      let invokeSignal: AbortSignal | undefined;
+      let channel: Awaited<ReturnType<PluginRuntime["nodes"]["openDuplex"]>> | undefined;
+      handleGatewayRequest.mockImplementationOnce(async (opts: HandleGatewayRequestOptions) => {
+        const signal = opts.signal;
+        const stream = opts.client?.internal?.nodeInvokeStream;
+        assert(signal && stream, "The canonical node invocation carries cancellation and framing");
+        invokeSignal = signal;
+        stream.onDispatchReady("duplex-retire-invoke");
+        stream.onProgress(JSON.stringify({ v: 1, kind: "ready" }));
+        await new Promise<void>((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              opts.respond(false, undefined, { code: "ABORTED", message: "node invoke cancelled" });
+              resolve();
+            },
+            { once: true },
+          );
+        });
+      });
+      const failures: unknown[] = [];
+      try {
+        channel = await runtimeOwner.api.runtime.nodes.openDuplex({
+          nodeId: "node-1",
+          command: `${runtimeOwner.record.id}.duplex`,
+          signal: callerAbort.signal,
+        });
+        if (retirement === "late-borrower") {
+          runtimeRegistryModule.setActivePluginRegistry(createEmptyPluginRegistry());
+          await runtimeRegistryModule.waitForPluginRegistryRetirement(loaded.pluginRegistry);
+          expect(await sharedRuntime.gateway.isAvailable()).toBe(true);
+          expect(invokeSignal?.aborted).toBe(false);
+          await expect(runtimeOwner.api.runtime.nodes.list()).resolves.toEqual({ nodes: [] });
+          const unsubscribe = channel.onMessage(vi.fn());
+          unsubscribe();
+          closeGateway();
+        } else if (scoped) {
+          await runtimeRegistryModule.disposePluginRegistryInstances(scoped.registry);
+          expect(await sharedRuntime.gateway.isAvailable()).toBe(true);
+          await expect(retained.api.runtime.nodes.list()).resolves.toEqual({ nodes: [] });
+        } else if (retirement === "binding") {
+          loaded.retireGatewayRuntimeBindings();
+        } else {
+          const next = createEmptyPluginRegistry();
+          next.plugins.push(retained.record);
+          projectPluginContributions(loaded.pluginRegistry, retained.record, next);
+          runtimeRegistryModule.setActivePluginRegistry(next);
+          if (retirement === "publication") {
+            const onMessage = channel.onMessage;
+            expect(invokeSignal?.aborted).toBe(false);
+            expect(() => onMessage(vi.fn())).toThrow(/authority.*no longer current/i);
+          }
+          await runtimeRegistryModule.waitForPluginRegistryRetirement(loaded.pluginRegistry);
+          expect(await sharedRuntime.gateway.isAvailable()).toBe(true);
+          await expect(retained.api.runtime.nodes.list()).resolves.toEqual({ nodes: [] });
+        }
 
-    const runtime = createRuntimeFromLastGatewayLoad();
-    const nodes = runtime.nodes as PluginRuntime["nodes"] & {
-      openDuplex: (params: { nodeId: string; command: string }) => Promise<{
-        closed: Promise<unknown>;
-        send: (message: Uint8Array) => Promise<void>;
-      }>;
-    };
-    const channel = await gatewayRequestScopeModule.withPluginRuntimeRegistryScope(registry, () =>
-      gatewayRequestScopeModule.withPluginRuntimePluginScope(
-        { pluginId: "duplex-plugin", pluginOrigin: "bundled" },
-        () => nodes.openDuplex({ nodeId: "node-1", command: "plugin.duplex.v1" }),
-      ),
-    );
-
-    loaded.retireGatewayRuntimeBindings();
-
-    expect(invokeSignal?.aborted).toBe(true);
-    await expect(channel.closed).rejects.toThrow(/retired|cancel/i);
-    await expect(channel.send(Uint8Array.of(1))).rejects.toThrow(/retired|closed/i);
-  });
+        expect(callerAbort.signal.aborted).toBe(false);
+        expect(invokeSignal?.aborted).toBe(true);
+        await expect(channel.closed).rejects.toThrow("node invoke cancelled");
+        await expect(channel.send(Uint8Array.of(1))).rejects.toThrow(/retir|closed/i);
+        await runtimeRegistryModule.clearActivePluginRegistry();
+        closeGateway();
+        expect(await sharedRuntime.gateway.isAvailable()).toBe(false);
+      } catch (error) {
+        failures.push(error);
+      } finally {
+        channel?.close();
+        loaded.retireGatewayRuntimeBindings();
+        await Promise.allSettled(channel ? [channel.closed] : []);
+        const settled = await Promise.allSettled([
+          runtimeRegistryModule.clearActivePluginRegistry(),
+          runtimeRegistryModule.waitForPluginRegistryRetirement(loaded.pluginRegistry),
+          ...(scoped
+            ? [runtimeRegistryModule.disposePluginRegistryInstances(scoped.registry)]
+            : []),
+        ]);
+        failures.push(
+          ...settled.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+        );
+      }
+      if (failures.length) {
+        throw new AggregateError(failures, "Plugin duplex fixture or cleanup failed");
+      }
+    },
+  );
 
   test("forwards provider and model overrides when the request scope is authorized", async () => {
     const runtime = await createRequestScopedSubagentRuntime();
@@ -2267,7 +2373,7 @@ describe("loadGatewayPlugins", () => {
     registerActivePluginToolOwnership("other-plugin", ["workboard_complete"]);
 
     await expect(
-      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("workboard", () =>
+      gatewayRequestScopeModule.withPluginRuntimePluginScope({ pluginId: "workboard" }, () =>
         runtime.run({
           sessionKey: "s-core-tools-also-allow",
           message: "run a command",
@@ -2276,7 +2382,7 @@ describe("loadGatewayPlugins", () => {
       ),
     ).rejects.toThrow('plugin "workboard" may not add core tool "exec" to subagent runs');
     await expect(
-      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("workboard", () =>
+      gatewayRequestScopeModule.withPluginRuntimePluginScope({ pluginId: "workboard" }, () =>
         runtime.run({
           sessionKey: "s-ambiguous-tools-also-allow",
           message: "finish the card",
@@ -2402,7 +2508,7 @@ describe("loadGatewayPlugins", () => {
     });
     expect(normalizeProviderModelIdWithRuntime).not.toHaveBeenCalled();
     serverPlugins.setFallbackGatewayContext(createTestContext("fallback-trusted-overrides"));
-    await gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope({ pluginId: "voice-call" }, () =>
       runtime.run({
         sessionKey: "s-trusted-override",
         message: "use trusted override",
@@ -2435,7 +2541,7 @@ describe("loadGatewayPlugins", () => {
     const deniedRuntime = await createSubagentRuntime(serverPluginsModule);
     serverPluginsModule.setFallbackGatewayContext(createTestContext("fallback-policy-binding"));
     const run = (runtime: PluginRuntime["subagent"]) =>
-      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+      gatewayRequestScopeModule.withPluginRuntimePluginScope({ pluginId: "voice-call" }, () =>
         runtime.run({
           sessionKey: "s-policy-binding",
           message: "use trusted override",
@@ -2456,7 +2562,7 @@ describe("loadGatewayPlugins", () => {
     const runtime = await createSubagentRuntime(serverPlugins);
     serverPlugins.setFallbackGatewayContext(createTestContext("fallback-plugin-owner"));
 
-    await gatewayRequestScopeModule.withPluginRuntimePluginIdScope("memory-core", () =>
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope({ pluginId: "memory-core" }, () =>
       runtime.run({
         sessionKey: "dreaming-narrative-light-workspace-1",
         message: "write a narrative",
@@ -2473,7 +2579,7 @@ describe("loadGatewayPlugins", () => {
     serverPlugins.setFallbackGatewayContext(createTestContext("fallback-untrusted-plugin"));
 
     await expect(
-      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+      gatewayRequestScopeModule.withPluginRuntimePluginScope({ pluginId: "voice-call" }, () =>
         runtime.run({
           sessionKey: "s-untrusted-override",
           message: "use untrusted override",
@@ -2502,7 +2608,7 @@ describe("loadGatewayPlugins", () => {
       },
     });
     serverPlugins.setFallbackGatewayContext(createTestContext("fallback-model-only-override"));
-    await gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope({ pluginId: "voice-call" }, () =>
       runtime.run({
         sessionKey: "s-model-only-override",
         message: "use trusted model-only override",
@@ -2533,7 +2639,7 @@ describe("loadGatewayPlugins", () => {
     });
     serverPlugins.setFallbackGatewayContext(createTestContext("fallback-invalid-allowlist"));
     await expect(
-      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("voice-call", () =>
+      gatewayRequestScopeModule.withPluginRuntimePluginScope({ pluginId: "voice-call" }, () =>
         runtime.run({
           sessionKey: "s-invalid-allowlist",
           message: "use trusted override",
@@ -2662,7 +2768,7 @@ describe("loadGatewayPlugins", () => {
     });
 
     await expect(
-      gatewayRequestScopeModule.withPluginRuntimePluginIdScope("memory-core", () =>
+      gatewayRequestScopeModule.withPluginRuntimePluginScope({ pluginId: "memory-core" }, () =>
         runtime.deleteSession({
           sessionKey: "dreaming-narrative-light-workspace-1",
           deleteTranscript: true,
@@ -2712,7 +2818,7 @@ describe("loadGatewayPlugins", () => {
 
     await expect(
       gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
-        gatewayRequestScopeModule.withPluginRuntimePluginIdScope("memory-core", () =>
+        gatewayRequestScopeModule.withPluginRuntimePluginScope({ pluginId: "memory-core" }, () =>
           runtime.deleteSession({
             sessionKey: "dreaming-narrative-light-workspace-1",
             deleteTranscript: true,
@@ -2747,7 +2853,7 @@ describe("loadGatewayPlugins", () => {
     });
     loadGatewayStartupPluginsForTest({ cfg });
 
-    expect(primeConfiguredBindingRegistry).toHaveBeenCalledWith({ cfg: autoEnabledConfig });
+    expect(validateConfiguredBindings).toHaveBeenCalledWith(autoEnabledConfig);
   });
 
   test("uses the auto-enabled config snapshot for gateway bootstrap policies", async () => {
@@ -2769,7 +2875,7 @@ describe("loadGatewayPlugins", () => {
     const runtime = await createSubagentRuntime(serverPlugins, {});
     serverPlugins.setFallbackGatewayContext(createTestContext("auto-enabled-bootstrap-policy"));
 
-    await gatewayRequestScopeModule.withPluginRuntimePluginIdScope("demo", () =>
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope({ pluginId: "demo" }, () =>
       runtime.run({
         sessionKey: "s-auto-enabled-bootstrap-policy",
         message: "use trusted override",

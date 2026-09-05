@@ -5,13 +5,17 @@ import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-met
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { resolvePluginInstallDir } from "./install-paths.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
-import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
+import {
+  readInstalledPluginIndexRow,
+  readPersistedInstalledPluginIndex,
+} from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -38,8 +42,8 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
   }),
 }));
 
-const { listManagedPlugins, refreshManagedPluginMetadata } =
-  await import("./management-service.js");
+const { listManagedPlugins } = await import("./management-service.js");
+const { refreshManagedPlugins } = await import("./management-mutations.js");
 const { setManagedPluginEnabled, uninstallManagedPlugin } =
   await import("./management-mutations.js");
 const roots: string[] = [];
@@ -89,7 +93,28 @@ it("refreshes an externally changed install ledger before publishing management 
     );
   });
 
-  refreshManagedPluginMetadata({ config });
+  configIo.read.mockResolvedValue({
+    snapshot: {
+      valid: true,
+      parsed: config,
+      path: path.join(root, "openclaw.json"),
+      sourceConfig: config,
+      hash: "base-hash",
+    },
+    writeOptions: { expectedConfigPath: path.join(root, "openclaw.json") },
+  });
+  const applyRuntime = vi.fn(async ({ pluginIds }: { pluginIds: readonly string[] }) => ({
+    operationId: "metadata-refresh",
+    generation: 1,
+    pluginIds: [...pluginIds],
+  }));
+  await refreshManagedPlugins({ applyRuntime });
+  expect(applyRuntime).toHaveBeenCalledWith({
+    config,
+    pluginIds: [fixture.pluginId],
+    reason: "metadata",
+    assertInvokerOwned: expect.any(Function),
+  });
 
   expect((await listManagedPlugins({ config })).plugins).toContainEqual(
     expect.objectContaining({ id: fixture.pluginId, installed: true }),
@@ -98,74 +123,109 @@ it("refreshes an externally changed install ledger before publishing management 
   expect(boot.byPluginId.has(fixture.pluginId)).toBe(false);
 });
 
-it("removes an npm-pack plugin from management inventory without replacing Gateway metadata", async () => {
-  const root = makeTrackedTempDir("managed-npm-pack-uninstall", roots);
-  const stateDir = path.join(root, "state");
-  const packageName = "@example/tgz-visible";
-  const pluginRoot = resolvePluginInstallDir("tgz-visible", path.join(stateDir, "extensions"));
-  mkdirSafeDir(pluginRoot);
-  const fixture = createColdPluginFixture({
-    rootDir: pluginRoot,
-    pluginId: "tgz-visible",
-    packageName,
-  });
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
-  let config: OpenClawConfig = {
-    plugins: { entries: { [fixture.pluginId]: { enabled: true } } },
-  };
-  const installRecord = {
-    source: "npm",
-    spec: `${packageName}@1.0.0`,
-    sourcePath: path.join(root, `${fixture.pluginId}.tgz`),
-    installPath: pluginRoot,
-    artifactKind: "npm-pack",
-    artifactFormat: "tgz",
-  } as const;
-  configIo.read.mockImplementation(async () => ({
-    snapshot: {
-      valid: true,
-      parsed: config,
-      path: path.join(stateDir, "openclaw.json"),
-      sourceConfig: config,
-      hash: "base-hash",
-    },
-    writeOptions: { expectedConfigPath: path.join(stateDir, "openclaw.json") },
-  }));
-  configIo.write.mockImplementation(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
-    config = nextConfig;
-  });
-  await writePersistedInstalledPluginIndex(
-    loadInstalledPluginIndex({
+it.each(["live", "closed"] as const)(
+  "removes an npm-pack plugin only with %s authority without replacing Gateway metadata",
+  async (authority) => {
+    const root = makeTrackedTempDir("managed-npm-pack-uninstall", roots);
+    const stateDir = path.join(root, "state");
+    const packageName = "@example/tgz-visible";
+    const pluginRoot = resolvePluginInstallDir("tgz-visible", path.join(stateDir, "extensions"));
+    mkdirSafeDir(pluginRoot);
+    const fixture = createColdPluginFixture({
+      rootDir: pluginRoot,
+      pluginId: "tgz-visible",
+      packageName,
+    });
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    let config: OpenClawConfig = {
+      plugins: { entries: { [fixture.pluginId]: { enabled: true } } },
+    };
+    const installRecord = {
+      source: "npm",
+      spec: `${packageName}@1.0.0`,
+      sourcePath: path.join(root, `${fixture.pluginId}.tgz`),
+      installPath: pluginRoot,
+      artifactKind: "npm-pack",
+      artifactFormat: "tgz",
+    } as const;
+    let authorityOpen = true;
+    const closed = new Error("invoking plugin retired during uninstall preparation");
+    configIo.read.mockImplementation(async () => {
+      if (authority === "closed") {
+        authorityOpen = false;
+      }
+      return {
+        snapshot: {
+          valid: true,
+          parsed: config,
+          path: path.join(stateDir, "openclaw.json"),
+          sourceConfig: config,
+          hash: "base-hash",
+        },
+        writeOptions: { expectedConfigPath: path.join(stateDir, "openclaw.json") },
+      };
+    });
+    configIo.write.mockImplementation(
+      async ({
+        nextConfig,
+        writeOptions,
+      }: Parameters<typeof import("../config/config.js").replaceConfigFile>[0]) => {
+        writeOptions?.assertConfigPathForWrite?.();
+        config = nextConfig;
+      },
+    );
+    await writePersistedInstalledPluginIndex(
+      loadInstalledPluginIndex({
+        config,
+        env: process.env,
+        installRecords: { [fixture.pluginId]: installRecord },
+      }),
+    );
+    const boot = loadPluginMetadataSnapshot({
       config,
       env: process.env,
-      installRecords: { [fixture.pluginId]: installRecord },
-    }),
-  );
-  const boot = loadPluginMetadataSnapshot({
-    config,
-    env: process.env,
-    preferPersisted: false,
-  });
-  setGatewayPluginMetadataSnapshot(boot, { config, env: process.env });
-  expect((await listManagedPlugins({ config })).plugins).toContainEqual(
-    expect.objectContaining({ id: fixture.pluginId, installed: true }),
-  );
+      preferPersisted: false,
+    });
+    setGatewayPluginMetadataSnapshot(boot, { config, env: process.env });
+    expect((await listManagedPlugins({ config })).plugins).toContainEqual(
+      expect.objectContaining({ id: fixture.pluginId, installed: true }),
+    );
 
-  await uninstallManagedPlugin({ pluginId: fixture.pluginId });
+    const db = openOpenClawStateDatabase().db;
+    const before = readInstalledPluginIndexRow(db);
+    expect(before).toBeDefined();
+    const pending = uninstallManagedPlugin({
+      pluginId: fixture.pluginId,
+      keepFiles: authority === "closed",
+      beforePersistentApply: () => {
+        if (!authorityOpen) {
+          throw closed;
+        }
+      },
+    });
+    if (authority === "closed") {
+      await expect(pending).rejects.toBe(closed);
+      // Compensation cannot make an unauthorized index revision acceptable.
+      expect(readInstalledPluginIndexRow(db)).toEqual(before);
+      expect(fs.existsSync(pluginRoot)).toBe(true);
+      return;
+    }
+    await pending;
 
-  expect(fs.existsSync(pluginRoot)).toBe(false);
-  expect(
-    (await readPersistedInstalledPluginIndex())?.plugins.some(
-      (plugin) => plugin.pluginId === fixture.pluginId,
-    ),
-  ).toBe(false);
-  expect((await listManagedPlugins({ config })).plugins).not.toContainEqual(
-    expect.objectContaining({ id: fixture.pluginId }),
-  );
-  expect(getGatewayPluginMetadataSnapshot()).toBe(boot);
-  expect(boot.byPluginId.has(fixture.pluginId)).toBe(true);
-});
+    expect(fs.existsSync(pluginRoot)).toBe(false);
+    expect(
+      (await readPersistedInstalledPluginIndex())?.plugins.some(
+        (plugin) => plugin.pluginId === fixture.pluginId,
+      ),
+    ).toBe(false);
+    expect((await listManagedPlugins({ config })).plugins).not.toContainEqual(
+      expect.objectContaining({ id: fixture.pluginId }),
+    );
+    expect(getGatewayPluginMetadataSnapshot()).toBe(boot);
+    expect(boot.byPluginId.has(fixture.pluginId)).toBe(true);
+  },
+);
 
 it.each([undefined, "main"])(
   "toggles a listed secondary-workspace plugin with system owner %s",

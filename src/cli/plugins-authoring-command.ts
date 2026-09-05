@@ -48,11 +48,6 @@ export type PluginsInitOptions = {
 
 type PluginScaffoldType = "tool" | "provider" | "feature";
 
-type LoadedToolPlugin = {
-  entry: unknown;
-  metadata: ToolPluginMetadata;
-};
-
 const SUPPORTED_PLUGIN_SCAFFOLD_TYPES = [
   "tool",
   "provider",
@@ -114,10 +109,9 @@ function readPackageManifest(rootDir: string): JsonObject {
   return readJsonFile(packagePath);
 }
 
-async function importToolPluginEntry(entryPath: string, rootDir: string): Promise<unknown> {
+async function importToolPluginEntry(entryPath: string): Promise<unknown> {
   const loader = getCachedPluginModuleLoader({
     modulePath: entryPath,
-    rootDir,
     importerUrl: import.meta.url,
     loaderFilename: entryPath,
     aliasMap: buildPluginLoaderAliasMap(entryPath, process.argv[1], import.meta.url),
@@ -133,17 +127,17 @@ async function importToolPluginEntry(entryPath: string, rootDir: string): Promis
   return typeof candidate === "function" ? (candidate as () => unknown)() : candidate;
 }
 
-export async function loadToolPlugin(params: {
+async function loadToolPlugin(params: {
   rootDir: string;
   entryPath: string;
-}): Promise<LoadedToolPlugin> {
+}): Promise<ToolPluginMetadata> {
   // Tool and feature helpers publish the same static authoring metadata.
   if (!fs.existsSync(params.entryPath)) {
     throw new Error(
       `plugin entry not found: ${normalizeRelativePath(params.rootDir, params.entryPath)}`,
     );
   }
-  const entry = await importToolPluginEntry(params.entryPath, params.rootDir);
+  const entry = await importToolPluginEntry(params.entryPath);
   const metadata = getToolPluginMetadata(entry);
   if (!metadata) {
     throw new Error(
@@ -153,10 +147,10 @@ export async function loadToolPlugin(params: {
       )}`,
     );
   }
-  return { entry, metadata };
+  return metadata;
 }
 
-export function buildToolPluginManifest(params: {
+function buildToolPluginManifest(params: {
   metadata: ToolPluginMetadata;
   packageManifest: JsonObject;
   existingManifest?: JsonObject;
@@ -212,7 +206,7 @@ function buildToolPluginToolMetadata(
   return nextEntries.length > 0 ? Object.fromEntries(nextEntries) : undefined;
 }
 
-export function buildToolPluginPackageManifest(params: {
+function buildToolPluginPackageManifest(params: {
   packageManifest: JsonObject;
   entry: string;
 }): JsonObject {
@@ -235,7 +229,7 @@ export function buildToolPluginPackageManifest(params: {
   };
 }
 
-export function validateToolPluginProject(params: {
+function validateToolPluginProject(params: {
   metadata: ToolPluginMetadata;
   manifest: JsonObject;
   packageManifest: JsonObject;
@@ -294,7 +288,7 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
   const entryRelative = normalizeRelativePath(rootDir, entryPath);
   const packagePath = path.join(rootDir, "package.json");
   const packageManifest = readPackageManifest(rootDir);
-  const { metadata } = await loadToolPlugin({ rootDir, entryPath });
+  const metadata = await loadToolPlugin({ rootDir, entryPath });
   const manifestPath = path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
   const currentManifest = fs.existsSync(manifestPath) ? readJsonFile(manifestPath) : undefined;
   const manifest = buildToolPluginManifest({
@@ -346,7 +340,7 @@ export async function collectPluginsValidationResult(
     return { valid: false, errors: [manifestResult.error] };
   }
   const manifest = readJsonFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME));
-  const { metadata } = await loadToolPlugin({ rootDir, entryPath });
+  const metadata = await loadToolPlugin({ rootDir, entryPath });
   const errors = validateToolPluginProject({
     metadata,
     manifest,

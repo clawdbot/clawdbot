@@ -38,6 +38,7 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   AUTOMATIONS_TOOL_NAME,
   // Gateway config can expose secrets and host topology
   "gateway",
+  "plugins",
   // Node command relay can reach system.run on paired hosts
   "nodes",
   // Desktop control on a paired Mac (pointer/keyboard) and screen reads
@@ -51,7 +52,7 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
  * Sensitive control-plane tools. `automations` can persist scheduled runs; `gateway`
  * exposes configuration/schema details and an owner-only self-update action.
  */
-export const GATEWAY_CONTROL_PLANE_TOOLS = [AUTOMATIONS_TOOL_NAME, "gateway"] as const;
+export const GATEWAY_CONTROL_PLANE_TOOLS = [AUTOMATIONS_TOOL_NAME, "gateway", "plugins"] as const;
 
 /**
  * Core tools that require sender owner identity on Gateway-scoped surfaces.

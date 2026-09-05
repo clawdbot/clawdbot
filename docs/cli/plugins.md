@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw plugins` (init, build, validate, list, install, marketplace, uninstall, enable/disable, doctor)"
+summary: "CLI reference for `openclaw plugins` (init, build, validate, list, install, reload, uninstall, enable/disable, doctor)"
 read_when:
   - You want to install or manage Gateway plugins or compatible bundles
   - You want to scaffold or validate a simple tool plugin
@@ -33,14 +33,15 @@ Manage Gateway plugins, hook packs, and compatible bundles.
 ```bash
 openclaw plugins list [--enabled] [--verbose] [--json]
 openclaw plugins search <query> [--limit <n>] [--json]
-openclaw plugins install <path-or-spec> [--link] [--force] [--pin] [--marketplace <source>]
+openclaw plugins install <path-or-spec> [--link] [--force] [--pin] [--marketplace <source>] [--accept-capabilities]
 openclaw plugins inspect <id> [--runtime] [--json]
 openclaw plugins inspect --all [--runtime] [--json]
 openclaw plugins info <id>                    # alias for inspect
-openclaw plugins enable <id>
+openclaw plugins enable <id> [--accept-capabilities]
 openclaw plugins disable <id>
+openclaw plugins reload <id> [--accept-capabilities] [--json]
 openclaw plugins uninstall <id> [--dry-run] [--keep-files] [--force]
-openclaw plugins update <id-or-npm-spec> | --all [--dry-run]
+openclaw plugins update <id-or-npm-spec> | --all [--dry-run] [--accept-capabilities]
 openclaw plugins registry [--refresh] [--json]
 openclaw plugins doctor [--json]
 openclaw plugins init <id> [--name <name>] [--type tool|provider|feature] [--directory <path>]
@@ -57,7 +58,7 @@ command with `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1`. The trace writes phase timings
 to stderr and keeps JSON output parseable. See [Debugging](/help/debugging#plugin-lifecycle-trace).
 
 <Note>
-In Nix mode (`OPENCLAW_NIX_MODE=1`), `openclaw.json` is immutable. `install`, `update`, `uninstall`, `enable`, and `disable` all refuse to run. Edit the Nix source for this install instead (`programs.openclaw.config` or `instances.<name>.config` for nix-openclaw), then rebuild. See the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
+In Nix mode (`OPENCLAW_NIX_MODE=1`), `openclaw.json` is immutable. `install`, `update`, `uninstall`, `enable`, `disable`, and `reload` all refuse to run. Edit the Nix source for this install instead (`programs.openclaw.config` or `instances.<name>.config` for nix-openclaw), then rebuild. See the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
 </Note>
 
 <Note>
@@ -104,10 +105,13 @@ and composer replacement. Run `npm install`, `npm run build`, and
 `package.json.openclaw.controlUi`; `plugins build` writes immutable bundled
 assets and their manifest declaration.
 
-Plugin APIs are [experimental](/plugins/sdk-overview#api-stability). To load the
-scaffold's native browser UI, enable **Settings → Labs → Custom plugin UI**, then
-restart the Gateway and reload the browser. See
+Plugin APIs are [experimental](/plugins/sdk-overview#api-stability). Before loading
+the scaffold's native browser UI, enable **Settings → Labs → Custom plugin UI**.
+Changing that setting requires a Gateway restart and browser reload; see
 [Enable custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui).
+Once enabled, `openclaw plugins install .` applies the built plugin to the running
+local Gateway. Use [plugins reload](/cli/plugins#reload) after editing its installed
+backend source.
 
 `plugins pack` validates a built project, bundles its backend dependencies, and
 writes an archive containing compiled code and UI with no install scripts or
@@ -179,7 +183,7 @@ install safety checks.
 </Warning>
 
 Bundled plugins and verified first-party catalog plugins do not require
-`--accept-capabilities` for install, enable, update, or Doctor repair. Local
+`--accept-capabilities` for install, enable, update, reload, or Doctor repair. Local
 copies and unverified sources still require capability consent even when their
 package name matches an official plugin. This exemption does not grant OAuth,
 operating-system, or runtime tool permissions. See
@@ -408,7 +412,7 @@ openclaw plugins list --json
 </ParamField>
 
 <Note>
-`plugins list` reads the persisted local plugin registry first, with a manifest-only derived fallback when the registry is missing or invalid. It is useful for checking whether a plugin is installed, enabled, and visible to cold startup planning, but it is not a live runtime probe of an already-running Gateway process. After changing plugin code or `plugins.load.paths`, restart the Gateway that serves the channel before expecting new `register(api)` code or hooks to run. With the default hybrid reload mode, enablement and hook policy changes hot-reload the existing plugin runtime unless the plugin declares a restart-triggering prefix. For remote/container deployments, verify you are restarting the actual `openclaw gateway run` child, not only a wrapper process.
+`plugins list` reads the persisted local plugin registry first, with a manifest-only derived fallback when the registry is missing or invalid. It shows installation and configured enablement; the Control UI shows the connected Gateway's runtime state. Plugin management commands apply their changes to the running local Gateway and wait for its runtime receipt. After editing plugin source or its manifest, run `openclaw plugins reload <id>`.
 
 `plugins list --json` includes each plugin's `dependencyStatus` from `package.json`
 `dependencies` and `optionalDependencies`. OpenClaw checks whether those package
@@ -448,6 +452,21 @@ An unreadable index is not invalid data. Permission, lock, and other read errors
 
 `plugins.installs` is a retired authored-config surface. Runtime and update commands read only the SQLite machine-state plugin index. Run `openclaw doctor --fix` to import legacy config records into the index and remove the retired key before normal runtime use.
 
+## Reload
+
+```bash
+openclaw plugins reload <plugin-id>
+openclaw plugins reload <plugin-id> --json
+```
+
+Reload a plugin's source, dependencies, manifest, and runtime registrations in the running local Gateway. This works for linked TypeScript plugins, including edits to imported helpers. Reload preserves the Gateway process and connections; affected plugin services or channel accounts restart within that process.
+
+TypeScript plugins selected from a source checkout use the same captured module graph. Standalone files capture literal local imports and asset URLs; use a plugin directory for computed import or asset paths. JavaScript compiled into OpenClaw's core keeps its host module identity: reload repeats registration and service startup, while changes to those core chunks require the normal OpenClaw build/update and Gateway restart.
+
+Reload requires a running Gateway and an installed plugin. It preserves enablement: reloading a disabled plugin refreshes its metadata without enabling it. A changed declared capability surface can require review; use `--accept-capabilities` only after reviewing it. Successful JSON output includes `runtime.generation`. If runtime replacement fails, the error message reports the failed phase and whether the replacement was applied. Gateway RPC errors also include structured `details.runtime.phase` and `details.runtime.committed` fields. Fix the reported plugin error and retry reload.
+
+Install, update, enable, disable, and uninstall also apply through the running local Gateway. When it is offline, they persist the desired state for its next startup. An unreachable running Gateway is an error, not an offline fallback.
+
 ## Uninstall
 
 ```bash
@@ -457,7 +476,9 @@ openclaw plugins uninstall <id> --keep-files
 openclaw plugins uninstall <id> --force
 ```
 
-`uninstall` removes plugin settings from `plugins.entries`, the persisted plugin index, plugin allow/deny list entries, and any `plugins.load.paths` entry that exactly resolves to the recorded install path. It leaves only an exact `enabled: false` entry for each removed plugin id. This marker records the explicit uninstall choice so remaining model, provider, or channel selections do not automatically reinstall the package during startup repair. Reinstalling does not silently re-enable it; enabling the plugin again replaces the marker. For a package with multiple child entries, any child id resolves to the package owner; uninstall removes every sibling's policy and slot/channel references, the one package install record, and the managed directory once. Linked path installs also remove an exact entry for their recorded source path. Parent directories, child paths, prefix matches, and unrelated load paths are preserved. Unless `--keep-files` is set, uninstall also removes the tracked managed install directory, but only when it resolves inside OpenClaw's plugin extensions root. If the plugin currently owns the `memory` or `contextEngine` slot, that slot resets to its default (`memory-core` for memory, `legacy` for context engine).
+`uninstall` removes plugin settings from `plugins.entries`, the persisted plugin index, plugin allow/deny list entries, and any `plugins.load.paths` entry that exactly resolves to the recorded install path. It leaves only an exact `enabled: false` entry for each removed plugin id. This marker records the explicit uninstall choice so remaining model, provider, or channel selections do not automatically reinstall the package during startup repair. Reinstalling does not silently re-enable it; enabling the plugin again replaces the marker. For a package with multiple child entries, any child id resolves to the package owner; uninstall removes every sibling's policy and slot/channel references, the one package install record, and the managed directory once. Linked path installs also remove an exact entry for their recorded source path. Parent directories, child paths, prefix matches, and unrelated load paths are preserved. Unless `--keep-files` is set, uninstall also removes files from verified OpenClaw-managed install locations, including npm projects and git checkouts. Linked source directories are preserved. If the plugin currently owns the `memory` or `contextEngine` slot, that slot resets to its default (`memory-core` for memory, `legacy` for context engine).
+
+When the Gateway is running, uninstall disables and stops the plugin before removing its managed files. If a later removal or persistence step fails, the error reports the already-applied Gateway generation. Repair the reported problem and retry uninstall to finish removing the files and records.
 
 `uninstall` prints a preview of what will be removed. Multi-entry packages name the package owner and every affected child before prompting. Pass `--force` to skip the confirmation prompt (useful for scripts and non-interactive runs); without it, uninstall requires an interactive TTY. `--dry-run` prints the same preview and exits without prompting or changing anything.
 
@@ -483,6 +504,8 @@ openclaw plugins update openclaw-codex-app-server --acknowledge-install-policy-w
 Updates apply to tracked plugin installs in the managed plugin index and tracked hook-pack installs in shared SQLite state. They reuse the source that the user already chose when installing the plugin, so they do not require a second source acknowledgement.
 
 `update --all` reports and skips orphaned path-source install records so remaining plugins can update. Remove an orphan record with `openclaw plugins uninstall <id>` when its files are no longer needed.
+
+Saved plugin updates apply to the running local Gateway before the command finishes. If part of `update --all` fails, successful updates still apply before the command exits with an error. A runtime application failure is reported separately from saved package changes; repair the reported plugin, then run `openclaw plugins reload <id>`. When the Gateway is offline, updates are saved for its next startup. `--dry-run` leaves installed packages and the running Gateway unchanged.
 
 <AccordionGroup>
   <Accordion title="Resolving plugin id vs npm spec">
@@ -533,7 +556,7 @@ openclaw plugins inspect <id> --json
 openclaw plugins inspect --all
 ```
 
-Inspect shows identity, load status, source, manifest capabilities, policy flags, diagnostics, install metadata, bundle capabilities, and any detected MCP or LSP server support without importing plugin runtime by default. JSON output includes the plugin manifest contracts, such as `contracts.agentToolResultMiddleware` and `contracts.trustedToolPolicies`, so operators can audit trusted-surface declarations before enabling or restarting a plugin. Add `--runtime` to load the plugin module and include registered hooks, tools, commands, services, gateway methods, and HTTP routes. Runtime inspection reports missing plugin dependencies directly; installs and repairs stay in `openclaw plugins install`, `openclaw plugins update`, and `openclaw doctor --fix`.
+Inspect shows identity, load status, source, manifest capabilities, policy flags, diagnostics, install metadata, bundle capabilities, and any detected MCP or LSP server support without importing plugin runtime by default. JSON output includes the plugin manifest contracts, such as `contracts.agentToolResultMiddleware` and `contracts.trustedToolPolicies`, so operators can audit trusted-surface declarations before enabling or reloading a plugin. Add `--runtime` to load the plugin module and include registered hooks, tools, commands, services, gateway methods, and HTTP routes. Runtime inspection reports missing plugin dependencies directly; installs and repairs stay in `openclaw plugins install`, `openclaw plugins update`, and `openclaw doctor --fix`.
 
 For multi-entry packages, inspecting any child shows the shared package install metadata. `inspect --all --json` includes that same record for each child. If package ownership is missing or ambiguous, inspection omits install metadata rather than attributing an unrelated install record.
 
@@ -620,6 +643,8 @@ openclaw plugins marketplace refresh --expected-sha256 <sha256> --json
 `plugins marketplace entries` lists entries from the configured OpenClaw marketplace feed. By default it attempts the hosted feed and falls back to the latest accepted snapshot or bundled data. Use `--feed-profile <name>` to read a specific configured profile, `--feed-url <url>` to read an explicit hosted feed URL, and `--offline` to read the latest accepted snapshot without fetching the feed.
 
 `plugins marketplace refresh` refreshes the configured hosted feed snapshot and reports whether OpenClaw accepted hosted data, a hosted snapshot, or bundled fallback data. Use `--expected-sha256` when a caller needs the command to fail unless a fresh hosted payload matches a pinned checksum.
+
+Accepted hosted data or snapshots also refresh the running local Gateway's catalog, with its applied generation included in JSON output. When the Gateway is offline, the command reports that the catalog is saved for its next startup. A failure to reach a running Gateway is reported as an error.
 
 Marketplace `list` accepts a local marketplace path, a `marketplace.json` path, a GitHub shorthand like `owner/repo`, a GitHub repo URL, or a git URL. `--json` prints the resolved source label plus the parsed marketplace manifest and plugin entries.
 

@@ -1,14 +1,9 @@
-// Gateway method authorization scope resolver.
-// Maps static and plugin-defined gateway methods to operator scopes.
 import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
 import {
   isAdminOnlyNodeInvokeCommand,
   isBrowserProxyNodeInvokeCommand,
 } from "../infra/node-commands.js";
-import {
-  getActivePluginHttpRouteRegistry,
-  getActivePluginSessionExtensionRegistry,
-} from "../plugins/runtime.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveDynamicSessionMutationRequiredScope } from "../shared/session-method-scopes.js";
 import { isAgentSessionResetCommand } from "./agent-command-policy.js";
@@ -65,7 +60,7 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (reservedScope) {
     return reservedScope;
   }
-  const pluginDescriptor = getActivePluginHttpRouteRegistry()?.gatewayMethodDescriptors?.find(
+  const pluginDescriptor = getActivePluginRegistry()?.gatewayMethodDescriptors?.find(
     (descriptor) => descriptor.name === method,
   );
   const pluginScope = pluginDescriptor?.scope;
@@ -96,7 +91,7 @@ function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] 
   if (!pluginId || !actionId) {
     return undefined;
   }
-  const registration = getActivePluginSessionExtensionRegistry()?.sessionActions?.find(
+  const registration = getActivePluginRegistry()?.sessionActions?.find(
     (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
   );
   if (!registration) {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   applyExclusiveSlotSelectionMock,
   applyPluginUninstallDirectoryRemovalMock,
@@ -24,14 +24,13 @@ const install = {
   installPath: "/private/managed-source/workboard",
 };
 
-describe("plugin install persistence warning audiences", () => {
+describe("plugin install persistence warnings", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
   });
 
   it("reports missing required configuration without forwarding informational logs", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
-    const warn = vi.fn();
     loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
         recordPluginManifestInstallOwner(
@@ -50,25 +49,21 @@ describe("plugin install persistence warning audiences", () => {
       diagnostics: [],
     });
 
-    const next = await persistPluginInstall({
+    const { config: next, warnings } = await persistPluginInstall({
       snapshot,
       pluginId: "workboard",
       install,
-      persistenceLogger: { warn },
     });
 
     expect(next.plugins?.entries?.workboard).toEqual({ enabled: false });
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
+    expect(warnings).toEqual([
       'Installed plugin "workboard" without enabling it because it requires configuration first. Configure it, then run `openclaw plugins enable workboard`.',
-    );
-    expect(pluginsCliRuntimeLogs.join("\n")).toContain("requires configuration first");
-    expect(pluginsCliRuntimeLogs).toContain("Installed plugin: workboard");
-    expect(pluginsCliRuntimeLogs).toContain("Restart the gateway to load plugins.");
+    ]);
+    expect(pluginsCliRuntimeLogs).toEqual([]);
   });
 
   it("preserves owner-authored exclusive-slot warnings verbatim", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
-    const warn = vi.fn();
     const warning = 'Exclusive slot "memory" switched from "memory-core" to "workboard".';
     loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
@@ -97,76 +92,55 @@ describe("plugin install persistence warning audiences", () => {
       changed: true,
     });
 
-    await persistPluginInstall({
+    const { warnings } = await persistPluginInstall({
       snapshot,
       pluginId: "workboard",
       install,
-      persistenceLogger: { warn },
     });
 
-    expect(warn).toHaveBeenCalledExactlyOnceWith(warning);
+    expect(warnings).toEqual([warning]);
   });
 
-  it.each(["management", "terminal"] as const)(
-    "keeps sensitive install details appropriate for the %s audience",
-    async (audience) => {
-      const { persistPluginInstall } = await import("./install-persistence.js");
-      const warn = vi.fn();
-      const onCommitted = vi.fn();
-      const cleanupDetail = "npm stderr PRIVATE_NPM_MARKER /private/previous-source/workboard";
-      const refreshDetail = "PRIVATE_REFRESH_MARKER /private/registry-source/workboard";
-      const configuredSource = "/private/configured-source/workboard/index.js";
-      setInstalledPluginIndexInstallRecords({
-        workboard: {
-          source: "clawhub",
-          spec: "clawhub:community/workboard",
-          installPath: "/private/previous-source/workboard",
-        },
-      });
-      planPluginUninstallMock.mockReturnValueOnce({
-        ok: true,
-        config: {},
-        pluginId: "workboard",
-        actions: {},
-        directoryRemoval: { target: "/private/previous-source/workboard" },
-      });
-      applyPluginUninstallDirectoryRemovalMock.mockResolvedValueOnce({
-        directoryRemoved: false,
-        warnings: [cleanupDetail],
-      });
-      refreshPluginRegistryMock.mockImplementationOnce(async () => {
-        expect(onCommitted).toHaveBeenCalledExactlyOnceWith();
-        throw new Error(refreshDetail);
-      });
-      buildPluginSnapshotReportMock.mockReturnValue({
-        plugins: [{ id: "workboard", origin: "config", source: configuredSource }],
-        diagnostics: [],
-      });
+  it("returns actionable warnings without exposing private install diagnostics", async () => {
+    const { persistPluginInstall } = await import("./install-persistence.js");
+    const cleanupDetail = "npm stderr PRIVATE_NPM_MARKER /private/previous-source/workboard";
+    const refreshDetail = "PRIVATE_REFRESH_MARKER /private/registry-source/workboard";
+    const configuredSource = "/private/configured-source/workboard/index.js";
+    setInstalledPluginIndexInstallRecords({
+      workboard: {
+        source: "clawhub",
+        spec: "clawhub:community/workboard",
+        installPath: "/private/previous-source/workboard",
+      },
+    });
+    planPluginUninstallMock.mockReturnValueOnce({
+      ok: true,
+      config: {},
+      pluginId: "workboard",
+      actions: {},
+      directoryRemoval: { target: "/private/previous-source/workboard" },
+    });
+    applyPluginUninstallDirectoryRemovalMock.mockResolvedValueOnce({
+      directoryRemoved: false,
+      warnings: [cleanupDetail],
+    });
+    refreshPluginRegistryMock.mockRejectedValueOnce(new Error(refreshDetail));
+    buildPluginSnapshotReportMock.mockReturnValue({
+      plugins: [{ id: "workboard", origin: "config", source: configuredSource }],
+      diagnostics: [],
+    });
 
-      await persistPluginInstall({
-        snapshot,
-        pluginId: "workboard",
-        install,
-        onCommitted,
-        ...(audience === "management" ? { persistenceLogger: { warn } } : {}),
-      });
+    const { warnings } = await persistPluginInstall({
+      snapshot,
+      pluginId: "workboard",
+      install,
+    });
 
-      if (audience === "terminal") {
-        expect(warn).not.toHaveBeenCalled();
-      } else {
-        const warnings = warn.mock.calls.map(([message]) => String(message));
-        expect(warnings).toHaveLength(3);
-        expect(warnings.join("\n")).toContain("previous plugin installation");
-        expect(warnings.join("\n")).toContain("registry");
-        expect(warnings.join("\n")).toContain("shadowed");
-        expect(warnings.join("\n")).not.toContain("/private/");
-        expect(warnings.join("\n")).not.toContain("PRIVATE_NPM_MARKER");
-        expect(warnings.join("\n")).not.toContain("PRIVATE_REFRESH_MARKER");
-      }
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain(cleanupDetail);
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain(refreshDetail);
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain(configuredSource);
-      expect(pluginsCliRuntimeLogs.join("\n")).toContain(install.installPath);
-    },
-  );
+    expect(warnings).toEqual([
+      "A previous plugin installation could not be fully cleaned up. Run `openclaw plugins doctor`.",
+      "Plugin registry refresh failed. Run `openclaw plugins registry --refresh`.",
+      'Installed plugin "workboard" is shadowed by a configured plugin source. Run `openclaw plugins doctor`.',
+    ]);
+    expect(pluginsCliRuntimeLogs).toEqual([]);
+  });
 });

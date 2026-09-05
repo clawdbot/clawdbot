@@ -353,7 +353,8 @@ OpenClaw can refresh the skills list mid-session: the skills watcher updates the
 
 Plugins run in-process with the Gateway - treat them as trusted code.
 
-- Only install from sources you trust; prefer explicit `plugins.allow` allowlists; review plugin config before enabling. Restart the Gateway after plugin code, metadata, or discovery-root changes. With the default hybrid reload mode, ordinary config and enablement changes hot-reload unless the plugin declares a restart-triggering prefix.
+- Only install from sources you trust; prefer explicit `plugins.allow` allowlists; review plugin config and declared capabilities before enabling.
+- Plugin management applies changes to a running Gateway without restarting it. After editing plugin source, use `openclaw plugins reload <id>`.
 - Installing/updating plugins runs executable code:
   - The install path is the per-plugin directory under the active plugin install root.
   - ClawHub packages and OpenClaw's bundled/official catalog are trusted sources. A new arbitrary npm, `npm-pack:`, git, local path/archive, or marketplace source warns before install; noninteractive installs require `--force` after you review and trust that source. `--force` confirms provenance and permits overwrite; it does not bypass `security.installPolicy` or remaining install safety checks. Updates reuse the already selected source.

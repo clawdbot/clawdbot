@@ -99,10 +99,10 @@ Grant this plugin access to conversation hooks in `openclaw.json`:
 }
 ```
 
-Merge that entry into your existing config, then let the default hybrid reload
-mode apply it and inspect:
+Merge that entry into your existing config, then reload and inspect:
 
 ```bash
+openclaw plugins reload hook-demo
 openclaw plugins inspect hook-demo --runtime --json
 ```
 
@@ -118,8 +118,8 @@ the field is only the sender's raw text.
 
 Hook registration does not bypass plugin loading rules. The plugin must be
 loaded and enabled; `plugins.enabled`, `plugins.allow`, and `plugins.deny` still
-apply. Restart the Gateway after changing plugin code. With the default hybrid
-reload mode, hook policy changes hot-reload the existing plugin runtime.
+apply. Run `openclaw plugins reload <id>` after changing plugin code or hook
+configuration.
 
 - Non-bundled plugins need explicit
   `plugins.entries.<id>.hooks.allowConversationAccess: true` for
@@ -626,7 +626,7 @@ export default definePluginEntry({
 });
 ```
 
-Load the file directly and restart the Gateway:
+Load the file directly in the Gateway config:
 
 ```json5
 {
@@ -657,6 +657,9 @@ Load the file directly and restart the Gateway:
 `AGENT_ID` must name the agent bound to the maintenance conversation. The
 binding selects that agent for normal messages and `/fix`; the standalone file
 remains the single owner of owner-versus-maintainer tool policy.
+
+After saving edits to that file, run `openclaw plugins reload maintenance-access`
+to replace its loaded code without restarting the Gateway.
 
 `requireAuth: true` reuses each channel's existing sender admission. For
 Discord, a guild or channel `users`/`roles` allowlist can authorize the
@@ -1154,14 +1157,18 @@ failures block the install fail-closed.
 
 ## Gateway lifecycle
 
-Use `gateway_start` to start general plugin services and `gateway_stop` to
-clean up long-running resources. The cron scheduler can still be loading when
-`gateway_start` runs, so do not use it as the baseline signal for an external
+Use `gateway_start` and `gateway_stop` to start and stop plugin services.
+These hooks also run for affected plugins during replacement. A failed
+replacement can start the previous instance again, so keep start/stop handlers
+restartable. Use `api.lifecycle.onDispose` for final instance cleanup; see
+[Instance lifecycle](/plugins/sdk-runtime#instance-lifecycle).
+
+The cron scheduler can still be loading when `gateway_start` runs, so do not use it as the baseline signal for an external
 cron projection.
 
 The legacy `api.on("deactivate", ...)` alias was removed in August 2026. Use
-`gateway_stop` for cleanup; see the
-[migration note](/plugins/sdk-migration#deactivate-hook-alias).
+`gateway_stop` for restartable service stops and `api.lifecycle.onDispose` for
+final cleanup; see the [migration note](/plugins/sdk-migration#deactivate-hook-alias).
 
 Do not rely on the internal `gateway:startup` hook for plugin-owned runtime
 services.
@@ -1238,7 +1245,7 @@ type CronReader = {
 };
 
 export function registerCronProjection(api: OpenClawPluginApi, host: ExternalWakeHost) {
-  const lifecycle = new AbortController();
+  let lifecycle = new AbortController();
   let cron: CronReader | undefined;
   let enabled = false;
   let hasBaseline = false;
@@ -1336,9 +1343,22 @@ export function registerCronProjection(api: OpenClawPluginApi, host: ExternalWak
     }
   });
 
-  api.on("gateway_stop", async () => {
+  const stopProjection = async () => {
     lifecycle.abort();
     await worker;
+  };
+
+  api.on("gateway_start", () => {
+    if (lifecycle.signal.aborted) {
+      lifecycle = new AbortController();
+    }
+    if (hasBaseline) {
+      return requestProjection();
+    }
+  });
+  api.on("gateway_stop", stopProjection);
+  api.lifecycle.onDispose?.(async () => {
+    await stopProjection();
     await host.close();
   });
 }
@@ -1350,19 +1370,22 @@ is process-local and treats runtime adapter failures as transient; validate
 non-retryable configuration before registration. OpenClaw does not provide an
 outbox for plugin hook effects. If the process exits before durable acceptance,
 the next Gateway start emits a new authoritative `cron_reconciled` snapshot.
-`gateway_stop` aborts in-flight host work, waits for the worker to settle, then
-closes the adapter.
+`gateway_stop` aborts in-flight host work and waits for the worker to settle.
+If a failed replacement restores this instance, `gateway_start` renews its
+controller and reprojects from its existing authoritative scheduler baseline.
+`api.lifecycle.onDispose` closes the adapter only when the instance finally
+retires.
 
 ## Troubleshooting
 
-| Symptom                                    | Check                                                                                                                                                                                                                            |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Plugin loads but the handler never runs    | Use `api.on` for typed names, inspect `openclaw plugins inspect <id> --runtime --json`, and check diagnostics for blocked registrations. Runtime inspection loads the plugin in the inspecting process; restart the Gateway too. |
-| Conversation hook is blocked               | Set `plugins.entries.<id>.hooks.allowConversationAccess: true`; for prompt hooks, also check that `allowPromptInjection` is not `false`. These keys belong under `hooks`, not the plugin's `config`.                             |
-| Hook works for one runtime or trigger only | Check the runtime boundary and `eligibleTriggers`. Missing context fields are not proof of a different sender, agent, or authorization state.                                                                                    |
-| Persistence rewrite has no effect          | Return `{ message }` synchronously. An `async` handler's result is ignored.                                                                                                                                                      |
-| A timed-out hook still performs work       | Timeout ends the host's await, not plugin work. Pass available abort signals through I/O and bound plugin-owned work yourself.                                                                                                   |
-| One plugin's rewrite disappears            | Check the hook's merge rule and priority. `message_sending` uses the last returned content; `reply_payload_sending` passes each updated payload onward.                                                                          |
+| Symptom                                    | Check                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Plugin loads but the handler never runs    | Use `api.on` for typed names, inspect `openclaw plugins inspect <id> --runtime --json`, and check diagnostics for blocked registrations. Runtime inspection loads the plugin in the inspecting process; run `openclaw plugins reload <id>` to apply source edits to the running Gateway. |
+| Conversation hook is blocked               | Set `plugins.entries.<id>.hooks.allowConversationAccess: true`; for prompt hooks, also check that `allowPromptInjection` is not `false`. These keys belong under `hooks`, not the plugin's `config`.                                                                                     |
+| Hook works for one runtime or trigger only | Check the runtime boundary and `eligibleTriggers`. Missing context fields are not proof of a different sender, agent, or authorization state.                                                                                                                                            |
+| Persistence rewrite has no effect          | Return `{ message }` synchronously. An `async` handler's result is ignored.                                                                                                                                                                                                              |
+| A timed-out hook still performs work       | Timeout ends the host's await, not plugin work. Pass available abort signals through I/O and bound plugin-owned work yourself.                                                                                                                                                           |
+| One plugin's rewrite disappears            | Check the hook's merge rule and priority. `message_sending` uses the last returned content; `reply_payload_sending` passes each updated payload onward.                                                                                                                                  |
 
 ## Upcoming deprecations
 

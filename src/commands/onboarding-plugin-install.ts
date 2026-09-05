@@ -11,7 +11,6 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
@@ -48,6 +47,7 @@ import {
   ALLOW_PLUGIN_INSTALL_OVERRIDES_ENV,
 } from "../plugins/install-overrides.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
+import { resolveBundledInstallPlanForCatalogEntry } from "../plugins/install-source-plan.js";
 import {
   isUnavailableNpmTarget,
   type PluginInstallArtifactConsentHandler,

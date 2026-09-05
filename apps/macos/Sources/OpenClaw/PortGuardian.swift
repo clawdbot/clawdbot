@@ -82,7 +82,6 @@ actor PortGuardian {
         for listener in listeners {
             if Self.isExpected(
                 listener,
-                port: port,
                 mode: mode,
                 managedGatewayPID: managedGatewayPID)
             {
@@ -91,14 +90,6 @@ actor PortGuardian {
                 (pid \(listener.pid)) — keeping
                 """
                 self.logger.info("\(message, privacy: .public)")
-                continue
-            }
-            if mode == .remote {
-                let message = """
-                port \(port) held by \(listener.command)
-                (pid \(listener.pid)) in remote mode — not killing
-                """
-                self.logger.warning(message)
                 continue
             }
             if AppProfile.current.isActive {
@@ -623,8 +614,7 @@ actor PortGuardian {
             return .init(port: port, expected: expectedDesc, status: .missing(text), listeners: [])
         }
 
-        let tunnelUnhealthy =
-            mode == .remote && port == GatewayEnvironment.gatewayPort() && tunnelHealthy == false
+        let tunnelUnhealthy = mode == .remote && tunnelHealthy == false
         let reportListeners = listeners.map { listener in
             var expected = okPredicate(listener)
             if tunnelUnhealthy, expected { expected = false }
@@ -681,7 +671,6 @@ actor PortGuardian {
 
     private static func isExpected(
         _ listener: Listener,
-        port: Int,
         mode: AppState.ConnectionMode,
         managedGatewayPID: Int32? = nil) -> Bool
     {
@@ -689,8 +678,8 @@ actor PortGuardian {
         let full = listener.fullCommand.lowercased()
         switch mode {
         case .remote:
-            if port == GatewayEnvironment.gatewayPort() { return true }
-            return false
+            // Remote listeners may be tunnels or containers owned outside this app.
+            return true
         case .local:
             // Daemon status owns this process identity; the listener snapshot proves
             // that the same launchd PID currently holds the configured Gateway port.
@@ -739,7 +728,7 @@ actor PortGuardian {
         mode: AppState.ConnectionMode,
         listeners: [Listener]) async -> Bool?
     {
-        guard mode == .remote, port == GatewayEnvironment.gatewayPort(), !listeners.isEmpty else { return nil }
+        guard mode == .remote else { return nil }
         let hasSsh = listeners.contains { $0.command.lowercased().contains("ssh") }
         guard hasSsh else { return nil }
         return await self.probeGatewayHealth(port: port)
@@ -913,7 +902,6 @@ extension PortGuardian {
     static func _testIsExpected(
         command: String,
         fullCommand: String,
-        port: Int,
         mode: AppState.ConnectionMode,
         pid: Int32 = 0,
         managedGatewayPID: Int32? = nil) -> Bool
@@ -921,7 +909,6 @@ extension PortGuardian {
         let listener = Listener(pid: pid, command: command, fullCommand: fullCommand, user: nil)
         return Self.isExpected(
             listener,
-            port: port,
             mode: mode,
             managedGatewayPID: managedGatewayPID)
     }

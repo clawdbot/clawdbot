@@ -6,7 +6,7 @@ import { createBundledBrowserPluginFixture } from "../../test/helpers/browser-bu
 import type { OpenClawConfig } from "../config/config.js";
 import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import { loadGatewayStartupPlugins } from "./server-plugin-bootstrap.js";
+import { prepareGatewayPluginLoad } from "./server-plugin-bootstrap.js";
 
 function resetPluginState() {
   clearPluginLoaderCache();
@@ -22,7 +22,7 @@ function createTestLog() {
   };
 }
 
-describe("loadGatewayStartupPlugins browser plugin integration", () => {
+describe("prepareGatewayPluginLoad browser plugin integration", () => {
   let bundledFixture: ReturnType<typeof createBundledBrowserPluginFixture> | null = null;
 
   beforeEach(() => {
@@ -39,7 +39,7 @@ describe("loadGatewayStartupPlugins browser plugin integration", () => {
   });
 
   it("adds browser.request and the browser control service from the bundled plugin", () => {
-    const loaded = loadGatewayStartupPlugins({
+    const loaded = prepareGatewayPluginLoad({
       cfg: {
         plugins: {
           allow: ["browser"],

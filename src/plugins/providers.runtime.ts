@@ -1,4 +1,3 @@
-// Runtime boundary for resolving provider plugins from metadata and config.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveBundledCompatActivationInputs,
@@ -8,7 +7,7 @@ import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import {
-  getRuntimePluginRegistryForLoadOptions,
+  resolveRuntimePluginRegistry,
   isPluginRegistryLoadInFlight,
   loadOpenClawPlugins,
   type PluginLoadOptions,
@@ -363,7 +362,7 @@ export function resolvePluginProvidersCore(params: {
           workspaceDir: base.workspaceDir,
           requiredPluginIds: onlyPluginIds,
         }) ??
-        getRuntimePluginRegistryForLoadOptions(loadState.loadOptions));
+        resolveRuntimePluginRegistry(loadState.loadOptions));
   if (!registry) {
     return [];
   }

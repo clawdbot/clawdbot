@@ -919,6 +919,7 @@ enum class GatewayMethod(
   UpdateRunsGet("update.runs.get"),
   UpdateRunsList("update.runs.list"),
   GatewaySuspendHandoff("gateway.suspend.handoff"),
+  PluginsReload("plugins.reload"),
 }
 
 enum class GatewayEvent(
@@ -967,6 +968,7 @@ enum class GatewayEvent(
   DevicePairSetupDeliveryUncertain("device.pair.setup.deliveryUncertain"),
   UsersPrefsChanged("users.prefs.changed"),
   SkillsChanged("skills.changed"),
+  PluginsChanged("plugins.changed"),
   VoicewakeChanged("voicewake.changed"),
   VoicewakeRoutingChanged("voicewake.routing.changed"),
   ExecApprovalRequested("exec.approval.requested"),

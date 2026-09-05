@@ -870,6 +870,9 @@ shutdown, see [Safe external cron projection](/plugins/hooks#safe-external-cron-
 | `api.registrationMode`   | `PluginRegistrationMode`  | Current load mode; `"setup-runtime"` is the lightweight setup flow with runtime available |
 | `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                                      |
 
+For instance retirement signals and asynchronous cleanup through
+`api.lifecycle.onDispose`, see [Instance lifecycle](/plugins/sdk-runtime#instance-lifecycle).
+
 ## Internal module convention
 
 Within your plugin, use local barrel files for internal imports:
@@ -895,6 +898,13 @@ snapshot exists yet, they fall back to the resolved config file on disk.
 Packaged bundled plugin facades should be loaded through OpenClaw's plugin
 facade loaders; direct imports from `dist/extensions/...` bypass the manifest
 and runtime sidecar checks that packaged installs use for plugin-owned code.
+
+An active external plugin's public barrels share its captured module instance with
+registration. Explicit reload captures a new instance; retained lazy facades follow
+that instance, and old executable references reject after disable or replacement.
+Core-shipped bundled libraries remain process-stable so config and doctor inspection
+work while a plugin is disabled. Registered callbacks and activated runtime facades
+still belong to the plugin instance; reload reruns registration and service lifecycles.
 
 Provider plugins can expose a narrow plugin-local contract barrel when a
 helper is intentionally provider-specific and does not belong in a generic SDK

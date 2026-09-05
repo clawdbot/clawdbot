@@ -23,6 +23,7 @@ import {
   resolveSessionPinnedHarnessId,
 } from "../sessions/agent-harness-session-key.js";
 import type { PluginRegistryState } from "./registry-state.js";
+import type { PluginRegistry } from "./registry-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
@@ -58,20 +59,24 @@ const PLUGIN_GATEWAY_GLOBAL_SESSION_MUTATION_METHODS = new Set([
 ]);
 
 /** Session ownership checks loaded only when a plugin invokes an async action. */
-export function createPluginSessionOwnership(state: PluginRegistryState, pluginId: string) {
-  const { registry, registryParams } = state;
+export function createPluginSessionOwnership(
+  state: PluginRegistryState,
+  pluginId: string,
+  resolveRegistry: () => PluginRegistry = () => state.registry,
+) {
+  const { registryParams } = state;
   // SAFETY: Logical session resolution only reads the immutable runtime config snapshot.
   const currentSessionConfig = () => registryParams.runtime.config.current() as OpenClawConfig;
   const resolveHarnessRegistration = (harnessId: unknown) => {
     const normalizedHarnessId = normalizeOptionalAgentRuntimeId(harnessId);
     return normalizedHarnessId
-      ? registry.agentHarnesses.find(
+      ? resolveRegistry().agentHarnesses.find(
           (entry) => normalizeOptionalAgentRuntimeId(entry.harness.id) === normalizedHarnessId,
         )
       : undefined;
   };
   const resolveHarnessRegistrationForSessionKey = (sessionKey: string) =>
-    registry.agentHarnesses.find((entry) => {
+    resolveRegistry().agentHarnesses.find((entry) => {
       const rawHarnessId = normalizeOptionalString(entry.harness.id)?.toLowerCase();
       return (
         rawHarnessId === normalizeOptionalAgentRuntimeId(rawHarnessId) &&

@@ -6,7 +6,7 @@ import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadat
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   isPluginRegistryRetired,
-  pluginLoaderCacheState,
+  getPluginLoaderCacheState,
 } from "../../plugins/registry-lifecycle.js";
 import {
   clearActivePluginRegistry,
@@ -20,7 +20,7 @@ const tempDirs = createSyncSuiteTempRootTracker("models-auth-registry");
 
 afterEach(async () => {
   await clearActivePluginRegistry();
-  pluginLoaderCacheState.clear();
+  getPluginLoaderCacheState().clear();
   clearPluginMetadataLifecycleCaches();
   vi.unstubAllEnvs();
   tempDirs.cleanup();

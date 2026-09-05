@@ -1,20 +1,26 @@
 // Runtime plan tool tests cover schema normalization and diagnostics when the
 // runtime plan owns tool policy, with legacy provider fallback still available.
 
+import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createJiti } from "jiti";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import {
   createNativeOpenAIResponsesModel,
   createParameterFreeTool,
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
+  setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
+import { getBeforeToolCallDiagnosticOptions } from "../before-tool-call-metadata.js";
 import type { RuntimeToolSchemaDiagnostic } from "../tool-schema-projection.js";
 import {
   getToolTerminalPresentation,
@@ -290,43 +296,60 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     },
   );
 
-  it("preserves private execution metadata when provider normalization clones tools", () => {
-    const formatter = vi.fn(() => ({ text: "Terminal summary" }));
-    const tool = {
-      ...createParameterFreeTool("web_fetch"),
-      label: "Web fetch",
-      execute: vi.fn(),
-    } as AgentTool;
-    const source = setToolTerminalPresentation(
-      wrapToolWithBeforeToolCallHook(tool, {
-        agentId: "main",
-        sessionId: "session-runtime-normalization",
-      }),
-      formatter,
-    );
-    (source as AnyAgentTool).catalogMode = "direct-only";
-    const normalized = {
-      ...createParameterFreeTool("web_fetch"),
-      label: "Web fetch",
-      execute: vi.fn(),
-      parameters: normalizedParameterFreeSchema(),
-    } as AgentTool;
-    mocks.normalizeProviderToolSchemas.mockReturnValueOnce([normalized]);
+  it.each(["host", "plugin"] as const)(
+    "preserves private execution metadata when %s normalization clones tools",
+    async (owner) => {
+      const instance = new PluginInstance("normalizer");
+      try {
+        const formatter = vi.fn(() => ({ text: "Terminal summary" }));
+        const tool = {
+          ...createParameterFreeTool("web_fetch"),
+          label: "Web fetch",
+          execute: vi.fn(),
+        } as AgentTool;
+        const source = setToolTerminalPresentation(
+          wrapToolWithBeforeToolCallHook(tool, {
+            agentId: "main",
+            sessionId: "session-runtime-normalization",
+          }),
+          formatter,
+        );
+        (source as AnyAgentTool).catalogMode = "direct-only";
+        const normalize = buildProviderToolCompatFamilyHooks("openai").normalizeToolSchemas;
+        mocks.normalizeProviderToolSchemas.mockImplementationOnce(
+          owner === "plugin" ? instance.wrap(normalize) : normalize,
+        );
 
-    const result = normalizeAgentRuntimeTools({
-      tools: [source],
-      provider: "openai",
-    });
+        const result = normalizeAgentRuntimeTools({
+          tools: [source],
+          provider: "openai",
+          modelApi: "openai-responses",
+        });
 
-    expect(result[0]).toBe(normalized);
-    expect((result[0] as AnyAgentTool).catalogMode).toBe("direct-only");
-    expect(
-      isToolWrappedWithBeforeToolCallHook(expectDefined(result[0], "result[0] test invariant")),
-    ).toBe(true);
-    expect(getToolTerminalPresentation(expectDefined(result[0], "result[0] test invariant"))).toBe(
-      formatter,
-    );
-  });
+        const projected = expectDefined(result[0], "normalized tool");
+        expect(projected.parameters).toEqual(normalizedParameterFreeSchema());
+        expect((projected as AnyAgentTool).catalogMode).toBe("direct-only");
+        expect(isToolWrappedWithBeforeToolCallHook(projected)).toBe(true);
+        expect(getToolTerminalPresentation(projected)).toBe(formatter);
+        setBeforeToolCallDiagnosticsEnabled(projected, false);
+        expect(getBeforeToolCallDiagnosticOptions(source)?.emitDiagnostics).toBe(false);
+        expect(Object.keys(projected)).toContain("parameters");
+        // Source plugins can load a transformed SDK copy beside compiled host code.
+        const sourceMetadata = await createJiti(import.meta.url, {
+          tryNative: false,
+          moduleCache: false,
+          fsCache: false,
+        }).import<typeof import("../before-tool-call-metadata.js")>(
+          fileURLToPath(new URL("../before-tool-call-metadata.ts", import.meta.url)),
+        );
+        expect(sourceMetadata.isToolWrappedWithBeforeToolCallHook(projected)).toBe(true);
+        sourceMetadata.setBeforeToolCallDiagnosticsEnabled(projected, true);
+        expect(getBeforeToolCallDiagnosticOptions(source)?.emitDiagnostics).toBe(true);
+      } finally {
+        await instance.dispose();
+      }
+    },
+  );
 
   it("does not reread quarantined tools while preserving normalized metadata", () => {
     const unreadableName = {

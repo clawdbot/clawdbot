@@ -88,6 +88,7 @@ const TRAIN_2026_8_METHODS = [
   "plugins.controlUi.reload",
   "plugins.controlUi.report",
   "plugins.controlUi.status",
+  "plugins.reload",
   "device.pair.setupStatus",
   "openclaw.setup.activate.start",
   "exec.approval.grants.list",

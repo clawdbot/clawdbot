@@ -88,7 +88,11 @@ export async function cleanupCodexAttempt(
       });
     }
     await runCleanupStep("codex-trajectory-flush", () => trajectoryRecorder?.flush());
+    // Ordinary refresh rebuilds history from the committed host transcript.
+    // Supervision owns its native thread; finalization carries the missing replies.
+    const pluginRuntimeRefreshing = params.pluginRuntimeRefreshPending?.() === true;
     const retainLiveIncognitoThread =
+      !pluginRuntimeRefreshing &&
       (terminalState.settledTurnStatus === "completed" ||
         (state.permissionChangeRestart === "confirmed" && !params.abortSignal?.aborted)) &&
       isIncognitoSessionKey(params.sessionKey);
@@ -96,6 +100,7 @@ export async function cleanupCodexAttempt(
     // Ordinary failed turns keep loaded configuration too: native unsubscribe delays unload.
     // Retain that configuration owner so later input can reuse the same thread.
     const retainedOrdinaryThread =
+      !pluginRuntimeRefreshing &&
       ((retainLiveIncognitoThread &&
         resourceState.thread.liveThreadEphemeralPolicy !== undefined) ||
         (terminalState.settledTurnStatus !== undefined &&
@@ -132,7 +137,8 @@ export async function cleanupCodexAttempt(
     // Codex keeps approvals in its native session; independent conversations
     // must retain their own subscriptions instead of evicting one another.
     const bindingReleased =
-      isIncognitoSessionKey(params.sessionKey) && !retainLiveThread
+      resourceState.thread.connectionScope !== "supervision" &&
+      (pluginRuntimeRefreshing || (isIncognitoSessionKey(params.sessionKey) && !retainLiveThread))
         ? await bindingStore.mutate(bindingIdentity, {
             kind: "clear",
             threadId: resourceState.thread.threadId,

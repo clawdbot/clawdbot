@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,7 +22,7 @@ import {
 import { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 
-const START_AUTH_CALLBACK = "__openclawProviderRefreshLifecycleStart";
+const startAuthChannel = channel("openclaw.test.providerRefreshLifecycleStart");
 const PLUGIN_ID = "provider-refresh-lifecycle";
 const PROVIDER_ID = "lifecycle-provider";
 const PROFILE_ID = `${PROVIDER_ID}:default`;
@@ -60,7 +61,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.unstubAllGlobals();
   clearRuntimeAuthProfileStoreSnapshots();
   resetFileLockStateForTest();
   resetPluginLoaderTestStateForTest();
@@ -88,7 +88,7 @@ describe("provider OAuth refresh lifecycle", () => {
         const initialStore = storeWith(PROFILE_ID, expiredCredential);
         await state.writeAuthProfiles(initialStore);
         const plugin = writeLifecycleProviderPlugin(`
-          globalThis[${JSON.stringify(START_AUTH_CALLBACK)}]();
+          require("node:diagnostics_channel").channel(${JSON.stringify(startAuthChannel.name)}).publish();
           api.registerProvider({
             id: ${JSON.stringify(PROVIDER_ID)},
             label: "Lifecycle Provider",
@@ -130,19 +130,22 @@ describe("provider OAuth refresh lifecycle", () => {
             profileId: PROFILE_ID,
           });
         });
-        vi.stubGlobal(START_AUTH_CALLBACK, startAuthDuringRegister);
+        startAuthChannel.subscribe(startAuthDuringRegister);
+        try {
+          loadOpenClawPlugins(loadOptions);
 
-        loadOpenClawPlugins(loadOptions);
-
-        expect(isPluginRegistryLoadInFlight(loadOptions)).toBe(false);
-        if (!authResolution) {
-          throw new Error("provider lifecycle fixture did not start auth resolution");
+          expect(isPluginRegistryLoadInFlight(loadOptions)).toBe(false);
+          if (!authResolution) {
+            throw new Error("provider lifecycle fixture did not start auth resolution");
+          }
+          await expect(authResolution).resolves.toMatchObject({ apiKey: "access-new" });
+          expect(readAuthProfileStoreForTest(state.agentDir()).profiles[PROFILE_ID]).toEqual(
+            refreshedCredential,
+          );
+          expect(startAuthDuringRegister).toHaveBeenCalledOnce();
+        } finally {
+          startAuthChannel.unsubscribe(startAuthDuringRegister);
         }
-        await expect(authResolution).resolves.toMatchObject({ apiKey: "access-new" });
-        expect(readAuthProfileStoreForTest(state.agentDir()).profiles[PROFILE_ID]).toEqual(
-          refreshedCredential,
-        );
-        expect(startAuthDuringRegister).toHaveBeenCalledOnce();
       },
     );
   });

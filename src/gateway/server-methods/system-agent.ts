@@ -1,4 +1,3 @@
-// OpenClaw gateway methods host the setup/repair conversation for clients.
 import {
   buildSystemAgentInferenceUnavailableErrorDetails,
   buildSystemAgentSessionInvalidatedErrorDetails,
@@ -460,6 +459,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         const engine = new SystemAgentChatEngine({
           surface: "gateway",
           deps: { gatewayHostLifecycle: context.hostLifecycle },
+          applyPluginRuntime: context.applyPluginLifecycleChange,
           verifiedInference: inference.binding,
           operatorApprovalOnly: params.delegation !== undefined,
           ...(params.delegation?.agentId ? { requesterAgentId: params.delegation.agentId } : {}),

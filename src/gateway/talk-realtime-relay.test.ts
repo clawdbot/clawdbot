@@ -40,7 +40,8 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
+import { registerChatAbortController } from "./chat-abort.js";
+import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
 import { createChatRunState } from "./server-chat-state.js";
 import { drainingRelaySessions, relaySessions } from "./talk-realtime-relay-state.js";
 import { MAX_RELAY_TOOL_CALL_IDENTITIES } from "./talk-realtime-relay-tool-call-ledger.js";

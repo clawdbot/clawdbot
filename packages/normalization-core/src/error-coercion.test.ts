@@ -1,4 +1,5 @@
 // Normalization core tests cover shared error coercion and formatting behavior.
+import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import {
   coerceErrorMessage,
@@ -11,6 +12,17 @@ import {
 
 const keepText = (text: string): string => text;
 const format = (value: unknown): string => formatErrorMessage(value, { redact: keepText });
+const errorRealms = [
+  {
+    realm: "host",
+    createError: (message: string, options?: ErrorOptions): Error => new Error(message, options),
+  },
+  {
+    realm: "plugin VM",
+    createError: (message: string, options?: ErrorOptions): Error =>
+      runInNewContext("new Error(message, options)", { message, options }),
+  },
+];
 
 describe("formatErrorMessage", () => {
   it("retains aggregate branches, nested causes and codes once despite cycles", () => {
@@ -48,17 +60,38 @@ describe("formatErrorMessage", () => {
     expect(format(error)).toBe("cleanup failed | native failed");
   });
 
-  it("walks and deduplicates Error cause chains while preserving codes", () => {
-    const root = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
-    const inner = new Error("request failed", { cause: root });
-    const outer = Object.assign(new Error("request failed", { cause: inner }), {
-      code: "REQUEST_FAILED",
-    });
+  it.each(errorRealms)(
+    "walks and deduplicates $realm Error cause chains while preserving codes",
+    ({ createError }) => {
+      const root = Object.assign(createError("socket closed"), { code: "ECONNRESET" });
+      const inner = createError("request failed", { cause: root });
+      const outer = Object.assign(new Error("request failed", { cause: inner }), {
+        code: "REQUEST_FAILED",
+      });
 
-    expect(format(outer)).toBe("request failed | socket closed | ECONNRESET");
-    expect(formatErrorMessage(outer, { includeCode: true, redact: keepText })).toBe(
-      "request failed | REQUEST_FAILED | socket closed | ECONNRESET",
-    );
+      expect(format(outer)).toBe("request failed | socket closed | ECONNRESET");
+      expect(formatErrorMessage(outer, { includeCode: true, redact: keepText })).toBe(
+        "request failed | REQUEST_FAILED | socket closed | ECONNRESET",
+      );
+      expect(format(inner)).toBe("request failed | socket closed | ECONNRESET");
+    },
+  );
+
+  it("formats VM errors when Error.isError is unavailable", () => {
+    const error: Error = runInNewContext("new TypeError('plugin rejected the request')");
+    const descriptor = Object.getOwnPropertyDescriptor(Error, "isError");
+    let formatted: string;
+    try {
+      Object.defineProperty(Error, "isError", { configurable: true, value: undefined });
+      formatted = format(error);
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(Error, "isError", descriptor);
+      } else {
+        Reflect.deleteProperty(Error, "isError");
+      }
+    }
+    expect(formatted).toBe("plugin rejected the request");
   });
 
   it("omits cause text the wrapper message already spells out", () => {
@@ -123,9 +156,49 @@ describe("formatErrorMessage", () => {
 });
 
 describe("toErrorObject", () => {
-  it("preserves Error and string inputs", () => {
-    const error = new Error("boom");
-    expect(toErrorObject(error, "fallback")).toBe(error);
+  it.each([
+    ...errorRealms.map(({ realm, createError }) => ({
+      kind: realm,
+      createError: () => createError("boom"),
+      name: "Error",
+    })),
+    {
+      kind: "host proxy",
+      createError: (): Error => new Proxy(new Error("boom"), {}),
+      name: "Error",
+    },
+    {
+      kind: "plugin VM subclass",
+      createError: (): Error =>
+        runInNewContext(
+          "new (class PluginFailure extends Error { name = 'PluginFailure' })('boom')",
+        ),
+      name: "PluginFailure",
+    },
+    {
+      kind: "plugin VM engine TypeError",
+      createError: (): Error => runInNewContext("try { null.missing(); } catch (error) { error; }"),
+      name: "TypeError",
+    },
+  ])("preserves $kind identity and diagnostics through error coercers", ({ createError, name }) => {
+    const cause = new Error("nested failure");
+    const error = Object.assign(createError(), { code: "EPLUGIN", cause });
+    const descriptors = Object.getOwnPropertyDescriptors(error);
+    const prototype = Object.getPrototypeOf(error);
+
+    for (const coerced of [
+      toErrorObject(error, "fallback"),
+      toStructuredErrorObject(error),
+      toStringifiedError(error),
+    ]) {
+      expect(coerced).toBe(error);
+      expect(coerced).toMatchObject({ name, code: "EPLUGIN", cause });
+      expect(coerced.cause).toBe(cause);
+    }
+    expect(Object.getOwnPropertyDescriptors(error)).toEqual(descriptors);
+    expect(Object.getPrototypeOf(error)).toBe(prototype);
+    expect(coerceErrorMessage(error)).toBe(error.message);
+    expect(format(error)).toBe(`${error.message} | nested failure`);
     expect(toErrorObject("boom", "fallback")).toMatchObject({ message: "boom" });
   });
 
@@ -335,12 +408,15 @@ describe("toStringifiedError", () => {
 });
 
 describe("coerceErrorMessage", () => {
-  it("preserves Error messages exactly and stringifies other values", () => {
-    expect(coerceErrorMessage(new Error(""))).toBe("");
-    expect(coerceErrorMessage(new Error(" boom "))).toBe(" boom ");
-    expect(coerceErrorMessage("failure")).toBe("failure");
-    expect(coerceErrorMessage(null)).toBe("null");
-  });
+  it.each(errorRealms)(
+    "preserves $realm Error messages exactly and stringifies other values",
+    ({ createError }) => {
+      expect(coerceErrorMessage(createError(""))).toBe("");
+      expect(coerceErrorMessage(createError(" boom "))).toBe(" boom ");
+      expect(coerceErrorMessage("failure")).toBe("failure");
+      expect(coerceErrorMessage(null)).toBe("null");
+    },
+  );
 });
 
 describe("stringifyNonErrorCause", () => {

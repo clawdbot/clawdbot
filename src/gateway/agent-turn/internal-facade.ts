@@ -4,7 +4,8 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
+import { abortChatRunById } from "../chat-abort.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
 import {
   type GatewayMethodDispatchResponse,

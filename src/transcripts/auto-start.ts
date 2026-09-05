@@ -1,6 +1,10 @@
+import { isDeepStrictEqual } from "node:util";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
+import { normalizeCapabilityProviderId } from "../plugins/provider-registry-shared.js";
 import { truncateUtf16Safe } from "../utils.js";
+import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { createTranscriptsStore, stopTranscriptCapture } from "./capture-operations.js";
 import {
   activeSessions,
@@ -33,42 +37,105 @@ function formatAutoStopDiagnostic(value: unknown): string {
   return JSON.stringify(truncateUtf16Safe(sanitizeTerminalText(formatErrorMessage(value)), 300));
 }
 
-async function waitForPendingAutoStartsToSettle(pending: Set<Promise<void>>): Promise<boolean> {
-  if (!pending.size) {
-    return true;
-  }
-  let timer: Timer | undefined;
-  try {
-    return await Promise.race([
-      Promise.allSettled(pending).then(() => true),
-      new Promise<boolean>((resolve) => {
-        timer = setTimeout(() => resolve(false), AUTO_START_STOP_TIMEOUT_MS);
-        timer.unref();
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
+export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext) {
+  const entries = new Set<{
+    config: ResolvedTranscriptsAutoStartConfig;
+    owner: { index: number };
+    providerId: string | undefined;
+    stop: (strict: boolean) => Promise<boolean>;
+    stopping?: Promise<boolean>;
+  }>();
+  const guildOwners = new Map<string, { index: number }>();
+  let stopped = false;
+  return {
+    start(config = ctx.config, excludedProviders?: ReadonlySet<string>) {
+      const resolved = resolveTranscriptsConfig(config?.transcripts);
+      if (stopped || !resolved.enabled) {
+        return;
+      }
+      const retained = new Set(entries);
+      for (const [index, entry] of resolved.autoStart.entries()) {
+        const current = [...retained].find((candidate) =>
+          isDeepStrictEqual(candidate.config, entry),
+        );
+        if (current) {
+          current.owner.index = index;
+          retained.delete(current);
+          continue;
+        }
+        const providerId = normalizeCapabilityProviderId(entry.providerId);
+        if (providerId && excludedProviders?.has(providerId)) {
+          continue;
+        }
+        const owner = { index };
+        entries.add({
+          config: entry,
+          owner,
+          providerId,
+          stop: startTranscriptsAutoStartEntry({ ...ctx, config }, entry, owner, guildOwners),
+        });
+      }
+    },
+    async stop(providerIds?: ReadonlySet<string>) {
+      stopped ||= providerIds === undefined;
+      const settled = await awaitWithinDeadline(async () => {
+        const results = await Promise.allSettled(
+          [...entries].map(async (entry) => {
+            if (providerIds && (!entry.providerId || !providerIds.has(entry.providerId))) {
+              return;
+            }
+            // The caller's deadline never discards or duplicates in-flight provider cleanup.
+            entry.stopping ??= entry.stop(providerIds !== undefined).finally(() => {
+              entry.stopping = undefined;
+            });
+            if (!(await entry.stopping)) {
+              if (providerIds) {
+                throw new Error("Transcript auto-start capture cleanup remains pending");
+              }
+              return;
+            }
+            entries.delete(entry);
+            for (const [key, owner] of guildOwners) {
+              if (owner === entry.owner) {
+                guildOwners.delete(key);
+              }
+            }
+          }),
+        );
+        const errors = results
+          .filter((result) => result.status === "rejected")
+          .map((result) => result.reason);
+        if (errors.length) {
+          throw new AggregateError(errors, "Transcript auto-start cleanup failed");
+        }
+      }, Date.now() + AUTO_START_STOP_TIMEOUT_MS);
+      if (settled === ABSOLUTE_DEADLINE_EXPIRED) {
+        throw new Error(
+          "Transcript auto-start cleanup timed out; retry after the provider finishes stopping",
+        );
+      }
+    },
+  };
 }
 
-/** Own configured captures independently of the room's provider connection. */
-export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext): {
-  start: () => void;
-  stop: () => Promise<void>;
-} {
+function startTranscriptsAutoStartEntry(
+  ctx: TranscriptsRuntimeContext,
+  entry: ResolvedTranscriptsAutoStartConfig,
+  entryOwner: { index: number },
+  guildOwners: Map<string, { index: number }>,
+): (strict: boolean) => Promise<boolean> {
   let stopped = false;
-  let started = false;
+  const store = createTranscriptsStore(ctx);
   const timers = new Set<Timer>();
-  const watchers = new Set<TranscriptOccupancyWatchHandle>();
+  let watcher: TranscriptOccupancyWatchHandle | undefined;
   const startedSessions = new Map<string, symbol>();
   const controllers = new Set<AbortController>();
   const pendingStarts = new Set<Promise<void>>();
-  const pendingStops = new Set<Promise<void>>();
-  const guildOwners = new Map<string, number>();
-  const retries = new Map<number, ReturnType<typeof retainTranscriptStartRetry>>();
-  const clearRetry = (index: number) => {
-    retries.get(index)?.release();
-    retries.delete(index);
+  let stopping: Promise<void> | undefined;
+  let startRetry: ReturnType<typeof retainTranscriptStartRetry> | undefined;
+  const clearRetry = () => {
+    startRetry?.release();
+    startRetry = undefined;
   };
   const terminalDiagnostic = (error: unknown) =>
     error instanceof TranscriptStartError && !error.retry ? error.code : undefined;
@@ -108,7 +175,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
     }
   };
 
-  const stopCapture = async (capture: OwnedCapture, store: TranscriptsStore) => {
+  const stopCapture = async (capture: OwnedCapture, requireProviderStop = false) => {
     const warnings: string[] = [];
     try {
       const active = activeSessions.get(capture.sessionId);
@@ -128,6 +195,10 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
         },
       });
       if (details.status === "skipped") {
+        if (requireProviderStop && details.reason !== "inactive") {
+          throw new Error(`Transcripts session stop still in progress: ${capture.sessionId}`);
+        }
+        forgetCapture(capture);
         return;
       }
       // Log diagnostics only, never the tool content or captured meeting notes.
@@ -142,6 +213,9 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
         );
       }
     } catch (error) {
+      if (requireProviderStop) {
+        throw error;
+      }
       warnings.push(`stop failed: ${formatAutoStopDiagnostic(error)}`);
     }
     for (const warning of warnings) {
@@ -154,14 +228,13 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
 
   const startCapture = async (
     capture: OwnedCapture,
-    index: number,
     params: Pick<
       Parameters<typeof startTranscripts>[0],
       "store" | "rawParams" | "abortSignal" | "existingSession" | "onCaptureEnded"
     >,
   ) => {
     try {
-      const retry = retries.get(index);
+      const retry = startRetry;
       // Both modes validate the exact failed attempt immediately before the
       // configured start's synchronous existing-tuple write.
       retry?.assertCurrent(params.store);
@@ -174,45 +247,36 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
         lifecycleToken: capture.lifecycleToken,
         rawParams: { ...params.rawParams, sessionId: capture.sessionId },
       });
-      clearRetry(index);
+      clearRetry();
       return result;
     } catch (error) {
       if (error instanceof TranscriptStartError) {
-        clearRetry(index);
+        clearRetry();
         if (!stopped && error.retry) {
-          retries.set(index, retainTranscriptStartRetry(ctx, error.retry));
+          startRetry = retainTranscriptStartRetry(ctx, error.retry);
         }
       }
       throw error;
     } finally {
-      // Shutdown may finish before startup transfers a cleanup/finalization owner.
-      // Reconcile this exact attempt on every settlement, including rejected starts.
+      // Per-entry shutdown keeps joining startup after its caller's deadline, then
+      // cleans this exact owner once; do not issue a second stop from this continuation.
       if (ownsCapture(capture)) {
         startedSessions.set(capture.sessionId, capture.lifecycleToken);
-        if (stopped) {
-          await stopCapture(capture, params.store);
-        }
       }
     }
   };
 
-  const startContinuous = (
-    entry: ResolvedTranscriptsAutoStartConfig,
-    index: number,
-    attempt: number,
-    store: TranscriptsStore,
-  ) => {
+  const startContinuous = (attempt: number) => {
     if (stopped || startedSessions.has(entry.sessionId ?? "")) {
       return;
     }
     const capture: OwnedCapture = {
-      sessionId:
-        retries.get(index)?.session.sessionId ?? entry.sessionId ?? createTranscriptSessionId(),
+      sessionId: startRetry?.session.sessionId ?? entry.sessionId ?? createTranscriptSessionId(),
       lifecycleToken: Symbol(entry.sessionId),
     };
     void runPending(async (controller) => {
       try {
-        await startCapture(capture, index, {
+        await startCapture(capture, {
           store,
           abortSignal: controller.signal,
           rawParams: entry,
@@ -223,33 +287,29 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
         }
         // Only the exact failed provider attempt may retain retry authority.
         const terminal = terminalDiagnostic(error);
-        if (terminal || attempt >= AUTO_START_RETRY_ATTEMPTS) {
-          clearRetry(index);
+        const cleanupPending = ownsCapture(capture);
+        if (terminal || cleanupPending || attempt >= AUTO_START_RETRY_ATTEMPTS) {
+          clearRetry();
           ctx.logger.warn(
-            `transcripts autoStart failed provider=${entry.providerId}: ${formatAutoStopDiagnostic(error)} (check the transcripts.autoStart entry in your config)`,
+            `transcripts autoStart failed provider=${entry.providerId}: ${formatAutoStopDiagnostic(error)} (${cleanupPending ? "capture cleanup pending; check the provider, then reload its plugin to retry cleanup and auto-start" : "check the transcripts.autoStart entry in your config"})`,
           );
         } else {
-          schedule(() => startContinuous(entry, index, attempt + 1, store), AUTO_START_RETRY_MS);
+          schedule(() => startContinuous(attempt + 1), AUTO_START_RETRY_MS);
         }
       }
     });
   };
 
-  const watchEntry = (
-    entry: ResolvedTranscriptsAutoStartConfig,
-    index: number,
-    store: TranscriptsStore,
-  ) => {
+  const watchEntry = () => {
     let occupied = false;
     let ready = false;
     let capture: OwnedCapture | undefined;
     let starting: Promise<void> | undefined;
-    let stopping: Promise<void> | undefined;
     let startController: AbortController | undefined;
     let emptyTimer: Timer | undefined;
     let retryTimer: Timer | undefined;
     let source: TranscriptSourceLocator;
-    const label = `transcripts autoStart[${index}] provider=${entry.providerId}`;
+    const label = () => `transcripts autoStart[${entryOwner.index}] provider=${entry.providerId}`;
     const retry = (
       run: () => void,
       attempt: number,
@@ -261,9 +321,9 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
       }
       const terminal = terminalDiagnostic(error);
       if (terminal || attempt >= AUTO_START_RETRY_ATTEMPTS) {
-        clearRetry(index);
+        clearRetry();
         ctx.logger.warn(
-          `${label} failed: ${formatAutoStopDiagnostic(error)}; check the entry and provider connection. ${phase === "watch" ? "Restart the gateway to retry occupancy watching." : "Waiting for the next occupancy transition."}`,
+          `${label()} failed: ${formatAutoStopDiagnostic(error)}; check the entry and provider connection. ${phase === "watch" ? "Reload the provider plugin to retry occupancy watching." : "Waiting for the next occupancy transition."}`,
         );
         return;
       }
@@ -287,7 +347,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           // A terminal persistence failure retains its old owner. Retire it through
           // the same stop path before reopening; never append behind finalization.
           if (capture) {
-            await stopCapture(capture, store);
+            await stopCapture(capture);
             if (ownsCapture(capture)) {
               throw new Error("previous capture still awaits finalization");
             }
@@ -297,7 +357,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           }
           const now = Date.now();
           const recent =
-            retries.get(index)?.session ??
+            startRetry?.session ??
             store.readRecentStoppedSession(
               sanitizeTranscriptSourceLocator(source),
               new Date(now - AUTO_START_OCCUPANCY_REOPEN_WINDOW_MS).toISOString(),
@@ -314,10 +374,10 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
               : undefined;
           const owned = {
             sessionId: candidate?.sessionId ?? createTranscriptSessionId(),
-            lifecycleToken: Symbol(label),
+            lifecycleToken: Symbol(label()),
           };
           capture = owned;
-          const result = await startCapture(owned, index, {
+          const result = await startCapture(owned, {
             store,
             abortSignal: controller.signal,
             existingSession: candidate,
@@ -356,29 +416,26 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
       if (stopping) {
         return;
       }
-      const task = (async () => {
+      stopping = (async () => {
         startController?.abort();
         await starting;
         // Failed startup may restore its candidate while settling. A new
         // occupancy episode must consult the durable reopen window again.
-        clearRetry(index);
+        clearRetry();
         if (capture) {
-          await stopCapture(capture, store);
+          await stopCapture(capture);
           if (!ownsCapture(capture)) {
             capture = undefined;
           }
         }
       })().finally(() => {
         stopping = undefined;
-        pendingStops.delete(task);
         // Arrival during an awaited stop still gets an episode once the old
         // owner has released, rather than silently losing that transition.
         if (occupied && !stopped) {
           begin(1);
         }
       });
-      stopping = task;
-      pendingStops.add(task);
     };
     const arm = (attempt: number) => {
       if (stopped) {
@@ -392,11 +449,11 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           }
           if (!provider.watchOccupancy) {
             ctx.logger.warn(
-              `${label} cannot report occupancy; remove whenOccupied or select a provider that supports occupancy watching.`,
+              `${label()} cannot report occupancy; remove whenOccupied or select a provider that supports occupancy watching.`,
             );
             return;
           }
-          clearRetry(index);
+          clearRetry();
           source = resolveTranscriptSourceOwnership({
             ctx,
             operation: "start",
@@ -409,13 +466,13 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           if (source.guildId) {
             const key = JSON.stringify([provider.id, source.accountId, source.guildId]);
             const owner = guildOwners.get(key);
-            if (owner !== undefined && owner !== index) {
+            if (owner !== undefined && owner !== entryOwner) {
               ctx.logger.warn(
-                `${label} skipped: autoStart[${owner}] already owns this provider account and guild; configure only one whenOccupied entry per account and guild.`,
+                `${label()} skipped: autoStart[${owner.index}] already owns this provider account and guild; configure only one whenOccupied entry per account and guild.`,
               );
               return;
             }
-            guildOwners.set(key, index);
+            guildOwners.set(key, entryOwner);
           }
           const result = await provider.watchOccupancy({
             cfg: ctx.config,
@@ -429,7 +486,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
               occupied = true;
               cancel(emptyTimer);
               cancel(retryTimer);
-              clearRetry(index);
+              clearRetry();
               begin(1);
             },
             onEmpty: () => {
@@ -445,11 +502,10 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           if (!result.ok) {
             throw new Error(result.error);
           }
+          watcher = result.value;
           if (stopped) {
-            result.value.stop();
             return;
           }
-          watchers.add(result.value);
           ready = true;
           // Initial occupancy can be reported inline by watchOccupancy. Admit
           // capture only after subscription succeeds, not after a failed watch.
@@ -465,54 +521,32 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
     arm(1);
   };
 
-  return {
-    start() {
-      if (started || stopped) {
-        return;
-      }
-      started = true;
-      const config = resolveTranscriptsConfig(ctx.config?.transcripts);
-      if (!config.enabled || !config.autoStart.length) {
-        return;
-      }
-      const store = createTranscriptsStore(ctx);
-      for (const [index, entry] of config.autoStart.entries()) {
-        if (entry.whenOccupied) {
-          watchEntry(entry, index, store);
-        } else {
-          startContinuous(entry, index, 1, store);
-        }
-      }
-    },
-    async stop() {
-      stopped = true;
-      for (const index of retries.keys()) {
-        clearRetry(index);
-      }
-      for (const watcher of watchers) {
-        watcher.stop();
-      }
-      watchers.clear();
-      for (const timer of timers) {
-        clearTimeout(timer);
-      }
-      timers.clear();
-      for (const controller of controllers) {
-        controller.abort();
-      }
-      const pendingStartsSettled = await waitForPendingAutoStartsToSettle(pendingStarts);
-      if (!pendingStartsSettled) {
-        ctx.logger.warn(
-          `transcripts autoStart stop timed out waiting for ${pendingStarts.size} pending start${pendingStarts.size === 1 ? "" : "s"}`,
-        );
-      }
-      if (pendingStartsSettled) {
-        await Promise.allSettled(pendingStops);
-      }
-      const store = createTranscriptsStore(ctx);
-      for (const [sessionId, lifecycleToken] of startedSessions) {
-        await stopCapture({ sessionId, lifecycleToken }, store);
-      }
-    },
+  if (entry.whenOccupied) {
+    watchEntry();
+  } else {
+    startContinuous(1);
+  }
+  return async (strict) => {
+    stopped = true;
+    clearRetry();
+    for (const timer of timers) {
+      clearTimeout(timer);
+    }
+    timers.clear();
+    for (const controller of controllers) {
+      controller.abort();
+    }
+    // Join late subscriptions before releasing handles so failed cleanup stays retryable.
+    await Promise.allSettled(pendingStarts);
+    if (watcher) {
+      const current = watcher;
+      await runPluginCleanup(current.stop, () => current.stop());
+      watcher = undefined;
+    }
+    await Promise.allSettled(stopping ? [stopping] : []);
+    for (const [sessionId, lifecycleToken] of startedSessions) {
+      await stopCapture({ sessionId, lifecycleToken }, strict);
+    }
+    return startedSessions.size === 0;
   };
 }

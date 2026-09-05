@@ -1,10 +1,12 @@
 // Covers migration provider runtime hooks supplied by plugins.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { PluginInstance } from "./plugin-instance.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 
 type MockManifestRegistry = {
   plugins: Array<Record<string, unknown>>;
@@ -222,11 +224,13 @@ describe("migration provider runtime", () => {
     const provider = createMigrationProvider("external-import");
     const active = createEmptyPluginRegistry();
     const loaded = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "external-migration", source: "test" });
+    loaded.plugins.push(record);
     loaded.migrationProviders.push({
       pluginId: "external-migration",
       pluginName: "External Migration",
       source: "test",
-      provider,
+      provider: new PluginInstance(record.id, { record, registry: loaded }).wrap(provider),
     } as never);
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
       params === undefined ? active : loaded,
@@ -303,15 +307,17 @@ describe("migration provider runtime", () => {
     });
   });
 
-  it("discovers newly bundled migration providers from current metadata", () => {
+  it("discovers newly bundled migration providers from current metadata", async () => {
     const provider = createMigrationProvider("hermes");
     const active = createEmptyPluginRegistry();
     const loaded = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "migrate-hermes", source: "test" });
+    loaded.plugins.push(record);
     loaded.migrationProviders.push({
       pluginId: "migrate-hermes",
       pluginName: "Hermes Migration",
       source: "test",
-      provider,
+      provider: new PluginInstance(record.id, { record, registry: loaded }).wrap(provider),
     } as never);
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
       params === undefined ? active : loaded,
@@ -327,7 +333,13 @@ describe("migration provider runtime", () => {
 
     const resolved = resolvePluginMigrationProvider({ providerId: "hermes" });
 
-    expect(resolved).not.toBe(provider);
+    expect(resolved?.id).toBe("hermes");
+    provider.plan.mockImplementationOnce(() => {
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(loaded);
+      return {} as never;
+    });
+    await resolved?.plan({} as never);
+    expect(provider.plan).toHaveBeenCalledTimes(1);
     expect(mocks.listBundledPluginMetadata).toHaveBeenCalledWith({
       includeChannelConfigs: false,
     });

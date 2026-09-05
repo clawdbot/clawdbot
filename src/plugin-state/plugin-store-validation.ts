@@ -184,7 +184,17 @@ function assertPlainJsonValue(
       return;
     }
 
-    if (Object.getPrototypeOf(objectValue) !== Object.prototype) {
+    // Source-plugin realms have their own Object.prototype; class and custom prototypes stay invalid.
+    const prototype = Object.getPrototypeOf(objectValue);
+    const constructor =
+      prototype && Object.getOwnPropertyDescriptor(prototype, "constructor")?.value;
+    if (
+      !prototype ||
+      Object.getPrototypeOf(prototype) !== null ||
+      typeof constructor !== "function" ||
+      Object.getOwnPropertyDescriptor(constructor, "prototype")?.value !== prototype ||
+      Function.prototype.toString.call(constructor) !== Function.prototype.toString.call(Object)
+    ) {
       throw params.errors.invalid(
         `${params.label} object at ${params.path} must be a plain object`,
       );

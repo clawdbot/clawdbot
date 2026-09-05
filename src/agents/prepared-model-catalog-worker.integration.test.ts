@@ -146,9 +146,9 @@ describe("prepared model catalog worker boundary", () => {
   });
 
   it.each([
-    { owner: "configured Gateway", prepareInboundPluginRegistry: true, version: "built" },
-    { owner: "standalone", prepareInboundPluginRegistry: false, version: "v1" },
-  ])("keeps the $owner artifact selection in catalog and auth workers", async (selection) => {
+    { owner: "configured Gateway", prepareInboundPluginRegistry: true },
+    { owner: "standalone", prepareInboundPluginRegistry: false },
+  ])("keeps explicit source selection in $owner catalog and auth workers", async (selection) => {
     const fixture = await createStaticSnapshot(
       0,
       {},
@@ -161,14 +161,14 @@ describe("prepared model catalog worker boundary", () => {
     expect.soft(catalog.entries).toContainEqual(
       expect.objectContaining({
         provider: PROVIDER_ID,
-        id: `plugin-generation-${selection.version}`,
+        id: "plugin-generation-v1",
       }),
     );
     const auth = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
       providerIds: [PROVIDER_ID],
     });
     expect(auth?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID]).toMatchObject({
-      access: `${selection.version}:A`,
+      access: "v1:A",
     });
     expect(
       new Set(
@@ -177,7 +177,7 @@ describe("prepared model catalog worker boundary", () => {
           .trim()
           .split("\n"),
       ),
-    ).toEqual(new Set([selection.version]));
+    ).toEqual(new Set(["v1"]));
   });
 
   it("keeps explicit read-only full inventories discoverable without a runtime registry", async () => {

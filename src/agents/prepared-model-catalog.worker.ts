@@ -14,7 +14,10 @@ import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-co
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
 import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
-import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
+import {
+  manifestPluginResolvesRuntimeModelCatalogAugment,
+  resolveOwningPluginIdsForProviderRef,
+} from "../plugins/providers.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import {
@@ -107,13 +110,20 @@ async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
   // Rediscovery under agent workspaces or runtime activation overlays loses the owner's
   // metadata generation. Its source/built artifact selection must survive reconstruction too.
   const metadata = restorePluginMetadataSnapshot(value.pluginMetadataSnapshot);
-  // Runtime catalog and harness owners declare their role in the prepared manifest snapshot.
-  // An empty eligible set stays empty instead of reopening unscoped plugin discovery.
+  // Catalog visibility includes providers beyond the selected run. Carry those exact owners
+  // alongside manifest runtime roles; an empty eligible set must remain authoritative.
+  const catalogProviderPluginIds = new Set(
+    value.providerIds.flatMap(
+      (provider) =>
+        resolveOwningPluginIdsForProviderRef({ provider, metadataSnapshot: metadata }) ?? [],
+    ),
+  );
   const normalizedConfig = normalizePluginsConfig(value.input.config.plugins);
   const basePluginIds = metadata.plugins
     .filter(
       (plugin) =>
-        (manifestPluginResolvesRuntimeModelCatalogAugment(plugin) ||
+        (catalogProviderPluginIds.has(plugin.id) ||
+          manifestPluginResolvesRuntimeModelCatalogAugment(plugin) ||
           plugin.cliBackends.length > 0 ||
           Boolean(plugin.setup?.cliBackends?.length) ||
           Boolean(plugin.activation?.onAgentHarnesses?.length)) &&

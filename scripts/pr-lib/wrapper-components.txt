@@ -1,3 +1,4 @@
+packages/normalization-core/src/error-coercion.ts
 packages/normalization-core/src/record-coerce.ts
 packages/normalization-core/src/stable-stringify.ts
 scripts/changed-lanes.mts

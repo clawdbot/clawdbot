@@ -220,6 +220,8 @@ describe("production lint suppressions", () => {
         "src/commands/backup-restore.ts|preserve-caught-error|1",
         // Intl.Collator.compare is a getter returning a bound function.
         "src/cron/service/list-page-sort.ts|typescript/unbound-method|1",
+        // The active reload clears running in its awaited finally block.
+        "src/gateway/config-reload.ts|no-unmodified-loop-condition|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",
@@ -242,13 +244,14 @@ describe("production lint suppressions", () => {
         "src/plugin-sdk/qa-runner-runtime.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/test-helpers/subagent-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/hooks.ts|typescript/no-unnecessary-type-parameters|1",
+        // Cleanup preserves each plugin's original rejection in its structured failure result.
+        "src/plugins/host-hook-cleanup.ts|typescript/only-throw-error|1",
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
         // These snapshots own their arrays, so sorting in place avoids another copy.
         "src/plugins/loader-load-context.ts|unicorn/no-array-sort|1",
         "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|3",
         "src/plugins/registry-state.ts|unicorn/no-array-sort|1",
-        "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/runtime/types-channel.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",
         // The queue ring reserves sparse capacity and reads only its occupied slots.

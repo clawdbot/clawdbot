@@ -15,7 +15,8 @@ type LanceDbRuntimeLoaderDeps = {
 function buildLoadFailureMessage(error: unknown): string {
   return [
     "memory-lancedb: bundled @lancedb/lancedb dependency is unavailable.",
-    "Install or repair the memory-lancedb plugin package dependencies, then restart OpenClaw.",
+    'Install or repair the memory-lancedb plugin package dependencies, then run "openclaw plugins reload memory-lancedb" if the Gateway is running.',
+    "Changing Node.js or the host platform still requires a Gateway restart.",
     String(error),
   ].join(" ");
 }

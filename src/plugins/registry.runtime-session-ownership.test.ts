@@ -4,23 +4,10 @@ import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRecord } from "./loader-records.js";
-import { createPluginRegistry } from "./registry.js";
+import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
-
-function createTestRegistry(runtime: PluginRuntime) {
-  return createPluginRegistry({
-    logger: {
-      info() {},
-      warn() {},
-      error() {},
-      debug() {},
-    },
-    runtime,
-    activateGlobalSideEffects: false,
-  });
-}
 
 describe("plugin registry runtime session ownership", () => {
   it("resolves persisted runtime requests at the plugin execution boundary", async () => {
@@ -50,7 +37,7 @@ describe("plugin registry runtime session ownership", () => {
       return { meta: { durationMs: 0 } };
     });
     Object.defineProperty(runtime.agent, "runEmbeddedAgent", { value: runEmbeddedAgent });
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
     const createApi = (id: string) =>
       pluginRegistry.createApi(
         createPluginRecord({
@@ -234,7 +221,7 @@ describe("plugin registry runtime session ownership", () => {
       request: gatewayRequest as unknown as PluginRuntime["gateway"]["request"],
     };
 
-    const pluginRegistry = createTestRegistry(runtime);
+    const pluginRegistry = createRuntimeTestRegistry(runtime);
     const ownerRecord = createPluginRecord({
       id: "codex-owner",
       source: "/plugins/codex-owner/index.js",

@@ -337,21 +337,18 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl);
       await gateway.waitForRequest("connect");
 
-      await page.locator(".login-gate__failure").waitFor();
-      // Retryable guidance must survive a real reconnect, including time spent capturing proof.
+      // Retryable guidance must survive a reconnect while proof is captured.
       if (fixture.error.code === "UNAVAILABLE") {
         await gateway.waitForRequest("connect", { after: 1 });
       }
-      await writeFile(
-        path.join(RECOVERY_ARTIFACT_DIR, "login-failure.png"),
-        await takeControlUiViewportScreenshot(page, page.locator(".login-gate__card"), [
-          page.locator(".login-gate__failure"),
-        ]),
-      );
       const failure = page.locator(`.login-gate__failure[data-kind="${fixture.expectedKind}"]`);
       await failure.waitFor({ timeout: 10_000 });
       expect(await failure.locator(".login-gate__failure-title").textContent()).toBe(
         fixture.expectedTitle,
+      );
+      await writeFile(
+        path.join(RECOVERY_ARTIFACT_DIR, "login-failure.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".login-gate__card"), [failure]),
       );
     } catch (error) {
       await captureControlUiE2eFailureDiagnostics(page, {

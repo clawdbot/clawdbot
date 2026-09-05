@@ -21,11 +21,10 @@ describe("plugins cli lazy runtime boundary", () => {
         runPluginMarketplaceEntriesCommand: vi.fn(),
         runPluginMarketplaceListCommand: vi.fn(),
         runPluginMarketplaceRefreshCommand: vi.fn(),
-        runPluginsDisableCommand: vi.fn(),
         runPluginsDoctorCommand: vi.fn(),
-        runPluginsEnableCommand: vi.fn(),
         runPluginsInstallAction: vi.fn(),
         runPluginsRegistryCommand: vi.fn(),
+        runPluginsSetEnabledCommand: vi.fn(),
       };
     });
 
@@ -119,11 +118,10 @@ describe("plugins cli lazy runtime boundary", () => {
         runPluginMarketplaceEntriesCommand: vi.fn(),
         runPluginMarketplaceListCommand: vi.fn(),
         runPluginMarketplaceRefreshCommand: vi.fn(),
-        runPluginsDisableCommand: vi.fn(),
         runPluginsDoctorCommand: vi.fn(),
-        runPluginsEnableCommand: vi.fn(),
         runPluginsInstallAction: vi.fn(),
         runPluginsRegistryCommand,
+        runPluginsSetEnabledCommand: vi.fn(),
       };
     });
 
@@ -162,11 +160,10 @@ describe("plugins cli lazy runtime boundary", () => {
       runPluginMarketplaceEntriesCommand,
       runPluginMarketplaceListCommand: vi.fn(),
       runPluginMarketplaceRefreshCommand: vi.fn(),
-      runPluginsDisableCommand: vi.fn(),
       runPluginsDoctorCommand: vi.fn(),
-      runPluginsEnableCommand: vi.fn(),
       runPluginsInstallAction: vi.fn(),
       runPluginsRegistryCommand: vi.fn(),
+      runPluginsSetEnabledCommand: vi.fn(),
     }));
 
     const { registerPluginsCli } = await import("./plugins-cli.js");
@@ -189,11 +186,10 @@ describe("plugins cli lazy runtime boundary", () => {
       runPluginMarketplaceEntriesCommand: vi.fn(),
       runPluginMarketplaceListCommand: vi.fn(),
       runPluginMarketplaceRefreshCommand,
-      runPluginsDisableCommand: vi.fn(),
       runPluginsDoctorCommand: vi.fn(),
-      runPluginsEnableCommand: vi.fn(),
       runPluginsInstallAction: vi.fn(),
       runPluginsRegistryCommand: vi.fn(),
+      runPluginsSetEnabledCommand: vi.fn(),
     }));
 
     const { registerPluginsCli } = await import("./plugins-cli.js");

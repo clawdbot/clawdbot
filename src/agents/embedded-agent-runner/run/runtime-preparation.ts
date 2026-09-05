@@ -1,9 +1,17 @@
 import { readSourceReplyDeliveryRuntime } from "../../../auto-reply/reply/source-reply-delivery-runtime.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
+import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { resolvePreparedRunAdmission } from "../../admitted-run-context.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { isProfileInCooldown } from "../../auth-profiles.js";
+import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
+import {
+  createContextEngineLogicalTurnLease,
+  selectContextEngineForTranscriptHost,
+} from "../../harness/context-engine-logical-turn.js";
+import { drainPendingContextEngineTurnsBeforeRun } from "../../harness/context-engine-turn-attempt.js";
+import type { AgentHarness } from "../../harness/types.js";
 import { resolvePreparedModelThinkingCompat } from "../../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveProviderEndpoint } from "../../provider-attribution.js";
@@ -38,6 +46,7 @@ import {
 } from "./model-harness.js";
 import { resolveEmbeddedRunModelSetup } from "./model-setup.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
 import { resolveInitialThinkLevel } from "./runtime-resolution.js";
 
 export async function prepareEmbeddedRunRuntime(input: {
@@ -520,7 +529,8 @@ export async function prepareEmbeddedRunRuntime(input: {
     params.forceMessageTool = mode === "message_tool_only";
   }
   return {
-    admittedRunContext,
+    // Continuations retain the admitted authority, never its consumed preparation handle.
+    runAdmission: { preparedRunAdmission: undefined, admittedRunContext },
     provider,
     modelId,
     requestedModelId,
@@ -576,5 +586,56 @@ export async function prepareEmbeddedRunRuntime(input: {
       pluginMetadataSnapshot,
       providerRuntimeHandle,
     }),
+  };
+}
+
+/** Prepare the logical-turn lease before dispatch, retaining borrowed ownership. */
+export async function prepareEmbeddedContextEngine(
+  params: RunEmbeddedAgentInternalParams,
+  agentHarness: AgentHarness,
+  agentDir: string,
+  workspaceDir: string,
+) {
+  const ownsContextEngineLogicalTurnLease = params.contextEngineLogicalTurnLease === undefined;
+  const contextEngineLogicalTurnLease =
+    params.contextEngineLogicalTurnLease ??
+    (await measureEmbeddedAgentPreparation(
+      "context-engine",
+      () =>
+        createContextEngineLogicalTurnLease({
+          config: params.config,
+          agentDir,
+          workspaceDir,
+        }),
+      { config: params.config },
+    ));
+  const ownedContextEngineLease = ownsContextEngineLogicalTurnLease
+    ? contextEngineLogicalTurnLease
+    : undefined;
+  selectContextEngineForTranscriptHost({
+    lease: contextEngineLogicalTurnLease,
+    host: {
+      id: `agent-harness:${agentHarness.id}`,
+      label: `agent harness "${agentHarness.id}"`,
+      capabilities: agentHarness.contextEngineHostCapabilities ?? [],
+    },
+    operation: "agent-run",
+    recorder: params.userTurnTranscriptRecorder,
+  });
+  await drainPendingContextEngineTurnsBeforeRun({
+    admission: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+    isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
+    lease: contextEngineLogicalTurnLease,
+    recorder: params.userTurnTranscriptRecorder,
+    sessionTarget: params.sessionTarget,
+  });
+  const contextEngine = contextEngineLogicalTurnLease.begin().engine;
+  const resolveContextEnginePluginId = () =>
+    contextEngineLogicalTurnLease.effectiveEnginePluginId ??
+    resolveContextEngineOwnerPluginId(contextEngine);
+  return {
+    contextEngine,
+    ownedContextEngineLease,
+    resolveContextEnginePluginId,
   };
 }

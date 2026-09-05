@@ -179,7 +179,6 @@ it.each(["global", "shared-project"])(
       const modulePath = resolvePluginDoctorContractArtifactPath(rootDir)!;
       const load = getCachedPluginModuleLoader({
         modulePath,
-        rootDir,
         importerUrl: import.meta.url,
       });
       const { stateMigrations } = coercePluginDoctorContractModule(

@@ -76,12 +76,13 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
-  const applyFreshThreadContinuityProjection = () => {
+  const applyContinuityProjection = (assembledMessages = historyState.messages) => {
     const projection = projectContextEngineAssemblyForCodex({
-      assembledMessages: historyState.messages,
+      assembledMessages,
       originalHistoryMessages: historyState.messages,
       prompt: params.prompt,
       maxRenderedContextChars: codexContinuityProjectionMaxChars,
+      toolPayloadMode: params.pluginRuntimeRefreshMessages ? "preserve" : "elide",
     });
     promptState.promptText = projection.promptText;
     promptState.promptContextRange = projection.promptContextRange;
@@ -129,20 +130,23 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       prompt: params.prompt,
       systemPromptAddition: assembled.systemPromptAddition,
       maxRenderedContextChars: codexContextProjectionMaxChars,
-      toolPayloadMode: contextEngineProjection ? "preserve" : "elide",
+      toolPayloadMode:
+        contextEngineProjection || params.pluginRuntimeRefreshMessages ? "preserve" : "elide",
     });
-    const projectionDecision = contextEngineProjection
-      ? resolveContextEngineBootstrapProjectionDecision({
-          startupBinding: decisionStartupBinding,
-          expectedBinding: buildContextEngineBinding(
-            buildActiveRunAttemptParams(),
-            contextEngineProjection,
-          ),
-          projection: contextEngineProjection,
-          dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
-          legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
-        })
-      : { project: true, reason: "per-turn-projection" };
+    const projectionDecision = params.pluginRuntimeRefreshMessages
+      ? { project: true, reason: "plugin-runtime-refresh" }
+      : contextEngineProjection
+        ? resolveContextEngineBootstrapProjectionDecision({
+            startupBinding: decisionStartupBinding,
+            expectedBinding: buildContextEngineBinding(
+              buildActiveRunAttemptParams(),
+              contextEngineProjection,
+            ),
+            projection: contextEngineProjection,
+            dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
+            legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
+          })
+        : { project: true, reason: "per-turn-projection" };
     const decisionBinding = decisionStartupBinding;
     embeddedAgentLog.info("codex app-server context-engine projection decision", {
       sessionId: params.sessionId,
@@ -370,16 +374,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     if (newerVisibleMessages.length === 0) {
       return false;
     }
-    const projection = projectContextEngineAssemblyForCodex({
-      assembledMessages: newerVisibleMessages,
-      originalHistoryMessages: historyState.messages,
-      prompt: params.prompt,
-      maxRenderedContextChars: codexContinuityProjectionMaxChars,
-    });
-    promptState.promptText = projection.promptText;
-    promptState.promptContextRange = projection.promptContextRange;
-    promptState.prePromptMessageCount = projection.prePromptMessageCount;
-    promptState.noEngineContinuityProjectionApplied = true;
+    applyContinuityProjection(newerVisibleMessages);
     return true;
   };
   const precomputeNoContextEngineStaleBindingProjection = () => {
@@ -401,6 +396,16 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     action: "started" | "resumed" | "forked",
     binding?: NonNullable<typeof mutable.startupBinding>,
   ) => {
+    if (activeContextEngine) {
+      return false;
+    }
+    if (params.pluginRuntimeRefreshMessages?.length) {
+      // Existing native threads own prior history; carry only this run's completed work.
+      applyContinuityProjection(
+        action === "started" ? historyState.messages : [...params.pluginRuntimeRefreshMessages],
+      );
+      return true;
+    }
     // A fresh thread can inherit summaries after all prior user messages were compacted away.
     // Resumed bindings keep their separate incremental user/assistant handoff contract.
     const hasContinuity = historyState.messages.some(
@@ -409,7 +414,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         (action === "started" &&
           (message.role === "compactionSummary" || message.role === "branchSummary")),
     );
-    if (activeContextEngine || !hasContinuity) {
+    if (!hasContinuity) {
       return false;
     }
     if (action === "resumed" && promptState.precomputedStaleBindingContinuityProjectionApplied) {
@@ -425,7 +430,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       return applyResumeStaleBindingContinuityProjection(binding);
     }
     if (action === "started") {
-      applyFreshThreadContinuityProjection();
+      applyContinuityProjection();
       return true;
     }
     return false;
@@ -466,7 +471,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       promptState.precomputedStaleBindingContinuityProjectionApplied &&
       !promptState.inactiveThreadBootstrapBindingForcedFreshStart;
     if (promptState.staleBindingContinuityForcedFreshStart) {
-      applyFreshThreadContinuityProjection();
+      applyContinuityProjection();
     }
     if (activeContextEngine) {
       promptState.contextEngineProjection = undefined;

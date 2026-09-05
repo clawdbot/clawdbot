@@ -1,11 +1,7 @@
-// Resolves native module require paths for plugin runtime loading.
-import fs from "node:fs";
 import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { isPathInside } from "../infra/path-guards.js";
 
-const nodeRequire = createRequire(import.meta.url);
 // Resolution and Jiti must accept the same source family, including typed JSX variants.
 export const PLUGIN_SOURCE_MODULE_EXTENSIONS: readonly string[] = [
   ".ts",
@@ -103,19 +99,19 @@ export function tryNativeRequireModule(
     return { ok: false };
   }
   const modulePath = toNativeRequirePath(moduleSpecifier);
+  // A process-wide require retains evicted graphs through its parent's children.
+  // Keep that parent scoped to this load so retired graphs can be collected.
+  const require = createRequire(import.meta.url);
   if (
     isPluginSourceModulePath(modulePath) &&
     !process.features.typescript &&
-    typeof nodeRequire.extensions?.[path.extname(modulePath)] !== "function"
+    typeof require.extensions?.[path.extname(modulePath)] !== "function"
   ) {
     return { ok: false };
   }
   let resolvedPath = modulePath;
   try {
     const moduleExport = withNativeRequireAliases(options.aliasMap, () => {
-      // A process-wide require retains evicted graphs through its parent's children.
-      // Keep that parent scoped to this load so retired graphs can be collected.
-      const require = createRequire(import.meta.url);
       resolvedPath = require.resolve(modulePath);
       // Requiring the resolved target could apply a second alias to the same request.
       return require(modulePath);
@@ -144,23 +140,6 @@ export function tryNativeRequireModule(
   }
 }
 
-/** Clears native and source-transformed modules within the plugin dependency root. */
-export function clearPluginModuleRequireCache(
-  modulePath: string,
-  options: { dependencyRoot?: string } = {},
-): void {
-  try {
-    const resolved = nodeRequire.resolve(toNativeRequirePath(modulePath));
-    clearRequireCacheSubtree(
-      resolved,
-      resolveRequireCachePath(options.dependencyRoot ?? path.dirname(resolved)),
-      new Set(),
-    );
-  } catch {
-    // Best-effort lifecycle cleanup: unresolved paths were not loaded.
-  }
-}
-
 // Native require and cache keys use paths; ESM/source loaders keep URL specifiers.
 function toNativeRequirePath(specifier: string): string {
   try {
@@ -168,34 +147,6 @@ function toNativeRequirePath(specifier: string): string {
   } catch {
     return specifier;
   }
-}
-
-function resolveRequireCachePath(targetPath: string): string {
-  try {
-    return fs.realpathSync.native(targetPath);
-  } catch {
-    return path.resolve(targetPath);
-  }
-}
-
-function clearRequireCacheSubtree(
-  resolvedPath: string,
-  dependencyRoot: string,
-  seen: Set<string>,
-): void {
-  if (seen.has(resolvedPath)) {
-    return;
-  }
-  seen.add(resolvedPath);
-  const cached = nodeRequire.cache[resolvedPath];
-  if (cached) {
-    for (const child of cached.children) {
-      if (isPathInside(dependencyRoot, child.id)) {
-        clearRequireCacheSubtree(child.id, dependencyRoot, seen);
-      }
-    }
-  }
-  delete nodeRequire.cache[resolvedPath];
 }
 
 /** Runs a native require block with temporary CJS/ESM alias hooks and restores both afterward. */

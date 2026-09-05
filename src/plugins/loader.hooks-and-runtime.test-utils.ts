@@ -28,7 +28,7 @@ import {
 } from "./loader.test-harness.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
-import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
@@ -164,7 +164,7 @@ function loadBuiltArtifactScenario(scenario: BuiltArtifactScenario) {
   return registry.plugins.find((entry) => entry.id === scenario.id)?.status;
 }
 
-function loadSourceExternalArtifactScenario(params: {
+async function loadSourceExternalArtifactScenario(params: {
   sourceBody: string;
   packageLocalBody: string;
   rootBuildBody?: string;
@@ -273,7 +273,7 @@ function loadSourceExternalArtifactScenario(params: {
       return registry.plugins.find((entry) => entry.id === id)?.status;
     });
   } finally {
-    cache.disposeModules?.();
+    await retirePluginCache(cache);
   }
 }
 
@@ -964,18 +964,18 @@ ${channelPluginSource({
     ).toBe("loaded");
   });
 
-  it("ignores package-local dist when a bundled source plugin opts out of core dist", () => {
+  it("ignores package-local dist when a bundled source plugin opts out of core dist", async () => {
     expect(
-      loadSourceExternalArtifactScenario({
+      await loadSourceExternalArtifactScenario({
         sourceBody: 'export default { id: "source-external-artifact-test", register() {} };\n',
         packageLocalBody: 'throw new Error("stale package-local dist should not load");\n',
       }),
     ).toBe("loaded");
   });
 
-  it("prefers the root build when a bundled source plugin opts out of core dist", () => {
+  it("prefers the root build when a bundled source plugin opts out of core dist", async () => {
     expect(
-      loadSourceExternalArtifactScenario({
+      await loadSourceExternalArtifactScenario({
         sourceBody: 'throw new Error("source should not load when root build exists");\n',
         packageLocalBody: 'throw new Error("stale package-local dist should not load");\n',
         rootBuildBody: 'module.exports = { id: "source-external-artifact-test", register() {} };\n',
@@ -1008,9 +1008,9 @@ ${channelPluginSource({
       sourceSelection: "symlink" as const,
       fromInstalledIndex: true,
     },
-  ])("preserves $name execution instead of its built peer", (scenario) => {
+  ])("preserves $name execution instead of its built peer", async (scenario) => {
     expect(
-      loadSourceExternalArtifactScenario({
+      await loadSourceExternalArtifactScenario({
         ...scenario,
         sourceBody: 'export default { id: "source-external-artifact-test", register() {} };\n',
         packageLocalBody: 'throw new Error("package-local output should not load");\n',

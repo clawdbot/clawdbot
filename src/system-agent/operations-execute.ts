@@ -12,13 +12,11 @@ import {
   CONFIG_SCHEMA_CHILDREN_MAX,
   applyPersistentOperation,
   assertConfigWriteDoesNotBypassInferenceVerification,
-  createNoExitRuntime,
   executeSetDefaultModel,
   executeSetup,
   formatChannelDocsUrl,
   formatConfigValidationLine,
   formatGatewayStatusLine,
-  isPluginBackingDefaultInferenceRoute,
   loadOverviewForOperation,
   readConfigFileSnapshotLazy,
   readConfigValueAtPath,
@@ -29,7 +27,7 @@ import {
   type ExecuteOptions,
 } from "./operations-execution-helpers.js";
 import type { SystemAgentOperation, SystemAgentOperationResult } from "./operations-parse.js";
-import { executePluginInstall } from "./plugin-install.js";
+import { executePluginOperation } from "./plugin-operations.js";
 
 const loadOverviewModule = async () => await import("./overview.js");
 
@@ -350,64 +348,11 @@ export async function executeSystemAgentOperation(
         },
       });
     case "plugin-install":
-      return await executePluginInstall(operation, runtime, opts);
+    case "plugin-uninstall":
+      return await executePluginOperation(operation, runtime, opts);
     case "plugin-activate-artifact": {
       const { executePluginArtifactActivation } = await import("./plugin-artifact.js");
       return await executePluginArtifactActivation(operation, runtime, opts);
-    }
-    case "plugin-uninstall": {
-      if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
-        const message = [
-          `Uninstalling ${operation.pluginId} could remove the provider behind OpenClaw's own active inference route.`,
-          `Removing it has to happen with OpenClaw stopped: run \`openclaw plugins uninstall ${operation.pluginId}\` on the machine running it.`,
-        ].join("\n");
-        runtime.log(message);
-        return { applied: false, message };
-      }
-      const result = await applyPersistentOperation({
-        auditOperation: "plugin.uninstall",
-        operation,
-        runtime,
-        opts,
-        run: async (ctx) => {
-          const runPluginUninstall =
-            ctx.deps?.runPluginUninstall ??
-            (async (
-              pluginId: string,
-              pluginRuntime: RuntimeEnv,
-              options?: { beforePersistentApply?: () => void },
-            ) => {
-              const { runPluginUninstallCommand } =
-                await import("../cli/plugins-uninstall-command.js");
-              await runPluginUninstallCommand(pluginId, options, pluginRuntime);
-            });
-          // A concurrent config write can retarget the default route between
-          // the pre-approval check and this commit; re-verify before the
-          // command's asynchronous preparation starts.
-          if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
-            throw new Error(
-              `Uninstall aborted: ${operation.pluginId} now backs the active inference route. Removing it has to happen with OpenClaw stopped: run \`openclaw plugins uninstall ${operation.pluginId}\` on the machine running it.`,
-            );
-          }
-          await ctx.commit(() =>
-            runPluginUninstall(
-              operation.pluginId,
-              createNoExitRuntime(ctx.runtime),
-              ctx.assertPersistentApply
-                ? { beforePersistentApply: ctx.assertPersistentApply }
-                : undefined,
-            ),
-          );
-          return {
-            summary: `Uninstalled plugin ${operation.pluginId}`,
-            details: { pluginId: operation.pluginId },
-          };
-        },
-      });
-      if (result.applied) {
-        runtime.log("Restart the Gateway to apply plugin changes.");
-      }
-      return result;
     }
     case "create-agent": {
       if (isReservedSystemAgentId(operation.agentId)) {

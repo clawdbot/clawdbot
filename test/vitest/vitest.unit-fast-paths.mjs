@@ -88,6 +88,7 @@ export const forcedUnitFastTestFiles = [
   "src/system-agent/assistant.configured.test.ts",
   "src/system-agent/system-agent.test.ts",
   "src/system-agent/operations.test.ts",
+  "src/system-agent/operations.plugins.test.ts",
   "src/system-agent/rescue-message.test.ts",
   "src/system-agent/tui-backend.test.ts",
   "src/flows/channel-setup.status.test.ts",

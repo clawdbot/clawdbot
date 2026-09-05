@@ -3,13 +3,11 @@
  *
  * Resolves generated contract artifacts through runtime records with local workspace fallback.
  */
-import fs from "node:fs";
 import { createRequire } from "node:module";
-import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { vi } from "vitest";
 import { listBundledChannelPluginMetadata } from "../../../../plugins/bundled-channel-runtime.js";
-import { resolvePluginRuntimeModulePath } from "../../../../plugins/runtime/runtime-plugin-boundary.js";
+import { resolvePluginRootPublicSurfacePath } from "../../../../plugins/public-surface-runtime.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../../test-utils/bundled-plugin-public-surface.js";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../../", import.meta.url));
@@ -34,28 +32,6 @@ export async function importBundledChannelContractSourceArtifact<T extends objec
   return (await import(moduleId)) as T;
 }
 
-function resolveBundledChannelWorkspaceArtifactPath(
-  pluginId: string,
-  entryBaseName: string,
-): string | null {
-  const normalizedEntryBaseName = entryBaseName.replace(/\.(?:[cm]?js|ts)$/u, "");
-  const pluginRoot = listBundledChannelPluginMetadata({
-    rootDir: REPO_ROOT,
-    includeChannelConfigs: false,
-    includeSyntheticChannelConfigs: false,
-  }).find((metadata) => metadata.manifest.id === pluginId)?.rootDir;
-  if (!pluginRoot) {
-    return null;
-  }
-  for (const extension of ["js", "ts"]) {
-    const candidate = path.join(pluginRoot, `${normalizedEntryBaseName}.${extension}`);
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
 function resolveBundledChannelContractArtifactUrl(pluginId: string, entryBaseName: string): string {
   const normalizedEntryBaseName = entryBaseName.replace(/\.(?:[cm]?js|ts)$/u, "");
   const metadata = listBundledChannelPluginMetadata({
@@ -66,11 +42,12 @@ function resolveBundledChannelContractArtifactUrl(pluginId: string, entryBaseNam
   if (!metadata) {
     throw new Error(`missing bundled channel plugin '${pluginId}'`);
   }
-  const modulePath =
-    resolvePluginRuntimeModulePath(
-      { rootDir: metadata.rootDir, source: metadata.source.built },
-      normalizedEntryBaseName,
-    ) ?? resolveBundledChannelWorkspaceArtifactPath(pluginId, entryBaseName);
+  const modulePath = resolvePluginRootPublicSurfacePath({
+    pluginRoot: metadata.rootDir,
+    pluginId,
+    entrySource: metadata.source.built,
+    artifactBasename: `${normalizedEntryBaseName}.js`,
+  });
   if (!modulePath) {
     throw new Error(`missing ${entryBaseName} for bundled channel plugin '${pluginId}'`);
   }

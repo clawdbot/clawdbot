@@ -7,7 +7,7 @@ function normalizeContractName(value: string): string {
   return value.trim().toLowerCase();
 }
 
-export function isHostRestrictedConversationReadTool(params: {
+function isHostRestrictedConversationReadTool(params: {
   pluginId: string;
   toolName: string;
 }): boolean {

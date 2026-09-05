@@ -7,7 +7,6 @@ import {
   resolvePluginActivationDecisionShared,
   toPluginActivationState,
   type PluginActivationConfigSourceLike,
-  type PluginActivationSource,
   type PluginActivationStateLike,
 } from "./config-activation-shared.js";
 import {
@@ -18,7 +17,6 @@ import {
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
-export type { PluginActivationSource };
 export type PluginActivationState = PluginActivationStateLike;
 
 export type PluginActivationConfigSource = {
@@ -211,7 +209,7 @@ export function isTestDefaultMemorySlotDisabled(
   return true;
 }
 
-function resolvePluginActivationState(params: {
+export function resolveEffectivePluginActivationState(params: {
   id: string;
   origin: PluginOrigin;
   config: NormalizedPluginsConfig;
@@ -246,7 +244,9 @@ export const resolveEnableState = (
   config: NormalizedPluginsConfig,
   enabledByDefault?: boolean,
 ): { enabled: boolean; reason?: string } =>
-  toEnableStateResult(resolvePluginActivationState({ id, origin, config, enabledByDefault }));
+  toEnableStateResult(
+    resolveEffectivePluginActivationState({ id, origin, config, enabledByDefault }),
+  );
 
 type EffectiveActivationParams = {
   id: string;
@@ -262,19 +262,6 @@ export const resolveEffectiveEnableState = (
   params: EffectiveActivationParams,
 ): { enabled: boolean; reason?: string } =>
   toEnableStateResult(resolveEffectivePluginActivationState(params));
-
-export function resolveEffectivePluginActivationState(params: {
-  id: EffectiveActivationParams["id"];
-  origin: EffectiveActivationParams["origin"];
-  config: EffectiveActivationParams["config"];
-  rootConfig?: EffectiveActivationParams["rootConfig"];
-  enabledByDefault?: EffectiveActivationParams["enabledByDefault"];
-  activationSource?: EffectiveActivationParams["activationSource"];
-  autoEnabledReason?: string;
-  channelIds?: EffectiveActivationParams["channelIds"];
-}): PluginActivationState {
-  return resolvePluginActivationState(params);
-}
 
 export function resolveMemorySlotDecision(params: {
   id: string;

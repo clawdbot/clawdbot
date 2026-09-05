@@ -153,6 +153,9 @@ export async function prepareCodexAttemptContext(
     });
     historyState.messages = (await readFencedHistory()) ?? historyState.messages;
   }
+  // Admission excludes the current turn. The host carries only this run's committed
+  // native messages across reloads without admitting concurrent transcript writes.
+  historyState.messages.push(...(params.pluginRuntimeRefreshMessages ?? []));
   const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params: runtimeParams,

@@ -12,7 +12,6 @@ import type {
   PluginsSearchResult as ProtocolPluginsSearchResult,
   PluginsSetEnabledParams,
   PluginsSetEnabledResult,
-  PluginsUninstallResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RuntimeConfigCapability } from "../config/runtime-config-capability.ts";
@@ -25,9 +24,11 @@ export type PluginOperatorGrants = ProtocolPluginOperatorGrants;
 export type PluginsInspectResult = ProtocolPluginsInspectResult;
 export type PluginListResult = ProtocolPluginsListResult;
 export type PluginSearchResult = ProtocolPluginsSearchResult["results"][number];
-export type PluginInstallRequest = PluginsInstallParams;
+export type PluginInstallRequest = Extract<
+  PluginsInstallParams,
+  { source: "official" | "clawhub" }
+>;
 export type PluginMutationResult = PluginsInstallResult | PluginsSetEnabledResult;
-type PluginUninstallResult = PluginsUninstallResult;
 
 export function resolvePluginInstallIdentity(
   request: PluginInstallRequest,
@@ -53,20 +54,6 @@ export const CLAWHUB_BROWSE_URL = "https://clawhub.ai/plugins";
 
 export function loadPluginCatalog(client: GatewayBrowserClient): Promise<PluginListResult> {
   return client.request<PluginListResult>("plugins.list", {});
-}
-
-export function installPlugin(
-  client: GatewayBrowserClient,
-  request: PluginInstallRequest,
-): Promise<PluginMutationResult> {
-  return client.request<PluginMutationResult>("plugins.install", request);
-}
-
-export function uninstallPlugin(
-  client: GatewayBrowserClient,
-  pluginId: string,
-): Promise<PluginUninstallResult> {
-  return client.request<PluginUninstallResult>("plugins.uninstall", { pluginId });
 }
 
 export function setPluginEnabled(

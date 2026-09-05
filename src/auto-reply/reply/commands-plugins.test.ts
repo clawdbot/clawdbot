@@ -1,13 +1,28 @@
 // Tests plugin command install, listing, and config behavior.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createAgentPluginRuntimeRefresh,
+  captureAgentPluginRuntimeRefresh,
+} from "../../agents/plugin-runtime-refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import type { PluginCapabilityConsentReview } from "../../plugins/capability-summary.js";
 import { recordInstalledPluginIndexInstallOwner } from "../../plugins/installed-plugin-index-install-owner.js";
+import { PluginRuntimeApplicationError } from "../../plugins/lifecycle.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
+import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { createInstalledPluginIndexSnapshot } from "../../plugins/status.test-fixtures.js";
-import { handlePluginsCommand } from "./commands-plugins.js";
+import { resolvePluginCommandRuntimeApply } from "./commands-plugins-install.js";
+import { handlePluginsCommand as handlePluginsCommandWithoutGateway } from "./commands-plugins.js";
+import { runPluginsCommand as handlePluginsCommand } from "./commands-plugins.test-support.js";
 import { buildPluginsCommandParams, type ConfigSnapshotMock } from "./commands.test-harness.js";
+
+const management = vi.hoisted(() => ({ enable: vi.fn(), reload: vi.fn(), install: vi.fn() }));
+vi.mock("../../plugins/management-mutations.js", () => ({
+  setManagedPluginEnabled: management.enable,
+  reloadManagedPlugin: management.reload,
+  installManagedPlugin: management.install,
+}));
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const loadPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
@@ -169,47 +184,62 @@ function buildPluginsParams(
   return params;
 }
 
-type MockCalls = {
-  mock: { calls: unknown[][] };
-};
-
-const requireRecord = createRequireRecord("object", "expected-label");
-
-function getNestedRecord(record: Record<string, unknown>, key: string, label: string) {
-  return requireRecord(record[key], label);
-}
-
-function expectPluginEnabledInConfig(config: unknown, enabled: boolean) {
-  const configRecord = requireRecord(config, "config");
-  const plugins = getNestedRecord(configRecord, "plugins", "config.plugins");
-  const entries = getNestedRecord(plugins, "entries", "config.plugins.entries");
-  const superpowers = getNestedRecord(entries, "superpowers", "superpowers entry");
-  expect(superpowers.enabled).toBe(enabled);
-}
-
-function expectLastReplaceConfig(enabled: boolean) {
-  const calls = (replaceConfigFileMock as unknown as MockCalls).mock.calls;
-  const [payload] = calls.at(-1) ?? [];
-  const payloadRecord = requireRecord(payload, "replace config payload");
-  expect(Object.keys(payloadRecord).toSorted()).toEqual(["afterWrite", "nextConfig"]);
-  expect(payloadRecord.afterWrite).toEqual({ mode: "auto" });
-  expectPluginEnabledInConfig(payloadRecord.nextConfig, enabled);
-}
-
-function expectLastRegistryRefresh(enabled: boolean) {
-  const calls = (refreshPluginRegistryAfterConfigMutationMock as unknown as MockCalls).mock.calls;
-  const [payload] = calls.at(-1) ?? [];
-  const payloadRecord = requireRecord(payload, "registry refresh payload");
-  expect(Object.keys(payloadRecord).toSorted()).toEqual(["config", "logger", "reason"]);
-  expect(payloadRecord.reason).toBe("policy-changed");
-  const logger = getNestedRecord(payloadRecord, "logger", "registry refresh logger");
-  expect(logger.warn).toEqual(expect.any(Function));
-  expectPluginEnabledInConfig(payloadRecord.config, enabled);
+function expectManagedEnable(enabled: boolean) {
+  expect(management.enable).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      pluginId: "superpowers",
+      enabled,
+      applyRuntime: expect.any(Function),
+    }),
+  );
 }
 
 describe("handlePluginsCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    management.enable
+      .mockReset()
+      .mockImplementation(
+        async (
+          params: Parameters<
+            typeof import("../../plugins/management-mutations.js").setManagedPluginEnabled
+          >[0],
+        ) => {
+          if (params.enabled) {
+            await resolvePluginCapabilityConsentMock({
+              config: buildCfg(),
+              pluginId: params.pluginId,
+              onCapabilityConsent: params.onCapabilityConsent,
+            });
+          }
+          return {
+            plugin: { id: params.pluginId },
+            changedPaths: [],
+            application: await params.applyRuntime?.({
+              config: buildCfg(),
+              pluginIds: [params.pluginId],
+              reason: params.enabled ? "enable" : "disable",
+            }),
+          };
+        },
+      );
+    management.reload
+      .mockReset()
+      .mockImplementation(
+        async (
+          params: Parameters<
+            typeof import("../../plugins/management-mutations.js").reloadManagedPlugin
+          >[0],
+        ) => ({
+          pluginId: params.pluginId,
+          application: await params.applyRuntime({
+            config: buildCfg(),
+            pluginIds: [params.pluginId],
+            reason: "reload",
+          }),
+        }),
+      );
+
     loadPluginMetadataSnapshotMock.mockReturnValue({
       index: createInstalledPluginIndexSnapshot([]),
     });
@@ -453,8 +483,7 @@ describe("handlePluginsCommand", () => {
     const result = await handlePluginsCommand(params, true);
 
     expect(result?.reply?.text).toContain('Plugin "superpowers" disabled');
-    expectLastReplaceConfig(false);
-    expectLastRegistryRefresh(false);
+    expectManagedEnable(false);
   });
 
   it("enables and disables a discovered plugin", async () => {
@@ -467,8 +496,7 @@ describe("handlePluginsCommand", () => {
 
     const enableResult = await handlePluginsCommand(enableParams, true);
     expect(enableResult?.reply?.text).toContain('Plugin "superpowers" enabled');
-    expectLastReplaceConfig(true);
-    expectLastRegistryRefresh(true);
+    expectManagedEnable(true);
 
     const disableParams = buildPluginsParams("/plugins disable superpowers", buildCfg(), {
       gatewayClientScopes: WRITE_GATEWAY_SCOPES,
@@ -477,8 +505,7 @@ describe("handlePluginsCommand", () => {
 
     const disableResult = await handlePluginsCommand(disableParams, true);
     expect(disableResult?.reply?.text).toContain('Plugin "superpowers" disabled');
-    expectLastReplaceConfig(false);
-    expectLastRegistryRefresh(false);
+    expectManagedEnable(false);
   });
 
   it("does not enable a managed plugin when capability consent is required", async () => {
@@ -538,8 +565,7 @@ describe("handlePluginsCommand", () => {
     );
 
     expect(accepted?.reply?.text).toContain('Plugin "superpowers" enabled');
-    expectLastReplaceConfig(true);
-    expectLastRegistryRefresh(true);
+    expectManagedEnable(true);
   });
 
   it.each([
@@ -627,4 +653,121 @@ describe("handlePluginsCommand", () => {
       reply: { text: "You are not authorized to use this command." },
     });
   });
+  it("reloads through the admitted Gateway and reports the applied generation", async () => {
+    const result = await handlePluginsCommand(
+      buildPluginsParams("/plugins reload superpowers", buildCfg(), {
+        gatewayClientScopes: WRITE_GATEWAY_SCOPES,
+      }),
+      true,
+    );
+    expect(result?.reply?.text).toContain(
+      'Plugin "superpowers" reloaded. Applied Gateway generation 2.',
+    );
+    expect(management.reload).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "superpowers", applyRuntime: expect.any(Function) }),
+    );
+    expect(management.enable).not.toHaveBeenCalled();
+  });
+
+  it("refuses writes outside an admitted Gateway scope", async () => {
+    const result = await handlePluginsCommandWithoutGateway(
+      buildPluginsParams("/plugins disable superpowers", buildCfg(), {
+        gatewayClientScopes: WRITE_GATEWAY_SCOPES,
+      }),
+      true,
+    );
+    expect(result?.reply?.text).toContain("active Gateway");
+    expect(management.enable).not.toHaveBeenCalled();
+  });
+
+  it("rechecks the exact Gateway after the management operation waits", async () => {
+    const applyPluginLifecycleChange = vi.fn();
+    let current: GatewayRequestContext | undefined = {
+      applyPluginLifecycleChange,
+    } as unknown as GatewayRequestContext;
+    const apply = withPluginRuntimeGatewayContextResolver(
+      () => current,
+      resolvePluginCommandRuntimeApply,
+    );
+    await Promise.resolve();
+    current = { applyPluginLifecycleChange } as unknown as GatewayRequestContext;
+    await expect(
+      apply({ config: buildCfg(), pluginIds: ["superpowers"], reason: "reload" }),
+    ).rejects.toThrow("Gateway changed");
+    expect(applyPluginLifecycleChange).not.toHaveBeenCalled();
+  });
+
+  it.each(["reload", "install"] as const)(
+    "requests agent continuation after a committed %s failure and retains the failure",
+    async (action) => {
+      const application = {
+        operationId: "plugin-committed",
+        generation: 3,
+        pluginIds: ["superpowers"],
+      };
+      const error =
+        action === "reload"
+          ? new PluginRuntimeApplicationError("Old instance cleanup failed", {
+              ...application,
+              phase: "dispose",
+              committed: true,
+            })
+          : new ManagedPluginLifecycleError(
+              "installed plugin missing from refreshed registry: superpowers",
+            );
+      const change = { config: buildCfg(), pluginIds: ["superpowers"], reason: action };
+      const applyPluginLifecycleChange = vi.fn(async () => {
+        if (action === "reload") {
+          throw error;
+        }
+        return application;
+      });
+      if (action === "install") {
+        management.install.mockImplementationOnce(
+          async (
+            params: Parameters<
+              typeof import("../../plugins/management-mutations.js").installManagedPlugin
+            >[0],
+          ) => {
+            await params.applyRuntime?.(change);
+            throw error;
+          },
+        );
+      }
+      // SAFETY: The command fixture reads only this Gateway lifecycle callback.
+      const context = { applyPluginLifecycleChange } as unknown as GatewayRequestContext;
+      const refresh = createAgentPluginRuntimeRefresh();
+      try {
+        await refresh.run(async () => {
+          const captured = captureAgentPluginRuntimeRefresh();
+          const result = await withPluginRuntimeGatewayContextResolver(
+            () => context,
+            () =>
+              handlePluginsCommandWithoutGateway(
+                buildPluginsParams(
+                  action === "reload"
+                    ? "/plugins reload superpowers"
+                    : "/plugins install npm:@example/superpowers --force",
+                  buildCfg(),
+                  { gatewayClientScopes: WRITE_GATEWAY_SCOPES },
+                ),
+                true,
+              ),
+          );
+          expect(result?.reply?.text).toContain(error.message);
+          expect(applyPluginLifecycleChange).toHaveBeenCalledExactlyOnceWith(change);
+          expect(captured.isRequested()).toBe(true);
+          if (action === "install") {
+            expect(result?.reply?.text).toContain(
+              "An earlier runtime change from this operation was applied in Gateway generation 3.",
+            );
+            expect(result?.reply?.text).not.toContain("Installed plugin");
+            expect(management.install).toHaveBeenCalledOnce();
+          }
+        });
+      } finally {
+        refresh.close();
+      }
+    },
+  );
 });

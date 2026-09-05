@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createCodeModePermissionChangeReason } from "./code-mode-permission-change.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
@@ -24,6 +25,10 @@ import {
   resultDetails,
   testing,
 } from "./code-mode.test-support.js";
+import {
+  captureAgentPluginRuntimeRefresh,
+  createAgentPluginRuntimeRefresh,
+} from "./plugin-runtime-refresh.js";
 import { Agent } from "./runtime/index.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
@@ -275,6 +280,92 @@ async function runParkedReadFailure(scenario: ParkedFailure) {
 }
 
 describe("Code Mode agent-loop error recovery", () => {
+  it("drains the old cell before refreshing its complete catalog in the same session", async () => {
+    const refresh = createAgentPluginRuntimeRefresh();
+    const started = createDeferred();
+    const release = createDeferred();
+    const effects: string[] = [];
+    let retainedExec!: AnyAgentTool;
+    try {
+      await refresh.run(async () => {
+        const owner = captureAgentPluginRuntimeRefresh();
+        const slow = pluginToolWithExecute("slow_action", "Finish admitted work", async () => {
+          started.resolve();
+          await release.promise;
+          effects.push("old action completed");
+          return jsonResult({ finished: true });
+        });
+        const reload = pluginToolWithExecute("reload_runtime", "Reload plugin files", async () => {
+          await started.promise;
+          owner.request({ operationId: "reload", generation: 2, pluginIds: ["fixture"] });
+          effects.push("reload committed");
+          return { ...jsonResult({ generation: 2 }), terminate: true };
+        });
+        const removed = pluginToolWithExecute("removed_tool", "Old capability", async () =>
+          jsonResult({ old: true }),
+        );
+        const harness = createCodeModeHarness();
+        applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, slow, reload, removed] });
+        retainedExec = wrapToolWithBeforeToolCallHook(harness.tools[0]!, undefined, {
+          emitDiagnostics: false,
+        });
+        const wait = wrapToolWithBeforeToolCallHook(harness.tools[1]!, undefined, {
+          emitDiagnostics: false,
+        });
+        const result = await retainedExec.execute("cell", {
+          code: 'const pending = slow_action({}); await reload_runtime({}); json("reload recorded"); await yield_control(); return await pending;',
+        });
+        expect(result).toMatchObject({ terminate: false, details: { status: "waiting" } });
+        expect(owner.isRequested()).toBe(true);
+        expect(owner.isPending()).toBe(false);
+        expect(effects).toEqual(["reload committed"]);
+        release.resolve();
+        const settled = await wait.execute("drain", {
+          runId: resultDetails(result).runId,
+        });
+        expect(settled).toMatchObject({ terminate: true, details: { status: "completed" } });
+        expect(owner.isPending()).toBe(true);
+        expect(effects).toEqual(["reload committed", "old action completed"]);
+        expect(reload.execute).toHaveBeenCalledOnce();
+        expect(slow.execute).toHaveBeenCalledOnce();
+        expect(removed.execute).not.toHaveBeenCalled();
+        expect(testing.activeRuns.size).toBe(0);
+      });
+      refresh.takeContinuation();
+      await refresh.run(async () => {
+        const changed = pluginToolWithExecute("changed_tool", "New capability", async (_id, args) =>
+          jsonResult({ version: 2, input: args }),
+        );
+        changed.parameters = {
+          type: "object",
+          properties: { amount: { type: "number" } },
+          required: ["amount"],
+          additionalProperties: false,
+        };
+        const harness = createCodeModeHarness();
+        applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, changed] });
+        await expect(retainedExec.execute("stale-cell", { code: "return 1;" })).rejects.toThrow(
+          "Plugin runtime changed",
+        );
+        const verified = await harness.tools[0]!.execute("verify", {
+          code: "json({ removed: typeof removed_tool, schema: (await changed_tool.describe()).parameters }); return await changed_tool({ amount: 2 });",
+        });
+        expect(verified).toMatchObject({
+          details: {
+            status: "completed",
+            output: [{ type: "json", value: { removed: "undefined", schema: changed.parameters } }],
+          },
+        });
+        expect(changed.execute).toHaveBeenCalledOnce();
+        expect(vi.mocked(changed.execute).mock.calls[0]?.[1]).toEqual({ amount: 2 });
+        expect(effects).toEqual(["reload committed", "old action completed"]);
+      });
+    } finally {
+      release.resolve();
+      refresh.close();
+    }
+  });
+
   afterEach(() => {
     resetCodeModeTestState();
     vi.useRealTimers();

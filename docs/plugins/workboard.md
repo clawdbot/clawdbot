@@ -24,7 +24,7 @@ Workboard is bundled but disabled by default:
    uses `/openclaw/settings/plugins`.
 2. Find **Workboard** and choose **Enable**. Because Workboard is included with
    OpenClaw, it does not need an **Install** action.
-3. If the UI reports that a restart is required, restart the Gateway.
+3. Wait for enablement to finish; no Gateway restart is needed.
 
 The Workboard tab appears in the dashboard nav after the plugin runtime loads.
 While it is disabled, the tab stays hidden from navigation. Opening the
@@ -36,7 +36,6 @@ The equivalent CLI workflow is:
 
 ```bash
 openclaw plugins enable workboard
-openclaw gateway restart
 openclaw dashboard
 ```
 
@@ -60,7 +59,6 @@ plugin entry:
 
 ```bash
 openclaw plugins disable workboard
-openclaw gateway restart
 ```
 
 ## Card fields
@@ -476,8 +474,8 @@ Confirm there is at least one `ready` card without an active claim:
 openclaw workboard list --status ready
 ```
 
-If the CLI reports data-only dispatch, start or restart the Gateway and
-retry - data-only dispatch updates local board state but cannot start
+If the CLI reports data-only dispatch, start the Gateway or repair its connection,
+then retry - data-only dispatch updates local board state but cannot start
 subagent worker runs. Cards can also be skipped when another card for the
 same owner or agent is already running or waiting for review; complete,
 block, or release that active work before dispatching more for the same

@@ -12,11 +12,10 @@ For compatibility, OpenClaw also supports legacy Perplexity Sonar/OpenRouter set
 
 ## Install plugin
 
-Install the official plugin, then restart Gateway:
+Install the official plugin. The command applies it to a running Gateway without restarting it:
 
 ```bash
 openclaw plugins install @openclaw/perplexity-plugin
-openclaw gateway restart
 ```
 
 ## Getting a Perplexity API key

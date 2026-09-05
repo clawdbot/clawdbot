@@ -1,6 +1,7 @@
 import os from "node:os";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import {
@@ -16,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   metadata: vi.fn(),
   npmInstall: vi.fn(),
   officialCatalog: vi.fn(),
-  persistInstall: vi.fn(),
+  persistInstall: vi.fn<typeof import("./install-persistence.js").persistPluginInstall>(),
   preflight: vi.fn(),
   readConfig: vi.fn(),
   refreshRegistry: vi.fn(),
@@ -39,7 +40,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("./install-persistence.js", () => ({
-  persistPluginInstall: (...args: unknown[]) => mocks.persistInstall(...args),
+  persistPluginInstall: mocks.persistInstall,
   resolveInstallConfigMutationPreflights: (...args: unknown[]) => mocks.preflight(...args),
   selectInstallMutationWriteOptions: (writeOptions: unknown) =>
     mocks.selectWriteOptions(writeOptions),
@@ -165,6 +166,61 @@ describe("managed plugin installation", () => {
     expect(mocks.persistInstall).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { label: "omission", state: undefined, trust: undefined },
+    { label: "unavailable row", state: "unavailable", trust: "official" },
+    { label: "untrusted row", state: "available", trust: "community" },
+  ])("uses the local official catalog only for hosted $label", async ({ state, trust }) => {
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mockHostedOfficialCatalog(
+      state
+        ? [
+            {
+              name: "@openclaw/matrix",
+              state,
+              publisher: { id: "openclaw", trust },
+              openclaw: { plugin: { id: "matrix" } },
+              install: {
+                candidates: [{ sourceRef: "public-npm", package: "@openclaw/matrix" }],
+              },
+            },
+          ]
+        : [],
+    );
+    mocks.npmInstall.mockResolvedValue({
+      ok: true,
+      pluginId: "matrix",
+      targetDir: "/tmp/npm/matrix",
+      extensions: ["index.js"],
+    });
+    mocks.persistInstall.mockResolvedValue({ config: {}, warnings: [] });
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({ enabled: true, id: "matrix", origin: "global" }),
+    );
+
+    const install = installManagedPlugin({
+      request: {
+        source: "official",
+        pluginId: "matrix",
+        acknowledgeCapabilities: emptyArtifactAcknowledgment,
+      },
+      env: {},
+    });
+    if (state) {
+      await expect(install).rejects.toThrow("not installable");
+      expect(mocks.npmInstall).not.toHaveBeenCalled();
+      expect(mocks.clawhubInstall).not.toHaveBeenCalled();
+      expect(mocks.persistInstall).not.toHaveBeenCalled();
+    } else {
+      await expect(install).resolves.toMatchObject({ plugin: { id: "matrix" } });
+      expect(mocks.npmInstall).toHaveBeenCalledOnce();
+      expect(mocks.npmInstall).toHaveBeenCalledWith(
+        expect.objectContaining({ spec: expect.stringMatching(/^@openclaw\/matrix(?:@.+)?$/) }),
+      );
+      expect(mocks.persistInstall).toHaveBeenCalledOnce();
+    }
+  });
+
   it.each([false, true])(
     "uses npm first and ClawHub only when npm is absent (%s)",
     async (absent) => {
@@ -189,7 +245,7 @@ describe("managed plugin installation", () => {
           : { ok: true, pluginId: "diffs", targetDir: "/tmp/npm/diffs", extensions: ["index.js"] },
       );
       mockClawHubInstall("diffs", "@openclaw/diffs");
-      mocks.persistInstall.mockResolvedValue({});
+      mocks.persistInstall.mockResolvedValue({ config: {}, warnings: [] });
       mocks.metadata.mockReturnValue(
         metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
       );
@@ -267,7 +323,7 @@ describe("managed plugin installation", () => {
       error: "package absent",
     });
     mockClawHubInstall("diffs", "@openclaw/diffs");
-    mocks.persistInstall.mockResolvedValue({});
+    mocks.persistInstall.mockResolvedValue({ config: {}, warnings: [] });
     mocks.metadata.mockReturnValue(
       metadataSnapshot({ enabled: true, id: "diffs", origin: "global" }),
     );
@@ -313,7 +369,7 @@ describe("managed plugin installation", () => {
       },
     ]);
     mockClawHubInstall("bluebubbles", "@openclaw/bluebubbles");
-    mocks.persistInstall.mockResolvedValue({});
+    mocks.persistInstall.mockResolvedValue({ config: {}, warnings: [] });
     mocks.refreshRegistry.mockResolvedValue(undefined);
     mocks.metadata.mockReturnValue(
       metadataSnapshot({
@@ -378,7 +434,7 @@ describe("managed plugin installation", () => {
     mocks.readConfig.mockResolvedValue(configSnapshot());
     mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
     mockClawHubInstall("diffs", "@openclaw/diffs");
-    mocks.persistInstall.mockResolvedValue({});
+    mocks.persistInstall.mockResolvedValue({ config: {}, warnings: [] });
     mocks.metadata.mockReturnValue(
       metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
     );
@@ -448,7 +504,7 @@ describe("managed plugin installation", () => {
         },
       };
     });
-    mocks.persistInstall.mockResolvedValue({});
+    mocks.persistInstall.mockResolvedValue({ config: {}, warnings: [] });
     mocks.metadata.mockReturnValue(
       metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
     );
@@ -465,13 +521,17 @@ describe("managed plugin installation", () => {
   });
 
   it("serializes install and enable mutations through one Gateway lock", async () => {
-    let releasePersist: ((config: Record<string, unknown>) => void) | undefined;
-    const heldPersist = new Promise<Record<string, unknown>>((resolve) => {
-      releasePersist = resolve;
-    });
+    const enteredPersist = createDeferred();
+    const heldPersist =
+      createDeferred<
+        Awaited<ReturnType<typeof import("./install-persistence.js").persistPluginInstall>>
+      >();
     mocks.readConfig.mockResolvedValue(configSnapshot());
     mockClawHubInstall("demo", "community/demo");
-    mocks.persistInstall.mockReturnValueOnce(heldPersist);
+    mocks.persistInstall.mockImplementationOnce(() => {
+      enteredPersist.resolve();
+      return heldPersist.promise;
+    });
     mocks.replaceConfig.mockResolvedValue({});
     mocks.refreshRegistry.mockResolvedValue(undefined);
     mocks.metadata
@@ -487,12 +547,16 @@ describe("managed plugin installation", () => {
       },
       env: {},
     });
-    await vi.waitFor(() => expect(mocks.persistInstall).toHaveBeenCalledTimes(1));
+    await Promise.race([enteredPersist.promise, install]);
     const enable = setManagedPluginEnabled({ pluginId: "workboard", enabled: true, env: {} });
-    await Promise.resolve();
-
-    expect(mocks.readConfig).toHaveBeenCalledTimes(1);
-    releasePersist?.({});
+    try {
+      await Promise.resolve();
+      expect(mocks.persistInstall).toHaveBeenCalledOnce();
+      expect(mocks.readConfig).toHaveBeenCalledTimes(1);
+    } finally {
+      heldPersist.resolve({ config: {}, warnings: [] });
+      await Promise.allSettled([install, enable]);
+    }
     await install;
     await enable;
     expect(mocks.readConfig).toHaveBeenCalledTimes(2);

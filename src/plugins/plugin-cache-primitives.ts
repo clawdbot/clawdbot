@@ -1,85 +1,12 @@
-// Defines bounded caches for plugin runtime results and schema validation.
+// Config-scoped plugin memoization and cache keys.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
-
-/** Small process-local LRU cache for runtime registries and compiled validators. */
-export class PluginLruCache<T> {
-  readonly #maxEntries: number;
-  readonly #entries = new Map<string, T>();
-
-  constructor(maxEntries: number) {
-    this.#maxEntries = normalizeMaxEntries(maxEntries, 1);
-  }
-
-  get size(): number {
-    return this.#entries.size;
-  }
-
-  clear(): void {
-    this.#entries.clear();
-  }
-
-  deleteValue(value: T): void {
-    for (const [key, entry] of this.#entries) {
-      if (entry === value) {
-        this.#entries.delete(key);
-      }
-    }
-  }
-
-  /** Returns a cached value and refreshes its recency when present. */
-  get(cacheKey: string): T | undefined {
-    if (!this.#entries.has(cacheKey)) {
-      return undefined;
-    }
-    const cached = this.#entries.get(cacheKey) as T;
-    this.#entries.delete(cacheKey);
-    this.#entries.set(cacheKey, cached);
-    return cached;
-  }
-
-  /** Stores a value as the newest entry and evicts oldest entries past capacity. */
-  set(cacheKey: string, value: T): void {
-    if (this.#entries.has(cacheKey)) {
-      this.#entries.delete(cacheKey);
-    }
-    this.#entries.set(cacheKey, value);
-    pruneMapToMaxSize(this.#entries, this.#maxEntries);
-  }
-}
-
-/** Runtime cache partitioned by config object identity so request-scoped configs do not collide. */
-export type ConfigScopedRuntimeCache<T> = WeakMap<OpenClawConfig, Map<string, T>>;
 
 /** Promise loader that coalesces concurrent loads per config object and for the default scope. */
 type ConfigScopedPromiseLoader<T> = {
   load(config?: OpenClawConfig): Promise<T>;
   clear(): void;
 };
-
-/** Resolves a config-scoped cached value; calls without config intentionally bypass caching. */
-export function resolveConfigScopedRuntimeCacheValue<T>(params: {
-  cache: ConfigScopedRuntimeCache<T>;
-  config?: OpenClawConfig;
-  key: string;
-  load: () => T;
-}): T {
-  if (!params.config) {
-    return params.load();
-  }
-  let configCache = params.cache.get(params.config);
-  if (!configCache) {
-    configCache = new Map();
-    params.cache.set(params.config, configCache);
-  }
-  if (configCache.has(params.key)) {
-    return configCache.get(params.key) as T;
-  }
-  const loaded = params.load();
-  configCache.set(params.key, loaded);
-  return loaded;
-}
 
 /** Encodes structured cache dimensions without separator ambiguity. */
 export function createPluginCacheKey(parts: readonly unknown[]): string {
@@ -129,11 +56,4 @@ export function createConfigScopedPromiseLoader<T>(
   // Resolved values can retain executable plugin callbacks past install, replacement, or removal.
   registerPluginMetadataProcessMemoLifecycleClear(() => loader.clear());
   return loader;
-}
-
-function normalizeMaxEntries(value: number, fallback: number): number {
-  if (!Number.isFinite(value) || value <= 0) {
-    return fallback;
-  }
-  return Math.max(1, Math.floor(value));
 }

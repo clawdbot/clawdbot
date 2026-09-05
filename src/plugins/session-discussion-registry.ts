@@ -1,4 +1,5 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 import type { SessionDiscussionProvider } from "./registry-contribution-types.js";
 import {
   getActivePluginChannelRegistry,
@@ -28,7 +29,10 @@ export function registerSessionDiscussionProvider(provider: SessionDiscussionPro
       );
     }
   }
-  registry.sessionDiscussionProviders.set(pluginId, { pluginId, provider });
+  registry.sessionDiscussionProviders.set(pluginId, {
+    pluginId,
+    provider: wrapCurrentPluginInstance(provider),
+  });
 }
 
 export function getSessionDiscussionProvider(): SessionDiscussionProvider | undefined {

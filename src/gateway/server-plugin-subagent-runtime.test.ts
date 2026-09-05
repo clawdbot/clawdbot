@@ -14,7 +14,7 @@ import {
 import { markTrustedOtelDiagnosticListener } from "../infra/diagnostic-otel-listener-provenance.js";
 import {
   withPluginRuntimeGatewayRequestScope,
-  withPluginRuntimePluginIdScope,
+  withPluginRuntimePluginScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {
@@ -53,7 +53,7 @@ function createRuntime() {
 }
 
 function complete(runtime: PluginRuntime["subagent"], params: Partial<CompleteParams> = {}) {
-  return withPluginRuntimePluginIdScope(PLUGIN_ID, () =>
+  return withPluginRuntimePluginScope({ pluginId: PLUGIN_ID }, () =>
     runtime.complete({ agentId: "research", message: "Review these notes", ...params }),
   );
 }

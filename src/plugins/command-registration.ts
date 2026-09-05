@@ -1,4 +1,3 @@
-/** Validates and registers plugin command definitions into the global command registry. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -9,8 +8,10 @@ import { isRecord } from "../utils.js";
 import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
 import { getPluginCommandExecutionCount } from "./command-execution-lock.js";
 import { clearPluginCommands } from "./command-registry-state.js";
+import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRegistrationContext, requireActivePluginRegistry } from "./runtime.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import {
   AGENT_PROMPT_SURFACE_KINDS,
   type AgentPromptGuidance,
@@ -372,6 +373,11 @@ export function registerPluginCommandInRegistry(
   const description = command.description.trim();
   const normalizedCommand = {
     ...command,
+    // The direct SDK registrar also supports host callers outside a managed instance.
+    handler: wrapCurrentPluginInstance(
+      command.handler,
+      (handler) => (ctx) => withPluginRuntimeRegistryScope(registry, () => handler(ctx)),
+    ),
     name,
     description,
     ...(command.channels

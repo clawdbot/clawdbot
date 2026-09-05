@@ -13,17 +13,13 @@ import {
   PLUGIN_SOURCE_MODULE_EXTENSIONS,
 } from "../../plugins/native-module-require.js";
 import { getPluginCacheRoot, getPluginCacheSource } from "../../plugins/plugin-cache.js";
-import {
-  getCachedPluginModuleLoader,
-  recordPluginModuleRoot,
-} from "../../plugins/plugin-module-loader-cache.js";
+import { getCachedPluginModuleLoader } from "../../plugins/plugin-module-loader-cache.js";
 
 const nodeRequire = createRequire(import.meta.url);
 
-function loadModuleWithJiti(modulePath: string, rootDir: string): unknown {
+function loadModuleWithJiti(modulePath: string): unknown {
   const loadWithJiti = getCachedPluginModuleLoader({
     modulePath,
-    rootDir,
     importerUrl: import.meta.url,
     loaderFilename: import.meta.url,
     tryNative: false,
@@ -32,7 +28,7 @@ function loadModuleWithJiti(modulePath: string, rootDir: string): unknown {
   return loadWithJiti(modulePath);
 }
 
-function loadModule(modulePath: string, rootDir: string): unknown {
+function loadModule(modulePath: string): unknown {
   const extension = path.extname(modulePath).toLowerCase();
   const isSource = PLUGIN_SOURCE_MODULE_EXTENSIONS.includes(extension);
   if (
@@ -42,7 +38,7 @@ function loadModule(modulePath: string, rootDir: string): unknown {
     if (isSource) {
       // Local source plugins need the TS loader unless the current runtime has
       // installed a native source require hook for that extension.
-      return loadModuleWithJiti(modulePath, rootDir);
+      return loadModuleWithJiti(modulePath);
     }
     throw new Error(`channel plugin module must be built JavaScript: ${modulePath}`);
   }
@@ -52,7 +48,7 @@ function loadModule(modulePath: string, rootDir: string): unknown {
     if (isSource) {
       // Native source hooks can still fail on ESM/TS edge cases; fall back to
       // the cached loader before surfacing the error.
-      return loadModuleWithJiti(modulePath, rootDir);
+      return loadModuleWithJiti(modulePath);
     }
     throw new Error(`failed to load channel plugin module with native require: ${modulePath}`, {
       cause: error,
@@ -139,8 +135,7 @@ export function loadChannelPluginModule(params: { modulePath: string; rootDir: s
   // The boundary check opens the file to verify the path; close before loading
   // through require/jiti so module evaluation owns its own descriptor lifecycle.
   fs.closeSync(opened.fd);
-  recordPluginModuleRoot(safePath, params.rootDir);
-  const value = loadModule(safePath, params.rootDir);
+  const value = loadModule(safePath);
   source.variants.set(key, { exports: { value } });
   return value;
 }

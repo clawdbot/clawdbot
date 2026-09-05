@@ -19,11 +19,10 @@ It is a hosted extraction/search service that supports bot circumvention and cac
 
 ## Install plugin
 
-Install the official plugin, then restart Gateway:
+Install the official plugin. The command applies it to a running Gateway without restarting it:
 
 ```bash
 openclaw plugins install @openclaw/firecrawl-plugin
-openclaw gateway restart
 ```
 
 ## Keyless access and API keys

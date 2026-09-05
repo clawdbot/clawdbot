@@ -283,6 +283,29 @@ async function runLoop(
     return true;
   };
 
+  const commitPendingMessages = async () => {
+    const messagesToInject = pendingMessages;
+    pendingMessages = [];
+    let injectedMessage = false;
+    for (const message of messagesToInject) {
+      if (config.consumeQueuedMessageCancellation?.(message)) {
+        continue;
+      }
+      await emit({ type: "message_start", message });
+      if (config.consumeQueuedMessageCancellation?.(message)) {
+        continue;
+      }
+      if (message.role === "user") {
+        turnTainted = false;
+      }
+      await emit({ type: "message_end", message });
+      state.context.messages.push(message);
+      newMessages.push(message);
+      injectedMessage = true;
+    }
+    return injectedMessage;
+  };
+
   // Outer loop: continues when queued follow-up messages arrive after agent would stop
   while (true) {
     let hasMoreToolCalls = true;
@@ -302,25 +325,7 @@ async function runLoop(
 
       // Process pending messages (inject before next assistant response)
       if (pendingMessages.length > 0) {
-        const messagesToInject = pendingMessages;
-        let injectedMessage = false;
-        pendingMessages = [];
-        for (const message of messagesToInject) {
-          if (config.consumeQueuedMessageCancellation?.(message)) {
-            continue;
-          }
-          await emit({ type: "message_start", message });
-          if (config.consumeQueuedMessageCancellation?.(message)) {
-            continue;
-          }
-          if (message.role === "user") {
-            turnTainted = false;
-          }
-          await emit({ type: "message_end", message });
-          state.context.messages.push(message);
-          newMessages.push(message);
-          injectedMessage = true;
-        }
+        const injectedMessage = await commitPendingMessages();
         if (!injectedMessage && !hasMoreToolCalls) {
           // The entire drained batch was cancelled before transcript commit.
           // Re-evaluate the loop instead of issuing an empty provider continuation.
@@ -485,12 +490,13 @@ async function runLoop(
 
       if (pendingMessages.length === 0) {
         if (
-          await config.shouldStopAfterTurn?.({
+          !nextTurnSnapshot?.stop &&
+          (await config.shouldStopAfterTurn?.({
             message,
             toolResults,
             context: state.context,
             newMessages,
-          })
+          }))
         ) {
           await emit({ type: "agent_end", messages: newMessages });
           return newMessages;
@@ -500,6 +506,12 @@ async function runLoop(
         pendingMessages = Array.isArray(steering) ? steering : await steering;
       }
       if (await stopIfAborted()) {
+        return newMessages;
+      }
+      if (nextTurnSnapshot?.stop) {
+        // The old owner is about to close; commit accepted steering before re-admission.
+        await commitPendingMessages();
+        await emit({ type: "agent_end", messages: newMessages });
         return newMessages;
       }
     }

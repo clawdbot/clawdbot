@@ -13,13 +13,15 @@ const gatewayMetadataOwners = resolveGlobalSingleton<Set<symbol>>(
 );
 
 /** Keeps shared boot metadata alive through every kernel's startup and shutdown. */
-export function retainGatewayPluginMetadata(): () => void {
+export function retainGatewayPluginMetadata(): () => boolean {
   const owner = Symbol("gateway-plugin-metadata-owner");
   gatewayMetadataOwners.add(owner);
   return () => {
     if (gatewayMetadataOwners.delete(owner) && gatewayMetadataOwners.size === 0) {
       clearPluginMetadataLifecycleCaches();
+      return true;
     }
+    return false;
   };
 }
 

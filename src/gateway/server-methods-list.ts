@@ -1,5 +1,3 @@
-// Gateway method/event catalog.
-// Lists advertised core, auxiliary, channel plugin methods, and websocket events.
 import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
 import {
   GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
@@ -85,6 +83,7 @@ export const GATEWAY_EVENTS = [
   "device.pair.setup.deliveryUncertain",
   "users.prefs.changed",
   "skills.changed",
+  "plugins.changed",
   "voicewake.changed",
   "voicewake.routing.changed",
   "exec.approval.requested",

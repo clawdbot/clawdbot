@@ -47,32 +47,3 @@ export type PluginCacheMetadata = {
     >;
   };
 };
-
-export function createPluginCacheMetadata(): PluginCacheMetadata {
-  return {
-    metadata: {
-      current: {
-        snapshot: undefined,
-        owner: "operation",
-        configFingerprint: undefined,
-        envFingerprint: undefined,
-        defaultDiscoveryCompatible: false,
-        compatiblePolicyHashes: undefined,
-        compatibleConfigFingerprints: undefined,
-        modelIdNormalizationPolicies: undefined,
-        revision: Symbol("plugin-metadata-snapshot"),
-        configIdentities: new WeakSet(),
-      },
-      snapshots: new Map(),
-      discovery: new Map(),
-      projections: new WeakMap(),
-      projectionSources: new WeakMap(),
-      completions: new WeakMap(),
-      indexFingerprints: new WeakMap(),
-      channelAdapters: new WeakMap(),
-      bundledChannelCatalogs: new Map(),
-      staticCatalogStates: new WeakMap(),
-      modelSuppressionResolvers: new WeakMap(),
-    },
-  };
-}

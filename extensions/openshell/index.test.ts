@@ -165,20 +165,20 @@ describe("OpenShell plugin registration lifecycle", () => {
         pluginConfig: { remoteWorkspaceDir: "/sandbox/unstarted" },
       }),
     );
+    setActivePluginRegistry(registry.registry);
     try {
       expect(readBackend().factory).toEqual(expect.any(Function));
       expect(readBackend().resolveWorkdir?.(workdirParams)).toBe("/sandbox/unstarted");
-      setActivePluginRegistry(registry.registry);
       setActivePluginRegistry(createEmptyPluginRegistry());
       await expect.poll(readBackend).toEqual(originalBackend);
     } finally {
-      for (const { lifecycle } of registry.registry.runtimeLifecycles.toReversed()) {
-        await lifecycle.cleanup?.({ reason: "disable" });
-      }
-      if (originalRegistry) {
-        setActivePluginRegistry(originalRegistry);
-      } else {
-        resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(originalRegistry ?? createEmptyPluginRegistry());
+      try {
+        await expect.poll(readBackend).toEqual(originalBackend);
+      } finally {
+        if (!originalRegistry) {
+          resetPluginRuntimeStateForTest();
+        }
       }
     }
   });

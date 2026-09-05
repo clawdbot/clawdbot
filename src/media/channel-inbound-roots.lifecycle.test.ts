@@ -7,12 +7,8 @@ import { withEnv } from "../test-utils/env.js";
 import { resolveChannelInboundAttachmentRootsForChannel } from "./channel-inbound-roots.js";
 
 const tempDirs = createTempDirTracker();
-const caches: ReturnType<typeof createPluginCache>[] = [];
 
 afterEach(() => {
-  for (const cache of caches.splice(0)) {
-    cache.disposeModules?.();
-  }
   tempDirs.cleanup();
 });
 
@@ -25,7 +21,6 @@ describe("channel media artifact cache ownership", () => {
       const secondRoot = tempDirs.make("openclaw-media-owner-second-");
       const firstCache = createPluginCache();
       const secondCache = createPluginCache();
-      caches.push(firstCache, secondCache);
       const writeArtifact = (rootDir: string, marker: string) => {
         const pluginDir = path.join(rootDir, channelId);
         fs.mkdirSync(pluginDir);

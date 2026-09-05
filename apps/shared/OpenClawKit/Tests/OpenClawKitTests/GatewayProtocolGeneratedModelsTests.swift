@@ -3,22 +3,36 @@ import OpenClawProtocol
 import Testing
 
 struct GatewayProtocolGeneratedModelsTests {
-    @Test(arguments: ["clawhub", "official"], [false, true])
+    @Test(arguments: [
+        ("clawhub", #""packageName":"fixture""#),
+        ("official", #""pluginId":"fixture""#),
+        ("bundled", #""pluginId":"fixture""#),
+        ("local", #""path":"fixture""#),
+        ("npm", #""spec":"fixture""#),
+        ("git", #""spec":"fixture""#),
+        ("npm-pack", #""archivePath":"fixture""#),
+        ("marketplace", #""marketplace":"fixture","plugin":"fixture""#),
+    ], [false, true])
     func `optional install literals preserve omitted and explicit values`(
-        source: String,
+        request: (source: String, fields: String),
         acknowledged: Bool) throws
     {
-        let identifier = source == "clawhub" ? "packageName" : "pluginId"
         let acknowledgement = acknowledged ? #","acknowledgeInstallPolicyWarning":true"# : ""
-        let data = Data(#"{"source":"\#(source)","\#(identifier)":"fixture"\#(acknowledgement)}"#.utf8)
-        let request = try JSONDecoder().decode(PluginsInstallParams.self, from: data)
+        let data = Data(#"{"source":"\#(request.source)",\#(request.fields)\#(acknowledgement)}"#.utf8)
+        let decoded = try JSONDecoder().decode(PluginsInstallParams.self, from: data)
         let expected: Bool? = acknowledged ? true : nil
-        switch request {
+        switch decoded {
         case let .clawhub(value): #expect(value.acknowledgeinstallpolicywarning == expected)
         case let .official(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .bundled(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .local(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .npm(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .git(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .npmPack(value): #expect(value.acknowledgeinstallpolicywarning == expected)
+        case let .marketplace(value): #expect(value.acknowledgeinstallpolicywarning == expected)
         }
         let actualJSON = try #require(
-            JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? NSDictionary)
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(decoded)) as? NSDictionary)
         let expectedJSON = try #require(JSONSerialization.jsonObject(with: data) as? NSDictionary)
         #expect(actualJSON == expectedJSON)
     }
@@ -38,8 +52,12 @@ struct GatewayProtocolGeneratedModelsTests {
 
     @Test(arguments: [true, false])
     func `optional install literal initializers preserve and validate supplied values`(literal: Bool) throws {
-        let clawhub = PluginsInstallParamsClawhub(packagename: "fixture", acknowledgeinstallpolicywarning: literal)
-        let official = PluginsInstallParamsOfficial(pluginid: "fixture", acknowledgeinstallpolicywarning: literal)
+        let clawhub = PluginsInstallParamsClawhub(
+            acknowledgeinstallpolicywarning: literal,
+            packagename: "fixture")
+        let official = PluginsInstallParamsOfficial(
+            acknowledgeinstallpolicywarning: literal,
+            pluginid: "fixture")
         #expect(clawhub.acknowledgeinstallpolicywarning == literal)
         #expect(official.acknowledgeinstallpolicywarning == literal)
         for request in [PluginsInstallParams.clawhub(clawhub), .official(official)] {
