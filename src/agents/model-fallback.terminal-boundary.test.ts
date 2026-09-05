@@ -8,7 +8,11 @@ import {
   recordModelFallbackStop,
   resolveModelFallbackError,
 } from "./failover-error.js";
-import { AgentHarnessPreflightError, recordAgentHarnessPreflightOwner } from "./harness/errors.js";
+import {
+  AgentHarnessPreflightError,
+  AgentHarnessTerminalError,
+  recordAgentHarnessPreflightOwner,
+} from "./harness/errors.js";
 import {
   type ModelFallbackStepHandler,
   runFallbackAttempt,
@@ -358,3 +362,26 @@ describe.each([
     expect(find({ cause: null, errors: [null, { error: third }] })).toBe(third);
   });
 });
+
+const terminalWrappers = [
+  (error: Error): unknown => error,
+  (error: Error): unknown => new Error("wrapper", { cause: error }),
+  (error: Error): unknown => new AggregateError([{ error }], "wrapper"),
+  (error: Error): unknown => ({ name: error.name, message: error.message }),
+];
+
+it.each(terminalWrappers)(
+  "does not retry a terminal provider refusal and permits a separate turn",
+  async (wrap) => {
+    const error = wrap(new AgentHarnessTerminalError("Provider rejected this request"));
+    const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValue("next turn succeeded");
+    await expect(runWithModelFallback({ ...fallbackOptions, run })).rejects.toBe(error);
+    expect(run).toHaveBeenCalledOnce();
+    expect(providerHook).not.toHaveBeenCalled();
+    await expect(runWithModelFallback({ ...fallbackOptions, run })).resolves.toMatchObject({
+      result: "next turn succeeded",
+      model: fallbackOptions.model,
+    });
+    expect(run).toHaveBeenCalledTimes(2);
+  },
+);

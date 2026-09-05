@@ -66,6 +66,7 @@ export function recordModelFallbackStop(error: Error): void {
 export function hasModelFallbackStop(error: unknown): boolean {
   return collectErrorGraphCandidates(error, resolveNestedErrors).some(
     (candidate) =>
+      readErrorName(candidate) === "AgentHarnessTerminalError" ||
       (candidate instanceof Error && modelFallbackStops.has(candidate)) ||
       (isFailoverError(candidate) && isCliTerminalStopCode(candidate.code)),
   );

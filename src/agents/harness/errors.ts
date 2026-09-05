@@ -58,3 +58,11 @@ export function resolveAgentHarnessPreflightOwner(error: unknown): string | unde
 export function isAgentHarnessPreflightError(err: unknown): err is AgentHarnessPreflightError {
   return err instanceof AgentHarnessPreflightError;
 }
+
+/** A completed harness failure that must not replay through another profile or model. */
+export class AgentHarnessTerminalError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "AgentHarnessTerminalError";
+  }
+}

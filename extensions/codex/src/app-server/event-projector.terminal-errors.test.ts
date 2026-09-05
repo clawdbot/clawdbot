@@ -533,3 +533,31 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
   });
 });
+
+it.each(["misalignmentPolicyViolation"])(
+  "preserves %s as terminal on both error and completed notifications",
+  async (codexErrorInfo) => {
+    const projector = await createProjector();
+    const message = "Provider rejected this request";
+    await projector.handleNotification(
+      appServerError({ message, willRetry: false, codexErrorInfo }),
+    );
+    expect(
+      readAttemptTerminal(projector.buildResult(buildEmptyToolTelemetry())).promptError,
+    ).toMatchObject({
+      name: "AgentHarnessTerminalError",
+      message,
+    });
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: { id: TURN_ID, status: "failed", items: [], error: { message, codexErrorInfo } },
+      }),
+    );
+    expect(
+      readAttemptTerminal(projector.buildResult(buildEmptyToolTelemetry())).promptError,
+    ).toMatchObject({
+      name: "AgentHarnessTerminalError",
+      message,
+    });
+  },
+);

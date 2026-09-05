@@ -326,6 +326,7 @@ function createTwoCalendarAppPolicyContext() {
 async function createManualResumeFixture(
   options: {
     active?: boolean;
+    systemError?: boolean;
     cold?: boolean;
     receipt?: "none" | "stale" | "unrelated" | "malformed";
     dynamicTools?: CodexDynamicToolFunctionSpec[];
@@ -390,7 +391,7 @@ async function createManualResumeFixture(
             : {}),
           status: options.active
             ? { type: "active", activeFlags: [] }
-            : { type: options.cold ? "notLoaded" : "idle" },
+            : { type: options.cold ? "notLoaded" : options.systemError ? "systemError" : "idle" },
         },
       };
     }
@@ -1002,9 +1003,16 @@ describe("Codex app-server thread lifecycle bindings", () => {
     },
   );
 
-  it.each(["initial policy", "replacement policy", ""])(
-    "keeps ordinary warm configuration honest across policy %j",
-    async (developerInstructions) => {
+  it.each(
+    ["idle", "systemError"].flatMap((nativeStatus) =>
+      ["initial policy", "replacement policy", ""].map((developerInstructions) => ({
+        nativeStatus,
+        developerInstructions,
+      })),
+    ),
+  )(
+    "keeps ordinary warm configuration honest across $nativeStatus and policy $developerInstructions",
+    async ({ nativeStatus, developerInstructions }) => {
       const sessionFile = path.join(tempDir, "ordinary-warm-policy.jsonl");
       const workspaceDir = path.join(tempDir, "workspace");
       const threadId = "ordinary-warm-policy";
@@ -1022,7 +1030,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
           return response;
         }
         if (request.method === "thread/read") {
-          return { thread: response.thread };
+          return { thread: { ...response.thread, status: { type: nativeStatus } } };
         }
         if (request.method === "thread/unsubscribe") {
           wire.send({
@@ -1719,6 +1727,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
     {
       label: "loaded native thread",
       options: { dynamicTools: [createNamedDynamicTool("example")] },
+    },
+    {
+      label: "native thread after a completed failed turn",
+      options: { systemError: true, wireClient: true },
     },
     {
       label: "cold native thread with no stored tools",

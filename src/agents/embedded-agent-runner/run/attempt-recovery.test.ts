@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { AgentHarnessTerminalError } from "../../harness/errors.js";
 import {
   buildEmbeddedRunnerAssistant,
   createMockUsage,
@@ -449,4 +450,15 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(failoverRetryController.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
     expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
+});
+
+it("surfaces a terminal harness refusal before transport or prompt recovery", async () => {
+  const error = new AgentHarnessTerminalError("rate limit exceeded", {
+    cause: new Error("WebSocket error"),
+  });
+  await expect(
+    recoverAfterTransportDrop({
+      terminal: { kind: "failed", source: "prompt", error },
+    }),
+  ).rejects.toBe(error);
 });
