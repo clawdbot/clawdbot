@@ -11,7 +11,7 @@ import type {
 } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { getRawSessionAppendMessage } from "../session-raw-append-message.js";
-import { SessionManager } from "../sessions/index.js";
+import { SessionManager } from "../sessions/session-manager.js";
 
 type SessionManagerLike = ReturnType<typeof SessionManager.open>;
 type SessionBranchEntry = ReturnType<SessionManagerLike["getBranch"]>[number];
@@ -161,6 +161,15 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
     ? SessionManager.fromEntries(expectedEvents, params.sessionManager.getCwd())
     : params.sessionManager;
   const branch = rewriteManager.getBranch();
+  if (expectedEvents) {
+    const activeBranch = params.sessionManager.getBranch();
+    const branchIsCurrent =
+      branch.length === activeBranch.length &&
+      branch.every((entry, index) => entry.id === activeBranch[index]?.id);
+    if (!branchIsCurrent) {
+      throw new Error("Session transcript changed before rewrite preparation");
+    }
+  }
   if (branch.length === 0) {
     return {
       changed: false,
