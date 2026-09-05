@@ -17,7 +17,15 @@ import {
   createMockPluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  createParams as createCodexParams,
+  createStartedThreadHarness,
+  runCodexAppServerAttempt,
+  setupRunAttemptTestHooks,
+  tempDir as codexTempDir,
+} from "../../codex/src/app-server/run-attempt-test-harness.js";
 import type { OpenClawConfig } from "../api.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import {
@@ -43,6 +51,8 @@ const SESSION_CLAIM = "OpenClaw rotates gateway tokens every ninety days.";
 const TEST_HOME = "/Users/tester";
 
 const { createTempDir } = createMemoryWikiTestHarness();
+
+setupRunAttemptTestHooks();
 
 const knownAgentsConfig = {
   agents: { list: [{ id: SESSION_AGENT_ID, default: true }, { id: REQUESTER_AGENT_ID }] },
@@ -177,6 +187,32 @@ describe("Memory Wiki hosted prompt-owner composition", () => {
 
     expect(requesterPrompt).toContain(REQUESTER_CLAIM);
     expect(requesterPrompt).not.toContain(SESSION_CLAIM);
+  });
+
+  it("submits the requester's real compiled digest to the Codex app-server boundary", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createCodexParams(
+      path.join(codexTempDir, "memory-wiki-owner.jsonl"),
+      path.join(codexTempDir, "memory-wiki-owner-workspace"),
+      { sessionKey: SESSION_KEY },
+    );
+    params.agentId = SESSION_AGENT_ID;
+    params.memoryPromptAgentId = REQUESTER_AGENT_ID;
+    params.contextEngine = contextEngine;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const developerInstructions = readStringValue(
+      (threadStart?.params as { developerInstructions?: unknown } | undefined)
+        ?.developerInstructions,
+    );
+
+    expect(developerInstructions).toContain(REQUESTER_CLAIM);
+    expect(developerInstructions).not.toContain(SESSION_CLAIM);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
   });
 
   it("falls back to the session owner's compiled digest when no requester is declared", async () => {
