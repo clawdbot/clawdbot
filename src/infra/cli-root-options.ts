@@ -37,6 +37,25 @@ export function consumeRootOptionToken(args: ReadonlyArray<string>, index: numbe
   return 0;
 }
 
+/** Locate the root command after supported root options without loading CLI catalogs. */
+export function findRootCommandIndex(argv: readonly string[]): number | null {
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      return null;
+    }
+    const consumed = consumeRootOptionToken(argv, index);
+    if (consumed > 0) {
+      index += consumed - 1;
+      continue;
+    }
+    if (!arg.startsWith("-")) {
+      return index;
+    }
+  }
+  return null;
+}
+
 /** Read positional command tokens while accepting root options at any pre-terminator position. */
 export function getRootOptionAwareCommandPath(argv: readonly string[], depth: number): string[] {
   const args = argv.slice(2);

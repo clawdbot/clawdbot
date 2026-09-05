@@ -6,6 +6,7 @@ import { summarizeUpdateStepFailure, type UpdateRunRecord } from "./update-run-r
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 export type UpdateRunReport = { headline: string; lines: string[]; markdown: string };
+export type UpdateRunNoticeKind = "ack" | "activating" | "verifying" | "finished";
 type ReportInput = Pick<
   UpdateRunRecord,
   | "status"
@@ -20,6 +21,32 @@ type ReportInput = Pick<
   | "downtimeMs"
 >;
 const PHASES = new Set<string>(UPDATE_RUN_PHASES);
+
+/** The four conversation milestones share the run's recorded versions and final report. */
+export function renderUpdateRunNotice(
+  run: UpdateRunRecord,
+  kind: UpdateRunNoticeKind,
+): string | null {
+  if (kind === "finished") {
+    return run.status === "running" ? null : renderUpdateRunReport(run).markdown;
+  }
+  if (run.status !== "running" || run.phase !== (kind === "ack" ? "requested" : kind)) {
+    return null;
+  }
+  const from = run.before.version ? bounded(run.before.version, 120) : undefined;
+  const target = run.after.version ?? run.target.version;
+  const to = target ? bounded(target, 120) : undefined;
+  if (kind === "ack") {
+    return `⬆️ Updating OpenClaw ${from ?? "the current version"} → ${to ?? "the latest release"}. You'll get a message here before the gateway restarts and when verification finishes.`;
+  }
+  if (kind === "activating") {
+    return `⏳ Restarting the gateway now${from && to ? ` (v${from} → v${to})` : ""}…`;
+  }
+  const running = run.verification.runningVersion
+    ? bounded(run.verification.runningVersion, 120)
+    : to;
+  return `🔁 Back${running ? ` on v${running}` : ""}, verifying…`;
+}
 
 function bounded(text: string, limit: number): string {
   return text.length <= limit ? text : `${sliceUtf16Safe(text, 0, limit - 1)}…`;
@@ -65,8 +92,9 @@ export function renderUpdateRunReport(
   run: ReportInput,
   opts: { doctorHint?: string | null; nextAction?: string } = {},
 ): UpdateRunReport {
-  const before = run.before.version ?? run.before.sha?.slice(0, 8);
-  const after = run.after.version ?? run.after.sha?.slice(0, 8);
+  // Git updates can change commits without changing the package version.
+  const before = run.before.sha?.slice(0, 8) ?? run.before.version;
+  const after = run.after.sha?.slice(0, 8) ?? run.after.version;
   const reason = bounded(run.reason?.trim() || "unknown reason", 240);
   const running =
     run.verification.serviceRunning === false ? undefined : run.verification.runningVersion;

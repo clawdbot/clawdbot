@@ -191,14 +191,15 @@ it alongside main-thread delay and utilization; see
 
 The event-loop histogram records the maximum delay from each completed Gateway
 health-monitor window. The counter sums the seconds represented by those
-windows. Both are cumulative: a readiness or status read can complete a window
-before Prometheus scrapes it, and a later healthy window does not erase the
-earlier observation. Repeated scrapes and cached health reads add no samples.
+windows. Both are cumulative: a later healthy window does not erase an earlier
+high-delay observation. Readiness, status, and scrape requests consume completed
+observations without advancing or resetting the sampling window.
 
-Windows are defined by existing health readers, not by the scrape interval or a
-new timer. Normally a window completes after at least one second; a delay
-warning can complete it sooner. Histogram counts are window counts, not stall
-counts. Histogram quantiles describe window maxima, not the native event-loop
+The monitor samples elapsed event-loop intervals every 20 milliseconds and
+completes a window after at least one second, or sooner for a delay warning.
+It preserves the pending interval across ordinary window resets, so reading
+health before an overdue sample cannot erase that delay. Histogram counts are window counts, not stall
+counts. Histogram quantiles describe window maxima, not the sampled event-loop
 delay distribution or its overall p99. These metrics have no request labels or
 trace attribution and do not identify the JavaScript function that blocked.
 
@@ -207,7 +208,7 @@ metrics exporter is running; it does not backfill earlier windows. Intentional
 monitor resets discard the unfinished window. Diagnostic queue drops, the
 exporter's series cap, and process restarts can also lose observations. Watch
 the existing drop counters and the represented-duration counter when assessing
-coverage. Readiness decisions and persistent liveness warnings are unchanged.
+coverage. Readiness decisions and persistent liveness-warning thresholds are unchanged.
 
 ## Label policy
 

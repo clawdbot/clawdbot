@@ -22,7 +22,8 @@ import {
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "./update-run-ledger.js";
-import { UpdateRunRecordSchema, type UpdateRunRecord } from "./update-run-record.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
+import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -172,6 +173,57 @@ describe("update run ledger", () => {
     ).toBe(5_000);
   });
 
+  it.each([
+    ["failed", "failed"],
+    ["succeeded", "completed"],
+    ["skipped", "skipped"],
+    ["rolled-back", "completed"],
+  ] as const)(
+    "closes unfinished steps when the run becomes %s without changing recorded outcomes",
+    (status, stepStatus) => {
+      const options = isolatedOptions();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const run = createUpdateRun({ trigger: "cli" }, options);
+      recordUpdateRunPhase(run.runId, "validating", {}, options);
+      const recordedSteps = [
+        { step: "install", status: "completed", endedAtMs: 1_000 },
+        { step: "validation attempt", status: "failed", endedAtMs: 1_000, detail: "Build failed." },
+        { step: "optional check", status: "skipped", endedAtMs: 1_000 },
+      ] as const;
+      for (const step of recordedSteps) {
+        recordUpdateRunStep(run.runId, step, options);
+      }
+      recordUpdateRunStep(
+        run.runId,
+        {
+          step: "openclaw doctor",
+          status: "in_progress",
+          startedAtMs: 1_000,
+        },
+        options,
+      );
+      clock.mockReturnValue(2_000);
+      finishUpdateRun(run.runId, { status }, options);
+      closeOpenClawStateDatabaseForTest();
+
+      const persisted = getUpdateRun(run.runId, options);
+      expect(persisted?.steps.some((step) => step.status === "in_progress")).toBe(false);
+      expect(persisted?.steps.find((step) => step.step === "openclaw doctor")).toEqual({
+        step: "openclaw doctor",
+        status: stepStatus,
+        startedAtMs: 1_000,
+        endedAtMs: 2_000,
+      });
+      expect(persisted?.steps.find((step) => step.step === "validating")).toMatchObject({
+        status: stepStatus,
+        endedAtMs: 2_000,
+      });
+      for (const step of recordedSteps) {
+        expect(persisted?.steps.find((entry) => entry.step === step.step)).toEqual(step);
+      }
+    },
+  );
+
   it("lists newest runs deterministically and excludes terminal runs from active discovery", () => {
     const options = isolatedOptions();
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -193,6 +245,37 @@ describe("update run ledger", () => {
     expect(findActiveUpdateRun(options)).toBeUndefined();
     expect(listUpdateRuns({}, options)).toHaveLength(3);
   });
+
+  it.each([
+    { name: "step count", count: 130, detail: undefined },
+    { name: "diagnostic bytes", count: 30, detail: "diagnostic ".repeat(80) },
+    { name: "retained phase bytes", count: 0, detail: "🦞".repeat(512) },
+  ])(
+    "retains notice custody and phases across the $name bound and database reopen",
+    ({ count, detail }) => {
+      const options = isolatedOptions();
+      const run = createUpdateRun({ trigger: "chat" }, options);
+      const notices = ["notice:ack", "notice:activating", "notice:verifying"];
+      for (const step of [...UPDATE_RUN_PHASES, ...notices]) {
+        recordUpdateRunStep(run.runId, { step, status: "completed", detail }, options);
+      }
+      for (let index = 0; index < count; index++) {
+        recordUpdateRunStep(
+          run.runId,
+          { step: `diagnostic-${index}`, status: "completed", detail },
+          options,
+        );
+      }
+      closeOpenClawStateDatabaseForTest();
+      const persisted = getUpdateRun(run.runId, options)!;
+      expect(persisted.steps.map((step) => step.step)).toEqual(
+        expect.arrayContaining([...UPDATE_RUN_PHASES, ...notices]),
+      );
+      expect(persisted.steps.every((step) => step.status === "completed")).toBe(true);
+      expect(persisted.steps.length).toBeLessThanOrEqual(128);
+      expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
+    },
+  );
 
   it("bounds every JSON column deterministically without splitting Unicode or losing the phase timeline", () => {
     const options = isolatedOptions();

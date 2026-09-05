@@ -1,4 +1,5 @@
 // Shared Logbook domain shapes used by the store, pipeline, and gateway methods.
+import type { Generated } from "openclaw/plugin-sdk/sqlite-runtime";
 
 export type LogbookFrame = {
   id: number;
@@ -86,7 +87,7 @@ export type LogbookStatus = {
 
 export type LogbookDatabase = {
   frames: {
-    id: number;
+    id: Generated<number>;
     captured_at_ms: number;
     day: string;
     path: string;
@@ -99,7 +100,7 @@ export type LogbookDatabase = {
     batch_id: number | null;
   };
   batches: {
-    id: number;
+    id: Generated<number>;
     day: string;
     start_ms: number;
     end_ms: number;
@@ -111,7 +112,7 @@ export type LogbookDatabase = {
     updated_ms: number;
   };
   observations: {
-    id: number;
+    id: Generated<number>;
     batch_id: number;
     day: string;
     start_ms: number;
@@ -119,7 +120,7 @@ export type LogbookDatabase = {
     text: string;
   };
   cards: {
-    id: number;
+    id: Generated<number>;
     day: string;
     start_ms: number;
     end_ms: number;

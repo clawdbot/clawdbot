@@ -622,7 +622,7 @@ extensions/logbook/src/analyze.ts	8
 extensions/logbook/src/config.ts	1
 extensions/logbook/src/node-host.ts	1
 extensions/logbook/src/service.ts	6
-extensions/logbook/src/store.ts	6
+extensions/logbook/src/store.ts	4
 extensions/matrix/src/actions.ts	3
 extensions/matrix/src/approval-auth.ts	1
 extensions/matrix/src/approval-handler.runtime.ts	8
@@ -2261,14 +2261,14 @@ src/claws/doctor.ts	2
 src/claws/export.ts	8
 src/claws/lifecycle-delete-support.ts	7
 src/claws/mcp.ts	4
-src/claws/openclaw-profile.ts	2
+src/claws/openclaw-profile.ts	1
 src/claws/package-update.ts	1
 src/claws/packages.ts	1
 src/claws/project-build.ts	4
 src/claws/project.ts	4
 src/claws/provenance-runtime-read.ts	1
 src/claws/provenance.ts	6
-src/claws/reader.ts	8
+src/claws/reader.ts	7
 src/claws/schema.ts	3
 src/claws/update-capability-changes.ts	11
 src/claws/workspace.ts	2
@@ -2502,7 +2502,6 @@ src/commands/doctor/shared/legacy-config-state-migration-input.ts	2
 src/commands/doctor/shared/legacy-talk-config-normalizer.ts	2
 src/commands/doctor/shared/legacy-web-tools-migrate.ts	1
 src/commands/doctor/shared/open-policy-allowfrom.ts	2
-src/commands/doctor/shared/plugin-registry-migration.ts	1
 src/commands/doctor/shared/plugin-runtime-symlinks.ts	4
 src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	2
 src/commands/doctor/shared/preview-warnings.ts	2
@@ -3938,7 +3937,6 @@ ui/src/pages/chat/chat-pane-lifecycle.ts	4
 ui/src/pages/chat/chat-pane-render.ts	3
 ui/src/pages/chat/chat-progress.ts	2
 ui/src/pages/chat/chat-queue.ts	1
-ui/src/pages/chat/chat-realtime.ts	1
 ui/src/pages/chat/chat-send-ack.ts	2
 ui/src/pages/chat/chat-send-composer.ts	1
 ui/src/pages/chat/chat-send-request.ts	1

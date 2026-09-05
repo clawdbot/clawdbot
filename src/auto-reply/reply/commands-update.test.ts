@@ -181,6 +181,7 @@ describe("handleUpdateCommand", () => {
       return {
         ok: true,
         runId,
+        ackDelivered: true,
         result: { status: "skipped", reason: "managed-service-handoff-started", steps: [] },
         handoff: { status: "started", command: "openclaw update" },
       };
@@ -188,9 +189,6 @@ describe("handleUpdateCommand", () => {
 
     expect(await handleUpdateCommand(params, true)).toEqual({
       shouldContinue: false,
-      reply: {
-        text: "⬆️ OpenClaw update in progress: requested.\nCheck progress with openclaw update status.",
-      },
     });
     expect(dispatch).toHaveBeenCalledExactlyOnceWith(
       "update.run",
@@ -229,7 +227,7 @@ describe("handleUpdateCommand", () => {
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("renders the durable result versions instead of reconstructing an acknowledgment", async () => {
+  it("does not repeat an outcome already owned by gateway notices", async () => {
     getRun.mockReturnValue(
       updateRun({
         status: "succeeded",
@@ -241,6 +239,7 @@ describe("handleUpdateCommand", () => {
     dispatch.mockResolvedValueOnce({
       ok: true,
       runId,
+      ackDelivered: true,
       result: {
         status: "ok",
         before: { version: "2026.9.1" },
@@ -249,10 +248,30 @@ describe("handleUpdateCommand", () => {
       },
     });
 
-    expect((await handleUpdateCommand(updateCommandParams(), true))?.reply?.text).toBe(
-      "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).",
-    );
+    expect(await handleUpdateCommand(updateCommandParams(), true)).toEqual({
+      shouldContinue: false,
+    });
   });
+
+  it.each([true, false])(
+    "preserves queued ack custody without a duplicate reply (%s)",
+    async (ackQueued) => {
+      const acknowledgement = "⬆️ Updating OpenClaw 2026.9.1 → 2026.9.2.";
+      dispatch.mockResolvedValueOnce({
+        ok: true,
+        runId,
+        ackDelivered: false,
+        ackQueued,
+        acknowledgement,
+        result: { status: "skipped", reason: "managed-service-handoff-started" },
+        handoff: { status: "started" },
+      });
+      expect(await handleUpdateCommand(updateCommandParams(), true)).toEqual({
+        shouldContinue: false,
+        ...(!ackQueued ? { reply: { text: acknowledgement } } : {}),
+      });
+    },
+  );
 
   it.each([
     { status: "skipped", reason: "managed-service-handoff-unavailable" },

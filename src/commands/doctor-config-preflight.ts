@@ -12,6 +12,7 @@ import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import { logConfigWarningsOnce } from "../config/io.warnings.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { resolveStateDir } from "../config/paths.js";
+import { inspectShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -317,6 +318,8 @@ export async function runDoctorConfigPreflight(
     let snapshot = configSnapshotRead.snapshot;
     let activeConfigRepair: ReturnType<typeof planAutomaticConfigRepair> = null;
     if (options.repairPrefixedConfig === true && snapshot.exists && !snapshot.valid) {
+      const pendingPluginInstallConfig =
+        inspectShippedPluginInstallConfigRecords(snapshot.sourceConfig).status !== "missing";
       // Migrate readable active bytes before rollback; otherwise one retired key can discard
       // newer valid settings that the canonical Doctor migration would preserve.
       activeConfigRepair =
@@ -335,6 +338,8 @@ export async function runDoctorConfigPreflight(
         configRepaired = true;
       } else if (
         !activeConfigRepair &&
+        // Config preparation imports these records; backup recovery would erase its source.
+        !pendingPluginInstallConfig &&
         (await recoverConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" }))
       ) {
         note(

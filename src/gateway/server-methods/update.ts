@@ -57,7 +57,7 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { summarizeUpdateStepFailure } from "../../infra/update-run-record.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { renderUpdateRunNotice } from "../../infra/update-run-report.js";
 import {
   resolveUpdateInstallSurface,
   runGatewayUpdate,
@@ -66,16 +66,14 @@ import {
 import { getUpdateAvailable, initializeGatewayUpdateStatus } from "../../infra/update-startup.js";
 import { mergeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import {
+  INTERNAL_MESSAGE_CHANNEL,
   isBrowserOperatorUiClient,
   isInternalMessageChannel,
 } from "../../utils/message-channel.js";
 import { VERSION } from "../../version.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
-import {
-  resolveGatewayLifecycleNoticeRoute,
-  sendGatewayLifecycleNotice,
-} from "../server-restart-sentinel-notice.js";
 import { recordLatestUpdateRestartSentinel } from "../server-restart-sentinel.js";
+import { resolveUpdateRunNoticeTarget } from "../update-run-notice-target.js";
 import { wakeUpdateRunWatcher } from "../update-run-watcher.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -118,7 +116,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     const restartDelayMs = normalizeGatewayRestartDelayMs(requestedRestartDelayMs);
     const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
       extractDeliveryInfo(sessionKey);
-    const deliveryContext = mergeDeliveryContext(requestedDeliveryContext, sessionDeliveryContext);
+    let deliveryContext = mergeDeliveryContext(requestedDeliveryContext, sessionDeliveryContext);
     const threadId = requestedThreadId ?? sessionThreadId;
     const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
     const timeoutMs =
@@ -134,6 +132,17 @@ export const updateHandlers: GatewayRequestHandlers = {
             (sessionKey && isInternalMessageChannel(requesterChannel ?? deliveryContext?.channel))
           ? "control-ui"
           : "api";
+    const config = context.getRuntimeConfig();
+    const noticeTarget = resolveUpdateRunNoticeTarget({
+      cfg: config,
+      sessionKey,
+      explicitDeliveryContext: deliveryContext,
+      threadId,
+    });
+    // Recording an internal destination does not change the caller's trigger classification.
+    if (noticeTarget.kind === "internal") {
+      deliveryContext = { channel: INTERNAL_MESSAGE_CHANNEL };
+    }
     const origin = {
       doctorHint: formatDoctorNonInteractiveHint(),
       ...(params.requester ? { requester: params.requester } : {}),
@@ -173,7 +182,8 @@ export const updateHandlers: GatewayRequestHandlers = {
       | null = null;
     let managedHandoffRestart: ReturnType<typeof scheduleGatewaySigusr1Restart> | null = null;
     let ackDelivered = false;
-    const noticeAttemptId = runId;
+    let ackQueued = false;
+    let acknowledgement: string | undefined;
     let ownsUpdateOutcome = false;
     let adoptedCampaignId: string | undefined;
     const ownerRequiredMessage = () =>
@@ -193,33 +203,24 @@ export const updateHandlers: GatewayRequestHandlers = {
         gatewayUpdateCampaign.clear();
       }
       recordUpdateRunPhase(runId, "requested", { origin: { nextAction: ownerRequiredMessage() } });
-      finishUpdateRun(runId, { status: "failed", reason: "owner_required" });
+      const refusedRun = finishUpdateRun(runId, { status: "failed", reason: "owner_required" });
       respond(true, {
         runId,
         ok: false,
         code: "owner_required",
         message: ownerRequiredMessage(),
         ackDelivered,
+        ackQueued,
+        acknowledgement,
         result: { status: "error", reason: "owner_required" },
       });
-      return true;
+      return refusedRun;
     };
     if (refuseNonOwner()) {
       return;
     }
-    const config = context.getRuntimeConfig();
-    const route = resolveGatewayLifecycleNoticeRoute({ cfg: config, deliveryContext, threadId });
-    const notify = async (kind: "ack" | "failed", message: string) =>
-      route
-        ? sendGatewayLifecycleNotice({
-            ...route,
-            cfg: config,
-            deps: context.deps,
-            sessionKey,
-            message,
-            deliveryIntentId: `update-run-${kind}:${sessionKey ?? "sessionless"}:${noticeAttemptId}`,
-          })
-        : false;
+    const { createUpdateRunNotifier } = await import("../update-run-notice.runtime.js");
+    const notify = createUpdateRunNotifier(run, config, context.deps, noticeTarget);
     const sentinelMeta: UpdateRestartSentinelMeta = {
       runId,
       ...(sessionKey ? { sessionKey } : {}),
@@ -319,10 +320,14 @@ export const updateHandlers: GatewayRequestHandlers = {
           return false;
         }
         const targetVersion = adoptedPackageTargetVersion ?? getUpdateAvailable()?.latestVersion;
-        ackDelivered = await notify(
-          "ack",
-          `⬆️ Updating OpenClaw ${beforeVersion ?? VERSION} → ${targetVersion ?? "the latest release"}. The gateway restarts in about a minute; you'll get a message here when it's back.`,
-        );
+        const acknowledgedRun = recordUpdateRunPhase(runId, "requested", {
+          before: { version: beforeVersion ?? VERSION },
+          ...(targetVersion ? { target: { version: targetVersion } } : {}),
+        });
+        acknowledgement = renderUpdateRunNotice(acknowledgedRun, "ack") ?? undefined;
+        const ack = await notify(acknowledgedRun, "ack");
+        ackDelivered = ack.delivered;
+        ackQueued = ack.owned;
         return true;
       };
       const supervisor = detectRespawnSupervisor(process.env, process.platform, {
@@ -397,14 +402,19 @@ export const updateHandlers: GatewayRequestHandlers = {
               return;
             }
             // Recheck after the awaited acknowledgement, immediately before the effect.
-            if (refuseNonOwner()) {
-              if (ackDelivered) {
-                await notify("failed", ownerRequiredMessage());
+            const refusal = refuseNonOwner();
+            if (refusal) {
+              if (ackDelivered || ackQueued) {
+                await notify(refusal, "finished");
               }
               return;
             }
             const started = await startManagedServiceUpdateHandoff({
               runId,
+              beforePark: async () => {
+                const activating = recordUpdateRunPhase(runId, "activating");
+                await notify(activating, "activating");
+              },
               requester: params.requester,
               root: installRoot,
               timeoutMs,
@@ -511,9 +521,10 @@ export const updateHandlers: GatewayRequestHandlers = {
           return;
         }
         // Recheck after the awaited acknowledgement, immediately before the effect.
-        if (refuseNonOwner()) {
-          if (ackDelivered) {
-            await notify("failed", ownerRequiredMessage());
+        const refusal = refuseNonOwner();
+        if (refusal) {
+          if (ackDelivered || ackQueued) {
+            await notify(refusal, "finished");
           }
           return;
         }
@@ -577,6 +588,13 @@ export const updateHandlers: GatewayRequestHandlers = {
     }
 
     result = normalizeControlPlaneUpdateResult(result);
+    if (result.status === "ok") {
+      const activating = recordUpdateRunPhase(runId, "activating", {
+        before: result.before,
+        after: result.after,
+      });
+      await notify(activating, "activating");
+    }
     let outcomeRun = recordUpdateRunPhase(
       runId,
       result.status === "ok" ? "restarting" : "requested",
@@ -677,8 +695,8 @@ export const updateHandlers: GatewayRequestHandlers = {
             },
           })
         : null);
-    if (ackDelivered && result.status !== "ok" && !restart) {
-      await notify("failed", renderUpdateRunReport(outcomeRun).markdown);
+    if ((ackDelivered || ackQueued) && result.status !== "ok" && !restart) {
+      await notify(outcomeRun, "finished");
     }
     context?.logGateway?.info(
       `update.run completed ${formatControlPlaneActor(actor)} changedPaths=<n/a> restartReason=update.run status=${result.status}`,
@@ -695,6 +713,8 @@ export const updateHandlers: GatewayRequestHandlers = {
         runId,
         ok: result.status === "ok" || handoff?.status === "started",
         ackDelivered,
+        ackQueued,
+        acknowledgement,
         ...(noticeFailureMessage ? { message: noticeFailureMessage } : {}),
         result,
         ...(handoff ? { handoff } : {}),
