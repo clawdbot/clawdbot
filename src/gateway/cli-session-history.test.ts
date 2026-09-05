@@ -2092,6 +2092,42 @@ describe("cli session history", () => {
     ]);
   });
 
+  it("keeps both aggregates when a repeated prompt cannot be aligned", () => {
+    const interim = "Working on it";
+    const finalSegment = "All done.";
+    const meta = (externalId: string) => ({
+      __openclaw: { importedFrom: "claude-cli", externalId, cliSessionId: "s" },
+    });
+    const question = { role: "user", content: "same question" };
+    const aggregate = (runId: string) => ({
+      role: "assistant",
+      content: [{ type: "text", text: `${interim}\n${finalSegment}` }],
+      idempotencyKey: `cli-assistant:${runId}`,
+    });
+    // The import starts at the second occurrence, and nothing carries a
+    // timestamp, so neither local turn can be proven to own these segments.
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [question, aggregate("run-1"), question, aggregate("run-2")],
+      importedMessages: [
+        { role: "user", content: "same question", ...meta("u-2") },
+        { role: "assistant", content: [{ type: "text", text: interim }], ...meta("a-interim") },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: finalSegment }],
+          ...meta("a-final"),
+        },
+      ],
+    });
+
+    const keys = merged.map((message) =>
+      typeof message === "object" && message !== null && "idempotencyKey" in message
+        ? (message as { idempotencyKey?: unknown }).idempotencyKey
+        : undefined,
+    );
+    expect(keys).toContain("cli-assistant:run-1");
+    expect(keys).toContain("cli-assistant:run-2");
+  });
+
   it("drops every covered cli-assistant aggregate across untimestamped turns", () => {
     const meta = (externalId: string) => ({
       __openclaw: { importedFrom: "claude-cli", externalId, cliSessionId: "s" },

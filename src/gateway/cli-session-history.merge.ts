@@ -323,6 +323,41 @@ function dropCoveredCliAssistantAggregates(
   return dropped.size === 0 ? entries : entries.filter((entry) => !dropped.has(entry));
 }
 
+type LocalTurnBucket = {
+  turns: Array<{ order: number; timestamp: number | undefined }>;
+  cursor: number;
+};
+
+// Picks the local turn an imported user row duplicates. A timestamp inside the
+// dedupe window names one turn outright. Without that evidence the only safe
+// alignment is a single remaining candidate: guessing between repeats of the
+// same prompt can attach an import to the wrong turn, and reconciliation would
+// then drop the aggregate that answered the other one. Ambiguity yields
+// undefined, which leaves every aggregate in that turn alone.
+function takeAlignedLocalTurn(
+  bucket: LocalTurnBucket,
+  timestamp: number | undefined,
+): number | undefined {
+  if (timestamp !== undefined) {
+    for (let i = bucket.cursor; i < bucket.turns.length; i += 1) {
+      const candidate = bucket.turns[i];
+      if (candidate?.timestamp === undefined) {
+        continue;
+      }
+      if (Math.abs(candidate.timestamp - timestamp) <= DEDUPE_TIMESTAMP_WINDOW_MS) {
+        bucket.cursor = i + 1;
+        return candidate.order;
+      }
+    }
+  }
+  if (bucket.turns.length - bucket.cursor !== 1) {
+    return undefined;
+  }
+  const only = bucket.turns[bucket.cursor];
+  bucket.cursor += 1;
+  return only?.order;
+}
+
 /** Merges imported CLI transcript messages into local history without duplicating overlaps. */
 export function mergeImportedChatHistoryMessages(params: {
   localMessages: unknown[];
@@ -346,17 +381,24 @@ export function mergeImportedChatHistoryMessages(params: {
     }
     addRoleTextCandidate(allMessageRoleTextIndex, entry);
   };
-  const localTurnsByUserText = new Map<string, number[]>();
+  // Buckets of local user turns per prompt text, appended in order, each with a
+  // cursor so matching an import walks forward instead of rescanning the bucket.
+  const localTurnsByUserText = new Map<string, LocalTurnBucket>();
   let localTurn: number | undefined;
   for (const entry of merged) {
     indexEntry(entry);
     if (entry.role === "user") {
       localTurn = entry.order;
       if (entry.text) {
-        localTurnsByUserText.set(entry.text, [
-          ...(localTurnsByUserText.get(entry.text) ?? []),
-          entry.order,
-        ]);
+        const bucket = localTurnsByUserText.get(entry.text);
+        if (bucket) {
+          bucket.turns.push({ order: entry.order, timestamp: entry.timestamp });
+        } else {
+          localTurnsByUserText.set(entry.text, {
+            turns: [{ order: entry.order, timestamp: entry.timestamp }],
+            cursor: 0,
+          });
+        }
       }
     }
     entry.turn = localTurn;
@@ -371,11 +413,9 @@ export function mergeImportedChatHistoryMessages(params: {
     }
   }
   let nextOrder = merged.length;
-  // A dropped imported user row joins the local turn it duplicates, taken in
-  // order so a repeated question maps to its own occurrence; a kept one starts
-  // a turn with no local aggregate to cover.
+  // A dropped imported user row joins the local turn it duplicates; a kept one
+  // starts a turn with no local aggregate to cover.
   let importedTurn: number | undefined;
-  let lastAlignedTurn = -1;
   const isDuplicateImport = (imported: ComparableHistoryMessage): boolean => {
     if (exactExternalIdentityIndex.has(imported.externalIdentityKey ?? "")) {
       return true;
@@ -401,10 +441,9 @@ export function mergeImportedChatHistoryMessages(params: {
     );
     const duplicate = isDuplicateImport(imported);
     if (imported.role === "user") {
-      const candidates =
+      const bucket =
         duplicate && imported.text ? localTurnsByUserText.get(imported.text) : undefined;
-      importedTurn = candidates?.find((turn) => turn > lastAlignedTurn);
-      lastAlignedTurn = importedTurn ?? lastAlignedTurn;
+      importedTurn = bucket ? takeAlignedLocalTurn(bucket, imported.timestamp) : undefined;
     } else if (imported.role === "assistant" && isClaudeCliImportedMessage(imported.message)) {
       // Provenance is the importedFrom stamp; uuid-less records have no externalId.
       imported.importedCliAssistantSegment = true;
