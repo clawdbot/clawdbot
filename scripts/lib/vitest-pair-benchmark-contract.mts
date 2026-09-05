@@ -343,11 +343,29 @@ export function parseVitestExecutionReport(
               `Vitest JSON report assertion ${String(fileIndex)}:${String(assertionIndex)} status is invalid`,
             );
           }
-          return { fullName: assertion.fullName, status: assertion.status };
+          if (
+            !isRecord(assertion.location) ||
+            !Number.isSafeInteger(assertion.location.line) ||
+            Number(assertion.location.line) <= 0 ||
+            !Number.isSafeInteger(assertion.location.column) ||
+            Number(assertion.location.column) <= 0
+          ) {
+            throw new Error(
+              `Vitest JSON report assertion ${String(fileIndex)}:${String(assertionIndex)} location must contain positive integer line and column`,
+            );
+          }
+          return {
+            line: Number(assertion.location.line),
+            column: Number(assertion.location.column),
+            status: assertion.status,
+          };
         })
+        // test.each cases intentionally share one source location; retain every occurrence.
         .toSorted(
           (left, right) =>
-            left.fullName.localeCompare(right.fullName) || left.status.localeCompare(right.status),
+            left.line - right.line ||
+            left.column - right.column ||
+            left.status.localeCompare(right.status),
         );
       return {
         path: normalizeReportedTestPath(

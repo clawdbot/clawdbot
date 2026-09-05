@@ -144,7 +144,11 @@ function writeExecutable(file: string, contents: string): void {
   chmodSync(file, 0o755);
 }
 
-type ReportAssertion = { fullName: string; status: "passed" | "skipped" };
+type ReportAssertion = {
+  fullName: string;
+  status: "passed" | "skipped";
+  location?: unknown;
+};
 type ReportFile = { path: string; assertions: ReportAssertion[] };
 
 function writeSelectedFiles(root: string, files: string[]): void {
@@ -180,7 +184,12 @@ function writeVitestReport(
       testResults: files.map((file) => ({
         name: path.join(root, file.path),
         status: success ? "passed" : "failed",
-        assertionResults: file.assertions,
+        assertionResults: file.assertions.map((assertion, index) => ({
+          ...assertion,
+          location: Object.hasOwn(assertion, "location")
+            ? assertion.location
+            : { line: index + 1, column: 1 },
+        })),
       })),
     }),
   );
@@ -288,7 +297,7 @@ describe("Vitest pair benchmark contract", () => {
     );
   });
 
-  it("fails closed when test identities or statuses diverge from correctness", () => {
+  it("uses source locations instead of version-specific rendered names", () => {
     const root = tempDirs.make("vitest-pair-report-digest-");
     const lane = {
       id: "report-digest",
@@ -300,14 +309,123 @@ describe("Vitest pair benchmark contract", () => {
     writeVitestReport(baselineFile, root, [
       {
         path: lane.files[0]!,
-        assertions: [{ fullName: "suite stable test", status: "passed" }],
+        assertions: [
+          {
+            fullName: "mime detection maps 'avif' image format",
+            status: "passed",
+            location: { line: 62, column: 5 },
+          },
+          {
+            fullName: "mime detection maps 'jpg' image format",
+            status: "passed",
+            location: { line: 62, column: 5 },
+          },
+          {
+            fullName: "mime detection 'detects docx from buffer'",
+            status: "passed",
+            location: { line: 79, column: 14 },
+          },
+        ],
+      },
+    ]);
+    const baseline = parseVitestExecutionReport(baselineFile, root, lane);
+    const candidateFile = path.join(root, "candidate.json");
+    writeVitestReport(candidateFile, root, [
+      {
+        path: lane.files[0]!,
+        assertions: [
+          {
+            fullName: "mime detection maps avif image format",
+            status: "passed",
+            location: { line: 62, column: 5 },
+          },
+          {
+            fullName: "mime detection maps jpg image format",
+            status: "passed",
+            location: { line: 62, column: 5 },
+          },
+          {
+            fullName: "mime detection detects docx from buffer",
+            status: "passed",
+            location: { line: 79, column: 14 },
+          },
+        ],
+      },
+    ]);
+    const candidate = parseVitestExecutionReport(candidateFile, root, lane);
+
+    expect(candidate.digest).toBe(baseline.digest);
+    expect(candidate.assertionCount).toBe(3);
+  });
+
+  it("fails closed when assertion locations are missing or malformed", () => {
+    const root = tempDirs.make("vitest-pair-report-location-");
+    const lane = {
+      id: "report-location",
+      critical: true,
+      files: ["src/example.test.ts"],
+    };
+    writeSelectedFiles(root, lane.files);
+
+    for (const [label, location] of [
+      ["missing", undefined],
+      ["zero", { line: 0, column: 5 }],
+      ["fractional", { line: 62, column: 5.5 }],
+      ["string", { line: 62, column: "5" }],
+    ] as const) {
+      const candidateFile = path.join(root, `candidate-${label}.json`);
+      writeVitestReport(candidateFile, root, [
+        {
+          path: lane.files[0]!,
+          assertions: [{ fullName: "suite stable test", status: "passed", location }],
+        },
+      ]);
+      expect(() => parseVitestExecutionReport(candidateFile, root, lane)).toThrow(
+        "location must contain positive integer line and column",
+      );
+    }
+  });
+
+  it("fails closed when assertion status or source location diverges", () => {
+    const root = tempDirs.make("vitest-pair-report-divergence-");
+    const lane = {
+      id: "report-divergence",
+      critical: true,
+      files: ["src/example.test.ts"],
+    };
+    writeSelectedFiles(root, lane.files);
+    const baselineFile = path.join(root, "baseline.json");
+    writeVitestReport(baselineFile, root, [
+      {
+        path: lane.files[0]!,
+        assertions: [
+          {
+            fullName: "suite stable test",
+            status: "passed",
+            location: { line: 62, column: 5 },
+          },
+        ],
       },
     ]);
     const baseline = parseVitestExecutionReport(baselineFile, root, lane);
 
     for (const [label, assertion] of [
-      ["identity", { fullName: "suite renamed test", status: "passed" as const }],
-      ["status", { fullName: "suite stable test", status: "skipped" as const }],
+      [
+        "status",
+        {
+          fullName: "suite stable test",
+          status: "skipped" as const,
+          location: { line: 62, column: 5 },
+        },
+      ],
+      [
+        "location",
+        {
+          fullName: "suite stable test",
+          status: "passed" as const,
+          location: { line: 63, column: 5 },
+        },
+      ],
     ] as const) {
       const candidateFile = path.join(root, `candidate-${label}.json`);
       writeVitestReport(candidateFile, root, [{ path: lane.files[0]!, assertions: [assertion] }]);

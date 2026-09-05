@@ -279,6 +279,7 @@ function runVitestArgs(lane: BenchmarkLane, reportFile: string): string[] {
       "--config",
       lane.config,
       "--reporter=json",
+      "--includeTaskLocation",
       "--outputFile",
       reportFile,
       ...lane.files,
@@ -289,6 +290,7 @@ function runVitestArgs(lane: BenchmarkLane, reportFile: string): string[] {
     ...lane.files,
     "--",
     "--reporter=json",
+    "--includeTaskLocation",
     "--outputFile",
     reportFile,
   ];
