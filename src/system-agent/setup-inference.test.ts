@@ -3212,6 +3212,9 @@ describe("activateSetupInference", () => {
       id: "local-test",
       label: "Local Test Provider",
       pluginId: "local-test",
+      normalizeModelId: () => {
+        throw new Error("Detected model is already canonical");
+      },
       auth: [
         {
           id: "local",
@@ -3328,6 +3331,9 @@ describe("activateSetupInference", () => {
         },
         order: { groq: ["groq:legacy"] },
       });
+      const selectedModel = "canonical-fixture-model";
+      const selectedModelRef = `groq/${selectedModel}`;
+      const selectedMetadata = { alias: "selected-fixture", params: { temperature: 0.2 } };
       const runAuth = vi.fn(async (ctx: { opts?: { token?: string } }) => ({
         profiles: [
           {
@@ -3338,13 +3344,20 @@ describe("activateSetupInference", () => {
                 : { type: "token" as const, provider: "groq", token: ctx.opts?.token ?? "" },
           },
         ],
-        defaultModel: "groq/llama-3.3-70b-versatile",
-        configPatch: { agents: { defaults: { models: { "groq/llama-3.3-70b-versatile": {} } } } },
+        defaultModel: "groq/starter-fixture-alias",
+        configPatch: {
+          agents: { defaults: { models: { "groq/starter-fixture-alias": selectedMetadata } } },
+        },
       }));
       const provider: ProviderPlugin = {
         id: "groq",
         label: "Groq",
         pluginId: "groq",
+        normalizeModelId({ modelId }) {
+          return modelId === "starter-fixture-alias" && this.id === "groq"
+            ? selectedModel
+            : modelId;
+        },
         auth: [
           {
             id: "api-key",
@@ -3365,7 +3378,7 @@ describe("activateSetupInference", () => {
       }));
       const runEmbeddedAgent = vi.fn(
         async (params: SuccessfulRunParams & { authProfileId?: string }) =>
-          successfulRun("groq", "llama-3.3-70b-versatile", params),
+          successfulRun("groq", selectedModel, params),
       );
       const configHarness = createConfigTransformHarness(initialConfig);
 
@@ -3382,7 +3395,7 @@ describe("activateSetupInference", () => {
           },
         });
 
-        expect(result).toMatchObject({ ok: true, modelRef: "groq/llama-3.3-70b-versatile" });
+        expect(result).toMatchObject({ ok: true, modelRef: selectedModelRef });
         expect(resolvePluginProviders).toHaveBeenCalledWith(
           expect.objectContaining({
             config: expect.objectContaining({
@@ -3408,7 +3421,7 @@ describe("activateSetupInference", () => {
           expect.objectContaining({
             agentId: "main",
             provider: "groq",
-            model: "llama-3.3-70b-versatile",
+            model: selectedModel,
             authProfileId: activatedProfileId,
             agentDir: expect.stringContaining("setup-inference-test-"),
             authProfileStateMode: "read-only",
@@ -3419,7 +3432,7 @@ describe("activateSetupInference", () => {
           plugins: { entries: { groq: { enabled: true } } },
           agents: {
             defaults: {
-              model: `groq/llama-3.3-70b-versatile@${activatedProfileId}`,
+              model: `${selectedModelRef}@${activatedProfileId}`,
             },
           },
           auth: {
@@ -3428,6 +3441,14 @@ describe("activateSetupInference", () => {
             },
           },
         });
+        for (const config of [
+          runEmbeddedAgent.mock.calls[0]?.[0].config,
+          configHarness.current(),
+        ]) {
+          expect(config?.agents?.defaults?.models).toEqual({
+            [selectedModelRef]: selectedMetadata,
+          });
+        }
         expect(readInMemoryAuthProfileStore(agentDir).profiles[activatedProfileId]).toMatchObject(
           credentialType === "api_key"
             ? { type: "api_key", provider: "groq", key: "test-groq-key" }

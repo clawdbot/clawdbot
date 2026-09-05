@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { expectDefined } from "@openclaw/normalization-core";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { AgentRunResultView } from "../agents/agent-run-result.js";
 import { listAgentEntries, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
@@ -289,6 +288,7 @@ export function prepareManualAuthForActivation(params: {
   profiles: ProviderAuthResult["profiles"];
   selectedProfileId: string;
   modelRef: string;
+  targetModelRef: string;
   providerId: string;
   pluginId?: string;
   agentId?: string;
@@ -322,49 +322,27 @@ function copySelectedModelMetadata(params: {
   target: OpenClawConfig;
   prepared: OpenClawConfig;
   modelRef: string;
+  targetModelRef: string;
   agentId?: string;
 }): void {
-  const preparedDefaultModels = params.prepared.agents?.defaults?.models;
-  if (preparedDefaultModels && Object.hasOwn(preparedDefaultModels, params.modelRef)) {
-    params.target.agents = {
-      ...params.target.agents,
-      defaults: {
-        ...params.target.agents?.defaults,
-        models: {
-          ...params.target.agents?.defaults?.models,
-          [params.modelRef]: structuredClone(
-            expectDefined(
-              preparedDefaultModels[params.modelRef],
-              "prepared default models entry at params.model ref",
-            ),
-          ),
-        },
-      },
-    };
+  const key = params.targetModelRef;
+  const defaultEntry = params.prepared.agents?.defaults?.models?.[params.modelRef];
+  // The projection owns a deep clone; only selected metadata crosses from the auth result.
+  if (defaultEntry !== undefined) {
+    const defaults = ((params.target.agents ??= {}).defaults ??= {});
+    (defaults.models ??= {})[key] = structuredClone(defaultEntry);
   }
-
   const defaultAgentId = resolveAmbientOwnerAgentId(params.target, params.agentId);
   const preparedAgent = listAgentEntries(params.prepared).find(
     (agent) => normalizeAgentId(agent.id) === defaultAgentId,
   );
-  if (!preparedAgent?.models || !Object.hasOwn(preparedAgent.models, params.modelRef)) {
-    return;
+  const selectedEntry = preparedAgent?.models?.[params.modelRef];
+  const targetAgent = Object.entries(params.target.agents?.entries ?? {}).find(
+    ([agentId]) => normalizeAgentId(agentId) === defaultAgentId,
+  )?.[1];
+  if (selectedEntry !== undefined && targetAgent) {
+    (targetAgent.models ??= {})[key] = structuredClone(selectedEntry);
   }
-  const targetEntryKey = Object.keys(params.target.agents?.entries ?? {}).find(
-    (agentId) => normalizeAgentId(agentId) === defaultAgentId,
-  );
-  if (!targetEntryKey || !params.target.agents?.entries?.[targetEntryKey]) {
-    return;
-  }
-  const nextEntries = structuredClone(params.target.agents.entries);
-  const targetAgent = expectDefined(nextEntries[targetEntryKey], "target agent entry");
-  targetAgent.models = {
-    ...targetAgent.models,
-    [params.modelRef]: structuredClone(
-      expectDefined(preparedAgent.models[params.modelRef], "models entry at params.model ref"),
-    ),
-  };
-  params.target.agents = { ...params.target.agents, entries: nextEntries };
 }
 
 function findSelectedProviderConfigKey(
@@ -395,6 +373,7 @@ export function projectManualInferenceConfig(params: {
   selectedProfile?: ProviderAuthResult["profiles"][number];
   selectedProfileId?: string;
   modelRef: string;
+  targetModelRef: string;
   providerId: string;
   pluginId?: string;
   agentId?: string;
@@ -445,6 +424,7 @@ export function projectManualInferenceConfig(params: {
     target: config,
     prepared: params.preparedConfig,
     modelRef: params.modelRef,
+    targetModelRef: params.targetModelRef,
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   return config;
