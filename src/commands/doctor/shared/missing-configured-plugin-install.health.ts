@@ -131,7 +131,11 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     })) {
       deferredPluginIds.add(pluginId);
       const record = records[pluginId];
-      if (!record || !isPayloadMissing(env, record.installPath)) {
+      if (
+        !record ||
+        (!isPayloadMissing(env, record.installPath) &&
+          !installedPluginMissingRequiredDependencies.has(pluginId))
+      ) {
         continue;
       }
       issues.push({
