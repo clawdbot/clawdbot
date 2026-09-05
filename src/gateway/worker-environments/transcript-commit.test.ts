@@ -398,6 +398,54 @@ describe("worker transcript commit application", () => {
     expect(reopened.getLeafId()).toBe(outcome.result.newLeafId);
   });
 
+  it("commits a non-default agent's global session", async () => {
+    const workStorePath = path.join(root, "agents", "work", "sessions", "sessions.json");
+    cfg = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+      session: {
+        scope: "global",
+        store: path.join(root, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+    };
+    await upsertSessionEntryCore(
+      { agentId: "work", sessionKey: "global", storePath: workStorePath },
+      { sessionId: SESSION_ID, updatedAt: 20 },
+    );
+    sessionTarget = await resolveSessionTranscriptRuntimeTarget({
+      agentId: "work",
+      sessionId: SESSION_ID,
+      sessionKey: "global",
+      storePath: workStorePath,
+    });
+    committer = createWorkerTranscriptCommitter({ getConfig: () => cfg, store: ledgerStore });
+
+    const outcome = await committer.commit({
+      ...ADMITTED_OWNER,
+      request: createRequest({
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Persist in the owning agent" }],
+            timestamp: 100,
+          },
+        ],
+      }),
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      throw new Error(`expected global transcript commit, received ${outcome.reason}`);
+    }
+    expect(SessionManager.open(sessionTarget).getEntries()).toEqual([
+      expect.objectContaining({
+        id: outcome.result.newLeafId,
+        message: expect.objectContaining({ role: "user" }),
+      }),
+    ]);
+  });
+
   it("rejects a stale base leaf without appending", async () => {
     const first = await committer.commit({ ...ADMITTED_OWNER, request: createRequest() });
     if (!first.ok) {
