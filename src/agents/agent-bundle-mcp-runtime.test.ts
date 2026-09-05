@@ -2193,6 +2193,7 @@ process.on("SIGINT", shutdown);`,
 
     const runtime = await makeStdioRuntime("session-tools-unknown-method", "notes", serverPath, {
       server: { toolFilter: { exclude: ["unused_*"] } },
+      toolOverrides: { mcpToolsDeny: { notes: ["denied_tool"] } },
     });
 
     try {
@@ -2200,12 +2201,13 @@ process.on("SIGINT", shutdown);`,
 
       expect(catalog.servers).toEqual({});
       expect(catalog.tools).toEqual([]);
-      // The failure diagnostic carries the server's own tool filter so outage
-      // admission can judge it together with the tool policy.
+      // The failure diagnostic carries the server's own tool filter and the
+      // session's denials so outage admission can judge them with the policy.
       expect(catalog.diagnostics?.[0]).toMatchObject({
         serverName: "notes",
         message: expect.stringContaining("Unknown method"),
         toolFilter: { exclude: ["unused_*"] },
+        deniedToolNames: ["denied_tool"],
       });
       await waitForFileText(logPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
     } finally {

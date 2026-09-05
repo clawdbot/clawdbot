@@ -315,6 +315,8 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         safeServerName: "memos",
         launchSummary: "memos",
         message: "connect ECONNREFUSED",
+        toolFilter: { include: ["read_*"] },
+        deniedToolNames: ["read_note"],
       },
     ];
     mocks.acquireSessionMcpRuntime.mockResolvedValue({ runtime: {}, releaseLease: () => {} });
@@ -326,7 +328,7 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     // judge the failed server against its own cap and these together.
     expect(result.mcpDiagnostics).toEqual({ diagnostics, policyLayers: runPolicyLayers });
     // Server-level visibility is decided from the recorded failure itself (its
-    // safe server name and tool filter), not by a fabricated stand-in tool.
+    // safe server name, tool filter and session denials), not by a stand-in tool.
     expect(mocks.admitsMcpServer).toHaveBeenCalledWith(diagnostics[0]);
   });
 

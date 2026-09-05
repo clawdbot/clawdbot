@@ -39,11 +39,14 @@ function makeConfiguredRuntime(
     toolNames?: string[];
     /** The server's own `toolFilter`, applied to raw names as the real catalog load does. */
     toolFilter?: McpServerToolFilterConfig;
+    /** Session `mcpToolsDeny` raw names, dropped after the filter as the real load does. */
+    deniedToolNames?: string[];
   } = {},
 ): SessionMcpRuntime {
   const serverName = params.serverName ?? "userMcp";
-  const toolNames = (params.toolNames ?? ["list_inbox", "send_reply"]).filter((toolName) =>
-    isMcpToolAllowed(params.toolFilter, toolName),
+  const toolNames = (params.toolNames ?? ["list_inbox", "send_reply"]).filter(
+    (toolName) =>
+      isMcpToolAllowed(params.toolFilter, toolName) && !params.deniedToolNames?.includes(toolName),
   );
   const tools: McpCatalogTool[] = toolNames.map((toolName) => ({
     serverName,
@@ -88,6 +91,7 @@ async function buildConfiguredMcpToolNamesAtRequestBoundary(params: {
   serverName?: string;
   toolNames?: string[];
   toolFilter?: McpServerToolFilterConfig;
+  deniedToolNames?: string[];
   toolsAllow?: string[];
   reservedToolNames?: string[];
 }): Promise<string[]> {
@@ -378,6 +382,8 @@ describe("failed MCP server outages follow the same policy as that server's tool
     toolNames?: string[];
     /** Names other tools already hold, so a colliding memos tool materializes renamed. */
     reservedToolNames?: string[];
+    /** Session `toolOverrides.mcpToolsDeny` raw names for memos. */
+    deniedToolNames?: string[];
     visible: boolean;
   }> = [
     { label: "the coding profile", tools: { profile: "coding" }, visible: true },
@@ -734,6 +740,41 @@ describe("failed MCP server outages follow the same policy as that server's tool
       reservedToolNames: ["memos__read_note"],
       visible: true,
     },
+    {
+      label: "a session denial covering the only tool the server filter admits",
+      tools: { profile: "coding" },
+      toolFilter: { include: ["read_note"] },
+      deniedToolNames: ["read_note"],
+      visible: false,
+    },
+    {
+      label: "a session denial of one memos tool",
+      tools: { profile: "coding" },
+      deniedToolNames: ["read_note"],
+      visible: true,
+    },
+    {
+      label: "a session denial of the one memos tool an allowlist names",
+      tools: { allow: ["memos__read_note", "notes__list"] },
+      deniedToolNames: ["read_note"],
+      visible: false,
+    },
+    {
+      label: "every discovery gate at once, the policy naming only the denied tool",
+      tools: { allow: ["memos__read_note"] },
+      toolFilter: { include: ["read_*", "write_*"] },
+      deniedToolNames: ["read_note"],
+      reservedToolNames: ["memos__write_note"],
+      visible: false,
+    },
+    {
+      label: "every discovery gate at once, the policy reaching the tool that survives them",
+      tools: { allow: ["memos__write*"] },
+      toolFilter: { include: ["read_*", "write_*"] },
+      deniedToolNames: ["read_note"],
+      reservedToolNames: ["memos__write_note"],
+      visible: true,
+    },
   ];
 
   it.each(outageCases)("names the memos outage under $label: $visible", async (testCase) => {
@@ -761,13 +802,18 @@ describe("failed MCP server outages follow the same policy as that server's tool
       serverName: "memos",
       toolNames: testCase.toolNames ?? ["read_note", "write_note"],
       toolFilter: testCase.toolFilter,
+      deniedToolNames: testCase.deniedToolNames,
       toolsAllow: testCase.toolsAllow,
       reservedToolNames: testCase.reservedToolNames,
     });
 
-    // The failed server's diagnostic carries the same filter its healthy catalog
-    // load applied, so both sides of the parity are judged from one config.
-    const diagnostic = { safeServerName: "memos", toolFilter: testCase.toolFilter };
+    // The failed server's diagnostic carries the same filter and session denials
+    // its healthy catalog load applied, so both sides are judged from one config.
+    const diagnostic = {
+      safeServerName: "memos",
+      toolFilter: testCase.toolFilter,
+      deniedToolNames: testCase.deniedToolNames,
+    };
     expect(admitsMcpServer(diagnostic)).toBe(testCase.visible);
     expect(namesWhenHealthy.length > 0).toBe(testCase.visible);
   });

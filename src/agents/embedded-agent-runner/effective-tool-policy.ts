@@ -128,28 +128,40 @@ export function buildBundleMcpPolicyLayers(params: {
 }
 
 /**
- * Whether the effective policy and a failed bundle MCP server's own tool filter
- * could still admit some tool of that server. A failed catalog load leaves its
- * tool names unknown, so its outage diagnostic is judged from the same allow/deny
- * layers as its tools, with the server namespace standing in for them.
+ * Whether some tool of a failed bundle MCP server could still reach the model. A
+ * failed catalog load leaves its tool names unknown, so every gate healthy
+ * discovery applies is judged together over the server namespace: the effective
+ * policy layers (`layers`, including names other tools already hold, around which
+ * a colliding MCP tool is renamed), the server's own `toolFilter`, and the
+ * session's exact-name denials. Session `mcpServers` overrides need no gate here:
+ * `loadSessionMcpConfig` drops unselected servers before a runtime, and so a
+ * diagnostic, can exist for them.
  */
 export function createBundleMcpServerPolicyMatcher(
   layers: readonly ToolPolicyLike[],
-): (diagnostic: Pick<McpToolCatalogDiagnostic, "safeServerName" | "toolFilter">) => boolean {
-  return ({ safeServerName, toolFilter }) => {
+): (
+  diagnostic: Pick<McpToolCatalogDiagnostic, "safeServerName" | "toolFilter" | "deniedToolNames">,
+) => boolean {
+  return ({ safeServerName, toolFilter, deniedToolNames }) => {
     // The failed server materialized no tools, so its namespace stands in for
     // the `bundle-mcp` plugin id every MCP tool carries: `bundle-mcp` and
     // `group:plugins` entries then expand as they do for a healthy server.
     const prefix = `${safeServerName}${TOOL_NAME_SEPARATOR}`;
     const namespaceTools = [`${prefix}*`];
     const groups = { all: namespaceTools, byPlugin: new Map([["bundle-mcp", namespaceTools]]) };
-    // Healthy discovery applies the server's tool filter to raw names first; here
-    // it is one more layer over the safe names those raw names become, judged with
-    // the rest so no layer admits a tool alone. An empty `include` restricts nothing.
+    // Healthy discovery applies the server's tool filter, then the session's
+    // exact-name denials, to raw names first; here they are one more layer over
+    // the safe names those raw names become, judged with the rest so no layer
+    // admits a tool alone. An empty `include` restricts nothing.
     const toGlob = (pattern: string) => safeToolNameGlob(safeServerName, pattern);
+    // Denials are exact raw names, so a `*` in one is a name character, not a glob.
+    const toExact = (name: string) => toGlob(name.replaceAll("*", "-"));
     return policiesAdmitToolNamespace(prefix, [
       ...layers.map((policy) => expandPolicyWithPluginGroups(policy, groups)),
-      { allow: toolFilter?.include?.map(toGlob), deny: toolFilter?.exclude?.map(toGlob) },
+      {
+        allow: toolFilter?.include?.map(toGlob),
+        deny: [...(toolFilter?.exclude ?? []).map(toGlob), ...(deniedToolNames ?? []).map(toExact)],
+      },
     ]);
   };
 }

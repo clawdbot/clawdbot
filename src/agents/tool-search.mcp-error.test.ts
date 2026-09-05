@@ -172,7 +172,10 @@ function makeRequesterConnect(serverName: string): RequesterMcpConnect {
 }
 
 /** One healthy server ("notes") plus one whose catalog load failed ("memos"). */
-function makeOutageCatalog(memosToolFilter?: McpServerToolFilterConfig): McpToolCatalog {
+function makeOutageCatalog(
+  memosToolFilter?: McpServerToolFilterConfig,
+  memosDeniedToolNames?: string[],
+): McpToolCatalog {
   return {
     version: 1,
     generatedAt: 0,
@@ -201,6 +204,7 @@ function makeOutageCatalog(memosToolFilter?: McpServerToolFilterConfig): McpTool
         launchSummary: LAUNCH_SUMMARY,
         message: RAW_FAILURE_MESSAGE,
         ...(memosToolFilter ? { toolFilter: memosToolFilter } : {}),
+        ...(memosDeniedToolNames ? { deniedToolNames: memosDeniedToolNames } : {}),
       },
     ],
   };
@@ -731,6 +735,39 @@ describe("Tool Search with an unavailable MCP server", () => {
     expect(miss.details).toMatchObject({
       unavailableMcpServers: [{ server: "memos", error: FAILURE_MESSAGE }],
     });
+  });
+
+  it("hides an outage whose session denial covers the only tool the server filter admits, in search and Code Mode", async () => {
+    // Healthy discovery keeps `read_note` through the filter and then drops it as
+    // session-denied, so no memos tool reaches the model. The notes sibling keeps
+    // search callable, and neither surface may name memos.
+    const catalog = () => makeOutageCatalog({ include: ["read_note"] }, ["read_note"]);
+    const search = await createControls(catalog());
+    createAgentHarnessPromptToolPolicy({
+      tools: search.tools,
+      catalogRef: search.catalogRef,
+      codeModeControlsEnabled: false,
+    }).apply();
+    expect(search.catalogRef.current?.mcpDiagnostics).toBeUndefined();
+    const hit = await search
+      .control(TOOL_SEARCH_RAW_TOOL_NAME)
+      .execute("search-denied", { query: "list saved notes" });
+    expect(hit.details).toEqual([expect.objectContaining({ id: "mcp:notes:notes__list" })]);
+    expect(JSON.stringify(hit)).not.toContain("memos");
+
+    const code = await createControls(catalog(), "code");
+    createAgentHarnessPromptToolPolicy({
+      tools: code.tools,
+      catalogRef: code.catalogRef,
+      codeModeControlsEnabled: true,
+    }).apply();
+    expect(code.catalogRef.current?.mcpDiagnostics).toBeUndefined();
+    const result = await code.control(TOOL_SEARCH_CODE_MODE_TOOL_NAME).execute("code-denied", {
+      code: `return await openclaw.tools.search("list saved notes");`,
+    });
+    expect(result.details).toMatchObject({ ok: true });
+    expect(result.details).not.toHaveProperty("unavailableMcpServers");
+    expect(JSON.stringify(result)).not.toContain("memos");
   });
 
   it("keeps the outage payload inside the batch response cap at every limit", async () => {
