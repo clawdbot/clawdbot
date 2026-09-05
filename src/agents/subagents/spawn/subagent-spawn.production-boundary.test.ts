@@ -16,8 +16,6 @@ import {
   type AgentRuntimeIdentity,
 } from "../../../gateway/agent-runtime-identity-token.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
-import { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
-import { createRequestGatewayMethodRegistry } from "../../../gateway/server-methods.js";
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import {
@@ -224,6 +222,11 @@ describe("recursive spawn production boundary", () => {
   it("authorizes and admits an upgraded descendant before model execution", async () => {
     process.stderr.write("spawn-boundary:test:start\n");
     const bound = await createBoundParent();
+    const [{ createGatewayInstanceRuntime }, { createRequestGatewayMethodRegistry }] =
+      await Promise.all([
+        import("../../../gateway/server-instance-runtime.js"),
+        import("../../../gateway/server-methods.js"),
+      ]);
     process.stderr.write("spawn-boundary:refresh:start\n");
     await waitForStage(
       "prepared model runtime publication",
