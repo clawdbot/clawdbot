@@ -142,7 +142,7 @@ describe("assistant failure recovery", () => {
 
   it("rotates after transient recovery is exhausted", async () => {
     const input = makeInput("429 rate_limit_exceeded: too many requests per minute");
-    input.failover.transientRetryCount = 8;
+    input.failover = { ...input.failover, transientRetryCount: 8 };
     input.failover.advanceRateLimitAuthProfile = vi.fn(async () => true);
     const outcome = await handleEmbeddedAssistantFailure(input);
     expect(outcome.action).toBe("retry");
