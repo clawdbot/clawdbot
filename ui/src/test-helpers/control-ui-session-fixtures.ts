@@ -1,4 +1,7 @@
-import type { SessionsResolveResult } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionsResolveCandidate,
+  SessionsResolveResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 
 export type ControlUiSessionFixture = {
   key: string;
@@ -197,7 +200,7 @@ export function createControlUiSessionFixtures(input: {
     shortId?: string;
     agentId?: string;
   }): SessionsResolveResult => {
-    const present = (row: ControlUiSessionFixture) => ({
+    const present = (row: ControlUiSessionFixture): SessionsResolveCandidate => ({
       key: row.key,
       agentId:
         typeof row.agentId === "string"
