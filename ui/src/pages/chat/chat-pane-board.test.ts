@@ -94,11 +94,6 @@ type TestChatPane = HTMLElement & {
   requestUpdate: () => void;
 };
 
-function nullBoardProvider(sessionKey: string): BoardProvider {
-  window.history.replaceState({}, "", "/");
-  return boardProviderForSession({ sessionKey });
-}
-
 let theme: ReturnType<typeof createApplicationTheme>;
 
 function createTestPane(sessions: SessionCapability = {} as SessionCapability) {
@@ -151,7 +146,6 @@ function createGatewayBoardPane(params: {
   capabilities?: readonly string[];
   lifecycleConnected?: boolean;
 }) {
-  window.history.replaceState({}, "", "/");
   const pane = createTestPane();
   const snapshot = { sessionKey: params.sessionKey, revision: 1, tabs: [], widgets: [] };
   const removeListener = vi.fn();
@@ -649,7 +643,7 @@ describe("chat pane board shell", () => {
 
   it("keeps chat-only reset confirmation disabled", async () => {
     const pane = createTestPane();
-    pane.boardProvider = nullBoardProvider("agent:main:current");
+    pane.boardProvider = boardProviderForSession({ sessionKey: "agent:main:current" });
 
     await expect(pane.confirmConversationReset()).resolves.toBe(true);
     expect(pane.resetConfirmationOpen).toBe(false);
