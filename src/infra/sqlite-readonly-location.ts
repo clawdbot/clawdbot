@@ -1,5 +1,4 @@
 // Prepares consistent private SQLite read-only snapshots.
-import { execFile, spawnSync } from "node:child_process";
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
@@ -8,13 +7,12 @@ import {
   requireNodeSqlite,
   resolveSqliteFilesystemPath,
 } from "./node-sqlite.js";
-import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   createPrivateSqliteTempDirectory,
   createPrivateSqliteTempDirectorySync,
   resolvePrivateSqliteSnapshotStagingRoot,
 } from "./sqlite-private-directory.js";
+import { runSqliteReadOnlyWorker, runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
 
 const MAX_SNAPSHOT_ATTEMPTS = 10;
 const COPY_BUFFER_BYTES = 1024 * 1024;
@@ -23,8 +21,6 @@ const SQLITE_READONLY_RESULT_CODE = 8;
 const SQLITE_RESULT_CODE_MASK = 0xff;
 const SQLITE_JOURNAL_MAGIC = Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]);
 const SQLITE_SNAPSHOT_STAGING_PREFIX = `openclaw-sqlite-readonly-${process.pid}-`;
-export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
-const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
 const pendingTempDirectoryCleanup = new Set<string>();
 let cleanupExitHandlerInstalled = false;
 
@@ -46,8 +42,6 @@ type PreparedSqliteReadOnlyLocation = {
   cleanup: () => boolean;
   location: string;
 };
-
-type SqliteReadOnlyWorkerResult = { ok: true; location: string } | { ok: false; message: string };
 
 class SqliteSourceChangedError extends Error {}
 
@@ -608,74 +602,10 @@ export function prepareSqliteReadOnlyLocationSyncInProcess(
   });
 }
 
-function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteReadOnlyWorkerResult {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  if (Object.keys(value).length !== 2 || !("ok" in value)) {
-    return false;
-  }
-  return (
-    (value.ok === true && "location" in value && typeof value.location === "string") ||
-    (value.ok === false && "message" in value && typeof value.message === "string")
-  );
-}
-
-function createSqliteReadOnlyWorkerError(message: string, stderr: string): Error {
-  const stderrTail = stderr.trim().slice(-SQLITE_READONLY_STDERR_TAIL_CHARS);
-  return new Error(
-    `SQLite read-only worker ${message}${stderrTail ? `\nstderr (tail): ${stderrTail}` : ""}`,
-  );
-}
-
-function parseSqliteReadOnlyWorkerResult(
-  stdout: string,
-  stderr: string,
-): SqliteReadOnlyWorkerResult {
-  if (!stdout.trim()) {
-    throw createSqliteReadOnlyWorkerError("returned no JSON result", stderr);
-  }
-  let message: unknown;
-  try {
-    message = JSON.parse(stdout);
-  } catch {
-    throw createSqliteReadOnlyWorkerError("returned invalid JSON", stderr);
-  }
-  if (!isSqliteReadOnlyWorkerResult(message)) {
-    throw createSqliteReadOnlyWorkerError("returned an invalid result", stderr);
-  }
-  return message;
-}
-
-function adoptSqliteReadOnlyWorkerResult(params: {
-  failure?: string;
-  stderr: string;
-  stdout: string;
-  stagingRoot?: string;
-}): PreparedSqliteReadOnlyLocation {
-  let result: SqliteReadOnlyWorkerResult;
-  try {
-    result = parseSqliteReadOnlyWorkerResult(params.stdout, params.stderr);
-  } catch (error) {
-    if (params.failure) {
-      throw createSqliteReadOnlyWorkerError(params.failure, params.stderr);
-    }
-    throw error;
-  }
-  if (params.failure || !result.ok) {
-    throw createSqliteReadOnlyWorkerError(
-      !result.ok ? result.message : (params.failure ?? "failed"),
-      params.stderr,
-    );
-  }
-  return adoptPreparedLocation(result.location, params.stagingRoot);
-}
-
 export async function prepareSqliteReadOnlyLocation(
   pathname: string,
   options: { preserveSourceArtifacts?: boolean; signal?: AbortSignal } = {},
 ): Promise<PreparedSqliteReadOnlyLocation> {
-  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
   let stagingRoot: string | undefined;
   try {
     options.signal?.throwIfAborted();
@@ -685,44 +615,13 @@ export async function prepareSqliteReadOnlyLocation(
       stagingRoot = await createSqliteSnapshotStagingDirectory();
     }
     options.signal?.throwIfAborted();
-    const prepared = await new Promise<PreparedSqliteReadOnlyLocation>((resolve, reject) => {
-      let output: Parameters<typeof adoptSqliteReadOnlyWorkerResult>[0] = {
-        stderr: "",
-        stdout: "",
-        stagingRoot,
-      };
-      const child = execFile(
-        process.execPath,
-        [
-          ...resolveRuntimeWorkerArgv(workerUrl),
-          SQLITE_READONLY_CHILD_ARG,
-          options.preserveSourceArtifacts ? "sync" : "async",
-          path.resolve(pathname),
-          ...(stagingRoot ? [stagingRoot] : []),
-        ],
-        { encoding: "utf8", signal: options.signal },
-        (error, stdout, stderr) => {
-          output = {
-            failure: error ? `exited unsuccessfully: ${error.message}` : undefined,
-            stderr,
-            stdout,
-            stagingRoot,
-          };
-        },
-      );
-      // execFile can report an abort/error before close. Ownership ends only
-      // after the process and its pipes have closed, including failed launches.
-      child.once("close", () => {
-        try {
-          options.signal?.throwIfAborted();
-          resolve(adoptSqliteReadOnlyWorkerResult(output));
-        } catch (workerError) {
-          reject(workerError instanceof Error ? workerError : new Error(String(workerError)));
-        }
-      });
+    const location = await runSqliteReadOnlyWorker(pathname, {
+      mode: options.preserveSourceArtifacts ? "sync" : "async",
+      signal: options.signal,
+      stagingRoot,
     });
     options.signal?.throwIfAborted();
-    return prepared;
+    return adoptPreparedLocation(location, stagingRoot);
   } catch (error) {
     if (stagingRoot && !removeTempDirectory(stagingRoot)) {
       throw new Error(`SQLite read-only worker snapshot cleanup failed: ${stagingRoot}`, {
@@ -737,23 +636,7 @@ export async function prepareSqliteReadOnlyLocation(
 export function prepareSqliteReadOnlyLocationSync(
   pathname: string,
 ): PreparedSqliteReadOnlyLocation {
-  const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
-  const result = spawnSync(
-    process.execPath,
-    [
-      ...resolveRuntimeWorkerArgv(workerUrl),
-      SQLITE_READONLY_CHILD_ARG,
-      "sync",
-      path.resolve(pathname),
-    ],
-    { encoding: "utf8" },
-  );
-  const failure = result.error
-    ? `failed to start: ${result.error.message}`
-    : result.status === 0
-      ? undefined
-      : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`;
-  return adoptSqliteReadOnlyWorkerResult({ failure, stderr: result.stderr, stdout: result.stdout });
+  return adoptPreparedLocation(runSqliteReadOnlyWorkerSync(pathname));
 }
 
 async function prepareSqliteSnapshotSource(

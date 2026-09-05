@@ -2145,8 +2145,8 @@ describe("runGatewayLoop", () => {
       vi.clearAllMocks();
       await withIsolatedSignals(async ({ captureSignal }) => {
         const entered = createDeferredCore<AbortSignal>();
-        const cleanup = createDeferredCore<void>();
-        const activeDrain = createDeferredCore<void>();
+        const cleanup = createDeferredCore();
+        const activeDrain = createDeferredCore();
         waitForGatewayActiveWork.mockImplementationOnce(async () => {
           await activeDrain.promise;
           return { drained: true, snapshot: idleActiveWorkSnapshot };
@@ -2159,9 +2159,9 @@ describe("runGatewayLoop", () => {
         const start: Parameters<typeof runGatewayLoop>[0]["start"] = async (options) => {
           await options!.startupOperation!(async (signal) => {
             entered.resolve(signal);
-            await new Promise<void>((resolve) =>
-              signal.addEventListener("abort", () => resolve(), { once: true }),
-            );
+            await new Promise<void>((resolve) => {
+              signal.addEventListener("abort", () => resolve(), { once: true });
+            });
             await cleanup.promise;
             throw scenario === "cleanup-failure" ? cleanupFailure : signal.reason;
           });
@@ -2187,11 +2187,15 @@ describe("runGatewayLoop", () => {
           expect(signal.aborted).toBe(true);
           // A duplicate signal cannot bypass the already admitted cleanup join.
           captureSignal("SIGINT")();
-          await new Promise<void>((resolve) => setImmediate(resolve));
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
           expect(runtime.exit).not.toHaveBeenCalled();
           expect(completeBoot).not.toHaveBeenCalled();
           cleanup.resolve();
-          await new Promise<void>((resolve) => setImmediate(resolve));
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
           expect(loopFinished).toBe(false);
           expect(runtime.exit).not.toHaveBeenCalled();
           expect(completeBoot).not.toHaveBeenCalled();
@@ -2228,7 +2232,7 @@ describe("runGatewayLoop", () => {
     async (phase) => {
       await withIsolatedSignals(async ({ captureSignal }) => {
         const entered = createDeferredCore<GatewayStartupOperation>();
-        const resumeStartup = createDeferredCore<void>();
+        const resumeStartup = createDeferredCore();
         const close = createCloseMock();
         const acquireResource = vi.fn(async () => {});
         const { runtime, exited } = createRuntimeWithExitSignal();
@@ -2249,7 +2253,9 @@ describe("runGatewayLoop", () => {
             captureSignal("SIGINT")();
             await exited;
           } else {
-            await new Promise<void>((resolve) => setImmediate(resolve));
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
           }
           await expect(startupOperation(acquireResource)).rejects.toMatchObject({
             name: "AbortError",

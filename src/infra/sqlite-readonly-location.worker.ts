@@ -1,10 +1,10 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { formatSqliteErrorCodeSuffix } from "./sqlite-error-diagnostics.js";
 import {
-  SQLITE_READONLY_CHILD_ARG,
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
+import { SQLITE_READONLY_CHILD_ARG } from "./sqlite-readonly-worker.js";
 
 // The sync strategy raw-copies without attaching SQLite to the source, so sync
 // callers stay byte-neutral on the live family; the async strategy holds a read

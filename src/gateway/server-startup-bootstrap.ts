@@ -89,13 +89,17 @@ export async function prepareGatewayServerBootstrap(input: {
   if (startupElapsedMs > 0) {
     startupTrace.mark("process.bootstrap");
   }
-  await startupTrace.measure("state.ownership", async () => {
+  const inspectStateOwnership = async (signal?: AbortSignal) => {
     normalizeStateDirEnv(process.env);
     await assertOpenClawStateWriteAllowedAtPath({
       databasePath: resolveOpenClawStateSqlitePath(process.env),
       env: process.env,
+      signal,
     });
-  });
+  };
+  await startupTrace.measure("state.ownership", () =>
+    opts.startupOperation ? opts.startupOperation(inspectStateOwnership) : inspectStateOwnership(),
+  );
   const [
     {
       OPENCLAW_DATABASE_SCHEMA_DOCS_URL,

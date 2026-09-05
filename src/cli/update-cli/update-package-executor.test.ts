@@ -244,7 +244,7 @@ describe("mutable update execution", () => {
         },
       };
     });
-    const schemaGate = createDeferred<void>();
+    const schemaGate = createDeferred();
     mocks.checkTargetSchemas.mockImplementation(async () => {
       events.push("schema");
       await schemaGate.promise;

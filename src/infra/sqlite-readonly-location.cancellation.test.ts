@@ -5,10 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import * as workerUrls from "./runtime-worker-url.js";
-import {
-  prepareSqliteReadOnlyLocation,
-  SQLITE_READONLY_CHILD_ARG,
-} from "./sqlite-readonly-location.js";
+import { prepareSqliteReadOnlyLocation } from "./sqlite-readonly-location.js";
+import { SQLITE_READONLY_CHILD_ARG } from "./sqlite-readonly-worker.js";
 
 const processMocks = vi.hoisted(() => ({
   execFile: vi.fn<typeof import("node:child_process").execFile>(),
@@ -105,9 +103,13 @@ describe("SQLite read-only worker cancellation", () => {
         const callIndex = workerIndex();
         const child = processMocks.execFile.mock.results[callIndex]?.value;
         expect(child).toBeDefined();
-        childClosed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+        childClosed = new Promise<void>((resolve) => {
+          child.once("close", () => resolve());
+        });
         const argv = processMocks.execFile.mock.calls[callIndex]?.[1];
-        if (!Array.isArray(argv)) throw new Error("worker arguments missing");
+        if (!Array.isArray(argv)) {
+          throw new Error("worker arguments missing");
+        }
         const stagingRoot = argv.at(-1)!;
         await vi.waitFor(() =>
           expect(fs.existsSync(path.join(stagingRoot, "partial.sqlite"))).toBe(true),

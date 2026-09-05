@@ -7277,8 +7277,8 @@ describe("update-cli", () => {
       const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const processOnSpy = vi.spyOn(process, "on");
       const processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-      const gate = createDeferred<void>();
-      const entered = createDeferred<void>();
+      const gate = createDeferred();
+      const entered = createDeferred();
       const waitForSignal = async () => {
         entered.resolve();
         await gate.promise;
