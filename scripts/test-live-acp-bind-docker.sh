@@ -123,21 +123,12 @@ case "$agent" in
       unset ANTHROPIC_AUTH_TOKEN
       unset ANTHROPIC_OAUTH_TOKEN
     fi
-    claude_code_version="$(
-      node -e 'const path = require("node:path"); const packagePath = path.join(path.dirname(require.resolve("@anthropic-ai/claude-agent-sdk")), "package.json"); process.stdout.write(require(packagePath).claudeCodeVersion);'
-    )"
-    claude_package_json="$NPM_CONFIG_PREFIX/lib/node_modules/@anthropic-ai/claude-code/package.json"
     real_claude="$NPM_CONFIG_PREFIX/bin/claude-real"
-    installed_claude_code_version=""
-    if [ -f "$claude_package_json" ]; then
-      installed_claude_code_version="$(
-        node -e 'process.stdout.write(require(process.argv[1]).version);' \
-          "$claude_package_json" 2>/dev/null || true
-      )"
-    fi
-    if [ "$installed_claude_code_version" != "$claude_code_version" ]; then
-      rm -f "$NPM_CONFIG_PREFIX/bin/claude" "$real_claude"
-      run_setup_command npm install -g "@anthropic-ai/claude-code@$claude_code_version"
+    if [ ! -x "$real_claude" ]; then
+      # Claude owns its executable; the retired Agent SDK no longer pins its version.
+      openclaw_live_prepare_cli_backend \
+        "$NPM_CONFIG_PREFIX/bin/claude" "@anthropic-ai/claude-code" \
+        "$OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS"
     fi
     if [ ! -x "$real_claude" ] && [ -x "$NPM_CONFIG_PREFIX/bin/claude" ]; then
       mv "$NPM_CONFIG_PREFIX/bin/claude" "$real_claude"
@@ -162,7 +153,7 @@ WRAP
       chmod +x "$NPM_CONFIG_PREFIX/bin/claude"
     fi
     export CLAUDE_CODE_EXECUTABLE="$NPM_CONFIG_PREFIX/bin/claude"
-    echo "Using Claude Code $claude_code_version declared by the installed Claude Agent SDK"
+    echo "Using installed Claude Code CLI"
     claude --version
     claude auth status || true
     ;;
