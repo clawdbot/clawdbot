@@ -930,9 +930,9 @@ save Actions caches, and checks out the helper, candidate, and baseline with
 credentials disabled.
 
 The committed lane manifest covers representative core unit, Gateway, Control
-UI jsdom, and worker-lifecycle tests. Both commits must expose the same lane and
-file inventory and pass correctness before timing state is created. The harness
-then runs one excluded warmup per side and lane, seven paired rounds with
+UI jsdom, and worker-lifecycle tests. Both commits must expose identical
+selected test/config paths and bytes and pass correctness before timing state
+is created. The harness then runs one excluded warmup per side and lane, seven paired rounds with
 alternating side order and rotated lane order, plus one separately labeled cold
 pair with fresh caches. Frozen installs are setup and are never timed.
 

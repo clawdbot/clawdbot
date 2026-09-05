@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   analyzeBenchmark,
+  assertEquivalentInventories,
   assertInventoryAvailable,
   assertSingleWorkflowAttempt,
   buildBenchmarkSchedule,
@@ -151,6 +152,28 @@ describe("Vitest pair benchmark contract", () => {
     const inventory = assertInventoryAvailable(root, manifest);
     expect(inventory.entries).toHaveLength(7);
     expect(inventory.inventorySha256).toMatch(/^[0-9a-f]{64}$/u);
+  });
+
+  it("rejects selected workload byte mismatches between sides", () => {
+    const baselineRoot = tempDirs.make("vitest-pair-baseline-inventory-");
+    const candidateRoot = tempDirs.make("vitest-pair-candidate-inventory-");
+    for (const lane of manifest.lanes) {
+      for (const relative of inventoryPaths(lane)) {
+        for (const root of [baselineRoot, candidateRoot]) {
+          const file = path.join(root, relative);
+          mkdirSync(path.dirname(file), { recursive: true });
+          writeFileSync(file, `${relative}\n`);
+        }
+      }
+    }
+    writeFileSync(path.join(candidateRoot, manifest.lanes[0]!.files[0]!), "changed workload\n");
+
+    expect(() =>
+      assertEquivalentInventories(
+        assertInventoryAvailable(baselineRoot, manifest),
+        assertInventoryAvailable(candidateRoot, manifest),
+      ),
+    ).toThrow("benchmark workload bytes differ");
   });
 
   it("rotates lane order and alternates paired side order", () => {

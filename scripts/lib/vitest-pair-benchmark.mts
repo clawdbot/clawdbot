@@ -16,6 +16,7 @@ import path from "node:path";
 import { inspectManagedProcessGroup, runManagedCommand } from "./managed-child-process.mts";
 import {
   analyzeBenchmark,
+  assertEquivalentInventories,
   assertExactSha,
   assertInventoryAvailable,
   buildBenchmarkSchedule,
@@ -31,6 +32,7 @@ import {
 
 export {
   analyzeBenchmark,
+  assertEquivalentInventories,
   assertExactSha,
   assertInventoryAvailable,
   assertSingleWorkflowAttempt,
@@ -426,9 +428,7 @@ export async function runVitestPairBenchmark(context: BenchmarkContext): Promise
   mkdirSync(context.scratchDir, { recursive: true });
   const baselineInventory = assertInventoryAvailable(baselineDir, context.manifest);
   const candidateInventory = assertInventoryAvailable(candidateDir, context.manifest);
-  if (baselineInventory.inventorySha256 !== candidateInventory.inventorySha256) {
-    throw new Error("baseline and candidate benchmark inventories differ");
-  }
+  assertEquivalentInventories(baselineInventory, candidateInventory);
   writeJsonAtomic(path.join(context.outputDir, "environment.json"), {
     version: 1,
     platform: process.platform,

@@ -12,6 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 
 const SHA_RE = /^[0-9a-f]{40}$/u;
 const SAFE_PATH_RE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._@/+-]+$/u;
@@ -101,9 +102,10 @@ export type BenchmarkAnalysis = {
   claim: string;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
+export type BenchmarkInventory = {
+  inventorySha256: string;
+  entries: Array<{ path: string; sha256: string; bytes: number }>;
+};
 
 function assertFiniteRatio(value: unknown, name: string): asserts value is number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -224,7 +226,10 @@ export function benchmarkInventoryDigest(manifest: BenchmarkManifest): string {
   return sha256(JSON.stringify(stableManifestValue(manifest)));
 }
 
-export function assertInventoryAvailable(root: string, manifest: BenchmarkManifest) {
+export function assertInventoryAvailable(
+  root: string,
+  manifest: BenchmarkManifest,
+): BenchmarkInventory {
   const canonicalRoot = realpathSync(root);
   const entries: Array<{ path: string; sha256: string; bytes: number }> = [];
   const paths = new Set<string>();
@@ -252,6 +257,31 @@ export function assertInventoryAvailable(root: string, manifest: BenchmarkManife
     inventorySha256: benchmarkInventoryDigest(manifest),
     entries,
   };
+}
+
+export function assertEquivalentInventories(
+  baseline: BenchmarkInventory,
+  candidate: BenchmarkInventory,
+): void {
+  if (baseline.inventorySha256 !== candidate.inventorySha256) {
+    throw new Error("baseline and candidate benchmark manifests differ");
+  }
+  if (baseline.entries.length !== candidate.entries.length) {
+    throw new Error("baseline and candidate benchmark inventory sizes differ");
+  }
+  for (const [index, baselineEntry] of baseline.entries.entries()) {
+    const candidateEntry = candidate.entries[index];
+    if (
+      !candidateEntry ||
+      baselineEntry.path !== candidateEntry.path ||
+      baselineEntry.sha256 !== candidateEntry.sha256 ||
+      baselineEntry.bytes !== candidateEntry.bytes
+    ) {
+      throw new Error(
+        `baseline and candidate benchmark workload bytes differ at ${baselineEntry.path}`,
+      );
+    }
+  }
 }
 
 export function assertSingleWorkflowAttempt(value: string | number): void {
