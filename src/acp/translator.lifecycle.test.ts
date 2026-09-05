@@ -548,9 +548,10 @@ describe("acp translator stable lifecycle handlers", () => {
     await expect(settlePromptQuickly(pending.promptPromise)).resolves.toEqual({
       stopReason: "cancelled",
     });
+    const sendCall = requestA.mock.calls.find(([method]) => method === "chat.send");
     const abortCall = requestA.mock.calls.find(([method]) => method === "chat.abort");
     expect(abortCall?.[1]).toEqual({
-      sessionKey: `acp-bridge:${sessionA.sessionId}`,
+      sessionKey: sendCall?.[1]?.sessionKey,
       runId: pending.runId,
     });
     await expect(

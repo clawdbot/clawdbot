@@ -1,6 +1,7 @@
 /** Tests ACP server startup readiness, Gateway bootstrap, and shutdown wiring. */
 import { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 
 type GatewayClientCallbacks = {
@@ -33,6 +34,8 @@ const mockState = vi.hoisted(() => ({
   gateways: [] as MockGatewayClient[],
   gatewayAuth: [] as GatewayClientAuth[],
   gatewayOptions: [] as GatewayClientOptions[],
+  agentOptions: [] as Array<Record<string, unknown>>,
+  runtimeConfig: { gateway: { mode: "local" } } as OpenClawConfig,
   agentSideConnectionCtor: vi.fn(),
   closeAgentSideConnection: null as (() => void) | null,
   closeAcpInput: null as (() => void) | null,
@@ -144,11 +147,7 @@ vi.mock("@agentclientprotocol/sdk", () => ({
 }));
 
 vi.mock("../config/config.js", () => {
-  const loadConfig = () => ({
-    gateway: {
-      mode: "local",
-    },
-  });
+  const loadConfig = () => mockState.runtimeConfig;
   return {
     getRuntimeConfig: loadConfig,
     loadConfig,
@@ -222,6 +221,10 @@ vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
 
 vi.mock("./translator.js", () => ({
   AcpGatewayAgent: class {
+    constructor(_connection: unknown, _gateway: unknown, options: Record<string, unknown>) {
+      mockState.agentOptions.push(options);
+    }
+
     start(): void {
       mockState.agentStart();
     }
@@ -368,6 +371,8 @@ describe("serveAcpGateway startup", () => {
     mockState.gateways.length = 0;
     mockState.gatewayAuth.length = 0;
     mockState.gatewayOptions.length = 0;
+    mockState.agentOptions.length = 0;
+    mockState.runtimeConfig = { gateway: { mode: "local" } };
     mockState.agentSideConnectionCtor.mockReset();
     mockState.closeAgentSideConnection = null;
     mockState.closeAcpInput = null;
@@ -414,6 +419,31 @@ describe("serveAcpGateway startup", () => {
 
       expect(mockState.agentSideConnectionCtor).not.toHaveBeenCalled();
       await emitHelloAndWaitForAgentSideConnection();
+      await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("normalizes the selected bridge agent and passes runtime config to the translator", async () => {
+    mockState.runtimeConfig = {
+      gateway: { mode: "local" },
+      agents: {
+        ownership: "explicit",
+        entries: { ops: {}, research: {} },
+      },
+    };
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({ agentId: " Ops " });
+      await emitHelloAndWaitForAgentSideConnection();
+
+      expect(mockState.agentOptions[0]).toMatchObject({
+        agentId: "ops",
+        config: mockState.runtimeConfig,
+      });
+
       await stopServeWithSigint(signalHandlers, servePromise);
     } finally {
       onceSpy.mockRestore();

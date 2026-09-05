@@ -17,6 +17,7 @@ export function registerAcpCli(program: Command) {
     .option("--token-file <path>", "Read gateway token from file")
     .option("--password <password>", "Gateway password (if required)")
     .option("--password-file <path>", "Read gateway password from file")
+    .option("--agent <id>", "Agent owner for generated bridge sessions")
     .option("--session <key>", "Default session key (e.g. agent:main:main)")
     .option("--session-label <label>", "Default session label to resolve")
     .option("--require-existing", "Fail if the session key/label does not exist", false)
@@ -31,6 +32,7 @@ export function registerAcpCli(program: Command) {
     .action(async (opts) => {
       try {
         const { gatewayToken, gatewayPassword } = resolveGatewayAuthOptions(opts);
+        const agentId = typeof opts.agent === "string" ? opts.agent : undefined;
         const provenanceMode = normalizeAcpProvenanceMode(opts.provenance as string | undefined);
         if (opts.provenance && !provenanceMode) {
           throw new Error('Invalid --provenance. Use "off", "meta", or "meta+receipt".');
@@ -40,6 +42,7 @@ export function registerAcpCli(program: Command) {
           gatewayUrl: opts.url as string | undefined,
           gatewayToken,
           gatewayPassword,
+          agentId,
           defaultSessionKey: opts.session as string | undefined,
           defaultSessionLabel: opts.sessionLabel as string | undefined,
           requireExistingSession: Boolean(opts.requireExisting),
