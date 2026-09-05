@@ -2230,7 +2230,13 @@ private fun AppLanguageRow(
 
 private fun appLanguageTitle(language: AppLanguage): String = if (language == AppLanguage.System) nativeString("System") else language.displayName
 
-internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String = nativeString(mode.displayLabel)
+// Literal lookups keep every mode visible to the phone localization extractor.
+internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String =
+  when (mode) {
+    AppearanceThemeMode.System -> nativeString("System")
+    AppearanceThemeMode.Dark -> nativeString("Dark")
+    AppearanceThemeMode.Light -> nativeString("Light")
+  }
 
 internal fun appearanceThemeOptions(): List<String> = AppearanceThemeMode.entries.map(::appearanceThemeSummary)
 
