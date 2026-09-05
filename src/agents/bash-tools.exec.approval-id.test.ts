@@ -1011,7 +1011,7 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("failed");
     const approvalId = requireExecApprovalRequestCall().params.id;
     expect(getResultText(result)).toContain(
-      `Exec denied (gateway id=${approvalId}, user-denied): echo ok`,
+      `Exec denied (gateway id=${String(approvalId)}, user-denied): echo ok`,
     );
     expect(calls).toContain("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
