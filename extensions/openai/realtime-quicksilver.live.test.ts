@@ -14,10 +14,7 @@ import {
   createOpenAIQuicksilverBrowserSessionBroker,
   OPENAI_QUICKSILVER_OFFER_PATH,
 } from "./realtime-quicksilver-session.js";
-import {
-  buildOpenAIQuicksilverSession,
-  type OpenAIQuicksilverAuth,
-} from "./realtime-quicksilver-wire.js";
+import type { OpenAIQuicksilverAuth } from "./realtime-quicksilver-wire.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL } from "./realtime-voice-session-policy.js";
 

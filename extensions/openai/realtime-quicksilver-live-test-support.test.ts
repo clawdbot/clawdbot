@@ -31,7 +31,7 @@ describe("private realtime live model selection", () => {
     expect(resolveConfiguredLiveQuicksilverModel()).toBe("gpt-live-direct-fixture");
   });
 
-  it("uses the selected provider model when the Talk-level model is not eligible", () => {
+  it("rejects an ineligible explicit Talk-level model instead of falling through", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       talk: {
         realtime: {
@@ -44,15 +44,15 @@ describe("private realtime live model selection", () => {
       },
     });
 
-    expect(resolveConfiguredLiveQuicksilverModel()).toBe("gpt-live-provider-fixture");
+    expect(resolveConfiguredLiveQuicksilverModel()).toBeUndefined();
   });
 
-  it("uses a sole provider model when no provider is selected", () => {
+  it("uses a sole OpenAI provider model when no provider is selected", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       talk: {
         realtime: {
           providers: {
-            custom: { model: "gpt-live-provider-fixture" },
+            OpenAI: { model: "gpt-live-provider-fixture" },
           },
         },
       },
@@ -70,6 +70,30 @@ describe("private realtime live model selection", () => {
           provider: "openai",
           model: "public-realtime-fixture",
           providers: { openai: { model: "other-public-fixture" } },
+        },
+      },
+    },
+    {
+      talk: {
+        realtime: {
+          provider: "custom",
+          model: "gpt-live-direct-fixture",
+          providers: { custom: { model: "gpt-live-provider-fixture" } },
+        },
+      },
+    },
+    {
+      talk: {
+        realtime: {
+          providers: { custom: { model: "gpt-live-provider-fixture" } },
+        },
+      },
+    },
+    {
+      talk: {
+        realtime: {
+          model: "gpt-live-direct-fixture",
+          providers: { custom: { model: "gpt-live-provider-fixture" } },
         },
       },
     },

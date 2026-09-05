@@ -182,8 +182,9 @@ export function projectInternalRealtimeVoicePublicProjection<
   if (projected) {
     return {
       ...projected,
+      // SAFETY: projections only remove or replace `model`; other fields stay intact.
       config: projected.config as T,
-    }; // SAFETY: projections only remove or replace `model`; other fields stay intact.
+    };
   }
   return { config: params.config };
 }
