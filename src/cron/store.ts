@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -23,6 +24,7 @@ import {
   assertCronStoreCanPersist,
   deleteCronJobRowInDatabase,
   deleteStaleCronJobFamilyRows,
+  fingerprintCronJobRows,
   loadedCronStoreFromRows,
   loadCronRows,
   readCronJobsFingerprint,
@@ -103,8 +105,8 @@ export async function loadCronJobsStoreWithConfigJobs(storePath: string): Promis
   const resolvedStorePath = path.resolve(storePath);
   const storeKey = cronStoreKey(resolvedStorePath);
   const database = openOpenClawStateDatabase().db;
-  const jobsFingerprint = readCronJobsFingerprint(database, storeKey);
   const rows = loadCronRows(database, storeKey);
+  const jobsFingerprint = fingerprintCronJobRows(rows);
   if (rows.length > 0) {
     const loaded = loadedCronStoreFromRows(rows);
     const authority = loadCronRuntimeAuthorities({
@@ -196,14 +198,6 @@ function emptyLoadedCronStore(): LoadedCronStore {
     configJobRuntimeEntries: [],
     invalidConfigRows: [],
   };
-}
-
-function tableExists(db: DatabaseSync, tableName: string): boolean {
-  return (
-    db
-      .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get(tableName) !== undefined
-  );
 }
 
 /** Loads cron jobs from an existing SQLite store without creating or migrating state. */
