@@ -46,6 +46,7 @@ Built-in acpx harness aliases (from the pinned `acpx` dependency):
 | `opencode`   | [OpenCode](https://opencode.ai)                                                                        |
 | `openclaw`   | OpenClaw ACP bridge (native `openclaw acp`)                                                            |
 | `pi`         | [Pi Coding Agent](https://github.com/earendil-works/pi)                                                |
+| `pool`       | [Poolside Agent CLI](https://github.com/poolsideai/pool) (`pool acp`)                                  |
 | `qoder`      | [Qoder CLI](https://docs.qoder.com/cli/acp)                                                            |
 | `qwen`       | [Qwen Code](https://github.com/QwenLM/qwen-code)                                                       |
 | `trae`       | [Trae CLI](https://docs.trae.cn/cli)                                                                   |
@@ -87,6 +88,7 @@ Core ACP baseline:
       "kiro",
       "openclaw",
       "opencode",
+      "pool",
       "qwen",
     ],
     stream: {
