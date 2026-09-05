@@ -138,7 +138,9 @@ export function createManagedServiceManagerBoundary({
     const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
       stdio: ["pipe", "ignore", "ignore"],
     });
-    const parentClosed = new Promise<void>((resolve) => parent.once("close", () => resolve()));
+    const parentClosed = new Promise<void>((resolve) => {
+      parent.once("close", () => resolve());
+    });
     const parentPid = parent.pid;
     const parentStartIdentity = parentPid ? getFileLockProcessStartTime(parentPid) : null;
     if (!parentPid || parentStartIdentity === null) {

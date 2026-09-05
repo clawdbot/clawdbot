@@ -59,7 +59,6 @@ import {
 
 export {
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
-  maybeRestartServiceAfterFailedMutableUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
   revalidateManagedGatewayServiceAfterUpdate,
   resolvePreparedGatewayUpdatePolicy,
@@ -69,6 +68,7 @@ export {
   type UpdateCommandRecoveryState,
 } from "./update-command-service-maintenance.js";
 export { resolveUpdatedGatewayRestartPort } from "./update-command-service-plan.js";
+export { maybeRestartServiceAfterFailedMutableUpdate } from "./update-command-service-recovery.js";
 
 const CLI_NAME = resolveCliName();
 

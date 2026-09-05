@@ -24,12 +24,7 @@ import { sha256Hex } from "../../infra/crypto-digest.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  renderRestartDiagnostics,
-  waitForGatewayHealthyRestart,
-} from "../daemon-cli/restart-health.js";
 import {
   registerSignalExitBarrier,
   registerSignalExitGate,
@@ -37,7 +32,6 @@ import {
 } from "../signal-exit-barrier.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { gatewayAncestryBlockMessage } from "./update-command-handoff.js";
-import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import {
   assertGatewayServiceManagementAllowedForUpdate,
   gatewayServiceCommandUsesRoot,
@@ -663,105 +657,6 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
       resolveManagedGatewayServiceCommand(serviceState.command)?.environment ?? {},
     ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
   };
-}
-
-export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
-  preManagedServiceStop: PreManagedServiceStop | undefined;
-  recovery?: UpdateRunResult["recovery"];
-  jsonMode: boolean;
-  nodeRunner?: string;
-  timeoutMs?: number;
-  invocationCwd?: string;
-}): Promise<"healthy" | "failed" | undefined> {
-  const before = params.preManagedServiceStop;
-  if (!before?.stopped || !before.serviceEnv) {
-    return undefined;
-  }
-  if (params.recovery?.serviceRestartSafe !== true || !params.recovery.version) {
-    defaultRuntime.error(
-      "Managed gateway remains stopped: update safety is unverified. Run `openclaw doctor` and inspect the update failure before restarting.",
-    );
-    return "failed";
-  }
-  try {
-    const verdict = before.serviceUpdateVerdict;
-    if (!verdict || !("root" in verdict)) {
-      throw new Error(
-        "Stopped service ownership is unknown; restart it manually after inspection.",
-      );
-    }
-    const service = resolveGatewayService();
-    let expectedService: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict"> =
-      before;
-    const readCurrentService = async () => {
-      const state = await readGatewayServiceState(service, {
-        env: before.serviceEnv,
-        requireEffective: true,
-        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-        timeoutMs: params.timeoutMs,
-      });
-      const inspection = await revalidateManagedGatewayServiceAfterUpdate({
-        state,
-        root: verdict.root,
-        preManagedServiceStop: expectedService,
-      });
-      // Recovery preserves the current definition. Once observed, even a same-unit
-      // replacement during config or health awaits must not inherit this activation.
-      expectedService = {
-        serviceEnv: state.env,
-        serviceUpdateVerdict:
-          inspection.kind === "owned" ? { ...inspection, refreshDefinition: false } : inspection,
-      };
-      return state;
-    };
-    const state = await readCurrentService();
-    const port = await resolveUpdatedGatewayRestartPort({
-      serviceEnv: state.env,
-      serviceCommand: state.command,
-    });
-    // Context resolution awaits config reads. Revalidate before the one activation;
-    // the installed CLI owns its config dialect and preserves the service definition.
-    const current = await readCurrentService();
-    await runUpdatedInstallGatewayCommand(
-      {
-        result: { root: verdict.root },
-        opts: { json: params.jsonMode },
-        invocationEnv: before.serviceEnv,
-        serviceEnv: current.env,
-        nodeRunner: params.nodeRunner,
-        timeoutMs: params.timeoutMs,
-        invocationCwd: params.invocationCwd,
-      },
-      "restart",
-      true,
-    );
-    const health = await waitForGatewayHealthyRestart({
-      service,
-      port,
-      env: current.env,
-      expectedVersion: params.recovery.version,
-      expectedBuildId: params.recovery.buildId,
-      requireRunningService: true,
-      settle: { probes: 12 },
-    });
-    if (!health.healthy || health.runtime.status !== "running") {
-      throw new Error(renderRestartDiagnostics(health).join("\n"));
-    }
-    await readCurrentService();
-    if (!params.jsonMode) {
-      defaultRuntime.log(
-        theme.muted(
-          "Recovered managed gateway service and verified readiness after failed update.",
-        ),
-      );
-    }
-    return "healthy";
-  } catch (err) {
-    defaultRuntime.error(
-      `Failed to restart managed gateway service after failed update: ${String(err)}. Run \`openclaw gateway status --deep\` before restarting it manually.`,
-    );
-    return "failed";
-  }
 }
 
 export function shouldBlockMutableUpdateFromGatewayServiceEnv(params: {
