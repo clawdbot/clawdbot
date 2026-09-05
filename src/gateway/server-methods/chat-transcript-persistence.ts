@@ -17,6 +17,8 @@ import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../../shared/assistant-display-content.js";
@@ -428,10 +430,59 @@ export function captureAbortedPartial(params: {
   }
 }
 
+export type AbortedPartialPersistenceFailure = {
+  runId: string;
+  sessionId: string;
+  agentId?: string;
+  abortOrigin: ChatAbortOrigin;
+  error: string;
+};
+
+const ABORTED_PARTIAL_PERSISTENCE_NOTICE =
+  "An assistant message streamed before this abort could not be saved to the transcript and is missing from history. It cannot be recovered; the abort itself completed.";
+
+/**
+ * Queue an operator-visible system event for each aborted partial that could not
+ * be persisted to the transcript. The partial was streamed to the client before
+ * the abort, so silently dropping it would leave history/resume missing an
+ * assistant message the operator actually saw; this records the non-outcome so
+ * the loss is discoverable at the session boundary that owns it.
+ *
+ * Each event is bound to the originating agent (when one exists) so shared or
+ * global session queues never let another agent consume another run's loss
+ * notice. The notice text is fixed and bounded; the run identifier is kept only
+ * in the non-model-visible dedupe context key, never interpolated into prompt
+ * text, because chat-send run ids are caller-supplied and may be unbounded or
+ * contain newlines.
+ */
+export function queueAbortedPartialPersistenceFailures(
+  sessionKey: string,
+  failures: readonly AbortedPartialPersistenceFailure[],
+): void {
+  for (const failure of failures) {
+    if (failure.abortOrigin === "placement-abandon") {
+      continue;
+    }
+    const options = {
+      sessionKey,
+      contextKey: `chat.abort:partial-persist:${failure.runId}`,
+    };
+    if (failure.agentId) {
+      enqueueSystemEvent(
+        ABORTED_PARTIAL_PERSISTENCE_NOTICE,
+        withSystemEventOwner(options, failure.agentId),
+      );
+    } else {
+      enqueueSystemEvent(ABORTED_PARTIAL_PERSISTENCE_NOTICE, options);
+    }
+  }
+}
+
 export async function persistAbortedPartials(params: {
   context: { logGateway: { warn: (message: string) => void } };
   snapshots: AbortedPartialSnapshot[];
-}): Promise<void> {
+}): Promise<AbortedPartialPersistenceFailure[]> {
+  const failed: AbortedPartialPersistenceFailure[] = [];
   for (const snapshot of params.snapshots) {
     if (!snapshot.ok) {
       throw snapshot.error;
@@ -446,8 +497,16 @@ export async function persistAbortedPartials(params: {
       if (snapshot.abortOrigin === "placement-abandon") {
         throw new Error(error);
       }
+      failed.push({
+        runId: snapshot.runId,
+        sessionId: snapshot.value.sessionId,
+        agentId: snapshot.value.agentId,
+        abortOrigin: snapshot.abortOrigin,
+        error,
+      });
     }
   }
+  return failed;
 }
 
 async function touchAssistantTranscriptSessionEntry(

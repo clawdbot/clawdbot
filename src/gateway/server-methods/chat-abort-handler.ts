@@ -36,7 +36,11 @@ import {
   normalizeOptionalChatText as normalizeOptionalText,
   normalizeUnknownChatText as normalizeUnknownText,
 } from "./chat-text-normalization.js";
-import { captureAbortedPartial, persistAbortedPartials } from "./chat-transcript-persistence.js";
+import {
+  captureAbortedPartial,
+  persistAbortedPartials,
+  queueAbortedPartialPersistenceFailures,
+} from "./chat-transcript-persistence.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -341,7 +345,10 @@ export async function handleChatAbortRequestWithLifecycle(
   });
   // Transcript failure must not abandon children after the parent loses its controller.
   if (aborted && snapshot) {
-    await persistAbortedPartials({ context, snapshots: [snapshot] });
+    const failed = await persistAbortedPartials({ context, snapshots: [snapshot] });
+    if (failed.length > 0) {
+      queueAbortedPartialPersistenceFailures(sessionKey, failed);
+    }
   }
   if (!abortSession.ok) {
     throw abortSession.error;

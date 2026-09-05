@@ -47,6 +47,7 @@ import {
 import {
   captureAbortedPartial,
   persistAbortedPartials,
+  queueAbortedPartialPersistenceFailures,
   type AbortedPartialSnapshot,
   type ChatAbortOrigin,
   type ChatAbortSessionSnapshot,
@@ -631,10 +632,13 @@ function prepareChatSessionAbort(params: ChatSessionAbortParams, selectedRunId?:
     async finish(result: Pick<ChatSessionAbortResult, "aborted" | "runIds">) {
       if (result.aborted && snapshots.length > 0) {
         const abortedRunIds = new Set(result.runIds);
-        await persistAbortedPartials({
+        const failed = await persistAbortedPartials({
           context: params.context,
           snapshots: snapshots.filter((snapshot) => abortedRunIds.has(snapshot.runId)),
         });
+        if (failed.length > 0) {
+          queueAbortedPartialPersistenceFailures(params.sessionKey, failed);
+        }
       }
       if (params.session && !params.session.ok) {
         throw params.session.error;
