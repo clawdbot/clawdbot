@@ -56,6 +56,7 @@ type OpenAIResponsesEndpointClass =
 type OpenAIResponsesPayloadPolicy = {
   allowsServiceTier: boolean;
   compactThreshold: number | undefined;
+  explicitContinuationOptIn: boolean;
   explicitStore: boolean | undefined;
   shouldStripDisabledReasoningPayload: boolean;
   shouldStripInputStatus: boolean;
@@ -68,6 +69,7 @@ type OpenAIResponsesPayloadPolicy = {
 type OpenAIResponsesPayloadCapabilities = {
   allowsOpenAIServiceTier: boolean;
   allowsResponsesStore: boolean;
+  explicitContinuationOptIn: boolean;
   shouldStripResponsesPromptCache: boolean;
   supportsResponsesStoreField: boolean;
   usesKnownNativeOpenAIRoute: boolean;
@@ -219,7 +221,11 @@ function isOpenAIResponsesApi(api: string | undefined): boolean {
 
 function readCompatPayloadBoolean(
   compat: unknown,
-  key: "supportsInstructions" | "supportsPromptCacheKey" | "supportsStore",
+  key:
+    | "supportsInstructions"
+    | "supportsPromptCacheKey"
+    | "supportsResponsesContinuation"
+    | "supportsStore",
 ): boolean | undefined {
   if (!compat || typeof compat !== "object") {
     return undefined;
@@ -276,6 +282,24 @@ function resolveOpenAIResponsesPayloadCapabilities(
         : isResponsesApi && usesExplicitProxyLikeEndpoint;
   const supportsResponsesStoreField =
     readCompatPayloadBoolean(model.compat, "supportsStore") !== false && isResponsesApi;
+  // Provider-owned opt-in for a custom/proxy OpenAI-Responses-compatible
+  // endpoint (self-hosted router, gateway, etc.): the endpoint class itself
+  // carries no trust signal, so eligibility here comes entirely from an
+  // operator explicitly confirming, per model, that the backend correctly
+  // resolves `previous_response_id` and persists `store: true` turns.
+  // Scoped to the custom `openai-responses` route only -- not the broader
+  // isResponsesApi predicate, which also matches `openai-chatgpt-responses`.
+  // ChatGPT/Codex deliberately stays `store: false` (see allowsResponsesStore
+  // below); this opt-in must never be able to flip that contract for an
+  // operator who sets the compat flag on a ChatGPT/Codex-routed model.
+  // Azure is excluded: azure-openai-responses.ts hardcodes `store: false`
+  // downstream regardless, so opting in there would be a no-op.
+  const explicitContinuationOptIn =
+    (api === "openai-responses" || api === "openclaw-openai-responses-transport") &&
+    supportsResponsesStoreField &&
+    provider !== "azure-openai" &&
+    provider !== "azure-openai-responses" &&
+    readCompatPayloadBoolean(model.compat, "supportsResponsesContinuation") === true;
 
   return {
     allowsOpenAIServiceTier:
@@ -295,6 +319,7 @@ function resolveOpenAIResponsesPayloadCapabilities(
       provider !== undefined &&
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       usesKnownNativeOpenAIEndpoint,
+    explicitContinuationOptIn,
     shouldStripResponsesPromptCache,
     supportsResponsesStoreField,
     usesKnownNativeOpenAIRoute,
@@ -393,14 +418,25 @@ export function resolveOpenAIResponsesPayloadPolicy(
 ): OpenAIResponsesPayloadPolicy {
   const capabilities = resolveOpenAIResponsesPayloadCapabilities(model);
   const storeMode = options.storeMode ?? "provider-policy";
+  // A continuation-eligible native OpenAI connection needs store:true to get
+  // a previous_response_id back — "disable" mode still means "force store
+  // off by default", but that default is specifically what continuation
+  // eligibility overrides, same as "provider-policy" mode. Without this,
+  // buildOpenAIResponsesParams (the only shipped request builder for this
+  // transport) always resolves this policy with storeMode:"disable", so
+  // params.store is never true and the HTTP continuation claim guard in
+  // openai-responses-client.ts (which requires params.store === true) never
+  // passes, regardless of eligibility.
   const explicitStore =
     storeMode === "preserve"
       ? undefined
       : storeMode === "disable"
-        ? capabilities.supportsResponsesStoreField
-          ? false
-          : undefined
-        : capabilities.allowsResponsesStore
+        ? capabilities.allowsResponsesStore || capabilities.explicitContinuationOptIn
+          ? true
+          : capabilities.supportsResponsesStoreField
+            ? false
+            : undefined
+        : capabilities.allowsResponsesStore || capabilities.explicitContinuationOptIn
           ? true
           : undefined;
   const isResponsesApi = isOpenAIResponsesApi(normalizeOptionalLowercaseString(model.api));
@@ -432,6 +468,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
     compactThreshold: serverCompactionPlan.threshold,
+    explicitContinuationOptIn: capabilities.explicitContinuationOptIn,
     explicitStore,
     shouldStripDisabledReasoningPayload,
     shouldStripInputStatus,

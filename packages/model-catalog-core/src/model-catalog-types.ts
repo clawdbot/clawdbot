@@ -62,6 +62,8 @@ export type ModelCatalogCompatConfig = {
   supportsEagerToolInputStreaming?: boolean;
   supportsLongCacheRetention?: boolean;
   supportsPromptCacheKey?: boolean;
+  /** Explicit per-model opt-in for HTTP continuation on a custom/proxy OpenAI-Responses-compatible endpoint. */
+  supportsResponsesContinuation?: boolean;
   supportsTools?: boolean;
   /** Code-mode tier consumed by `tools.codeMode.enabled: "auto"`; absent means "capable". */
   codeMode?: "preferred" | "capable";
