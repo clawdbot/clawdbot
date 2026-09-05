@@ -258,6 +258,24 @@ async function streamIncompleteMistralResponseOverLoopback() {
 }
 
 describe("handleEmbeddedAssistantFailure", () => {
+  it("surfaces storage failure without replaying the run or rotating credentials", async () => {
+    const fixture = makeExhaustedCredentialFailureInput();
+    fixture.input.attemptAssistant = buildEmbeddedRunnerAssistant({
+      provider: "mock",
+      model: "model",
+      stopReason: "error",
+      errorMessage: "database is locked",
+    });
+    fixture.input.emptyErrorRetries = 0;
+    expect(await handleEmbeddedAssistantFailure(fixture.input)).toMatchObject({
+      action: "proceed",
+      assistantProfileFailureReason: null,
+      emptyErrorRetries: 0,
+    });
+    expect(fixture.input.maybeRetryTransient).not.toHaveBeenCalled();
+    expect(fixture.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(fixture.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     providerRuntimeMocks.classifyProviderFailoverSignalWithPlugin.mockReset();
   });
