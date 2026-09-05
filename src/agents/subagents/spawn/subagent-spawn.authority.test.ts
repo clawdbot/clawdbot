@@ -1,8 +1,7 @@
-/** Pending native spawn must transfer only live invocation authority to the child owner. */
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+/** Registered native children retain their own lifecycle after spawn handoff. */
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   clearConfigCache,
@@ -11,24 +10,14 @@ import {
 } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
-import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { handleChatAbortRequest } from "../../../gateway/server-methods/chat-abort-handler.js";
-import {
-  createChatAbortContext,
-  invokeChatAbortHandler,
-} from "../../../gateway/server-methods/chat.abort.test-helpers.js";
-import { sessionDeleteHandlers } from "../../../gateway/server-methods/sessions-delete.js";
+import { invokeChatAbortHandler } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
-import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import {
-  claimAgentRunDelegatedAuthority,
   clearAgentRunContext,
   registerAgentRunContext,
-  releaseAgentRunDelegatedAuthority,
-  rotateAgentRunRegistryLifecycleGeneration,
 } from "../../../infra/agent-run-registry.js";
-import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
@@ -37,27 +26,16 @@ import {
   beginSessionWorkAdmission,
   consumeSessionWorkAdmissionHandoff,
 } from "../../../sessions/session-lifecycle-admission.js";
-import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
-import * as taskControlRuntime from "../../../tasks/task-registry-control.runtime.js";
 import { cancelTaskById, findTaskByRunId, getTaskById } from "../../../tasks/task-registry.js";
 import { configureTaskRegistryRuntime } from "../../../tasks/task-registry.store.js";
-import {
-  resetTaskRegistryForTests,
-  setTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryControlRuntimeForTests,
-} from "../../../tasks/task-registry.test-support.js";
-import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
-import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../../admitted-run-context.js";
-import { finalizeAgentToolAvailability } from "../../agent-tool-availability.js";
 import { copyAgentToolMetadata } from "../../agent-tool-metadata.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
-import { createAgentHarnessHostCapabilities } from "../../harness/host-capability.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -70,112 +48,13 @@ import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../registry/subagent-registry.persistence.test-support.js";
-import {
-  resetSubagentRegistryForTests,
-  testing as registryTesting,
-} from "../registry/subagent-registry.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
-import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import { installSpawnAuthorityFixture } from "./subagent-spawn.authority.test-support.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
-const parentSessionKey = "agent:main:main";
-const parentRunId = "pending-spawn-parent";
-const groupId = "pending-spawn";
-const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
-let stateDir = "";
-
-beforeEach(async () => {
-  stateDir = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-spawn-authority-")));
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-  await writeFile(
-    path.join(stateDir, "openclaw.json"),
-    JSON.stringify({
-      logging: { audit: { enabled: false } },
-      tools: { swarm: { enabled: true, maxConcurrent: 1 } },
-      agents: { defaults: { workspace: stateDir }, entries: { main: { workspace: stateDir } } },
-    }),
-  );
-  clearConfigCache();
-  clearRuntimeConfigSnapshot();
-  resetSubagentRegistryForTests({ persist: false });
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
-  // The source test supplies the real ESM owner through the existing CJS runtime seam.
-  setTaskRegistryControlRuntimeForTests(taskControlRuntime);
-  registryTesting.setDepsForTest({
-    loadAgentRuntimePluginRegistryHandle: () => undefined,
-    callGateway: async (request) => {
-      if (request.method !== "agent.wait") {
-        throw new Error(`Unexpected registry RPC ${request.method}`);
-      }
-      return await new Promise<never>(() => {});
-    },
-  });
-});
-
-afterEach(async () => {
-  await settleSubagentRegistryPersistenceWork();
-  resetSubagentRegistryForTests({ persist: false });
-  resetTaskRegistryForTests({ persist: false });
-  resetTaskFlowRegistryForTests({ persist: false });
-  schedulerTesting.reset();
-  resetTaskRegistryControlRuntimeForTests();
-  await cleanupSessionStateForTest({ stateDir });
-  registryTesting.setDepsForTest();
-  spawnTesting.setDepsForTest();
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  await flushLogger();
-  resetLogger();
-  await rm(stateDir, { recursive: true, force: true });
-  env.restore();
-});
-
-async function createBoundParent(runtime: "embedded" | "plugin-harness" = "embedded") {
-  const cfg = getRuntimeConfig();
-  const storePath = await writeSubagentSessionEntry({
-    stateDir,
-    agentId: "main",
-    sessionKey: parentSessionKey,
-    defaultSessionId: "parent-session",
-  });
-  const context = createChatAbortContext({
-    getRuntimeConfig: () => cfg,
-    getSessionEventSubscriberConnIds: () => new Set(),
-    broadcastToConnIds: vi.fn(),
-  });
-  const admission = prepareAgentRunAdmission({
-    cfg,
-    operationalRunInstance: createOperationalRunInstanceRef(parentRunId),
-    facts: {
-      runId: parentRunId,
-      agentId: "main",
-      ingress: { kind: "system", boundary: "spawn-authority-test", state: "present" },
-    },
-  });
-  const parent = registerChatAbortController({
-    chatAbortControllers: context.chatAbortControllers,
-    runId: parentRunId,
-    sessionKey: parentSessionKey,
-    sessionId: "parent-session",
-    agentId: "main",
-    ownerConnId: "owner-connection",
-    timeoutMs: 60_000,
-    operationalRunInstance: admission.operationalRunInstance,
-  });
-  const admitted = await admission.admit(runtime);
-  // Match agent-run-execution-phase: bind the admitted owner before tools run.
-  bindGatewayContextResolver(admitted, () => context as unknown as GatewayRequestContext);
-  const authority = getAdmittedRunDelegatedAuthority(admitted)!;
-  parent.bindAgentRunDelegatedAuthority(authority);
-  expect(parent.entry?.operationalRunInstance).toBe(admitted.operationalRunInstance);
-  expect(parent.entry?.agentRunDelegatedAuthority).toBe(authority);
-  expect(admitted.executionIdentityToken).toBeUndefined();
-
-  return { cfg, storePath, context, admission, parent, admitted, authority };
-}
+const fixture = installSpawnAuthorityFixture();
+const { parentSessionKey, parentRunId, groupId, createBoundParent } = fixture;
 
 describe("pending spawn invocation authority", () => {
   it.each(["sibling", "nested sibling"] as const)(
@@ -183,7 +62,7 @@ describe("pending spawn invocation authority", () => {
     async (slowBranch) => {
       const originalConfig = getRuntimeConfig();
       await writeFile(
-        path.join(stateDir, "openclaw.json"),
+        path.join(fixture.stateDir, "openclaw.json"),
         JSON.stringify({
           ...originalConfig,
           agents: {
@@ -204,7 +83,7 @@ describe("pending spawn invocation authority", () => {
       const slowId = slowBranch === "sibling" ? "a" : "d";
       for (const id of ids) {
         await writeSubagentSessionEntry({
-          stateDir,
+          stateDir: fixture.stateDir,
           agentId: "main",
           sessionKey: key(id),
           defaultSessionId: `${id}-session`,
@@ -403,267 +282,6 @@ describe("pending spawn invocation authority", () => {
       }
     },
   );
-
-  it.each([
-    "native abort",
-    "native acceptance",
-    "native call signal",
-    "native construction signal",
-    "native claim loss",
-    "native replacement",
-    "native lifecycle rotation",
-    "native admission close",
-    "projected close",
-    "projected claim loss",
-  ])("rolls back an untransferred native spawn: %s", async (closure) => {
-    const { cfg, storePath, context, admission, parent, admitted, authority } =
-      await createBoundParent(closure.startsWith("projected") ? "plugin-harness" : "embedded");
-    const acceptedGate = createDeferred();
-    const acceptedEntered = createDeferred();
-    let childController: ReturnType<typeof registerChatAbortController> | undefined;
-    const entered = createDeferred<string>();
-    const release = createDeferred();
-    const rollback = vi.fn(async () => {});
-    const agentDispatch = vi.fn();
-    const deleted: string[] = [];
-    spawnTesting.setDepsForTest({
-      resolveContextEngine: async () =>
-        Object.assign(new LegacyContextEngine(), {
-          prepareSubagentSpawn: async ({ childSessionKey }: { childSessionKey: string }) => {
-            entered.resolve(childSessionKey);
-            await release.promise;
-            return { rollback };
-          },
-        }),
-      dispatchGatewayMethodInProcess: async <T>(
-        method: string,
-        params: Record<string, unknown>,
-      ) => {
-        if (method === "agent") {
-          agentDispatch(params);
-          if (closure === "native acceptance") {
-            const childSessionKey = params.sessionKey as string;
-            const child = loadSessionEntry({ storePath, sessionKey: childSessionKey })!;
-            childController = registerChatAbortController({
-              chatAbortControllers: context.chatAbortControllers,
-              runId: params.idempotencyKey as string,
-              sessionKey: childSessionKey,
-              sessionId: child.sessionId,
-              agentId: "main",
-              timeoutMs: 60_000,
-            });
-            acceptedEntered.resolve();
-            await acceptedGate.promise;
-          }
-          return { runId: params.idempotencyKey, status: "accepted" } as T;
-        }
-        if (method === "chat.abort") {
-          const respond = await invokeChatAbortHandler({
-            handler: handleChatAbortRequest,
-            context,
-            request: params as { sessionKey: string; runId: string },
-            client: createSyntheticPluginRuntimeClient(),
-          });
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            expect.objectContaining({ aborted: true, runIds: [params.runId] }),
-          );
-          return respond.mock.calls[0]![1] as T;
-        }
-        if (method !== "sessions.delete") {
-          throw new Error(`Unexpected spawn RPC ${method}`);
-        }
-        let payload: unknown;
-        await sessionDeleteHandlers["sessions.delete"]!({
-          req: {} as never,
-          params,
-          context: context as unknown as GatewayRequestContext,
-          client: createSyntheticPluginRuntimeClient(),
-          isWebchatConnect: () => false,
-          respond: (ok, result, error) => {
-            if (!ok) {
-              throw new Error(error?.message ?? "delete failed");
-            }
-            payload = result;
-          },
-        });
-        deleted.push(params.key as string);
-        return payload as T;
-      },
-    });
-    const invocationAbort = new AbortController();
-    let replacementAuthority: ReturnType<typeof claimAgentRunDelegatedAuthority> | undefined;
-    const host = closure.startsWith("projected")
-      ? createAgentHarnessHostCapabilities({
-          attempt: {
-            admittedRunContext: admitted,
-            runId: parentRunId,
-            config: cfg,
-            agentId: "main",
-            sessionKey: parentSessionKey,
-            abortSignal: parent.controller.signal,
-          },
-          pluginId: "test-harness",
-        })
-      : undefined;
-    const source = createSessionsSpawnTool({
-      config: cfg,
-      agentSessionKey: parentSessionKey,
-      requesterRunId: parentRunId,
-      requesterTurnRunId: parentRunId,
-      signal: closure === "native construction signal" ? invocationAbort.signal : undefined,
-    });
-    let forwarded: Promise<unknown> | undefined;
-    const observed: AnyAgentTool = copyAgentToolMetadata(source, {
-      ...source,
-      execute: (...args) => {
-        const pending = source.execute!(...args);
-        // Observe, but still forward the real source promise through the native wrappers.
-        forwarded = pending.then(
-          (result) => result,
-          (error: unknown) => error,
-        );
-        return pending;
-      },
-    });
-    const wait = createAgentsWaitTool({
-      config: cfg,
-      agentSessionKey: parentSessionKey,
-      agentId: "main",
-    });
-    const tools = [observed, wait];
-    const [tool] = host
-      ? finalizeAgentToolAvailability(host.capabilities.bindToolSurface(tools))
-      : finalizeAgentTools({
-          tools,
-          hookContext: {
-            config: cfg,
-            agentId: "main",
-            sessionKey: parentSessionKey,
-            runId: parentRunId,
-          },
-          abortSignal: parent.controller.signal,
-        });
-    const caller = createAdmittedGatewayToolCallerIdentity({
-      admittedRunContext: admitted,
-      agentId: "main",
-      sessionKey: parentSessionKey,
-    });
-    const wrapped = withPluginRuntimeGatewayRequestScope(
-      { context: context as unknown as GatewayRequestContext, isWebchatConnect: () => false },
-      () =>
-        withGatewayToolCallerIdentity(caller, () =>
-          tool!.execute!(
-            "spawn-pending",
-            {
-              task: "bounded child",
-              collect: closure !== "native acceptance",
-              context: "isolated",
-              groupId: closure === "native acceptance" ? undefined : groupId,
-            },
-            closure === "native call signal" ? invocationAbort.signal : undefined,
-          ),
-        ),
-    );
-    const wrappedOutcome = wrapped.then(
-      (result) => result,
-      (error: unknown) => error,
-    );
-    try {
-      // A rejected spawn never enters preparation; report it instead of waiting for the test timeout.
-      const childSessionKey = await Promise.race([
-        entered.promise,
-        wrapped.then(() => {
-          throw new Error("Spawn settled before entering context preparation");
-        }),
-      ]);
-      expect(subagentRuns.size, "no ownership transfer before preparation resolves").toBe(0);
-      expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeDefined();
-      if (closure === "native acceptance") {
-        release.resolve();
-        await acceptedEntered.promise;
-        expect(subagentRuns.size, "accepted local run still awaits source registration").toBe(0);
-        expect(childController?.controller.signal.aborted).toBe(false);
-      }
-      if (closure === "native abort" || closure === "native acceptance") {
-        const reply = await invokeChatAbortHandler({
-          handler: handleChatAbortRequest,
-          context,
-          request: { sessionKey: parentSessionKey, runId: parentRunId },
-          client: {
-            connId: "owner-connection",
-            connect: { scopes: ["operator.read", "operator.write"] },
-          },
-        });
-        expect(reply).toHaveBeenCalledWith(true, {
-          ok: true,
-          aborted: true,
-          runIds: [parentRunId],
-        });
-        expect(parent.controller.signal.aborted).toBe(true);
-        expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
-        expect(await wrappedOutcome).toBeInstanceOf(Error);
-      } else {
-        if (closure.endsWith("claim loss")) {
-          releaseAgentRunDelegatedAuthority(authority);
-        } else if (closure.endsWith("replacement")) {
-          replacementAuthority = claimAgentRunDelegatedAuthority(
-            createOperationalRunInstanceRef(parentRunId),
-          );
-        } else if (closure.endsWith("lifecycle rotation")) {
-          rotateAgentRunRegistryLifecycleGeneration();
-        } else if (closure === "projected close") {
-          host!.close();
-        } else if (closure.endsWith("signal")) {
-          invocationAbort.abort();
-        } else {
-          admission.close();
-        }
-        expect(
-          parent.controller.signal.aborted,
-          "claim/capability closure is independent of parent signal",
-        ).toBe(false);
-      }
-      release.resolve();
-      acceptedGate.resolve();
-      await forwarded;
-      if (closure === "native acceptance") {
-        expect(agentDispatch).toHaveBeenCalledOnce();
-        expect(
-          childController?.controller.signal.aborted,
-          "exact accepted local child aborted before deletion",
-        ).toBe(true);
-      } else {
-        expect(agentDispatch, "cancelled source never dispatches a child").not.toHaveBeenCalled();
-      }
-      expect(subagentRuns.size, "cancelled source never registers runnable work").toBe(0);
-      expect(rollback).toHaveBeenCalledOnce();
-      expect(deleted).toEqual([childSessionKey]);
-      expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toBeUndefined();
-      const survivor = vi.fn(async () => {});
-      enqueueSwarmRun({
-        groupId: JSON.stringify(["main", parentSessionKey, groupId]),
-        runId: "surviving-reservation",
-        maxConcurrent: 1,
-        activeRunIds: [],
-        start: survivor,
-        onStartFailure: () => true,
-      });
-      await vi.waitFor(() => expect(survivor).toHaveBeenCalledOnce());
-    } finally {
-      release.resolve();
-      acceptedGate.resolve();
-      await forwarded;
-      childController?.cleanup();
-      await wrappedOutcome;
-      host?.close();
-      if (replacementAuthority) {
-        releaseAgentRunDelegatedAuthority(replacementAuthority);
-      }
-      admission.close();
-      parent.cleanup();
-    }
-  });
 
   it.each(["complete", "abort", "abort during registration"])(
     "preserves child ownership when the parent closes after registration: %s",
