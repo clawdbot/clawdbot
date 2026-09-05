@@ -46,6 +46,21 @@ function createRouterHarness(options: ConstructorParameters<typeof ChatTurnRoute
 }
 
 describe("SystemAgentChatEngine approval", () => {
+  it("keeps delegated memory ownership on the requester", async () => {
+    const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({ text: "ready" }));
+    const router = createRouterHarness({
+      operatorApprovalOnly: true,
+      requesterAgentId: "research",
+      runAgentTurn,
+    });
+
+    await router.resolveTurn("Inspect my scoped notes.");
+
+    expect(runAgentTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ memoryPromptAgentId: "research" }),
+    );
+  });
+
   it("records the delegated requester before hashing a model-tool proposal", async () => {
     const unrecordedOperation = {
       kind: "create-agent" as const,

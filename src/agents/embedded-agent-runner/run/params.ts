@@ -110,6 +110,8 @@ export type RunEmbeddedAgentParams = {
   /** Explicit sandbox and tool-policy owner when the policy session key is unscoped. */
   sandboxAgentId?: string;
   agentId?: string;
+  /** Host-verified owner used only to prepare agent-scoped memory prompt supplements. */
+  memoryPromptAgentId?: string;
   messageChannel?: string;
   messageProvider?: string;
   /** Capabilities declared by the gateway client that originated this run. */

@@ -358,9 +358,11 @@ describe("Memory Wiki prompt section", () => {
         ],
       });
     }
+    let currentAppConfig = appConfig;
     const prepare = createWikiPromptSectionPreparer({
       config,
-      resolveConfig: (agentId) => resolveMemoryWikiAgentConfig({ config, appConfig, agentId }),
+      resolveConfig: (agentId) =>
+        resolveMemoryWikiAgentConfig({ config, appConfig: currentAppConfig, agentId }),
     });
 
     const support = await prepare({ availableTools: new Set(), agentId: "support" });
@@ -371,5 +373,10 @@ describe("Memory Wiki prompt section", () => {
     expect(marketing.join("\n")).toContain("MARKETING_SENTINEL");
     expect(marketing.join("\n")).not.toContain("SUPPORT_SENTINEL");
     await expect(prepare({ availableTools: new Set() })).resolves.toEqual([]);
+
+    currentAppConfig = { agents: { list: [{ id: "marketing", default: true }] } };
+    await expect(prepare({ availableTools: new Set(), agentId: "support" })).rejects.toThrow(
+      "Unknown memory-wiki agentId: support.",
+    );
   });
 });

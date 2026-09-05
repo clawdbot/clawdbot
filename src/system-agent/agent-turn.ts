@@ -60,6 +60,8 @@ export type SystemAgentTurnRunner = (params: {
   approvalArmed: boolean;
   /** The host authorizes delegated proposals; chat replies cannot self-approve. */
   operatorApprovalOnly?: boolean;
+  /** Conversation owner used only for agent-scoped memory prompt preparation. */
+  memoryPromptAgentId?: string;
   session: SystemAgentSession;
 }) => Promise<SystemAgentTurnReply | null>;
 
@@ -338,6 +340,7 @@ async function runSystemAgentTurnWithDeps(
     messageChannel: "openclaw",
     messageProvider: "openclaw",
     disableTrajectory: true,
+    memoryPromptAgentId: params.memoryPromptAgentId ?? plan.agentId,
   };
   // Directives are per-turn: the tool records at most one interactive handoff
   // and the engine executes it after the reply.

@@ -810,6 +810,7 @@ describe("runSystemAgentTurn", () => {
         overview: { defaultModel: "openai/gpt-5.4" } as never,
         surface: "gateway",
         approvalArmed: false,
+        memoryPromptAgentId: "research",
         session,
       },
       {
@@ -828,6 +829,7 @@ describe("runSystemAgentTurn", () => {
       provider: "openai",
       model: "gpt-5.4",
       systemAgentTool: { agentId: "ops" },
+      memoryPromptAgentId: "research",
       agentDir,
       authProfileId: "openai:ops",
       authProfileIdSource: "user",

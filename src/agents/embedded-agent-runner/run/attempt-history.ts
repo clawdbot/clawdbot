@@ -634,7 +634,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
         contextEngine: input.activeContextEngine,
         sessionId: attempt.sessionId,
         sessionKey: attempt.sessionKey,
-        memoryPromptAgentId: attempt.memoryPromptAgentId ?? input.sessionAgentId,
+        agentId: attempt.memoryPromptAgentId ?? input.sessionAgentId,
         appendOnlyRuntimeContext: input.transcriptPolicy.appendOnlyRuntimeContext,
         messages: activeSession.messages,
         tokenBudget: messageBudget,

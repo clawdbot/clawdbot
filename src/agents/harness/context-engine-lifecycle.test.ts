@@ -163,7 +163,7 @@ describe("harness context engine lifecycle", () => {
             contextEngine: createContextEngine({ assemble }),
             sessionId: sessionParams.sessionId,
             sessionKey: "global",
-            memoryPromptAgentId: "support",
+            agentId: "support",
             messages: [textMessage("user", "visible ask", 1)],
             availableTools,
             citationsMode: "on",
