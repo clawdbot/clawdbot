@@ -307,9 +307,33 @@ export async function fetchPublishedRepositoryAdvisories({
               (response.status === 429 ||
                 (response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0"));
             const reason = rateLimited ? "rate-limited" : "request-failed";
-            // Secondary limits can return 403 with primary quota remaining. Do not
-            // continue through repositories after a throttle or credential denial.
-            if (github && [401, 403, 429].includes(response.status)) {
+            let resourceDenied = false;
+            if (
+              github &&
+              response.status === 403 &&
+              !rateLimited &&
+              !response.headers.has("retry-after")
+            ) {
+              try {
+                const error: unknown = JSON.parse(
+                  await readBoundedResponseText(
+                    response,
+                    "GitHub advisory denial",
+                    MAX_RESPONSE_BYTES,
+                    { signal, timeoutPromise },
+                  ),
+                );
+                // GitHub documents these as resource-scoped permission failures, not throttling.
+                // Keep that advisory unresolved without poisoning unrelated reviewed requests.
+                resourceDenied =
+                  isRecord(error) &&
+                  (error.message === "Resource not accessible by integration" ||
+                    error.message === "Resource not accessible by personal access token");
+              } catch {
+                // Unknown or unreadable 403 responses may be secondary limits: stop globally.
+              }
+            }
+            if (github && [401, 403, 429].includes(response.status) && !resourceDenied) {
               githubFailure = reason;
             }
             void response.body?.cancel().catch(() => undefined);

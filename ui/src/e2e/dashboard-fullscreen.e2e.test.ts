@@ -1,11 +1,16 @@
+import type { Server as HttpServer } from "node:http";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
+import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { focusChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -88,6 +93,27 @@ async function closeFocusedView(page: Page, label: "Back" | "Close dashboard"): 
   await action.waitFor();
   await action.click();
   await page.waitForURL(`${suite.server.baseUrl}dashboards`);
+}
+
+async function listenOnLoopback(server: HttpServer): Promise<number> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("sandbox host did not bind a TCP address");
+  }
+  return address.port;
+}
+
+async function closeServer(server: HttpServer): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
 }
 
 suite.define(() => {
@@ -180,51 +206,271 @@ suite.define(() => {
     });
   });
 
-  it("shows the board fullscreen control in split and dashboard faces", async () => {
+  it("leaves dashboard dismissal to the native navigation host", async () => {
+    await suite.withPage(
+      { serviceWorkers: "block", viewport: { width: 393, height: 852 } },
+      async ({ page }) => {
+        await page.addInitScript(() => {
+          Object.defineProperty(window, "__OPENCLAW_NATIVE_WEB_CHROME__", {
+            value: true,
+            configurable: true,
+          });
+        });
+        await installMockGateway(page, {
+          sessionKey,
+          featureMethods: ["board.get"],
+          methodResponses: {
+            "sessions.resolve": {
+              ok: true,
+              key: sessionKey,
+              agentId: "main",
+              displayName: sessionRow.displayName,
+              boardFace: sessionRow.boardFace,
+            },
+            "sessions.describe": { session: sessionRow },
+            "board.get": boardSnapshot,
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}${initialFocusPath}`);
+        const dashboardDocument = page.locator("openclaw-board-document");
+        await dashboardDocument.locator("openclaw-board-view").waitFor();
+
+        expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+        expect(
+          await dashboardDocument.getByRole("button", { name: "Close dashboard" }).count(),
+        ).toBe(0);
+        const horizontalOverflow = await page.evaluate(() => {
+          const board = document.querySelector("openclaw-board-view");
+          return {
+            document: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            board: board ? board.scrollWidth - board.clientWidth : null,
+            shortBoardVertical: board ? board.scrollHeight - board.clientHeight : null,
+          };
+        });
+        expect(horizontalOverflow).toEqual({ document: 0, board: 0, shortBoardVertical: 0 });
+      },
+    );
+  });
+
+  it("hands nested sandbox scroll remainder to the shell-free dashboard document", async () => {
+    const sandboxHost = createSandboxHostHttpServer();
+    const sandboxPort = await listenOnLoopback(sandboxHost);
+    try {
+      await suite.withPage(
+        {
+          hasTouch: true,
+          isMobile: true,
+          serviceWorkers: "block",
+          viewport: { width: 393, height: 852 },
+        },
+        async ({ context, page }) => {
+          const widgetDocument = buildWidgetDocument(
+            "Nightly disk cleanup",
+            `<style>
+            .local-scroll{height:120px;overflow-y:auto}.local-row{height:40px}
+            .row{height:48px;border-bottom:1px solid #333}
+          </style>
+          <section class="local-scroll">${Array.from(
+            { length: 8 },
+            (_, index) => `<div class="local-row">Local row ${index + 1}</div>`,
+          ).join("")}</section>
+          <main>${Array.from(
+            { length: 28 },
+            (_, index) =>
+              `<div class="row"${index === 27 ? ' id="dashboard-final-row"' : ""}>Cleanup row ${index + 1}</div>`,
+          ).join("")}</main>`,
+          );
+          const widgetUrl = `${suite.server.baseUrl}__widget/long-dashboard`;
+          await page.route(widgetUrl, async (route) => {
+            await route.fulfill({
+              body: widgetDocument,
+              contentType: "text/html; charset=utf-8",
+              status: 200,
+            });
+          });
+          await installMockGateway(page, {
+            sessionKey,
+            featureMethods: ["board.get"],
+            methodResponses: {
+              "sessions.resolve": {
+                ok: true,
+                key: sessionKey,
+                agentId: "main",
+                displayName: sessionRow.displayName,
+                boardFace: sessionRow.boardFace,
+              },
+              "sessions.describe": { session: sessionRow },
+              "board.get": {
+                ...boardSnapshot,
+                widgets: [
+                  {
+                    name: "long-dashboard",
+                    tabId: "main",
+                    title: "Nightly disk cleanup",
+                    contentKind: "html",
+                    sizeW: 12,
+                    sizeH: 6,
+                    position: 0,
+                    grantState: "none",
+                    revision: 1,
+                    frameUrl: widgetUrl,
+                    instanceId: "long-dashboard-instance",
+                    viewTicket: "long-dashboard-ticket",
+                    viewTicketTtlMs: 1_200_000,
+                    viewGeneration: "long-dashboard-generation",
+                    sandboxUrl: SANDBOX_HOST_PATH,
+                    sandboxPort,
+                    sandboxOrigin: `http://127.0.0.1:${sandboxPort}`,
+                  },
+                ],
+              },
+            },
+          });
+
+          await page.goto(`${suite.server.baseUrl}${initialFocusPath}`);
+          const board = page.locator("openclaw-board-document openclaw-board-view");
+          const frame = page.locator(
+            '.board-widget[data-widget-name="long-dashboard"] .board-widget__frame',
+          );
+          await frame.waitFor();
+          await expect
+            .poll(() => board.evaluate((element) => element.scrollHeight > element.clientHeight))
+            .toBe(true);
+          await expect
+            .poll(() =>
+              page
+                .frames()
+                .some((candidate) => candidate.parentFrame()?.url().includes(SANDBOX_HOST_PATH)),
+            )
+            .toBe(true);
+          const embeddedFrame = page
+            .frames()
+            .find((candidate) => candidate.parentFrame()?.url().includes(SANDBOX_HOST_PATH));
+          if (!embeddedFrame) {
+            throw new Error("Dashboard widget document is not mounted");
+          }
+          const localScroller = embeddedFrame.locator(".local-scroll");
+          const localScrollerBox = await localScroller.boundingBox();
+          const boardBox = await board.boundingBox();
+          const frameBox = await frame.boundingBox();
+          if (!localScrollerBox || !boardBox || !frameBox) {
+            throw new Error("Dashboard scroll owner or widget frame is not visible");
+          }
+
+          await board.evaluate((element) => {
+            element.scrollTop = 0;
+          });
+          await page.mouse.move(
+            localScrollerBox.x + localScrollerBox.width / 2,
+            localScrollerBox.y + localScrollerBox.height / 2,
+          );
+          await page.mouse.wheel(0, 80);
+          await expect
+            .poll(() => localScroller.evaluate((element) => element.scrollTop))
+            .toBeGreaterThan(0);
+          expect(await board.evaluate((element) => element.scrollTop)).toBe(0);
+
+          await embeddedFrame.evaluate(() => {
+            document.body.dispatchEvent(
+              new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 500 }),
+            );
+          });
+          expect(await board.evaluate((element) => element.scrollTop)).toBe(0);
+
+          await page.mouse.move(
+            frameBox.x + frameBox.width / 2,
+            Math.min(frameBox.y + frameBox.height / 2, boardBox.y + boardBox.height / 2),
+          );
+          await page.mouse.wheel(0, 500);
+          await expect
+            .poll(() => board.evaluate((element) => element.scrollTop))
+            .toBeGreaterThan(0);
+
+          await embeddedFrame.evaluate(() => {
+            if (document.scrollingElement) {
+              document.scrollingElement.scrollTop = 0;
+            }
+          });
+          await board.evaluate((element) => {
+            element.scrollTop = 0;
+          });
+          const cdp = await context.newCDPSession(page);
+          for (let attempt = 0; attempt < 4; attempt += 1) {
+            const currentBoardBox = await board.boundingBox();
+            const currentFrameBox = await frame.boundingBox();
+            if (!currentBoardBox || !currentFrameBox) {
+              throw new Error("Dashboard scroll owner or widget frame disappeared");
+            }
+            const touchX = currentFrameBox.x + currentFrameBox.width / 2;
+            const touchStartY = Math.min(
+              currentFrameBox.y + currentFrameBox.height - 24,
+              currentBoardBox.y + currentBoardBox.height - 24,
+            );
+            const touchEndY = Math.max(
+              currentFrameBox.y + 24,
+              currentBoardBox.y + 24,
+              touchStartY - 300,
+            );
+            await cdp.send("Input.dispatchTouchEvent", {
+              type: "touchStart",
+              touchPoints: [{ x: touchX, y: touchStartY }],
+            });
+            await cdp.send("Input.dispatchTouchEvent", {
+              type: "touchMove",
+              touchPoints: [{ x: touchX, y: touchEndY }],
+            });
+            await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+            const remaining = await board.evaluate(
+              (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+            );
+            if (remaining <= 1) {
+              break;
+            }
+          }
+          await expect
+            .poll(() =>
+              board.evaluate(
+                (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+              ),
+            )
+            .toBeLessThanOrEqual(1);
+          const finalRowBox = await embeddedFrame.locator("#dashboard-final-row").boundingBox();
+          const finalBoardBox = await board.boundingBox();
+          if (!finalRowBox || !finalBoardBox) {
+            throw new Error("Dashboard final row or scroll owner is not visible");
+          }
+          expect(finalRowBox.y + finalRowBox.height).toBeLessThanOrEqual(
+            finalBoardBox.y + finalBoardBox.height + 1,
+          );
+        },
+      );
+    } finally {
+      await closeServer(sandboxHost);
+    }
+  });
+
+  it("makes dashboard main and restores chat after focus", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      const hiddenDockSnapshot = {
-        ...boardSnapshot,
-        revision: 2,
-        tabs: boardSnapshot.tabs.map((tab) =>
-          tab.tabId === "main" ? { ...tab, chatDock: "hidden" } : tab,
-        ),
-      };
       const gateway = await installMockGateway(page, {
         sessionKey,
-        featureMethods: ["board.get", "board.update"],
-        methodResponses: {
-          "board.get": boardSnapshot,
-          "board.update": hiddenDockSnapshot,
-        },
+        featureMethods: ["board.get"],
+        methodResponses: { "board.get": boardSnapshot },
       });
       await rememberMainTab(page);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       await gateway.waitForRequest("board.get");
 
-      const fullscreen = page.locator(".board-fullscreen-button");
-      await fullscreen.waitFor();
-      expect(await fullscreen.getAttribute("aria-label")).toBe("Enter fullscreen");
-      expect(await fullscreen.getAttribute("aria-pressed")).toBe("false");
-      expect(await page.locator('wa-radio[value="split"]').getAttribute("class")).toContain(
-        "settings-segmented__btn--active",
-      );
-
-      await fullscreen.click();
-      await expect.poll(() => fullscreen.getAttribute("aria-pressed")).toBe("true");
-      expect(
-        await page.evaluate(() =>
-          document.fullscreenElement?.classList.contains("chat-pane-primary-column"),
-        ),
-      ).toBe(true);
-      await page.getByRole("button", { name: "Exit fullscreen" }).click();
-      await expect.poll(() => fullscreen.getAttribute("aria-pressed")).toBe("false");
-
-      await page.locator('wa-radio[value="dashboard"]').click();
-      await gateway.waitForRequest("board.update");
-      await expect
-        .poll(() => page.locator('wa-radio[value="dashboard"]').getAttribute("class"))
-        .toContain("settings-segmented__btn--active");
-      await page.getByRole("button", { name: "Enter fullscreen" }).waitFor();
+      await page.locator(".board-session-surface").waitFor();
+      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
+      await page.locator(".chat-thread").waitFor();
+      await focusChatSidePanel(page);
+      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
+      await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
+      await page.getByRole("button", { name: "Restore split", exact: true }).click();
+      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
+      await page.locator('.sidebar-region__primary[data-region="side"] .chat-thread').waitFor();
+      await page.locator('[data-panel-slot="dashboard"][data-region="main"]').waitFor();
     });
   });
 

@@ -32,6 +32,7 @@ import {
 } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import { resolveClaudeCliBindingSessionId } from "../cli-session-history.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import type { ChatRunState } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
@@ -66,6 +67,8 @@ import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import { readSessionPlacementFields } from "./session-placement-read-projection.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
+import { resolveAuthenticatedProfileId } from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
@@ -114,6 +117,8 @@ async function handleChatMetadataRequest({
   params,
   respond,
   context,
+  client,
+  signal,
 }: GatewayRequestHandlerOptions): Promise<void> {
   if (!assertValidParams(params, validateChatMetadataParams, "chat.metadata", respond)) {
     return;
@@ -133,6 +138,7 @@ async function handleChatMetadataRequest({
     // The router authorizes the session selector; only the persisted entry supplies auth profiles.
     const session = loadGatewaySessionEntryReadOnly(metadataParams.sessionKey, {
       agentId: requested.agentId,
+      projection: "list",
     });
     respond(
       true,
@@ -142,7 +148,9 @@ async function handleChatMetadataRequest({
           config: session.cfg,
           agentId: requested.agentId,
         }),
+        sessionKey: session.canonicalKey,
         sessionEntry: session.entry,
+        requesterProfileId: resolveAuthenticatedProfileId(client),
       }),
     );
     return;
@@ -159,12 +167,27 @@ async function handleChatMetadataRequest({
   if (!resolvedAgent) {
     return;
   }
-  respond(
-    true,
-    await context.readChatMetadata({
+  try {
+    const draftAccountSelection = metadataParams.authProfileId
+      ? preparePersonalModelAccountSelection(
+          { client, context, signal },
+          metadataParams.authProfileId,
+          "operator.read",
+        )
+      : undefined;
+    const metadata = await context.readChatMetadata({
       agentId: resolvedAgent.agentId,
-    }),
-  );
+      requesterProfileId: draftAccountSelection?.owner ?? resolveAuthenticatedProfileId(client),
+      ...(draftAccountSelection ? { draftAccountSelection } : {}),
+    });
+    draftAccountSelection?.assertCurrent();
+    respond(true, metadata);
+  } catch (error) {
+    if (!(error instanceof ModelAccountConnectAuthorityError)) {
+      throw error;
+    }
+    respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+  }
 }
 
 async function handleChatHistoryRequest({
@@ -244,6 +267,7 @@ async function handleChatHistoryRequest({
         // Exact reads own their nested JSON; history only projects that snapshot.
         clone: false,
         includeStoreChildEntries: true,
+        projection: "list",
       }),
     {
       config: requestConfig,
@@ -301,7 +325,9 @@ async function handleChatHistoryRequest({
         try {
           return await context.readChatStartupProjection?.({
             agentId: sessionAgentId,
+            sessionKey: canonicalKey,
             sessionEntry: entry,
+            requesterProfileId: resolveAuthenticatedProfileId(client),
             readPolicy: method === "chat.history" ? "ready" : "current",
           });
         } catch (error) {
@@ -398,13 +424,13 @@ async function handleChatHistoryRequest({
     maxSingleMessageBytes: perMessageHardCap,
   });
   const capped = messageId
-    ? (capChatHistoryAroundMessage({
+    ? capChatHistoryAroundMessage({
         messages: replaced.messages,
         messageId,
         // A nonempty JSON array costs one framing byte plus each message and its separator.
         maxCost: maxHistoryBytes - 1,
         messageCost: (message) => byteCounter.messageBytes(message) + 1,
-      }) ?? capArrayByJsonBytes(replaced.messages, maxHistoryBytes, byteCounter.messageBytes).items)
+      })
     : capArrayByJsonBytes(replaced.messages, maxHistoryBytes, byteCounter.messageBytes).items;
   const historyBudgetPreserved =
     replaced.replacedCount === 0 &&

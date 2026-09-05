@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
@@ -8,7 +7,7 @@ import {
 } from "./server-kernel.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
-import { runGatewayShutdownSteps } from "./server-shutdown.js";
+import { rethrowGatewayStartupError, runGatewayShutdownSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
 import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 
@@ -26,16 +25,6 @@ export async function startGatewayServerCore(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
-  // Direct embedders have no CLI lifecycle row, so the server start boundary
-  // still owns an exact generation instead of making clients infer one.
-  const suppliedBootId = opts.bootId;
-  if (
-    suppliedBootId !== undefined &&
-    (suppliedBootId.trim() !== suppliedBootId || !suppliedBootId || suppliedBootId.length > 96)
-  ) {
-    throw new Error("Gateway boot ID must contain 1 to 96 characters");
-  }
-  const bootId = suppliedBootId ?? randomUUID();
   let releasePostReadyWork: () => void = () => {};
   const postReadyWorkBarrier = new Promise<void>((resolve) => {
     releasePostReadyWork = resolve;
@@ -50,11 +39,12 @@ export async function startGatewayServerCore(
   const {
     beginClosePrelude,
     closeOnStartupFailure,
-    createCloseHandler,
+    prepareClose,
     sealAndJoinRegisteredSidecarStops,
     runClosePrelude,
     stopRegisteredGatewayLifetimeSidecars,
     stopRegisteredPostReadySidecars,
+    stopConnectionDependentSidecars,
     terminalSessions,
     shutdownRuntime,
   } = gatewayKernel;
@@ -85,7 +75,7 @@ export async function startGatewayServerCore(
       kernelRuntime: { ...gatewayKernel, ...transport },
       port,
       opts,
-      bootId,
+      bootId: gatewayKernel.bootId,
       log,
       logHealth,
       logWsControl,
@@ -98,44 +88,63 @@ export async function startGatewayServerCore(
     });
     startupSettled = startup.startupSettled;
   } catch (err) {
-    await closeOnStartupFailure();
-    throw err;
+    // Failed startup must release work whose normal timer was never armed.
+    releasePostReadyWork();
+    return await rethrowGatewayStartupError(err, closeOnStartupFailure);
   }
   // The public server is fully initialized now. Leave a short I/O window before
   // background prewarms and cleanup imports compete for the startup CPU.
   const postReadyWorkTimer = setTimeout(releasePostReadyWork, POST_READY_WORK_START_DELAY_MS);
   postReadyWorkTimer.unref?.();
 
-  const close = createCloseHandler();
+  let closePromise: Promise<void> | undefined;
 
   return {
     startupSettled,
     getTailscaleIngressEndpoint: gatewayKernel.transportBridge.getTailscaleIngressEndpoint,
-    close: async (optsLocal) => {
-      await runGatewayShutdownSteps({
-        steps: [
-          { name: "close prelude fence", run: beginClosePrelude },
-          // Kill any live operator shells before the socket layer tears down.
-          { name: "terminal sessions", run: () => terminalSessions.disposeAll() },
-          { name: "gateway lifetime sidecars", run: stopRegisteredGatewayLifetimeSidecars },
-          { name: "post-ready sidecars", run: stopRegisteredPostReadySidecars },
-          {
-            name: "gateway_stop plugin hooks",
-            run: async () => {
-              await shutdownRuntime.runGlobalGatewayStopSafely({
-                event: { reason: optsLocal?.reason ?? "gateway stopping" },
-                ctx: { port },
-                onError: (error) =>
-                  log.warn(`gateway_stop hook failed: ${formatErrorMessage(error)}`),
-              });
-            },
-          },
-          { name: "gateway close prelude", run: runClosePrelude },
-          { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops },
-          { name: "gateway close", run: () => close(optsLocal) },
-        ],
-        onError: (message) => log.error(message),
-      });
+    close: (optsLocal) => {
+      if (!closePromise) {
+        const prelude = beginClosePrelude(optsLocal);
+        clearTimeout(postReadyWorkTimer);
+        releasePostReadyWork();
+        closePromise = (async () => {
+          await prelude;
+          const close = await prepareClose(optsLocal);
+          await runGatewayShutdownSteps({
+            steps: [
+              {
+                name: "connection-dependent sidecars",
+                run: stopConnectionDependentSidecars,
+                required: true,
+              },
+              {
+                name: "received connection work",
+                run: () => gatewayKernel.connectionWork.drain(),
+                required: true,
+              },
+              { name: "terminal sessions", run: () => terminalSessions.disposeAll() },
+              { name: "gateway lifetime sidecars", run: stopRegisteredGatewayLifetimeSidecars },
+              { name: "post-ready sidecars", run: stopRegisteredPostReadySidecars },
+              {
+                name: "gateway_stop plugin hooks",
+                run: async () => {
+                  await shutdownRuntime.runGlobalGatewayStopSafely({
+                    event: { reason: optsLocal?.reason ?? "gateway stopping" },
+                    ctx: { port },
+                    onError: (error) =>
+                      log.warn(`gateway_stop hook failed: ${formatErrorMessage(error)}`),
+                  });
+                },
+              },
+              { name: "gateway close prelude", run: runClosePrelude },
+              { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops },
+              { name: "gateway close", run: close },
+            ],
+            onError: (message) => log.error(message),
+          });
+        })();
+      }
+      return closePromise;
     },
   };
 }

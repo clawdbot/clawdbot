@@ -1,7 +1,8 @@
 import { html, nothing, render } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleMarkdownCodeBlockClick, markdownCodeBlocks } from "./markdown-code-blocks.ts";
+import { markdownBlocks } from "./markdown-blocks.ts";
+import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
@@ -27,7 +28,7 @@ function renderCodeCopyButton(): HTMLButtonElement {
   return button;
 }
 
-it("reobserves reused code DOM while fencing scans queued before disconnect", async () => {
+it("reobserves reused Markdown DOM while fencing scans queued before disconnect", async () => {
   const observed = new Set<Element>();
   vi.stubGlobal(
     "ResizeObserver",
@@ -44,14 +45,19 @@ it("reobserves reused code DOM while fencing scans queued before disconnect", as
     },
   );
   const container = document.body.appendChild(document.createElement("div"));
-  const content = toSanitizedMarkdownHtml("```ts\nconst answer = 42;\n```", {
-    codeBlockInteraction: "interactive",
-  });
+  const content = toSanitizedMarkdownHtml(
+    "```ts\nconst answer = 42;\n```\n\n| Name | Value |\n| --- | --- |\n| Alpha | One |",
+    {
+      codeBlockInteraction: "interactive",
+      tableInteractions: "enabled",
+    },
+  );
   const part = render(
-    html`<section ${markdownCodeBlocks()}>${unsafeHTML(content)}</section>`,
+    html`<section class="chat-text" ${markdownBlocks()}>${unsafeHTML(content)}</section>`,
     container,
   );
   const code = container.querySelector("code");
+  const tableViewport = container.querySelector(".markdown-table__viewport");
 
   try {
     part.setConnected(false);
@@ -60,8 +66,9 @@ it("reobserves reused code DOM while fencing scans queued before disconnect", as
 
     part.setConnected(true);
     await Promise.resolve();
-    expect(observed.size).toBe(2);
+    expect(observed.size).toBe(3);
     expect(observed.has(code!)).toBe(true);
+    expect(observed.has(tableViewport!)).toBe(true);
 
     part.setConnected(false);
     expect(observed.size).toBe(0);
@@ -69,7 +76,9 @@ it("reobserves reused code DOM while fencing scans queued before disconnect", as
     await Promise.resolve();
     expect(container.querySelector("code")).toBe(code);
     expect(observed.has(code!)).toBe(true);
-    expect(observed.size).toBe(2);
+    expect(container.querySelector(".markdown-table__viewport")).toBe(tableViewport);
+    expect(observed.has(tableViewport!)).toBe(true);
+    expect(observed.size).toBe(3);
   } finally {
     render(nothing, container);
   }

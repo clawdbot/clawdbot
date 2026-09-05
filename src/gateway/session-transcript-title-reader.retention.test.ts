@@ -5,11 +5,13 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+import { sessionTitleRetentionEntrypoints } from "./session-title-retention.test-support.js";
 
 let state: OpenClawTestState;
 let storePath: string;
@@ -52,19 +54,19 @@ afterAll(async () => {
 test.each(["scalar", "batch"])(
   "releases transcript payloads after caching %s title fields",
   (mode) => {
-    const moduleUrl = (relative: string) => new URL(relative, import.meta.url).href;
+    const titleReaderUrl = resolveRuntimeWorkerUrl(sessionTitleRetentionEntrypoints.titleReader);
+    const sessionUtilsUrl = resolveRuntimeWorkerUrl(sessionTitleRetentionEntrypoints.sessionUtils);
     const result = spawnSync(
       process.execPath,
       [
         "--expose-gc",
-        "--import",
-        "tsx",
+        ...resolveRuntimeWorkerArgv(titleReaderUrl).slice(0, -1),
         "--input-type=module",
         "--eval",
         `
           import { setImmediate as yieldTurn } from "node:timers/promises";
-          import { readSessionTitleFieldsFromTranscript, readSessionTitleFieldsFromTranscriptBatch } from ${JSON.stringify(moduleUrl("./session-transcript-title-reader.ts"))};
-          import { deriveSessionTitle } from ${JSON.stringify(moduleUrl("./session-utils-core.ts"))};
+          import { readSessionTitleFieldsFromTranscript, readSessionTitleFieldsFromTranscriptBatch } from ${JSON.stringify(titleReaderUrl.href)};
+          import { deriveSessionTitle } from ${JSON.stringify(sessionUtilsUrl.href)};
 
           async function heapUsed() {
             await yieldTurn();
@@ -99,7 +101,7 @@ test.each(["scalar", "batch"])(
       ],
       { cwd: process.cwd(), env: state.env, encoding: "utf8", timeout: 20_000 },
     );
-    expect(result.error).toBeUndefined();
+    expect(result.error, result.stderr + result.stdout).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     const output = JSON.parse(result.stdout) as {
       retainedBytes: number;

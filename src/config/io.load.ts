@@ -63,7 +63,10 @@ export function loadConfigFromContext(
     const contextBudgetMigration = migrateLegacyContextBudgetConfig(
       readResolution.resolvedConfigRaw,
     );
-    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config);
+    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config, {
+      env: deps.env,
+      homedir: deps.homedir,
+    });
     const effectiveConfigRaw = rosterMigration.config;
     const validationConfigRaw = effectiveConfigRaw;
     const snapshotRaw = raw;

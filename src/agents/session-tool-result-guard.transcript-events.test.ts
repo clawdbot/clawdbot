@@ -60,6 +60,32 @@ afterEach(() => {
 });
 
 describe("guardSessionManager transcript updates", () => {
+  it("persists compaction item identity under each current run across reload", async () => {
+    const { sessionManager, root, target } = await openPersistedSessionManager();
+    for (const runId of ["run-first", "run-second"]) {
+      const guarded = guardSessionManager(sessionManager, { runId });
+      const keptId = guarded.appendMessage({ role: "user", content: runId, timestamp: 1 });
+      guarded.appendCompaction("summary", keptId, 100, { source: "hook" }, true, {
+        itemId: `compaction-${runId}`,
+      });
+    }
+    const compactions = SessionManager.open(target, root)
+      .getBranch()
+      .filter((entry) => entry.type === "compaction");
+    expect(compactions).toMatchObject([
+      {
+        __openclaw: { runId: "run-first", itemId: "compaction-run-first" },
+        details: { source: "hook" },
+        fromHook: true,
+      },
+      {
+        __openclaw: { runId: "run-second", itemId: "compaction-run-second" },
+        details: { source: "hook" },
+        fromHook: true,
+      },
+    ]);
+  });
+
   it("consumes a steered source under its own custody and does not repeat its approval hook", async () => {
     const { root, target, sessionEntry } = await openPersistedSessionManager();
     const recorderTarget = { ...target, sessionEntry };
@@ -72,6 +98,7 @@ describe("guardSessionManager transcript updates", () => {
       target: recorderTarget,
       beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
     });
+    const markRuntimePersisted = vi.spyOn(source, "markRuntimePersisted");
     try {
       await ambient.stageApproved!({ runId: "active", assertCurrent: () => {} });
       await ambient.persistApproved();
@@ -104,6 +131,9 @@ describe("guardSessionManager transcript updates", () => {
       const guarded = guardSessionManager(SessionManager.open(target, root), {
         agentId: target.agentId,
         sessionKey: target.sessionKey,
+        preparedUserTurnMessage: await ambient.resolveMessage(),
+        preparedUserTurnTranscriptRecorder: ambient,
+        suppressNextUserMessagePersistence: true,
       });
       const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
         { role: "user", content: "Rendered steering prompt", timestamp: 2 },
@@ -116,6 +146,11 @@ describe("guardSessionManager transcript updates", () => {
       expect(entryId).toBe(pending.items[0]?.id);
       expect(guarded.getEntry(entryId)).toMatchObject({ message: approved });
       expect(source.getAdmissionReceipt()).toMatchObject({ entryId });
+      expect(markRuntimePersisted).toHaveBeenCalledWith(
+        approved,
+        expect.objectContaining({ entryId }),
+        { appended: true },
+      );
       expect(listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
       expect(approvalHook).toHaveBeenCalledOnce();
 
@@ -135,48 +170,79 @@ describe("guardSessionManager transcript updates", () => {
     }
   });
 
-  it("records the admission anchor when adopting an ingress-persisted user", async () => {
-    const { root, target } = await openPersistedSessionManager();
-    const message = {
-      role: "user" as const,
-      content: "canonical prompt",
-      idempotencyKey: "canonical-run:user",
-      timestamp: Date.now(),
-    };
-    await appendTranscriptMessage(target, {
-      cwd: root,
-      eventId: "ingress-persisted-user",
-      message,
-      now: message.timestamp,
-    });
-    const recorder = createUserTurnTranscriptRecorder({
-      message,
-      target: {
-        ...target,
-        sessionEntry: { sessionId: target.sessionId, updatedAt: message.timestamp },
-      },
-    });
-    const guarded = guardSessionManager(SessionManager.open(target, root), {
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      preparedUserTurnMessage: message,
-      preparedUserTurnTranscriptRecorder: recorder,
-    });
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])(
+    "records replay admission without a fresh append (excluded: %s; stale manager: %s)",
+    async (excludeFromContext, staleManager) => {
+      const { root, target, sessionManager } = await openPersistedSessionManager();
+      if (staleManager) {
+        // The SDK persists model/thinking setup before prompt submission. Keep the user
+        // projection stale without creating a competing lazy header initializer.
+        sessionManager.appendModelChange("openai", "gpt-5.6-sol");
+        sessionManager.appendThinkingLevelChange("off");
+      }
+      const openedBeforeIngress = staleManager
+        ? SessionManager.openBounded(target, { cwd: root, maxBytes: 100_000, maxEvents: 100 })
+        : undefined;
+      const message = {
+        role: "user" as const,
+        content: "canonical prompt",
+        idempotencyKey: "canonical-run:user",
+        ...(excludeFromContext ? { excludeFromContext: true as const } : {}),
+        timestamp: Date.now(),
+      };
+      await appendTranscriptMessage(target, {
+        cwd: root,
+        eventId: "ingress-persisted-user",
+        message,
+        now: message.timestamp,
+      });
+      const recorder = createUserTurnTranscriptRecorder({
+        message,
+        target: {
+          ...target,
+          sessionEntry: { sessionId: target.sessionId, updatedAt: message.timestamp },
+        },
+      });
+      const markRuntimePersisted = vi.spyOn(recorder, "markRuntimePersisted");
+      const updates: InternalSessionTranscriptUpdate[] = [];
+      listeners.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
+      const guarded = guardSessionManager(
+        openedBeforeIngress ??
+          SessionManager.openBounded(target, { cwd: root, maxBytes: 100_000, maxEvents: 100 }),
+        {
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          preparedUserTurnMessage: message,
+          preparedUserTurnTranscriptRecorder: recorder,
+        },
+      );
 
-    expect(recorder.getAdmissionReceipt()).toBeUndefined();
-    guarded.appendMessage({ ...message });
+      expect(recorder.getAdmissionReceipt()).toBeUndefined();
+      guarded.appendMessage({ ...message });
 
-    expect(recorder.hasPersisted()).toBe(true);
-    expect(recorder.getAdmissionReceipt()).toMatchObject({
-      agentId: target.agentId,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      storePath: target.storePath,
-      entryId: "ingress-persisted-user",
-      idempotencyKey: message.idempotencyKey,
-      role: "user",
-    });
-  });
+      expect(recorder.hasPersisted()).toBe(true);
+      expect(markRuntimePersisted).toHaveBeenCalledWith(
+        message,
+        expect.objectContaining({ entryId: "ingress-persisted-user" }),
+        { appended: false },
+      );
+      expect(updates).toEqual([]);
+      expect(recorder.getAdmissionReceipt()).toMatchObject({
+        agentId: target.agentId,
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+        entryId: "ingress-persisted-user",
+        idempotencyKey: message.idempotencyKey,
+        role: "user",
+      });
+    },
+  );
 
   it.each(["active", "side", "setup-metadata"] as const)(
     "adopts an ingress-persisted %s-branch user without broadcasting a duplicate",
@@ -243,6 +309,7 @@ describe("guardSessionManager transcript updates", () => {
       expect(markRuntimePersisted.mock.calls[0]?.[0]).toMatchObject({
         idempotencyKey: "canonical-run:user",
       });
+      expect(markRuntimePersisted.mock.calls[0]?.[2]).toEqual({ appended: false });
     },
   );
 
@@ -309,6 +376,46 @@ describe("guardSessionManager transcript updates", () => {
       display: false,
       role: "user",
     });
+    expect(markRuntimePersisted.mock.calls[0]?.[2]).toEqual({ appended: true });
+  });
+
+  it("drops selected mentions when a write hook mutates their text in place", async () => {
+    const { target, sessionManager } = await openPersistedSessionManager();
+    const message = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "Hi @Taylor" }],
+      timestamp: 1,
+      __openclaw: {
+        humanMentions: [{ profileId: "profile-taylor", start: 3, end: 10 }],
+      },
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.typedHooks.push({
+      pluginId: "rewrite-user-selection",
+      hookName: "before_message_write",
+      source: "test",
+      handler: ({ message: runtimeMessage }: PluginHookBeforeMessageWriteEvent) => {
+        if (runtimeMessage.role === "user" && Array.isArray(runtimeMessage.content)) {
+          Object.assign(runtimeMessage.content[0]!, { text: "Hi @Morgan" });
+        }
+        return { message: runtimeMessage };
+      },
+    });
+    initializeGlobalHookRunner(registry);
+    try {
+      const guarded = guardSessionManager(sessionManager, {
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        preparedUserTurnMessage: message,
+      });
+      const entryId = guarded.appendMessage(message);
+      expect(guarded.getEntry(entryId)).toMatchObject({
+        message: { role: "user", content: [{ type: "text", text: "Hi @Morgan" }] },
+      });
+      expect(guarded.getEntry(entryId)).not.toHaveProperty("message.__openclaw.humanMentions");
+    } finally {
+      resetGlobalHookRunner();
+    }
   });
 
   it("does not hide ordinary messages that mention memory flushes", () => {

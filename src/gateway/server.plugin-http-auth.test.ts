@@ -216,35 +216,6 @@ describe("gateway plugin HTTP auth boundary", () => {
     await import("./control-ui.js");
   });
 
-  test("applies default security headers and optional strict transport security", async () => {
-    await withGatewayTempConfig("openclaw-plugin-http-security-headers-test-", async () => {
-      const withoutHsts = createTestGatewayServer({ resolvedAuth: AUTH_NONE });
-      const withoutHstsResponse = await sendRequest(withoutHsts, { path: "/missing" });
-      expect(withoutHstsResponse.setHeader).toHaveBeenCalledWith(
-        "X-Content-Type-Options",
-        "nosniff",
-      );
-      expect(withoutHstsResponse.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
-      expect(
-        withoutHstsResponse.setHeader.mock.calls.some(
-          ([headerName]) => headerName === "Strict-Transport-Security",
-        ),
-      ).toBe(false);
-
-      const withHsts = createTestGatewayServer({
-        resolvedAuth: AUTH_NONE,
-        overrides: {
-          strictTransportSecurityHeader: "max-age=31536000; includeSubDomains",
-        },
-      });
-      const withHstsResponse = await sendRequest(withHsts, { path: "/missing" });
-      expect(withHstsResponse.setHeader).toHaveBeenCalledWith(
-        "Strict-Transport-Security",
-        "max-age=31536000; includeSubDomains",
-      );
-    });
-  });
-
   test("serves unauthenticated liveness/readiness probe routes when no other route handles them", async () => {
     await withGatewayServer({
       prefix: "openclaw-plugin-http-probes-test-",

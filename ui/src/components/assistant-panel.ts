@@ -29,7 +29,7 @@ import {
   type CustodianSessionStore,
 } from "../pages/custodian/custodian-session-store.ts";
 import { DockLayoutController } from "./dock-layout-controller.ts";
-import { createDockPanelLayout, type DockPanelSide } from "./dock-panel-layout.ts";
+import { assistantPanelLayout, type DockPanelSide } from "./dock-panel-layout.ts";
 import { icons } from "./icons.ts";
 import { renderLazyElementState } from "./lazy-view-error.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
@@ -47,18 +47,6 @@ const HOME_SESSION_ELEMENT = {
 type AssistantDestination = "home" | "custodian";
 type AssistantDock = Exclude<DockPanelSide, "left">;
 
-const panelLayout = createDockPanelLayout({
-  // Shipped key: operators' saved dock size and placement live here, so the
-  // legacy custodian spelling stays even though the dock is now shared.
-  storageKey: "openclaw.custodian.panel.v1",
-  minHeight: 240,
-  minWidth: 320,
-  defaultDock: "right",
-  supportedDocks: ["bottom", "right"],
-  defaultHeight: 420,
-  defaultWidth: 440,
-});
-
 export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   @property({ attribute: false })
@@ -75,7 +63,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) store: CustodianSessionStore = custodianSessionStore;
 
   private readonly dockLayout = new DockLayoutController(this, {
-    layout: panelLayout,
+    layout: assistantPanelLayout,
     reservationPrefix: "assistant",
     isAvailable: () => this.available,
   });
@@ -383,22 +371,24 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
             )}
           </div>
           <div class="rail-header__actions assistant-panel-actions">
-            ${this.destination === "home"
-              ? html`<button
-                  class="rail-header__action assistant-panel-icon"
-                  type="button"
-                  aria-label=${t("assistantPanel.openHome")}
-                  @click=${() => this.openHomePage()}
-                >
-                  ${icons.maximize}
-                </button>`
-              : nothing}
+            ${
+              this.destination === "home"
+                ? html`<button
+                    class="rail-header__action assistant-panel-icon"
+                    type="button"
+                    aria-label=${t("assistantPanel.openHome")}
+                    @click=${() => this.openHomePage()}
+                  >
+                    ${icons.maximize}
+                  </button>`
+                : nothing
+            }
             <button
               class="rail-header__action assistant-panel-icon"
               type="button"
-              aria-label=${dock === "bottom"
-                ? t("assistantPanel.dockRight")
-                : t("assistantPanel.dockBottom")}
+              aria-label=${
+                dock === "bottom" ? t("assistantPanel.dockRight") : t("assistantPanel.dockBottom")
+              }
               @click=${() => this.setDock(dock === "bottom" ? "right" : "bottom")}
             >
               ${dock === "bottom" ? icons.panelRightOpen : icons.panelBottomOpen}
@@ -413,26 +403,30 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
             </button>
           </div>
         </header>
-        ${this.destination === "home"
-          ? html`${isOptionalElementDefined(HOME_SESSION_ELEMENT)
-              ? html`<openclaw-home-session
-                  .sessionKey=${home.sessionKey}
-                  .agentId=${home.agentId}
-                  .workContext=${workContext}
-                ></openclaw-home-session>`
-              : homeState
-                ? renderLazyElementState(
-                    homeState,
-                    () => this.homeLoader.retry(),
-                    () => this.setOpen(false),
-                  )
-                : nothing}`
-          : html`<openclaw-custodian-surface
-              .store=${this.store}
-              .onboarding=${this.store.activeVariant === "onboarding"}
-              .newAgentIntent=${this.store.activeVariant === "new-agent"}
-              compact
-            ></openclaw-custodian-surface>`}
+        ${
+          this.destination === "home"
+            ? html`${
+                isOptionalElementDefined(HOME_SESSION_ELEMENT)
+                  ? html`<openclaw-home-session
+                      .sessionKey=${home.sessionKey}
+                      .agentId=${home.agentId}
+                      .workContext=${workContext}
+                    ></openclaw-home-session>`
+                  : homeState
+                    ? renderLazyElementState(
+                        homeState,
+                        () => this.homeLoader.retry(),
+                        () => this.setOpen(false),
+                      )
+                    : nothing
+              }`
+            : html`<openclaw-custodian-surface
+                .store=${this.store}
+                .onboarding=${this.store.activeVariant === "onboarding"}
+                .newAgentIntent=${this.store.activeVariant === "new-agent"}
+                compact
+              ></openclaw-custodian-surface>`
+        }
       </section>
     `;
   }

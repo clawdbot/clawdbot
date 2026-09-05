@@ -84,6 +84,16 @@ call resume. The
 that cannot speak WebSocket at all. If every control path is lost, the
 two-minute lease expiry reopens admission automatically.
 
+The hello snapshot includes `suspension: { phase }`, and `gateway.suspension`
+events publish admission changes immediately. The phase is `accepting`,
+`preparing`, `draining`, or `prepared`; neither surface exposes suspension IDs.
+The Control UI's bottom-left connection indicator shows **Suspending…** during
+preparation or draining and **Suspended** while prepared, including in Settings.
+It clears when suspension admission reopens, not when a request succeeds.
+Offline and restart indicators take precedence. Scheduler recovery keeps the
+suspension indicator until admission actually reopens; there is no separate
+resuming phase.
+
 The RPC contract is:
 
 - `gateway.suspend.prepare` — `operator.admin`; params

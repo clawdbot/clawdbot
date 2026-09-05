@@ -17,6 +17,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "../state/openclaw-database-verify.worker",
     distWorkerPath: "state/openclaw-database-verify.worker.js",
   },
+  stateLeaseHeartbeat: {
+    currentModuleUrl,
+    sourceWorkerName: "../state/openclaw-state-lease-heartbeat.worker",
+    distWorkerPath: "state/openclaw-state-lease-heartbeat.worker.js",
+  },
   sessionTranscriptArchive: {
     currentModuleUrl,
     sourceWorkerName: "../config/sessions/session-accessor.sqlite-archive.worker",

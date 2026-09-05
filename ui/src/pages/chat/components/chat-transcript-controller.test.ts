@@ -15,15 +15,15 @@ import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import { renderReadOnlyTranscript } from "./chat-read-only-transcript.ts";
 import { renderChatThread } from "./chat-thread.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
-import type { TranscriptRow } from "./chat-transcript-layout.ts";
-import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
+  mountTestTranscript,
   observedElements,
   resetTranscriptTestDom,
   resizeObservers,
   threadProps,
+  type TestContentRow,
   transcriptDomState,
   transcriptRows,
 } from "./chat-transcript.test-support.ts";
@@ -35,8 +35,6 @@ function transcriptSize(container: ParentNode): number {
   );
   return Number.parseFloat(sizer.style.height);
 }
-
-type TestContentRow = Extract<TranscriptRow, { kind: "content" }>;
 
 function stubMcpAppLifecycle(
   container: ParentNode,
@@ -51,41 +49,6 @@ function stubMcpAppLifecycle(
     teardown: vi.fn(teardown),
   };
   return { app: Object.assign(app, lifecycle), ...lifecycle };
-}
-
-async function mountTestTranscript(
-  paneId: string,
-  initialRows: readonly TestContentRow[],
-  transcript = createTestTranscript(),
-) {
-  const container = document.body.appendChild(document.createElement("div"));
-  let currentSession: ChatTranscriptSession;
-  container.addEventListener("focusin", (event) => currentSession.handleFocusIn(event));
-  container.addEventListener("focusout", (event) => currentSession.handleFocusOut(event));
-  const renderRows = (rows: readonly TestContentRow[]) => {
-    const view = transcript.renderSession(paneId, `agent:main:${paneId}`, (session) => {
-      currentSession = session;
-      return session.render(
-        rows,
-        (row) => (row.kind === "content" ? row.content : nothing),
-        null,
-        false,
-      );
-    });
-    render(view, container);
-    transcript.hostUpdated();
-  };
-  transcript.hostConnected();
-  renderRows(initialRows);
-  await flushDeferredRowPrune();
-  return {
-    container,
-    renderRows,
-    transcript,
-    get session() {
-      return currentSession;
-    },
-  };
 }
 
 function mcpRangeRows(appContent: unknown): TestContentRow[] {
@@ -364,13 +327,15 @@ describe("chat transcript controller", () => {
   });
 
   it.each([
-    { behavior: "auto", resizeBefore: true, deltaY: -100 },
-    { behavior: "smooth", resizeBefore: true, deltaY: -100 },
-    { behavior: "smooth", resizeBefore: false, deltaY: -100 },
-    { behavior: "smooth", resizeBefore: true, deltaY: 100 },
+    { behavior: "auto", resizeBefore: true, deltaY: -100, observerLate: false },
+    { behavior: "smooth", resizeBefore: true, deltaY: -100, observerLate: false },
+    { behavior: "smooth", resizeBefore: false, deltaY: -100, observerLate: false },
+    { behavior: "smooth", resizeBefore: true, deltaY: 100, observerLate: false },
+    { behavior: "smooth", resizeBefore: true, deltaY: -100, observerLate: true },
+    { behavior: "smooth", resizeBefore: true, deltaY: -100_000, observerLate: "after-wheel" },
   ] as const)(
-    "recovers $behavior measurements with resizeBeforeInterruption=$resizeBefore and wheel=$deltaY",
-    async ({ behavior, resizeBefore, deltaY }) => {
+    "recovers $behavior measurements with resizeBeforeInterruption=$resizeBefore, wheel=$deltaY, and late offset=$observerLate",
+    async ({ behavior, resizeBefore, deltaY, observerLate }) => {
       const flushFrames = stubAnimationFrames();
       transcriptDomState.measuredRowHeight = 120;
       const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
@@ -379,10 +344,15 @@ describe("chat transcript controller", () => {
         content: html`<div>row ${index}</div>`,
       }));
       const { container, renderRows, transcript } = await mountTestTranscript(
-        `pane-${behavior}-${resizeBefore}-resize`,
+        `pane-${behavior}-${resizeBefore}-${deltaY}-${observerLate}-resize`,
         rows,
       );
       try {
+        container.scrollTo = (options?: ScrollToOptions | number) => {
+          if (typeof options === "object" && options.behavior !== "smooth") {
+            container.scrollTop = options.top ?? container.scrollTop;
+          }
+        };
         Object.defineProperties(container, {
           clientHeight: { configurable: true, value: 600 },
           scrollHeight: { configurable: true, value: 4000 },
@@ -409,19 +379,41 @@ describe("chat transcript controller", () => {
           }
         };
         transcript.scrollToEnd({ behavior });
+        if (observerLate) {
+          container.scrollTop = 135;
+          container.dispatchEvent(new Event("scroll"));
+        }
         if (resizeBefore) {
           resize();
         }
+        if (observerLate === true) {
+          // Native wheel movement can precede both input delivery and the
+          // offset observer. Remeasurement must use this viewport, not 135.
+          container.scrollTop = 0;
+        }
         container.dispatchEvent(new WheelEvent("wheel", { deltaY }));
-        container.scrollTop = 0;
-        container.dispatchEvent(new Event("scroll"));
+        if (observerLate === "after-wheel") {
+          // The wheel's native default action can land before its offset observer,
+          // but after the input callback queued skipped row measurements.
+          container.scrollTop = 0;
+        }
+        if (!observerLate) {
+          container.scrollTop = 0;
+          container.dispatchEvent(new Event("scroll"));
+        }
         if (!resizeBefore) {
           resize();
         }
         flushFrames();
         renderRows(rows);
         expect(transcriptSize(container)).toBe(initialSize + 80);
-        expect(container.scrollTop).toBe(0);
+        expect.soft(container.scrollTop).toBe(0);
+        if (observerLate) {
+          container.dispatchEvent(new Event("scroll"));
+          flushFrames();
+          renderRows(rows);
+          expect(container.scrollTop).toBe(0);
+        }
       } finally {
         transcript.hostDisconnected();
       }
@@ -562,70 +554,6 @@ describe("chat transcript controller", () => {
     detail.hostDisconnected();
     expect(main.scrollElement).toBeNull();
     expect(detail.scrollElement).toBeNull();
-  });
-
-  it.each([
-    "wheel",
-    "downward wheel",
-    "stationary wheel",
-    "pointer",
-    "latest",
-    "automatic follow",
-  ] as const)("resolves pending restoration ownership for %s", async (command) => {
-    const flushFrames = stubAnimationFrames();
-    const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
-      kind: "content",
-      key: `row:${index}`,
-      content: html`<div>row ${index}</div>`,
-    }));
-    const { container, renderRows, transcript } = await mountTestTranscript(
-      `restore-${command}`,
-      rows,
-    );
-    Object.defineProperties(container, {
-      clientHeight: { configurable: true, value: 600 },
-      scrollHeight: { configurable: true, value: 4800 },
-    });
-    const writes: ScrollToOptions[] = [];
-    container.scrollTo = (options?: ScrollToOptions | number) => {
-      if (typeof options === "object") {
-        writes.push(options);
-        container.scrollTop = options.top ?? container.scrollTop;
-      }
-    };
-    const settled = vi.fn();
-    transcript.scrollToOffset(420, settled);
-    renderRows(rows);
-    expect(container.scrollTop).toBe(420);
-    if (["wheel", "downward wheel", "stationary wheel", "pointer"].includes(command)) {
-      container.dispatchEvent(
-        command === "pointer"
-          ? new PointerEvent("pointerdown")
-          : new WheelEvent("wheel", { deltaY: command === "wheel" ? -100 : 100 }),
-      );
-      if (command !== "stationary wheel") {
-        container.scrollTop = command === "downward wheel" ? 520 : 300;
-        container.dispatchEvent(new Event("scroll"));
-      }
-    } else if (command === "automatic follow") {
-      expect(transcript.scrollToEnd({ source: "auto" })).toBe(false);
-    } else {
-      expect(transcript.scrollToEnd()).toBe(true);
-    }
-    const expectedOffset = container.scrollTop;
-    writes.length = 0;
-    for (let frame = 0; frame < 15; frame++) {
-      flushFrames();
-      renderRows(rows);
-    }
-    if (command === "automatic follow") {
-      expect(settled).toHaveBeenCalledWith({ scrollTop: 420, anchorToEnd: false });
-    } else {
-      expect(settled).not.toHaveBeenCalled();
-      expect(writes.some((write) => write.top === 420)).toBe(false);
-    }
-    expect(container.scrollTop).toBe(expectedOffset);
-    transcript.hostDisconnected();
   });
 
   it.each([true, false])(

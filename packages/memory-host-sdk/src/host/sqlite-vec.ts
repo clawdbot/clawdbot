@@ -6,7 +6,6 @@ import { resolveSqliteVecPlatformVariant } from "./sqlite-vec-platform-variant.j
 
 type SqliteVecModule = {
   getLoadablePath: () => string;
-  load: (db: DatabaseSync) => void;
 };
 
 const SQLITE_VEC_MODULE_ID = "sqlite-vec";
@@ -42,8 +41,18 @@ function assertSqliteVecAvailable(db: DatabaseSync, source: string): void {
 }
 
 function loadExtensionAndVerify(db: DatabaseSync, extensionPath: string): void {
-  db.loadExtension(extensionPath);
-  assertSqliteVecAvailable(db, extensionPath);
+  // Import can outlive disposal. Node 24.15 cannot safely enable loading on a
+  // closed handle, so revalidate before the synchronous native-load section.
+  if (!db.isOpen) {
+    throw new Error("SQLite database is closed; reacquire before loading sqlite-vec");
+  }
+  db.enableLoadExtension(true);
+  try {
+    db.loadExtension(extensionPath);
+    assertSqliteVecAvailable(db, extensionPath);
+  } finally {
+    db.enableLoadExtension(false);
+  }
 }
 
 export async function loadSqliteVecExtension(params: {
@@ -52,7 +61,6 @@ export async function loadSqliteVecExtension(params: {
 }): Promise<{ ok: boolean; extensionPath?: string; error?: string }> {
   try {
     const resolvedPath = normalizeOptionalString(params.extensionPath);
-    params.db.enableLoadExtension(true);
     if (resolvedPath) {
       loadExtensionAndVerify(params.db, resolvedPath);
       return { ok: true, extensionPath: resolvedPath };
@@ -61,8 +69,7 @@ export async function loadSqliteVecExtension(params: {
     try {
       const sqliteVec = await loadSqliteVecModule();
       const extensionPath = sqliteVec.getLoadablePath();
-      sqliteVec.load(params.db);
-      assertSqliteVecAvailable(params.db, extensionPath);
+      loadExtensionAndVerify(params.db, extensionPath);
       return { ok: true, extensionPath };
     } catch (err) {
       // Optional-dep installs sometimes land only the platform-specific variant

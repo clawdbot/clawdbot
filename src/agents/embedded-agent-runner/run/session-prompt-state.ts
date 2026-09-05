@@ -61,7 +61,15 @@ export function createEmbeddedRunSessionPromptState(input: {
   // Fresh attempts retain the projection owner's bounded, retryable failure contract.
   let settleOwnedTranscriptProjection = false;
   let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
-  let activePrompt: ActivePrompt = {
+  let basePromptOverride: string | undefined;
+  let compactionContinuationInstruction: string | undefined;
+  const activePrompt: ActivePrompt = {
+    get override() {
+      const instruction = compactionContinuationInstruction;
+      return instruction && basePromptOverride?.trim()
+        ? `${basePromptOverride}\n\n${instruction}`
+        : (instruction ?? basePromptOverride);
+    },
     persisted: suppressNextUserMessagePersistence,
     internal: false,
   };
@@ -100,9 +108,15 @@ export function createEmbeddedRunSessionPromptState(input: {
   };
   // Internal control prompts are model-only context, never operator-authored transcript turns.
   const activateInternalPrompt = (prompt: string) => {
-    activePrompt = { override: prompt, persisted: true, internal: true };
+    basePromptOverride = prompt;
+    Object.assign(activePrompt, { persisted: true, internal: true });
     suppressNextUserMessagePersistence = true;
   };
+  const activateCompactionContinuation = (instruction: string) => {
+    compactionContinuationInstruction = instruction;
+    activateInternalPrompt(basePromptOverride ?? "");
+  };
+  const clearCompactionContinuation = () => (compactionContinuationInstruction = undefined);
   const onUserMessagePersisted: NonNullable<
     PreparedEmbeddedRunInput["runParams"]["onUserMessagePersisted"]
   > = (message) => {
@@ -196,6 +210,8 @@ export function createEmbeddedRunSessionPromptState(input: {
     recordCommittedCompactionSuccessor,
     notifyCompactionSessionAdopted,
     activateInternalPrompt,
+    activateCompactionContinuation,
+    clearCompactionContinuation,
     markOwnedTranscriptRetry: () => {
       settleOwnedTranscriptProjection = true;
     },
@@ -204,7 +220,9 @@ export function createEmbeddedRunSessionPromptState(input: {
       abortSignal?: AbortSignal,
     ) => {
       const sessionId = target?.sessionId ?? activeSessionId;
-      if (settleOwnedTranscriptProjection && target && sessionId) {
+      // A caller's manager owns the transcript even when metadata has a durable target.
+      // Waiting on that borrowed identity can block an unrelated in-memory retry.
+      if (settleOwnedTranscriptProjection && !params.sessionManager && target && sessionId) {
         settleOwnedTranscriptProjection = false;
         const { waitForSessionTranscriptProjection } =
           await import("../../../config/sessions/session-transcript-reconcile.js");

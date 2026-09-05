@@ -21,6 +21,7 @@ type InstallRootTransitionFixture = {
     child: Mock<typeof import("../../process/exec.js").runCommandWithTimeout>;
     health: Mock<typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart>;
     script: Mock;
+    configSnapshot: Mock;
   };
 };
 
@@ -158,6 +159,9 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
           termination: "exit",
         };
       });
+      if (scenario === "Git still serves previous build") {
+        mocks.configSnapshot.mockResolvedValueOnce(undefined);
+      }
       const activated = await maybeRestartService({
         shouldRestart: true,
         result: {
@@ -182,6 +186,9 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
       expect(activated).toBe(
         scenario !== "same-version stale launcher after refresh" &&
           scenario !== "failed Git refresh retains original launcher",
+      );
+      expect(mocks.configSnapshot).toHaveBeenCalledTimes(
+        scenario === "Git still serves previous build" ? 1 : 0,
       );
       expect(mocks.events).toEqual([
         "native stop",

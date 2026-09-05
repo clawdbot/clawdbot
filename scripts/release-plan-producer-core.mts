@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { compareAscii } from "./lib/canonical-json.mjs";
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import {
   collectPublishablePluginPackagesFromCandidates,
@@ -45,6 +46,7 @@ type ReleasePlanSource = {
 };
 
 type CorePackagePolicy = {
+  name: string;
   path: string;
   dependency?: string;
 };
@@ -61,11 +63,10 @@ type ReleasePlanProducerRequest =
 const REPOSITORY = "openclaw/openclaw";
 const VALIDATION_WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const PUBLICATION_WORKFLOW_PATH = ".github/workflows/openclaw-release-publish.yml";
-const NPM_PUBLICATION_WORKFLOW_PATH = ".github/workflows/openclaw-npm-release.yml";
+const NPM_CORE_PACKAGE_POLICY_PATH = "scripts/lib/npm-core-release-packages.json";
 const YAML_PACKAGE_VERSION = "2.9.0";
 const YAML_PACKAGE_INTEGRITY =
   "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==";
-const compareAscii = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 function git(repoRoot: string, args: string[]): string {
   return execFileSync("git", args, {
     cwd: repoRoot,
@@ -219,26 +220,45 @@ function withCandidateSnapshot<T>(
 ): T {
   const snapshotRoot = mkdtempSync(join(tmpdir(), "openclaw-release-candidate-"));
   try {
-    const tree = execFileSync(
+    // Select metadata inside Git before buffering or decoding paths: directory-name
+    // decoding can silently omit non-UTF-8 inventory, while source trees can exceed stdout limits.
+    // Latin1 preserves raw bytes until mode filtering; only retained blob paths need UTF-8.
+    const patterns = [
+      "package.json",
+      "extensions/*/package.json",
+      "extensions/*/README.md",
+      "packages/*/package.json",
+    ];
+    const entries = execFileSync(
       "git",
-      ["ls-tree", "-r", "-z", candidateSha, "--", "package.json", "extensions", "packages"],
+      [
+        "diff-tree",
+        "--raw",
+        "-r",
+        "-z",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        git(repoRoot, ["hash-object", "-t", "tree", "--stdin"]),
+        candidateSha,
+        "--",
+        ...patterns.flatMap((path) => [`:(top,glob)${path}`, `:(top,glob,exclude)${path}/**`]),
+      ],
       { cwd: repoRoot },
-    ).toString("utf8");
+    )
+      .toString("latin1")
+      .split("\0");
+    const decoder = new TextDecoder("utf-8", { fatal: true });
     const inventoryPaths: string[] = [];
-    for (const entry of tree.split("\0").filter(Boolean)) {
-      const [metadata, path] = entry.split("\t");
-      if (
-        !path ||
-        (path !== "package.json" &&
-          !/^extensions\/[^/]+\/(?:package\.json|README\.md)$/u.test(path) &&
-          !/^packages\/[^/]+\/package\.json$/u.test(path))
-      ) {
-        continue;
-      }
-      if (metadata?.startsWith("120000 ")) {
+    for (let index = 0; index + 1 < entries.length; index += 2) {
+      const mode = entries[index]?.split(" ")[1];
+      if (mode === "120000") {
         throw new Error("candidate package inventory must not contain symbolic links");
       }
-      inventoryPaths.push(path);
+      if (mode?.startsWith("100")) {
+        inventoryPaths.push(decoder.decode(Buffer.from(entries[index + 1]!, "latin1")));
+      }
     }
     if (!inventoryPaths.includes("package.json")) {
       throw new Error("candidate package.json is missing");
@@ -313,49 +333,24 @@ function readPackageManifest(path: string): PluginPackageJson {
   return JSON.parse(readFileSync(path, "utf8")) as PluginPackageJson;
 }
 
-function collectCorePackagePolicy(
-  workflowText: string,
-  workflowDocument: unknown,
-): CorePackagePolicy[] {
-  const workflow = workflowDocument as {
-    jobs?: Record<string, { steps?: Array<{ env?: { CORE_PACKAGE_DIRS?: unknown } }> }>;
-  };
-  const declarations = Object.values(workflow.jobs ?? {}).flatMap((job) =>
-    (job.steps ?? [])
-      .map((step) => step.env?.CORE_PACKAGE_DIRS)
-      .filter((value): value is string => typeof value === "string"),
-  );
-  const [declaration] = declarations;
-  if (declarations.length !== 1 || !declaration) {
-    throw new Error(`${NPM_PUBLICATION_WORKFLOW_PATH} must declare one CORE_PACKAGE_DIRS owner`);
-  }
-  const paths = declaration.trim().split(/\s+/u).filter(Boolean);
+function collectCorePackagePolicy(document: unknown): CorePackagePolicy[] {
   if (
-    paths.length === 0 ||
-    new Set(paths).size !== paths.length ||
-    paths.some((path) => !/^packages\/[a-z0-9-]+$/u.test(path))
+    !Array.isArray(document) ||
+    document.length === 0 ||
+    document.some(
+      (entry) =>
+        !entry ||
+        typeof entry !== "object" ||
+        !/^packages\/[a-z0-9-]+$/u.test(entry.path) ||
+        !/^@openclaw\/[a-z0-9-]+$/u.test(entry.name) ||
+        (entry.dependency !== undefined && entry.dependency !== entry.name),
+    ) ||
+    new Set(document.map((entry) => entry.path)).size !== document.length ||
+    new Set(document.map((entry) => entry.name)).size !== document.length
   ) {
-    throw new Error(`${NPM_PUBLICATION_WORKFLOW_PATH} has invalid CORE_PACKAGE_DIRS`);
+    throw new Error(`${NPM_CORE_PACKAGE_POLICY_PATH} has invalid core package policy`);
   }
-  const dependencyGates = new Map<string, string>();
-  for (const match of workflowText.matchAll(
-    /\[\[ "\$package_dir" == "(packages\/[a-z0-9-]+)" \]\][^\n]*dependencies\?\.\["([^"]+)"\]/gu,
-  )) {
-    if (match[1] && match[2]) {
-      dependencyGates.set(match[1], match[2]);
-    }
-  }
-  for (const path of dependencyGates.keys()) {
-    if (!paths.includes(path)) {
-      throw new Error(`${NPM_PUBLICATION_WORKFLOW_PATH} gates an undeclared core package: ${path}`);
-    }
-  }
-  return paths
-    .map((path) => {
-      const dependency = dependencyGates.get(path);
-      return dependency ? { path, dependency } : { path };
-    })
-    .toSorted((left, right) => compareAscii(left.path, right.path));
+  return document.toSorted((left, right) => compareAscii(left.path, right.path));
 }
 
 function collectPackageInventory(
@@ -428,6 +423,9 @@ function collectPackageInventory(
     }
     if (manifest.version !== version) {
       throw new Error(`${policy.path} version must match openclaw ${version}`);
+    }
+    if (manifest.name !== policy.name) {
+      throw new Error(`${policy.path} must publish ${policy.name}`);
     }
     addPackage(manifest, ["npm"], `${policy.path}/package.json`);
   }
@@ -545,18 +543,18 @@ function produceReleasePlan(params: ReleasePlanSource, runtime: ReleasePlanRunti
   const { candidateSha, repoRoot, toolingFullRef, toolingSha } = resolveSource(params);
   const validationWorkflow = readGitText(repoRoot, toolingSha, VALIDATION_WORKFLOW_PATH);
   const publicationWorkflow = readGitText(repoRoot, toolingSha, PUBLICATION_WORKFLOW_PATH);
-  const npmPublicationWorkflow = readGitText(repoRoot, toolingSha, NPM_PUBLICATION_WORKFLOW_PATH);
-  const [validationDocument, publicationDocument, npmPublicationDocument] =
+  const npmCorePackagePolicy = readGitText(repoRoot, toolingSha, NPM_CORE_PACKAGE_POLICY_PATH);
+  const [validationDocument, publicationDocument, npmCorePackageDocument] =
     parseVerifiedYamlDocuments(
       repoRoot,
       toolingSha,
-      [validationWorkflow, publicationWorkflow, npmPublicationWorkflow],
+      [validationWorkflow, publicationWorkflow, npmCorePackagePolicy],
       runtime,
     );
   const candidate = readCandidateInventory(
     repoRoot,
     candidateSha,
-    collectCorePackagePolicy(npmPublicationWorkflow, npmPublicationDocument),
+    collectCorePackagePolicy(npmCorePackageDocument),
   );
   const policy = deriveReleasePlanPolicy(params.intent, candidate.version, params.validationIntent);
   // ReleasePlan binds the candidate bytes. A branch used only to make the FRV

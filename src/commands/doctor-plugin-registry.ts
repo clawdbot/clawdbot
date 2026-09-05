@@ -20,6 +20,7 @@ import {
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
+import { isExternallyDistributedPlugin } from "../plugins/official-external-plugin-catalog.js";
 import { refreshPluginRegistry } from "../plugins/plugin-registry-refresh.js";
 import {
   listStaleLocalBundledPluginInstallRecords,
@@ -157,7 +158,9 @@ function listStaleManagedNpmBundledPlugins(
   const currentBundled = loadInstalledPluginIndex({
     ...params,
     installRecords: {},
-  }).plugins.filter((plugin) => plugin.origin === "bundled" && plugin.packageName);
+  }).plugins.filter(
+    (plugin) => plugin.origin === "bundled" && !isExternallyDistributedPlugin(plugin),
+  );
   const bundledByPackage = new Map(
     currentBundled.map((plugin) => [plugin.packageName, plugin] as const),
   );

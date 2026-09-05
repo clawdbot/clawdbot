@@ -37,14 +37,15 @@ export function parseReplyDirectives(
   });
   let text = split.text ?? "";
 
-  const replyParsed = parseInlineDirectives(text, {
-    currentMessageId: options.currentMessageId,
-    stripAudioTag: false,
-    stripReplyTags: true,
-  });
+  const replyParsed = text.includes("[[")
+    ? parseInlineDirectives(text, {
+        currentMessageId: options.currentMessageId,
+        stripAudioTag: false,
+      })
+    : undefined;
 
   text = stripInlineDirectiveTagsForDelivery(
-    replyParsed.hasReplyTag ? replyParsed.text : text,
+    replyParsed?.hasReplyTag ? replyParsed.text : text,
   ).text;
 
   const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
@@ -55,9 +56,9 @@ export function parseReplyDirectives(
     text: isSilent ? "" : text,
     // Keep native path conversion outside the browser-shared parser and before reply policy.
     mediaUrls: split.mediaUrls?.map((source) => trySafeFileURLToPath(source) ?? source),
-    replyToId: replyParsed.replyToId,
-    replyToCurrent: replyParsed.replyToCurrent || undefined,
-    replyToTag: replyParsed.hasReplyTag,
+    replyToId: replyParsed?.replyToId,
+    replyToCurrent: replyParsed?.replyToCurrent || undefined,
+    replyToTag: replyParsed?.hasReplyTag ?? false,
     audioAsVoice: split.audioAsVoice,
     isSilent,
   };

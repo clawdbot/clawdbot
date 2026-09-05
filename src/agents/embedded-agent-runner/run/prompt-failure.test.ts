@@ -1,5 +1,6 @@
 import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
 import { describe, expect, it, vi } from "vitest";
+import { FailoverError } from "../../failover-error.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 
 type Params = Parameters<typeof handleEmbeddedPromptFailure>[0];
@@ -49,7 +50,8 @@ function makeParams(overrides: Partial<Params> = {}): Params {
     advanceAuthProfile: vi.fn(async () => true),
     advanceRateLimitAuthProfile: vi.fn(async () => true),
     maybeMarkAuthProfileFailure: vi.fn(async () => {}),
-    maybeBackoffBeforeOverloadFailover: vi.fn(async () => {}),
+    maybeRetryTransient: vi.fn(async () => false),
+    getTransientRetryCount: () => 0,
     attemptedThinking: new Set(),
     thinkLevel: "low",
     getThinkLevel: () => "low",
@@ -101,7 +103,7 @@ describe("handleEmbeddedPromptFailure", () => {
         params.advanceAuthProfile,
         params.advanceRateLimitAuthProfile,
         params.maybeMarkAuthProfileFailure,
-        params.maybeBackoffBeforeOverloadFailover,
+        params.maybeRetryTransient,
       ]) {
         expect(callback).not.toHaveBeenCalled();
       }
@@ -143,6 +145,42 @@ describe("handleEmbeddedPromptFailure", () => {
     },
   );
 
+  it("never refreshes auth or retries a recorded CLI terminal stop, even with an auth-shaped reason", async () => {
+    // The stop message repeats the backend's own terminal_reason; a value like
+    // `unauthorized` reads as an auth failure to text classifiers, and a retry
+    // would replay tool effects the terminal-stop policy exists to protect.
+    const promptError = new FailoverError(
+      "Claude CLI ended the turn without a reply (terminal_reason: unauthorized, stop_reason: end_turn). " +
+        "Tool actions may already have run; verify their effects before retrying.",
+      { reason: "unknown", code: "cli_turn_stopped", provider: "claude-cli", model: "sonnet" },
+    );
+    const params = makeParams({
+      promptError,
+      provider: "claude-cli",
+      modelId: "sonnet",
+      activeErrorContext: { provider: "claude-cli", model: "sonnet" },
+      maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => true),
+      maybeRetryTransient: vi.fn(async () => true),
+      resolveAuthProfileFailureReason: vi.fn(() => null),
+    });
+
+    await expect(handleEmbeddedPromptFailure(params)).rejects.toMatchObject({
+      code: "cli_turn_stopped",
+    });
+
+    for (const callback of [
+      params.maybeRefreshRuntimeAuthForAuthError,
+      params.maybeRetryTransient,
+      params.advanceAuthProfile,
+      params.advanceRateLimitAuthProfile,
+    ]) {
+      expect(callback).not.toHaveBeenCalled();
+    }
+    expect(params.traceAttempts).toEqual([
+      expect.objectContaining({ result: "surface_error", stage: "prompt" }),
+    ]);
+  });
+
   it("returns the profile-rotation retry before failure marking finishes", async () => {
     const events: string[] = [];
     let releaseMark: (() => void) | undefined;
@@ -163,9 +201,6 @@ describe("handleEmbeddedPromptFailure", () => {
             return true;
           }),
           maybeMarkAuthProfileFailure,
-          maybeBackoffBeforeOverloadFailover: vi.fn(async () => {
-            events.push("backoff");
-          }),
         }),
       );
 
@@ -175,7 +210,7 @@ describe("handleEmbeddedPromptFailure", () => {
         authRetryPending: false,
         lastRetryFailoverReason: "rate_limit",
       });
-      expect(events).toEqual(["advance", "mark-start", "backoff"]);
+      expect(events).toEqual(["advance", "mark-start"]);
       expect(maybeMarkAuthProfileFailure).toHaveBeenCalledWith({
         profileId: "openai:p1",
         reason: "rate_limit",
@@ -185,8 +220,6 @@ describe("handleEmbeddedPromptFailure", () => {
       releaseMark?.();
     }
 
-    await vi.waitFor(() =>
-      expect(events).toEqual(["advance", "mark-start", "backoff", "mark-finish"]),
-    );
+    await vi.waitFor(() => expect(events).toEqual(["advance", "mark-start", "mark-finish"]));
   });
 });

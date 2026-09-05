@@ -70,6 +70,61 @@ describe("shared/node-match", () => {
     ).toBe("current-mac");
   });
 
+  it.each([
+    { clientIds: ["openclaw-macos", "node-host"] },
+    { clientIds: ["openclaw-macos", "openclaw-linux"] },
+    { clientIds: ["openclaw-macos", undefined] },
+    { clientIds: ["openclaw-macos", "custom-client"] },
+    { clientIds: ["openclaw-macos", "clawdbot-macos", "node-host"] },
+    { clientIds: ["openclaw-macos", "moldbot-macos", undefined] },
+    { clientIds: ["clawdbot-macos", undefined] },
+    { clientIds: ["node-host", "clawdbot-macos"] },
+  ])("keeps non-migration ties ambiguous for $clientIds", ({ clientIds }) => {
+    for (const connected of [true, false, undefined]) {
+      const nodes = clientIds.map((clientId, index) => ({
+        nodeId: `node-${index}`,
+        displayName: "Shared Desk",
+        clientId,
+        connected,
+      }));
+      for (const candidates of [nodes, nodes.toReversed()]) {
+        expect(() => resolveNodeIdFromCandidates(candidates, "Shared Desk")).toThrow(
+          /ambiguous node: Shared Desk/,
+        );
+      }
+    }
+  });
+
+  it.each([true, false, undefined])(
+    "keeps the unique current client in an entirely legacy migration tie (connected=%s)",
+    (connected) => {
+      const nodes = ["clawdbot-macos", "moldbot-macos", " OpenClaw-MacOS "].map(
+        (clientId, index) => ({
+          nodeId: `node-${index}`,
+          displayName: "Shared Desk",
+          clientId,
+          connected,
+        }),
+      );
+      for (const candidates of [nodes, nodes.toReversed()]) {
+        expect(resolveNodeIdFromCandidates(candidates, "Shared Desk")).toBe("node-2");
+      }
+    },
+  );
+
+  it.each(["node-host", "clawdbot-macos", undefined])(
+    "prefers a connected %s client over a disconnected current app",
+    (clientId) => {
+      const nodes = [
+        { nodeId: "app", displayName: "Shared Desk", clientId: "openclaw-macos", connected: false },
+        { nodeId: "live", displayName: "Shared Desk", clientId, connected: true },
+      ];
+      for (const candidates of [nodes, nodes.toReversed()]) {
+        expect(resolveNodeIdFromCandidates(candidates, "Shared Desk")).toBe("live");
+      }
+    },
+  );
+
   it("falls back to raw ambiguous matches when none of them are connected", () => {
     expect(() =>
       resolveNodeIdFromCandidates(

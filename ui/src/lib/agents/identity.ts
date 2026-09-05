@@ -119,7 +119,13 @@ export function createAgentIdentityCapability(
       }
       let changed = false;
       for (const [agentId, invalidationEpoch, identity] of results) {
-        if (identity && invalidationEpoch === (invalidationEpochs.get(agentId) ?? 0)) {
+        // Overlapping ensure calls share the request, so only its first
+        // publication changes the snapshot observed by subscribers.
+        if (
+          identity &&
+          identities.get(agentId) !== identity &&
+          invalidationEpoch === (invalidationEpochs.get(agentId) ?? 0)
+        ) {
           identities.set(agentId, identity);
           changed = true;
         }

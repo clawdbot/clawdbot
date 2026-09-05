@@ -14,7 +14,6 @@ function sessionRow(
   return {
     key,
     label: key,
-    href: `/chat/${key}`,
     active: false,
     visuallyActive: false,
     hasActiveRun: false,

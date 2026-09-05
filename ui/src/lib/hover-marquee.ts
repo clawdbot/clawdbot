@@ -7,6 +7,7 @@ const MARQUEE_SPEED_PX_PER_SEC = 80;
 const MARQUEE_MIN_DURATION_MS = 300;
 const MARQUEE_HOVER_DELAY_MS = 500;
 const pendingMarquees = new WeakMap<HTMLElement, number>();
+const marqueeHosts = new WeakMap<HTMLElement, HTMLElement>();
 let marqueeResizeObserver: ResizeObserver | undefined;
 
 function isMarqueeHostActive(host: HTMLElement): boolean {
@@ -38,9 +39,10 @@ function observeMarquee(label: HTMLElement): void {
           continue;
         }
         const resizedLabel = entry.target;
-        const host = resizedLabel.closest<HTMLElement>(".session-row-host");
-        if (!host || !isMarqueeHostActive(host)) {
+        const host = marqueeHosts.get(resizedLabel);
+        if (!host?.isConnected || !isMarqueeHostActive(host)) {
           marqueeResizeObserver?.unobserve(resizedLabel);
+          marqueeHosts.delete(resizedLabel);
           continue;
         }
         clearPendingMarquee(resizedLabel);
@@ -57,6 +59,7 @@ function startHoverMarquee(host: HTMLElement): void {
   if (!label) {
     return;
   }
+  marqueeHosts.set(label, host);
   observeMarquee(label);
   if (label.classList.contains("hover-marquee--scrolling")) {
     return;
@@ -102,6 +105,7 @@ function stopHoverMarquee(host: HTMLElement): void {
   clearPendingMarquee(label);
   label.classList.remove("hover-marquee--scrolling");
   marqueeResizeObserver?.unobserve(label);
+  marqueeHosts.delete(label);
 }
 
 export function startHoverMarqueeFromEvent(event: Event): void {

@@ -62,18 +62,29 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
   }
   return await withPluginLifecycleLease(
     {},
-    async () => await runPluginInstallCommandUnlocked(params, preflight),
+    async (lease) =>
+      await runPluginInstallCommandUnlocked(
+        {
+          ...params,
+          beforePersistentApply: () => {
+            lease.assertOwned();
+            params.beforePersistentApply?.();
+          },
+        },
+        preflight,
+        lease.assertOwned.bind(lease),
+      ),
   );
 }
 
 async function runPluginInstallCommandUnlocked(
   params: RunPluginInstallCommandParams,
   preflight: Extract<PluginInstallPreflight, { ok: true }>,
+  assertOwned: () => void,
 ) {
   assertConfigWriteAllowedInCurrentMode();
 
   const runtime = params.runtime ?? defaultRuntime;
-  const invalidateRuntimeCache = params.invalidateRuntimeCache ?? true;
   const { raw, opts, installMode, request } = preflight;
   if (opts.dangerouslyForceUnsafeInstall) {
     runtime.log(theme.warn(DEPRECATED_DANGEROUS_FORCE_UNSAFE_INSTALL_WARNING));
@@ -85,6 +96,13 @@ async function runPluginInstallCommandUnlocked(
   if (!snapshot) {
     return runtime.exit(1);
   }
+  const installContext = {
+    snapshot,
+    runtime,
+    invalidateRuntimeCache: params.invalidateRuntimeCache ?? true,
+    beforePersistentApply: params.beforePersistentApply,
+    assertOwned,
+  };
   const safetyOverrides = resolveInstallSafetyOverrides({
     ...opts,
     config: snapshot.config,
@@ -123,12 +141,10 @@ async function runPluginInstallCommandUnlocked(
         plugin: raw,
         mode: installMode,
       },
-      snapshot,
+      ...installContext,
       ...capabilityConsent,
       safetyOverrides,
       logger: createPluginInstallLogger(runtime),
-      invalidateRuntimeCache,
-      runtime,
     });
     if (!result.ok) {
       if (!isClawHubBlockedCliFailure(result)) {
@@ -175,13 +191,12 @@ async function runPluginInstallCommandUnlocked(
             return runtime.exit(1);
           }
           const hookFallback = await tryInstallHookPackFromLocalPath({
-            snapshot,
+            ...installContext,
             installMode,
             resolvedPath: resolved,
             safetyOverrides,
             ...(opts.link ? { link: true } : {}),
             expectedPackageKind: "hook-only",
-            runtime,
           });
           if (hookFallback.ok) {
             return;
@@ -197,12 +212,10 @@ async function runPluginInstallCommandUnlocked(
 
       const result = await installManagedPluginSource({
         request: sourceRequest,
-        snapshot,
+        ...installContext,
         ...capabilityConsent,
         safetyOverrides,
         logger: createPluginInstallLogger(runtime),
-        invalidateRuntimeCache,
-        runtime,
       });
       if (result.ok) {
         return;
@@ -212,12 +225,11 @@ async function runPluginInstallCommandUnlocked(
         return runtime.exit(1);
       }
       const hookFallback = await tryInstallHookPackFromLocalPath({
-        snapshot,
+        ...installContext,
         installMode,
         resolvedPath: resolved,
         safetyOverrides,
         ...(sourceRequest.link ? { link: true } : {}),
-        runtime,
       });
       if (hookFallback.ok) {
         return;
@@ -231,12 +243,10 @@ async function runPluginInstallCommandUnlocked(
     case "git": {
       const result = await installManagedPluginSource({
         request: sourceRequest,
-        snapshot,
+        ...installContext,
         ...capabilityConsent,
         safetyOverrides,
         logger: createPluginInstallLogger(runtime),
-        invalidateRuntimeCache,
-        runtime,
       });
       if (!result.ok) {
         runtime.error(result.error);
@@ -251,9 +261,7 @@ async function runPluginInstallCommandUnlocked(
         () =>
           installManagedPluginSource({
             request: sourceRequest,
-            snapshot,
-            invalidateRuntimeCache,
-            runtime,
+            ...installContext,
           }),
         {
           command: "install",
@@ -269,8 +277,23 @@ async function runPluginInstallCommandUnlocked(
     }
 
     case "official": {
+      const primary = sourceRequest.installSources?.[0];
+      if (primary?.source === "clawhub") {
+        const result = await installManagedPluginSource({
+          request: sourceRequest,
+          ...installContext,
+          ...capabilityConsent,
+          safetyOverrides,
+          logger: createPluginInstallLogger(runtime),
+        });
+        if (!result.ok) {
+          runtime.error(result.error);
+          return runtime.exit(1);
+        }
+        return;
+      }
       const result = await tryInstallPluginOrHookPackFromNpmSpec({
-        snapshot,
+        ...installContext,
         installMode,
         spec: sourceRequest.spec,
         pin: sourceRequest.pin,
@@ -278,11 +301,9 @@ async function runPluginInstallCommandUnlocked(
         capabilityConsent,
         allowBundledFallback: false,
         expectedPluginId: sourceRequest.pluginId,
-        expectedIntegrity: sourceRequest.expectedIntegrity,
+        expectedIntegrity: primary?.expectedIntegrity ?? sourceRequest.expectedIntegrity,
         trustedSourceLinkedOfficialInstall: true,
-        official: true,
-        invalidateRuntimeCache,
-        runtime,
+        officialRequest: sourceRequest,
       });
       if (!result.ok) {
         return runtime.exit(1);
@@ -296,6 +317,7 @@ async function runPluginInstallCommandUnlocked(
         installSafetyOverrides = safetyOverrides,
       ) => {
         const result = await installManagedPluginSource({
+          ...installContext,
           request: {
             ...sourceRequest,
             ...(opts.expectedIntegrity ? { expectedIntegrity: opts.expectedIntegrity } : {}),
@@ -306,8 +328,6 @@ async function runPluginInstallCommandUnlocked(
           ...capabilityConsent,
           safetyOverrides: installSafetyOverrides,
           logger: createPluginInstallLogger(runtime),
-          invalidateRuntimeCache,
-          runtime,
         });
         if (!result.ok) {
           if (!isClawHubBlockedCliFailure(result)) {
@@ -361,18 +381,16 @@ async function runPluginInstallCommandUnlocked(
 
     case "npm": {
       const result = await tryInstallPluginOrHookPackFromNpmSpec({
-        snapshot,
+        ...installContext,
         installMode,
         spec: sourceRequest.spec,
         pin: sourceRequest.pin,
         safetyOverrides,
         capabilityConsent,
         allowBundledFallback: sourceRequest.allowBundledFallback ?? false,
-        invalidateRuntimeCache,
         expectedPluginId: sourceRequest.expectedPluginId,
         expectedIntegrity: sourceRequest.expectedIntegrity,
         trustedSourceLinkedOfficialInstall: sourceRequest.trustedSourceLinkedOfficialInstall,
-        runtime,
       });
       if (!result.ok) {
         return runtime.exit(1);

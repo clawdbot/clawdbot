@@ -29,7 +29,7 @@ import { getLineRuntime } from "./runtime.js";
 import { lineSetupContract } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
 import { lineStatusAdapter } from "./status.js";
-import type { ResolvedLineAccount } from "./types.js";
+import type { LineProbeResult, ResolvedLineAccount } from "./types.js";
 
 const loadLineChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
@@ -55,7 +55,9 @@ function normalizeLineDirectoryId(entry: string, kind: "direct" | "group"): stri
   return id && inferLineTargetChatType(id) === kind ? id : null;
 }
 
-export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelPlugin({
+type LineChannelPlugin = ChannelPlugin<ResolvedLineAccount, LineProbeResult>;
+
+export const linePlugin: LineChannelPlugin = createChatChannelPlugin({
   base: {
     id: "line",
     ...lineChannelPluginCommon,
@@ -161,6 +163,8 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       defaultTopLevelPlacement: "current",
     },
     agentPrompt: {
+      // LINE always renders native buttons; it has no capability opt-in setting.
+      messageToolCapabilities: () => ["inlineButtons"],
       messageToolHints: () => [
         "",
         "### LINE structured output",

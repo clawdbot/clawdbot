@@ -19,7 +19,8 @@ async function main(): Promise<void> {
     },
     env,
   });
-  process.stdout.write(JSON.stringify(result));
+  // The 160 MiB proof covers repair and result serialization, not unrelated Node shutdown tasks.
+  process.stdout.write(JSON.stringify(result), () => process.exit(0));
 }
 
 // Node resolves the bundle through shared node_modules; compare canonical paths.

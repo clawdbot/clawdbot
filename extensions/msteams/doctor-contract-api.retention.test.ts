@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import {
   createPluginStateKeyedStoreForTests,
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  openOpenClawStateDatabase,
+  type OpenClawStateKyselyDatabaseForTests,
   resetPluginStateStoreForTests,
   setMaxPluginStateEntriesPerPluginForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -89,23 +93,49 @@ describe("Teams custom migration retention", () => {
       if (surface === "vote buckets") {
         setMaxPluginStateEntriesPerPluginForTests(capacity + 1);
       }
-      for (let index = 0; index < capacity; index++) {
+      const rows = Array.from({ length: capacity }, (_, index) => {
         const id = `existing-${index}`;
+        const row = {
+          plugin_id: "msteams",
+          namespace,
+          created_at: Date.now(),
+          expires_at: null,
+        };
         if (conversations) {
-          await store.register(buildMSTeamsConversationStateKey(id), { conversation: { id } });
-        } else if (surface === "polls") {
+          return {
+            ...row,
+            entry_key: buildMSTeamsConversationStateKey(id),
+            value_json: JSON.stringify({ conversation: { id } }),
+          };
+        }
+        if (surface === "polls") {
           const { votes: _votes, ...metadata } = makePoll(id);
-          await store.register(buildMSTeamsPollStateKey(id), metadata);
-        } else {
-          const bucket = selectMSTeamsPollVoteBucket(id, "voter");
-          await store.register(buildMSTeamsPollVoteBucketKey(id, bucket), {
+          return {
+            ...row,
+            entry_key: buildMSTeamsPollStateKey(id),
+            value_json: JSON.stringify(metadata),
+          };
+        }
+        const bucket = selectMSTeamsPollVoteBucket(id, "voter");
+        return {
+          ...row,
+          entry_key: buildMSTeamsPollVoteBucketKey(id, bucket),
+          value_json: JSON.stringify({
             pollId: id,
             bucket,
             votes: { voter: ["1"] },
             updatedAt: new Date().toISOString(),
-          });
-        }
-      }
+          }),
+        };
+      });
+      // Seed pre-existing rows together; migration below still owns real limit enforcement.
+      const { db } = openOpenClawStateDatabase({ env });
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<OpenClawStateKyselyDatabaseForTests>(db)
+          .insertInto("plugin_state_entries")
+          .values(rows),
+      );
       const before = new Set((await store.entries()).map((entry) => entry.key));
       const poll = {
         ...makePoll("legacy"),

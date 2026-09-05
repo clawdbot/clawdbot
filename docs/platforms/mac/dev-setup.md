@@ -47,6 +47,12 @@ architecture or nonportable native dependency fails packaging. Node downloads
 and package installation need network access. The larger app includes its
 complete private runtime; it does not update an independently managed Gateway.
 
+Packaging builds the MLX voice helper with Swift Build (`--build-system swiftbuild`)
+and copies its SwiftPM resource bundles into `Contents/Resources`. The native
+SwiftPM backend does not compile MLX's Metal shaders. Packaging fails if the
+helper's `mlx-swift_Cmlx.bundle/Contents/Resources/default.metallib` is missing,
+rather than shipping a helper that fails on its first speech request.
+
 The private worker uses read-only core config bootstrap rather than Gateway-wide
 Doctor preflight. Node plugin validation, MCP lifecycle, and node-owned identity
 and exec-approval startup migrations remain enabled. See
@@ -167,9 +173,12 @@ isolate unrelated tests or the process from the host.
 If packaging stops at `Freezing authenticated Peekaboo sources in a read-only snapshot`,
 check the `hdiutil` error on stderr. Routine image creation and attachment output stays
 quiet, but failures such as `hdiutil: attach failed - Permission denied` are preserved.
-Check the temporary location selected by `TMPDIR` and its filesystem or mount permissions
-before retrying. This step runs before signing; source verification and the read-only
-snapshot remain required.
+Snapshot images and build outputs stay in the checkout. Their read-only mount directories
+use macOS's per-user temporary location (`getconf DARWIN_USER_TEMP_DIR`), independently of
+`TMPDIR`, so an external checkout does not need to support nested mounts. If attachment
+still fails, check that location's mount permissions. Unverified cleanup retains the
+mount directories and build locks at the paths printed in the error. This step runs before
+signing; source verification and the read-only snapshot remain required.
 
 ### Build fails: toolchain or SDK mismatch
 

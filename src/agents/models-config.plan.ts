@@ -40,6 +40,7 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type PreparedModelsConfigContext = Readonly<{
   cfg: OpenClawConfig;
   discoveryAuthConfig: OpenClawConfig;
+  discoveryAuthEnv?: NodeJS.ProcessEnv;
   sourceConfigForSecrets: OpenClawConfig;
   agentDir: string;
   env: NodeJS.ProcessEnv;
@@ -62,6 +63,7 @@ type ResolveImplicitProvidersForModelsJson = (params: {
   authStore?: AuthProfileStore;
   config: OpenClawConfig;
   discoveryAuthConfig?: OpenClawConfig;
+  discoveryAuthEnv?: NodeJS.ProcessEnv;
   sourceConfigForSecrets?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   workspaceDir?: string;
@@ -181,6 +183,7 @@ async function resolveProvidersForModelsJsonWithDeps(
     ...(params.authStore ? { authStore: params.authStore } : {}),
     config: cfg,
     discoveryAuthConfig: context.discoveryAuthConfig,
+    discoveryAuthEnv: context.discoveryAuthEnv,
     sourceConfigForSecrets: context.sourceConfigForSecrets,
     env,
     ...(context.workspaceDir ? { workspaceDir: context.workspaceDir } : {}),
@@ -258,7 +261,8 @@ function isWritableProviderConfig(provider: ProviderConfig): boolean {
   if (!Array.isArray(provider.models) || provider.models.length === 0) {
     return true;
   }
-  return Boolean(provider.baseUrl?.trim() && provider.apiKey);
+  // AuthStorage can supply omitted keys; an explicitly empty key still violates the schema.
+  return Boolean(provider.baseUrl?.trim() && (provider.apiKey === undefined || provider.apiKey));
 }
 
 function filterWritableProviders(

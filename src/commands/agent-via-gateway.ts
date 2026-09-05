@@ -1232,8 +1232,16 @@ export async function agentCliCommand(
   runtime: RuntimeEnv,
   deps?: AgentCliDeps,
 ) {
-  if (opts.agent !== undefined && !opts.agent.trim()) {
-    throw new Error("--agent must not be blank");
+  // A present blank selector must not become an omitted target during normalization.
+  for (const [flag, value] of [
+    ["--agent", opts.agent],
+    ["--session-id", opts.sessionId],
+    ["--session-key", opts.sessionKey],
+    ["--to", opts.to],
+  ]) {
+    if (value !== undefined && !value.trim()) {
+      throw new Error(`${flag} must not be blank`);
+    }
   }
   protectJsonStdout(opts);
   const messageOpts = await resolveAgentMessageOpts(opts);

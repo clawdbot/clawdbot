@@ -84,6 +84,58 @@ describe("ChatStatusEventSchema", () => {
   });
 });
 
+describe("ChatErrorEventSchema", () => {
+  const event = { runId: "run-1", sessionKey: "agent:main:main", seq: 1, state: "error" };
+  const detail = {
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    failoverReason: "server_error",
+    providerRuntimeFailureKind: "timeout",
+    providerErrorType: "server_error",
+    httpStatus: 502,
+    providerErrorMessagePreview: "Upstream unavailable",
+  };
+
+  it("round-trips optional closed provider error details", () => {
+    for (const errorDetail of [
+      undefined,
+      {},
+      ...Object.entries(detail).map(([key, value]) => ({ [key]: value })),
+      detail,
+    ]) {
+      const serialized = JSON.stringify({ ...event, errorDetail });
+      const wire = JSON.parse(serialized);
+      expect(Value.Check(ChatEventSchema, wire)).toBe(true);
+    }
+    expect(
+      Value.Check(ChatEventSchema, {
+        ...event,
+        errorDetail: { ...detail, rawErrorPreview: "raw" },
+      }),
+    ).toBe(false);
+    expect(Value.Check(ChatEventSchema, { ...event, state: "final", errorDetail: detail })).toBe(
+      false,
+    );
+  });
+
+  it("enforces string and HTTP status bounds", () => {
+    for (const key of Object.keys(detail).filter((field) => field !== "httpStatus")) {
+      expect(
+        Value.Check(ChatEventSchema, { ...event, errorDetail: { [key]: "x".repeat(300) } }),
+      ).toBe(true);
+      expect(
+        Value.Check(ChatEventSchema, { ...event, errorDetail: { [key]: "x".repeat(301) } }),
+      ).toBe(false);
+    }
+    for (const httpStatus of [100, 599]) {
+      expect(Value.Check(ChatEventSchema, { ...event, errorDetail: { httpStatus } })).toBe(true);
+    }
+    for (const httpStatus of [99, 600, 502.5, "502"]) {
+      expect(Value.Check(ChatEventSchema, { ...event, errorDetail: { httpStatus } })).toBe(false);
+    }
+  });
+});
+
 describe("ChatSendParamsSchema", () => {
   const send = {
     sessionKey: "agent:main:main",

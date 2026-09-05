@@ -188,7 +188,7 @@ describe("plugins cli policy mutations", () => {
       await runPluginsCommand(commandArgs);
 
       const { resolvePluginArtifactDeclaredSurface } =
-        await import("../plugins/capability-consent.js");
+        await import("../plugins/capability-artifact.js");
       const { computeDeclaredSurfaceHash } = await import("../plugins/capability-summary.js");
       if (expectsConsent) {
         const acceptedRecord =

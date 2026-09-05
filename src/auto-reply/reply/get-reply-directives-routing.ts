@@ -7,9 +7,7 @@ import { HISTORY_CONTEXT_MARKER } from "./history.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { stripInlineStatus } from "./reply-inline.js";
 
-type NativeDirectiveCommand = NonNullable<
-  Parameters<typeof parseInlineSessionDirectives>[1]
->["nativeCommand"];
+type DirectiveCommand = NonNullable<Parameters<typeof parseInlineSessionDirectives>[1]>["command"];
 
 function hasInlineDirective(directives: InlineDirectives): boolean {
   return (
@@ -55,7 +53,7 @@ export function resolveReplyDirectiveRouting(params: {
   commandText: string;
   agentText: string;
   modelAliases: string[];
-  nativeCommand?: NativeDirectiveCommand;
+  command?: DirectiveCommand;
   canInterpretTextDirectives: boolean;
   isAuthorizedSender: boolean;
   isGroup: boolean;
@@ -74,7 +72,7 @@ export function resolveReplyDirectiveRouting(params: {
   let parsed = parseInlineSessionDirectives(params.commandText, {
     modelAliases: params.modelAliases,
     allowStatusDirective,
-    nativeCommand: params.nativeCommand,
+    command: params.command,
   });
   const hasInlineStatus = parsed.hasStatusDirective && parsed.cleaned.trim().length > 0;
   if (hasInlineStatus) {
@@ -102,7 +100,7 @@ export function resolveReplyDirectiveRouting(params: {
     parsed = clearExecInlineDirectives(parsed);
   }
 
-  if (params.canInterpretTextDirectives && hasInlineDirective(parsed) && !parsed.nativeCommand) {
+  if (params.canInterpretTextDirectives && hasInlineDirective(parsed) && !parsed.command) {
     const stripped = stripStructuralPrefixes(parsed.cleaned);
     const noMentions = params.isGroup
       ? stripMentions(stripped, params.ctx, params.cfg, params.agentId)
@@ -132,8 +130,7 @@ export function resolveReplyDirectiveRouting(params: {
 
   const unauthorizedReasoningDirectiveAttempt =
     !params.isAuthorizedSender && parsed.hasReasoningDirective;
-  const canInterpretDirectives =
-    params.canInterpretTextDirectives || parsed.nativeCommand !== undefined;
+  const canInterpretDirectives = params.canInterpretTextDirectives || parsed.command !== undefined;
   if (!canInterpretDirectives) {
     return {
       directives: clearInlineDirectives(params.commandText),

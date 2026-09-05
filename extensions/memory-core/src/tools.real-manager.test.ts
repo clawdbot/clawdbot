@@ -1,6 +1,10 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Memory Core integration tests exercise the real SQLite search manager through tools.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  clearMemoryPluginState,
+  registerMemoryCorpusSupplement,
+} from "openclaw/plugin-sdk/memory-host-core";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,6 +26,151 @@ describe("memory_search real manager", () => {
 
   beforeEach(() => {
     testing.resetMemorySearchToolCooldowns();
+  });
+
+  it("reports current invalid config after replacing the config of a retained tool", async () => {
+    const cases = [
+      {
+        provider: "openai-compatible",
+        fallback: "none",
+        error:
+          "memory.search.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",
+      },
+      {
+        provider: "none",
+        fallback: "gemini",
+        error:
+          'memory.search.multimodal does not support memory.search.fallback. Set fallback to "none".',
+      },
+    ] as const;
+    let config = fixture.createConfig({});
+    const tool = createMemorySearchTool({ getConfig: () => config, agentId: "main" });
+    if (!tool) {
+      throw new Error("memory_search tool missing");
+    }
+
+    for (const testCase of cases) {
+      config = fixture.createConfig({
+        provider: testCase.provider,
+        fallback: testCase.fallback,
+        multimodal: { enabled: true, modalities: ["image"] },
+      });
+      const result = await tool.execute("invalid-config", { query: "alpha" });
+
+      expect(result.details).toMatchObject({
+        results: [],
+        disabled: true,
+        unavailable: true,
+        error: testCase.error,
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+      expect(result.content).toContainEqual({
+        type: "text",
+        text: expect.stringContaining(
+          "Check embedding provider configuration and retry memory_search.",
+        ),
+      });
+      expect(fixture.provider.providerCalls).toEqual([]);
+    }
+  });
+
+  it("attributes a persisted provenance mismatch to OpenClaw", async () => {
+    const cfg = fixture.createConfig({
+      provider: "none",
+      vectorEnabled: false,
+      onSearch: false,
+    });
+    const manager = await fixture.getFreshManager(cfg);
+    await manager.sync({ reason: "cli", force: true });
+    await manager.close();
+    await closeAllMemorySearchManagers();
+
+    const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
+    const row = db
+      .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
+      .get() as { value: string };
+    db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'").run(
+      JSON.stringify({ ...JSON.parse(row.value), provenanceVersion: 0 }),
+    );
+    closeOpenClawAgentDatabasesForTest();
+
+    const tool = createMemorySearchTool({ config: cfg, agentId: "main" });
+    if (!tool) {
+      throw new Error("memory_search tool missing");
+    }
+    const result = await tool.execute("provenance-mismatch", { query: "alpha" });
+
+    expect(result.details).toMatchObject({
+      disabled: true,
+      unavailable: true,
+      error: "index provenance classifier changed",
+      warning:
+        "Tell the user: memory search is paused because this OpenClaw version changed the memory index format (index provenance classifier changed); no configuration change is needed.",
+      action:
+        "Tell the user to run: openclaw memory status --index --agent main. Rebuilding uses keyword indexing only and does not call an embedding provider.",
+    });
+    expect(fixture.provider.embedQueryCalls).toBe(0);
+  });
+
+  it("preserves reindex guidance alongside wiki results after an embedding model change", async () => {
+    const manager = await fixture.getFreshManager(
+      fixture.createConfig({ model: "old-embed", vectorEnabled: false, onSearch: false }),
+    );
+    await manager.sync({ reason: "cli", force: true });
+    await manager.close();
+    const embeddingCalls = fixture.provider.embedBatchCalls;
+    const wikiHit = {
+      corpus: "wiki" as const,
+      path: "entities/alpha.md",
+      score: 1,
+      snippet: "Alpha wiki entry",
+    };
+    registerMemoryCorpusSupplement("memory-guidance-fixture", {
+      search: async () => [wikiHit],
+      get: async () => null,
+    });
+    try {
+      const tool = createMemorySearchTool({
+        config: fixture.createConfig({
+          model: "new-embed",
+          vectorEnabled: false,
+          onSearch: false,
+        }),
+        agentId: "main",
+      });
+      if (!tool) {
+        throw new Error("memory_search tool missing");
+      }
+      const action =
+        "Tell the user to run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.";
+      const primary = await tool.execute("paused-primary", { query: "alpha" });
+      expect(primary.details).toMatchObject({
+        disabled: true,
+        unavailable: true,
+        action,
+      });
+
+      const combined = await tool.execute("paused-with-wiki", { query: "alpha", corpus: "all" });
+      expect(combined.details).toMatchObject({
+        results: [wikiHit],
+        corpora: [
+          { corpus: "memory", outcome: "unavailable" },
+          { corpus: "wiki", outcome: "ok" },
+        ],
+        warning: expect.stringContaining("Memory corpus unavailable"),
+        action,
+      });
+      expect(combined.content).toContainEqual({
+        type: "text",
+        text: expect.stringContaining(action),
+      });
+      expect(combined.details).not.toHaveProperty("disabled");
+      expect(combined.details).not.toHaveProperty("unavailable");
+      expect(fixture.provider.embedBatchCalls).toBe(embeddingCalls);
+      expect(fixture.provider.embedQueryCalls).toBe(0);
+    } finally {
+      clearMemoryPluginState();
+    }
   });
 
   it("keeps routine transcript refresh silent during memory_search", async () => {
@@ -202,6 +351,7 @@ describe("memory_search real manager", () => {
 
   it("preserves canonical-session migration recovery through cooldown", async () => {
     const baseConfig = fixture.createConfig({
+      provider: "none",
       sources: ["sessions"],
       sessionMemory: true,
       minScore: 0,
@@ -211,6 +361,17 @@ describe("memory_search real manager", () => {
       ...baseConfig,
       memory: { ...baseConfig.memory, citations: "off" },
     } satisfies OpenClawConfig;
+    await fixture.seedSessionTranscript({
+      sessionId: "recovery-source",
+      sessionKey: "agent:main:telegram:direct:recovery-source",
+      messages: [
+        {
+          role: "user",
+          content: "Operator recovery instructions.",
+          timestamp: "2026-09-03T00:00:00.000Z",
+        },
+      ],
+    });
     const initializedManager = await fixture.getFreshManager(cfg);
     await initializedManager.sync({ reason: "test", force: true });
     await initializedManager.close();

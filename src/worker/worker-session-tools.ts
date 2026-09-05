@@ -1,13 +1,7 @@
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import {
-  GitHubPublicationBodySchema,
-  GitHubPublicationTitleSchema,
-} from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
-import {
   WORKER_SESSION_TOOL_MAX_TEXT_LENGTH,
-  type WorkerGitHubPublishParams,
-  type WorkerGitHubPublishResponseFrame,
   type WorkerPortalParams,
   type WorkerPortalResponseFrame,
   WorkerPortalParamsSchema,
@@ -16,6 +10,12 @@ import {
   type WorkerSessionsSpawnParams,
   type WorkerSessionsSpawnResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  SkillLibraryWorkshopSchema,
+  type WorkerSkillWorkshopBinding,
+  type WorkerSkillWorkshopParams,
+  type WorkerSkillWorkshopResponseFrame,
+} from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import type { AgentToolResult } from "../agents/runtime/index.js";
 import { SESSIONS_SEND_RESULT_GUIDANCE } from "../agents/tool-description-presets.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -24,15 +24,16 @@ import {
   PortalOutputSchema,
   PortalToolSchema,
 } from "../agents/tools/portal-tool-contract.js";
+import { createLibrarySkillWorkshopDescriptor } from "../agents/tools/skill-workshop-tool-library.js";
 
 type WorkerSessionRpcClient = {
+  requestSkillWorkshop?(
+    params: WorkerSkillWorkshopParams,
+  ): Promise<WorkerSkillWorkshopResponseFrame>;
   requestSessionsSpawn(
     params: WorkerSessionsSpawnParams,
   ): Promise<WorkerSessionsSpawnResponseFrame>;
   requestSessionsSend(params: WorkerSessionsSendParams): Promise<WorkerSessionsSendResponseFrame>;
-  requestGitHubPublish(
-    params: WorkerGitHubPublishParams,
-  ): Promise<WorkerGitHubPublishResponseFrame>;
   requestPortal(params: WorkerPortalParams): Promise<WorkerPortalResponseFrame>;
 };
 
@@ -56,26 +57,24 @@ function parseToolResult(frame: WorkerSessionsSpawnResponseFrame) {
   return parsed as AgentToolResult<unknown>;
 }
 
-export function createWorkerSessionTools(client: WorkerSessionRpcClient): AnyAgentTool[] {
-  return [
-    {
-      label: "GitHub Publish",
-      name: "github_publish",
-      description:
-        "Request Gateway-owned publication of this cloud session. Call only after the work is complete, then finish the turn. The Gateway reconciles the workspace, commits remaining changes as the effective GitHub user, pushes an exact HTTPS branch, and creates or reuses a draft pull request without sending credentials to this worker.",
-      parameters: Type.Object(
-        {
-          title: Type.Optional(GitHubPublicationTitleSchema),
-          body: Type.Optional(GitHubPublicationBodySchema),
+export function createWorkerSessionTools(
+  client: WorkerSessionRpcClient,
+  skillAuthoring?: WorkerSkillWorkshopBinding,
+): AnyAgentTool[] {
+  const workshop: AnyAgentTool | undefined = skillAuthoring
+    ? {
+        ...createLibrarySkillWorkshopDescriptor(skillAuthoring.multipleProfiles),
+        parameters: SkillLibraryWorkshopSchema,
+        execute: async (toolCallId, raw) => {
+          if (!Value.Check(SkillLibraryWorkshopSchema, raw) || !client.requestSkillWorkshop) {
+            throw new Error("Worker Workshop transport is unavailable or arguments are invalid.");
+          }
+          return parseToolResult(await client.requestSkillWorkshop({ toolCallId, arguments: raw }));
         },
-        { additionalProperties: false },
-      ),
-      execute: async (toolCallId, raw) => {
-        // SAFETY: the embedded agent runtime validates raw against this tool's schema.
-        const params = raw as Omit<WorkerGitHubPublishParams, "toolCallId">;
-        return parseToolResult(await client.requestGitHubPublish({ toolCallId, ...params }));
-      },
-    },
+      }
+    : undefined;
+  return [
+    ...(workshop ? [workshop] : []),
     {
       label: "Sessions",
       name: "sessions_spawn",

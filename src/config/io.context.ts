@@ -134,7 +134,10 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
     const contextBudgetConfig = migrateLegacyContextBudgetConfig(
       resolution.resolvedConfigRaw,
     ).config;
-    return coerceConfig(migratePersistedImplicitMainRoster(contextBudgetConfig).config);
+    return coerceConfig(
+      migratePersistedImplicitMainRoster(contextBudgetConfig, { env, homedir: deps.homedir })
+        .config,
+    );
   }
 
   function prepareRecoveryBackupCandidate(

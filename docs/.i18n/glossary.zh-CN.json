@@ -64,6 +64,10 @@
     "target": "ClawHub"
   },
   {
+    "source": "ClawHub CLI",
+    "target": "ClawHub CLI"
+  },
+  {
     "source": "Claws",
     "target": "Claws"
   },
@@ -892,6 +896,10 @@
     "target": "工具插件"
   },
   {
+    "source": "Feature plugins",
+    "target": "功能插件"
+  },
+  {
     "source": "Plugin SDK subpaths",
     "target": "插件 SDK 子路径"
   },
@@ -1668,6 +1676,10 @@
     "target": "v2026.8.1 (AKA OpenClaw 2.0)"
   },
   {
+    "source": "v2026.8.2",
+    "target": "v2026.8.2"
+  },
+  {
     "source": "v2026.8.1",
     "target": "v2026.8.1"
   },
@@ -1806,6 +1818,14 @@
   {
     "source": "llama-server",
     "target": "llama-server"
+  },
+  {
+    "source": "llmman",
+    "target": "llmman"
+  },
+  {
+    "source": "llmman (local models)",
+    "target": "llmman（本地模型）"
   },
   {
     "source": "llama.cpp (managed or existing server)",

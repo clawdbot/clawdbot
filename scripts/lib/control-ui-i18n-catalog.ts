@@ -1,71 +1,78 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { registerActivityEnglish } from "../../ui/src/i18n/locales/en-activity.ts";
+import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
+import { registerDesktopEnglish } from "../../ui/src/i18n/locales/en-desktop.ts";
+import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts";
+import { registerLoginEnglish } from "../../ui/src/i18n/locales/en-login.ts";
+import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.ts";
+import { registerMemoryImportEnglish } from "../../ui/src/i18n/locales/en-memory-import.ts";
+import { registerModelAccountsEnglish } from "../../ui/src/i18n/locales/en-model-accounts.ts";
+import { registerNewSessionSetupEnglish } from "../../ui/src/i18n/locales/en-new-session-setup.ts";
+import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
+import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
+import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
+import { registerSkillLibraryEnglish } from "../../ui/src/i18n/locales/en-skill-library.ts";
+import { registerUpdateActionsEnglish } from "../../ui/src/i18n/locales/en-update-actions.ts";
+import { en } from "../../ui/src/i18n/locales/en.ts";
 import type { TranslationMap, TranslationMemoryEntry } from "./control-ui-i18n-sync-plan.ts";
 
-async function importControlUiLocaleModule<T>(filePath: string): Promise<T> {
-  const stats = await stat(filePath);
-  return (await import(`${pathToFileURL(filePath).href}?ts=${stats.mtimeMs}`)) as T;
-}
+// Host-only owner for generation, verification and Vite. Static imports let Vite
+// track every English dependency (including en.ts's en-agents.ts import).
+const localesDir = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../ui/src/i18n/locales",
+);
+const sourceFiles = [
+  "en.ts",
+  "en-agents.ts",
+  "en-activity.ts",
+  "en-debug.ts",
+  "en-desktop.ts",
+  "en-devices.ts",
+  "en-login.ts",
+  "en-meetings.ts",
+  "en-memory-import.ts",
+  "en-model-accounts.ts",
+  "en-session-placement.ts",
+  "en-new-session-setup.ts",
+  "en-plugin-consent.ts",
+  "en-settings.ts",
+  "en-skill-library.ts",
+  "en-update-actions.ts",
+];
 
-export async function loadControlUiLocaleCatalog(
-  filePath: string,
-  exportName: string,
-): Promise<TranslationMap | null> {
-  if (!existsSync(filePath)) {
-    return null;
-  }
-  const module = await importControlUiLocaleModule<Record<string, TranslationMap>>(filePath);
-  return module[exportName] ?? null;
-}
-
-export async function loadControlUiSourceCatalog(
-  sourceLocalePath: string,
-  activitySourceLocalePath: string,
-  sessionPlacementSourceLocalePath: string,
-  pluginConsentSourceLocalePath: string,
-): Promise<TranslationMap> {
-  const source = await loadControlUiLocaleCatalog(sourceLocalePath, "en");
-  const activitySource = (
-    await importControlUiLocaleModule<{
-      registerActivityEnglish: { catalog: TranslationMap };
-    }>(activitySourceLocalePath)
-  ).registerActivityEnglish.catalog;
-  const sessionPlacementSource = (
-    await importControlUiLocaleModule<{
-      registerSessionPlacementEnglish: { catalog: TranslationMap };
-    }>(sessionPlacementSourceLocalePath)
-  ).registerSessionPlacementEnglish.catalog;
-  const pluginConsentSource = (
-    await importControlUiLocaleModule<{
-      registerPluginConsentEnglish: { catalog: TranslationMap };
-    }>(pluginConsentSourceLocalePath)
-  ).registerPluginConsentEnglish.catalog;
-  if (!source || !activitySource || !sessionPlacementSource || !pluginConsentSource) {
-    throw new Error("Control UI English source catalogs are incomplete");
-  }
+export function loadControlUiSourceCatalog(): TranslationMap {
+  // Read fragment data without registering it into the shared runtime catalog.
+  // en.ts's empty anchors retain source order for extracted whole subtrees.
   return mergeControlUiTranslationMaps(
-    source,
-    activitySource,
-    sessionPlacementSource,
-    pluginConsentSource,
+    registerSkillLibraryEnglish.catalog,
+    // Preserve partial-fragment key order while keeping shared labels eager.
+    {
+      ...en,
+      debug: registerDebugEnglish.catalog.debug,
+      desktop: registerDesktopEnglish.catalog.desktop,
+    },
+    registerActivityEnglish.catalog,
+    registerDevicesEnglish.catalog,
+    registerLoginEnglish.catalog,
+    registerMeetingsEnglish.catalog,
+    registerMemoryImportEnglish.catalog,
+    registerModelAccountsEnglish.catalog,
+    registerSessionPlacementEnglish.catalog,
+    registerNewSessionSetupEnglish.catalog,
+    registerPluginConsentEnglish.catalog,
+    registerSettingsEnglish.catalog,
+    registerUpdateActionsEnglish.catalog,
   );
 }
 
-export async function readControlUiSourceCatalog(
-  sourceLocalePath: string,
-  activitySourceLocalePath: string,
-  sessionPlacementSourceLocalePath: string,
-  pluginConsentSourceLocalePath: string,
-): Promise<string> {
+export async function readControlUiSourceCatalog(): Promise<string> {
   const sources = await Promise.all(
-    [
-      sourceLocalePath,
-      activitySourceLocalePath,
-      sessionPlacementSourceLocalePath,
-      pluginConsentSourceLocalePath,
-    ].map((filePath) => readFile(filePath, "utf8")),
+    sourceFiles.map((fileName) => readFile(path.join(localesDir, fileName), "utf8")),
   );
   return sources.join("\n");
 }

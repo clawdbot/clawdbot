@@ -1,6 +1,6 @@
 {
   "id": "xiaomi",
-  "icon": "https://cdn.simpleicons.org/xiaomi",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },

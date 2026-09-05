@@ -44,7 +44,8 @@ describe("reconcileSkillCollectionReviewJobs", () => {
     const remove = vi.fn(async () => ({ ok: true }));
     const list = vi.fn(async () => [
       monitorJob("main"),
-      monitorJob("stale"),
+      monitorJob("stale", "stale-older"),
+      { ...monitorJob("stale", "stale-newer"), updatedAtMs: 2 },
       {
         ...monitorJob("collider"),
         id: "user-job",
@@ -77,8 +78,46 @@ describe("reconcileSkillCollectionReviewJobs", () => {
       enabledExplicit: true,
       systemOwned: true,
     });
-    expect(remove).toHaveBeenCalledWith("job-stale", { systemOwned: true });
-    expect(remove).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenNthCalledWith(1, "stale-older", { systemOwned: true });
+    expect(remove).toHaveBeenNthCalledWith(2, "stale-newer", { systemOwned: true });
+    expect(remove).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes duplicate monitors before converging their declaration", async () => {
+    const older = monitorJob("main", "older");
+    const newer = { ...monitorJob("main", "newer"), updatedAtMs: 2 };
+    const jobs = [older, newer];
+    const remove = vi.fn(async (jobId: string) => {
+      const index = jobs.findIndex((job) => job.id === jobId);
+      if (index >= 0) {
+        jobs.splice(index, 1);
+      }
+      return { ok: true };
+    });
+    const add = vi.fn(
+      async (_input: unknown, options?: { matchesExisting?: (job: CronJob) => boolean }) => {
+        const matches = jobs.filter((job) => options?.matchesExisting?.(job));
+        if (matches.length > 1) {
+          throw new Error("ambiguous declaration key");
+        }
+        return { job: matches[0] };
+      },
+    );
+    const cfg = {
+      agents: { list: [{ id: "main", default: true, workspace: "/tmp/openclaw-main" }] },
+      skills: { workshop: { autonomous: { mode: "propose" } } },
+    } as OpenClawConfig;
+
+    await expect(
+      reconcileSkillCollectionReviewJobs({
+        cron: { add, list: vi.fn(async () => jobs), remove } as never,
+        cfg,
+        logger,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(remove).toHaveBeenNthCalledWith(1, "older", { systemOwned: true });
+    expect(add).toHaveBeenCalledOnce();
   });
 
   it("revokes an active review through gateway reconciliation before its final write", async () => {

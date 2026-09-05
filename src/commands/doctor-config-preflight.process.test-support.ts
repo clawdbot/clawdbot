@@ -8,7 +8,42 @@ import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db.js
 const execFileAsync = promisify(execFile);
 // The fixture owns its package assets; resolving linked source back to the checkout
 // makes Doctor repair that checkout instead, including building its Control UI.
-const SOURCE_RUNTIME_NODE_ARGS = ["--preserve-symlinks", "--preserve-symlinks-main"];
+// Dependency realpaths still own their transitive packages under isolated installs.
+const ISOLATED_RUNTIME_NODE_ARGS = [
+  "--preserve-symlinks",
+  "--preserve-symlinks-main",
+  "--import",
+  `data:text/javascript,${encodeURIComponent(`
+    import fs from "node:fs";
+    import { registerHooks } from "node:module";
+    import path from "node:path";
+    import { fileURLToPath, pathToFileURL } from "node:url";
+    registerHooks({
+      resolve(specifier, context, nextResolve) {
+        const resolved = nextResolve(specifier, context);
+        if (!resolved.url.startsWith("file:")) return resolved;
+        const filename = fileURLToPath(resolved.url);
+        if (!filename.split(path.sep).includes("node_modules")) return resolved;
+        const url = new URL(resolved.url);
+        url.pathname = pathToFileURL(fs.realpathSync(filename)).pathname;
+        return { ...resolved, url: url.href };
+      }
+    });
+  `)}`,
+];
+
+export function runBuiltRuntime(
+  runtimeRoot: string,
+  env: NodeJS.ProcessEnv,
+  args: string[],
+  timeout: number,
+) {
+  return spawnSync(
+    process.execPath,
+    [...ISOLATED_RUNTIME_NODE_ARGS, path.join(runtimeRoot, "dist", "entry.js"), ...args],
+    { cwd: runtimeRoot, encoding: "utf8", env, timeout },
+  );
+}
 
 export function runSourceRuntime(
   runtimeRoot: string,
@@ -16,7 +51,7 @@ export function runSourceRuntime(
   args: string[],
   timeout: number,
 ) {
-  return spawnSync(process.execPath, [...SOURCE_RUNTIME_NODE_ARGS, "--import", "tsx", ...args], {
+  return spawnSync(process.execPath, [...ISOLATED_RUNTIME_NODE_ARGS, "--import", "tsx", ...args], {
     cwd: runtimeRoot,
     encoding: "utf8",
     env,
@@ -32,7 +67,7 @@ export function runIsolatedModuleScript(
   return execFileAsync(
     process.execPath,
     [
-      ...(options.runtimeRoot ? SOURCE_RUNTIME_NODE_ARGS : []),
+      ...(options.runtimeRoot ? ISOLATED_RUNTIME_NODE_ARGS : []),
       "--import",
       "tsx",
       "--input-type=module",
@@ -69,6 +104,29 @@ export function createSourceRuntime(root: string): string {
   const uiDir = path.join(runtimeRoot, "dist", "control-ui");
   fs.mkdirSync(uiDir, { recursive: true });
   fs.writeFileSync(path.join(uiDir, "index.html"), "<!doctype html>\n");
+  return runtimeRoot;
+}
+
+export function createBuiltRuntime(root: string): string {
+  const runtimeRoot = createSourceRuntime(root);
+  const sourceDist = path.resolve("dist");
+  // The pretest owner supplies immutable built modules once; mutable package
+  // metadata and Control UI assets remain private to each fixture.
+  for (const entry of fs.readdirSync(sourceDist, { withFileTypes: true })) {
+    if (entry.name === "build-info.json" || entry.name === "control-ui") {
+      continue;
+    }
+    const source = path.join(sourceDist, entry.name);
+    const target = path.join(runtimeRoot, "dist", entry.name);
+    if (entry.isDirectory()) {
+      fs.symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
+    } else {
+      fs.copyFileSync(source, target, fs.constants.COPYFILE_FICLONE);
+    }
+  }
+  if (!fs.existsSync(path.join(runtimeRoot, "dist", "entry.js"))) {
+    throw new Error("built Doctor fixture requires dist/entry.js; prepare the runtime first");
+  }
   return runtimeRoot;
 }
 

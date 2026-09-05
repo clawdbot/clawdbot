@@ -1,5 +1,6 @@
 // Subagent spawn thread-binding tests cover child-session placement, target
 // account selection, and completion routing for channel thread spawns.
+import assert from "node:assert/strict";
 import os from "node:os";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
@@ -65,6 +66,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
   let currentConfig: Record<string, unknown>;
   let currentSessionBindingService: ReturnType<SessionBindingService>;
   let currentDeliveryTargetResolver: DeliveryTargetResolver;
+  let routableProjection = true;
 
   beforeAll(async () => {
     ({ spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
@@ -106,6 +108,9 @@ describe("spawnSubagentDirect thread binding delivery", () => {
                 conversationId: string;
                 parentConversationId?: string;
               }) => {
+                if (!routableProjection) {
+                  return {};
+                }
                 const parent = parentConversationId?.trim();
                 const child = conversationId.trim();
                 if (parent && parent !== child) {
@@ -121,6 +126,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
   }
 
   beforeEach(() => {
+    routableProjection = true;
     installChannelRouteProjectionPluginsForTest();
     currentConfig = createSubagentSpawnTestConfig(os.tmpdir(), {
       agents: {
@@ -164,6 +170,61 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
     installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
   });
+
+  it.each([
+    { mode: "run", thread: false, routable: true, announce: true, completion: "announce" },
+    { mode: "run", thread: false, routable: true, announce: false, completion: "quiet" },
+    { mode: "run", thread: true, routable: true, announce: true, completion: "announce" },
+    { mode: "session", thread: true, routable: true, announce: true, completion: "thread-direct" },
+    { mode: "session", thread: true, routable: true, announce: false, completion: "thread-direct" },
+    { mode: "session", thread: true, routable: false, announce: true, completion: "announce" },
+    { mode: "session", thread: true, routable: false, announce: false, completion: "quiet" },
+  ] as const)(
+    "aligns $mode thread=$thread routable=$routable announce=$announce guidance with delivery and cleanup",
+    async ({ mode, thread, routable, announce, completion }) => {
+      routableProjection = routable;
+      const cleanup = completion === "quiet" && mode === "run" ? "delete" : "keep";
+      const result = await spawnSubagentDirect(
+        {
+          task: "Return the requested findings.",
+          mode,
+          thread,
+          expectsCompletionMessage: announce,
+          cleanup,
+        },
+        { agentSessionKey: "agent:main:main", agentChannel: "matrix", agentTo: "room:parent" },
+      );
+      expect(result.status).toBe("accepted");
+      const agentCall = hoisted.callGatewayMock.mock.calls.find(
+        ([call]) => (call as { method?: string }).method === "agent",
+      )?.[0] as { params: Record<string, unknown> };
+      expect(agentCall.params.deliver).toBe(completion === "thread-direct");
+      expect(result.expectsCompletionMessage).toBe(completion === "announce");
+      expect(firstRegisteredSubagentRun().expectsCompletionMessage).toBe(completion === "announce");
+      assert(
+        typeof agentCall.params.extraSystemPrompt === "string",
+        "child system prompt must be text",
+      );
+      assert(typeof agentCall.params.message === "string", "child task must be text");
+      const childGuidance = `${agentCall.params.extraSystemPrompt}\n${agentCall.params.message}`;
+      const contract = {
+        announce: /completion event/i,
+        quiet: /no completion notification/i,
+        "thread-direct": /directly to the bound thread/i,
+      }[completion];
+      expect.soft(childGuidance).toMatch(contract);
+      expect.soft(result.note).toMatch(contract);
+      if (cleanup === "delete") {
+        expect(firstRegisteredSubagentRun()).toMatchObject({ cleanup: "delete" });
+        expect.soft(childGuidance).not.toContain("remains in the child session");
+        expect.soft(result.note).not.toContain("remains in the child session");
+      }
+      if (completion !== "announce") {
+        expect.soft(childGuidance).not.toMatch(/final auto-reported|Results auto-announce/);
+        expect.soft(result.note).not.toMatch(/Auto-announce is push-based/);
+      }
+    },
+  );
 
   it("passes the target agent's bound account to core thread binding", async () => {
     // Cross-agent spawns bind the target agent account, while requester origin

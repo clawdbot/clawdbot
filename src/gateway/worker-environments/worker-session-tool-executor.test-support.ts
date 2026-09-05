@@ -69,7 +69,6 @@ type WorkerSessionToolTestMocks = {
   dispatchChild: Mock;
   spawnCallerIdentity: Mock;
   spawnArgs: Mock;
-  githubPublicationRequest: Mock;
   scopedSessionAccess: Mock<(params: { run: () => Promise<unknown> }) => Promise<unknown>>;
 };
 
@@ -88,7 +87,6 @@ async function createWorkerSessionToolTestFixture(
     dispatchChild,
     spawnCallerIdentity,
     spawnArgs,
-    githubPublicationRequest,
     scopedSessionAccess,
   } = mocks;
   const root = await fs.mkdtemp(
@@ -110,11 +108,7 @@ async function createWorkerSessionToolTestFixture(
       ownerEpoch: SOURCE.ownerEpoch,
     },
   });
-  placements.authorizeWorkerTurnTools(sourceClaim, [
-    "sessions_send",
-    "sessions_spawn",
-    "github_publish",
-  ]);
+  placements.authorizeWorkerTurnTools(sourceClaim, ["sessions_send", "sessions_spawn"]);
   const delegatedAuthorities: AgentRunDelegatedAuthority[] = [];
   const sourceOperationalRun = createOperationalRunInstanceRef(sourceClaim.runId);
   delegatedAuthorities.push(claimAgentRunDelegatedAuthority(sourceOperationalRun));
@@ -157,12 +151,6 @@ async function createWorkerSessionToolTestFixture(
   dispatchChild.mockReset();
   spawnCallerIdentity.mockReset();
   spawnArgs.mockReset();
-  githubPublicationRequest.mockReset();
-  githubPublicationRequest.mockResolvedValue({
-    requestId: "publication-1",
-    status: "requested",
-    message: "Publication was accepted.",
-  });
   scopedSessionAccess.mockClear();
   const spawnState: { childSessionKey: string | undefined; order: string[] } = {
     childSessionKey: undefined,
@@ -202,7 +190,6 @@ async function createWorkerSessionToolTestFixture(
     resolveGatewayContext,
     placements,
     dispatchChild,
-    githubPublication: { requestForClaim: githubPublicationRequest },
     portals: {
       getService: () => undefined,
       carrier: { open: vi.fn() },

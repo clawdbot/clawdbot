@@ -8,6 +8,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { AgentSelectionRequiredError, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
+import * as channelRegistry from "../channels/plugins/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import {
@@ -804,6 +805,42 @@ describe("state migrations", () => {
     detectionCase = { ...detected, stateDir, env };
   });
 
+  describe.each(["automatic", "doctor"] as const)("%s pairing detection", (mode) => {
+    it.each(["missing", "empty", "irrelevant", "pairing-only"])(
+      "does not request channel runtime for %s credentials",
+      async (input) => {
+        const root = await createTempDir();
+        const stateDir = path.join(root, ".openclaw");
+        const sourceDir = path.join(stateDir, "credentials");
+        if (input !== "missing") {
+          await fs.mkdir(sourceDir, { recursive: true });
+        }
+        if (input === "irrelevant") {
+          await fs.writeFile(path.join(sourceDir, "oauth.json"), "{}");
+          await fs.mkdir(path.join(sourceDir, "chatapp-allowFrom.json"));
+        }
+        if (input === "pairing-only") {
+          await fs.writeFile(path.join(sourceDir, "chatapp-pairing.json"), '{"requests":[]}');
+        }
+        const getChannelPlugin = vi.spyOn(channelRegistry, "getChannelPlugin");
+        try {
+          const detected = await detectLegacyStateMigrations({
+            cfg: createConfig(),
+            mode,
+            env: createEnv(stateDir),
+            homedir: () => root,
+          });
+          expect(detected.channelPairing.files).toEqual(
+            input === "pairing-only" ? ["chatapp-pairing.json"] : [],
+          );
+          expect(getChannelPlugin).not.toHaveBeenCalled();
+        } finally {
+          getChannelPlugin.mockRestore();
+        }
+      },
+    );
+  });
+
   it("does not treat wildcard route bindings as pairing account ids", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
@@ -879,17 +916,69 @@ describe("state migrations", () => {
     });
     setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
 
+    const authoredConfig = structuredClone(cfg);
     const detected = await detectLegacyStateMigrations({
       cfg,
       env,
       homedir: () => root,
     });
+    expect(cfg).toEqual(authoredConfig);
     const result = await runLegacyStateMigrations({ detected, config: cfg, env });
 
     expect(result.warnings).toEqual([]);
     expect(readChannelPairingStateSnapshot("chatapp", env).allowFrom).toEqual({
       default: ["123456789"],
     });
+  });
+
+  it.each([
+    { bound: "Bound.Acct", explicit: "alpha", expected: "bound.acct", entries: ["unscoped"] },
+    { bound: undefined, explicit: "alpha", expected: "alpha", entries: ["unscoped", "scoped"] },
+    { bound: undefined, explicit: undefined, expected: "plugin.default", entries: ["unscoped"] },
+  ])("preserves loaded plugin accounts with $expected as the default", async (selection) => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    cfg.channels = {
+      chatapp: { accounts: { beta: {}, alpha: {} }, defaultAccount: selection.explicit },
+    };
+    if (selection.bound) {
+      cfg.bindings = [
+        { agentId: "worker-1", match: { channel: "chatapp", accountId: selection.bound } },
+      ];
+    }
+    const plugin = createChannelTestPluginBase({
+      id: "chatapp",
+      config: {
+        listAccountIds: (config) => {
+          expect(config).toBe(cfg);
+          return ["Plugin.Acct"];
+        },
+        defaultAccountId: () => "Plugin.Default",
+      },
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
+    const sourceDir = path.join(stateDir, "credentials");
+    await fs.mkdir(sourceDir, { recursive: true });
+    for (const suffix of ["", "-plugin.acct", "-alpha", "-beta"]) {
+      await fs.writeFile(
+        path.join(sourceDir, `chatapp${suffix}-allowFrom.json`),
+        suffix ? '["scoped"]' : '["unscoped"]',
+      );
+    }
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    // Import uses captured detection facts even if the caller replaces its config later.
+    const result = await runLegacyStateMigrations({ detected, config: {}, env });
+
+    expect(result.warnings).toEqual([]);
+    expect(readChannelPairingStateSnapshot("chatapp", env).allowFrom).toEqual({
+      "plugin.acct": ["scoped"],
+      alpha: ["scoped"],
+      beta: ["scoped"],
+      [selection.expected]: selection.entries,
+    });
+    expect(await fs.readdir(sourceDir)).toEqual([]);
   });
 
   it("preserves ambiguous pairing ownership when only the session fallback exists", async () => {
@@ -1080,6 +1169,41 @@ describe("state migrations", () => {
     );
   });
 
+  it("preserves retired config locators before an advisory transcript migration return", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    fsSync.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const database = new DatabaseSync(databasePath);
+    try {
+      ensureOpenClawAgentDatabaseSchema(database, {
+        agentId: "main",
+        env,
+        path: databasePath,
+        register: false,
+      });
+      database
+        .prepare(
+          "INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,app_version,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+        )
+        .run("historical-transcript-directives-v1", "agent", 1, "main", "invalid-json", 1, 1);
+    } finally {
+      database.close();
+    }
+    const store = path.join(root, "legacy-jobs.json");
+    const cfg: OpenClawConfig & { cron: { store: string } } = {
+      agents: { ownership: "explicit", entries: { main: {} } },
+      cron: { store },
+    };
+    const result = await autoMigrateLegacyState({ cfg, env });
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining("invalid historical transcript migration cursor"),
+    );
+    expect(readConfigMachineState("cron.store", { env })).toBe(store);
+    expect(result.changes).toContain("Migrated cron.store → shared SQLite state");
+  });
+
   it("ignores a schema-only legacy agent database without selecting an owner", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
@@ -1114,7 +1238,7 @@ describe("state migrations", () => {
   });
 
   it.each([null, "", "   "])(
-    "keeps a schema-only legacy agent database with invalid owner %j blocking",
+    "preserves a schema-only legacy agent database with invalid owner %j as advisory",
     async (agentId) => {
       const root = await createTempDir();
       const stateDir = path.join(root, ".openclaw");
@@ -1125,13 +1249,8 @@ describe("state migrations", () => {
       const databasePath = seedSchemaOnlyLegacyAgentDatabase(stateDir, { agentId });
 
       const automatic = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
-
-      expect(automatic.skipped).toBe(false);
       expect(automatic.warnings).toContainEqual(
         expect.stringContaining("agent schema owner is missing or blank"),
-      );
-      expect(automatic.notices ?? []).not.toContain(
-        "Deferred legacy agent/session migration: select an agent owner",
       );
       expect(fsSync.existsSync(databasePath)).toBe(true);
       expect(fsSync.existsSync(path.join(stateDir, "agents", "main", "agent"))).toBe(false);
@@ -3823,15 +3942,13 @@ describe("state migrations", () => {
       },
     ];
 
-    const result = await autoMigrateLegacyPluginDoctorState({
-      config: cfg,
-      env,
-      homedir: () => root,
-    });
-
-    expect(result.changes).toStrictEqual([]);
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain("Failed migrating shared state database schema");
+    await expect(
+      autoMigrateLegacyPluginDoctorState({
+        config: cfg,
+        env,
+        homedir: () => root,
+      }),
+    ).rejects.toThrow("Failed migrating shared state database schema");
     expect(detectLegacyState).not.toHaveBeenCalled();
     expect(migrateLegacyState).not.toHaveBeenCalled();
   });
@@ -3853,13 +3970,9 @@ describe("state migrations", () => {
       db.close();
     }
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
-
-    expect(result.migrated).toBe(false);
-    expect(result.skipped).toBe(false);
-    expect(result.changes).toStrictEqual([]);
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain("Failed migrating shared state database schema");
+    await expect(autoMigrateLegacyState({ cfg, env, homedir: () => root })).rejects.toThrow(
+      "Failed migrating shared state database schema",
+    );
     await expect(fs.readFile(voiceWakePath, "utf8")).resolves.toContain("leave-me");
     await expect(fs.stat(`${voiceWakePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
   });

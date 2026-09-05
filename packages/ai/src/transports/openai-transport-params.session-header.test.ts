@@ -1,4 +1,4 @@
-import type { Context, Model } from "@openclaw/llm-core";
+import type { Context, Model, SimpleStreamOptions } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH } from "../providers/openai-prompt-cache.js";
 import {
@@ -46,15 +46,15 @@ describe("buildOpenAISdkRequestOptions turn controls", () => {
     baseUrl: "https://api.openai.com/v1",
   } as Model;
 
-  it("forwards an explicit turn timeout and zero retries to the SDK", () => {
+  it.each([undefined, 0, 7])("keeps SDK retries at zero for legacy maxRetries=%s", (maxRetries) => {
     const signal = new AbortController().signal;
+    const options: SimpleStreamOptions = { timeoutMs: 1_234, maxRetries };
 
-    expect(
-      buildOpenAISdkRequestOptions(model, signal, {
-        timeoutMs: 1_234,
-        maxRetries: 0,
-      }),
-    ).toEqual({ signal, timeout: 1_234, maxRetries: 0 });
+    expect(buildOpenAISdkRequestOptions(model, signal, options)).toEqual({
+      signal,
+      timeout: 1_234,
+      maxRetries: 0,
+    });
   });
 
   it("does not add a retry policy when the turn does not specify one", () => {

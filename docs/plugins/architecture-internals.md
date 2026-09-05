@@ -688,6 +688,8 @@ Notes:
 - Canonically equivalent paths with the same `match` mode occupy one route. Static `api.registerHttpRoute(...)` calls from the same plugin replace that route; another plugin cannot replace it.
 - Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.
 - Dynamic lifecycle code using `registerPluginHttpRoute(...)` from `openclaw/plugin-sdk/webhook-ingress` must set `replaceExisting: true` to refresh its own canonical route. Named registrations can replace only the same nonempty `pluginId`; when either side sets a route `source`, both must set the same nonempty source. Same-plugin source-less-to-source-less refresh and anonymous-to-anonymous refresh remain supported for shipped SDK callers, but named and anonymous routes cannot replace each other.
+- Set `reuseExistingSameOwner: true` to share a canonical route with the same nonempty `pluginId` and `source`. A dynamically created route remains until its last holder releases it; reusing a static `api.registerHttpRoute(...)` route leaves its lifetime with the plugin registry.
+- Channel lifecycle callbacks use their Gateway's route registry. Startup routes expire when their task settles or recovery abandons it; `stopAccount` routes expire when that stop attempt settles or times out. Recovery revokes abandoned task routes before replacement startup, even if startup fails. Expired callbacks cannot dynamically register or replace routes.
 - Treat route `source` as a stable same-plugin sub-owner, not a diagnostic label. Existing source-less callers may keep omitting it; source-aware callers must keep it unchanged across refreshes.
 - Dynamic lifecycle registration logs and returns a no-op unregister callback on rejection by default. Set `throwOnFailure: true` when readiness depends on that route; required bundled webhook transports use strict registration so they cannot report ready without live ingress.
 - `auth: "plugin"` routes do **not** receive operator runtime scopes automatically. They are for plugin-managed webhooks/signature verification, not privileged Gateway helper calls.
@@ -1041,6 +1043,13 @@ Official external npm entries should prefer an exact `npmSpec` plus
 `expectedIntegrity`. Bare package names and dist-tags still work for
 compatibility, but they surface source-plane warnings so the catalog can move
 toward pinned, integrity-checked installs without breaking existing plugins.
+When an official package is renamed, the catalog entry may declare
+`legacyNpmPackageNames` with the former package names. Trusted update rewrites
+matching npm records to the current `npmSpec`, and migrates a catalog lookup
+alias such as a channel id to the canonical plugin id. Duplicate alias+canonical
+records drop only when the canonical install is also trusted official.
+`legacyPluginIds` remains the contract for plugin-id cutovers that are not lookup
+aliases.
 When onboarding installs from a local catalog path, it records a managed plugin
 plugin index entry with `source: "path"` and a workspace-relative
 `sourcePath` when possible. The absolute operational load path stays in

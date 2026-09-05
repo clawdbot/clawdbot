@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 describe("resolveRuntimeWorkerUrl", () => {
@@ -44,6 +44,30 @@ describe("resolveRuntimeWorkerArgv", () => {
       const url = pathToFileURL(path.resolve(`worker fixture.${extension}`));
       const loader = typescriptLoader && extension.endsWith("ts") ? ["--import", "tsx"] : [];
       expect(resolveRuntimeWorkerArgv(url, runtime)).toEqual([...loader, fileURLToPath(url)]);
+    }
+  });
+});
+
+describe("resolveRuntimeProcessEntrypointUrl", () => {
+  it("uses canonical launchers unless the sealed bundle registers a sibling", async () => {
+    vi.resetModules();
+    try {
+      const {
+        registerSealedRuntimeProcessEntrypoint,
+        resolveRuntimeProcessEntrypointUrl,
+        resolveRuntimeWorkerUrl: resolveUrl,
+      } = await import("./runtime-worker-url.js");
+      const { runtimeProcessEntrypoints } = await import("./runtime-process-entrypoints.js");
+      expect(resolveRuntimeProcessEntrypointUrl("githubExec")).toEqual(
+        resolveUrl(runtimeProcessEntrypoints.githubExec),
+      );
+      const sqliteUrl = resolveRuntimeProcessEntrypointUrl("sqliteReadOnly");
+      const sealedUrl = new URL("file:///worker-bundle/github-exec-launcher.mjs");
+      registerSealedRuntimeProcessEntrypoint("githubExec", sealedUrl);
+      expect(resolveRuntimeProcessEntrypointUrl("githubExec")).toEqual(sealedUrl);
+      expect(resolveRuntimeProcessEntrypointUrl("sqliteReadOnly")).toEqual(sqliteUrl);
+    } finally {
+      vi.resetModules();
     }
   });
 });

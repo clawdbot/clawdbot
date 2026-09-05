@@ -7,7 +7,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  appendBoundedStepOutput,
   cleanupCanaryArtifactsForExtensions,
   formatBoundaryCheckSuccessSummary,
   formatSlowCompileSummary,
@@ -140,14 +139,6 @@ describe("check-extension-package-tsc-boundary", () => {
       ),
     ).rejects.toMatchObject({ kind: "timeout", fullOutput: expect.stringContaining(diagnostic) });
   });
-  it("keeps a bounded tail of captured step output", () => {
-    const first = appendBoundedStepOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
-    const second = appendBoundedStepOutput(first, "ghij", 5);
-
-    expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
-    expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
-  });
-
   it("removes stale canary artifacts across extensions", () => {
     const { rootDir } = createTempExtensionRoot();
     const { canaryPath, tsconfigPath } = writeCanaryArtifacts(rootDir);

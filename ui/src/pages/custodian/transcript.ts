@@ -1,6 +1,7 @@
 import type {
   SystemAgentChatHistoryResult,
   SystemAgentChatHistoryTurn,
+  SystemAgentChatResult,
 } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -15,13 +16,16 @@ import {
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
+import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { renderChatDivider } from "../chat/components/chat-divider.ts";
 import { renderMessageGroup } from "../chat/components/chat-message.ts";
 import { renderCustodianQuestionCard } from "./custodian-question-card.ts";
-import type { CustodianStructuredQuestion } from "./structured-question.ts";
+import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 
 const CUSTODIAN_TRANSCRIPT_TIMEOUT_MS = 15_000;
+const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
 export type CustodianMessage = {
   id: number;
@@ -32,13 +36,26 @@ export type CustodianMessage = {
   step: WizardStep | null;
 };
 
-export function createCustodianAssistantMessage(
+export function createCustodianMessage(
   id: number,
+  role: CustodianMessage["role"],
   text: string,
-  question: CustodianStructuredQuestion | null,
-  step: WizardStep | null,
+  question: CustodianStructuredQuestion | null = null,
+  step: WizardStep | null = null,
 ): CustodianMessage {
-  return { id, role: "assistant", text, at: Date.now(), question, step };
+  return { id, role, text, at: Date.now(), question, step };
+}
+
+export function createCustodianReplyMessage(
+  id: number,
+  result: SystemAgentChatResult,
+): CustodianMessage | null {
+  const step = result.step ?? null;
+  const question = step ? null : parseCustodianQuestion(result.question);
+  const silentReply = SILENT_REPLY_PATTERN.test(result.reply);
+  return silentReply && !question && !step
+    ? null
+    : createCustodianMessage(id, "assistant", silentReply ? "" : result.reply, question, step);
 }
 
 export function hasUnresolvedCustodianQuestion(
@@ -51,9 +68,12 @@ export function hasUnresolvedCustodianQuestion(
   return (
     wizardInputPending ||
     replyUncertain ||
+    // buildSystemAgentGreetingQuestion emits suggestions, not pending input.
+    // Like free text, diagnostics and nudges may replace those quick actions.
     messages.some(
       (message) =>
         message.question !== null &&
+        message.question.id !== "system-agent-quick-actions" &&
         !dismissedQuestions.has(`${message.id}:${message.question.id}`) &&
         !answeredQuestions.has(`${message.id}:${message.question.id}`),
     )
@@ -79,11 +99,13 @@ export function custodianErrorMessage(error: unknown): string {
 
 function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
   const key = `msg-${message.id}`;
+  const rawMessage = { role: message.role, content: message.text };
   return {
     kind: "group",
     key,
     role: message.role,
-    messages: [{ message: { role: message.role, content: message.text }, key }],
+    messages: [{ message: rawMessage, key }],
+    visibleContent: resolveMessageVisibleContent(rawMessage, normalizeMessage(rawMessage)),
     timestamp: message.at,
     isStreaming: false,
   };
@@ -237,54 +259,62 @@ export function renderCustodianTranscriptEntry(params: {
   const question = params.message.question;
   const step = params.message.step;
   return html`
-    ${params.message.text
-      ? renderMessageGroup(toCustodianMessageGroup(params.message), {
-          showReasoning: false,
-          showToolCalls: false,
-          assistantName: t("custodian.title"),
-          assistantAvatar: params.assistantAvatar,
-        })
-      : nothing}
+    ${
+      params.message.text
+        ? renderMessageGroup(toCustodianMessageGroup(params.message), {
+            showReasoning: false,
+            showToolCalls: false,
+            assistantName: t("custodian.title"),
+            assistantAvatar: params.assistantAvatar,
+          })
+        : nothing
+    }
     ${renderCustodianEarlierDivider(params.message, params.boundaryAfterId)}
-    ${params.showQuestion && question
-      ? renderCustodianQuestionCard({
-          question,
-          disabled: params.questionDisabled,
-          onSelect: params.onSelect,
-          onSkip: params.onSkip,
-        })
-      : nothing}
-    ${params.showWizardStep && step
-      ? html`<section
-          class="custodian__wizard-step"
-          aria-label=${formatUiExternalText(step.title ?? step.message, "Setup")}
-        >
-          ${step.title
-            ? html`<strong class="custodian__wizard-title"
-                >${formatUiExternalText(step.title)}</strong
-              >`
-            : nothing}
-          ${renderWizardStepControls({
-            step,
-            value: params.wizardValue,
-            busy: params.wizardDisabled,
-            inputId: `custodian-wizard-input-${params.message.id}`,
-            sensitiveRevealed: params.wizardSecretVisible,
-            onValueChange: params.onWizardValueChange,
-            onAnswer: params.onWizardAnswer,
-            leadingAction: params.showWizardCancel
-              ? html`<button
-                  class="btn btn--ghost custodian__wizard-cancel"
-                  type="button"
-                  ?disabled=${params.wizardDisabled}
-                  @click=${params.onWizardCancel}
-                >
-                  ${t("custodian.cancel")}
-                </button>`
-              : undefined,
-            onToggleSensitiveVisibility: params.onToggleWizardSecretVisibility,
-          })}
-        </section>`
-      : nothing}
+    ${
+      params.showQuestion && question
+        ? renderCustodianQuestionCard({
+            question,
+            disabled: params.questionDisabled,
+            onSelect: params.onSelect,
+            onSkip: params.onSkip,
+          })
+        : nothing
+    }
+    ${
+      params.showWizardStep && step
+        ? html`<section
+            class="custodian__wizard-step"
+            aria-label=${formatUiExternalText(step.title ?? step.message, "Setup")}
+          >
+            ${
+              step.title
+                ? html`<strong class="custodian__wizard-title"
+                    >${formatUiExternalText(step.title)}</strong
+                  >`
+                : nothing
+            }
+            ${renderWizardStepControls({
+              step,
+              value: params.wizardValue,
+              busy: params.wizardDisabled,
+              inputId: `custodian-wizard-input-${params.message.id}`,
+              sensitiveRevealed: params.wizardSecretVisible,
+              onValueChange: params.onWizardValueChange,
+              onAnswer: params.onWizardAnswer,
+              leadingAction: params.showWizardCancel
+                ? html`<button
+                    class="btn btn--ghost custodian__wizard-cancel"
+                    type="button"
+                    ?disabled=${params.wizardDisabled}
+                    @click=${params.onWizardCancel}
+                  >
+                    ${t("custodian.cancel")}
+                  </button>`
+                : undefined,
+              onToggleSensitiveVisibility: params.onToggleWizardSecretVisibility,
+            })}
+          </section>`
+        : nothing
+    }
   `;
 }

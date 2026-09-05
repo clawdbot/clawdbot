@@ -69,6 +69,7 @@ describe("openai completions transport", () => {
     expect(buildOpenAISdkRequestOptions(model, signal)).toEqual({
       signal,
       timeout: 900_000,
+      maxRetries: 0,
     });
     expect(
       buildOpenAISdkRequestOptions(

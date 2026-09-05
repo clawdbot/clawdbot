@@ -61,13 +61,12 @@ function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   if (source === target) {
     return;
   }
-  const catalogMode = (source as AnyAgentTool).catalogMode;
-  if (catalogMode) {
-    (target as AnyAgentTool).catalogMode = catalogMode;
-  }
-  if (source.outputSchema !== undefined) {
-    target.outputSchema = source.outputSchema;
-  }
+  const { catalogMode, outputSchema, hideFromChannelProgress } = source as AnyAgentTool;
+  Object.assign(target, {
+    ...(catalogMode ? { catalogMode } : {}),
+    ...(outputSchema !== undefined ? { outputSchema } : {}),
+    ...(hideFromChannelProgress === true ? { hideFromChannelProgress } : {}),
+  });
   copyAgentToolMetadata(source as never, target as never);
 }
 

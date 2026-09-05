@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -180,10 +181,9 @@ func TestCodexTranslatorUsesExactGlossaryMatchWithoutPrompt(t *testing.T) {
 }
 
 func TestBuildCodexTranslationPromptIncludesGuardrailsAndInput(t *testing.T) {
-	prompt := buildCodexTranslationPrompt("System prompt.", "Hello\nworld")
+	prompt := buildCodexTranslationPrompt("Hello\nworld")
 
 	for _, want := range []string{
-		"System prompt.",
 		"Return only the translated text",
 		"Do not wrap the response in an additional code fence",
 		"preserve every code fence already present in the input exactly",
@@ -216,6 +216,8 @@ set -eu
 out=""
 saw_effort=0
 saw_service=0
+saw_contract=0
+saw_project_docs_disabled=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --output-last-message)
@@ -231,18 +233,34 @@ while [ "$#" -gt 0 ]; do
         service_tier=\"fast\")
           saw_service=1
           ;;
+        developer_instructions=\"Translate.\")
+          saw_contract=1
+          ;;
+        project_doc_max_bytes=0)
+          saw_project_docs_disabled=1
+          ;;
       esac
       ;;
   esac
   shift || true
 done
-cat >/dev/null
+input="$(cat)"
+case "$input" in
+  *"Translate."*)
+    echo "translation contract must not be repeated in user input" >&2
+    exit 1
+    ;;
+esac
 if [ "$saw_effort" != "1" ]; then
   echo "missing high reasoning effort config" >&2
   exit 1
 fi
 if [ "$saw_service" != "1" ]; then
   echo "missing fast service tier config" >&2
+  exit 1
+fi
+if [ "$saw_contract" != "1" ] || [ "$saw_project_docs_disabled" != "1" ]; then
+  echo "missing isolated developer translation contract" >&2
   exit 1
 fi
 if [ -z "${CODEX_HOME:-}" ]; then
@@ -375,31 +393,112 @@ sleep 10
 	}
 }
 
-func TestPreviewCommandOutputFlattensAndTruncates(t *testing.T) {
-	input := "line one\n\nline   two\tline three " + strings.Repeat("x", 1200) + " final api error 429"
-	preview := previewCommandOutput(input, "")
-	if strings.Contains(preview, "\n") {
-		t.Fatalf("expected flattened whitespace, got %q", preview)
-	}
-	if !strings.HasPrefix(preview, "line one line two line three ") {
-		t.Fatalf("unexpected preview prefix: %q", preview)
-	}
-	if !strings.Contains(preview, "... [truncated] ...") {
-		t.Fatalf("expected truncation marker, got %q", preview)
-	}
-	if !strings.HasSuffix(preview, "final api error 429") {
-		t.Fatalf("expected retained error tail, got %q", preview)
+func TestCodexTranslatorPrivateModelFallback(t *testing.T) {
+	previousDelay := translateRetryDelay
+	translateRetryDelay = func(int) time.Duration { return 0 }
+	defer func() { translateRetryDelay = previousDelay }()
+	for _, tc := range []struct {
+		name, message string
+		fallback      bool
+	}{
+		{"missing code", `{"error":{"code":"model_not_found","param":null}}`, true},
+		{"missing requested model", "unexpected status 404 Not Found: Model not found private-primary", true},
+		{"nonexistent requested model", "The model `private-primary` does not exist or you do not have access to it.", true},
+		{"unsupported requested model", "The 'private-primary' model is not supported when using Codex with a ChatGPT account.", true},
+		{"unrelated model", "Model not found another-model", false},
+		{"unknown endpoint", "unexpected status 404 Not Found", false},
+		{"forbidden", "unexpected status 403 Forbidden", false},
+		{"authentication", "invalid_api_key private-primary", false},
+		{"quota", "insufficient_quota private-primary", false},
+		{"rate limit", "rate limit 429 private-primary", false},
+		{"outage", "503 temporarily unavailable private-primary", false},
+		{"network", "connection reset private-primary", false},
+		{"invalid parameter", "Unsupported parameter reasoning.effort for model private-primary", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			callsPath := filepath.Join(dir, "calls")
+			fakeCodex := filepath.Join(dir, "codex")
+			if err := os.WriteFile(fakeCodex, []byte(`#!/bin/sh
+set -eu
+model=""
+out=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --model) shift; model="$1" ;;
+    --output-last-message) shift; out="$1" ;;
+  esac
+  shift
+done
+cat >/dev/null
+printf '%s\n' "$model" >> "$TEST_CALLS"
+# Banners and warnings must never control fallback or reach public logs.
+printf 'model_not_found private-primary private-fallback private-diagnostic\n' >&2
+if [ "$model" = "private-primary" ]; then
+  printf '%s\n' "$TEST_EVENT"
+  exit 1
+fi
+printf 'translated\n' > "$out"
+`), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			event, err := json.Marshal(map[string]any{"type": "turn.failed", "error": map[string]string{"message": tc.message}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("TEST_EVENT", string(event))
+			t.Setenv("TEST_CALLS", callsPath)
+			t.Setenv(envDocsI18nCodexExecutable, fakeCodex)
+			t.Setenv(envDocsI18nModel, "private-primary")
+			t.Setenv("OPENCLAW_DOCS_I18N_FALLBACK_MODEL", "private-fallback")
+			translator, err := NewCodexTranslator("en", "de", nil, "high")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := translator.TranslateRaw(context.Background(), "Hello", "en", "de")
+			if tc.fallback {
+				if err != nil || got != "translated" {
+					t.Fatalf("fallback failed: got=%q err=%v", got, err)
+				}
+				if _, err := translator.TranslateRaw(context.Background(), "Again", "en", "de"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err == nil {
+					t.Fatal("unexpected fallback success")
+				}
+				for _, private := range []string{"private-primary", "private-fallback", "private-diagnostic"} {
+					if strings.Contains(err.Error(), private) {
+						t.Fatalf("private diagnostic leaked: %v", err)
+					}
+				}
+			}
+			calls, err := os.ReadFile(callsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.fallback && string(calls) != "private-primary\nprivate-fallback\nprivate-fallback\n" {
+				t.Fatalf("fallback must remain selected: %q", calls)
+			}
+			if !tc.fallback && strings.Contains(string(calls), "private-fallback") {
+				t.Fatalf("unexpected fallback: %q", calls)
+			}
+		})
 	}
 }
 
-func TestPreviewCommandOutputRetainsStderrTail(t *testing.T) {
-	stdout := "startup banner " + strings.Repeat("x", 1200)
-	stderr := "provider api error 429"
-	preview := previewCommandOutput(stdout, stderr)
-	if !strings.HasPrefix(preview, "startup banner ") {
-		t.Fatalf("unexpected preview prefix: %q", preview)
-	}
-	if !strings.HasSuffix(preview, stderr) {
-		t.Fatalf("expected retained stderr tail, got %q", preview)
+func TestCodexTranslatorRejectsPrivateModelDisclosure(t *testing.T) {
+	t.Setenv(envDocsI18nModel, "private-primary")
+	t.Setenv("OPENCLAW_DOCS_I18N_FALLBACK_MODEL", "private-fallback")
+	for _, model := range []string{"private-primary", "private-fallback"} {
+		translator, err := NewCodexTranslator("en", "de", nil, "high")
+		if err != nil {
+			t.Fatal(err)
+		}
+		translator.runPrompt = func(context.Context, codexPromptRequest) (string, error) { return "Translated by " + model, nil }
+		got, err := translator.TranslateRaw(context.Background(), "Hello", "en", "de")
+		if err == nil || got != "" || strings.Contains(err.Error(), model) {
+			t.Fatalf("private model response was exposed: got=%q err=%v", got, err)
+		}
 	}
 }

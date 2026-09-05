@@ -1,7 +1,7 @@
 // Status daemon real-summary tests cover the shared service-state path for node services.
 import { expect, it, vi } from "vitest";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
-import { formatStatusServiceValue } from "./status-all/format.js";
+import { getStatusOverviewRowValue } from "./status.test-support.ts";
 
 const mocks = vi.hoisted(() => ({
   resolveNodeService: vi.fn(),
@@ -35,7 +35,7 @@ it("renders root-status recovery guidance for a rejected node runtime", async ()
       detail: "node service manager unavailable",
     },
   });
-  expect(formatStatusServiceValue(summary)).toBe(
+  expect(getStatusOverviewRowValue("Node service", { nodeService: summary })).toBe(
     "systemd user disabled (inspection failed: service runtime inspection failed; retry with openclaw status --deep) · unknown",
   );
 });

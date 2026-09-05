@@ -1,4 +1,4 @@
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
 import { isCliSessionInvalidatingFailoverReason } from "../cli-session.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { type FailoverError, isFailoverError } from "../failover-error.js";
@@ -74,7 +74,7 @@ export async function runCliRecovery<TAttempt>(params: {
   const failTerminal = async (error: unknown): Promise<never> => {
     // Record only after every eligible recovery path is exhausted.
     cliBackendLog.warn(
-      `cli terminal failure: provider=${runParams.provider} model=${context.modelId} durationMs=${Date.now() - context.started} runId=${runParams.runId} error=${formatErrorMessage(error)}`,
+      `cli terminal failure: provider=${runParams.provider} model=${context.modelId} durationMs=${Date.now() - context.started} runId=${runParams.runId} error=${formatErrorMessageForDisplay(error)}`,
     );
     await params.onTerminalFailure(error);
     throw error;
@@ -98,6 +98,7 @@ export async function runCliRecovery<TAttempt>(params: {
     if (deliveredFailure) {
       return deliveredFailure;
     }
+    runParams.assertCurrent?.();
     let recoveryError = err;
     if (isFailoverError(recoveryError)) {
       if (
@@ -141,6 +142,7 @@ export async function runCliRecovery<TAttempt>(params: {
           if (deliveredForkFailure) {
             return deliveredForkFailure;
           }
+          runParams.assertCurrent?.();
           recoveryError =
             isFailoverError(forkError) && forkError.code === "cli_resume_at_unsupported"
               ? err

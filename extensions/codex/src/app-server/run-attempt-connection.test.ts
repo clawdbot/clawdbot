@@ -1,12 +1,15 @@
+import { getEventListeners } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { patchSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import * as appServerPolicy from "./app-server-policy.js";
 import { applyCodexAppServerAuthProfile } from "./auth-bridge.js";
 import * as bindingConnection from "./binding-connection.js";
 import * as codexRequirements from "./config-requirements.js";
+import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import {
   createCodexRuntimePlanFixture,
@@ -16,6 +19,8 @@ import {
 } from "./run-attempt-test-harness.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import {
+  createCodexTestBindingStore,
+  readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
@@ -24,10 +29,177 @@ import {
   createIsolatedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
+import { withCodexThreadLifecycleBinding } from "./thread-lifecycle-adoption.js";
 
 setupRunAttemptTestHooks();
 
 describe("prepareCodexAttemptConnection", () => {
+  it("retains the recovered generation fence after connection preparation", async () => {
+    const workspaceDir = path.join(tempDir, "recovered-workspace");
+    const params = createParams(path.join(tempDir, "recovered.jsonl"), workspaceDir);
+    const current = {
+      kind: "session" as const,
+      agentId: "main",
+      sessionKey: params.sessionKey!,
+      sessionId: params.sessionId,
+    };
+    const previous = { ...current, sessionId: "before-compaction" };
+    const scope = {
+      agentId: current.agentId,
+      sessionKey: current.sessionKey,
+      storePath: path.join(tempDir, "admitted", "sessions.json"),
+    };
+    params.sessionTarget = { ...scope, sessionId: current.sessionId };
+    await upsertSessionEntry({ ...scope, entry: { sessionId: previous.sessionId, updatedAt: 1 } });
+    await patchSessionEntry({ ...scope, update: () => ({ sessionId: current.sessionId }) });
+    const bindingStore = createCodexTestBindingStore();
+    const binding = { threadId: "recovered-native-thread", cwd: workspaceDir };
+    await bindingStore.mutate(previous, { kind: "set", binding });
+    const originalHostCapabilities = params.hostCapabilities;
+
+    const connection = await prepareCodexAttemptConnection({ params, options: { bindingStore } });
+    expect(bindingStore.read(current)).toEqual(binding);
+    expect(connection.params.hostCapabilities).toBe(originalHostCapabilities);
+    expect(() => connection.assertCurrent()).not.toThrow();
+    await patchSessionEntry({ ...scope, update: () => ({ sessionId: "next-compaction" }) });
+
+    expect(() => originalHostCapabilities.assertActive()).not.toThrow();
+    expect(() => connection.assertCurrent()).toThrow(
+      "Codex session generation is no longer current",
+    );
+    expect(bindingStore.read(current)).toEqual(binding);
+  });
+
+  it.each(["missing", "ordinary", "auth-changed", "model-changed", "provider-changed"] as const)(
+    "rejects %s expected native ownership before reclaim or connection preparation",
+    async (state) => {
+      const sessionFile = path.join(tempDir, "expected-ownership.jsonl");
+      const workspaceDir = path.join(tempDir, "expected-ownership-workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      const expectedOwnership = {
+        model: "native" as const,
+        auth: state === "auth-changed" ? ("native" as const) : ("host" as const),
+        modelRef: { provider: "openai", model: "gpt-5.6-luna" },
+      };
+      params.expectedSessionRuntimeOwnership = expectedOwnership;
+      registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+      if (state !== "missing") {
+        await writeCodexAppServerBinding(sessionFile, {
+          threadId: "thread-existing",
+          cwd: workspaceDir,
+          ...(state !== "ordinary" ? { preserveNativeModel: true } : {}),
+          model: state === "model-changed" ? "gpt-5.6-sol" : "gpt-5.6-luna",
+          modelProvider: state === "provider-changed" ? "other-native-provider" : "openai",
+        });
+      }
+      const before = await readCodexAppServerBinding(sessionFile);
+      const reclaim = vi.spyOn(testCodexAppServerBindingStore, "prepareSessionGenerationReclaim");
+      const connect = vi
+        .spyOn(bindingConnection, "resolveCodexBindingAppServerConnection")
+        .mockImplementation(() => {
+          throw new Error("invalid ownership reached connection preparation");
+        });
+
+      await expect(
+        prepareCodexAttemptConnection({
+          params,
+          options: { bindingStore: testCodexAppServerBindingStore },
+        }),
+      ).rejects.toMatchObject({
+        name: "AgentHarnessPreflightError",
+        message: expect.stringContaining("Reattach the original native session"),
+      });
+      expect(reclaim).not.toHaveBeenCalled();
+      expect(connect).not.toHaveBeenCalled();
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
+    },
+  );
+
+  it.each([
+    "preserved",
+    "missing",
+    "ordinary",
+    "auth-changed",
+    "model-changed",
+    "provider-changed",
+  ] as const)(
+    "rechecks %s native ownership after acquiring the lifecycle binding lease",
+    async (state) => {
+      const sessionFile = path.join(tempDir, "leased-ownership.jsonl");
+      const workspaceDir = path.join(tempDir, "leased-ownership-workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      const expectedOwnership = {
+        model: "native" as const,
+        auth: "host" as const,
+        modelRef: { provider: "openai", model: "gpt-5.6-luna" },
+      };
+      params.expectedSessionRuntimeOwnership = expectedOwnership;
+      registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: "thread-existing",
+        cwd: workspaceDir,
+        preserveNativeModel: true,
+        model: "gpt-5.6-luna",
+        modelProvider: "openai",
+      });
+      const bindingStore = testCodexAppServerBindingStore;
+      const withLease = bindingStore.withLease.bind(bindingStore);
+      vi.spyOn(bindingStore, "withLease").mockImplementationOnce(async (identity, run) => {
+        // The initial snapshot is valid; simulate retirement/replacement while awaiting its lease.
+        if (state === "missing") {
+          await bindingStore.mutate(identity, { kind: "clear", threadId: "thread-existing" });
+        } else if (state !== "preserved") {
+          await bindingStore.mutate(identity, {
+            kind: "patch",
+            threadId: "thread-existing",
+            patch:
+              state === "ordinary"
+                ? { preserveNativeModel: undefined }
+                : state === "model-changed"
+                  ? { model: "gpt-5.6-sol" }
+                  : state === "provider-changed"
+                    ? { modelProvider: "other-native-provider" }
+                    : {
+                        connectionScope: "supervision",
+                        supervisionSourceThreadId: "native-source",
+                        conversationSourceTransferComplete: true,
+                        model: "native-model",
+                        modelProvider: "native-provider",
+                      },
+          });
+        }
+        return withLease(identity, run);
+      });
+      const execute = vi.fn<Parameters<typeof withCodexThreadLifecycleBinding>[1]>(
+        async (_identity, binding) => {
+          if (!binding) {
+            throw new Error("native execution received no binding");
+          }
+          return { ...binding, lifecycle: { action: "resumed" } };
+        },
+      );
+      const operation = withCodexThreadLifecycleBinding(
+        {
+          params,
+          bindingStore,
+          client: {} as never,
+          cwd: workspaceDir,
+          dynamicTools: [],
+          appServer: resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null }),
+        },
+        execute,
+      );
+
+      if (state === "preserved") {
+        await expect(operation).resolves.toMatchObject({ preserveNativeModel: true });
+        expect(execute).toHaveBeenCalledOnce();
+      } else {
+        await expect(operation).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
+        expect(execute).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it.each([
     "local",
     "loopback-server",
@@ -324,7 +496,9 @@ describe("prepareCodexAttemptConnection", () => {
         pluginConfig: { appServer: { homeScope: "user" } },
       },
     });
-    const request = vi.fn(async () => ({ account: { type: "chatgpt" } }));
+    const request = vi.fn(async (_method: string, _params?: unknown) => ({
+      account: { type: "chatgpt" },
+    }));
 
     expect(connection.startupAuthProfileId).toBeUndefined();
     expect(connection.startupPreparedAuth).toBeUndefined();
@@ -337,8 +511,9 @@ describe("prepareCodexAttemptConnection", () => {
         authRequirement: connection.startupAuthRequirement,
       }),
     ).resolves.toBeUndefined();
-    expect(request).toHaveBeenCalledExactlyOnceWith("account/read", { refreshToken: false });
-    expect(request).not.toHaveBeenCalledWith("account/login/start", expect.anything());
+    expect(
+      request.mock.calls.map(([method, requestParams]) => ({ method, params: requestParams })),
+    ).toEqual([{ method: "account/read", params: { refreshToken: false } }]);
   });
 
   it.each([
@@ -418,6 +593,72 @@ describe("prepareCodexAttemptConnection", () => {
     expect(resolveConnection).toHaveBeenCalledTimes(2);
     expect(resolveModelPolicy).toHaveBeenCalledTimes(2);
   });
+
+  it.each(["during rotation", "after rejection"] as const)(
+    "releases a failed connection's abort listener when cancelled %s",
+    async (cancelAt) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const agentDir = path.join(tempDir, "agent");
+      const params = createParams(sessionFile, workspaceDir);
+      params.agentDir = agentDir;
+      params.config = {
+        agents: { defaults: { compaction: { maxActiveTranscriptBytes: "1mb" } } },
+      };
+      const controller = new AbortController();
+      params.abortSignal = controller.signal;
+      params.onAttemptAbort = vi.fn();
+      const upstreamListeners = getEventListeners(controller.signal, "abort").length;
+      registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: "thread-existing",
+        cwd: workspaceDir,
+        model: params.modelId,
+        modelProvider: "openai",
+      });
+      const rolloutDir = path.join(agentDir, "codex-home", "sessions");
+      await fs.mkdir(rolloutDir, { recursive: true });
+      await fs.writeFile(
+        path.join(rolloutDir, "rollout-thread-existing.jsonl"),
+        "x".repeat(1_048_577),
+      );
+      const rotationError = new Error("synthetic startup binding mutation failure");
+      const mutate = vi
+        .spyOn(testCodexAppServerBindingStore, "mutate")
+        .mockImplementationOnce(async () => {
+          if (cancelAt === "during rotation") {
+            controller.abort("cancelled during rotation");
+            expect(params.onAttemptAbort).toHaveBeenCalledTimes(1);
+          }
+          throw rotationError;
+        });
+
+      try {
+        await expect(
+          prepareCodexAttemptConnection({
+            params,
+            options: { bindingStore: testCodexAppServerBindingStore },
+          }),
+        ).rejects.toBe(rotationError);
+        expect(mutate).toHaveBeenCalledWith(
+          expect.anything(),
+          { kind: "clear", threadId: "thread-existing" },
+          expect.any(Function),
+        );
+        const remainingListeners = getEventListeners(controller.signal, "abort").length;
+        controller.abort("cancelled after rejection");
+        expect({
+          remainingListeners,
+          abortNotifications: vi.mocked(params.onAttemptAbort).mock.calls.length,
+        }).toEqual({
+          remainingListeners: upstreamListeners,
+          abortNotifications: cancelAt === "during rotation" ? 1 : 0,
+        });
+      } finally {
+        controller.abort("test cleanup");
+      }
+    },
+  );
 
   it("rejects the retired explicit untrusted approval policy with Doctor remediation", async () => {
     initializeGlobalHookRunner(

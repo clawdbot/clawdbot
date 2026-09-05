@@ -57,11 +57,14 @@ export function createProviderApiKeyResolverFromPreparedCredentials(
   env: NodeJS.ProcessEnv,
   credentials: Readonly<AuthStorageData>,
   config?: OpenClawConfig,
+  workspaceDir?: string,
 ): ProviderApiKeyResolver {
   const resolveConfiguredOrEnvironment = createProviderApiKeyResolver(
     env,
     { version: 1, profiles: {} },
     config,
+    undefined,
+    workspaceDir,
   );
   const getLookupCaches = createProviderAuthLookupCaches(env, config);
   return (provider: string) => {
@@ -137,6 +140,8 @@ export function createProviderApiKeyResolver(
   authStoreInput: AuthProfileStoreInput,
   config?: OpenClawConfig,
   sourceConfigForSecrets?: OpenClawConfig,
+  workspaceDir?: string,
+  syntheticAuthEnv = env,
 ): ProviderApiKeyResolver {
   const getLookupCaches = createProviderAuthLookupCaches(env, config);
   return (provider: string) => {
@@ -160,6 +165,8 @@ export function createProviderApiKeyResolver(
       config,
       env,
       sourceConfigForSecrets,
+      workspaceDir,
+      syntheticAuthEnv,
     });
     if (fromConfig?.apiKey) {
       return {
@@ -188,6 +195,8 @@ export function createProviderAuthResolver(
   authStoreInput: AuthProfileStoreInput,
   config?: OpenClawConfig,
   sourceConfigForSecrets?: OpenClawConfig,
+  workspaceDir?: string,
+  syntheticAuthEnv = env,
 ): ProviderAuthResolver {
   const getLookupCaches = createProviderAuthLookupCaches(env, config);
   return (provider: string, options?: { oauthMarker?: string }) => {
@@ -257,6 +266,8 @@ export function createProviderAuthResolver(
       config,
       env,
       sourceConfigForSecrets,
+      workspaceDir,
+      syntheticAuthEnv,
     });
     if (fromConfig) {
       return {
@@ -280,6 +291,8 @@ function resolveConfigBackedProviderAuth(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   sourceConfigForSecrets?: OpenClawConfig;
+  workspaceDir?: string;
+  syntheticAuthEnv?: NodeJS.ProcessEnv;
 }):
   | {
       apiKey: string;
@@ -318,6 +331,8 @@ function resolveConfigBackedProviderAuth(params: {
   const synthetic = resolveProviderSyntheticAuthWithPlugin({
     provider: authProvider,
     config: params.config,
+    env: params.syntheticAuthEnv ?? params.env,
+    workspaceDir: params.workspaceDir,
     context: {
       config: params.config,
       provider: authProvider,

@@ -18,12 +18,10 @@
 import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { runIsolatedCompletion } from "../agents/isolated-completion.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { parseModelRef } from "../agents/model-selection-normalize.js";
-import {
-  completeWithPreparedSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
-} from "../agents/simple-completion-runtime.js";
+import { prepareUtilityCompletionForAgent } from "../agents/utility-completion.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
@@ -211,65 +209,40 @@ async function generateMissingTitles(params: {
   if (params.items.length === 0) {
     return generated;
   }
-  let prepared: Awaited<ReturnType<typeof prepareSimpleCompletionModelForAgent>>;
+  let prepared: Awaited<ReturnType<typeof prepareUtilityCompletionForAgent>>;
   try {
-    prepared = await prepareSimpleCompletionModelForAgent({
+    prepared = await prepareUtilityCompletionForAgent({
       cfg: params.cfg,
       agentId: params.agentId,
       modelRef: params.modelRef,
       // Profile-isolated sessions must not leak their tool args through the
       // agent/default credential; the session's auth profile wins.
       preferredProfile: params.sessionAuthProfile,
-      allowMissingApiKeyModes: ["aws-sdk"],
     });
   } catch (err) {
     logVerbose(`chat-tool-titles: model preparation failed: ${String(err)}`);
     return generated;
   }
-  if ("error" in prepared) {
-    logVerbose(`chat-tool-titles: ${prepared.error}`);
-    return generated;
-  }
-
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TOOL_TITLES_TIMEOUT_MS);
   try {
-    const result = await completeWithPreparedSimpleCompletionModel({
-      model: prepared.model,
-      auth: prepared.auth,
-      cfg: params.cfg,
-      context: {
-        systemPrompt: TOOL_TITLES_SYSTEM_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: JSON.stringify({
-              // Caller ids never reach the model: they are unbounded client
-              // input; local batch indexes are remapped on the way out.
-              items: params.items.map((item, index) => ({
-                id: String(index),
-                tool: item.name,
-                input: item.input,
-              })),
-            }),
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      options: {
-        maxTokens: Math.min(TOOL_TITLES_MAX_TOKENS, Math.floor(prepared.model.maxTokens)),
-        signal: controller.signal,
-      },
+    const result = await runIsolatedCompletion({
+      ...prepared,
+      systemPrompt: TOOL_TITLES_SYSTEM_PROMPT,
+      prompt: JSON.stringify({
+        // Caller ids never reach the model: they are unbounded client
+        // input; local batch indexes are remapped on the way out.
+        items: params.items.map((item, index) => ({
+          id: String(index),
+          tool: item.name,
+          input: item.input,
+        })),
+      }),
+      timeoutMs: TOOL_TITLES_TIMEOUT_MS,
+      abortSignal: controller.signal,
+      streamParams: { maxTokens: TOOL_TITLES_MAX_TOKENS },
     });
-    if (result.stopReason === "error") {
-      logVerbose(`chat-tool-titles: completion failed: ${result.errorMessage ?? "unknown error"}`);
-      return generated;
-    }
-    const text = result.content
-      .filter((block): block is { type: "text"; text: string } => block.type === "text")
-      .map((block) => block.text)
-      .join("")
-      .trim();
+    const text = result.text.trim();
     const titles = text ? parseTitlesResponse(text) : null;
     if (!titles) {
       return generated;

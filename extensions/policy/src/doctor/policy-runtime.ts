@@ -17,6 +17,7 @@ import {
   SUPPORTED_AUTH_PROFILE_METADATA,
   SUPPORTED_AUTH_PROFILE_MODES,
 } from "./policy-constants.js";
+import { isChannelDenyRule } from "./shape-helpers.js";
 import { readPolicyStringArray } from "./utils.js";
 
 export const normalizePolicyChannelId: (value: string) => string = normalizeLowercaseStringOrEmpty;
@@ -189,20 +190,6 @@ export function readChannelDenyRules(
       }
       return next;
     });
-}
-
-export function isChannelDenyRule(value: unknown): value is {
-  readonly id?: string;
-  readonly when?: { readonly provider?: string };
-  readonly reason?: string;
-} {
-  return (
-    isRecord(value) &&
-    (value.id === undefined || typeof value.id === "string") &&
-    (value.reason === undefined || typeof value.reason === "string") &&
-    isRecord(value.when) &&
-    typeof value.when.provider === "string"
-  );
 }
 
 export function channelIdsFromFindings(findings: readonly HealthFinding[]): readonly string[] {

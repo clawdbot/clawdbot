@@ -186,6 +186,13 @@ export const UpdateHoldResultSchema = closedObject({
 
 /** Request payload for running an update/restart flow with optional channel delivery context. */
 export const UpdateRunParamsSchema = closedObject({
+  requester: Type.Optional(
+    closedObject({
+      channel: Type.Optional(Type.String()),
+      accountId: Type.Optional(Type.String()),
+      senderId: Type.Optional(Type.String()),
+    }),
+  ),
   sessionKey: Type.Optional(Type.String()),
   deliveryContext: Type.Optional(ConfigDeliveryContextSchema),
   note: Type.Optional(Type.String()),

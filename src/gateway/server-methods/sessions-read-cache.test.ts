@@ -39,6 +39,8 @@ import {
   listSessions,
   requestContext,
   sessionReadHandlers,
+  seedSessions,
+  seedSessionsWithActivityTimes,
 } from "./sessions-read-cache.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -76,49 +78,6 @@ vi.mock("../session-utils.js", async (importOriginal) => {
 const { emitSessionsChanged } = await import("./session-change-event.js");
 const { emitSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js");
 
-async function seedSessions(): Promise<OpenClawConfig> {
-  const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-  };
-  for (const [agentId, name, updatedAt, owner, overrides] of [
-    ["main", "active", 400, "owner@example.com", {}],
-    ["main", "draft", 300, "owner@example.com", { visibility: "draft" }],
-    ["main", "archived", 200, "viewer@example.com", { archivedAt: 200 }],
-    ["work", "active", 100, "viewer@example.com", {}],
-  ] as const) {
-    await upsertSessionEntryCore(
-      { agentId, sessionKey: `agent:${agentId}:${name}` },
-      {
-        sessionId: `${agentId}-${name}`,
-        updatedAt,
-        createdActor: { type: "human", source: "profile", id: owner },
-        visibility: "shared",
-        ...overrides,
-      },
-    );
-  }
-  return config;
-}
-
-async function seedSessionsWithActivityTimes() {
-  const clock = vi.spyOn(Date, "now").mockReturnValue(400);
-  const config = await seedSessions();
-  for (const [name, updatedAt] of [
-    ["active", 400],
-    ["draft", 300],
-    ["archived", 200],
-  ] as const) {
-    const scope = { agentId: "main", sessionKey: `agent:main:${name}` };
-    const entry = loadSessionEntry(scope);
-    if (!entry) {
-      throw new Error(`Missing seeded session ${scope.sessionKey}`);
-    }
-    await replaceSessionEntry(scope, { ...entry, updatedAt });
-    expect(loadSessionEntry(scope)?.updatedAt).toBe(updatedAt);
-  }
-  return { clock, config };
-}
-
 beforeEach(() => {
   resetAgentEventsForTest();
 });
@@ -133,6 +92,55 @@ afterEach(() => {
 });
 
 describe("sessions.list single-flight", () => {
+  it.each([undefined, "live"])(
+    "refreshes reply activity including previously rejected search candidates (search: %s)",
+    async (search) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const config = await seedSessions();
+        const context = requestContext(config);
+        const client = identifiedClient("owner@example.com");
+        const request = { agentId: "main", search, limit: 50 };
+        const terminalScope = { agentId: "main", sessionKey: "agent:main:active" };
+        await replaceSessionEntry(terminalScope, {
+          ...loadSessionEntry(terminalScope)!,
+          status: "done",
+        });
+        context.chatAbortControllers.set("retained-terminal", {
+          sessionId: "main-active",
+          sessionKey: terminalScope.sessionKey,
+          agentId: "main",
+          projectSessionActive: false,
+        } as never);
+        if (search) {
+          expect((await listSessions({ client, context, request })).sessions).toEqual([]);
+        }
+        const operation = createReplyOperation({
+          sessionId: "main-active",
+          sessionKey: "agent:main:active",
+          resetTriggered: false,
+        });
+        try {
+          const active = await listSessions({ client, context, request });
+          expect(active.sessions.find((row) => row.key === terminalScope.sessionKey)).toMatchObject(
+            { hasActiveRun: true, status: "running" },
+          );
+          operation.complete();
+          const settled = await listSessions({ client, context, request });
+          if (search) {
+            expect(settled.sessions).toEqual([]);
+          } else {
+            expect(
+              settled.sessions.find((row) => row.key === terminalScope.sessionKey),
+            ).toMatchObject({ hasActiveRun: false, status: "done" });
+          }
+          expect(loader.calls).toHaveBeenCalledTimes(search ? 3 : 2);
+        } finally {
+          operation.complete();
+        }
+      });
+    },
+  );
+
   it.each([
     { agentId: "main", archived: false as const, limit: 10 },
     { agentId: "main", archived: true as const, limit: 1 },
@@ -307,13 +315,20 @@ describe("sessions.list single-flight", () => {
       expect(await listSessions({ client, context, request })).toBe(first);
       expect(loader.calls).toHaveBeenCalledTimes(1);
 
+      const mainRequest = { ...request, agentId: "main" };
+      const workRequest = { ...request, agentId: "work" };
+      const main = await listSessions({ client, context, request: mainRequest });
+      const work = await listSessions({ client, context, request: workRequest });
+      expect(await listSessions({ client, context, request: mainRequest })).toBe(main);
+      expect(await listSessions({ client, context, request: workRequest })).toBe(work);
+      expect(await listSessions({ client, context, request })).toBe(first);
       catalog = fullCatalog;
       const refreshed = await listSessions({ client, context, request });
       expect(refreshed).not.toBe(first);
       expect(
         refreshed.sessions.find((session) => session.agentId === "main")?.thinkingOptions,
       ).toEqual(expect.arrayContaining(["off", "low", "high", "max"]));
-      expect(loader.calls).toHaveBeenCalledTimes(2);
+      expect(loader.calls).toHaveBeenCalledTimes(4);
     });
   });
 
@@ -862,36 +877,6 @@ describe("sessions.list single-flight", () => {
     });
   });
 
-  it("does not cache a reply-owned active projection past turn completion", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const config = await seedSessions();
-      const context = requestContext(config);
-      const client = identifiedClient("owner@example.com");
-      const request = { agentId: "main", archived: "all" as const, limit: 100 };
-      const operation = createReplyOperation({
-        sessionId: "main-active",
-        sessionKey: "agent:main:active",
-        resetTriggered: false,
-      });
-
-      try {
-        const active = await listSessions({ client, context, request });
-        expect(
-          active.sessions.find((session) => session.key === "agent:main:active"),
-        ).toMatchObject({ hasActiveRun: true });
-
-        operation.complete();
-        const settled = await listSessions({ client, context, request });
-        expect(
-          settled.sessions.find((session) => session.key === "agent:main:active"),
-        ).toMatchObject({ hasActiveRun: false });
-        expect(loader.calls).toHaveBeenCalledTimes(2);
-      } finally {
-        operation.complete();
-      }
-    });
-  });
-
   it.each(["ownerFirst", "involvingMe"] as const)(
     "keeps administrator %s projections scoped to their authenticated profiles",
     async (projection) => {
@@ -983,62 +968,65 @@ describe("sessions.list single-flight", () => {
     });
   });
 
-  it("refills a page from the loaded store when a selected row becomes hidden", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const config = await seedSessions();
-      for (const [name, updatedAt] of [
-        ["third", 500],
-        ["second", 600],
-        ["first", 700],
-      ] as const) {
+  it.each([undefined, "direct"])(
+    "refills a page from the loaded store when a selected row becomes hidden (search: %s)",
+    async (search) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const config = await seedSessions();
+        for (const [name, updatedAt] of [
+          ["third", 500],
+          ["second", 600],
+          ["first", 700],
+        ] as const) {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: `agent:main:page-${name}` },
+            {
+              sessionId: `page-${name}`,
+              updatedAt,
+              createdActor: { type: "human", source: "profile", id: "owner@example.com" },
+              visibility: "shared",
+            },
+          );
+        }
+        const context = requestContext(config);
+        const client = identifiedClient("viewer@example.com");
+        let releaseRows!: () => void;
+        loader.rowGate = new Promise<void>((resolve) => {
+          releaseRows = resolve;
+        });
+
+        const firstPage = listSessions({
+          client,
+          context,
+          request: { search, agentId: "main", archived: "all", limit: 1 },
+        });
+        await vi.waitFor(() => expect(loader.rowCalls).toHaveBeenCalledOnce());
         await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: `agent:main:page-${name}` },
-          {
-            sessionId: `page-${name}`,
-            updatedAt,
-            createdActor: { type: "human", source: "profile", id: "owner@example.com" },
-            visibility: "shared",
-          },
+          { agentId: "main", sessionKey: "agent:main:page-first" },
+          { visibility: "draft", updatedAt: 800 },
         );
-      }
-      const context = requestContext(config);
-      const client = identifiedClient("viewer@example.com");
-      let releaseRows!: () => void;
-      loader.rowGate = new Promise<void>((resolve) => {
-        releaseRows = resolve;
-      });
+        emitSessionsChanged(context, {
+          reason: "sharing",
+          sessionKey: "agent:main:page-first",
+        });
+        releaseRows();
 
-      const firstPage = listSessions({
-        client,
-        context,
-        request: { agentId: "main", archived: "all", limit: 1 },
-      });
-      await vi.waitFor(() => expect(loader.rowCalls).toHaveBeenCalledOnce());
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: "agent:main:page-first" },
-        { visibility: "draft", updatedAt: 800 },
-      );
-      emitSessionsChanged(context, {
-        reason: "sharing",
-        sessionKey: "agent:main:page-first",
-      });
-      releaseRows();
+        const repaired = await firstPage;
+        expect(repaired.sessions.map((session) => session.key)).toEqual(["agent:main:page-second"]);
+        expect(repaired).toMatchObject({ count: 1, nextOffset: 1 });
+        expect(loader.calls).toHaveBeenCalledTimes(1);
+        expect(loader.rowCalls).toHaveBeenCalledTimes(2);
 
-      const repaired = await firstPage;
-      expect(repaired.sessions.map((session) => session.key)).toEqual(["agent:main:page-second"]);
-      expect(repaired).toMatchObject({ count: 1, nextOffset: 1 });
-      expect(loader.calls).toHaveBeenCalledTimes(1);
-      expect(loader.rowCalls).toHaveBeenCalledTimes(2);
-
-      loader.rowGate = undefined;
-      const next = await listSessions({
-        client,
-        context,
-        request: { agentId: "main", archived: "all", limit: 1, offset: 1 },
+        loader.rowGate = undefined;
+        const next = await listSessions({
+          client,
+          context,
+          request: { search, agentId: "main", archived: "all", limit: 1, offset: 1 },
+        });
+        expect(next.sessions.map((session) => session.key)).toEqual(["agent:main:page-third"]);
       });
-      expect(next.sessions.map((session) => session.key)).toEqual(["agent:main:page-third"]);
-    });
-  });
+    },
+  );
 
   it("rejects followers and retries after an underlying store failure", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

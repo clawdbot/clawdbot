@@ -116,6 +116,44 @@ describe("scripts/plan-targeted-docker-lane-groups", () => {
     ]);
   });
 
+  it("groups the weekly mobile and watch matrix into two baseline runners", () => {
+    const baselines = "2026.7.1 2026.8.1";
+    const scenarios = "mobile-pairing-reconnect watchos-direct-node";
+    const groups = planTargetedDockerLaneGroups({
+      lanes: "update-migration",
+      upgradeSurvivorBaselines: baselines,
+      upgradeSurvivorScenarios: scenarios,
+    });
+    const plans = groups.map((group) =>
+      expandedPlan(
+        group.docker_lanes,
+        group.published_upgrade_survivor_baselines ?? baselines,
+        group.published_upgrade_survivor_scenarios ?? scenarios,
+      ),
+    );
+
+    expect(groups).toEqual([
+      {
+        docker_lanes: "update-migration",
+        label: "update-migration-2026.7.1",
+        published_upgrade_survivor_baselines: "openclaw@2026.7.1",
+        timeout_minutes: 90,
+      },
+      {
+        docker_lanes: "update-migration",
+        label: "update-migration-2026.8.1",
+        published_upgrade_survivor_baselines: "openclaw@2026.8.1",
+        timeout_minutes: 90,
+      },
+    ]);
+    expect(plans.flatMap((plan) => plan.scheduledLanes.map((lane) => lane.name))).toEqual([
+      "update-migration-2026.7.1-mobile-pairing-reconnect",
+      "update-migration-2026.8.1-mobile-pairing-reconnect",
+      "update-migration-2026.8.1-watchos-direct-node",
+    ]);
+    expect(plans.flatMap((plan) => plan.omittedUnsupportedLaneNames)).toEqual([]);
+  });
+
   it.each([
     {
       label: "release baselines",

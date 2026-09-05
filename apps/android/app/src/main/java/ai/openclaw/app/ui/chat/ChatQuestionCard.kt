@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatQuestionStatus
 import ai.openclaw.app.gateway.Question
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -16,7 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -202,7 +202,7 @@ private fun QuestionSection(
     Text(
       text = question.header.uppercase(),
       style = ClawTheme.type.caption,
-      color = ClawTheme.colors.primary,
+      color = ClawTheme.colors.text,
       fontWeight = FontWeight.SemiBold,
     )
     Text(text = question.question, style = ClawTheme.type.body, color = ClawTheme.colors.text)
@@ -234,9 +234,6 @@ private fun QuestionSection(
       }
     }
     if (question.options.isEmpty() || question.isOther == true) {
-      // Secret answers must never render on screen or feed the keyboard's
-      // prediction/autocorrect stores; password transformation + keyboard type
-      // cover both, and single-line keeps the masked value one obscured run.
       val secret = question.isSecret == true
       OutlinedTextField(
         value = draft.otherText[question.questionId].orEmpty(),
@@ -246,7 +243,7 @@ private fun QuestionSection(
         label = { Text(if (secret) nativeString("Secret value") else nativeString("Other answer")) },
         visualTransformation = if (secret) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions =
-          if (secret) KeyboardOptions(keyboardType = KeyboardType.Password) else KeyboardOptions.Default,
+          if (secret) KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false) else KeyboardOptions.Default,
         minLines = 1,
         maxLines = if (secret) 1 else 4,
       )
@@ -278,18 +275,16 @@ private fun QuestionFooter(
       ) {
         Text(nativeString("Skip"))
       }
-      Button(
-        onClick = { answers?.let { onSubmit(prompt, it) } },
-        enabled = answers != null && status == ChatQuestionStatus.Pending,
-      ) {
-        Text(
+      ClawPrimaryButton(
+        text =
           if (status == ChatQuestionStatus.Submitting && !prompt.skipping) {
             nativeString("Submitting…")
           } else {
             nativeString("Submit")
           },
-        )
-      }
+        onClick = { answers?.let { onSubmit(prompt, it) } },
+        enabled = answers != null && status == ChatQuestionStatus.Pending,
+      )
     }
     prompt.errorText?.let { error ->
       Text(text = error, style = ClawTheme.type.caption, color = ClawTheme.colors.danger)

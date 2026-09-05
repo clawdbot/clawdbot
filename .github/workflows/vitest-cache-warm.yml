@@ -68,6 +68,44 @@ jobs:
             .cache/openclaw-pnpm-store
           key: ${{ steps.setup-node-env.outputs.dependency-cache-key }}
 
+      # Seal this owner before the full build creates sibling package dist trees.
+      # Those trees are resolution topology, but intentionally are not in this payload.
+      - name: Restore native SDK boundary cache
+        id: extension-package-boundary-cache
+        if: ${{ matrix.platform == 'linux' && steps.setup-node-env.outputs.cache-mode == 'read-write' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            packages/plugin-sdk/dist
+            .artifacts/extension-package-boundary/plugins
+            .artifacts/extension-package-boundary/*.json
+            .artifacts/extension-package-boundary/compile
+          key: ${{ runner.os }}-extension-package-boundary-v4-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-extension-package-boundary-v4-
+
+      - name: Prepare native SDK boundary cache
+        if: ${{ matrix.platform == 'linux' }}
+        run: node --import ./scripts/tsx.mjs scripts/prepare-extension-package-boundary-artifacts.mts --mode=package-boundary
+
+      - name: Save native SDK boundary cache
+        if: ${{ matrix.platform == 'linux' && steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.extension-package-boundary-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            packages/plugin-sdk/dist
+            .artifacts/extension-package-boundary/plugins
+            .artifacts/extension-package-boundary/*.json
+            .artifacts/extension-package-boundary/compile
+          key: ${{ runner.os }}-extension-package-boundary-v4-${{ github.sha }}
+
+      # Packaged declarations must see the same tree as ordinary build consumers.
+      # The native lint output belongs only in its completed cache archive.
+      - name: Clear native SDK boundary output before build
+        if: ${{ matrix.platform == 'linux' }}
+        run: rm -rf packages/plugin-sdk/dist
+
       - name: Warm build cache
         if: ${{ matrix.platform == 'linux' }}
         env:
@@ -129,6 +167,9 @@ jobs:
           # Only the publisher prunes restored entries before saving a new seed.
           OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: "1"
           OPENCLAW_NODE_COMPILE_CACHE_WRITER: "1"
+          # Keep compiled imports and per-file cleanup in the normal runner;
+          # ordinary CI owns test-body validation.
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--testNamePattern=(?!)"]'
         run: node --import tsx scripts/ci-run-node-test-shard.mts
 
       # Let pnpm prune its owned store and record the remaining size; this does

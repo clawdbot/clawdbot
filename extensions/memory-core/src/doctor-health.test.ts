@@ -73,7 +73,6 @@ describe("managed local embedding setup health check", () => {
   it("stays opt-in outside an explicit pre-cutover selection", () => {
     expect(captureCheck()).toMatchObject({
       defaultEnabled: false,
-      updateReadiness: "post-plugin",
     });
   });
 

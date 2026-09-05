@@ -2,5 +2,5 @@
 export {
   findCommandByNativeName,
   listChatCommands,
-  normalizeCommandBody,
+  resolveTextCommand,
 } from "./commands-registry.js";

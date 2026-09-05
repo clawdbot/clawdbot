@@ -183,8 +183,8 @@ async function waitForOneShotHostExit(
 describe("provider local service", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  afterEach(() => {
-    stopManagedProviderLocalServices();
+  afterEach(async () => {
+    await stopManagedProviderLocalServices();
   });
 
   it("attaches local service metadata to model objects", () => {

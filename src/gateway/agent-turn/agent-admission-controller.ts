@@ -33,6 +33,7 @@ export function createAgentAdmissionController(params: {
   agentDedupeKeys: string[];
   preAcceptedReservedSessionKey?: string;
   expectedSession?: ExpectedExistingSessionConstraint;
+  admissionOwner?: symbol;
   context: AgentTurnContext;
   io: AgentTurnIo;
   dedupeLifecycle: AgentDedupeLifecycle;
@@ -224,6 +225,7 @@ export function createAgentAdmissionController(params: {
       (await beginSessionWorkAdmission({
         scope,
         identities: [params.getResolvedSessionKey(), params.getResolvedSessionId()],
+        ...(params.admissionOwner ? { owner: params.admissionOwner } : {}),
         assertAllowed: () => assertAllowed(false),
         revalidateAllowed: assertAllowed,
         onInterrupt: interrupt,

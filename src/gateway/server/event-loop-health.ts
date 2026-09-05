@@ -1,5 +1,11 @@
 // Event-loop health monitor samples delay, utilization, and CPU pressure for gateway readiness snapshots.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
+import { hasInternalDiagnosticEventInterest } from "../../infra/diagnostic-event-listener-presence.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  emitInternalDiagnosticEvent,
+} from "../../infra/diagnostic-events.js";
+import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 
 const EVENT_LOOP_MONITOR_RESOLUTION_MS = 20;
 const EVENT_LOOP_DELAY_WARN_MS = 1_000;
@@ -174,6 +180,16 @@ export function createGatewayEventLoopHealthMonitor(
     lastCpuUsage = readCpuUsage();
     lastEventLoopUtilization = currentEventLoopUtilization;
     lastSnapshot = health;
+
+    // Publish only committed windows. The process-wide sample is not caused by its reader.
+    if (
+      areDiagnosticsEnabledForProcess() &&
+      hasInternalDiagnosticEventInterest("gateway.event_loop.sample")
+    ) {
+      runWithDiagnosticTraceContext(undefined, () =>
+        emitInternalDiagnosticEvent({ type: "gateway.event_loop.sample", intervalMs, delayMaxMs }),
+      );
+    }
 
     return health;
   };

@@ -20,7 +20,7 @@ import {
   confirmGatewayReachable,
   resolveGatewayRestartProbeContext,
   type GatewayReachability,
-  type GatewayRestartProbeAuth,
+  type GatewayRestartProbeContext,
 } from "./restart-health-probe.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
@@ -129,7 +129,7 @@ export async function inspectGatewayRestart(params: {
   expectedVersion?: string | null;
   expectedBuildId?: string | null;
   includeUnknownListenersAsStale?: boolean;
-  probeAuth?: GatewayRestartProbeAuth;
+  probeContext?: GatewayRestartProbeContext;
   configuredProbe?: ConfiguredGatewayLocalProbe;
   probeHosts?: readonly string[];
 }): Promise<GatewayRestartSnapshot> {
@@ -151,8 +151,7 @@ export async function inspectGatewayRestart(params: {
     if (!reachability) {
       reachability = await confirmGatewayReachable({
         port: params.port,
-        includeHealthDetails: requiresGatewayProbe,
-        auth: params.probeAuth,
+        ...params.probeContext,
         ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
         env,
       });
@@ -330,6 +329,7 @@ export async function waitForGatewayHealthyRestart(params: {
   port: number;
   attempts?: number;
   delayMs?: number;
+  settle?: { probes: number };
   env?: NodeJS.ProcessEnv;
   expectedVersion?: string | null;
   expectedBuildId?: string | null;
@@ -342,6 +342,8 @@ export async function waitForGatewayHealthyRestart(params: {
   const startedAtMs = performance.now();
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
+  const settleProbes = Math.max(1, params.settle?.probes ?? 1);
+  const settleDurationMs = (settleProbes - 1) * delayMs;
   const standardDeadlineMs = attempts * delayMs;
 
   const probeContext = await resolveGatewayRestartProbeContext(params.env).catch(() => ({
@@ -362,7 +364,7 @@ export async function waitForGatewayHealthyRestart(params: {
     expectedVersion: params.expectedVersion,
     expectedBuildId: params.expectedBuildId,
     includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
-    probeAuth: probeContext.auth,
+    probeContext,
     configuredProbe,
     probeHosts,
   });
@@ -377,15 +379,34 @@ export async function waitForGatewayHealthyRestart(params: {
   let postMigrationDeadlineMs: number | undefined;
   let migrationActive = false;
   let nextMigrationActivityPollMs = 0;
+  let healthyStreak: { pid: number | undefined; probes: number } | undefined;
 
   for (let attempt = 0; ; attempt += 1) {
     // Health probes and state-DB reads are part of the operator-visible wait. A monotonic clock
     // keeps both the normal deadline and migration watchdog bounded when those operations stall.
     const elapsedMs = Math.max(0, performance.now() - startedAtMs);
+    // A managed settle streak needs a concrete process identity. Scheduled Tasks can
+    // report running without exposing a PID, so Windows retains status-only proof.
     const healthy =
-      snapshot.healthy && (!params.requireRunningService || snapshot.runtime.status === "running");
+      snapshot.healthy &&
+      (!params.requireRunningService ||
+        (snapshot.runtime.status === "running" &&
+          (process.platform === "win32" || typeof snapshot.runtime.pid === "number")));
     if (healthy) {
-      return withWaitContext(snapshot, "healthy", elapsedMs);
+      if (healthyStreak && healthyStreak.pid === snapshot.runtime.pid) {
+        healthyStreak.probes += 1;
+      } else {
+        healthyStreak = { pid: snapshot.runtime.pid, probes: 1 };
+      }
+      if (healthyStreak.probes >= settleProbes) {
+        return withWaitContext(snapshot, "healthy", elapsedMs);
+      }
+    } else {
+      healthyStreak = undefined;
+    }
+    if (settleProbes > 1 && snapshot.healthy) {
+      // Callers consume snapshot.healthy; a partial settle must not report recovery at timeout.
+      snapshot.healthy = false;
     }
     if (snapshot.activatedPluginErrors?.length) {
       return withWaitContext(snapshot, "plugin-errors", elapsedMs);
@@ -440,9 +461,10 @@ export async function waitForGatewayHealthyRestart(params: {
     }
 
     if (elapsedMs >= standardDeadlineMs || migrationDeadlineMs !== undefined) {
+      // Settling gets its own readiness time, but cannot extend an active migration's watchdog.
       const deadlineMs = migrationActive
         ? migrationDeadlineMs
-        : (postMigrationDeadlineMs ?? standardDeadlineMs);
+        : (postMigrationDeadlineMs ?? standardDeadlineMs) + settleDurationMs;
       if (deadlineMs === undefined || elapsedMs >= deadlineMs) {
         return withWaitContext(snapshot, "timeout", elapsedMs);
       }
@@ -455,7 +477,7 @@ export async function waitForGatewayHealthyRestart(params: {
       expectedVersion: params.expectedVersion,
       expectedBuildId: params.expectedBuildId,
       includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
-      probeAuth: probeContext.auth,
+      probeContext,
       configuredProbe,
       probeHosts,
     });

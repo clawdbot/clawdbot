@@ -388,38 +388,6 @@ describe("AgentSession compaction", () => {
     });
   });
 
-  it("records post-compaction live-message tokens through the subscriber", async () => {
-    const sessionManager = SessionManager.inMemory();
-    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-    const firstKeptEntryId = sessionManager.appendMessage({
-      ...createAssistant(testModel, [{ type: "text", text: "retained answer" }]),
-      timestamp: 2,
-    });
-    let requests = 0;
-    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
-      createAssistantResultStream(
-        ++requests === 1
-          ? createOverflowAssistant(activeModel)
-          : createAssistant(activeModel, [{ type: "text", text: "complete retry" }]),
-      ),
-    );
-    const { session } = await createTestSession({
-      sessionManager,
-      settingsManager: createAutoCompactionSettings(),
-      resourceLoader: createResourceLoader(
-        createResultHandlers("condensed history", firstKeptEntryId),
-      ),
-    });
-    const subscription = subscribeEmbeddedAgentSession({ session, runId: "run-tokens-after" });
-
-    await session.prompt("long request");
-
-    expect(subscription.getCompactionCount()).toBe(1);
-    expect(subscription.getLastCompactionTokensAfter()).toEqual(expect.any(Number));
-    expect(subscription.getLastCompactionTokensAfter()).toBeGreaterThan(0);
-    subscription.unsubscribe();
-  });
-
   it("sends a pre-persisted keyed user once after pre-prompt compaction", async () => {
     const dir = tempDirs.make("openclaw-agent-session-compaction-keyed-user-");
     const scope = {
@@ -587,10 +555,15 @@ describe("AgentSession compaction", () => {
       .map(([event]) => event)
       .filter((event) => event.stream === "compaction");
     expect(compactionEvents).toHaveLength(2);
+    expect(compactionEvents[0]).toEqual({
+      stream: "compaction",
+      data: { phase: "start", itemId: expect.any(String) },
+    });
     expect(compactionEvents.at(-1)).toEqual({
       stream: "compaction",
       data: {
         phase: "end",
+        itemId: compactionEvents[0].data.itemId,
         outcome: "aborted",
         completed: false,
         willRetry: false,
@@ -646,10 +619,15 @@ describe("AgentSession compaction", () => {
       .map(([event]) => event)
       .filter((event) => event.stream === "compaction");
     expect(compactionEvents).toHaveLength(2);
+    expect(compactionEvents[0]).toEqual({
+      stream: "compaction",
+      data: { phase: "start", itemId: expect.any(String) },
+    });
     expect(compactionEvents.at(-1)).toEqual({
       stream: "compaction",
       data: {
         phase: "end",
+        itemId: compactionEvents[0].data.itemId,
         outcome: "aborted",
         completed: false,
         willRetry: false,

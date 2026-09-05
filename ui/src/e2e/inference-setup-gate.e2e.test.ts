@@ -1,8 +1,11 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createNewSessionPageE2eSuite,
+  controlUiSessionUrl,
   installMockGateway,
 } from "./new-session-page.test-support.ts";
 
@@ -16,6 +19,15 @@ beforeEach(() => {
 
 async function captureProof(page: import("playwright").Page, fileName: string) {
   if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+    return;
+  }
+  if (page.video()) {
+    await writeFile(
+      path.join(proofDir, fileName),
+      await takeControlUiViewportScreenshot(page, page.locator(".custodian-surface"), [
+        page.locator(".custodian__messages"),
+      ]),
+    );
     return;
   }
   await page.screenshot({
@@ -144,8 +156,16 @@ suite.define(() => {
       const runtimeError =
         "OpenClaw requires working inference: The configured runtime could not start. Repair the launcher and retry.";
       const gateway = await installMockGateway(page, {
+        sessionKey: "agent:main:work",
         deferredMethods: ["openclaw.chat"],
-        featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat", "openclaw.chat.history"],
+        featureMethods: [
+          "chat.metadata",
+          "chat.startup",
+          "chat.history",
+          "chat.send",
+          "openclaw.chat",
+          "openclaw.chat.history",
+        ],
         methodResponses: {
           "openclaw.chat.history": {
             turns: [
@@ -160,10 +180,17 @@ suite.define(() => {
       });
 
       try {
-        await page.goto(`${suite.server.baseUrl}${surface === "page" ? "custodian" : "chat"}`);
+        await page.goto(
+          surface === "page"
+            ? `${suite.server.baseUrl}custodian`
+            : controlUiSessionUrl(suite.server.baseUrl, "agent:main:work"),
+        );
         if (surface === "panel") {
-          await page.locator(".sidebar-issues-button").click();
-          await page.locator(".sidebar-issues-panel__ask").click();
+          await page.locator(".sidebar-footer-bar__home").click();
+          await page
+            .locator("openclaw-assistant-panel")
+            .getByRole("button", { name: "Ask OpenClaw", exact: true })
+            .click();
         }
         const chat = page.locator("openclaw-custodian-surface");
         await gateway.waitForRequest("openclaw.chat");

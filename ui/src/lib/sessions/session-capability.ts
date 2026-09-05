@@ -62,6 +62,7 @@ export type SessionListOptions = {
   agentId?: string;
   spawnedBy?: string;
   boardFace?: "chat" | "dashboard";
+  hasBoard?: boolean;
   activeMinutes?: number;
   search?: string;
   ownerId?: string;
@@ -161,6 +162,11 @@ export type SessionCapability = {
     scope: SessionListScope,
     listener: (snapshot: SessionListSnapshot) => void,
   ) => () => void;
+  /** Observes an independent query; refresh rejects after failure, retirement or disposal. */
+  observeList: (
+    scope: SessionListScope,
+    listener: (snapshot: SessionListSnapshot) => void,
+  ) => { refresh: () => Promise<void>; dispose: () => void };
   refreshList: (options?: SessionRefreshOptions) => Promise<void>;
   /** Admits history through the deletion fence, even when outside the shared roster. */
   reconcile: (
@@ -171,7 +177,8 @@ export type SessionCapability = {
   reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
-  refreshReplacement: (agentId?: string | null) => Promise<void>;
+  /** Forces the remembered roster query; null means the attempt retired or failed. */
+  refreshReplacement: (agentId?: string | null) => Promise<SessionsListResult | null>;
   createResult: (
     params?: SessionCreateParams,
     options?: { reconciliation?: SessionCreateReconciliation },

@@ -9,6 +9,7 @@ import {
 } from "./session-catalog-adoption.js";
 import { type CatalogRecord, listClaudeSessions } from "./session-catalog-discovery.js";
 import { importClaudeHistory } from "./session-catalog-history.js";
+import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
 import {
   readBoundedClaudeHistory,
   readClaudeSessionTranscript,
@@ -19,7 +20,7 @@ import {
   listBoundClaudeSessions,
   resolveClaudeCliRoutedModelId,
 } from "./session-catalog-runtime.js";
-import { currentHomeDir, gatewayClaudeScanOptions } from "./session-catalog-scan.js";
+import { gatewayClaudeScanOptions } from "./session-catalog-scan.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
   CLAUDE_SESSION_READ_COMMAND,
@@ -50,7 +51,7 @@ export async function continueClaudeSession(
       hostId,
       threadId,
       ...(history ? { history } : {}),
-      listLocalSessions: () => listClaudeSessions(currentHomeDir(), scanOptions),
+      listLocalSessions: () => listClaudeSessions(resolveClaudeCatalogHomeDir(), scanOptions),
       readRemote: async () =>
         (
           await readClaudeSessionTranscript({
@@ -74,7 +75,7 @@ export async function continueClaudeSession(
       let nodeId: string | undefined;
       let record: ClaudeSessionCatalogSession | undefined;
       if (hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
-        record = (await listClaudeSessions(currentHomeDir(), scanOptions)).find(
+        record = (await listClaudeSessions(resolveClaudeCatalogHomeDir(), scanOptions)).find(
           (candidate) => candidate.threadId === threadId,
         );
         if (!record || !isResumableClaudeSource(record.source)) {

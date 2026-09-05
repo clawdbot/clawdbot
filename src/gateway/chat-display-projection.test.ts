@@ -24,6 +24,27 @@ function projectHistoryTransports(message: Record<string, unknown>) {
 }
 
 describe("managed document chat history", () => {
+  it("projects durable display content without dropping canonical assistant blocks", () => {
+    const canonical = [
+      { type: "text", text: "Slides ready" },
+      { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+    ];
+    const attachment = {
+      type: "attachment",
+      attachment: { kind: "document", label: "slides.pptx" },
+    };
+    const message = {
+      role: "assistant",
+      content: canonical,
+      openclawDisplayContent: [...canonical, attachment],
+    };
+
+    for (const messages of projectHistoryTransports(message)) {
+      expect(messages).toEqual([{ role: "assistant", content: [...canonical, attachment] }]);
+    }
+    expect(message.content).toBe(canonical);
+  });
+
   it("keeps the attachment envelope while stripping URL capabilities", () => {
     const message = {
       role: "assistant",

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchPublishedRepositoryAdvisories } from "../../scripts/lib/upstream-repository-advisories.mts";
+import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 
 const REGISTRY = "https://registry.npmjs.org";
 const REPOSITORY = "fixture/packages";
@@ -26,7 +27,9 @@ function advisory(range: unknown = "< 2.0.0", fields: Record<string, unknown> = 
     vulnerabilities: [vulnerability(range)],
     ...fields,
   };
-  if (!publishedRows.has(row.ghsa_id)) publishedRows.set(row.ghsa_id, row);
+  if (!publishedRows.has(row.ghsa_id)) {
+    publishedRows.set(row.ghsa_id, row);
+  }
   return row;
 }
 
@@ -45,7 +48,7 @@ function createSourceFetch(
 ) {
   const calls: Array<{ url: URL; init: RequestInit | undefined }> = [];
   const fetchImpl: typeof fetch = async (input, init) => {
-    const url = new URL(String(input));
+    const url = new URL(input instanceof Request ? input.url : input);
     calls.push({ url, init });
     if (url.origin === REGISTRY) {
       return handlers.manifest ? handlers.manifest(url, init) : manifest(url);
@@ -54,7 +57,9 @@ function createSourceFetch(
       throw new Error(`Unexpected request origin: ${url.origin}`);
     }
     if (url.pathname.startsWith("/advisories/")) {
-      if (handlers.reviewed) return handlers.reviewed(url, init);
+      if (handlers.reviewed) {
+        return handlers.reviewed(url, init);
+      }
       const row = publishedRows.get(url.pathname.split("/").at(-1) ?? "");
       return Response.json({
         ...row,
@@ -237,6 +242,47 @@ describe("published upstream repository advisories", () => {
       expect.objectContaining({ subject: `fixture#${ADVISORY_ID}` }),
     );
   });
+
+  it.each(["integration", "personal access token"])(
+    "keeps resource denial by %s local while preserving real findings and reconciling stale ranges",
+    async (actor) => {
+      const ids = Array.from({ length: 6 }, (_, index) => `GHSA-2222-3333-444${index}`);
+      const inaccessible = ids.slice(0, 4);
+      const trueMatch = expectDefined(ids[4], "true advisory");
+      const staleMatch = expectDefined(ids[5], "stale advisory");
+      const secret = "synthetic-advisory-secret";
+      vi.stubEnv("GH_TOKEN", secret);
+      const source = createSourceFetch({
+        page: () => Response.json(ids.map((id) => advisory("< 2.0.0", { ghsa_id: id }))),
+        reviewed: (url) => {
+          const id = url.pathname.split("/").at(-1) ?? "";
+          if (inaccessible.includes(id)) {
+            return Response.json(
+              { message: `Resource not accessible by ${actor}`, diagnostic: secret },
+              { status: 403, headers: { "x-ratelimit-remaining": "100" } },
+            );
+          }
+          return Response.json({
+            ghsa_id: id,
+            published_at: "2026-08-01T00:00:00Z",
+            github_reviewed_at: "2026-08-02T00:00:00Z",
+            withdrawn_at: null,
+            vulnerabilities: [vulnerability(id === staleMatch ? "< 1.0.0" : "< 2.0.0")],
+          });
+        },
+      });
+      const report = await scan(source.fetchImpl);
+      expect(report.advisories.map(({ id }) => id)).toEqual([...inaccessible, trueMatch]);
+      expect(report.coverage.issues).toEqual(
+        inaccessible.map((id) => ({ subject: `fixture#${id}`, reason: "request-failed" })),
+      );
+      expect(report.coverage.reconciliations).toMatchObject([
+        { id: trueMatch, matchedVersions: ["1.0.0"] },
+        { id: staleMatch, matchedVersions: [] },
+      ]);
+      expect(JSON.stringify(report)).not.toContain(secret);
+    },
+  );
 
   it("sends the token only to fixed GitHub requests and refuses redirects on every request", async () => {
     vi.stubEnv("GH_TOKEN", "synthetic-upstream-test-token");
@@ -672,14 +718,27 @@ describe("published upstream repository advisories", () => {
   it("keeps metadata and repository requests within four concurrent operations", async () => {
     let active = 0;
     let peak = 0;
+    const waves = [REGISTRY, "https://api.github.com"].map((origin) => ({
+      origin,
+      started: createDeferred(),
+      release: createDeferred(),
+    }));
     const source = createSourceFetch({
       manifest: (url) => manifest(url, `https://github.com/fixture/${url.pathname.split("/")[1]}`),
     });
     const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      const wave = expectDefined(
+        waves.find(({ origin }) => origin === url.origin),
+        "request phase",
+      );
       active += 1;
       peak = Math.max(peak, active);
+      if (active === 4) {
+        wave.started.resolve();
+      }
       try {
-        await Promise.resolve();
+        await wave.release.promise;
         return await source.fetchImpl(input, init);
       } finally {
         active -= 1;
@@ -688,11 +747,32 @@ describe("published upstream repository advisories", () => {
     const payload = Object.fromEntries(
       Array.from({ length: 8 }, (_, index) => [`package-${index}`, ["1.0.0"]]),
     );
-    const report = await scan(fetchImpl, payload);
-    expect(peak).toBe(4);
-    expect(active).toBe(0);
-    expect(report.coverage.status).toBe("checked");
-    expect(report.coverage.checkedRepositories).toBe(8);
+    const scanning = scan(fetchImpl, payload);
+    try {
+      for (const wave of waves) {
+        await withTestTimeout(
+          wave.started.promise,
+          1_000,
+          `expected four requests to ${wave.origin}`,
+        );
+        // Let admission finish while requests stay blocked so excess fanout is observable.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(active).toBe(4);
+        wave.release.resolve();
+      }
+      const report = await scanning;
+      expect(peak).toBe(4);
+      expect(active).toBe(0);
+      expect(report.coverage.status).toBe("checked");
+      expect(report.coverage.checkedRepositories).toBe(8);
+    } finally {
+      for (const wave of waves) {
+        wave.release.resolve();
+      }
+      await scanning;
+    }
   });
 
   it.each([
@@ -700,27 +780,64 @@ describe("published upstream repository advisories", () => {
     { code: 429, remaining: "0", reason: "rate-limited" },
     { code: 403, remaining: "100", reason: "request-failed" },
     { code: 401, remaining: "100", reason: "request-failed" },
-  ])(
-    "stops scheduling GitHub work after HTTP $code (remaining $remaining)",
-    async ({ code, remaining, reason: expectedReason }) => {
-      const source = createSourceFetch({
-        manifest: (url) =>
-          manifest(url, `https://github.com/fixture/${url.pathname.split("/")[1]}`),
-        page: () =>
-          new Response(null, { status: code, headers: { "x-ratelimit-remaining": remaining } }),
-      });
-      const payload = Object.fromEntries(
-        Array.from({ length: 8 }, (_, index) => [`package-${index}`, ["1.0.0"]]),
-      );
-      const report = await scan(source.fetchImpl, payload);
-      expect(source.calls.filter(({ url }) => url.origin === REGISTRY)).toHaveLength(8);
-      expect(
-        source.calls.some(({ url }) =>
-          /\/repos\/fixture\/package-[4-7](?:\/|$)/u.test(url.pathname),
-        ),
-      ).toBe(false);
-      expect(report.coverage.status).toBe("partial");
-      expect(report.coverage.issues.some(({ reason }) => reason === expectedReason)).toBe(true);
+    {
+      code: 403,
+      remaining: "100",
+      reason: "request-failed",
+      body: JSON.stringify({ message: "You have exceeded a secondary rate limit." }),
     },
-  );
+    {
+      code: 403,
+      remaining: "100",
+      reason: "request-failed",
+      body: JSON.stringify({ message: "Unknown denial", diagnostic: "synthetic-advisory-secret" }),
+    },
+    { code: 403, remaining: "100", reason: "request-failed", body: "{" },
+    {
+      code: 403,
+      remaining: "100",
+      reason: "request-failed",
+      body: JSON.stringify({
+        message: "Resource not accessible by integration",
+        padding: "x".repeat(2 * 1024 * 1024),
+      }),
+    },
+    {
+      code: 403,
+      remaining: "0",
+      reason: "rate-limited",
+      body: JSON.stringify({ message: "Resource not accessible by integration" }),
+    },
+    {
+      code: 403,
+      remaining: "100",
+      reason: "request-failed",
+      body: JSON.stringify({ message: "Resource not accessible by integration" }),
+      retryAfter: "60",
+    },
+  ])("stops scheduling GitHub work after HTTP $code (remaining $remaining)", async (entry) => {
+    const { code, remaining, reason: expectedReason } = entry;
+    const source = createSourceFetch({
+      manifest: (url) => manifest(url, `https://github.com/fixture/${url.pathname.split("/")[1]}`),
+      page: () =>
+        new Response("body" in entry ? entry.body : null, {
+          status: code,
+          headers: {
+            "x-ratelimit-remaining": remaining,
+            ...("retryAfter" in entry ? { "retry-after": entry.retryAfter } : {}),
+          },
+        }),
+    });
+    const payload = Object.fromEntries(
+      Array.from({ length: 8 }, (_, index) => [`package-${index}`, ["1.0.0"]]),
+    );
+    const report = await scan(source.fetchImpl, payload);
+    expect(source.calls.filter(({ url }) => url.origin === REGISTRY)).toHaveLength(8);
+    expect(
+      source.calls.some(({ url }) => /\/repos\/fixture\/package-[4-7](?:\/|$)/u.test(url.pathname)),
+    ).toBe(false);
+    expect(report.coverage.status).toBe("partial");
+    expect(report.coverage.issues.some(({ reason }) => reason === expectedReason)).toBe(true);
+    expect(JSON.stringify(report)).not.toContain("synthetic-advisory-secret");
+  });
 });

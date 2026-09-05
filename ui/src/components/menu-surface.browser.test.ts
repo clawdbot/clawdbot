@@ -136,6 +136,39 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
   });
 });
 
+describe.skipIf(!hasPopoverApi)("agent picker surface", () => {
+  it("stays opaque while the Web Awesome menu animates open", async () => {
+    await useDesktopViewport();
+    const dropdown = document.createElement("wa-dropdown") as HTMLElement & {
+      updateComplete: Promise<unknown>;
+    };
+    dropdown.className = "agent-select";
+    const trigger = document.createElement("button");
+    trigger.slot = "trigger";
+    trigger.textContent = "Agent";
+    const item = document.createElement("wa-dropdown-item");
+    item.textContent = "All agents";
+    dropdown.append(trigger, item);
+    document.body.append(dropdown);
+    await dropdown.updateComplete;
+
+    const menu = dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+    expect(menu).not.toBeNull();
+    menu!.style.setProperty("--show-duration", "1s");
+    trigger.click();
+    await expect.poll(() => menu!.getAnimations().length).toBe(1);
+
+    const animation = menu!.getAnimations()[0];
+    if (!animation) {
+      throw new Error("expected the agent picker menu to be animating");
+    }
+    animation.pause();
+    animation.currentTime = 500;
+    expect(getComputedStyle(menu!).opacity).toBe("1");
+    expect(getComputedStyle(menu!).scale).not.toBe("1");
+  });
+});
+
 describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
   it.each([
     ["session-menu__item", "keyboard"],

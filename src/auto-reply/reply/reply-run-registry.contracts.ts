@@ -93,13 +93,13 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   toolBindings?: Readonly<Record<string, unknown>>;
 }>;
 
-export type ReplyToolAuthorityProjector = (
-  overlay: ReplyToolAuthorityOverlay,
-  route: ReplyToolAuthorityRoute,
-) => string;
+export type ReplyToolAuthoritySnapshot = Readonly<{
+  fingerprint(route?: ReplyToolAuthorityRoute): string;
+  project: (overlay: ReplyToolAuthorityOverlay, route: ReplyToolAuthorityRoute) => string;
+}>;
 
 export type ReplyBackendQueueMessageResult = {
-  /** Acceptance was irreversible, but the harness could not prove transcript commitment. */
+  /** Input is non-replayable, but its delivery or commitment could not be confirmed. */
   transcriptCommit: "unconfirmed";
   errorMessage: string;
 };
@@ -111,6 +111,29 @@ export type ReplyBackendMessageInjection = {
     text: string,
     options?: ReplyBackendQueueMessageOptions,
   ): Promise<void | ReplyBackendQueueMessageResult>;
+};
+
+/** V2 sinks invoke the host-owned, per-injection assertion at their final effect. */
+export type ReplyBackendMessageInjectionV2 = {
+  readonly version: 2;
+  isAvailable(): boolean;
+  queueMessage(
+    text: string,
+    options: ReplyBackendQueueMessageOptions | undefined,
+    assertCurrent: () => void,
+    authorityKind: "run" | "source-bound",
+  ): Promise<void | ReplyBackendQueueMessageResult>;
+  claimPendingUserInputAnswer?(
+    text: string,
+    options: ReplyBackendQueueMessageOptions | undefined,
+    assertCurrent: () => void,
+    authorityKind: "run" | "source-bound",
+  ): Promise<boolean>;
+  cancelPendingUserInput?(
+    resolvedBy: string,
+    assertCurrent: () => void,
+    authorityKind: "run" | "source-bound",
+  ): Promise<boolean>;
 };
 
 export type ReplyBackendHandle = {
@@ -129,6 +152,8 @@ export type ReplyBackendHandle = {
   cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
   cancel(reason?: ReplyBackendCancelReason): void;
   readonly messageInjection?: ReplyBackendMessageInjection;
+  /** V1 remains compatible with v2026.8.1; source-bound input requires V2. */
+  readonly messageInjectionV2?: ReplyBackendMessageInjectionV2;
   /** @deprecated Compatibility for shipped embedded handles. Use messageInjection. */
   isStreaming?: () => boolean;
   isStopped?: () => boolean;
@@ -165,6 +190,7 @@ type ReplyMessageInjectionRejectionReason =
   | "runtime_rejected";
 
 export type ReplyMessageInjectionOutcome =
+  | { status: "indeterminate"; errorMessage: string }
   | { status: "accepted"; result?: ReplyBackendQueueMessageResult }
   | { status: "rejected"; reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
 
@@ -270,14 +296,12 @@ export type ReplyOperation = {
   /** Mark this operation as an in-flight terminal-session recovery. */
   markTerminalRecovery(): void;
   markAcceptedSteeredInboundAudio(): void;
-  /** Bind provisional request authority before a concrete backend attempt attaches. */
-  bindToolAuthorityFingerprint(fingerprint: string): void;
-  /** Bind the active run's immutable authority projector for direct inbound steering. */
-  bindToolAuthorityProjector(projector: ReplyToolAuthorityProjector): void;
+  /** Freeze the complete caller policy before a concrete backend attempt attaches. */
+  bindToolAuthoritySnapshot(snapshot: ReplyToolAuthoritySnapshot): void;
   /** Project an inbound turn through the current concrete route; settled owners fail closed. */
   projectToolAuthorityFingerprint(overlay: ReplyToolAuthorityOverlay): string | undefined;
-  /** Record the concrete candidate route; fallback attempts may replace it. */
-  bindToolAuthorityRoute(route: ReplyToolAuthorityRoute): void;
+  /** Prepare fingerprint and projection together for the final concrete attempt route. */
+  bindToolAuthorityRoute(route: ReplyToolAuthorityRoute): string;
   updateSessionId(nextSessionId: string): void;
   /**
    * Move this queued operation to another session key's run slot. Native command

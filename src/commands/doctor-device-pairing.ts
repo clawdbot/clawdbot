@@ -4,6 +4,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { callGateway } from "../gateway/call.js";
@@ -374,10 +375,6 @@ function collectPairedRecordIssues(snapshot: DoctorPairingSnapshot): PairedRecor
   return issues;
 }
 
-function formatPairedRecordIssue(issue: PairedRecordIssue): string {
-  return `- ${issue.message}`;
-}
-
 function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): { deviceId: string } | null {
   try {
     return loadDeviceIdentityIfPresent({ env });
@@ -469,23 +466,23 @@ function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): LocalDev
   return issues;
 }
 
-function formatLocalDeviceAuthIssue(issue: LocalDeviceAuthIssue): string {
-  return `- ${issue.message}`;
-}
-
-function formatLegacyPairingStoreIssue(filePath: string): string {
-  return `- Legacy device pairing store ${filePath} has not been imported into the SQLite state store yet. The gateway imports and archives it at startup, so restart the gateway. If the file persists across restarts it is likely unreadable; OpenClaw refused to treat it as empty to avoid dropping approved pairings, so fix or move it aside, then restart.`;
-}
-
 /** Warn about legacy devices/*.json files the startup SQLite import has not archived. */
-async function collectLegacyPairingStoreIssues(cfg: OpenClawConfig): Promise<string[]> {
+async function collectLegacyPairingStoreFindings(cfg: OpenClawConfig): Promise<HealthFinding[]> {
   if (cfg.gateway?.mode === "remote") {
     return [];
   }
   // Lazy import keeps the migration module a startup-only boundary.
   const { listLegacyDevicePairingStoreFiles } =
     await import("../infra/device-pairing-migration.js");
-  return (await listLegacyDevicePairingStoreFiles()).map(formatLegacyPairingStoreIssue);
+  return (await listLegacyDevicePairingStoreFiles()).map((filePath): HealthFinding => ({
+    checkId: DEVICE_PAIRING_CHECK_ID,
+    severity: "warning",
+    message: `Legacy device pairing store ${filePath} has not been imported into the SQLite state store yet. The gateway imports and archives it at startup, so restart the gateway. If the file persists across restarts it is likely unreadable; OpenClaw refused to treat it as empty to avoid dropping approved pairings, so fix or move it aside, then restart.`,
+    path: "devices.legacy-store",
+    requirement: "pairing-store-legacy-file",
+    fixHint:
+      "Restart the gateway so it imports the legacy store; if the file persists, fix or move it aside first.",
+  }));
 }
 
 function stripListMarker(message: string): string {
@@ -532,25 +529,28 @@ function localDeviceAuthIssueToHealthFinding(issue: LocalDeviceAuthIssue): Healt
   };
 }
 
-function legacyPairingStoreIssueToHealthFinding(message: string): HealthFinding {
-  return {
-    checkId: DEVICE_PAIRING_CHECK_ID,
-    severity: "warning",
-    message: stripListMarker(message),
-    path: "devices.legacy-store",
-    requirement: "pairing-store-legacy-file",
-    fixHint:
-      "Restart the gateway so it imports the legacy store; if the file persists, fix or move it aside first.",
-  };
-}
-
 export async function collectDevicePairingHealthFindings(params: {
   cfg: OpenClawConfig;
   healthOk?: boolean;
+  env?: NodeJS.ProcessEnv;
 }): Promise<HealthFinding[]> {
-  const legacyStoreFindings = (await collectLegacyPairingStoreIssues(params.cfg)).map(
-    legacyPairingStoreIssueToHealthFinding,
-  );
+  const legacyStoreFindings = await collectLegacyPairingStoreFindings(params.cfg);
+  const { detectLegacyDeviceAuth } = await import("../infra/state-migrations.device-auth.js");
+  // Retired device auth uses the source env; pairing/token reads keep lint's active state view.
+  // Report this debt even without a reachable remote Gateway or local identity.
+  const deviceAuth = detectLegacyDeviceAuth({ stateDir: resolveStateDir(params.env) });
+  if (deviceAuth.sourcePresent) {
+    const fixCommand = formatCliCommand("openclaw doctor --fix", params.env);
+    const fixHint = `Stop the Gateway and run ${fixCommand} to finish migration or cleanup.`;
+    legacyStoreFindings.push({
+      checkId: DEVICE_PAIRING_CHECK_ID,
+      severity: "warning",
+      message: `Legacy device auth store ${sanitizeTerminalText(deviceAuth.sourcePath)} is still present, so doctor cannot inspect locally cached device tokens. ${fixHint}`,
+      path: "identity.device-auth",
+      requirement: "device-auth-store-legacy-file",
+      fixHint,
+    });
+  }
   const snapshot = await loadDoctorPairingSnapshot({
     cfg: params.cfg,
     healthOk: params.healthOk ?? false,
@@ -566,30 +566,15 @@ export async function collectDevicePairingHealthFindings(params: {
   ];
 }
 
-/**
- * Emits device pairing repair guidance from live gateway state or the local pairing store.
- *
- * Remote gateways only report through the gateway API; local gateways can fall back to the
- * local SQLite pairing state when the gateway is down.
- */
+/** Render the same local migration and pairing findings as structured Doctor output. */
 export async function noteDevicePairingHealth(params: {
   cfg: OpenClawConfig;
   healthOk: boolean;
+  env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const legacyStoreLines = await collectLegacyPairingStoreIssues(params.cfg);
-  const snapshot = await loadDoctorPairingSnapshot(params);
-  const lines = [
-    ...legacyStoreLines,
-    ...(snapshot
-      ? [
-          ...collectPendingPairingIssues(snapshot).map(formatPendingPairingIssue),
-          ...collectPairedRecordIssues(snapshot).map(formatPairedRecordIssue),
-          ...collectLocalDeviceAuthIssues(snapshot).map(formatLocalDeviceAuthIssue),
-        ]
-      : []),
-  ];
-  if (lines.length === 0) {
+  const findings = await collectDevicePairingHealthFindings(params);
+  if (findings.length === 0) {
     return;
   }
-  note(lines.join("\n"), "Device pairing");
+  note(findings.map((finding) => `- ${finding.message}`).join("\n"), "Device pairing");
 }

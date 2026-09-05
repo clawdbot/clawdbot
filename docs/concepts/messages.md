@@ -97,6 +97,8 @@ Tool result `content` is the model-visible result; `details` is runtime metadata
 - Persisted session transcripts keep only bounded `details`; oversized metadata is replaced with a compact summary marked `persistedDetailsTruncated: true`.
 - Plugins and tools should put text the model must read in `content`, not only in `details`.
 
+When a tool-error warning is the agent's only reply, WebChat displays and retains it. The warning does not by itself change a completed agent run into a runtime failure; the failed tool result remains recorded separately.
+
 ## Queueing and followups
 
 When a run is already active, inbound messages steer into it by default. `messages.queue` controls the mode:

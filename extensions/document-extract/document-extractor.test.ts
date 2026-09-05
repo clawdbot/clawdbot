@@ -63,7 +63,7 @@ describe("PDF document extractor", () => {
         images: [
           {
             type: "image",
-            bytes: Uint8Array.from(Buffer.from("png1")),
+            bytes: Uint8Array.from(Buffer.from("!png1?")).subarray(1, 5),
             mimeType: "image/png",
             page: 1,
             width: 5,
@@ -86,12 +86,14 @@ describe("PDF document extractor", () => {
       });
     const extractor = createPdfDocumentExtractor();
 
-    const result = await extractor.extract(request());
+    const input = request({ buffer: Buffer.from("!%PDF-1.4?").subarray(1, -1) });
+    const result = await extractor.extract(input);
 
     if (!result) {
       throw new Error("Expected PDF extraction result");
     }
     expect(openPdfMock).toHaveBeenCalledWith(expect.any(Uint8Array));
+    expect(Buffer.from(openPdfMock.mock.calls[0]?.[0] ?? [])).toEqual(input.buffer);
     expect(pdfDocument.extract).toHaveBeenNthCalledWith(1, {
       mode: "text",
       maxPages: 2,

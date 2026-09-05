@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import {
+  createSessionWorkStartChangedError,
   isSessionWorkStartInvalidatedError,
   resolveSessionWorkStartError,
 } from "../config/sessions/lifecycle.js";
@@ -44,7 +45,10 @@ import { repairPendingAssistantTranscriptTurns } from "./command/assistant-trans
 import { persistAgentSession } from "./command/attempt-execution.shared.js";
 import { emitIngressModelUsageDiagnostic } from "./command/ingress-diagnostics.js";
 import { resolveEmbeddedModelSelection } from "./command/model-selection.js";
-import { finalizeEmbeddedAgentCommand } from "./command/post-run.js";
+import {
+  createCompactionSessionIdReporter,
+  finalizeEmbeddedAgentCommand,
+} from "./command/post-run.js";
 import {
   prepareAgentCommandExecution,
   type PreparedAgentCommandRuntimeContext,
@@ -112,8 +116,13 @@ async function agentCommandInternal(
       "internal delivery media constraints require automatic delivery with restart-safe tools and no message tool",
     );
   }
+  const compactionSessionIdReporter = createCompactionSessionIdReporter(
+    prepared.sessionId,
+    preparedOpts.onSessionIdChanged,
+  );
   let opts: AgentCommandOpts = {
     ...preparedOpts,
+    onSessionIdChanged: compactionSessionIdReporter.onSessionIdChanged,
     abortSignal: preparedOpts.abortSignal
       ? AbortSignal.any([preparedOpts.abortSignal, lifecycleAbortController.signal])
       : lifecycleAbortController.signal,
@@ -199,16 +208,12 @@ async function agentCommandInternal(
               })
             : sessionEntry;
         if (!currentEntry && preparedSessionId) {
-          throw new Error(
-            `Session "${sessionKey ?? sessionId}" changed while starting work. Retry.`,
-          );
+          throw createSessionWorkStartChangedError(sessionKey ?? sessionId);
         }
         const matchesIntentionalRollover =
           isNewSession && currentEntry?.sessionId === preparedSessionId;
         if (currentEntry && currentEntry.sessionId !== sessionId && !matchesIntentionalRollover) {
-          throw new Error(
-            `Session "${sessionKey ?? sessionId}" changed while starting work. Retry.`,
-          );
+          throw createSessionWorkStartChangedError(sessionKey ?? sessionId);
         }
         const archivedSessionError = resolveSessionWorkStartError(
           sessionKey ?? sessionId,
@@ -500,6 +505,9 @@ async function agentCommandInternal(
         onCompactionAccounting: (fact) => {
           if (fact.kind === "durable") {
             runOwnedSessionId = fact.target.sessionId;
+            if (fact.previousSessionId !== undefined) {
+              compactionSessionIdReporter.onCompactionCommitted(fact.target.sessionId);
+            }
           }
         },
         suppressVisibleSessionEffects,
@@ -527,9 +535,10 @@ async function agentCommandInternal(
         currentRunDeliveryContext,
         sessionOwnership: { runOwnedSessionId, sessionReboundDuringRun },
         trackInternalModelRunTarget,
-        onSessionOwnershipChanged: (ownership) => {
+        onSessionOwnershipChanged: (ownership, committedCompactionSessionId) => {
           runOwnedSessionId = ownership.runOwnedSessionId;
           sessionReboundDuringRun = ownership.sessionReboundDuringRun;
+          compactionSessionIdReporter.onCompactionCommitted(committedCompactionSessionId);
         },
         onTerminalDeliveryEvidenceChanged: (evidence) => {
           restartRecoveryTerminalDeliveryEvidence = evidence;
@@ -541,6 +550,7 @@ async function agentCommandInternal(
       return finalized.deliveryResult;
     });
   } finally {
+    compactionSessionIdReporter.reportCommitted();
     await preparedRunAdmission?.finish();
     sessionWorkAdmission?.release();
     await cleanupInternalModelRunTargets();
@@ -672,7 +682,6 @@ async function agentCommandFromIngressInternal(
       if (result && preparedAgentDir) {
         emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
       }
-
       return result;
     });
   return generation && runtimeContext

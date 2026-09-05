@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
+import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -12,10 +12,9 @@ import { runtimeForLogger } from "../logging/subsystem.js";
 import { isGatewayDraining } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
-import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
-import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
+import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { isLoopbackHost } from "./net.js";
@@ -41,32 +40,9 @@ type ChannelRuntime = ReturnType<
   (typeof import("../plugins/runtime/runtime-channel.js"))["createRuntimeChannel"]
 >;
 
-type AuthRateLimitConfig = Parameters<typeof createAuthRateLimiter>[0];
-
-function createGatewayAuthRateLimiters(rateLimitConfig: AuthRateLimitConfig | undefined): {
-  rateLimiter: AuthRateLimiter;
-  browserRateLimiter: AuthRateLimiter;
-} {
-  // Remote non-browser and HTTP attempts keep the normal loopback exemption.
-  const rateLimiter = createAuthRateLimiter(rateLimitConfig ?? {});
-  // Browser-origin WebSocket attempts are always throttled, including loopback.
-  const browserRateLimiter = createAuthRateLimiter({ ...rateLimitConfig, exemptLoopback: false });
-  return { rateLimiter, browserRateLimiter };
-}
-
-type GatewayStartupChannelPlugin = {
-  id: ChannelId;
-  gatewayMethods?: readonly string[];
-  gatewayMethodDescriptors?: readonly { name: string }[];
-  meta: { aliases?: readonly string[] };
-};
-
-function listGatewayStartupChannelPlugins(): GatewayStartupChannelPlugin[] {
-  return listLoadedChannelPlugins() as GatewayStartupChannelPlugin[];
-}
-
 export async function prepareGatewayKernelState(params: {
   bootstrap: GatewayBootstrap;
+  bootId: string;
   port: number;
   opts: GatewayBootstrap["opts"];
   log: GatewayLogger;
@@ -84,6 +60,7 @@ export async function prepareGatewayKernelState(params: {
 }) {
   const {
     bootstrap,
+    bootId,
     port,
     opts,
     log,
@@ -106,42 +83,33 @@ export async function prepareGatewayKernelState(params: {
     ambientAutostartSuppressedChannelIds,
     minimalTestGateway,
     pluginGatewayContext,
+    resolvePluginGatewayContext,
   } = bootstrap;
   const pluginRuntime = {
     registry: pluginBootstrap.pluginRegistry,
     baseGatewayMethods: pluginBootstrap.baseGatewayMethods,
   };
+  const listGatewayStartupChannelPlugins = () =>
+    listLoadedChannelPluginsForRegistry(pluginRuntime.registry);
   // The core device provider is configuration-free, so every full Gateway owns the
   // worker service even when no plugin-backed cloud profile has been configured.
   const shouldStartWorkerEnvironmentService = Boolean(workerEnvironmentStartup);
   const hostDesktopConfig = gatewayPluginConfigAtStart.desktop?.host;
   const hostDesktopEnabled = hostDesktopConfig?.enabled === true;
-  const nodeCommandConfig = gatewayPluginConfigAtStart.gateway?.nodes?.commands;
-  const nodeDesktopObserveAvailable =
-    (nodeCommandConfig?.allow ?? []).some(
-      (command) => command.trim() === NODE_DESKTOP_STREAM_COMMAND,
-    ) &&
-    !(nodeCommandConfig?.deny ?? []).some(
-      (command) => command.trim() === NODE_DESKTOP_STREAM_COMMAND,
-    );
   const workerDesktopObserveAvailable =
     shouldStartWorkerEnvironmentService &&
     gatewayPluginConfigAtStart.cloudWorkers?.desktop === true;
-  const desktopSessionRegistry =
-    shouldStartWorkerEnvironmentService || hostDesktopEnabled || nodeDesktopObserveAvailable
-      ? createDesktopSessionRegistry()
-      : undefined;
-  const nodeDesktopStreamBroker =
-    nodeDesktopObserveAvailable || shouldStartWorkerEnvironmentService
-      ? (
-          await startupTrace.measure(
-            "node-desktop.runtime-import",
-            () => import("./desktop/node-stream-broker.js"),
-          )
-        ).createNodeDesktopStreamBroker()
-      : undefined;
+  // Policy can enable an already-approved node without restarting the Gateway.
+  // These owners allocate streams only when an authorized observation starts.
+  const desktopSessionRegistry = createDesktopSessionRegistry();
+  const nodeDesktopStreamBroker = (
+    await startupTrace.measure(
+      "node-desktop.runtime-import",
+      () => import("./desktop/node-stream-broker.js"),
+    )
+  ).createNodeDesktopStreamBroker();
   const hostDesktopService =
-    hostDesktopConfig && hostDesktopEnabled && desktopSessionRegistry
+    hostDesktopConfig && hostDesktopEnabled
       ? (
           await startupTrace.measure(
             "host-desktop.runtime-import",
@@ -152,21 +120,20 @@ export async function prepareGatewayKernelState(params: {
           registry: desktopSessionRegistry,
         })
       : undefined;
-  const workerEnvironmentRuntime =
-    workerEnvironmentStartup && desktopSessionRegistry
-      ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
-          const workerModule = await loadWorkerEnvironmentStartupModule();
-          return await workerModule.createGatewayWorkerEnvironmentRuntime({
-            getPluginRegistry: () => pluginRuntime.registry,
-            getPortalRuntime: () => pluginGatewayContext.current,
-            resolveGatewayContext: () => pluginGatewayContext.current,
-            desktopSessionRegistry,
-            ...(nodeDesktopStreamBroker ? { nodeDesktopStreamBroker } : {}),
-            startup: workerEnvironmentStartup,
-            log,
-          });
-        })
-      : {};
+  const workerEnvironmentRuntime = workerEnvironmentStartup
+    ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
+        const workerModule = await loadWorkerEnvironmentStartupModule();
+        return await workerModule.createGatewayWorkerEnvironmentRuntime({
+          getPluginRegistry: () => pluginRuntime.registry,
+          getPortalRuntime: () => pluginGatewayContext.current,
+          resolveGatewayContext: resolvePluginGatewayContext,
+          desktopSessionRegistry,
+          nodeDesktopStreamBroker,
+          startup: workerEnvironmentStartup,
+          log,
+        });
+      })
+    : {};
   const {
     workerEnvironmentService,
     workerLiveEvents,
@@ -174,7 +141,6 @@ export async function prepareGatewayKernelState(params: {
     bindDeviceNodeControl,
     bindWorkerNodeDesktopControl,
     bindNodeWorkspaceBindingResolver,
-    bindGitHubPublication,
     handleNodeWorkerBundleTransferRequest,
     handleWorkerBootstrapArtifactTransferRequest,
     handleNodeWorkspaceTransferRequest,
@@ -253,9 +219,6 @@ export async function prepareGatewayKernelState(params: {
       workerPlacementRuntime.dispatchService.dispatch,
     );
   }
-  if (githubPublicationRuntime) {
-    bindGitHubPublication?.(githubPublicationRuntime.coordinator);
-  }
   const bindDeviceNodeRuntime = bindDeviceNodeControl
     ? (transport: Parameters<NonNullable<typeof bindDeviceNodeControl>>[0]) => {
         bindDeviceNodeControl(transport);
@@ -264,8 +227,6 @@ export async function prepareGatewayKernelState(params: {
     : undefined;
   const workerPlacementControlAvailable = workerPlacementRuntime?.dispatchService;
   const workerPlacementDispatchAvailable = workerPlacementControlAvailable;
-  const desktopObserveAvailable =
-    workerDesktopObserveAvailable || nodeDesktopObserveAvailable || Boolean(hostDesktopService);
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -288,7 +249,6 @@ export async function prepareGatewayKernelState(params: {
         (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
         (workerPlacementControlAvailable ||
           (method !== "sessions.reclaim" && method !== "sessions.move")) &&
-        (desktopObserveAvailable || method !== "desktop.observe") &&
         (workerDesktopObserveAvailable ||
           (method !== "desktop.launch" &&
             method !== "worker.desktop.observe" &&
@@ -302,8 +262,6 @@ export async function prepareGatewayKernelState(params: {
       bind: opts.bind,
       host: opts.host,
       controlUiEnabled: opts.controlUiEnabled,
-      openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
-      openResponsesEnabled: opts.openResponsesEnabled,
       auth: resolvedStartupAuthOverride,
       tailscale: startupTailscaleOverride,
     });
@@ -311,11 +269,6 @@ export async function prepareGatewayKernelState(params: {
   const {
     bindHost,
     controlUiEnabled,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig,
-    openResponsesEnabled,
-    openResponsesConfig,
-    strictTransportSecurityHeader,
     controlUiBasePath,
     controlUiRoot: controlUiRootOverride,
     resolvedAuth,
@@ -363,15 +316,7 @@ export async function prepareGatewayKernelState(params: {
       getRuntimeConfig().gateway?.trustedProxies,
     );
   const resolveSharedGatewaySessionGenerationForRuntimeSnapshot = () =>
-    resolveSharedGatewaySessionGeneration(
-      resolveGatewayAuth({
-        authConfig: getRuntimeConfig().gateway?.auth,
-        authOverride: resolvedStartupAuthOverride,
-        env: process.env,
-        tailscaleMode,
-      }),
-      getRuntimeConfig().gateway?.trustedProxies,
-    );
+    resolveSharedGatewaySessionGenerationForConfig(getRuntimeConfig());
   const sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState = {
     current: resolveCurrentSharedGatewaySessionGeneration(),
     required: null,
@@ -380,10 +325,13 @@ export async function prepareGatewayKernelState(params: {
   const initialHooksConfig = runtimeConfig.hooksConfig;
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
 
-  // Create auth rate limiters used by connect/auth flows.
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
-  const { rateLimiter: authRateLimiter, browserRateLimiter: browserAuthRateLimiter } =
-    createGatewayAuthRateLimiters(rateLimitConfig);
+  const authRateLimiter = createAuthRateLimiter(rateLimitConfig);
+  // Browser-origin attempts are throttled even when local CLI clients are exempt.
+  const browserAuthRateLimiter = createAuthRateLimiter({
+    ...rateLimitConfig,
+    exemptLoopback: false,
+  });
   const nodeReapprovalCoordinator = createNodeReapprovalCoordinator(rateLimitConfig);
 
   const controlUiRootLifecycle = await startupTrace.measure("control-ui.root", () =>
@@ -447,7 +395,7 @@ export async function prepareGatewayKernelState(params: {
     channelLogs,
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,
-    getPluginHttpRouteRegistry: () => pluginRuntime.registry,
+    getPluginRegistry: () => pluginRuntime.registry,
     startupTrace,
     deferStartupAccountStartsUntil: startupAccountStartsReady,
     getNativeApprovalRuntime: () => gatewayInstanceRuntimeRef.current?.nativeApprovals,
@@ -485,6 +433,7 @@ export async function prepareGatewayKernelState(params: {
   log.info("starting HTTP server...");
   const connectionState = await startupTrace.measure("runtime.state", () =>
     createGatewayConnectionState({
+      bootId,
       cfg: cfgAtStart,
       getRuntimeConfig,
     }),
@@ -495,14 +444,11 @@ export async function prepareGatewayKernelState(params: {
     getRuntimeConfig,
     bindHost,
     port,
-    controlUiEnabled,
+    controlUiEnabled: opts.controlUiEnabled,
     controlUiBasePath,
     controlUiRoot: controlUiRootLifecycle.state,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig,
-    openResponsesEnabled,
-    openResponsesConfig,
-    strictTransportSecurityHeader,
+    openAiChatCompletionsEnabled: opts.openAiChatCompletionsEnabled,
+    openResponsesEnabled: opts.openResponsesEnabled,
     resolvedAuth,
     rateLimiter: authRateLimiter,
     joinRateLimiter: browserAuthRateLimiter,
@@ -515,7 +461,7 @@ export async function prepareGatewayKernelState(params: {
     pluginRegistry: pluginRuntime.registry,
     getPluginRouteRegistry: () => pluginRuntime.registry,
     isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
-    getGatewayRequestContext: () => pluginGatewayContext.current,
+    getGatewayRequestContext: resolvePluginGatewayContext,
     deps,
     log,
     logHooks,
@@ -536,6 +482,7 @@ export async function prepareGatewayKernelState(params: {
   });
   const {
     clients,
+    mentionInbox,
     broadcast,
     broadcastToConnIds,
     broadcastPluginEvent,
@@ -555,6 +502,7 @@ export async function prepareGatewayKernelState(params: {
 
   return {
     ...bootstrap,
+    bootId,
     pluginRuntime,
     workerEnvironmentService,
     workerLiveEvents,
@@ -567,9 +515,7 @@ export async function prepareGatewayKernelState(params: {
     workerPlacementControlAvailable,
     workerPlacementDispatchAvailable,
     workerDesktopObserveAvailable,
-    desktopObserveAvailable,
     desktopSessionRegistry,
-    nodeDesktopObserveAvailable,
     nodeDesktopStreamBroker,
     hostDesktopService,
     channelLogs,
@@ -577,13 +523,7 @@ export async function prepareGatewayKernelState(params: {
     listStartupChannelGatewayMethods,
     listActiveGatewayMethods,
     bindHost,
-    controlUiEnabled,
     controlUiRootLifecycle,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig,
-    openResponsesEnabled,
-    openResponsesConfig,
-    strictTransportSecurityHeader,
     controlUiBasePath,
     resolvedAuth,
     tailscaleConfig,
@@ -621,7 +561,9 @@ export async function prepareGatewayKernelState(params: {
     watchNodeRequestHandler,
     createHttpTransportOptions,
     transportBridge,
+    connectionWork: connectionState.connectionWork,
     clients,
+    mentionInbox,
     broadcast,
     broadcastToConnIds,
     broadcastPluginEvent,

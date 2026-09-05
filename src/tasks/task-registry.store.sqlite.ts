@@ -29,6 +29,7 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { normalizeTaskTimestamps } from "./task-registry-records.js";
 import { parseDeliveryContextJson, parseSqliteJsonValue } from "./task-registry.sqlite.shared.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 import {
@@ -130,7 +131,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
   // System tasks intentionally have no requester session; ownerKey is the lookup anchor.
   const requesterSessionKey =
     scopeKind === "system" ? "" : row.requester_session_key?.trim() || row.owner_key;
-  return {
+  return normalizeTaskTimestamps({
     taskId: row.task_id,
     runtime: parseTaskRuntime(row.runtime),
     ...(row.task_kind ? { taskKind: row.task_kind } : {}),
@@ -161,7 +162,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     ...(row.terminal_summary !== null ? { terminalSummary: row.terminal_summary } : {}),
     ...(terminalOutcome ? { terminalOutcome } : {}),
     ...(detail !== undefined ? { detail } : {}),
-  };
+  });
 }
 
 function rowToTaskDeliveryState(row: TaskDeliveryStateRow): TaskDeliveryState {
@@ -178,37 +179,38 @@ type BoundTaskRecord = Insertable<TaskRunsTable>;
 
 /** Canonically serializes a task before an outer transaction acquires the write lock. */
 export function bindTaskRecord(record: TaskRecord): BoundTaskRecord {
+  const normalized = normalizeTaskTimestamps(record);
   return {
-    task_id: record.taskId,
-    runtime: record.runtime,
-    task_kind: record.taskKind ?? null,
-    source_id: record.sourceId ?? null,
-    requester_session_key: record.scopeKind === "system" ? "" : record.requesterSessionKey,
-    owner_key: record.ownerKey,
-    scope_kind: record.scopeKind,
-    child_session_key: record.childSessionKey ?? null,
-    parent_flow_id: record.parentFlowId ?? null,
-    parent_task_id: record.parentTaskId ?? null,
-    agent_id: record.agentId ?? null,
-    requester_agent_id: record.requesterAgentId ?? null,
-    run_id: record.runId ?? null,
-    label: record.label ?? null,
-    task: record.task,
-    status: record.status,
-    delivery_status: record.deliveryStatus,
-    notify_policy: record.notifyPolicy,
-    created_at: record.createdAt,
-    started_at: record.startedAt ?? null,
-    ended_at: record.endedAt ?? null,
-    last_event_at: record.lastEventAt ?? null,
-    cleanup_after: record.cleanupAfter ?? null,
-    tool_use_count: record.toolUseCount ?? null,
-    last_tool_name: record.lastToolName ?? null,
-    error: record.error ?? null,
-    progress_summary: record.progressSummary ?? null,
-    terminal_summary: record.terminalSummary ?? null,
-    terminal_outcome: record.terminalOutcome ?? null,
-    detail_json: serializeJson(record.detail),
+    task_id: normalized.taskId,
+    runtime: normalized.runtime,
+    task_kind: normalized.taskKind ?? null,
+    source_id: normalized.sourceId ?? null,
+    requester_session_key: normalized.scopeKind === "system" ? "" : normalized.requesterSessionKey,
+    owner_key: normalized.ownerKey,
+    scope_kind: normalized.scopeKind,
+    child_session_key: normalized.childSessionKey ?? null,
+    parent_flow_id: normalized.parentFlowId ?? null,
+    parent_task_id: normalized.parentTaskId ?? null,
+    agent_id: normalized.agentId ?? null,
+    requester_agent_id: normalized.requesterAgentId ?? null,
+    run_id: normalized.runId ?? null,
+    label: normalized.label ?? null,
+    task: normalized.task,
+    status: normalized.status,
+    delivery_status: normalized.deliveryStatus,
+    notify_policy: normalized.notifyPolicy,
+    created_at: normalized.createdAt,
+    started_at: normalized.startedAt ?? null,
+    ended_at: normalized.endedAt ?? null,
+    last_event_at: normalized.lastEventAt ?? null,
+    cleanup_after: normalized.cleanupAfter ?? null,
+    tool_use_count: normalized.toolUseCount ?? null,
+    last_tool_name: normalized.lastToolName ?? null,
+    error: normalized.error ?? null,
+    progress_summary: normalized.progressSummary ?? null,
+    terminal_summary: normalized.terminalSummary ?? null,
+    terminal_outcome: normalized.terminalOutcome ?? null,
+    detail_json: serializeJson(normalized.detail),
   };
 }
 

@@ -30,7 +30,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
     );
   });
 
-  it("keeps raw table values literal without changing authored Slack text", () => {
+  it("neutralizes raw table mentions without changing authored Slack text", () => {
     expect(
       renderSlackMessagePresentationFallbackText({
         text: "Intentional <!here>",
@@ -47,7 +47,7 @@ describe("renderSlackMessagePresentationFallbackText", () => {
         },
       }),
     ).toBe(
-      "Intentional <!here>\n\nReport &lt;@U999&gt;\n\n&lt;!channel&gt; \\*report\\* (table)\n- Owner\\_name: &lt;@U123&gt; &amp; &lt;https://example.com&gt;",
+      "Intentional <!here>\n\nReport &lt;@U999&gt;\n\n&lt;!channel&gt; *report* (table)\n- Owner_name: &lt;@U123&gt; &amp; &lt;https://example.com&gt;",
     );
   });
 

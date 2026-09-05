@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { HTTP_IMAGE_MAX_BYTES } from "./http-image-response.js";
+import { APNG_BYTES } from "./http-image.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
@@ -102,27 +103,34 @@ describe("handleChannelAvatarHttpRequest", () => {
   const avatarRoute = (sessionKey: string) =>
     `http://127.0.0.1:${port}${buildControlUiChannelAvatarUrl("", sessionKey, "test-revision")}`;
 
-  it("serves managed conversation bytes with sandboxed image headers", async () => {
-    const response = await fetch(avatarRoute("agent:main:discord:direct:user-1"));
+  it.each([
+    { label: "PNG", buffer: PNG_BYTES },
+    { label: "APNG", buffer: APNG_BYTES },
+  ])(
+    "serves managed conversation $label bytes with sandboxed image headers",
+    async ({ label, buffer }) => {
+      mocks.readMedia.mockResolvedValue({ buffer });
+      const response = await fetch(avatarRoute(`agent:main:discord:direct:${label}`));
 
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("image/png");
-    expect(response.headers.get("content-length")).toBe(String(PNG_BYTES.byteLength));
-    expect(response.headers.get("cache-control")).toBe("private, max-age=3600");
-    expect(response.headers.get("cross-origin-resource-policy")).toBe("same-origin");
-    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
-    expect(response.headers.get("content-security-policy")).toContain("sandbox");
-    expect(response.headers.get("content-disposition")).toBe(
-      'attachment; filename="channel-avatar"',
-    );
-    expect(Buffer.from(await response.arrayBuffer()).equals(PNG_BYTES)).toBe(true);
-    expect(mocks.resolveReference).toHaveBeenCalledWith(AVATAR_REFERENCE);
-    expect(mocks.readMedia).toHaveBeenCalledWith(
-      "channel-avatar.png",
-      "inbound",
-      HTTP_IMAGE_MAX_BYTES,
-    );
-  });
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("image/png");
+      expect(response.headers.get("content-length")).toBe(String(buffer.byteLength));
+      expect(response.headers.get("cache-control")).toBe("private, max-age=3600");
+      expect(response.headers.get("cross-origin-resource-policy")).toBe("same-origin");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(response.headers.get("content-security-policy")).toContain("sandbox");
+      expect(response.headers.get("content-disposition")).toBe(
+        'attachment; filename="channel-avatar"',
+      );
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(buffer);
+      expect(mocks.resolveReference).toHaveBeenCalledWith(AVATAR_REFERENCE);
+      expect(mocks.readMedia).toHaveBeenCalledWith(
+        "channel-avatar.png",
+        "inbound",
+        HTTP_IMAGE_MAX_BYTES,
+      );
+    },
+  );
 
   it("reuses cached bytes and supports ETag revalidation", async () => {
     const first = await fetch(avatarRoute("agent:main:cached"));
@@ -136,6 +144,28 @@ describe("handleChannelAvatarHttpRequest", () => {
     expect(second.status).toBe(304);
     expect((await second.arrayBuffer()).byteLength).toBe(0);
     expect(mocks.readMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases superseded avatars without evicting another session's cached image", async () => {
+    const stable = await fetch(avatarRoute("agent:main:stable-avatar"));
+    await stable.arrayBuffer();
+
+    for (let revision = 0; revision < 130; revision++) {
+      const reference = `/state/media/inbound/rotating-avatar-${revision}.png`;
+      const buffer = Buffer.concat([PNG_BYTES, Buffer.from(String(revision))]);
+      mocks.loadEntry.mockReturnValue({ entry: avatarEntry(reference) });
+      mocks.readMedia.mockResolvedValue({ buffer });
+      const response = await fetch(avatarRoute("agent:main:rotating-avatar"));
+      expect(Buffer.from(await response.arrayBuffer()).equals(buffer)).toBe(true);
+    }
+
+    mocks.loadEntry.mockReturnValue({ entry: avatarEntry() });
+    mocks.readMedia.mockResolvedValue({ buffer: PNG_BYTES });
+    const readsBeforeRevisit = mocks.readMedia.mock.calls.length;
+    const revisited = await fetch(avatarRoute("agent:main:stable-avatar"));
+
+    expect(Buffer.from(await revisited.arrayBuffer()).equals(PNG_BYTES)).toBe(true);
+    expect(mocks.readMedia).toHaveBeenCalledTimes(readsBeforeRevisit);
   });
 
   it("keeps representation headers but omits bytes on HEAD", async () => {

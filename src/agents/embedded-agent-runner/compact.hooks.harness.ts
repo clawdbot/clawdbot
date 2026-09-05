@@ -15,6 +15,7 @@ import {
   agentSessionAutomaticCompaction,
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
+import type { SessionManager } from "../sessions/session-manager.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import type { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
@@ -258,9 +259,9 @@ export const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { sur
 );
 export const buildEmbeddedSystemPromptMock = vi.fn<typeof buildEmbeddedSystemPrompt>(() => "");
 export const resolveSkillsPromptMock = vi.fn((): string | undefined => undefined);
-export const resolveEmbeddedAgentStreamFnMock: Mock<
-  (params?: unknown) => MockEmbeddedAgentStreamFn
-> = vi.fn((_params?: unknown) => vi.fn());
+export const resolveEmbeddedAgentStreamMock: Mock<
+  (params?: unknown) => { streamFn: MockEmbeddedAgentStreamFn; strategy: string }
+> = vi.fn((_params?: unknown) => ({ streamFn: vi.fn(), strategy: "session-custom" }));
 const getModelRegistryRuntimeMock = vi.fn(() => ({
   apiRegistry: {},
   llmRuntime: { streamSimple: vi.fn() },
@@ -354,7 +355,12 @@ function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): Age
         ? { forwardedAuthProfileId: params.sessionAuthProfileId }
         : {}),
       ...(params.sessionAuthProfileId && params.sessionAuthProfileSource
-        ? { forwardedAuthProfileSource: params.sessionAuthProfileSource }
+        ? {
+            // Person-linked pins forward at user-pin strength, matching
+            // buildAgentRuntimeAuthPlan.
+            forwardedAuthProfileSource:
+              params.sessionAuthProfileSource === "auto" ? ("auto" as const) : ("user" as const),
+          }
         : {}),
       ...(params.sessionAuthProfileCandidateIds?.length
         ? { forwardedAuthProfileCandidateIds: params.sessionAuthProfileCandidateIds }
@@ -510,8 +516,11 @@ export function resetCompactSessionStateMocks(): void {
   createAgentSessionMock.mockImplementation(async () => ({
     session: createMockCompactionSession(),
   }));
-  resolveEmbeddedAgentStreamFnMock.mockReset();
-  resolveEmbeddedAgentStreamFnMock.mockImplementation((_params?: unknown) => vi.fn());
+  resolveEmbeddedAgentStreamMock.mockReset();
+  resolveEmbeddedAgentStreamMock.mockImplementation((_params?: unknown) => ({
+    streamFn: vi.fn(),
+    strategy: "session-custom",
+  }));
   getModelRegistryRuntimeMock.mockReset();
   getModelRegistryRuntimeMock.mockReturnValue({
     apiRegistry: {},
@@ -778,7 +787,8 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       AuthStorage: function AuthStorage() {},
       ModelRegistry: function ModelRegistry() {},
       SessionManager: {
-        open: vi.fn(() => ({
+        open: vi.fn((target: Parameters<typeof SessionManager.open>[0]) => ({
+          getSessionTarget: () => ({ ...target }),
           buildSessionContext: vi.fn(() => ({ messages: sessionMessages })),
         })),
       },
@@ -940,7 +950,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   vi.doMock("./stream-resolution.js", () => ({
     resolveEmbeddedAgentApiKey: vi.fn(async () => "test-api-key"),
     resolveEmbeddedAgentBaseStreamFn: vi.fn(() => vi.fn()),
-    resolveEmbeddedAgentStreamFn: resolveEmbeddedAgentStreamFnMock,
+    resolveEmbeddedAgentStream: resolveEmbeddedAgentStreamMock,
   }));
 
   vi.doMock("./extra-params.js", () => ({

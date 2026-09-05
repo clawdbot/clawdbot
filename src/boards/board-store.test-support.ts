@@ -26,11 +26,14 @@ export function createTestBoardStore(options: { stateDir?: string } = {}): Sqlit
   }
 
   return new SqliteBoardStore({
-    resolveSession: (sessionKey) => {
+    resolveSession: ({ sessionKey, agentId: requestedAgentId }) => {
       const parsed = parseAgentSessionKey(sessionKey);
-      const agentId = parsed?.agentId ?? "main";
+      const agentId = requestedAgentId ?? parsed?.agentId ?? "main";
       // Mirror the Gateway resolver so shorthand keys exercise canonical persisted rows.
-      const canonicalSessionKey = parsed ? sessionKey : `agent:${agentId}:${sessionKey}`;
+      const canonicalSessionKey =
+        parsed || sessionKey === "global" || sessionKey === "unknown"
+          ? sessionKey
+          : `agent:${agentId}:${sessionKey}`;
       const identity = `${agentId}\0${canonicalSessionKey}`;
       if (!seededSessions.has(identity)) {
         const database = openOpenClawAgentDatabase({ agentId, env });

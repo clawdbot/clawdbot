@@ -9,9 +9,12 @@ import {
 // callers can tell a lost exclusive-create race from a real failure. Any other
 // nonzero exit stays an error.
 export const SANDBOX_CREATE_EXISTS_EXIT_CODE = 17;
+// Preserve missing-read identity across the shell boundary without parsing stderr.
+export const SANDBOX_READ_NOT_FOUND_EXIT_CODE = 2;
 
 export const SANDBOX_PINNED_MUTATION_PYTHON = [
   `SANDBOX_CREATE_EXISTS_EXIT_CODE = ${SANDBOX_CREATE_EXISTS_EXIT_CODE}`,
+  `SANDBOX_READ_NOT_FOUND_EXIT_CODE = ${SANDBOX_READ_NOT_FOUND_EXIT_CODE}`,
   "import ctypes",
   "import errno",
   "import os",
@@ -452,6 +455,8 @@ export const SANDBOX_PINNED_MUTATION_PYTHON = [
   "            read_file_bounded(parent_fd, sys.argv[4], int(sys.argv[5]))",
   "        else:",
   "            read_file(parent_fd, sys.argv[4])",
+  "    except FileNotFoundError:",
+  "        sys.exit(SANDBOX_READ_NOT_FOUND_EXIT_CODE)",
   "    finally:",
   "        if parent_fd is not None:",
   "            os.close(parent_fd)",

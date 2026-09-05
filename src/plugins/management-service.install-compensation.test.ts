@@ -10,7 +10,7 @@ import {
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import {
   attachPluginInstallTransaction,
-  isPluginInstallCommitDeferred,
+  resolvePluginInstallTransactionRequest,
 } from "./install-transaction.js";
 import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
 import type { ManagedPluginSourceInstallRequest } from "./management-service.js";
@@ -60,8 +60,43 @@ const requests = [
 describe("managed plugin install transactions", () => {
   beforeEach(() => vi.resetAllMocks());
 
+  it("rechecks the initiating owner after awaited capability consent", async () => {
+    const expired = new Error("approval owner expired during review");
+    let current = true;
+    mocks.install.mockImplementation(
+      (params: Parameters<typeof invokePluginArtifactInstallMock>[1]) =>
+        invokePluginArtifactInstallMock(
+          async () => ({ ok: true, pluginId: "demo", targetDir: "/managed/demo" }),
+          params,
+        ),
+    );
+    await expect(
+      installManagedPluginSource({
+        request: {
+          source: "local",
+          path: "/incoming.tgz",
+          recordSource: "archive",
+          mode: "update",
+        },
+        snapshot,
+        onCapabilityConsent: async (review) => {
+          await Promise.resolve();
+          current = false;
+          return { reviewToken: review.reviewToken };
+        },
+        beforePersistentEffect: () => {
+          if (!current) {
+            throw expired;
+          }
+        },
+      }),
+    ).rejects.toBe(expired);
+    expect(mocks.persist).not.toHaveBeenCalled();
+  });
+
   it.each(requests)("settles $source payloads at the config commit boundary", async (request) => {
-    for (const failure of ["before-commit", "after-commit", "none"] as const) {
+    for (const failure of ["authority-closed", "before-commit", "after-commit", "none"] as const) {
+      mocks.persist.mockClear();
       const home = await fs.realpath(tempDirs.make("openclaw-managed-upgrade-"));
       const sourceDir = path.join(home, "incoming");
       const targetDir = path.join(home, "extensions", "demo");
@@ -77,10 +112,12 @@ describe("managed plugin install transactions", () => {
       await fs.writeFile(path.join(sourceDir, "version"), "2.0.0");
       await fs.writeFile(path.join(targetDir, "version"), "1.0.0");
       const conflict = new Error(failure);
+      let active = true;
       mocks.persist.mockImplementation(
         async (
           params: Parameters<typeof import("./install-persistence.js").persistPluginInstall>[0],
         ) => {
+          params.beforePersistentApply?.();
           expect(params.install.acceptedSurface?.tools).toEqual(["demo.write"]);
           if (request.source === "marketplace") {
             expect(params.install).toMatchObject({
@@ -100,7 +137,10 @@ describe("managed plugin install transactions", () => {
         },
       );
       mocks.install.mockImplementation(
-        async (params: { onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler }) => {
+        async (params: {
+          onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+          beforePersistentApply?: () => void;
+        }) => {
           const copy = {
             sourceDir,
             targetDir,
@@ -109,6 +149,7 @@ describe("managed plugin install transactions", () => {
             copyErrorPrefix: "copy failed",
             hasDeps: false,
             depsLogMessage: "",
+            beforePersistentApply: params.beforePersistentApply,
             afterInstall: async (stagedArtifactDir: string) => {
               await params.onBeforePluginArtifactCommit?.({
                 pluginId: "demo",
@@ -119,8 +160,11 @@ describe("managed plugin install transactions", () => {
               return { ok: true as const };
             },
           };
+          const transactionRequest = resolvePluginInstallTransactionRequest(params);
           const copied = await installPackageDir(
-            isPluginInstallCommitDeferred(params) ? requestDeferredPackageDirInstall(copy) : copy,
+            transactionRequest
+              ? requestDeferredPackageDirInstall(copy, transactionRequest.assertOwned)
+              : copy,
           );
           if (!copied.ok) {
             throw new Error(copied.error);
@@ -149,6 +193,7 @@ describe("managed plugin install transactions", () => {
       );
       const onCapabilityConsent = vi.fn<PluginCapabilityConsentHandler>(async (review) => {
         expect(await fs.readFile(path.join(targetDir, "version"), "utf8")).toBe("1.0.0");
+        active = failure !== "authority-closed";
         return await acceptCapabilities(review);
       });
       const installed = installManagedPluginSource({
@@ -156,15 +201,23 @@ describe("managed plugin install transactions", () => {
         snapshot,
         env: { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "state") },
         onCapabilityConsent,
+        beforePersistentApply: () => {
+          if (!active) {
+            throw conflict;
+          }
+        },
       });
       if (failure === "none") {
         await expect(installed).resolves.toMatchObject({ ok: true });
+      } else if (failure === "authority-closed") {
+        await expect(installed).rejects.toThrow("authority-closed");
+        expect(mocks.persist).not.toHaveBeenCalled();
       } else {
         await expect(installed).rejects.toBe(conflict);
       }
       expect(onCapabilityConsent).toHaveBeenCalledOnce();
       expect(await fs.readFile(path.join(targetDir, "version"), "utf8"), failure).toBe(
-        failure === "before-commit" ? "1.0.0" : "2.0.0",
+        failure === "before-commit" || failure === "authority-closed" ? "1.0.0" : "2.0.0",
       );
       expect(await fs.readdir(path.join(home, "extensions", ".openclaw-install-backups"))).toEqual(
         [],

@@ -17,6 +17,8 @@ Use `openclaw onboard` or `openclaw setup` for the full guided first-run journey
 
 ## Options
 
+Before `openclaw configure` changes local credentials or configuration, OpenClaw compares the selected CLI state/config paths with the local Gateway or its installed service. A proven mismatch stops before the write. A remote Gateway or an authenticated path that cannot be verified produces a warning instead.
+
 `--section <section>`: repeatable section filter. Available sections:
 
 `workspace`, `model`, `web`, `gateway`, `daemon`, `channels`, `plugins`, `skills`, `health`

@@ -2,8 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setLoggerOverride } from "../logging.js";
+import { getChildLogger, setLoggerOverride } from "../logging.js";
+import { flushLogger } from "../logging/logger.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -291,23 +293,28 @@ describe("channelsLogsCommand", () => {
     expect(payload.lines.map((line) => line.message)).toEqual(["fallback sent"]);
   });
 
-  it("prefers the configured rolling log when it exists", async () => {
+  it("reads the active writer file instead of a newer stale configured rolling log", async () => {
     const configuredFile = path.join(tempDir, "openclaw-2026-04-26.log");
-    const fallbackFile = path.join(tempDir, "openclaw-2026-04-25.log");
-    setLoggerOverride({ file: configuredFile });
-    await fs.writeFile(
-      fallbackFile,
-      logLine({ module: "gateway/channels/external-chat/send", message: "fallback sent" }),
-    );
+    setLoggerOverride({ file: configuredFile, level: "info" });
+    getChildLogger({ module: "gateway/channels/external-chat/send" }).warn("current sent");
+    await flushLogger();
+
+    const writtenFiles = await fs.readdir(tempDir);
+    expect(writtenFiles).toEqual([expect.stringMatching(/^openclaw-\d{4}-\d{2}-\d{2}\.log$/)]);
+    const activeFile = path.join(tempDir, expectDefined(writtenFiles[0], "active log file"));
+    expect(activeFile).not.toBe(configuredFile);
+
     await fs.writeFile(
       configuredFile,
-      logLine({ module: "gateway/channels/external-chat/send", message: "current sent" }),
+      logLine({ module: "gateway/channels/external-chat/send", message: "stale sent" }),
     );
+    const newerMtime = new Date((await fs.stat(activeFile)).mtimeMs + 60_000);
+    await fs.utimes(configuredFile, newerMtime, newerMtime);
 
     await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
 
     const payload = readJsonPayload();
-    expect(payload.file).toBe(configuredFile);
+    expect(payload.file).toBe(activeFile);
     expect(payload.lines.map((line) => line.message)).toEqual(["current sent"]);
   });
 

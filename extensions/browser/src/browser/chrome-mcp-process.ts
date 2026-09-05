@@ -332,7 +332,7 @@ async function closeChromeMcpSessionHandle(session: ChromeMcpSession): Promise<v
   }
   // MCP SDK owns the exact spawned ChildProcess; always close it even when
   // descendant discovery or platform tree cleanup fails.
-  await attempt(async () => await session.client.close());
+  await attempt(async () => await session.closeTransport());
   if (!terminateFirst) {
     await attempt(async () => await terminateChromeMcpProcessTree(target));
   }

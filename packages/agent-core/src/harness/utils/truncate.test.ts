@@ -6,6 +6,11 @@ describe("truncate utilities", () => {
   it("does not count a trailing newline as an extra display line", () => {
     expect(truncateHead("alpha\nbeta\n").totalLines).toBe(2);
     expect(truncateTail("alpha\nbeta\n").totalLines).toBe(2);
+    expect(truncateTail("alpha\nbeta\ngamma\n", { maxLines: 2 })).toMatchObject({
+      content: "beta\ngamma",
+      truncatedBy: "lines",
+      outputLines: 2,
+    });
   });
 
   it("classifies trailing-newline truncation by the byte limit", () => {

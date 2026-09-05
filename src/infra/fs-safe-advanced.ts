@@ -9,5 +9,6 @@ export {
   type FileIdentityStat,
   sameFileIdentity,
   sanitizeUntrustedFileName,
+  tempFile,
 } from "@openclaw/fs-safe/advanced";
 export { readSecretFile } from "@openclaw/fs-safe/secret";

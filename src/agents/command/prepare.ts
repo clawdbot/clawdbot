@@ -27,6 +27,7 @@ import {
 import { resolveUserPath } from "../../utils.js";
 import { isDeliverableMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "../agent-runtime-config.js";
+import { resolveAgentRunCwd } from "../agent-scope-config.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -267,8 +268,19 @@ export async function prepareAgentCommandExecution(
   const workspaceDirRaw =
     normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const workspaceDir = resolveUserPath(workspaceDirRaw);
+  const { getAcpSessionManager } = await loadAcpManagerRuntime();
+  const acpManager = getAcpSessionManager();
+  const acpResolution = sessionKey
+    ? acpManager.resolveSession({ cfg, sessionKey, agentId: sessionAgentId })
+    : null;
+  // Configured run cwd is a Gateway-local path; ACP-placed sessions ("ready" or
+  // "stale") execute on their own node with a node-owned execCwd, so the config
+  // fallback applies only to ordinary sessions and never bridges into a node.
+  const isAcpPlacedSession = acpResolution !== null && acpResolution.kind !== "none";
   const cwd =
-    normalizeOptionalString(opts.cwd) ?? normalizeOptionalString(sessionEntryRaw?.spawnedCwd);
+    normalizeOptionalString(opts.cwd) ??
+    normalizeOptionalString(sessionEntryRaw?.spawnedCwd) ??
+    (isAcpPlacedSession ? undefined : resolveAgentRunCwd(cfg, sessionAgentId));
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const pluginsEnabled = cfg.plugins?.enabled !== false;
   const preparedMetadataSnapshot = runtimeContext?.pluginGeneration.pluginMetadataSnapshot;
@@ -360,11 +372,6 @@ export async function prepareAgentCommandExecution(
       provisioning: workspaceProvisioning,
     });
     const runId = opts.runId?.trim() || sessionId;
-    const { getAcpSessionManager } = await loadAcpManagerRuntime();
-    const acpManager = getAcpSessionManager();
-    const acpResolution = sessionKey
-      ? acpManager.resolveSession({ cfg, sessionKey, agentId: sessionAgentId })
-      : null;
     let promptMessage = message;
     if (!isRawModelRun && (message.includes("$") || message.trimStart().startsWith("/"))) {
       const {

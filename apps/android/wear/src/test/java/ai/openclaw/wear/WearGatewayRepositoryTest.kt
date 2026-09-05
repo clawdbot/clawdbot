@@ -155,15 +155,21 @@ class WearGatewayRepositoryTest {
       val requester =
         RecordingRequester { method, _ ->
           when (method) {
-            WearRpcMethod.SessionsList ->
+            WearRpcMethod.SessionsList -> {
               json.parseToJsonElement(
                 """{"sessions":[{"key":"agent:main","agentId":"main","displayName":"Main","updatedAt":7,"hasActiveRun":true,"modelRef":"openai/gpt-test"}],"activeAgentId":"main","selectedSessionValid":true,"hasMore":true,"nextOffset":35}""",
               )
-            WearRpcMethod.ChatHistory ->
+            }
+
+            WearRpcMethod.ChatHistory -> {
               json.parseToJsonElement(
                 """{"sessionKey":"agent:main","selectedModelRef":"openai/gpt-test","messages":[{"id":"m1","role":"assistant","content":[{"type":"text","text":"hello 😀"}],"timestamp":9}],"inFlightRun":{"runId":"run-1","text":"working"}}""",
               )
-            else -> error("unexpected $method")
+            }
+
+            else -> {
+              error("unexpected $method")
+            }
           }
         }
       val repository = WearGatewayRepository(requester)
@@ -208,16 +214,25 @@ class WearGatewayRepositoryTest {
       val requester =
         RecordingRequester { method, _ ->
           when (method) {
-            WearRpcMethod.AgentsList ->
+            WearRpcMethod.AgentsList -> {
               json.parseToJsonElement(
                 """{"agents":[{"id":"main","name":"Main","emoji":"*","selected":true}]}""",
               )
-            WearRpcMethod.AgentsSelect -> JsonObject(emptyMap())
-            WearRpcMethod.GatewayDisconnect ->
+            }
+
+            WearRpcMethod.AgentsSelect -> {
+              JsonObject(emptyMap())
+            }
+
+            WearRpcMethod.GatewayDisconnect -> {
               json.parseToJsonElement(
                 """{"connected":false,"status":"Offline","activeAgentId":"main","selectedModelRef":"openai/gpt-test","capabilities":["agent-controls","gateway-controls","model-controls","model-catalog-search","session-selection-lookup","session-search-pagination","agent-pulse","attempt-scoped-realtime-audio"]}""",
               )
-            else -> error("unexpected $method")
+            }
+
+            else -> {
+              error("unexpected $method")
+            }
           }
         }
       val repository = WearGatewayRepository(requester)
@@ -307,6 +322,7 @@ class WearGatewayRepositoryTest {
                 """{"models":[{"ref":"openai/gpt-a","name":"GPT A"},{"ref":"openai/gpt-b","name":"GPT B"}]}""",
               )
             }
+
             WearRpcMethod.ModelsSelect -> {
               assertEquals("agent:main:thread-7", params.getValue("sessionKey").jsonPrimitive.content)
               assertEquals("openai/gpt-b", params.getValue("modelRef").jsonPrimitive.content)
@@ -314,7 +330,10 @@ class WearGatewayRepositoryTest {
                 """{"sessionKey":"agent:main:thread-7","selectedModelRef":"openai/gpt-b"}""",
               )
             }
-            else -> error("unexpected $method")
+
+            else -> {
+              error("unexpected $method")
+            }
           }
         }
       val repository = WearGatewayRepository(requester)
@@ -353,11 +372,15 @@ class WearGatewayRepositoryTest {
               assertEquals(setOf("selectedModelRef"), params.keys)
               json.parseToJsonElement("""{"models":[]}""")
             }
+
             WearRpcMethod.SessionsList -> {
               assertEquals(setOf("limit", "selectedSessionKey"), params.keys)
               json.parseToJsonElement("""{"sessions":[]}""")
             }
-            else -> error("unexpected $method")
+
+            else -> {
+              error("unexpected $method")
+            }
           }
         }
       val repository = WearGatewayRepository(requester)

@@ -88,7 +88,7 @@ export function parseGitHubPublicationPullRequests(raw: string): GitHubPublicati
   });
 }
 
-export function resolveGitHubPublicationPullRequestUrl(
+export function resolveGitHubPublicationPullRequest(
   candidates: readonly GitHubPublicationPullRequest[],
   params: {
     accountId: number;
@@ -97,7 +97,7 @@ export function resolveGitHubPublicationPullRequestUrl(
     baseBranch: string;
     marker: string;
   },
-): string | undefined {
+): GitHubPublicationPullRequest | undefined {
   const exact = candidates.filter(
     (candidate) =>
       candidate.userId === params.accountId &&
@@ -106,15 +106,10 @@ export function resolveGitHubPublicationPullRequestUrl(
       candidate.baseRef === params.baseBranch,
   );
   const open = exact.find((candidate) => candidate.state === "open");
-  if (open) {
-    return open.url;
-  }
-  if (
-    exact.some(
+  return (
+    open ??
+    exact.find(
       (candidate) => candidate.state === "closed" && candidate.body.includes(params.marker),
     )
-  ) {
-    throw new Error("GitHub pull request was closed before publication completed.");
-  }
-  return undefined;
+  );
 }

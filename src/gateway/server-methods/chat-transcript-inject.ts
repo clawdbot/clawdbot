@@ -10,10 +10,14 @@ import {
   readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../../sessions/transcript-events.js";
+import {
+  ASSISTANT_DISPLAY_CONTENT_FIELD,
+  projectAssistantDisplayContent,
+  retainAssistantModelContent,
+} from "../../shared/assistant-display-content.js";
 import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
-type AssistantMessageContent = Extract<AppendMessageArg, { role: "assistant" }>["content"];
 
 /** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
 type GatewayInjectedAbortMeta = {
@@ -63,13 +67,6 @@ function resolveInjectedAssistantContent(params: {
   return [{ type: "text", text: `${labelPrefix}${params.message}` }];
 }
 
-/** Clone Gateway display blocks into the transcript's assistant-content boundary. */
-export function prepareGatewayInjectedAssistantContent(
-  content: readonly Record<string, unknown>[],
-): AssistantMessageContent {
-  return content.map((block) => Object.assign({}, block)) as unknown as AssistantMessageContent;
-}
-
 /** Append a gateway-authored assistant message while preserving transcript parent links. */
 export async function appendInjectedAssistantMessageToTranscript(params: {
   transcriptPath?: string;
@@ -84,6 +81,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
+  stopReason?: "stop" | "aborted";
   abortMeta?: GatewayInjectedAbortMeta;
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   now?: number;
@@ -109,24 +107,27 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     label: params.label,
     content: params.content,
   });
-  const rawDeliveryMessage: {
+  const displayMessage: {
     role: "assistant";
     content: Array<Record<string, unknown>>;
     openclawDelivery?: unknown;
   } = {
     role: "assistant",
-    content: [{ type: "text", text: params.message }],
+    content: resolvedContent.map((block) => Object.assign({}, block)),
   };
-  const rawDeliveryFacts = applyAssistantDeliveryDirectives(rawDeliveryMessage).openclawDelivery;
+  const preparedDisplayMessage = applyAssistantDeliveryDirectives(displayMessage);
+  const displayContent = preparedDisplayMessage.content;
+  const canonicalContent = retainAssistantModelContent(displayContent);
+  const rawDeliveryFacts = preparedDisplayMessage.openclawDelivery;
   const abortRunId = params.abortMeta?.runId;
   const messageBody: AppendMessageArg & Record<string, unknown> = applyAssistantDeliveryDirectives({
     role: "assistant",
-    // Gateway-injected assistant messages can include non-model content blocks (e.g. embedded TTS audio).
-    content: prepareGatewayInjectedAssistantContent(resolvedContent),
+    content: canonicalContent,
+    [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent,
     timestamp: now,
-    // stopReason is a strict runner enum; this is not model output, but we still store it as a
-    // normal assistant message so it participates in the session parentId chain.
-    stopReason: "stop",
+    // Runtime projections retain their terminal state; host-authored partials
+    // keep their replayable default and carry cancellation in openclawAbort.
+    stopReason: params.stopReason ?? "stop",
     usage,
     // Make these explicit so downstream tooling never treats this as model output.
     api: "openai-responses",
@@ -208,7 +209,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     return {
       ok: true,
       messageId: appended.messageId,
-      message: appended.message as Record<string, unknown>,
+      message: projectAssistantDisplayContent(appended.message as Record<string, unknown>),
     };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };

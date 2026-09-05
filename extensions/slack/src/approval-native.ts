@@ -170,7 +170,7 @@ const baseSlackApprovalCapability = createApproverRestrictedNativeApprovalCapabi
   resolveApproverDmTargets: resolveSlackApproverDmTargets,
   notifyOriginWhenDmOnly: true,
   nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
-    eventKinds: ["exec", "plugin"],
+    eventKinds: ["exec", "plugin", "system-agent"],
     isConfigured: ({ cfg, accountId }) =>
       isSlackAnyNativeApprovalClientEnabled({
         cfg,

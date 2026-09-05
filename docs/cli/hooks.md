@@ -29,7 +29,11 @@ inventory.
 
 **Enable, disable, install, and update mutate local files/config/state.** They do
 not change a remote Gateway over RPC. To change the server, run the command on
-that host using its profile/config, then restart that Gateway.
+that host using its profile/config. Enable, disable, and config written by a new
+install or link can activate immediately in the default `hybrid`
+[reload mode](/gateway/configuration#reload-modes). `off` requires a manual
+restart. Hook files and metadata are not watched; restart after editing them or
+updating existing hook code.
 
 `--agent <id>` selects the agent workspace used for inspection. It is required
 when configured agents do not have an implicit owner; blank or unknown IDs
@@ -66,7 +70,7 @@ preceded by `Hooks (<ready>/<total> ready)`. Plugin-managed sources appear as
 registration check. The report does not apply the Gateway's master switch or
 configured-name selection, import the handler to prove it works, or verify that
 the event has run. A bundled hook can appear ready while the internal hook
-system is off. Enable the intended hook, restart, and
+system is off. Enable the intended hook and
 [verify its real side effect](/automation/hooks#quick-start).
 </Note>
 
@@ -140,14 +144,9 @@ The entry is **global**, even with `--agent`: it applies wherever that key is
 discovered. Adding named entries can narrow a previously open-ended directory
 selection. See [Configuration](/automation/hooks#configuration).
 
-Restart after enabling:
-
-```bash
-openclaw gateway restart
-```
-
-For a foreground Gateway, stop and start the process instead. Restart is not
-performed automatically by `hooks enable`.
+The running Gateway reloads the selection in `hybrid` mode. If a selected hook
+cannot load, it keeps the previous handlers; inspect Gateway logs. Reload does
+not replay `gateway:startup`, so `boot-md` runs on the next Gateway start.
 
 ## Disable a hook
 
@@ -158,7 +157,8 @@ openclaw hooks disable <name> [--agent <id>]
 Writes `hooks.internal.entries.<hookKey>.enabled = false`. It does not remove the
 hook files or change the master switch. Missing/ambiguous and plugin-managed
 hooks are rejected; missing runtime requirements do not prevent disabling.
-Restart the Gateway afterward.
+In `hybrid` mode, subsequent events use the updated selection. An event already
+running finishes with its original handlers.
 
 Plugin-managed hooks cannot be toggled by these commands. Enable or disable the
 owning plugin through [`openclaw plugins`](/cli/plugins).
@@ -181,7 +181,7 @@ A pack declares hook directories in `package.json` under `openclaw.hooks`.
 A local directory without `package.json` can contain a single `HOOK.md` and
 handler. Copied hook packs are installed into `<stateDir>/hooks/<id>`; their
 hooks are enabled in config and install provenance is recorded in shared SQLite
-state. Restart the Gateway to load them. Do not author
+state. That config can activate the hooks immediately in `hybrid` mode. Do not author
 `hooks.internal.installs` in `openclaw.json`.
 
 For the npm hook-pack path, specs are registry-only: package name with an
@@ -192,9 +192,13 @@ non-latest tag such as `@beta` or `@rc`. Use `npm:` to select npm explicitly; th
 unified installer supports other plugin sources described in
 [`openclaw plugins`](/cli/plugins).
 
-Supported local archives are `.zip`, `.tgz`, `.tar.gz`, and `.tar`. npm pack and
-project-local dependency installation use `--ignore-scripts`; this does not
-sandbox the installed handler.
+Supported local archives are `.zip`, `.tgz`, `.tar.gz`, and `.tar`. Copied hook
+packs resolve runtime packages from `dependencies` and `optionalDependencies`,
+including packs with only optional dependencies. Packages listed only in
+`devDependencies` are omitted. npm pack and dependency installation use
+`--ignore-scripts`; this does not sandbox the installed handler.
+The download always creates an archive in OpenClaw's temporary workspace,
+regardless of npm's `dry-run` or `pack-destination` settings.
 
 ### Install options and trust
 
@@ -206,9 +210,10 @@ sandbox the installed handler.
 | `--acknowledge-install-policy-warning` | Acknowledge an operator `security.installPolicy` warning without its prompt. Blocks and policy failures still stop the install.             |
 
 Interactive non-ClawHub installs ask you to confirm trust. Noninteractive
-installs require `--force`; global `--yes` is not a substitute for that gate.
-`--force` is also not a substitute for acknowledging an install-policy warning.
-Review the source before supplying either acknowledgement.
+installs require `--force`; neither `plugins install` nor the `hooks install`
+alias accepts a `--yes` flag. `--force` is also not a substitute for
+acknowledging an install-policy warning. Review the source before supplying
+either acknowledgement.
 
 <Warning>
 A linked hook runs directly from the supplied path; linking does not copy it
@@ -220,8 +225,9 @@ or collections, or scan unlisted children, even when all declared paths are reje
 
 Only link trusted code. Extra directories still make directory-hook name
 selection open-ended across discovery sources, not just within the linked
-pack. Restart the Gateway after linking or editing hook code, check
-`hooks list`, and [verify the handler's actual side effect](/automation/hooks#quick-start).
+pack. Linking can activate the hooks immediately in `hybrid` mode. Restart after
+editing existing hook code or metadata, check `hooks list`, and
+[verify the handler's actual side effect](/automation/hooks#quick-start).
 </Warning>
 
 ### Update behavior
@@ -235,9 +241,10 @@ archive records are not refreshed by the npm hook updater.
 when reached through the deprecated alias; it is not a hooks-only bulk command.
 
 When an applicable stored integrity hash differs from the downloaded artifact,
-the updater warns and asks for confirmation. Global `--yes` can accept that
-yes/no prompt, so use it only when you intend to accept the drift. It does not
-bypass operator policy blocks or replace the dedicated policy-warning flag.
+the updater warns and asks for confirmation in the terminal. No CLI flag answers
+that prompt: neither `plugins update` nor the `hooks update` alias accepts
+`--yes`, and `--acknowledge-install-policy-warning` covers only install-policy
+warnings. `--dry-run` reports the drift without prompting.
 
 ### Deprecated aliases
 

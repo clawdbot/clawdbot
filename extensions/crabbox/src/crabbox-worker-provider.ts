@@ -251,7 +251,7 @@ export function createCrabboxWorkerProvider(
   const maintenanceAbort = new AbortController();
   let maintenanceInFlight: Promise<void> | undefined;
   const stopLease = async (context: LeaseCommandContext): Promise<void> => {
-    heartbeats.stop(context.id);
+    await heartbeats.stop(context.id);
     // Cleanup has its own deadline. Only confirmed stop releases allocation/image ownership.
     await stopCrabboxLease({
       ...context,
@@ -287,9 +287,8 @@ export function createCrabboxWorkerProvider(
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
     async dispose() {
-      heartbeats.dispose();
       maintenanceAbort.abort();
-      await maintenanceInFlight?.catch(() => {});
+      await Promise.all([heartbeats.dispose(), maintenanceInFlight?.catch(() => {})]);
     },
     maintain(context) {
       context.assertCurrent();
@@ -340,11 +339,11 @@ export function createCrabboxWorkerProvider(
     },
     resolveDestroyTimeoutMs(profile) {
       const parsed = parseCrabboxProfile(profile);
-      // The lifecycle profile omits placement sizing, which may have enabled capture.
-      // Reserve its full budget unless the profile explicitly disabled warm images.
+      // Lifecycle profiles omit placement sizing. Reserve capture unless disabled,
+      // plus separate heartbeat and stop child settlement.
       return (
         CRABBOX_STOP_TIMEOUT_MS +
-        CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS +
+        2 * CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS +
         (parsed.warmImage === false ? 0 : resolveCrabboxWarmImageCaptureTimeoutMs(parsed.provider))
       );
     },
@@ -642,7 +641,7 @@ export function createCrabboxWorkerProvider(
         runCommand,
       });
       if (inspected.status === "unknown" || isNonRunnableState(inspected.inspect.state)) {
-        heartbeats.stop(context.id);
+        await heartbeats.stop(context.id);
         return { status: "unknown" };
       }
       // `ready` is an SSH probe; every recognized nonterminal lease remains active.
@@ -652,7 +651,7 @@ export function createCrabboxWorkerProvider(
     async destroy(lease): Promise<void> {
       const { context, profile } = resolveLeaseContext(lease);
       // Fence the provider keepalive before teardown so an in-flight touch cannot reschedule.
-      heartbeats.stop(context.id);
+      await heartbeats.stop(context.id);
       // Lifecycle profiles omit placement overrides. Successful enrollment records
       // the class that owns both the default warm policy and reusable image after restart.
       let captureError: unknown;

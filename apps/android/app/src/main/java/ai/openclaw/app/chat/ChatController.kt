@@ -21,6 +21,7 @@ import ai.openclaw.app.i18n.resolveOptionalNativeText
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.parseGatewayModels
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
+import ai.openclaw.app.ui.chat.chatModelSendBlocked
 import ai.openclaw.app.ui.chat.thinkingSupportedForSelection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -76,10 +77,58 @@ private val MANAGED_MEDIA_PATH_REGEX =
 
 internal fun chatOutboxQueueFailureText(): NativeText = ChatController.queueFailureText()
 
+internal fun selectChatAgentSessionKey(
+  candidates: List<ChatSessionEntry>,
+  agentId: String,
+  rememberedSessionKey: String?,
+  mainSessionKey: String,
+): String {
+  val normalizedAgentId = agentId.trim()
+  val ownerSessions =
+    candidates.filter { entry ->
+      val owner = resolveAgentIdFromMainSessionKey(entry.key) ?: entry.ownerAgentId
+      owner == null || owner == normalizedAgentId
+    }
+  rememberedSessionKey
+    ?.takeIf { remembered -> ownerSessions.any { entry -> entry.key == remembered && entry.archived != true } }
+    ?.let { return it }
+  return ownerSessions
+    .asSequence()
+    .filter { entry ->
+      entry.archived != true &&
+        entry.isMain != true &&
+        entry.key != mainSessionKey &&
+        entry.key != "main"
+    }.maxWithOrNull(
+      compareBy<ChatSessionEntry> { entry ->
+        entry.lastActivityAt ?: entry.updatedAtMs ?: Long.MIN_VALUE
+      }.thenBy { entry -> entry.key },
+    )?.key
+    ?: mainSessionKey
+}
+
 // Capture before suspend points; both fields must still match before gateway data reaches UI state.
 internal data class ChatCacheScope(
   val gatewayId: String,
   val connectionGeneration: Long,
+)
+
+internal data class ChatAgentSessionSelectionOwner(
+  val gatewayStableId: String?,
+  val agentId: String,
+)
+
+// Reference identity distinguishes a new explicit choice of the same key.
+internal class RememberedChatSession(
+  val key: String,
+  var observedSessionId: String?,
+)
+
+internal data class ChatAgentSessionSelection(
+  val gatewayScope: ChatCacheScope?,
+  val rememberedSession: RememberedChatSession?,
+  val rememberedSessionId: String?,
+  val targetSessionKey: String?,
 )
 
 private fun normalizedChatCacheScope(scope: ChatCacheScope?): ChatCacheScope? {
@@ -159,7 +208,7 @@ class ChatController internal constructor(
     kind: GatewayMediaKind,
     playbackRendition: Boolean,
   ) -> GatewayLoadedMedia? = { _, _, _, _, _, _ -> null },
-  private val commandOutbox: ChatCommandOutbox? = null,
+  private val commandOutbox: ChatCommandOutbox,
   private val recordModelRecent: (String) -> Unit = {},
   private val onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
   private val onOfflineDefaultAgentRestored: (String) -> Unit = {},
@@ -176,7 +225,7 @@ class ChatController internal constructor(
     gatewayAdvertisesMethod: (method: String) -> Boolean? = { null },
     gatewayAdvertisesCapability: (capability: String) -> Boolean? = { null },
     currentGatewayCatalogRevision: () -> Long = { 0L },
-    commandOutbox: ChatCommandOutbox? = null,
+    commandOutbox: ChatCommandOutbox,
     recordModelRecent: (String) -> Unit = {},
     onSessionDeleted: (ChatSessionDeletion) -> Unit = {},
     onOfflineDefaultAgentRestored: (String) -> Unit = {},
@@ -257,27 +306,97 @@ class ChatController internal constructor(
   private data class QueuedSessionSettingsMutation(
     val settingsKey: SessionSettingsKey,
     val requestLease: GatewaySession.RequestLease?,
+    val lane: SessionSettingsLane,
     val pending: CompletableDeferred<Boolean>,
     val previous: CompletableDeferred<Boolean>?,
+    val thinkingIntent: ThinkingIntent?,
   )
 
-  private val pendingSettingsMutations = ConcurrentHashMap<SessionSettingsKey, CompletableDeferred<Boolean>>()
+  private class SessionSettingsLane(
+    var tail: CompletableDeferred<Boolean>,
+    var confirmed: ChatSessionEntry,
+    var confirmedThinkingLevel: String,
+    var observation: Any = Any(),
+    var thinkingIntent: ThinkingIntent? = null,
+    var needsRefresh: Boolean = false,
+    var reconciliation: SessionSettingsCompletion? = null,
+  )
+
+  private data class SessionSettingsCompletion(
+    val pending: CompletableDeferred<Boolean>,
+    val succeeded: Boolean,
+  )
+
+  private data class SessionSettingsSnapshot(
+    val entry: ChatSessionEntry,
+    val authoritative: Boolean,
+  )
+
+  private class SessionSettingsRead(
+    val gatewayScope: ChatCacheScope?,
+    val ownerAgentId: String,
+  ) {
+    val settingsSnapshots = mutableMapOf<String, SessionSettingsSnapshot>()
+
+    fun observe(snapshot: SessionSettingsSnapshot) {
+      val previous = settingsSnapshots[snapshot.entry.key]
+      settingsSnapshots[snapshot.entry.key] =
+        if (previous == null) {
+          snapshot
+        } else {
+          SessionSettingsSnapshot(
+            mergeChatSessionEntry(previous.entry, snapshot.entry, authoritativeSessionSettings = snapshot.authoritative),
+            previous.authoritative || snapshot.authoritative,
+          )
+        }
+    }
+
+    fun hasConflictingSettings(sessions: List<ChatSessionEntry>): Boolean =
+      sessions.any { entry ->
+        val snapshot = settingsSnapshots[entry.key] ?: return@any false
+        !sameSessionSettings(
+          entry,
+          mergeChatSessionEntry(entry, snapshot.entry, authoritativeSessionSettings = snapshot.authoritative),
+        )
+      }
+  }
+
+  private class ThinkingIntent(
+    val level: String,
+    var dispatched: Boolean = false,
+  )
+
+  private sealed interface SessionSettingsChange {
+    data class Model(
+      val ref: String?,
+    ) : SessionSettingsChange
+
+    data class Thinking(
+      val level: String,
+    ) : SessionSettingsChange
+
+    data class Permission(
+      val mode: ChatPermissionMode?,
+      val expectedSessionId: String,
+      val expectedPermissionMode: ChatPermissionMode?,
+    ) : SessionSettingsChange
+
+    data class FastMode(
+      val mode: ChatFastMode?,
+    ) : SessionSettingsChange
+  }
+
+  private val pendingSettingsMutations = ConcurrentHashMap<SessionSettingsKey, SessionSettingsLane>()
+  private val _pendingSessionSettingsKeys = MutableStateFlow<Set<String>>(emptySet())
+  val pendingSessionSettingsKeys: StateFlow<Set<String>> =
+    _pendingSessionSettingsKeys.asStateFlow()
   private val settingsMutationRevisions = mutableMapOf<ChatCacheScope?, Long>()
-  private val activeSessionRefreshesByScope = mutableMapOf<ChatCacheScope?, Int>()
+  private val activeSessionReads = mutableSetOf<SessionSettingsRead>()
+  private val sessionSettingsRefreshError = nativeText("Could not refresh session settings. Refresh before sending.")
 
-  private data class ThinkingIntent(
-    val requestId: Long,
-    val level: String,
-  )
+  // Guarded by gatewayScopeApplyLock; stable gateway keys retain choices across reconnects.
+  private val lastSelectedChatSessionByOwner = mutableMapOf<ChatAgentSessionSelectionOwner, RememberedChatSession>()
 
-  private data class AcceptedThinkingState(
-    val level: String,
-    val thinkingLevels: List<ChatThinkingLevelOption>?,
-  )
-
-  private val thinkingRequestSequence = AtomicLong(0)
-  private val latestThinkingIntents = ConcurrentHashMap<SessionSettingsKey, ThinkingIntent>()
-  private val latestAcceptedThinkingStates = ConcurrentHashMap<SessionSettingsKey, AcceptedThinkingState>()
   private val _sessionKey = MutableStateFlow("main")
   val sessionKey: StateFlow<String> = _sessionKey.asStateFlow()
 
@@ -311,12 +430,31 @@ class ChatController internal constructor(
     val optimisticMessage: ChatMessage,
   )
 
+  private data class RunDiagnosticOwner(
+    val owner: ChatComposerOwner,
+    val runId: String,
+  )
+
+  private enum class HistoryRefreshPurpose {
+    RestoreSession,
+    ReconcileRun,
+    Transcript,
+  }
+
+  private data class HistoryRunSnapshot(
+    val requestSequence: Long,
+    val runId: String?,
+  )
+
   private sealed interface HistoryRefreshResult {
     data class Applied(
       val branchState: ChatOutboxBranchState?,
+      val purpose: HistoryRefreshPurpose,
     ) : HistoryRefreshResult
 
     data object Superseded : HistoryRefreshResult
+
+    data object BranchInvalidated : HistoryRefreshResult
 
     data object OwnerUnavailable : HistoryRefreshResult
 
@@ -337,6 +475,9 @@ class ChatController internal constructor(
 
   private val _historyLoading = MutableStateFlow(false)
   val historyLoading: StateFlow<Boolean> = _historyLoading.asStateFlow()
+
+  private val _isCreatingSession = MutableStateFlow(false)
+  val isCreatingSession: StateFlow<Boolean> = _isCreatingSession.asStateFlow()
 
   private val _errorText = MutableStateFlow<NativeText?>(null)
   val errorText: StateFlow<String?> = _errorText.resolveOptionalNativeText()
@@ -618,12 +759,8 @@ class ChatController internal constructor(
   private val chatSelectionGeneration = MutableStateFlow(0L)
   internal val selectionGeneration: StateFlow<Long> = chatSelectionGeneration.asStateFlow()
   private val historyRequestSequence = AtomicLong(0)
-  private val modelSelectionGeneration = AtomicLong(0)
+  private val settingsPublicationGeneration = AtomicLong(0)
   private val sessionsRequestSequence = AtomicLong(0)
-
-  // Ownerless delete proofs must finish in event order. Parallel list refreshes can supersede
-  // each other and strand an earlier session's durable cache/outbox state.
-  private val ambiguousDeleteReconciliationMutex = Mutex()
 
   // Every live history path awaits this gateway/session readiness. Per-gateway locking keeps
   // rapid agent switches from letting an older lookup refresh before the new session is ready.
@@ -634,16 +771,22 @@ class ChatController internal constructor(
   private val gatewayScopeApplyLock = Any()
   private var latestAppliedHistoryRequest = 0L
   private var publishedHistoryBranch: PublishedHistoryBranch? = null
-  private var latestAppliedInFlightRunId: String? = null
+  private var latestAppliedRunSnapshot: HistoryRunSnapshot? = null
   private var lastHandledTerminalRunId: String? = null
+
+  // Lifecycle telemetry can retire a run before its canonical chat terminal arrives.
+  // Its diagnostic remains owned until that terminal, a newer run, or an owner reset.
+  @Volatile private var runDiagnosticOwner: RunDiagnosticOwner? = null
   private var historyLoadErrorGeneration: Long? = null
-  private val newChatCreateInFlight = AtomicBoolean(false)
 
   private var lastHealthPollAtMs: Long? = null
   private val chatMetadataRequestSequence = AtomicLong(0)
   private var chatMetadataScope: ChatMetadataScope? = null
   private var chatMetadataLoadState = ChatMetadataLoadState.Unloaded
   private var sessionsListArchived = false
+
+  // Retained selection and event rows must not enlarge the next requested page.
+  private var sessionsListLimit: Int? = null
 
   // One acknowledgement per unread episode: the pending flag clears when the
   // server-confirmed read (unread=false) arrives, so fresh activity on the open
@@ -656,22 +799,34 @@ class ChatController internal constructor(
   // Armed on disconnect so the next health event refetches history and re-adopts
   // any run the gateway still reports in flight (chat.history `inFlightRun`).
   private var restoreRunStateOnReconnect = false
-  private var reconnectRecoveryGeneration: Long? = null
+
+  private class HealthRefresh(
+    var historyGeneration: Long? = null,
+    val force: Boolean = false,
+    val refreshSessions: Boolean = false,
+  ) {
+    // Bootstrap retains ownership across cache reads and branch-history retries.
+    var historyOwners = if (historyGeneration == null) 0 else 1
+    var claimed = false
+  }
+
+  private var pendingHealthRefresh: HealthRefresh? = null
 
   private fun updateErrorText(
     message: String?,
     historyGeneration: Long? = null,
   ) {
-    _errorText.value = message?.let(::verbatimText)
-    historyLoadErrorGeneration = historyGeneration
+    updateLocalizedErrorText(message?.let(::verbatimText), historyGeneration)
   }
 
   private fun updateLocalizedErrorText(
     message: NativeText?,
     historyGeneration: Long? = null,
   ) {
-    _errorText.value = message
-    historyLoadErrorGeneration = historyGeneration
+    synchronized(gatewayScopeApplyLock) {
+      historyLoadErrorGeneration = historyGeneration
+      _errorText.value = message
+    }
   }
 
   private val _outboxItems = MutableStateFlow<List<ChatOutboxItem>>(emptyList())
@@ -684,8 +839,9 @@ class ChatController internal constructor(
   private val outboxBranchReconcileRequested = AtomicBoolean(false)
   private val outboxBranchReconcileRetryScheduled = AtomicBoolean(false)
   private val outboxRecoveryMutex = Mutex()
+  private var outboxPublicationRevision = 0L
   private var outboxRecoveryComplete = false
-  private val _outboxPresentationRestored = MutableStateFlow(commandOutbox == null)
+  private val _outboxPresentationRestored = MutableStateFlow(false)
   val outboxPresentationRestored: StateFlow<Boolean> = _outboxPresentationRestored.asStateFlow()
 
   // Counts idle-history snapshots that lacked proof for an orphaned accepted row; rows park as
@@ -700,17 +856,15 @@ class ChatController internal constructor(
   private val acknowledgedRunIdByRowId = ConcurrentHashMap<String, String>()
 
   private val outboxRecoveryJob =
-    commandOutbox?.let { outbox ->
-      scope.launch {
-        // A killed process can lose the local delete after the gateway accepted a command.
-        // Keep that delivery ambiguous and user-visible instead of replaying it automatically.
-        if (recoverInterruptedOutboxSends(outbox)) {
-          currentCacheScope()?.let { outboxScope ->
-            runCatching { outbox.expireStale(outboxScope.gatewayId, System.currentTimeMillis()) }
-          }
+    scope.launch {
+      // A killed process can lose the local delete after the gateway accepted a command.
+      // Keep that delivery ambiguous and user-visible instead of replaying it automatically.
+      if (recoverInterruptedOutboxSends()) {
+        currentCacheScope()?.let { outboxScope ->
+          runCatching { commandOutbox.expireStale(outboxScope.gatewayId, System.currentTimeMillis()) }
         }
-        publishOutbox()
       }
+      publishOutbox()
     }
 
   /** Clears transient chat state when the operator gateway session disconnects. */
@@ -723,10 +877,12 @@ class ChatController internal constructor(
       activeOutboxSessionMutations.clear()
       deferredOutboxSessionMutationEvents.clear()
     }
-    historyLoadGeneration.incrementAndGet()
-    restoreRunStateOnReconnect = true
-    reconnectRecoveryGeneration = null
-    _healthOk.value = false
+    synchronized(gatewayScopeApplyLock) {
+      historyLoadGeneration.incrementAndGet()
+      restoreRunStateOnReconnect = true
+      pendingHealthRefresh = null
+      _healthOk.value = false
+    }
     updateErrorText(null)
     clearChatMetadata()
     disableSwarmProgress()
@@ -774,13 +930,8 @@ class ChatController internal constructor(
           adoptionLock.withLock {
             if (desiredMainSessions[requestScope.gatewayId] != mainSession) return@withLock
             try {
-              val describeParams = buildJsonObject { put("key", JsonPrimitive(mainSession.key)) }
-              val describeResponse =
-                requestGatewayBound(requestScope.gatewayId, "sessions.describe", describeParams.toString())
-              val describeRoot = json.parseToJsonElement(describeResponse).asObjectOrNull() ?: error("invalid sessions.describe response")
-              if (!describeRoot.containsKey("session")) error("sessions.describe returned no session field")
+              val existingSession = fetchSessionDescription(requestScope.gatewayId, mainSession.key)
               if (desiredMainSessions[requestScope.gatewayId] != mainSession) return@withLock
-              val existingSession = describeRoot["session"].asObjectOrNull()
               val existingLabel =
                 existingSession
                   ?.get("label")
@@ -829,16 +980,14 @@ class ChatController internal constructor(
 
   private fun refreshConnectedGateway() {
     refreshQuestions()
-    if (!restoreRunStateOnReconnect) {
-      refresh()
-      return
-    }
-    updateErrorText(null)
-    refreshHistoryForRecovery(forceHealth = true, completesReconnectRecovery = true)
+    refreshHistoryForRecovery(forceHealth = true)
   }
 
   /** Invalidates and clears gateway-bound UI state before a target switch can race old responses. */
   fun onGatewayScopeChanging(retireRunState: Boolean = false) {
+    val retiredSettings =
+      synchronized(gatewayScopeApplyLock) { retireSessionSettingsLanes { _, _ -> true } }
+    retiredSettings.forEach { it.complete(false) }
     chatMetadataRequestSequence.incrementAndGet()
     retireMainSessionReadiness()
     disableSwarmProgress()
@@ -852,8 +1001,8 @@ class ChatController internal constructor(
       beginHistoryLoad(
         key = "main",
         ownerAgentId = null,
-        clearMessages = true,
         markLoading = false,
+        refreshHealth = false,
       )
       clearProgressCard()
       clearSubagentActivities()
@@ -863,6 +1012,7 @@ class ChatController internal constructor(
       clearQuestions()
       applyThinkingMetadata(null)
       sessionsListArchived = false
+      sessionsListLimit = null
       unreadPatchSessionKey = null
       unreadActivationObserved = false
       unreadActivationMarkedUnreadAt = null
@@ -870,8 +1020,9 @@ class ChatController internal constructor(
       clearChatMetadata()
       lastHealthPollAtMs = null
       // Outbox rows are gateway-scoped too; the next publish repopulates them for the new scope.
+      outboxPublicationRevision += 1
       _outboxItems.value = emptyList()
-      _outboxPresentationRestored.value = commandOutbox == null
+      _outboxPresentationRestored.value = false
       reconciledOutboxBranchScopes.clear()
       ambiguousMutationReconciliationStates.clear()
       synchronized(outboxSessionMutationEventLock) {
@@ -908,7 +1059,7 @@ class ChatController internal constructor(
   internal suspend fun clearGatewayCache(gatewayId: String) {
     clearGatewayCache(gatewayId) { gateway ->
       transcriptCache?.clearGateway(gateway)
-      commandOutbox?.clearGateway(gateway)
+      commandOutbox.clearGateway(gateway)
     }
   }
 
@@ -918,6 +1069,9 @@ class ChatController internal constructor(
     clearStores: suspend (String) -> Unit,
   ) {
     val gateway = gatewayId.trim().takeIf { it.isNotEmpty() } ?: return
+    synchronized(gatewayScopeApplyLock) {
+      lastSelectedChatSessionByOwner.keys.removeAll { it.gatewayStableId == gateway }
+    }
     synchronized(defaultAgentPersistenceRevisions) {
       defaultAgentPersistenceRevisions[gateway] = (defaultAgentPersistenceRevisions[gateway] ?: 0L) + 1L
     }
@@ -935,6 +1089,14 @@ class ChatController internal constructor(
     }
   }
 
+  /** Hydrates the live selection; a remounted screen must not reselect its captured previous chat. */
+  fun loadCurrent(mainSessionKey: String) {
+    synchronized(gatewayScopeApplyLock) {
+      val key = _sessionKey.value.takeUnless { it.isBlank() || it == "main" } ?: mainSessionKey
+      load(key, _sessionOwnerAgentId.value)
+    }
+  }
+
   /** Loads a chat session, normalizing "main" to the current gateway-provided main session key. */
   fun load(
     sessionKey: String,
@@ -944,13 +1106,11 @@ class ChatController internal constructor(
     val owner = normalizeSessionSelectionOwner(key, ownerAgentId)
     if (key == _sessionKey.value && owner == _sessionOwnerAgentId.value) {
       if (hasCurrentLiveHistory(key)) return
-      refresh()
+      refreshHistoryForRecovery(forceHealth = true)
       return
     }
-    val generation = beginHistoryLoad(key, ownerAgentId = owner, clearMessages = true)
-    scope.launch {
-      bootstrap(sessionKey = key, generation = generation, forceHealth = true, refreshSessions = true)
-    }
+    val generation = beginHistoryLoad(key, ownerAgentId = owner)
+    bootstrap(sessionKey = key, generation = generation)
   }
 
   /** Rebinds chat to a new canonical main session key after gateway hello/agent changes. */
@@ -974,7 +1134,7 @@ class ChatController internal constructor(
       beginHistoryLoad(
         key,
         ownerAgentId = resolveAgentIdFromMainSessionKey(key),
-        clearMessages = true,
+        refreshHealth = false,
       )
     }
   }
@@ -1019,10 +1179,9 @@ class ChatController internal constructor(
     // session alias stays unchanged. Empty first so offline bootstrap cannot reuse the old owner.
     _sessions.value = emptyList()
     sessionsListArchived = false
-    val generation = beginHistoryLoad(key, ownerAgentId = null, clearMessages = true, markLoading = true)
-    scope.launch {
-      bootstrap(sessionKey = key, generation = generation, forceHealth = true, refreshSessions = true)
-    }
+    sessionsListLimit = null
+    val generation = beginHistoryLoad(key, ownerAgentId = null)
+    bootstrap(sessionKey = key, generation = generation)
   }
 
   private fun bindMainSessionKey(
@@ -1043,17 +1202,10 @@ class ChatController internal constructor(
       beginHistoryLoad(
         nextState.currentSessionKey,
         ownerAgentId = resolveAgentIdFromMainSessionKey(nextState.currentSessionKey),
-        clearMessages = true,
+        refreshHealth = loadHistory,
       )
     if (!loadHistory) return
-    scope.launch {
-      bootstrap(
-        sessionKey = nextState.currentSessionKey,
-        generation = generation,
-        forceHealth = true,
-        refreshSessions = true,
-      )
-    }
+    bootstrap(sessionKey = nextState.currentSessionKey, generation = generation)
   }
 
   /** Refreshes current chat history and session list without clearing optimistic messages first. */
@@ -1137,18 +1289,34 @@ class ChatController internal constructor(
         }
       if (archived == true) {
         val defaultAgentRevision = currentDefaultAgentRevision().takeIf { activeSessionTracksDefaultAgent(sessionKey) }
-        val selection =
+        val rememberedOwner = capturedOwnerAgentId?.let { ChatAgentSessionSelectionOwner(requestCacheScope?.gatewayId, it) }
+        val (selection, remembered) =
           synchronized(gatewayScopeApplyLock) {
-            currentSessionActionSnapshot(sessionKey)?.takeIf {
-              it.gatewayScope == requestCacheScope &&
-                it.ownerAgentId == capturedOwnerAgentId?.lowercase() &&
-                _sessionId.value == lifecycleSessionId
-            }
+            val active =
+              currentSessionActionSnapshot(sessionKey)?.takeIf {
+                it.gatewayScope == requestCacheScope &&
+                  it.ownerAgentId == capturedOwnerAgentId?.lowercase() &&
+                  _sessionId.value == lifecycleSessionId
+              }
+            val remembered =
+              rememberedOwner
+                ?.let { lastSelectedChatSessionByOwner[it] }
+                ?.takeIf { it.key == sessionKey && (it.observedSessionId == null || it.observedSessionId == lifecycleSessionId) }
+            active to remembered
           }
         val lease = captureRequestLease(requestCacheScope) ?: throw GatewayRequestNotEnqueued("not connected")
         lease.request("sessions.patch", params.toString(), 10 * 60_000L)
         lease.commitIfCurrent {
           synchronized(gatewayScopeApplyLock) {
+            // ACK retirement belongs to the captured choice, even after an agent switch.
+            // A newer explicit choice or a history-observed successor keeps its intent.
+            if (
+              requestCacheScope == currentCacheScope() &&
+              rememberedOwner != null && remembered != null &&
+              (remembered.observedSessionId == null || remembered.observedSessionId == lifecycleSessionId)
+            ) {
+              lastSelectedChatSessionByOwner.remove(rememberedOwner, remembered)
+            }
             // Same-key history and default-owner changes need not move selection generation.
             // Only the selection captured at entry may navigate after the archive completes.
             if (
@@ -1282,9 +1450,7 @@ class ChatController internal constructor(
       }
     try {
       if (deleted) {
-        if (removeSessionEntry(sessionKey, ownerAgentId = capturedOwnerAgentId, cacheScope = requestCacheScope)) {
-          fallBackFromRetiredActiveSession(sessionKey)
-        }
+        removeSessionEntry(sessionKey, ownerAgentId = capturedOwnerAgentId, cacheScope = requestCacheScope)
       }
       fetchSessionsForCurrentWindow()
     } catch (err: Throwable) {
@@ -1306,7 +1472,7 @@ class ChatController internal constructor(
   // retired session; fall back to the gateway main session like web and iOS do.
   private fun fallBackFromRetiredActiveSession(retiredKey: String) {
     if (retiredKey != _sessionKey.value) return
-    switchSession("main")
+    switchSession("main", rememberSelection = false)
   }
 
   suspend fun forkSession(
@@ -1315,6 +1481,7 @@ class ChatController internal constructor(
     fromLastCompleted: Boolean = false,
   ): String? {
     val sessionKey = parentKey.trim().takeIf { it.isNotEmpty() } ?: return null
+    val requestCacheScope = currentCacheScope()
     val capturedOwnerAgentId =
       resolveAgentIdFromMainSessionKey(sessionKey)
         ?: ownerAgentId?.trim()?.takeIf { it.isNotEmpty() }
@@ -1329,8 +1496,9 @@ class ChatController internal constructor(
           // create the child under a newer gateway default for unscoped parent keys.
           capturedOwnerAgentId?.let { put("agentId", JsonPrimitive(it)) }
         }
-      val createdKey = parseCreatedSessionKey(json, requestGateway("sessions.create", params.toString()))
-      fetchSessions(limit = currentSessionWindowLimit(), archived = false)
+      val lease = captureRequestLease(requestCacheScope) ?: throw GatewayRequestNotEnqueued("not connected")
+      val createdKey = parseCreatedSessionKey(json, requestSessionCreate(requestCacheScope, params, lease))
+      fetchSessions(limit = sessionsListLimit, archived = false)
       createdKey
     } catch (err: Throwable) {
       updateErrorText(err.message)
@@ -1354,10 +1522,6 @@ class ChatController internal constructor(
   private data class ReconciledOutboxBranchScope(
     val gatewayScope: ChatCacheScope,
     val branchScope: ChatOutboxScope,
-  )
-
-  private data class SessionMutationLease(
-    val durable: ChatOutboxMutationLease?,
   )
 
   private data class ActiveOutboxSessionMutation(
@@ -1438,7 +1602,7 @@ class ChatController internal constructor(
       updateErrorText(err.message)
       null
     } finally {
-      releaseOutboxSessionMutation(snapshot, mutationLease.durable)
+      releaseOutboxSessionMutation(snapshot, mutationLease)
     }
   }
 
@@ -1566,7 +1730,7 @@ class ChatController internal constructor(
       if (isCurrentSessionAction(snapshot)) updateErrorText(err.message)
       false
     } finally {
-      releaseOutboxSessionMutation(snapshot, mutationLease.durable)
+      releaseOutboxSessionMutation(snapshot, mutationLease)
       if (switchGeneration == sessionBranchSwitchGeneration.get()) {
         sessionBranchSwitchClaimed.set(false)
         _sessionBranchSwitching.value = false
@@ -1785,18 +1949,17 @@ class ChatController internal constructor(
 
   private fun releaseOutboxSessionMutation(
     snapshot: SessionActionSnapshot,
-    lease: ChatOutboxMutationLease?,
+    lease: ChatOutboxMutationLease,
   ) {
-    val durable = lease ?: return
     val key = reconciledOutboxBranchScope(snapshot.gatewayScope, snapshot.outboxScope()) ?: return
     val reconcileDeferredEvent =
       synchronized(outboxSessionMutationEventLock) {
         val active = activeOutboxSessionMutations[key]
-        if (active?.lease == durable) {
+        if (active?.lease == lease) {
           activeOutboxSessionMutations.remove(key, active)
         }
         val deferredLeases = deferredOutboxSessionMutationEvents[key]
-        val deferred = deferredLeases?.remove(durable) == true
+        val deferred = deferredLeases?.remove(lease) == true
         if (deferredLeases?.isEmpty() == true) deferredOutboxSessionMutationEvents.remove(key)
         deferred
       }
@@ -1846,55 +2009,42 @@ class ChatController internal constructor(
   private suspend fun beginOutboxSessionMutation(
     snapshot: SessionActionSnapshot,
     expectedEventReason: String?,
-  ): SessionMutationLease? {
-    val outbox = commandOutbox ?: return SessionMutationLease(durable = null)
-    if (!outbox.supportsBranchCoordination) {
-      return if (_outboxItems.value.none { outboxItemMatches(it, snapshot) && it.status != ChatOutboxStatus.Failed }) {
-        SessionMutationLease(durable = null)
-      } else {
-        null
-      }
-    }
+  ): ChatOutboxMutationLease? {
     val gatewayId = snapshot.gatewayScope?.gatewayId ?: return null
-    var durable = outbox.beginSessionMutation(gatewayId, snapshot.outboxScope(), System.currentTimeMillis())
+    var durable = commandOutbox.beginSessionMutation(gatewayId, snapshot.outboxScope(), System.currentTimeMillis())
     if (durable == null) {
-      val branchState = outbox.branchState(gatewayId, snapshot.outboxScope())
+      val branchState = commandOutbox.branchState(gatewayId, snapshot.outboxScope())
       if (branchState?.needsReconciliation == true) {
         markOutboxBranchUnreconciled(snapshot.gatewayScope, snapshot.outboxScope())
         if (refreshSessionBranches(snapshot, branchState, BranchRefreshPurpose.Reconcile)) {
-          durable = outbox.beginSessionMutation(gatewayId, snapshot.outboxScope(), System.currentTimeMillis())
+          durable = commandOutbox.beginSessionMutation(gatewayId, snapshot.outboxScope(), System.currentTimeMillis())
         }
       }
     }
     durable ?: return null
     trackOutboxSessionMutation(snapshot, durable, expectedEventReason)
-    return SessionMutationLease(durable)
+    return durable
   }
 
   private suspend fun cancelOutboxSessionMutation(
     snapshot: SessionActionSnapshot,
-    mutationLease: SessionMutationLease,
+    mutationLease: ChatOutboxMutationLease,
   ) {
-    val outbox = commandOutbox ?: return
-    if (!outbox.supportsBranchCoordination) return
-    val durable = mutationLease.durable ?: return
     val gatewayId = snapshot.gatewayScope?.gatewayId ?: return
-    outbox.cancelSessionMutation(gatewayId, snapshot.outboxScope(), durable)
-    releaseOutboxSessionMutation(snapshot, durable)
+    commandOutbox.cancelSessionMutation(gatewayId, snapshot.outboxScope(), mutationLease)
+    releaseOutboxSessionMutation(snapshot, mutationLease)
   }
 
   private suspend fun recoverOutboxAfterSessionMutationRefreshFailure(
     snapshot: SessionActionSnapshot,
-    mutationLease: SessionMutationLease,
+    mutationLease: ChatOutboxMutationLease,
     requestReconciliation: Boolean = true,
     preserveReconciliationState: Boolean = false,
   ): ChatOutboxBranchState? {
-    val outbox = commandOutbox ?: return null
-    if (!outbox.supportsBranchCoordination) return null
     val gatewayId = snapshot.gatewayScope?.gatewayId ?: return null
     markOutboxBranchUnreconciled(snapshot.gatewayScope, snapshot.outboxScope())
     val reconciliationState =
-      outbox.demoteSessionMutationToReconciliationState(gatewayId, snapshot.outboxScope(), mutationLease.durable)
+      commandOutbox.demoteSessionMutationToReconciliationState(gatewayId, snapshot.outboxScope(), mutationLease)
     if (preserveReconciliationState && reconciliationState != null) {
       // Publish before lease release so newly admitted turns can follow the authoritative branch.
       // A restart loses this process hint and safely parks them instead.
@@ -1902,14 +2052,14 @@ class ChatController internal constructor(
         ambiguousMutationReconciliationStates[key] = reconciliationState
       }
     }
-    releaseOutboxSessionMutation(snapshot, mutationLease.durable)
+    releaseOutboxSessionMutation(snapshot, mutationLease)
     if (requestReconciliation && _healthOk.value) requestOutboxFlush()
     return reconciliationState
   }
 
   private suspend fun recoverOutboxAfterAmbiguousSessionMutation(
     snapshot: SessionActionSnapshot,
-    mutationLease: SessionMutationLease,
+    mutationLease: ChatOutboxMutationLease,
   ) {
     val previousState =
       recoverOutboxAfterSessionMutationRefreshFailure(
@@ -1932,20 +2082,18 @@ class ChatController internal constructor(
   private suspend fun confirmOutboxBranchChange(
     snapshot: SessionActionSnapshot,
     activeLeafEntryId: String?,
-    mutationLease: SessionMutationLease,
+    mutationLease: ChatOutboxMutationLease,
   ): Boolean {
-    val outbox = commandOutbox ?: return true
-    if (!outbox.supportsBranchCoordination) return true
     val gatewayId = snapshot.gatewayScope?.gatewayId ?: return false
     val scope = snapshot.outboxScope()
     markOutboxBranchUnreconciled(snapshot.gatewayScope, scope)
     val confirmed =
-      outbox.confirmBranchChange(
+      commandOutbox.confirmBranchChange(
         gatewayId,
         scope,
         activeLeafEntryId,
         OUTBOX_BRANCH_CHANGED_ERROR,
-        mutationLease.durable,
+        mutationLease,
       )
     if (confirmed) {
       markOutboxBranchReconciled(snapshot.gatewayScope, scope)
@@ -1956,10 +2104,8 @@ class ChatController internal constructor(
   }
 
   private suspend fun branchState(snapshot: SessionActionSnapshot): ChatOutboxBranchState? {
-    val outbox = commandOutbox ?: return null
-    if (!outbox.supportsBranchCoordination) return null
     val gatewayId = snapshot.gatewayScope?.gatewayId ?: return null
-    return outbox.branchState(gatewayId, snapshot.outboxScope())
+    return commandOutbox.branchState(gatewayId, snapshot.outboxScope())
   }
 
   private suspend fun requestSessionBranches(snapshot: SessionActionSnapshot): List<SessionBranch> =
@@ -2014,10 +2160,14 @@ class ChatController internal constructor(
       val updatedAt =
         obj["updatedAt"]?.let { value ->
           when (value) {
-            JsonNull -> null
-            else ->
+            JsonNull -> {
+              null
+            }
+
+            else -> {
               value.asStringOrNull()
                 ?: throw IllegalStateException("sessions.branches.list returned an invalid timestamp")
+            }
           }
         }
       SessionBranch(
@@ -2041,7 +2191,7 @@ class ChatController internal constructor(
     snapshot: SessionActionSnapshot,
     previousState: ChatOutboxBranchState?,
     purpose: BranchRefreshPurpose,
-    mutationLease: SessionMutationLease? = null,
+    mutationLease: ChatOutboxMutationLease? = null,
   ): Boolean {
     val generation = sessionBranchesRefreshGeneration.incrementAndGet()
     val historySequence = synchronized(gatewayScopeApplyLock) { latestAppliedHistoryRequest }
@@ -2057,18 +2207,24 @@ class ChatController internal constructor(
       val branches = requestSessionBranches(snapshot)
       if (!isCurrent()) return false
       val activeLeaf = if (branches.isEmpty()) null else activeBranchLeafEntryId(branches) ?: return false
-      val outbox = commandOutbox
       val gatewayId = snapshot.gatewayScope?.gatewayId
       val scope = snapshot.outboxScope()
       val stateApplied =
         when {
-          outbox == null || !outbox.supportsBranchCoordination -> true
-          gatewayId == null -> false
-          purpose == BranchRefreshPurpose.FinalizeMutation ->
+          gatewayId == null -> {
+            false
+          }
+
+          purpose == BranchRefreshPurpose.FinalizeMutation -> {
             confirmOutboxBranchChange(snapshot, activeLeaf, mutationLease ?: return false)
-          previousState == null || (purpose == BranchRefreshPurpose.ReadOnly && previousState.needsReconciliation) -> false
-          else ->
-            outbox.reconcileBranchScope(
+          }
+
+          previousState == null || (purpose == BranchRefreshPurpose.ReadOnly && previousState.needsReconciliation) -> {
+            false
+          }
+
+          else -> {
+            commandOutbox.reconcileBranchScope(
               gatewayId = gatewayId,
               scope = scope,
               evidence = ChatOutboxBranchEvidence.BranchListing(previousState, branches.mapTo(mutableSetOf()) { it.leafEntryId }),
@@ -2076,11 +2232,12 @@ class ChatController internal constructor(
               activeTranscriptEntryIds = _messages.value.mapNotNullTo(mutableSetOf()) { it.entryId },
               lastError = OUTBOX_BRANCH_CHANGED_ERROR,
             ) != null
+          }
         }
       if (!stateApplied) return false
       synchronized(gatewayScopeApplyLock) {
         if (!isCurrent()) return false
-        if (outbox?.supportsBranchCoordination == true && !markOutboxBranchReconciled(snapshot.gatewayScope, scope)) {
+        if (!markOutboxBranchReconciled(snapshot.gatewayScope, scope)) {
           return false
         }
         _sessionBranches.value = branches
@@ -2100,9 +2257,7 @@ class ChatController internal constructor(
         ) {
           return false
         }
-        val outbox = commandOutbox
-        outbox?.supportsBranchCoordination != true ||
-          markOutboxBranchReconciled(snapshot.gatewayScope, snapshot.outboxScope())
+        markOutboxBranchReconciled(snapshot.gatewayScope, snapshot.outboxScope())
       } else {
         false
       }
@@ -2127,7 +2282,7 @@ class ChatController internal constructor(
       fetchAndApplyHistory(
         sessionKey = snapshot.sessionKey,
         generation = generation,
-        updateSessionInfo = true,
+        purpose = HistoryRefreshPurpose.RestoreSession,
         mutationReconciliationState = mutationReconciliationState,
       ) as? HistoryRefreshResult.Applied
     } catch (err: CancellationException) {
@@ -2200,53 +2355,145 @@ class ChatController internal constructor(
     }
   }
 
+  /** Loads sessions for another agent without changing the visible chat owner. */
+  internal suspend fun fetchSessionSelectionCandidates(agentId: String): List<ChatSessionEntry>? {
+    val ownerAgentId = agentId.trim().takeIf(String::isNotEmpty) ?: return emptyList()
+    val requestCacheScope = currentCacheScope()
+    val cachedSessions =
+      try {
+        requestCacheScope
+          ?.let { cacheScope ->
+            transcriptCache
+              ?.loadSessions(cacheScope.gatewayId, ownerAgentId)
+              .orEmpty()
+              .map { session -> session.copy(ownerAgentId = ownerAgentId) }
+          }.orEmpty()
+      } catch (err: CancellationException) {
+        throw err
+      } catch (_: Throwable) {
+        emptyList()
+      }
+    if (requestCacheScope == null) return cachedSessions
+
+    return try {
+      val params =
+        buildJsonObject {
+          put("includeGlobal", JsonPrimitive(true))
+          put("includeUnknown", JsonPrimitive(false))
+          put("agentId", JsonPrimitive(ownerAgentId))
+          put("limit", JsonPrimitive(SESSION_LIST_FETCH_LIMIT))
+        }
+      parseSessions(
+        requestGatewayBound(requestCacheScope.gatewayId, "sessions.list", params.toString()),
+      ).sessions
+        .map { session -> session.copy(ownerAgentId = ownerAgentId) }
+        .takeIf { requestCacheScope == currentCacheScope() }
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      cachedSessions.takeIf { requestCacheScope == currentCacheScope() }
+    }
+  }
+
   /** Starts a fresh chat for the active gateway session key. */
   fun startNewChat(worktree: Boolean = false) {
     scope.launch { startNewChatAwait(worktree = worktree) }
   }
 
   /** Starts a fresh chat and returns whether the gateway created the session. */
-  suspend fun startNewChatAwait(worktree: Boolean = false): Boolean {
-    val createGatewayId = currentCacheScope()?.gatewayId
-    val parentKey = normalizeRequestedSessionKey(_sessionKey.value)
-    if (parentKey.isEmpty()) return false
-    val ownerAgentId = resolveAgentIdForSessionKey(parentKey) ?: return false
+  suspend fun startNewChatAwait(
+    worktree: Boolean = false,
+    catalogId: String? = null,
+  ): Boolean {
+    val createContext = currentCoroutineContext()
+    createContext.ensureActive()
+    val selection: SessionActionSnapshot
+    val parentSessionId: String?
+    val defaultAgentRevision: Long?
+    synchronized(gatewayScopeApplyLock) {
+      selection = currentSessionActionSnapshot(_sessionKey.value) ?: return false
+      parentSessionId = _sessionId.value
+      defaultAgentRevision = currentDefaultAgentRevision().takeIf { activeSessionTracksDefaultAgent(selection.sessionKey) }
+    }
+    val createGatewayScope = selection.gatewayScope
+    val parentKey = selection.sessionKey
+    val ownerAgentId = selection.ownerAgentId
     if (_pendingRunCount.value > 0) {
       updateLocalizedErrorText(nativeText("Wait for the current response to finish before starting a new chat."))
       return false
     }
-    if (!newChatCreateInFlight.compareAndSet(false, true)) {
+    if (!_isCreatingSession.compareAndSet(false, true)) {
       return false
     }
-    val requestGeneration = historyLoadGeneration.get()
-    updateErrorText(null)
-    _historyLoading.value = true
+    val lease = captureRequestLease(createGatewayScope)
+
+    fun <T> applyIfCurrent(action: () -> T): T? {
+      var result: T? = null
+
+      fun apply() {
+        synchronized(gatewayScopeApplyLock) {
+          // History refreshes do not cancel New. Selection, known parent identity,
+          // routing-owner changes, and the captured socket still fence navigation.
+          if (
+            isCurrentSessionAction(selection) &&
+            (parentSessionId == null || parentSessionId == _sessionId.value) &&
+            (defaultAgentRevision == null || defaultAgentRevision == currentDefaultAgentRevision())
+          ) {
+            result = action()
+          }
+        }
+      }
+      if (lease == null) apply() else lease.commitIfCurrent(::apply)
+      return result
+    }
+    val normalizedCatalogId = catalogId?.trim()?.takeIf(String::isNotEmpty)
     return try {
-      val hasLoadedParentSession = !_sessionId.value.isNullOrBlank()
+      applyIfCurrent {
+        createContext.ensureActive()
+        updateErrorText(null)
+      } ?: return false
+      if (lease == null) throw GatewayRequestNotEnqueued("not connected")
+      val inheritParent =
+        synchronized(gatewayScopeApplyLock) {
+          // Plain New starts independently of a native thread. Explicit worktree
+          // requests retain their parent so the creation guard can reject them.
+          !_sessionId.value.isNullOrBlank() &&
+            (worktree || !isSessionModelSelectionLocked(sessionSettingsKey(parentKey, createGatewayScope, ownerAgentId)))
+        }
       val params =
         buildJsonObject {
           put("agentId", JsonPrimitive(ownerAgentId))
-          if (hasLoadedParentSession) {
-            put("parentSessionKey", JsonPrimitive(parentKey))
-            put("emitCommandHooks", JsonPrimitive(true))
-            put("succeedsParent", JsonPrimitive(false))
+          if (normalizedCatalogId != null) {
+            put("catalogId", JsonPrimitive(normalizedCatalogId))
+          } else {
+            if (inheritParent) {
+              put("parentSessionKey", JsonPrimitive(parentKey))
+              put("emitCommandHooks", JsonPrimitive(true))
+              put("succeedsParent", JsonPrimitive(false))
+            }
+            if (worktree) put("worktree", JsonPrimitive(true))
           }
-          if (worktree) put("worktree", JsonPrimitive(true))
         }
-      val res = requestSessionCreateWithDispositionFallback(createGatewayId, params)
-      if (!isCurrentHistoryLoad(parentKey, _sessionKey.value, requestGeneration, historyLoadGeneration.get())) {
-        return false
-      }
+      val res = requestSessionCreate(createGatewayScope, params, lease)
       val createdKey = parseCreatedSessionKey(json, res) ?: parentKey
-      val generation = beginHistoryLoad(createdKey, ownerAgentId = ownerAgentId, clearMessages = true)
-      bootstrap(sessionKey = createdKey, generation = generation, forceHealth = true, refreshSessions = true)
+      val generation =
+        applyIfCurrent {
+          createContext.ensureActive()
+          beginHistoryLoad(
+            createdKey,
+            ownerAgentId = ownerAgentId,
+            rememberSelection = true,
+          )
+        } ?: return false
+      bootstrap(sessionKey = createdKey, generation = generation).await()
       true
+    } catch (err: CancellationException) {
+      throw err
     } catch (err: Throwable) {
-      updateErrorText(err.message)
-      _historyLoading.value = false
+      applyIfCurrent { updateErrorText(err.message) }
       false
     } finally {
-      newChatCreateInFlight.set(false)
+      _isCreatingSession.value = false
     }
   }
 
@@ -2257,227 +2504,445 @@ class ChatController internal constructor(
     scope.launch { fetchChatMetadata(requestSequence) }
   }
 
+  /** Updates or clears the explicit Fast Mode override for future runs in one session. */
+  fun setSessionFastMode(
+    sessionKey: String,
+    enabled: Boolean,
+    clearOverride: Boolean = false,
+  ) {
+    val mode =
+      if (clearOverride) {
+        null
+      } else if (enabled) {
+        ChatFastMode.On
+      } else {
+        ChatFastMode.Off
+      }
+    val queued = enqueueSessionSettingsMutation(sessionSettingsKey(normalizeRequestedSessionKey(sessionKey)))
+    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+      runSessionSettingsMutation(queued, SessionSettingsChange.FastMode(mode))
+    }
+  }
+
   /** Persists the normalized thinking level used for subsequent chat sends. */
   fun setThinkingLevel(thinkingLevel: String) {
     val normalized = normalizeThinking(thinkingLevel)
     val selection = _thinkingLevelSelection.value
-    if (selection.isGatewayProvided && selection.options.none { it.id == normalized }) {
-      return
-    }
+    if (selection.isGatewayProvided && selection.options.none { it.id == normalized }) return
     if (normalized == _thinkingLevel.value) return
     val key = normalizeRequestedSessionKey(_sessionKey.value)
-    val rollbackEntry = _sessions.value.firstOrNull { it.key == key }
-    val rollbackLevel =
-      rollbackEntry
-        ?.thinkingLevel
-        ?.let(::normalizeThinking)
-        ?: _thinkingLevel.value
-    val settingsKey = sessionSettingsKey(key)
-    val queuedMutation = enqueueSessionSettingsMutation(settingsKey)
-    latestAcceptedThinkingStates.putIfAbsent(
-      settingsKey,
-      AcceptedThinkingState(
-        level = rollbackLevel,
-        thinkingLevels =
-          rollbackEntry?.thinkingLevels
-            ?: selection.options.takeIf { selection.isGatewayProvided },
-      ),
-    )
-    val intent = ThinkingIntent(requestId = thinkingRequestSequence.incrementAndGet(), level = normalized)
-    latestThinkingIntents[settingsKey] = intent
-    _thinkingLevel.value = normalized
+    val queued = enqueueSessionSettingsMutation(sessionSettingsKey(key), ThinkingIntent(normalized))
     scope.launch(start = CoroutineStart.UNDISPATCHED) {
-      setSessionThinkingLevelAwait(
-        sessionKey = key,
-        thinkingLevel = normalized,
-        fallbackRollbackLevel = rollbackLevel,
-        settingsKey = settingsKey,
-        intent = intent,
-        queuedMutation = queuedMutation,
-      )
+      runSessionSettingsMutation(queued, SessionSettingsChange.Thinking(normalized))
     }
   }
 
-  /** Patches the active session model without blocking the Compose caller. */
+  fun setSessionPermissionMode(
+    sessionKey: String,
+    permissionMode: ChatPermissionMode?,
+  ) {
+    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+      setSessionPermissionModeAwait(sessionKey, permissionMode)
+    }
+  }
+
+  internal fun canSetSessionPermissionMode(): Boolean =
+    gatewayAdvertisesMethod("sessions.patch") == true &&
+      gatewayAdvertisesCapability("session-settings-contract") == true &&
+      gatewayAdvertisesCapability("session-settings-cas-v1") == true
+
+  internal suspend fun setSessionPermissionModeAwait(
+    sessionKey: String,
+    permissionMode: ChatPermissionMode?,
+  ): Boolean {
+    if (!canSetSessionPermissionMode()) {
+      updateLocalizedErrorText(nativeText("Update the Gateway to change session permissions."))
+      return false
+    }
+    // A queued permission change keeps the identity and policy the operator saw,
+    // rather than adopting a reset session or another client's later selection.
+    val (settingsKey, change) =
+      synchronized(gatewayScopeApplyLock) {
+        val key = sessionSettingsKey(normalizeRequestedSessionKey(sessionKey))
+        val entry = _sessions.value.firstOrNull { it.key == key.sessionKey }
+        val sessionId = entry?.sessionId?.takeIf { it.isNotBlank() }
+        if (entry == null || sessionId == null) {
+          updateLocalizedErrorText(nativeText("Refresh this chat before changing permissions."))
+          return false
+        }
+        key to SessionSettingsChange.Permission(permissionMode, sessionId, entry.permissionMode)
+      }
+    return runSessionSettingsMutation(enqueueSessionSettingsMutation(settingsKey), change)
+  }
+
   fun setSessionModel(
     sessionKey: String,
     modelRef: String?,
   ) {
-    // Enter the model-selection queue before returning so an immediate send cannot overtake it.
     scope.launch(start = CoroutineStart.UNDISPATCHED) {
-      setSessionModelAwait(sessionKey = sessionKey, modelRef = modelRef)
+      setSessionModelAwait(sessionKey, modelRef)
     }
   }
 
-  /** Patches a session model and updates picker state only after gateway acceptance. */
   internal suspend fun setSessionModelAwait(
     sessionKey: String,
     modelRef: String?,
-  ): Boolean {
-    val key = normalizeRequestedSessionKey(sessionKey)
-    val settingsKey = sessionSettingsKey(key)
-    val normalizedModelRef = modelRef?.trim()?.takeIf { it.isNotEmpty() }
-    return runSessionSettingsMutation(settingsKey) { requestLease ->
-      if (settingsKey == sessionSettingsKey(key)) updateErrorText(null)
-      try {
-        val lease = requestLease ?: throw GatewayRequestNotEnqueued("not connected")
-        val params =
-          buildJsonObject {
-            put("key", JsonPrimitive(key))
-            settingsKey.ownerAgentId?.let { put("agentId", JsonPrimitive(it)) }
-            put("model", normalizedModelRef?.let(::JsonPrimitive) ?: JsonNull)
-          }
-        val response = lease.request("sessions.patch", params.toString())
-        val resolution = parseSessionSettingsPatchResolution(response)
-        normalizedModelRef?.let(recordModelRecent)
-        applyAcceptedModelPatch(
-          key = key,
-          settingsKey = settingsKey,
-          modelRef = normalizedModelRef,
-          resolution = resolution,
-        )
-        if (_sessionKey.value == key && settingsKey == sessionSettingsKey(key)) {
-          modelSelectionGeneration.incrementAndGet()
-          _selectedModelRef.value = normalizedModelRef
-        }
-        true
-      } catch (err: CancellationException) {
-        throw err
-      } catch (err: Throwable) {
-        if (settingsKey == sessionSettingsKey(key)) {
-          updateLocalizedErrorText(err.message?.let(::verbatimText) ?: nativeText("Could not update model."))
-        }
-        false
-      }
-    }
-  }
-
-  private suspend fun setSessionThinkingLevelAwait(
-    sessionKey: String,
-    thinkingLevel: String,
-    fallbackRollbackLevel: String,
-    settingsKey: SessionSettingsKey,
-    intent: ThinkingIntent,
-    queuedMutation: QueuedSessionSettingsMutation,
   ): Boolean =
-    runSessionSettingsMutation(queuedMutation) { requestLease ->
-      val rollbackEntry = _sessions.value.firstOrNull { it.key == sessionKey }
-      val rollbackState =
-        latestAcceptedThinkingStates[settingsKey]
-          ?: AcceptedThinkingState(
-            level = rollbackEntry?.thinkingLevel?.let(::normalizeThinking) ?: fallbackRollbackLevel,
-            thinkingLevels =
-              rollbackEntry?.thinkingLevels
-                ?: _thinkingLevelSelection.value.options.takeIf {
-                  _thinkingLevelSelection.value.isGatewayProvided
-                },
-          )
-      if (settingsKey == sessionSettingsKey(sessionKey)) updateErrorText(null)
-      try {
-        val lease = requestLease ?: throw GatewayRequestNotEnqueued("not connected")
-        val params =
-          buildJsonObject {
-            put("key", JsonPrimitive(sessionKey))
-            settingsKey.ownerAgentId?.let { put("agentId", JsonPrimitive(it)) }
-            put("thinkingLevel", JsonPrimitive(thinkingLevel))
-          }
-        val response = lease.request("sessions.patch", params.toString())
-        val resolution = parseSessionSettingsPatchResolution(response)
-        applyAcceptedThinkingPatch(sessionKey, settingsKey, thinkingLevel, intent, resolution)
-        true
-      } catch (err: CancellationException) {
-        latestThinkingIntents.remove(settingsKey, intent)
-        throw err
-      } catch (err: Throwable) {
-        if (
-          _sessionKey.value == sessionKey &&
-          settingsKey == sessionSettingsKey(sessionKey) &&
-          latestThinkingIntents[settingsKey]?.requestId == intent.requestId
-        ) {
-          val current = _sessions.value
-          val index = current.indexOfFirst { it.key == sessionKey }
-          val applied =
-            (current.getOrNull(index) ?: ChatSessionEntry(key = sessionKey, updatedAtMs = null)).copy(
-              thinkingLevel = rollbackState.level,
-              thinkingLevels = rollbackState.thinkingLevels,
-            )
-          if (index >= 0) {
-            _sessions.value = current.toMutableList().also { it[index] = applied }
-          }
-          _thinkingLevel.value = rollbackState.level
-          applyThinkingMetadata(applied)
-        }
-        latestThinkingIntents.remove(settingsKey, intent)
-        if (settingsKey == sessionSettingsKey(sessionKey)) {
-          updateLocalizedErrorText(
-            err.message?.let(::verbatimText) ?: nativeText("Could not update thinking level."),
-          )
-        }
-        false
-      }
-    }
+    runSessionSettingsMutation(
+      enqueueSessionSettingsMutation(sessionSettingsKey(normalizeRequestedSessionKey(sessionKey))),
+      SessionSettingsChange.Model(modelRef?.trim()?.takeIf(String::isNotEmpty)),
+    )
 
-  private suspend fun runSessionSettingsMutation(
+  private fun enqueueSessionSettingsMutation(
     settingsKey: SessionSettingsKey,
-    operation: suspend (GatewaySession.RequestLease?) -> Boolean,
-  ): Boolean = runSessionSettingsMutation(enqueueSessionSettingsMutation(settingsKey), operation)
-
-  private fun enqueueSessionSettingsMutation(settingsKey: SessionSettingsKey): QueuedSessionSettingsMutation {
-    // Capture the physical socket before waiting. A reconnect may retire this
-    // lease, but queued work can never resolve the replacement connection.
+    thinkingIntent: ThinkingIntent? = null,
+  ): QueuedSessionSettingsMutation {
+    // Capture the physical socket before taking the data lock or waiting for a predecessor.
     val requestLease = captureRequestLease(settingsKey.gatewayScope)
     val pending = CompletableDeferred<Boolean>()
     return synchronized(gatewayScopeApplyLock) {
-      val previous = pendingSettingsMutations.put(settingsKey, pending)
-      incrementSettingsMutationRevision(settingsKey.gatewayScope)
-      QueuedSessionSettingsMutation(
-        settingsKey = settingsKey,
-        requestLease = requestLease,
-        pending = pending,
-        previous = previous,
-      )
+      val previousLane = pendingSettingsMutations[settingsKey]
+      val previous = previousLane?.tail
+      val existing = _sessions.value.firstOrNull { it.key == settingsKey.sessionKey }
+      val lane =
+        previousLane ?: SessionSettingsLane(
+          tail = pending,
+          confirmed =
+            existing
+              ?: ChatSessionEntry(
+                key = settingsKey.sessionKey,
+                updatedAtMs = null,
+                ownerAgentId = settingsKey.ownerAgentId,
+                thinkingLevels =
+                  _thinkingLevelSelection.value.options.takeIf {
+                    settingsKey.sessionKey == _sessionKey.value && _thinkingLevelSelection.value.isGatewayProvided
+                  },
+              ),
+          confirmedThinkingLevel =
+            if (settingsKey.sessionKey == _sessionKey.value) _thinkingLevel.value else existing?.thinkingLevel ?: "off",
+        )
+      lane.tail = pending
+      pendingSettingsMutations[settingsKey] = lane
+      if (thinkingIntent != null) {
+        lane.thinkingIntent = thinkingIntent
+        _thinkingLevel.value = thinkingIntent.level
+      }
+      // A successor blocked on reconciliation cannot change the server until
+      // that read publishes; enqueueing it must not invalidate its own barrier.
+      if (lane.reconciliation?.pending?.isCompleted != false) incrementSettingsMutationRevision(settingsKey.gatewayScope)
+      publishPendingSessionSettingsKeys()
+      QueuedSessionSettingsMutation(settingsKey, requestLease, lane, pending, previous, thinkingIntent)
     }
   }
 
   private suspend fun runSessionSettingsMutation(
-    queuedMutation: QueuedSessionSettingsMutation,
-    operation: suspend (GatewaySession.RequestLease?) -> Boolean,
+    queued: QueuedSessionSettingsMutation,
+    change: SessionSettingsChange,
   ): Boolean {
-    val settingsKey = queuedMutation.settingsKey
-    val pending = queuedMutation.pending
+    val settingsKey = queued.settingsKey
+    val lane = queued.lane
+    val lease = queued.requestLease
+    var dispatchObservation: Any? = null
     var succeeded = false
-    var drainedLane = false
+
+    fun ownsLane(): Boolean =
+      settingsKey == sessionSettingsKey(settingsKey.sessionKey) &&
+        pendingSettingsMutations[settingsKey] === lane
+
     return try {
-      queuedMutation.previous?.await()
-      // A queued mutation captured a concrete gateway generation. Never let it
-      // fall through to the replacement connection after waiting its turn.
-      succeeded =
-        if (settingsKey == sessionSettingsKey(settingsKey.sessionKey)) {
-          operation(queuedMutation.requestLease)
-        } else {
-          false
+      queued.previous?.await()
+      synchronized(gatewayScopeApplyLock) {
+        if (!ownsLane()) return false
+        updateErrorText(null)
+      }
+      val capturedLease = lease ?: throw GatewayRequestNotEnqueued("not connected")
+      val params =
+        buildJsonObject {
+          put("key", JsonPrimitive(settingsKey.sessionKey))
+          settingsKey.ownerAgentId?.let { put("agentId", JsonPrimitive(it)) }
+          when (change) {
+            is SessionSettingsChange.Model -> {
+              put("model", change.ref?.let(::JsonPrimitive) ?: JsonNull)
+            }
+
+            is SessionSettingsChange.Thinking -> {
+              put("thinkingLevel", JsonPrimitive(change.level))
+            }
+
+            is SessionSettingsChange.Permission -> {
+              put("permissionMode", change.mode?.wireValue?.let(::JsonPrimitive) ?: JsonNull)
+              put("expectedSessionId", JsonPrimitive(change.expectedSessionId))
+              put("expectedPermissionMode", change.expectedPermissionMode?.wireValue?.let(::JsonPrimitive) ?: JsonNull)
+            }
+
+            is SessionSettingsChange.FastMode -> {
+              put("fastMode", change.mode?.toWireJson() ?: JsonNull)
+            }
+          }
         }
-      succeeded
+      val response =
+        capturedLease.request("sessions.patch", params.toString()) { enqueue ->
+          // GatewaySession holds its physical-connection lock here. Events during
+          // transport waiting precede this write; only successful enqueue records dispatch.
+          synchronized(gatewayScopeApplyLock) {
+            if (!ownsLane()) throw GatewayRequestNotEnqueued("session settings owner changed")
+            if (change is SessionSettingsChange.Model && lane.confirmed.modelSelectionLocked == true) {
+              throw GatewayRequestNotEnqueued("Model selection is locked for this session.")
+            }
+            if (change is SessionSettingsChange.Permission) {
+              if (!canSetSessionPermissionMode()) throw GatewayRequestNotEnqueued("Update the Gateway to change session permissions.")
+              if (_sessions.value.firstOrNull { it.key == settingsKey.sessionKey }?.sessionId != change.expectedSessionId) {
+                throw GatewayRequestNotEnqueued("Refresh this chat before changing permissions.")
+              }
+            }
+            enqueue()
+            lane.reconciliation = null
+            dispatchObservation = lane.observation
+            queued.thinkingIntent?.dispatched = true
+          }
+        }
+      val resolution = parseSessionSettingsPatchResolution(response, settingsKey.sessionKey)
+      succeeded = true
+      if (change is SessionSettingsChange.Model) change.ref?.let(recordModelRecent)
+      var acknowledgedEntry: ChatSessionEntry? = null
+      capturedLease.commitIfCurrent {
+        synchronized(gatewayScopeApplyLock) {
+          if (ownsLane() && dispatchObservation === lane.observation) {
+            acknowledgedEntry = applyAcceptedSessionSettings(queued, change, resolution)
+            dispatchObservation = null
+          }
+        }
+      }
+      acknowledgedEntry?.let { acknowledgeUnreadIfNeeded(it.key, it, requireActive = true) }
+      true
+    } catch (err: CancellationException) {
+      throw err
+    } catch (err: Throwable) {
+      succeeded = false
+      val reportFailure = {
+        synchronized(gatewayScopeApplyLock) {
+          if (ownsLane()) {
+            updateLocalizedErrorText(
+              err.message?.let(::verbatimText)
+                ?: when (change) {
+                  is SessionSettingsChange.Model -> nativeText("Could not update model.")
+                  is SessionSettingsChange.Thinking -> nativeText("Could not update thinking level.")
+                  is SessionSettingsChange.Permission -> nativeText("Could not update permissions.")
+                  is SessionSettingsChange.FastMode -> nativeText("Could not update fast mode.")
+                },
+            )
+          }
+        }
+      }
+      if (lease == null) reportFailure() else lease.commitIfCurrent(reportFailure)
+      false
     } finally {
       synchronized(gatewayScopeApplyLock) {
-        incrementSettingsMutationRevision(settingsKey.gatewayScope)
-        drainedLane = pendingSettingsMutations.remove(settingsKey, pending)
-        if (drainedLane) {
-          // These baselines bridge adjacent operations in one lane only. After
-          // drain, refreshed session metadata is authoritative rollback state.
-          latestAcceptedThinkingStates.remove(settingsKey)
-          latestThinkingIntents.remove(settingsKey)
+        // A saved write may still reject, or its reply may lose the physical lease.
+        // Keep Send gated until the logical session's exact settings read succeeds.
+        if (ownsLane() && dispatchObservation != null) lane.needsRefresh = true
+        finishThinkingIntent(queued)
+      }
+      // Cancellation releases this caller, not its position in the queue. Later
+      // mutations and readers must still wait for a surviving predecessor.
+      val previous = queued.previous
+      if (previous == null) {
+        completeSessionSettingsMutation(queued, succeeded)
+      } else {
+        previous.invokeOnCompletion { completeSessionSettingsMutation(queued, succeeded) }
+      }
+    }
+  }
+
+  private fun completeSessionSettingsMutation(
+    queued: QueuedSessionSettingsMutation,
+    succeeded: Boolean,
+  ) {
+    val settingsKey = queued.settingsKey
+    val lane = queued.lane
+    var drainedLane = false
+    var ready = succeeded
+    val reconciliation =
+      synchronized(gatewayScopeApplyLock) {
+        if (pendingSettingsMutations[settingsKey] !== lane) ready = false
+        if (
+          pendingSettingsMutations[settingsKey] === lane &&
+          lane.tail === queued.pending &&
+          lane.needsRefresh &&
+          settingsKey == sessionSettingsKey(settingsKey.sessionKey) &&
+          settingsKey.ownerAgentId != null &&
+          settingsKey.ownerAgentId == resolveAgentIdForSessionKey(_sessionKey.value)
+        ) {
+          incrementSettingsMutationRevision(settingsKey.gatewayScope)
+          SessionSettingsCompletion(queued.pending, succeeded).also { lane.reconciliation = it }
+        } else {
+          drainedLane = removeCompletedSessionSettingsLane(settingsKey, lane, queued.pending)
+          null
         }
-        pruneSettingsMutationRevision(settingsKey.gatewayScope)
       }
-      // Publish only after registry cleanup so a resumed scope waiter cannot
-      // repeatedly observe this completed mutation before finally removes it.
-      pending.complete(succeeded)
-      if (drainedLane && succeeded && _healthOk.value) {
-        // A failed predecessor can stop a reconnect flush while its successor is queued.
-        // The successful lane tail must hand durable rows back to the flush owner.
-        requestOutboxFlush()
+    if (reconciliation != null) {
+      // The exact session read owns readiness; a filtered drawer page cannot
+      // establish whether this session exists or supply its model capabilities.
+      scope.launch { reconcileSessionSettings(settingsKey, lane, reconciliation) }
+    } else {
+      queued.pending.complete(ready)
+      if (drainedLane && ready && _healthOk.value) requestOutboxFlush()
+    }
+  }
+
+  private fun removeCompletedSessionSettingsLane(
+    settingsKey: SessionSettingsKey,
+    lane: SessionSettingsLane,
+    pending: CompletableDeferred<Boolean>,
+  ): Boolean {
+    if (pendingSettingsMutations[settingsKey] !== lane) return false
+    incrementSettingsMutationRevision(settingsKey.gatewayScope)
+    val drained = lane.tail === pending && pendingSettingsMutations.remove(settingsKey, lane)
+    publishPendingSessionSettingsKeys()
+    pruneSettingsMutationRevision(settingsKey.gatewayScope)
+    return drained
+  }
+
+  private fun retryFailedSessionSettingsReconciliations(
+    gatewayScope: ChatCacheScope?,
+    ownerAgentId: String,
+  ) {
+    val retries =
+      synchronized(gatewayScopeApplyLock) {
+        pendingSettingsMutations.mapNotNull { (key, lane) ->
+          if (key.gatewayScope != gatewayScope || key.ownerAgentId != ownerAgentId) return@mapNotNull null
+          val previous = lane.reconciliation ?: return@mapNotNull null
+          if (!previous.pending.isCompleted || lane.tail !== previous.pending) return@mapNotNull null
+          // Replace only failed readiness, never a running write or a queued successor.
+          val completion = SessionSettingsCompletion(CompletableDeferred(), succeeded = true)
+          lane.tail = completion.pending
+          lane.reconciliation = completion
+          incrementSettingsMutationRevision(gatewayScope)
+          Triple(key, lane, completion)
+        }
       }
+    retries.forEach { (key, lane, completion) ->
+      scope.launch { reconcileSessionSettings(key, lane, completion) }
+    }
+  }
+
+  private suspend fun reconcileSessionSettings(
+    settingsKey: SessionSettingsKey,
+    lane: SessionSettingsLane,
+    completion: SessionSettingsCompletion,
+  ) {
+    val ownerAgentId = settingsKey.ownerAgentId ?: return
+    val refresh = SessionSettingsRead(settingsKey.gatewayScope, ownerAgentId)
+    var ready = false
+
+    fun ownsReconciliation(): Boolean = pendingSettingsMutations[settingsKey] === lane && lane.reconciliation === completion
+
+    fun ownerIsCurrent(): Boolean =
+      settingsKey == sessionSettingsKey(settingsKey.sessionKey) &&
+        ownerAgentId == resolveAgentIdForSessionKey(_sessionKey.value)
+
+    synchronized(gatewayScopeApplyLock) { activeSessionReads.add(refresh) }
+    try {
+      val lease = captureRequestLease(settingsKey.gatewayScope) ?: throw GatewayRequestNotEnqueued("not connected")
+      val params =
+        buildJsonObject {
+          put("sessionKey", JsonPrimitive(settingsKey.sessionKey))
+          put("agentId", JsonPrimitive(ownerAgentId))
+          put("limit", JsonPrimitive(1))
+        }
+      while (true) {
+        var settingsRevision = 0L
+        val response =
+          lease.request("chat.history", params.toString()) { enqueue ->
+            synchronized(gatewayScopeApplyLock) {
+              if (!ownsReconciliation() || !ownerIsCurrent()) throw GatewayRequestNotEnqueued("session settings owner changed")
+              refresh.settingsSnapshots.clear()
+              settingsRevision = settingsMutationRevision(settingsKey.gatewayScope)
+              enqueue()
+            }
+          }
+        val root = json.parseToJsonElement(response).asObjectOrNull() ?: error("invalid chat.history response")
+        // Store lookup failures also return defaults without a durable identity.
+        // Only explicit deletion events/responses authorize purging local state.
+        if (root["sessionId"].asStringOrNull().isNullOrBlank()) error("missing durable session identity")
+        val info = parseSessionEntry(root["sessionInfo"].asObjectOrNull(), settingsKey.sessionKey) ?: error("missing session settings")
+        val thinkingLevel = root["thinkingLevel"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
+        val entry = if (thinkingLevel == null) info else info.copy(thinkingLevel = thinkingLevel)
+        val entryOwner = resolveAgentIdFromMainSessionKey(entry.key) ?: entry.ownerAgentId ?: ownerAgentId
+        if (entry.key != settingsKey.sessionKey || entryOwner != ownerAgentId) error("session settings owner changed")
+        lease.commitIfCurrent {
+          synchronized(gatewayScopeApplyLock) {
+            if (!ownsReconciliation() || !ownerIsCurrent()) return@synchronized
+            if (
+              settingsRevision != settingsMutationRevision(settingsKey.gatewayScope) ||
+              refresh.hasConflictingSettings(listOf(entry))
+            ) {
+              return@synchronized
+            }
+            // This read owns settings, not transcript/run/usage publication.
+            val current = _sessions.value.firstOrNull { it.key == settingsKey.sessionKey } ?: lane.confirmed
+            val settings = mergeChatSessionSettings(current, entry, authoritativeSessionSettings = true)
+            upsertSessionEntry(settings.copy(ownerAgentId = ownerAgentId), replace = true, authoritativeSessionSettings = true)
+            lane.needsRefresh = false
+            lane.reconciliation = null
+            removeCompletedSessionSettingsLane(settingsKey, lane, completion.pending)
+            if (_errorText.value == sessionSettingsRefreshError) updateErrorText(null)
+            ready = true
+          }
+        }
+        if (ready) return
+        if (!lease.isCurrent() || !synchronized(gatewayScopeApplyLock) { ownsReconciliation() && ownerIsCurrent() }) return
+      }
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      // Readiness fails independently of the already accepted settings write.
+    } finally {
+      val retired =
+        synchronized(gatewayScopeApplyLock) {
+          activeSessionReads.remove(refresh)
+          val retired =
+            if (ownsReconciliation() && !ownerIsCurrent()) {
+              retireSessionSettingsLanes { key, candidate -> key == settingsKey && candidate === lane }
+            } else {
+              if (ownsReconciliation() && !ready) updateLocalizedErrorText(sessionSettingsRefreshError)
+              emptyList()
+            }
+          pruneSettingsMutationRevision(settingsKey.gatewayScope)
+          retired
+        }
+      // Resume outside the data/physical locks; successors retain their queue position.
+      completion.pending.complete(ready && completion.succeeded)
+      retired.forEach { it.complete(false) }
+      if (ready && completion.succeeded && _healthOk.value) requestOutboxFlush()
+    }
+  }
+
+  private fun retireSessionSettingsLanes(
+    shouldRetire: (SessionSettingsKey, SessionSettingsLane) -> Boolean,
+  ): List<CompletableDeferred<Boolean>> {
+    val retired = linkedSetOf<CompletableDeferred<Boolean>>()
+    for ((key, lane) in pendingSettingsMutations) {
+      if (shouldRetire(key, lane) && pendingSettingsMutations.remove(key, lane)) {
+        lane.thinkingIntent = null
+        incrementSettingsMutationRevision(key.gatewayScope)
+        pruneSettingsMutationRevision(key.gatewayScope)
+        retired += lane.tail
+        lane.reconciliation?.pending?.let(retired::add)
+      }
+    }
+    if (retired.isNotEmpty()) publishPendingSessionSettingsKeys()
+    return retired.toList()
+  }
+
+  private fun finishThinkingIntent(queued: QueuedSessionSettingsMutation) {
+    if (queued.thinkingIntent == null || queued.lane.thinkingIntent !== queued.thinkingIntent) return
+    queued.lane.thinkingIntent = null
+    if (
+      queued.settingsKey == sessionSettingsKey(queued.settingsKey.sessionKey) &&
+      queued.settingsKey.sessionKey == _sessionKey.value
+    ) {
+      publishSelectedSessionSettings(queued.lane.confirmed)
     }
   }
 
@@ -2487,14 +2952,20 @@ class ChatController internal constructor(
 
   private fun settingsMutationRevision(gatewayScope: ChatCacheScope?): Long = settingsMutationRevisions[gatewayScope] ?: 0L
 
-  private fun hasPendingSessionSettings(gatewayScope: ChatCacheScope?): Boolean = pendingSettingsMutations.keys.any { it.gatewayScope == gatewayScope }
+  private fun hasPendingSessionSettings(
+    gatewayScope: ChatCacheScope?,
+  ): Boolean = pendingSettingsMutations.any { (key, lane) -> key.gatewayScope == gatewayScope && !lane.tail.isCompleted }
+
+  private fun publishPendingSessionSettingsKeys() {
+    _pendingSessionSettingsKeys.value = pendingSettingsMutations.keys.mapTo(linkedSetOf()) { it.sessionKey }
+  }
 
   private fun pruneSettingsMutationRevision(gatewayScope: ChatCacheScope?) {
-    // A drained revision only matters while an in-flight list request can
+    // A drained revision only matters while an in-flight session read can
     // compare it. Retired connection generations must not accumulate forever.
     if (
-      !hasPendingSessionSettings(gatewayScope) &&
-      activeSessionRefreshesByScope[gatewayScope] == null
+      pendingSettingsMutations.keys.none { it.gatewayScope == gatewayScope } &&
+      activeSessionReads.none { it.gatewayScope == gatewayScope }
     ) {
       settingsMutationRevisions.remove(gatewayScope)
     }
@@ -2503,10 +2974,10 @@ class ChatController internal constructor(
   private suspend fun waitForPendingSessionSettings(sessionKey: String): Boolean = waitForPendingSessionSettings(sessionSettingsKey(sessionKey))
 
   private suspend fun waitForPendingSessionSettings(settingsKey: SessionSettingsKey): Boolean {
-    var pending = pendingSettingsMutations[settingsKey] ?: return true
+    var pending = pendingSettingsMutations[settingsKey]?.tail ?: return true
     while (true) {
       if (!pending.await()) return false
-      val next = pendingSettingsMutations[settingsKey]
+      val next = pendingSettingsMutations[settingsKey]?.tail
       if (next == null || next === pending) return true
       pending = next
     }
@@ -2517,12 +2988,82 @@ class ChatController internal constructor(
       val pending =
         synchronized(gatewayScopeApplyLock) {
           pendingSettingsMutations
-            .filterKeys { it.gatewayScope == gatewayScope }
+            .filter { (key, lane) -> key.gatewayScope == gatewayScope && !lane.tail.isCompleted }
             .values
-            .toList()
+            .map { it.tail }
         }
       if (pending.isEmpty()) return
       pending.forEach { it.await() }
+    }
+  }
+
+  internal suspend fun resolveSessionSelection(
+    owner: ChatAgentSessionSelectionOwner,
+    mainSessionKey: String,
+  ): ChatAgentSessionSelection? {
+    val (requestScope, remembered, rememberedSessionId) =
+      synchronized(gatewayScopeApplyLock) {
+        val choice = lastSelectedChatSessionByOwner[owner]
+        // History may update this choice during discovery; compare its entry-time identity.
+        Triple(currentCacheScope(), choice, choice?.observedSessionId)
+      }
+    val rememberedKey = remembered?.key
+    val target =
+      try {
+        val candidates = fetchSessionSelectionCandidates(owner.agentId) ?: return null
+        val candidate = selectChatAgentSessionKey(candidates, owner.agentId, rememberedKey, mainSessionKey)
+        if (rememberedKey == null || candidate == rememberedKey) {
+          candidate
+        } else {
+          // Recent pages cannot prove absence. History accepts the captured agent
+          // for unscoped keys, unlike sessions.describe, and must identify a real row.
+          check(requestScope != null && requestScope.gatewayId == owner.gatewayStableId)
+          val params =
+            buildJsonObject {
+              put("sessionKey", JsonPrimitive(rememberedKey))
+              put("agentId", JsonPrimitive(owner.agentId))
+              put("limit", JsonPrimitive(1))
+            }
+          val response = requestGatewayBound(requestScope.gatewayId, "chat.history", params.toString())
+          val history = json.parseToJsonElement(response).asObjectOrNull()
+          val entry = parseSessionEntry(history?.get("sessionInfo").asObjectOrNull()) ?: error("session description unavailable")
+          check(entry.sessionId != null && entry.key == rememberedKey && (entry.ownerAgentId == null || entry.ownerAgentId == owner.agentId))
+          when (entry.archived) {
+            true -> candidate
+            false -> rememberedKey
+            null -> error("session description has no archive state")
+          }
+        }
+      } catch (err: CancellationException) {
+        throw err
+      } catch (_: Throwable) {
+        null
+      }
+    return ChatAgentSessionSelection(requestScope, remembered, rememberedSessionId, target)
+  }
+
+  internal fun restoreSessionSelection(
+    owner: ChatAgentSessionSelectionOwner,
+    selection: ChatAgentSessionSelection,
+    mainSessionKey: String,
+  ) {
+    synchronized(gatewayScopeApplyLock) {
+      if (
+        selection.gatewayScope != currentCacheScope() ||
+        lastSelectedChatSessionByOwner[owner] !== selection.rememberedSession ||
+        selection.rememberedSession?.observedSessionId != selection.rememberedSessionId
+      ) {
+        return
+      }
+      val target = selection.targetSessionKey
+      if (target == null) {
+        updateLocalizedErrorText(nativeText("Could not restore the last chat. Select a chat from the sidebar."))
+        return
+      }
+      if (selection.rememberedSession != null && target != selection.rememberedSession.key) {
+        lastSelectedChatSessionByOwner.remove(owner, selection.rememberedSession)
+      }
+      if (target != mainSessionKey) switchSession(target, owner.agentId, rememberSelection = false)
     }
   }
 
@@ -2530,16 +3071,28 @@ class ChatController internal constructor(
   fun switchSession(
     sessionKey: String,
     ownerAgentId: String? = null,
+    rememberSelection: Boolean = true,
   ) {
     val key = normalizeRequestedSessionKey(sessionKey)
     if (key.isEmpty()) return
     val owner = normalizeSessionSelectionOwner(key, ownerAgentId)
     prepareSessionSelection(key)
-    if (key == _sessionKey.value && owner == _sessionOwnerAgentId.value) return
-    val generation = beginHistoryLoad(key, ownerAgentId = owner, clearMessages = true)
-    scope.launch {
-      bootstrap(sessionKey = key, generation = generation, forceHealth = true, refreshSessions = false)
-    }
+    val generation =
+      synchronized(gatewayScopeApplyLock) {
+        if (rememberSelection) rememberSelectedChatSession(key, owner)
+        if (key == _sessionKey.value && owner == _sessionOwnerAgentId.value) return
+        beginHistoryLoad(key, ownerAgentId = owner, refreshSessions = false)
+      }
+    bootstrap(sessionKey = key, generation = generation)
+  }
+
+  private fun rememberSelectedChatSession(
+    key: String,
+    ownerAgentId: String?,
+  ) {
+    val agentId = ownerAgentId ?: effectiveDefaultAgentId() ?: return
+    val sessionId = _sessionId.value.takeIf { key == _sessionKey.value && agentId == resolveAgentIdForSessionKey(key) }
+    lastSelectedChatSessionByOwner[ChatAgentSessionSelectionOwner(currentCacheScope()?.gatewayId, agentId)] = RememberedChatSession(key, sessionId)
   }
 
   private fun prepareSessionSelection(key: String) {
@@ -2555,8 +3108,10 @@ class ChatController internal constructor(
   private fun beginHistoryLoad(
     key: String,
     ownerAgentId: String?,
-    clearMessages: Boolean,
     markLoading: Boolean = true,
+    rememberSelection: Boolean = false,
+    refreshHealth: Boolean = true,
+    refreshSessions: Boolean = true,
   ): Long {
     val owner = normalizeSessionSelectionOwner(key, ownerAgentId)
     // Commit selection and its reset together: a newer IO refresh must not finish
@@ -2568,10 +3123,13 @@ class ChatController internal constructor(
         if (changed) chatSelectionGeneration.update { it + 1 }
         _sessionKey.value = key
         _sessionOwnerAgentId.value = owner
-        if (clearMessages) {
-          _messages.value = emptyList()
-          _messagesFromCache.value = false
+        pendingHealthRefresh = if (refreshHealth) HealthRefresh(generation, force = true, refreshSessions = refreshSessions) else null
+        retireSessionSettingsLanes { settingsKey, lane ->
+          lane.reconciliation?.pending?.isCompleted == true &&
+            (settingsKey.gatewayScope != currentCacheScope() || settingsKey.ownerAgentId != resolveAgentIdForSessionKey(key))
         }
+        _messages.value = emptyList()
+        _messagesFromCache.value = false
         if (changed) {
           resetSwarmProgress(key)
           sessionBranchesRefreshGeneration.incrementAndGet()
@@ -2583,10 +3141,13 @@ class ChatController internal constructor(
           clearSubagentActivities()
           clearProgressCard()
         }
+        val activeAgentId = resolveAgentIdForSessionKey(key)
         _sessions.value =
           reconcileGlobalObserverDigestOwner(
-            _sessions.value,
-            activeAgentId = owner ?: resolveAgentIdForSessionKey(key),
+            // Unscoped keys can name different sessions for each agent. Retire the
+            // old owner's rows before history, settings intents, or events can merge.
+            _sessions.value.filter { activeAgentId == null || it.ownerAgentId == activeAgentId },
+            activeAgentId = activeAgentId,
             adoptOwnerless = false,
           )
         applyThinkingMetadata(_sessions.value.firstOrNull { it.key == key })
@@ -2604,6 +3165,7 @@ class ChatController internal constructor(
         clearPendingRuns()
         clearLiveRunUi()
         _sessionId.value = null
+        if (rememberSelection) rememberSelectedChatSession(key, owner)
         _historyLoading.value = markLoading
         restorePendingRunProjectionsForCurrentOwner()
         generation to changed
@@ -2624,16 +3186,16 @@ class ChatController internal constructor(
     liveHistoryMarker = LiveHistoryMarker(sessionKey = sessionKey, sessionId = sessionId, generation = generation)
   }
 
-  private fun hasCurrentLiveHistory(sessionKey: String): Boolean {
+  private fun hasCurrentLiveHistory(sessionKey: String): Boolean = hasCurrentHistorySnapshot(sessionKey) && _healthOk.value
+
+  private fun hasCurrentHistorySnapshot(sessionKey: String): Boolean {
     val marker = liveHistoryMarker ?: return false
     // Same-session load may skip refresh only for the exact live snapshot that
     // applied in the active generation. Cached or stale lifecycle state must refetch.
     return marker.sessionKey == sessionKey &&
       marker.generation == historyLoadGeneration.get() &&
       marker.sessionId == _sessionId.value &&
-      !_messagesFromCache.value &&
-      _errorText.value == null &&
-      _healthOk.value
+      !_messagesFromCache.value
   }
 
   private fun normalizeRequestedSessionKey(sessionKey: String): String {
@@ -2687,7 +3249,7 @@ class ChatController internal constructor(
     idempotencyKey: String? = null,
   ): Boolean = sendMessageAwaitAcceptance(message, thinkingLevel, attachments, expectedOwner, idempotencyKey)
 
-  internal suspend fun wasOutboxCommandAdmitted(id: String): Boolean = commandOutbox?.wasAdmitted(id) == true
+  internal suspend fun wasOutboxCommandAdmitted(id: String): Boolean = commandOutbox.wasAdmitted(id)
 
   internal fun isCurrentComposerOwner(expectedOwner: ChatComposerOwner): Boolean {
     val cacheScope = currentCacheScope()
@@ -2744,6 +3306,7 @@ class ChatController internal constructor(
     // must not leave with stale model or thinking state while sessions.patch is in flight.
     if (!waitForPendingSessionSettings(sessionKey)) return false
     if (!ownsCapturedUi()) return false
+    if (chatModelSendBlocked(_healthOk.value, _selectedModelRef.value, _modelCatalog.value)) return false
     // agent-command.ts throws for explicit unsupported levels, so hidden controls must send off.
     // Applied at enqueue time too so durable rows never persist a level the selected model
     // rejects; reconnect flushes with a cleared catalog fail open, matching pre-gating behavior.
@@ -2758,33 +3321,22 @@ class ChatController internal constructor(
     // Every send is journaled before the composer clears or any network attempt can lose
     // ownership; the durable row is the single recovery owner across process death.
     val journaled =
-      when (val outbox = commandOutbox) {
-        null -> {
-          if (!_healthOk.value) {
-            updateLocalizedErrorText(nativeText("Gateway health not OK; cannot send"))
-            return false
-          }
-          null
-        }
-        else ->
-          enqueueDurableSend(
-            outbox = outbox,
-            outboxScope = sendCacheScope,
-            sessionKey = normalizeRequestedSessionKey(sessionKey),
-            text = text,
-            thinkingLevel = thinking,
-            attachments = attachments,
-            canPublishUi = ::ownsCapturedUi,
-            ownerAgentId = capturedOwner.agentId,
-            idempotencyKey = idempotencyKey,
-          ) ?: return false
-      }
-    if (journaled != null && !ownsCapturedUi()) {
+      enqueueDurableSend(
+        outboxScope = sendCacheScope,
+        sessionKey = normalizeRequestedSessionKey(sessionKey),
+        text = text,
+        thinkingLevel = thinking,
+        attachments = attachments,
+        canPublishUi = ::ownsCapturedUi,
+        ownerAgentId = capturedOwner.agentId,
+        idempotencyKey = idempotencyKey,
+      ) ?: return false
+    if (!ownsCapturedUi()) {
       // Restore the draft only when the still-queued row is atomically removed. A reconnect
       // flush may already own it; then the durable row remains the single input owner.
       val deleted =
         try {
-          commandOutbox?.deleteIfQueued(journaled.id) == true
+          commandOutbox.deleteIfQueued(journaled.id)
         } catch (err: CancellationException) {
           throw err
         } catch (_: Throwable) {
@@ -2797,63 +3349,59 @@ class ChatController internal constructor(
       publishOutbox()
       return true
     }
-    if (journaled != null) {
-      if (!_healthOk.value) {
-        // Captured for reconnect: the queued bubble is visible and flush delivers it later.
-        return true
-      }
-      if (
-        commandOutbox?.supportsBranchCoordination == true &&
-        journaled.outboxScope()?.let { isOutboxBranchReconciled(sendCacheScope, it) } != true
-      ) {
-        // A remote branch mutation invalidates ownership before its async refresh starts.
-        // Keep new input durable, but let the reconciled FIFO lane decide its branch.
-        requestOutboxFlush()
-        return true
-      }
-      // The startup recovery sweep flips every 'sending' row to delivery-unconfirmed. Claiming
-      // only after it completes means the sweep can never hit this live dispatch; a failed
-      // sweep leaves the row queued so reconnect flush owns delivery instead.
-      outboxRecoveryJob?.join()
-      val outbox = commandOutbox
-      if (outbox == null || !recoverInterruptedOutboxSends(outbox)) {
-        _healthOk.value = false
-        publishOutbox()
-        return true
-      }
-      if (sessionHasDurableBacklog(journaled)) {
-        // An older row for this session is still queued or unresolved; a direct dispatch
-        // would reorder the conversation, so the FIFO flush owns delivery.
-        requestOutboxFlush()
-        return true
-      }
-      // Atomically claim the row for this direct dispatch: a vanished row (user delete) or a
-      // concurrent flush claim must not lead to a second send of the same idempotency key.
-      val claimed =
-        try {
-          outbox.claimForSendingIfAttempt(journaled.id, journaled.attemptVersion, 0, null)
-        } catch (err: CancellationException) {
-          throw err
-        } catch (_: Throwable) {
-          null
-        }
+    if (!_healthOk.value) {
+      // Captured for reconnect: the queued bubble is visible and flush delivers it later.
+      return true
+    }
+    if (
+      journaled.outboxScope()?.let { isOutboxBranchReconciled(sendCacheScope, it) } != true
+    ) {
+      // A remote branch mutation invalidates ownership before its async refresh starts.
+      // Keep new input durable, but let the reconciled FIFO lane decide its branch.
+      requestOutboxFlush()
+      return true
+    }
+    // The startup recovery sweep flips every 'sending' row to delivery-unconfirmed. Claiming
+    // only after it completes means the sweep can never hit this live dispatch; a failed
+    // sweep leaves the row queued so reconnect flush owns delivery instead.
+    outboxRecoveryJob.join()
+    if (!recoverInterruptedOutboxSends()) {
+      _healthOk.value = false
       publishOutbox()
-      if (claimed == null) {
-        // The claim could not be made durable, so the admitted row still has no dispatcher.
-        // Hand delivery to the flush lane instead of reporting success with no active owner.
-        requestOutboxFlush()
-        return true
+      return true
+    }
+    if (sessionHasDurableBacklog(journaled)) {
+      // An older row for this session is still queued or unresolved; a direct dispatch
+      // would reorder the conversation, so the FIFO flush owns delivery.
+      requestOutboxFlush()
+      return true
+    }
+    // Atomically claim the row for this direct dispatch: a vanished row (user delete) or a
+    // concurrent flush claim must not lead to a second send of the same idempotency key.
+    val claimed =
+      try {
+        commandOutbox.claimForSendingIfAttempt(journaled.id, journaled.attemptVersion, 0, null)
+      } catch (err: CancellationException) {
+        throw err
+      } catch (_: Throwable) {
+        null
       }
-      if (claimed == 0) return true
-      if (journaled.gatedEpoch != null && journaled.gatedEpoch != currentCacheScope()?.connectionGeneration) {
-        // A reconnect landed between admission and this claim; command-shaped input never
-        // auto-replays across connection epochs, so the claimed row parks for explicit retry.
-        persistJournaledSendState(journaled, ChatOutboxStatus.Failed, OUTBOX_CONNECTION_CHANGED_ERROR)
-        return true
-      }
+    publishOutbox()
+    if (claimed == null) {
+      // The claim could not be made durable, so the admitted row still has no dispatcher.
+      // Hand delivery to the flush lane instead of reporting success with no active owner.
+      requestOutboxFlush()
+      return true
+    }
+    if (claimed == 0) return true
+    if (journaled.gatedEpoch != null && journaled.gatedEpoch != currentCacheScope()?.connectionGeneration) {
+      // A reconnect landed between admission and this claim; command-shaped input never
+      // auto-replays across connection epochs, so the claimed row parks for explicit retry.
+      persistJournaledSendState(journaled, ChatOutboxStatus.Failed, OUTBOX_CONNECTION_CHANGED_ERROR)
+      return true
     }
 
-    val runId = journaled?.id ?: UUID.randomUUID().toString()
+    val runId = journaled.id
 
     val optimisticMessage = optimisticUserMessage(runId = runId, text = text, attachments = attachments)
     pendingRunProjectionsByRunId[runId] =
@@ -2875,6 +3423,7 @@ class ChatController internal constructor(
       clearPendingRun(settledRunId)
       removeOptimisticMessage(settledRunId)
       unresolvedRepliesByRunId.remove(settledRunId)
+      if (runDiagnosticOwner?.runId == settledRunId) runDiagnosticOwner = null
     }
 
     // Dispatch ownership lives in the controller scope: cancelling the calling UI scope
@@ -2887,7 +3436,7 @@ class ChatController internal constructor(
             buildChatSendParams(
               // Dispatch exactly what was journaled: the row's captured session key is the
               // idempotent identity a replay after process death would use.
-              sessionKey = journaled?.sessionKey ?: sessionKey,
+              sessionKey = journaled.sessionKey,
               ownerAgentId = capturedOwner.agentId,
               text = text,
               thinking = thinking,
@@ -2905,7 +3454,7 @@ class ChatController internal constructor(
           } else {
             markJournaledSendAccepted(journaled)
             val ackRunId = ack.runId
-            if (journaled != null && ackRunId != null && ackRunId != journaled.id) {
+            if (ackRunId != null && ackRunId != journaled.id) {
               acknowledgedRunIdByRowId[journaled.id] = ackRunId
             }
           }
@@ -2933,7 +3482,7 @@ class ChatController internal constructor(
                 updateLocalizedErrorText(nativeText("Chat failed before the run started; try again."))
               }
               // The parked row owns the input; restoring the draft would duplicate it.
-              journaled != null
+              true
             }
           } else {
             true
@@ -2944,26 +3493,20 @@ class ChatController internal constructor(
           // The frame provably never entered the socket queue. The journaled row stays queued and
           // reconnect flush owns delivery, exactly like the flush path treats not-dispatched sends;
           // deleting here could lose fire-and-forget input if the process died after the delete.
-          if (journaled != null) {
-            persistJournaledSendState(journaled, ChatOutboxStatus.Queued, err.message)
-            settleProjectedRun(runId)
-            // The transport is effectively down; drop health so the next health event re-flushes.
-            if (sendCacheScope == currentCacheScope()) _healthOk.value = false
-            publishOutbox()
-            true
-          } else {
-            settleProjectedRun(runId)
-            if (isCapturedOwnerCurrent()) updateErrorText(err.message)
-            false
-          }
+          persistJournaledSendState(journaled, ChatOutboxStatus.Queued, err.message)
+          settleProjectedRun(runId)
+          // The transport is effectively down; drop health so the next health event re-flushes.
+          if (sendCacheScope == currentCacheScope()) _healthOk.value = false
+          publishOutbox()
+          true
         } catch (err: GatewayRequestDefinitiveFailure) {
           // An ok:false response proves transmission, not that this idempotency key was never run;
           // park the journaled copy for review instead of deleting a possibly delivered send.
           markJournaledSendUnconfirmed(journaled)
           settleProjectedRun(runId)
           if (isCapturedOwnerCurrent()) updateErrorText(err.message)
-          // The parked row owns the input; only the journal-less path refuses the send.
-          journaled != null
+          // The parked row owns the input; restoring the draft would duplicate it.
+          true
         } catch (_: GatewayRequestOutcomeUnknown) {
           // A transport failure cannot distinguish rejection from an accepted send whose ACK was
           // lost. Keep the journaled row until history confirms or reconciliation parks it.
@@ -2984,8 +3527,8 @@ class ChatController internal constructor(
           settleProjectedRun(runId)
           if (isCapturedOwnerCurrent()) updateErrorText(err.message)
           // With a journaled row parked for review, the composer must not restore a duplicate
-          // draft: the row owns the input now. Only the journal-less path refuses the send.
-          journaled != null
+          // draft: the row owns the input now.
+          true
         }
       }
     return dispatch.await()
@@ -3043,14 +3586,24 @@ class ChatController internal constructor(
       )
     val clockKey =
       when {
-        selectedRunId != null && selectedRunId in liveLocalRunIds ->
+        selectedRunId != null && selectedRunId in liveLocalRunIds -> {
           pendingRunProjectionsByRunId[selectedRunId]?.optimisticMessage?.id
             ?: optimisticMessagesByRunId[selectedRunId]?.id
             ?: unresolvedRepliesByRunId[selectedRunId]?.id
             ?: selectedRunId
-        selectedRunId != null -> selectedRunId
-        activeCount > 0 -> session?.startedAt?.let { "${_sessionKey.value}:active:$it" } ?: "${_sessionKey.value}:active"
-        else -> null
+        }
+
+        selectedRunId != null -> {
+          selectedRunId
+        }
+
+        activeCount > 0 -> {
+          session?.startedAt?.let { "${_sessionKey.value}:active:$it" } ?: "${_sessionKey.value}:active"
+        }
+
+        else -> {
+          null
+        }
       }
     _pendingRunCount.value = localRunIds.size
     selectedActiveRunPresentationState.value =
@@ -3186,6 +3739,7 @@ class ChatController internal constructor(
     }
     armPendingRunTimeout(runId)
     synchronized(pendingRuns) { pendingRuns.add(runId) }
+    runDiagnosticOwner = RunDiagnosticOwner(projection.owner, runId)
     updateErrorText(null)
     _streamingAssistantText.value = null
     pendingToolCallsById.clear()
@@ -3195,6 +3749,7 @@ class ChatController internal constructor(
 
   /** Hides another owner's live run without discarding the ownership needed to restore it. */
   private fun unprojectPendingRun(runId: String) {
+    if (runDiagnosticOwner?.runId == runId) runDiagnosticOwner = null
     pendingRunTimeoutJobs.remove(runId)?.cancel()
     removeOptimisticMessage(runId)
     unresolvedRepliesByRunId.remove(runId)
@@ -3294,9 +3849,8 @@ class ChatController internal constructor(
 
   /** True when an older durable row for the same session must send before this one. */
   private suspend fun sessionHasDurableBacklog(row: ChatOutboxItem): Boolean {
-    val outbox = commandOutbox ?: return false
     val outboxScope = currentCacheScope() ?: return false
-    val rows = runCatching { outbox.load(outboxScope.gatewayId) }.getOrDefault(emptyList())
+    val rows = runCatching { commandOutbox.load(outboxScope.gatewayId) }.getOrDefault(emptyList())
     return rows.any { other ->
       other.id != row.id &&
         other.createdAtMs < row.createdAtMs &&
@@ -3344,11 +3898,11 @@ class ChatController internal constructor(
     right: String,
   ): Boolean = normalizeRequestedSessionKey(left) == normalizeRequestedSessionKey(right)
 
-  private suspend fun markJournaledSendAccepted(row: ChatOutboxItem?) {
+  private suspend fun markJournaledSendAccepted(row: ChatOutboxItem) {
     persistJournaledSendState(row, ChatOutboxStatus.Accepted, null)
   }
 
-  private suspend fun markJournaledSendUnconfirmed(row: ChatOutboxItem?) {
+  private suspend fun markJournaledSendUnconfirmed(row: ChatOutboxItem) {
     persistJournaledSendState(row, ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
   }
 
@@ -3356,16 +3910,14 @@ class ChatController internal constructor(
   // state cannot be made durable must not silently stay 'sending' (it would block its session
   // with no user action available); the re-armed recovery sweep parks it once storage recovers.
   private suspend fun persistJournaledSendState(
-    row: ChatOutboxItem?,
+    row: ChatOutboxItem,
     status: ChatOutboxStatus,
     lastError: String?,
   ) {
-    val outbox = commandOutbox ?: return
-    if (row == null) return
     if (status != ChatOutboxStatus.Accepted) acknowledgedRunIdByRowId.remove(row.id)
     val persisted =
       try {
-        outbox.updateStatusIfAttempt(
+        commandOutbox.updateStatusIfAttempt(
           row.id,
           row.attemptVersion,
           status,
@@ -3424,21 +3976,23 @@ class ChatController internal constructor(
     when (event) {
       "tick" -> {
         if (restoreRunStateOnReconnect) {
-          refreshHistoryForRecovery(forceHealth = true, completesReconnectRecovery = true)
+          refreshHistoryForRecovery(forceHealth = true)
         } else {
-          scope.launch { pollHealthIfNeeded(force = false) }
+          scope.launch { pollHealthIfNeeded() }
         }
       }
+
       "health" -> {
         refreshQuestions()
         refreshProgressCard()
         if (restoreRunStateOnReconnect) {
-          refreshHistoryForRecovery(forceHealth = true, completesReconnectRecovery = true)
+          refreshHistoryForRecovery(forceHealth = true)
         } else {
           markHealthOk()
           refreshCommandsAfterReconnect()
         }
       }
+
       "seqGap" -> {
         // Metadata notifications can be dropped too, even when history and health remain current.
         refreshCommands()
@@ -3454,15 +4008,21 @@ class ChatController internal constructor(
         refreshProgressCard()
         refreshHistoryForRecovery()
       }
+
       "progressCard.changed" -> {
         if (payloadJson.isNullOrBlank()) return
         handleProgressCardChanged(payloadJson)
       }
+
       "chat" -> {
         if (payloadJson.isNullOrBlank()) return
         handleChatEvent(payloadJson)
       }
-      "chat.metadata.changed" -> refreshCommands()
+
+      "chat.metadata.changed" -> {
+        refreshCommands()
+      }
+
       "sessions.changed" -> {
         if (payloadJson.isNullOrBlank()) {
           refreshSessionsForCurrentWindow()
@@ -3470,26 +4030,33 @@ class ChatController internal constructor(
           handleSessionsChangedEvent(payloadJson)
         }
       }
+
       "session.observer" -> {
         if (payloadJson.isNullOrBlank()) return
         handleSessionObserverEvent(payloadJson)
       }
+
       "session.message" -> {
         if (payloadJson.isNullOrBlank()) return
-        handleSessionMessageEvent(payloadJson)
+        val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+        applySessionEvent(payload = payload, refreshWhenMissing = false)
       }
+
       "agent" -> {
         if (payloadJson.isNullOrBlank()) return
         handleAgentEvent(payloadJson)
       }
+
       "task" -> {
         if (payloadJson.isNullOrBlank()) return
         handleTaskEvent(payloadJson)
       }
+
       "question.requested" -> {
         if (payloadJson.isNullOrBlank()) return
         handleQuestionRequested(payloadJson)
       }
+
       "question.resolved" -> {
         if (payloadJson.isNullOrBlank()) return
         handleQuestionResolved(payloadJson)
@@ -3930,17 +4497,17 @@ class ChatController internal constructor(
    * owned until that authoritative snapshot resolves them; resetting healthOk here
    * would block sends after reconnect.
    */
-  private fun refreshHistoryForRecovery(
-    forceHealth: Boolean = false,
-    completesReconnectRecovery: Boolean = false,
-  ) {
+  private fun refreshHistoryForRecovery(forceHealth: Boolean = false) {
     val (key, generation) =
       synchronized(gatewayScopeApplyLock) {
+        // Automatic hydration retries history failures without dismissing unrelated action errors.
+        if (historyLoadErrorGeneration != null) updateErrorText(null)
         val key = normalizeRequestedSessionKey(_sessionKey.value)
         val generation = historyLoadGeneration.incrementAndGet()
         _sessionKey.value = key
         _historyLoading.value = true
-        if (completesReconnectRecovery) reconnectRecoveryGeneration = generation
+        // A newer history request replaces transcript ownership, not an outstanding forced poll.
+        pendingHealthRefresh = HealthRefresh(generation, forceHealth || pendingHealthRefresh?.force == true, refreshSessions = true)
         key to generation
       }
     val restoredRunIds =
@@ -3956,71 +4523,61 @@ class ChatController internal constructor(
       synchronized(pendingRuns) {
         pendingRuns + optimisticMessagesByRunId.keys + unresolvedRepliesByRunId.keys
       }
-    scope.launch {
-      bootstrap(
-        sessionKey = key,
-        generation = generation,
-        forceHealth = forceHealth,
-        refreshSessions = true,
-        runIdsToReconcile = runIdsToReconcile,
-      )
+    bootstrap(sessionKey = key, generation = generation, runIdsToReconcile = runIdsToReconcile)
+  }
+
+  // Once a chat is selected, cancelling its UI caller must not abandon hydration.
+  private fun bootstrap(
+    sessionKey: String,
+    generation: Long,
+    runIdsToReconcile: Set<String> = emptySet(),
+  ) = scope.async {
+    val healthRefresh = synchronized(gatewayScopeApplyLock) { pendingHealthRefresh?.takeIf { it.historyGeneration == generation } }
+    try {
+      // Cache-first cold open: live history always replaces cached rows wholesale.
+      primeFromCache(sessionKey, generation)
+      var historyResult: HistoryRefreshResult
+      do {
+        currentCoroutineContext().ensureActive()
+        if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return@async
+        historyResult =
+          fetchAndApplyHistory(
+            sessionKey,
+            generation,
+            purpose = HistoryRefreshPurpose.RestoreSession,
+            runIdsToReconcile = runIdsToReconcile,
+            refreshBranches = true,
+          )
+        // Branch evidence can fence the only recovery request without a successor load.
+        // Keep this owner, but fetch new history rather than adopting the rejected response.
+      } while (historyResult == HistoryRefreshResult.BranchInvalidated)
+      if (historyResult !is HistoryRefreshResult.Applied) return@async
+      if (isSwarmEnabled()) refreshSwarmSessions()
+    } catch (err: CancellationException) {
+      throw err
+    } catch (err: Throwable) {
+      synchronized(gatewayScopeApplyLock) {
+        if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return@async
+        updateErrorText(err.message, historyGeneration = generation)
+      }
+    } finally {
+      finishHistoryHealth(healthRefresh, generation)
+      synchronized(gatewayScopeApplyLock) {
+        if (isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) {
+          _historyLoading.value = false
+          scheduleRecoveryHistoryReconciliation(sessionKey, generation, runIdsToReconcile)
+        }
+      }
     }
   }
 
-  private suspend fun bootstrap(
-    sessionKey: String,
+  private fun finishHistoryHealth(
+    refresh: HealthRefresh?,
     generation: Long,
-    forceHealth: Boolean,
-    refreshSessions: Boolean,
-    runIdsToReconcile: Set<String> = emptySet(),
   ) {
-    val ownsReconnectRecovery =
-      synchronized(gatewayScopeApplyLock) {
-        reconnectRecoveryGeneration == generation
-      }
-    // Cache-first cold open: prime before the live request so ordering is deterministic and the
-    // live chat.history response always replaces cached rows wholesale.
-    primeFromCache(sessionKey, generation)
-    try {
-      val historyResult =
-        fetchAndApplyHistory(
-          sessionKey,
-          generation,
-          updateSessionInfo = true,
-          runIdsToReconcile = runIdsToReconcile,
-          refreshBranches = true,
-        )
-      if (historyResult !is HistoryRefreshResult.Applied) {
-        if (
-          historyResult == HistoryRefreshResult.OwnerUnavailable &&
-          isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())
-        ) {
-          _historyLoading.value = false
-        }
-        return
-      }
-
-      if (isSwarmEnabled()) {
-        refreshSwarmSessions()
-      }
-      if (!ownsReconnectRecovery) {
-        pollHealthIfNeeded(force = forceHealth)
-      }
-      if (refreshSessions) {
-        fetchSessions(limit = 50)
-      }
-    } catch (err: Throwable) {
-      if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return
-      updateErrorText(err.message, historyGeneration = generation)
-      _historyLoading.value = false
-    } finally {
-      if (isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) {
-        scheduleRecoveryHistoryReconciliation(
-          sessionKey = sessionKey,
-          generation = generation,
-          runIds = runIdsToReconcile,
-        )
-      }
+    synchronized(gatewayScopeApplyLock) {
+      if (refresh == null || pendingHealthRefresh !== refresh || refresh.historyGeneration != generation) return
+      refresh.historyOwners -= 1
     }
   }
 
@@ -4031,188 +4588,232 @@ class ChatController internal constructor(
   private suspend fun fetchAndApplyHistory(
     sessionKey: String,
     generation: Long,
-    updateSessionInfo: Boolean,
+    purpose: HistoryRefreshPurpose,
     runIdsToReconcile: Set<String> = emptySet(),
     markCompletedTranscript: Boolean = false,
     refreshBranches: Boolean = false,
     mutationReconciliationState: ChatOutboxBranchState? = null,
   ): HistoryRefreshResult {
     val requestSequence = historyRequestSequence.incrementAndGet()
-    val runIdsOwnedAtRequest = synchronized(pendingRuns) { pendingRuns.toSet() }
-    val requestModelSelectionGeneration = modelSelectionGeneration.get()
-    val requestCacheScope = currentCacheScope()
-    val requestTracksDefaultAgent = activeSessionTracksDefaultAgent(sessionKey)
-    awaitMainSessionReadiness(sessionKey, requestCacheScope)
-    val requestDefaultAgentRevision = currentDefaultAgentRevision()
-    val requestAgentId = resolveAgentIdForSessionKey(sessionKey) ?: return HistoryRefreshResult.OwnerUnavailable
+    val healthRefresh =
+      synchronized(gatewayScopeApplyLock) {
+        if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return HistoryRefreshResult.Superseded
+        pendingHealthRefresh?.takeIf { it.historyGeneration?.let { owner -> owner <= generation } == true }?.also {
+          // Only current-generation history can finish the obligation; an older request
+          // must not release it while a same-generation sibling can still apply.
+          if (it.historyGeneration != generation) {
+            it.historyGeneration = generation
+            it.historyOwners = 0
+          }
+          it.historyOwners += 1
+        }
+      }
+    try {
+      val runIdsOwnedAtRequest = synchronized(pendingRuns) { pendingRuns.toSet() }
+      val reconciliationRunIds =
+        if (purpose == HistoryRefreshPurpose.Transcript) {
+          runIdsOwnedAtRequest + optimisticMessagesByRunId.keys + unresolvedRepliesByRunId.keys
+        } else {
+          runIdsToReconcile
+        }
+      val requestCacheScope = currentCacheScope()
+      val requestTracksDefaultAgent = activeSessionTracksDefaultAgent(sessionKey)
+      awaitMainSessionReadiness(sessionKey, requestCacheScope)
+      val requestSettingsGeneration = settingsPublicationGeneration.get()
+      val requestDefaultAgentRevision = currentDefaultAgentRevision()
+      val requestAgentId = resolveAgentIdForSessionKey(sessionKey) ?: return HistoryRefreshResult.OwnerUnavailable
 
-    fun requestOwnerIsCurrent(): Boolean =
-      resolveAgentIdForSessionKey(_sessionKey.value) == requestAgentId &&
-        (
-          !requestTracksDefaultAgent ||
-            (currentDefaultAgentRevision() == requestDefaultAgentRevision && effectiveDefaultAgentId() == requestAgentId)
-        )
-
-    fun isCurrent(): Boolean =
-      isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get()) &&
-        requestCacheScope == currentCacheScope() &&
-        requestOwnerIsCurrent() &&
-        requestSequence >= latestAppliedHistoryRequest
-
-    if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return HistoryRefreshResult.Superseded
-    val branchSnapshot = currentSessionActionSnapshot(sessionKey)
-    // Publishing a transcript establishes enqueue intent, not dispatch readiness. A requested
-    // listing must still settle the active branch before health can release this scope.
-    if (refreshBranches) branchSnapshot?.let { markOutboxBranchUnreconciled(it.gatewayScope, it.outboxScope()) }
-    // Only a locally ambiguous mutation carries an earlier adoption boundary. Ordinary history
-    // (including remote branch events) must settle earlier input before becoming visible.
-    var historyBranchState = mutationReconciliationState ?: branchSnapshot?.let { branchState(it) }
-    val history =
-      try {
-        val historyJson =
-          requestGatewayBound(
-            requestCacheScope?.gatewayId,
-            "chat.history",
-            buildJsonObject {
-              put("sessionKey", JsonPrimitive(sessionKey))
-              put("agentId", JsonPrimitive(requestAgentId))
-            }.toString(),
+      fun requestOwnerIsCurrent(): Boolean =
+        resolveAgentIdForSessionKey(_sessionKey.value) == requestAgentId &&
+          (
+            !requestTracksDefaultAgent ||
+              (currentDefaultAgentRevision() == requestDefaultAgentRevision && effectiveDefaultAgentId() == requestAgentId)
           )
-        parseHistory(historyJson, sessionKey = sessionKey, previousMessages = _messages.value)
-      } catch (err: CancellationException) {
-        throw err
-      } catch (err: Throwable) {
-        if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return HistoryRefreshResult.Superseded
-        throw err
-      }
-    val applied =
-      historyPublicationMutex.withLock {
-        if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return@withLock false
-        val previousState =
-          historyBranchState?.let { captured ->
-            // Continue only a committed history publication from this load. Never recapture after
-            // enqueue or borrow authority from branch listings or mutation-lease changes.
-            publishedHistoryBranch
-              ?.takeIf {
-                mutationReconciliationState == null &&
-                  it.snapshot == branchSnapshot &&
-                  it.generation == generation &&
-                  it.state.revision > captured.revision
-              }?.state ?: captured
-          }
-        historyBranchState = previousState
-        val tip = history.messages.asReversed().firstNotNullOfOrNull { it.entryId }
-        if (
-          mutationReconciliationState == null &&
-          branchSnapshot != null &&
-          previousState != null &&
-          previousState.switchPendingSinceMs == null &&
-          (tip != null || history.messages.isEmpty())
-        ) {
-          // Room still checks the exact revision and parks all earlier input before publication.
-          historyBranchState = commandOutbox?.reconcileBranchScope(
-            gatewayId = requestCacheScope?.gatewayId ?: return@withLock false,
-            scope = branchSnapshot.outboxScope(),
-            evidence = ChatOutboxBranchEvidence.History(previousState),
-            activeLeafEntryId = tip,
-            activeTranscriptEntryIds = history.messages.mapNotNullTo(mutableSetOf()) { it.entryId },
-            lastError = OUTBOX_BRANCH_CHANGED_ERROR,
-          ) ?: return@withLock false
-        }
-        synchronized(gatewayScopeApplyLock) {
-          if (!isCurrent()) return@synchronized false
-          val runIdsOwnedAfterRequest =
-            synchronized(pendingRuns) {
-              pendingRuns.filterNotTo(mutableSetOf()) { it in runIdsOwnedAtRequest }
-            }
-          latestAppliedHistoryRequest = requestSequence
-          if (mutationReconciliationState == null && branchSnapshot != null && historyBranchState != previousState) {
-            historyBranchState?.let { publishedHistoryBranch = PublishedHistoryBranch(branchSnapshot, generation, it) }
-          }
-          if (updateSessionInfo) {
-            updateSessionFromHistory(history, publishRunState = false)
-            if (requestModelSelectionGeneration == modelSelectionGeneration.get()) {
-              _selectedModelRef.value = history.sessionInfo?.providerQualifiedModelRef()
-            }
-          }
-          transferLostAckOwnershipFromHistory(history)
-          resolvePersistedReplies(history.messages)
-          val snapshotRunId =
-            history.inFlightRun
-              ?.runId
-              ?.trim()
-              ?.takeIf { it.isNotEmpty() }
-          latestAppliedInFlightRunId = snapshotRunId
-          val optimisticRunIds = runIdsToReconcile.filterTo(mutableSetOf()) { optimisticMessagesByRunId.containsKey(it) }
-          prunePersistedOptimisticMessages(history.messages)
-          if (snapshotRunId == null) {
-            optimisticRunIds
-              .filterNot { runId ->
-                unknownOutcomeRunIds.contains(runId) && unresolvedRepliesByRunId.containsKey(runId)
-              }.filterNotTo(mutableSetOf()) { optimisticMessagesByRunId.containsKey(it) }
-              .forEach { clearPendingRun(it, publishRunState = false) }
-          }
-          if (snapshotRunId != null) {
-            runIdsToReconcile
-              .filterTo(mutableSetOf()) {
-                it != snapshotRunId &&
-                  !optimisticMessagesByRunId.containsKey(it) &&
-                  !unresolvedRepliesByRunId.containsKey(it)
-              }.forEach { clearPendingRun(it, publishRunState = false) }
-          }
-          val nextMessages = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
-          _messagesFromCache.value = false
-          _messages.value = nextMessages
-          val previousAnchor = _transcriptAnchor.value?.takeIf { it.sessionKey == sessionKey }
-          val completionSettled =
-            markCompletedTranscript &&
-              runIdsToReconcile.none(unresolvedRepliesByRunId::containsKey) &&
-              history.sessionInfo?.endedAt != null
-          _transcriptAnchor.value =
-            ChatTranscriptAnchorState(
-              sessionKey = sessionKey,
-              newestItemId = nextMessages.lastOrNull()?.id,
-              completedEndedAt =
-                if (completionSettled) history.sessionInfo.endedAt else previousAnchor?.completedEndedAt,
-              completedNewestItemId =
-                if (completionSettled) history.messages.lastOrNull()?.id else previousAnchor?.completedNewestItemId,
+
+      fun isCurrent(): Boolean =
+        isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get()) &&
+          requestCacheScope == currentCacheScope() &&
+          requestOwnerIsCurrent() &&
+          requestSequence >= latestAppliedHistoryRequest
+
+      if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return HistoryRefreshResult.Superseded
+      val branchSnapshot = currentSessionActionSnapshot(sessionKey)
+      // Publishing a transcript establishes enqueue intent, not dispatch readiness. A requested
+      // listing must still settle the active branch before health can release this scope.
+      if (refreshBranches) branchSnapshot?.let { markOutboxBranchUnreconciled(it.gatewayScope, it.outboxScope()) }
+      // Only a locally ambiguous mutation carries an earlier adoption boundary. Ordinary history
+      // (including remote branch events) must settle earlier input before becoming visible.
+      var historyBranchState = mutationReconciliationState ?: branchSnapshot?.let { branchState(it) }
+      val history =
+        try {
+          val historyJson =
+            requestGatewayBound(
+              requestCacheScope?.gatewayId,
+              "chat.history",
+              buildJsonObject {
+                put("sessionKey", JsonPrimitive(sessionKey))
+                put("agentId", JsonPrimitive(requestAgentId))
+              }.toString(),
             )
-          _sessionId.value = history.sessionId
-          markLiveHistoryApplied(sessionKey = sessionKey, sessionId = history.sessionId, generation = generation)
-          _historyLoading.value = false
-          if (historyLoadErrorGeneration == generation) {
-            updateErrorText(null)
-          }
-          if (history.inFlightRun == null) {
-            // Empty history is terminal proof for acknowledged runs. An unknown-outcome
-            // send stays owned until its reply persists, a terminal arrives, or it expires.
-            runIdsToReconcile
-              .filterNot { runId ->
-                unknownOutcomeRunIds.contains(runId) && unresolvedRepliesByRunId.containsKey(runId)
-              }.forEach { clearPendingRun(it, publishRunState = false) }
-          }
-          clearTransientRunUiIfIdle()
-          // All live history paths (bootstrap, reconnect recovery, cache-first
-          // replace) adopt the gateway's in-flight run snapshot so restored
-          // runs keep their pending state and streaming text.
-          adoptInFlightRun(history, runIdsOwnedAfterRequest)
-          publishRunPresentation()
-          history.thinkingLevel
-            ?.trim()
-            ?.takeIf { it.isNotEmpty() }
-            ?.let { _thinkingLevel.value = it }
-          enqueueTranscriptCacheWrite(requestCacheScope, requestAgentId, sessionKey, history.messages)
-          true
+          parseHistory(historyJson, sessionKey = sessionKey, previousMessages = _messages.value)
+        } catch (err: CancellationException) {
+          throw err
+        } catch (err: Throwable) {
+          if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return HistoryRefreshResult.Superseded
+          throw err
         }
+      var appliedHistoryEntry: ChatSessionEntry? = null
+      val applied =
+        historyPublicationMutex.withLock {
+          if (!synchronized(gatewayScopeApplyLock) { isCurrent() }) return@withLock HistoryRefreshResult.Superseded
+          val previousState =
+            historyBranchState?.let { captured ->
+              // Continue only a committed history publication from this load. Never recapture after
+              // enqueue or borrow authority from branch listings or mutation-lease changes.
+              publishedHistoryBranch
+                ?.takeIf {
+                  mutationReconciliationState == null &&
+                    it.snapshot == branchSnapshot &&
+                    it.generation == generation &&
+                    it.state.revision > captured.revision
+                }?.state ?: captured
+            }
+          historyBranchState = previousState
+          if (
+            mutationReconciliationState == null &&
+            branchSnapshot != null &&
+            previousState != null
+          ) {
+            historyBranchState = reconcileOutboxHistory(
+              gatewayId = requestCacheScope?.gatewayId ?: return@withLock HistoryRefreshResult.OwnerUnavailable,
+              branchScope = branchSnapshot.outboxScope(),
+              previousState = previousState,
+              history = history,
+            ) ?: return@withLock HistoryRefreshResult.BranchInvalidated
+          }
+          synchronized(gatewayScopeApplyLock) {
+            if (!isCurrent()) return@synchronized HistoryRefreshResult.Superseded
+            // Transcript events do not own settings or run state. They may finish
+            // a pending load only while that exact load still needs its snapshot.
+            val appliedPurpose =
+              if (
+                purpose == HistoryRefreshPurpose.Transcript &&
+                !hasCurrentHistorySnapshot(sessionKey)
+              ) {
+                HistoryRefreshPurpose.RestoreSession
+              } else {
+                purpose
+              }
+            val reconcileRunState = appliedPurpose != HistoryRefreshPurpose.Transcript
+            val runIdsOwnedAfterRequest =
+              synchronized(pendingRuns) {
+                pendingRuns.filterNotTo(mutableSetOf()) { it in runIdsOwnedAtRequest }
+              }
+            latestAppliedHistoryRequest = requestSequence
+            if (mutationReconciliationState == null && branchSnapshot != null && historyBranchState != previousState) {
+              historyBranchState?.let { publishedHistoryBranch = PublishedHistoryBranch(branchSnapshot, generation, it) }
+            }
+            val snapshotRunId =
+              history.inFlightRun
+                ?.runId
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+            if (reconcileRunState) {
+              // A newer settings observation invalidates only this projection,
+              // not the useful transcript carried by the same history response.
+              appliedHistoryEntry =
+                updateSessionFromHistory(
+                  history,
+                  ownerAgentId = requestAgentId,
+                  publishRunState = false,
+                  includeSessionInfo = appliedPurpose == HistoryRefreshPurpose.RestoreSession,
+                  preserveSessionSettings =
+                    requestSettingsGeneration != settingsPublicationGeneration.get() ||
+                      pendingSettingsMutations.containsKey(sessionSettingsKey(sessionKey)),
+                )
+              transferLostAckOwnershipFromHistory(history)
+              latestAppliedRunSnapshot = HistoryRunSnapshot(requestSequence, snapshotRunId)
+            }
+            resolvePersistedReplies(history.messages)
+            val optimisticRunIds = reconciliationRunIds.filterTo(mutableSetOf()) { optimisticMessagesByRunId.containsKey(it) }
+            prunePersistedOptimisticMessages(history.messages)
+            if (reconcileRunState && snapshotRunId == null) {
+              optimisticRunIds
+                .filterNot { runId ->
+                  unknownOutcomeRunIds.contains(runId) && unresolvedRepliesByRunId.containsKey(runId)
+                }.filterNotTo(mutableSetOf()) { optimisticMessagesByRunId.containsKey(it) }
+                .forEach { clearPendingRun(it, publishRunState = false) }
+            }
+            if (reconcileRunState && snapshotRunId != null) {
+              reconciliationRunIds
+                .filterTo(mutableSetOf()) {
+                  it != snapshotRunId &&
+                    !optimisticMessagesByRunId.containsKey(it) &&
+                    !unresolvedRepliesByRunId.containsKey(it)
+                }.forEach { clearPendingRun(it, publishRunState = false) }
+            }
+            val nextMessages = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
+            _messagesFromCache.value = false
+            _messages.value = nextMessages
+            val previousAnchor = _transcriptAnchor.value?.takeIf { it.sessionKey == sessionKey }
+            val completionSettled =
+              markCompletedTranscript &&
+                runIdsToReconcile.none(unresolvedRepliesByRunId::containsKey) &&
+                history.sessionInfo?.endedAt != null
+            _transcriptAnchor.value =
+              ChatTranscriptAnchorState(
+                sessionKey = sessionKey,
+                newestItemId = nextMessages.lastOrNull()?.id,
+                completedEndedAt =
+                  if (completionSettled) history.sessionInfo.endedAt else previousAnchor?.completedEndedAt,
+                completedNewestItemId =
+                  if (completionSettled) history.messages.lastOrNull()?.id else previousAnchor?.completedNewestItemId,
+              )
+            _sessionId.value = history.sessionId
+            history.sessionId?.let { sessionId ->
+              lastSelectedChatSessionByOwner[ChatAgentSessionSelectionOwner(requestCacheScope?.gatewayId, requestAgentId)]
+                ?.takeIf { it.key == sessionKey }
+                ?.observedSessionId = sessionId
+            }
+            markLiveHistoryApplied(sessionKey = sessionKey, sessionId = history.sessionId, generation = generation)
+            _historyLoading.value = false
+            if (historyLoadErrorGeneration == generation) {
+              updateErrorText(null)
+            }
+            if (reconcileRunState && history.inFlightRun == null) {
+              // Empty history is terminal proof for acknowledged runs. An unknown-outcome
+              // send stays owned until its reply persists, a terminal arrives, or it expires.
+              reconciliationRunIds
+                .filterNot { runId ->
+                  unknownOutcomeRunIds.contains(runId) && unresolvedRepliesByRunId.containsKey(runId)
+                }.forEach { clearPendingRun(it, publishRunState = false) }
+            }
+            if (reconcileRunState) {
+              clearTransientRunUiIfIdle()
+              adoptInFlightRun(history, runIdsOwnedAfterRequest)
+            }
+            publishRunPresentation()
+            enqueueTranscriptCacheWrite(requestCacheScope, requestAgentId, sessionKey, history.messages)
+            HistoryRefreshResult.Applied(historyBranchState, appliedPurpose)
+          }
+        }
+      if (applied !is HistoryRefreshResult.Applied) return applied
+      // Canonical history retires delivered rows before further RPCs can delay that proof.
+      // Resuming their queued successors still waits for branch reconciliation and health.
+      val outboxChanged =
+        requestCacheScope != null &&
+          reconcileDurableSendsAgainstHistory(requestCacheScope.gatewayId, history, requestAgentId)
+      publishOutbox()
+      appliedHistoryEntry?.let { acknowledgeUnreadIfNeeded(it.key, it, requireActive = true) }
+      if (refreshBranches && branchSnapshot != null) {
+        refreshSessionBranches(branchSnapshot, historyBranchState, BranchRefreshPurpose.Reconcile)
       }
-    if (!applied) return HistoryRefreshResult.Superseded
-    if (refreshBranches && branchSnapshot != null) {
-      refreshSessionBranches(branchSnapshot, historyBranchState, BranchRefreshPurpose.Reconcile)
+      pollHealthIfNeeded(sessionKey, generation)
+      if (outboxChanged) kickFlushForRoutedBacklog()
+      return applied
+    } finally {
+      finishHistoryHealth(healthRefresh, generation)
     }
-    completeReconnectRecoveryIfOwned(sessionKey, generation)
-    confirmDurableSendsFromHistory(requestCacheScope, history, requestAgentId)
-    publishOutbox()
-    return HistoryRefreshResult.Applied(historyBranchState)
   }
 
   private suspend fun awaitMainSessionReadiness(
@@ -4229,43 +4830,25 @@ class ChatController internal constructor(
     readiness?.await()
   }
 
-  /** Canonical history is the only proof that retires journaled sends; every apply checks it. */
-  private suspend fun confirmDurableSendsFromHistory(
-    requestCacheScope: ChatCacheScope?,
+  private suspend fun reconcileOutboxHistory(
+    gatewayId: String,
+    branchScope: ChatOutboxScope,
+    previousState: ChatOutboxBranchState,
     history: ChatHistory,
-    ownerAgentId: String,
-  ) {
-    val outbox = commandOutbox ?: return
-    val gatewayId = requestCacheScope?.gatewayId ?: return
-    if (reconcileDurableSendsAgainstHistory(outbox, gatewayId, history, ownerAgentId)) {
-      publishOutbox()
-      // Retired rows may have been session heads holding queued successors; resume delivery.
-      kickFlushForRoutedBacklog()
-    }
-  }
-
-  /** Lets whichever same-generation history request wins finish reconnect health recovery. */
-  private suspend fun completeReconnectRecoveryIfOwned(
-    sessionKey: String,
-    generation: Long,
-  ) {
-    val ownsRecovery =
-      synchronized(gatewayScopeApplyLock) {
-        reconnectRecoveryGeneration == generation &&
-          isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())
-      }
-    if (!ownsRecovery) return
-    pollHealthIfNeeded(force = true)
-    synchronized(gatewayScopeApplyLock) {
-      if (
-        reconnectRecoveryGeneration == generation &&
-        isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get()) &&
-        _healthOk.value
-      ) {
-        reconnectRecoveryGeneration = null
-        restoreRunStateOnReconnect = false
-      }
-    }
+  ): ChatOutboxBranchState? {
+    val tip = history.messages.asReversed().firstNotNullOfOrNull { it.entryId }
+    if (previousState.switchPendingSinceMs != null || (tip == null && history.messages.isNotEmpty())) return previousState
+    val persistedAttempts =
+      if (previousState.lastActiveLeafEntryId == null) history.persistedOutboxAttempts(commandOutbox.load(gatewayId)) else emptyMap()
+    // Room validates the captured revision and each attempt before publishing branch ownership.
+    return commandOutbox.reconcileBranchScope(
+      gatewayId = gatewayId,
+      scope = branchScope,
+      evidence = ChatOutboxBranchEvidence.History(previousState, persistedAttempts),
+      activeLeafEntryId = tip,
+      activeTranscriptEntryIds = history.messages.mapNotNullTo(mutableSetOf()) { it.entryId },
+      lastError = OUTBOX_BRANCH_CHANGED_ERROR,
+    )
   }
 
   /** Emits cached transcript/session rows for instant cold open; live data replaces them wholesale. */
@@ -4390,28 +4973,30 @@ class ChatController internal constructor(
     archived: Boolean = false,
   ): Boolean {
     val requestCacheScope = currentCacheScope()
+    val requestLimit = limit?.takeIf { it > 0 }
     val requestTracksDefaultAgent = activeSessionTracksDefaultAgent(_sessionKey.value)
     val requestDefaultAgentRevision = currentDefaultAgentRevision()
     val requestAgentId = resolveAgentIdForSessionKey(_sessionKey.value) ?: return false
 
     fun requestOwnerIsCurrent(): Boolean {
       val currentAgentId = resolveAgentIdForSessionKey(_sessionKey.value)
-      return currentAgentId == requestAgentId &&
+      return requestCacheScope == currentCacheScope() &&
+        currentAgentId == requestAgentId &&
         (!requestTracksDefaultAgent || currentDefaultAgentRevision() == requestDefaultAgentRevision)
     }
     val requestSequence = sessionsRequestSequence.incrementAndGet()
-    synchronized(gatewayScopeApplyLock) {
-      activeSessionRefreshesByScope[requestCacheScope] =
-        (activeSessionRefreshesByScope[requestCacheScope] ?: 0) + 1
-    }
+    val refresh = SessionSettingsRead(requestCacheScope, requestAgentId)
+    synchronized(gatewayScopeApplyLock) { activeSessionReads.add(refresh) }
     try {
+      retryFailedSessionSettingsReconciliations(requestCacheScope, requestAgentId)
       while (true) {
-        // A sessions list is one authoritative snapshot. Do not let it straddle
-        // any per-session settings transaction and restore stale picker state.
+        // A sessions list must not straddle local settings transactions or newer
+        // authoritative session events and restore stale picker state.
         waitForPendingSessionSettings(requestCacheScope)
-        if (!requestOwnerIsCurrent()) return false
+        if (!requestOwnerIsCurrent() || requestSequence != sessionsRequestSequence.get()) return false
         val settingsRevision =
           synchronized(gatewayScopeApplyLock) {
+            refresh.settingsSnapshots.clear()
             settingsMutationRevision(requestCacheScope)
           }
         val params =
@@ -4419,7 +5004,7 @@ class ChatController internal constructor(
             put("includeGlobal", JsonPrimitive(true))
             put("includeUnknown", JsonPrimitive(false))
             put("agentId", JsonPrimitive(requestAgentId))
-            if (limit != null && limit > 0) put("limit", JsonPrimitive(limit))
+            if (requestLimit != null) put("limit", JsonPrimitive(requestLimit))
             if (archived) put("archived", JsonPrimitive(true))
           }
         val res = requestGateway("sessions.list", params.toString())
@@ -4428,44 +5013,40 @@ class ChatController internal constructor(
           parsed.copy(
             sessions = parsed.sessions.map { session -> session.copy(ownerAgentId = requestAgentId) },
           )
-        val settingsChanged =
+        var retainedSessionKey: String? = null
+        val appliedSessions =
           synchronized(gatewayScopeApplyLock) {
-            settingsRevision != settingsMutationRevision(requestCacheScope) ||
-              hasPendingSessionSettings(requestCacheScope)
-          }
-        if (settingsChanged) continue
-        val retainedSessionKey =
-          synchronized(gatewayScopeApplyLock) {
-            if (requestCacheScope != currentCacheScope()) return false
             if (!requestOwnerIsCurrent()) return false
             if (requestSequence != sessionsRequestSequence.get()) return false
             if (
               settingsRevision != settingsMutationRevision(requestCacheScope) ||
-              hasPendingSessionSettings(requestCacheScope)
+              hasPendingSessionSettings(requestCacheScope) ||
+              refresh.hasConflictingSettings(result.sessions)
             ) {
               null
             } else {
-              _sessions.value = result.sessions
-              result.sessions
-                .firstOrNull { it.key == _sessionKey.value }
-                ?.let(::applyThinkingMetadata)
-              sessionsListArchived = archived
               val activeSessionKey = _sessionKey.value
+              // A filtered drawer page cannot evict the selected history row. Retain only
+              // the current owner's row; explicit deletion retires it before publication.
+              val selected =
+                _sessions.value
+                  .firstOrNull {
+                    it.key == activeSessionKey && it.ownerAgentId == requestAgentId
+                  }?.takeIf { result.sessions.none { row -> row.key == activeSessionKey } }
+              val sessions = if (selected == null) result.sessions else result.sessions + selected
+              _sessions.value = sessions
+              result.sessions.forEach { observeSessionSettings(it) }
+              sessionsListArchived = archived
+              sessionsListLimit = requestLimit
               val activeOutsideLocalWindow =
-                result.sessions
+                sessions
                   .drop(MAX_CACHED_SESSIONS)
                   .any { session -> session.key == activeSessionKey }
-              activeSessionKey.takeIf { result.isTruncated || activeOutsideLocalWindow }
+              retainedSessionKey = activeSessionKey.takeIf { selected != null || result.isTruncated || activeOutsideLocalWindow }
+              sessions
             }
           }
-        if (
-          synchronized(gatewayScopeApplyLock) {
-            settingsRevision != settingsMutationRevision(requestCacheScope) ||
-              hasPendingSessionSettings(requestCacheScope)
-          }
-        ) {
-          continue
-        }
+        if (appliedSessions == null) continue
         pruneRunTelemetryToAuthoritativeOwnership()
         publishRunPresentation()
         unreadPatchSessionKey?.let { trackedKey ->
@@ -4476,22 +5057,19 @@ class ChatController internal constructor(
           )
         }
         if (!archived) {
-          persistSessions(requestCacheScope, requestAgentId, result.sessions, retainedSessionKey)
+          persistSessions(requestCacheScope, requestAgentId, appliedSessions, retainedSessionKey)
         }
         return true
       }
+    } catch (err: CancellationException) {
+      throw err
     } catch (_: Throwable) {
       // best-effort
       return false
     } finally {
       synchronized(gatewayScopeApplyLock) {
-        val remaining = (activeSessionRefreshesByScope[requestCacheScope] ?: 1) - 1
-        if (remaining > 0) {
-          activeSessionRefreshesByScope[requestCacheScope] = remaining
-        } else {
-          activeSessionRefreshesByScope.remove(requestCacheScope)
-          pruneSettingsMutationRevision(requestCacheScope)
-        }
+        activeSessionReads.remove(refresh)
+        pruneSettingsMutationRevision(requestCacheScope)
       }
     }
     return false
@@ -4722,93 +5300,108 @@ class ChatController internal constructor(
     }
   }
 
-  private fun currentSessionWindowLimit(): Int = _sessions.value.size.takeIf { it > 0 } ?: 100
-
-  private suspend fun fetchSessionsForCurrentWindow(): Boolean = fetchSessions(limit = currentSessionWindowLimit(), archived = sessionsListArchived)
+  private suspend fun fetchSessionsForCurrentWindow(): Boolean = fetchSessions(limit = sessionsListLimit, archived = sessionsListArchived)
 
   private fun refreshSessionsForCurrentWindow() {
     scope.launch { fetchSessionsForCurrentWindow() }
   }
 
-  private fun refreshSessionsAfterAmbiguousDelete(sessionKey: String) {
-    val retiredKey = normalizeRequestedSessionKey(sessionKey)
-    val requestCacheScope = currentCacheScope()
-    val retiredOwner = resolveAgentIdForSessionKey(retiredKey)
-    val wasVisible = _sessions.value.any { it.key == retiredKey }
-    val requestArchived = sessionsListArchived
-    val requestMainSessionKey = appliedMainSessionKey
-    scope.launch {
-      ambiguousDeleteReconciliationMutex.withLock {
-        if (requestCacheScope == null || retiredOwner == null || requestCacheScope != currentCacheScope()) return@withLock
-        val result = fetchSessionsSnapshotForOwner(requestCacheScope, retiredOwner, requestArchived) ?: return@withLock
-        if (requestCacheScope != currentCacheScope()) return@withLock
-        // A truncated result cannot prove absence. Preserve all local state until a complete
-        // owner-scoped snapshot confirms that the formerly visible key is gone.
-        val removalConfirmed = wasVisible && !result.isTruncated && result.sessions.none { it.key == retiredKey }
-        if (!removalConfirmed) return@withLock
-        purgeSessionOwnedState(
-          retiredKey,
-          retiredOwner,
-          requestCacheScope,
-          mainSessionKey = requestMainSessionKey,
-        )
-        if (resolveAgentIdForSessionKey(_sessionKey.value) == retiredOwner) {
-          _sessions.value = _sessions.value.filterNot { it.key == retiredKey }
-          fallBackFromRetiredActiveSession(retiredKey)
+  private suspend fun pollHealthIfNeeded(
+    sessionKey: String = _sessionKey.value,
+    historyGeneration: Long? = null,
+  ) {
+    val refresh: HealthRefresh
+    val requestCacheScope: ChatCacheScope?
+    val selection: SessionActionSnapshot?
+    val defaultAgentRevision: Long?
+    val shouldPoll: Boolean
+    synchronized(gatewayScopeApplyLock) {
+      refresh =
+        if (historyGeneration == null) {
+          val pending = pendingHealthRefresh
+          // Failed history releases its hold, not Refresh's forced health check.
+          if (pending != null && pending.historyGeneration == historyLoadGeneration.get() && pending.historyOwners > 0) return
+          pending ?: HealthRefresh()
+        } else {
+          if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, historyGeneration, historyLoadGeneration.get())) return
+          pendingHealthRefresh?.takeIf { it.historyGeneration?.let { owner -> owner <= historyGeneration } == true } ?: return
         }
-      }
+      if (refresh.claimed) return
+      val now = System.currentTimeMillis()
+      shouldPoll = refresh.force || lastHealthPollAtMs?.let { now - it >= 10_000 } != false
+      if (!shouldPoll && historyGeneration == null) return
+      if (shouldPoll) lastHealthPollAtMs = now
+      refresh.claimed = true
+      pendingHealthRefresh = refresh
+      requestCacheScope = currentCacheScope()
+      selection = currentSessionActionSnapshot(sessionKey)
+      defaultAgentRevision = currentDefaultAgentRevision().takeIf { activeSessionTracksDefaultAgent(sessionKey) }
     }
+    val lease = captureRequestLease(requestCacheScope)
+
+    fun ownsSelection(): Boolean =
+      requestCacheScope == currentCacheScope() && sessionKey == _sessionKey.value &&
+        selection == currentSessionActionSnapshot(sessionKey) &&
+        (defaultAgentRevision == null || defaultAgentRevision == currentDefaultAgentRevision())
+
+    fun isCurrent(): Boolean = pendingHealthRefresh === refresh && ownsSelection()
+
+    // A session-action caller can stop awaiting history after this controller claimed its refresh.
+    scope
+      .async(start = CoroutineStart.UNDISPATCHED) {
+        try {
+          currentCoroutineContext().ensureActive()
+          val healthy =
+            if (!shouldPoll) {
+              null
+            } else {
+              try {
+                val connection = lease ?: throw GatewayRequestNotEnqueued("not connected")
+                connection.request("health", null) { enqueue ->
+                  synchronized(gatewayScopeApplyLock) {
+                    if (!isCurrent()) throw GatewayRequestNotEnqueued("chat refresh superseded")
+                    enqueue()
+                  }
+                }
+                currentCoroutineContext().ensureActive()
+                true
+              } catch (err: CancellationException) {
+                throw err
+              } catch (_: Throwable) {
+                false
+              }
+            }
+          var applied = false
+          val publish = {
+            synchronized(gatewayScopeApplyLock) {
+              if (isCurrent()) {
+                pendingHealthRefresh = null
+                if (healthy == true) {
+                  if (historyGeneration != null) restoreRunStateOnReconnect = false
+                  markHealthOk()
+                } else if (healthy == false) {
+                  _healthOk.value = false
+                }
+                applied = true
+              }
+            }
+          }
+          // Socket ownership precedes the logical lock, matching request enqueue and disconnect.
+          if (lease == null) publish() else lease.commitIfCurrent(publish)
+          if (!applied || lease?.isCurrent() != true || !synchronized(gatewayScopeApplyLock) { ownsSelection() }) return@async
+          if (healthy == true && !hasCurrentChatMetadata()) fetchChatMetadata()
+          if (refresh.refreshSessions && lease.isCurrent() && synchronized(gatewayScopeApplyLock) { ownsSelection() }) fetchSessions(limit = 50)
+        } finally {
+          synchronized(gatewayScopeApplyLock) { refresh.claimed = false }
+        }
+      }.await()
   }
 
-  private suspend fun fetchSessionsSnapshotForOwner(
-    requestCacheScope: ChatCacheScope,
-    ownerAgentId: String,
-    archived: Boolean,
-  ): SessionListResult? =
-    try {
-      val params =
-        buildJsonObject {
-          put("includeGlobal", JsonPrimitive(true))
-          put("includeUnknown", JsonPrimitive(false))
-          put("agentId", JsonPrimitive(ownerAgentId))
-          put("limit", JsonPrimitive(GROUP_MEMBER_FETCH_LIMIT))
-          if (archived) put("archived", JsonPrimitive(true))
-        }
-      parseSessions(requestGatewayBound(requestCacheScope.gatewayId, "sessions.list", params.toString()))
-    } catch (err: CancellationException) {
-      throw err
-    } catch (_: Throwable) {
-      null
-    }
-
-  private suspend fun pollHealthIfNeeded(force: Boolean) {
-    val requestCacheScope = currentCacheScope()
-    val now = System.currentTimeMillis()
-    val last = lastHealthPollAtMs
-    if (!force && last != null && now - last < 10_000) return
-    lastHealthPollAtMs = now
-    try {
-      requestGatewayBound(requestCacheScope?.gatewayId, "health", null)
-      if (requestCacheScope != currentCacheScope()) return
-      markHealthOk()
-      if (!hasCurrentChatMetadata()) {
-        fetchChatMetadata()
-      }
-    } catch (_: Throwable) {
-      if (requestCacheScope == currentCacheScope()) {
-        _healthOk.value = false
-      }
-    }
-  }
-
-  // Gateway-health transition is the single reconnect trigger for the outbox flush; it avoids a
-  // second reachability source (ConnectivityManager) that could disagree with gateway state.
+  // A healthy observation also releases work whose history waiter was cancelled after retirement.
+  // The single-flight dispatcher rechecks branch readiness and connection ownership before sending.
   private fun markHealthOk() {
-    val wasOk = _healthOk.value
     _healthOk.value = true
-    if (!wasOk && commandOutbox != null) {
-      requestOutboxFlush()
-    }
+    requestOutboxFlush()
   }
 
   private fun hasCurrentChatMetadata(): Boolean {
@@ -4826,7 +5419,6 @@ class ChatController internal constructor(
    * Returns null after surfacing an actionable error; the composer must keep the draft then.
    */
   private suspend fun enqueueDurableSend(
-    outbox: ChatCommandOutbox,
     outboxScope: ChatCacheScope?,
     sessionKey: String,
     text: String,
@@ -4861,7 +5453,7 @@ class ChatController internal constructor(
     val result =
       try {
         historyPublicationMutex.withLock {
-          outbox.enqueue(
+          commandOutbox.enqueue(
             gatewayId = outboxScope.gatewayId,
             sessionKey = sessionKey,
             text = text,
@@ -4885,24 +5477,28 @@ class ChatController internal constructor(
         publishOutbox()
         result.item
       }
+
       ChatOutboxEnqueueResult.QueueFull -> {
         if (canPublishUi()) {
           updateLocalizedErrorText(nativeText("Offline queue is full (\$OUTBOX_MAX_QUEUED messages); delete queued items first.", OUTBOX_MAX_QUEUED))
         }
         null
       }
+
       ChatOutboxEnqueueResult.AttachmentsTooLarge -> {
         if (canPublishUi()) {
           updateLocalizedErrorText(nativeText("Attachments are too large to queue for one message; remove some and try again."))
         }
         null
       }
+
       ChatOutboxEnqueueResult.StorageFull -> {
         if (canPublishUi()) {
           updateLocalizedErrorText(nativeText("Offline attachment storage is full; delete queued items first."))
         }
         null
       }
+
       ChatOutboxEnqueueResult.Unavailable -> {
         if (canPublishUi()) updateLocalizedErrorText(nativeText("Gateway health not OK; cannot send"))
         null
@@ -4916,7 +5512,6 @@ class ChatController internal constructor(
 
   /** Re-queues a failed outbox item and flushes immediately when the gateway is healthy. */
   fun retryOutboxCommand(id: String) {
-    val outbox = commandOutbox ?: return
     scope.launch {
       val outboxScope = currentCacheScope() ?: return@launch
       val row = _outboxItems.value.firstOrNull { it.id == id } ?: return@launch
@@ -4926,12 +5521,12 @@ class ChatController internal constructor(
       val retryOwnerAgentId =
         row.ownerAgentId ?: resolveAgentIdFromMainSessionKey(row.sessionKey)
       if (row.ownerAgentId == null && retryOwnerAgentId == null) return@launch
-      // requeueForRetry refreshes createdAt and requires this gateway's Failed state. The
+      // Retry refreshes createdAt and requires this gateway's Failed state. The
       // compare-and-set keeps stale gateway or double Retry taps from reviving an in-flight row.
       val requeued =
         runCatching {
           historyPublicationMutex.withLock {
-            outbox.requeueForRetryIfCurrent(
+            commandOutbox.requeueForRetryIfCurrent(
               gatewayId = outboxScope.gatewayId,
               id = id,
               expectedAttemptVersion = row.attemptVersion,
@@ -4954,9 +5549,8 @@ class ChatController internal constructor(
   }
 
   fun deleteOutboxCommand(id: String) {
-    val outbox = commandOutbox ?: return
     scope.launch {
-      runCatching { outbox.delete(id) }
+      runCatching { commandOutbox.delete(id) }
       acknowledgedRunIdByRowId.remove(id)
       publishOutbox()
       // Deleting an unresolved row can release its session's queued successors.
@@ -4965,24 +5559,18 @@ class ChatController internal constructor(
   }
 
   private suspend fun publishOutbox() {
-    val outbox = commandOutbox ?: return
-    val outboxScope = currentCacheScope()
-    if (outboxScope == null) {
-      _outboxItems.value = emptyList()
-      _outboxPresentationRestored.value = false
-      return
-    }
+    // Supersede older reads without making a claimed send wait on another refresh's I/O.
+    val (outboxScope, revision) =
+      synchronized(gatewayScopeApplyLock) {
+        currentCacheScope() to ++outboxPublicationRevision
+      }
+    // A cancelled UI caller can still owe its durable claim to the controller-owned dispatcher.
     val items =
-      runCatching { outbox.load(outboxScope.gatewayId) }
-        .getOrElse {
-          _outboxPresentationRestored.value = false
-          return
-        }
-    // Publish under the scope lock so rows loaded for an old gateway cannot land after a switch.
+      if (outboxScope == null) emptyList() else runCatching { commandOutbox.load(outboxScope.gatewayId) }.getOrNull()
     synchronized(gatewayScopeApplyLock) {
-      if (outboxScope == currentCacheScope()) {
-        _outboxItems.value = items
-        _outboxPresentationRestored.value = true
+      if (revision == outboxPublicationRevision && outboxScope == currentCacheScope()) {
+        if (items != null) _outboxItems.value = items
+        _outboxPresentationRestored.value = outboxScope != null && items != null
       }
     }
   }
@@ -4992,17 +5580,12 @@ class ChatController internal constructor(
    * repeatedly while a flush is already draining the queue.
    */
   private fun requestOutboxFlush() {
-    val outbox = commandOutbox ?: return
     outboxFlushRequested.set(true)
-    if (outbox.supportsBranchCoordination) {
-      outboxBranchReconcileRequested.set(true)
-      scope.launch { reconcileOutboxBranchesThenDrain(outbox) }
-      return
-    }
-    scope.launch { drainOutboxFlushRequests() }
+    outboxBranchReconcileRequested.set(true)
+    scope.launch { reconcileOutboxBranchesThenDrain() }
   }
 
-  private suspend fun reconcileOutboxBranchesThenDrain(outbox: ChatCommandOutbox) {
+  private suspend fun reconcileOutboxBranchesThenDrain() {
     if (!outboxBranchReconcileInFlight.compareAndSet(false, true)) return
     // Reconciliation and delivery have separate single-flight owners. If delivery won the race,
     // leave this request pending so its finally block schedules reconciliation after the drain.
@@ -5014,41 +5597,38 @@ class ChatController internal constructor(
       while (outboxBranchReconcileRequested.getAndSet(false)) {
         val gatewayScope = currentCacheScope()
         if (_healthOk.value && gatewayScope != null) {
-          reconcilePendingOutboxBranchScopes(outbox, gatewayScope)
+          reconcilePendingOutboxBranchScopes(gatewayScope)
         }
       }
     } finally {
       outboxBranchReconcileInFlight.set(false)
     }
     if (outboxBranchReconcileRequested.get()) {
-      scope.launch { reconcileOutboxBranchesThenDrain(outbox) }
+      scope.launch { reconcileOutboxBranchesThenDrain() }
       return
     }
     drainOutboxFlushRequests()
   }
 
   private suspend fun drainOutboxFlushRequests() {
-    val branchAwareOutbox = commandOutbox?.takeIf { it.supportsBranchCoordination }
     if (!outboxFlushInFlight.compareAndSet(false, true)) return
     try {
       if (
-        branchAwareOutbox != null &&
-        (outboxBranchReconcileInFlight.get() || outboxBranchReconcileRequested.get())
+        outboxBranchReconcileInFlight.get() || outboxBranchReconcileRequested.get()
       ) {
         outboxFlushRequested.set(true)
         if (!outboxBranchReconcileInFlight.get()) {
-          scope.launch { reconcileOutboxBranchesThenDrain(branchAwareOutbox) }
+          scope.launch { reconcileOutboxBranchesThenDrain() }
         }
         return
       }
       while (outboxFlushRequested.getAndSet(false)) {
         if (
-          branchAwareOutbox != null &&
-          (outboxBranchReconcileInFlight.get() || outboxBranchReconcileRequested.get())
+          outboxBranchReconcileInFlight.get() || outboxBranchReconcileRequested.get()
         ) {
           outboxFlushRequested.set(true)
           if (!outboxBranchReconcileInFlight.get()) {
-            scope.launch { reconcileOutboxBranchesThenDrain(branchAwareOutbox) }
+            scope.launch { reconcileOutboxBranchesThenDrain() }
           }
           return
         }
@@ -5071,11 +5651,10 @@ class ChatController internal constructor(
   }
 
   private suspend fun flushOutboxPass() {
-    val outbox = commandOutbox ?: return
     // The unscoped recovery sweep must succeed before this process claims a row. A transient
     // storage failure stays retryable, but never lets younger queued work bypass an ambiguous send.
-    outboxRecoveryJob?.join()
-    if (!recoverInterruptedOutboxSends(outbox)) {
+    outboxRecoveryJob.join()
+    if (!recoverInterruptedOutboxSends()) {
       _healthOk.value = false
       publishOutbox()
       return
@@ -5085,19 +5664,25 @@ class ChatController internal constructor(
       // The whole flush is bound to one gateway scope; a connection switch mid-flush stops it
       // and the next health transition flushes under the new scope.
       val flushScope = currentCacheScope() ?: return
-      runCatching { outbox.expireStale(flushScope.gatewayId, System.currentTimeMillis()) }
+      runCatching { commandOutbox.expireStale(flushScope.gatewayId, System.currentTimeMillis()) }
       publishOutbox()
       while (_healthOk.value && currentCacheScope() == flushScope) {
-        val rows = runCatching { outbox.load(flushScope.gatewayId) }.getOrDefault(emptyList())
-        if (parkStaleGatedRows(outbox, rows, flushScope)) {
+        val rows = runCatching { commandOutbox.load(flushScope.gatewayId) }.getOrDefault(emptyList())
+        if (parkStaleGatedRows(rows, flushScope)) {
           publishOutbox()
           continue
         }
         val next = nextFlushableRow(rows, flushScope) ?: break
-        when (sendOutboxItem(outbox, next, flushScope)) {
-          OutboxSendOutcome.Sent -> flushedAny = true
+        when (sendOutboxItem(next, flushScope)) {
+          OutboxSendOutcome.Sent -> {
+            flushedAny = true
+          }
+
           OutboxSendOutcome.Continue -> {}
-          OutboxSendOutcome.Stop -> break
+
+          OutboxSendOutcome.Stop -> {
+            break
+          }
         }
       }
       // Accepted rows from an earlier process have no live run ownership; prove them against
@@ -5105,10 +5690,10 @@ class ChatController internal constructor(
       // second pass (after a short delay) both confirms turns whose transcript write lagged the
       // ACK and provides the second sighting that parks genuinely lost sends. Confirmations can
       // release queued successors in the same session, so they request a rerun of the drain.
-      if (reconcileOrphanAcceptedRows(outbox, flushScope) > 0) {
+      if (reconcileOrphanAcceptedRows(flushScope) > 0) {
         delay(recoveryHistoryRetryDelayMs)
         if (_healthOk.value && currentCacheScope() == flushScope) {
-          reconcileOrphanAcceptedRows(outbox, flushScope)
+          reconcileOrphanAcceptedRows(flushScope)
         }
       }
     } finally {
@@ -5133,8 +5718,7 @@ class ChatController internal constructor(
     for (row in rows) {
       val session: Any = row.outboxScope() ?: normalizeRequestedSessionKey(row.sessionKey)
       val branchReady =
-        !requireNotNull(commandOutbox).supportsBranchCoordination ||
-          row.outboxScope()?.let { isOutboxBranchReconciled(gatewayScope, it) } == true
+        row.outboxScope()?.let { isOutboxBranchReconciled(gatewayScope, it) } == true
       if (row.status == ChatOutboxStatus.Queued && session !in blockedSessions && branchReady) return row
       if (outboxRowUnresolved(row)) blockedSessions.add(session)
     }
@@ -5142,11 +5726,9 @@ class ChatController internal constructor(
   }
 
   private suspend fun reconcilePendingOutboxBranchScopes(
-    outbox: ChatCommandOutbox,
     flushScope: ChatCacheScope,
   ) {
-    if (!outbox.supportsBranchCoordination) return
-    val rows = runCatching { outbox.load(flushScope.gatewayId) }.getOrDefault(emptyList())
+    val rows = runCatching { commandOutbox.load(flushScope.gatewayId) }.getOrDefault(emptyList())
     val grouped =
       rows
         .filter { it.status != ChatOutboxStatus.Failed }
@@ -5160,7 +5742,7 @@ class ChatController internal constructor(
     for (branchScope in branchScopes) {
       val scopedRows = grouped[branchScope].orEmpty()
       if (isOutboxBranchReconciled(flushScope, branchScope)) continue
-      val state = outbox.branchState(flushScope.gatewayId, branchScope) ?: continue
+      val state = commandOutbox.branchState(flushScope.gatewayId, branchScope) ?: continue
       val reconciliationKey = ReconciledOutboxBranchScope(flushScope, branchScope)
       val savedCandidate = ambiguousMutationReconciliationStates[reconciliationKey]
       val mutationReconciliationState = savedCandidate?.takeIf { it.revision == state.revision }
@@ -5193,9 +5775,11 @@ class ChatController internal constructor(
                   put("agentId", JsonPrimitive(branchScope.ownerAgentId))
                 }.toString(),
               )
-            parseHistory(historyJson, sessionKey = sessionKey, previousMessages = emptyList())
-              .messages
-              .mapNotNullTo(mutableSetOf()) { it.entryId }
+            val history = parseHistory(historyJson, sessionKey = sessionKey, previousMessages = emptyList())
+            if (mutationReconciliationState == null) {
+              savedState = reconcileOutboxHistory(flushScope.gatewayId, branchScope, savedState, history) ?: continue
+            }
+            history.messages.mapNotNullTo(mutableSetOf()) { it.entryId }
           }
         val branches =
           requestSessionBranches(
@@ -5205,7 +5789,7 @@ class ChatController internal constructor(
           )
         val activeLeaf = if (branches.isEmpty()) null else activeBranchLeafEntryId(branches) ?: continue
         if (
-          outbox.reconcileBranchScope(
+          commandOutbox.reconcileBranchScope(
             gatewayId = flushScope.gatewayId,
             scope = branchScope,
             evidence = ChatOutboxBranchEvidence.BranchListing(savedState, branches.mapTo(mutableSetOf()) { it.leafEntryId }),
@@ -5245,7 +5829,6 @@ class ChatController internal constructor(
   // Gated command rows enqueued under an older connection epoch park instead of auto-replaying;
   // returns true when any row changed so the flush loop reloads before selecting.
   private suspend fun parkStaleGatedRows(
-    outbox: ChatCommandOutbox,
     rows: List<ChatOutboxItem>,
     flushScope: ChatCacheScope,
   ): Boolean {
@@ -5258,7 +5841,7 @@ class ChatController internal constructor(
       if (!stale) continue
       // A park that cannot be persisted must fail closed: reporting it as parked would make
       // the flush loop reload the same queued row and spin while health stays OK.
-      val persisted = updateOutboxStatusOrNull(outbox, row, ChatOutboxStatus.Failed, OUTBOX_CONNECTION_CHANGED_ERROR)
+      val persisted = updateOutboxStatusOrNull(row, ChatOutboxStatus.Failed, OUTBOX_CONNECTION_CHANGED_ERROR)
       if (persisted == null) {
         // Returning true here re-enters the loop, whose health check now stops the pass;
         // falling through instead would dispatch the still-queued stale row this pass.
@@ -5273,10 +5856,9 @@ class ChatController internal constructor(
 
   /** Reconciles orphaned accepted rows against per-session history; returns how many remain. */
   private suspend fun reconcileOrphanAcceptedRows(
-    outbox: ChatCommandOutbox,
     flushScope: ChatCacheScope,
   ): Int {
-    val rows = runCatching { outbox.load(flushScope.gatewayId) }.getOrDefault(emptyList())
+    val rows = runCatching { commandOutbox.load(flushScope.gatewayId) }.getOrDefault(emptyList())
     val orphanSessions =
       rows
         .filter { it.status == ChatOutboxStatus.Accepted && !locallyOwnedOutboxRow(it.id) }
@@ -5290,6 +5872,9 @@ class ChatController internal constructor(
       if (!_healthOk.value || currentCacheScope() != flushScope) break
       val history =
         try {
+          val branchScope = ChatOutboxScope(owner.sessionKey, owner.agentId)
+          val previousState = commandOutbox.branchState(flushScope.gatewayId, branchScope) ?: continue
+          if (previousState.switchPendingSinceMs != null) continue
           val historyJson =
             requestGatewayBound(
               flushScope.gatewayId,
@@ -5299,14 +5884,20 @@ class ChatController internal constructor(
                 put("agentId", JsonPrimitive(owner.agentId))
               }.toString(),
             )
-          parseHistory(historyJson, sessionKey = owner.sessionKey, previousMessages = emptyList())
+          val history = parseHistory(historyJson, sessionKey = owner.sessionKey, previousMessages = emptyList())
+          // Record continuity before retiring the only send that can prove an empty root's
+          // first append. Otherwise the next refresh can park its queued successors.
+          if (reconcileOutboxHistory(flushScope.gatewayId, branchScope, previousState, history) == null) {
+            continue
+          }
+          history
         } catch (err: CancellationException) {
           throw err
         } catch (_: Throwable) {
           // Keep the rows accepted; the next flush or history apply reconciles them.
           continue
         }
-      changed = reconcileDurableSendsAgainstHistory(outbox, flushScope.gatewayId, history, owner.agentId) || changed
+      changed = reconcileDurableSendsAgainstHistory(flushScope.gatewayId, history, owner.agentId) || changed
     }
     if (changed) {
       publishOutbox()
@@ -5314,7 +5905,7 @@ class ChatController internal constructor(
       // the level-triggered request makes the drain run another pass so released rows send.
       outboxFlushRequested.set(true)
     }
-    return runCatching { outbox.load(flushScope.gatewayId) }
+    return runCatching { commandOutbox.load(flushScope.gatewayId) }
       .getOrDefault(emptyList())
       .count { it.status == ChatOutboxStatus.Accepted && !locallyOwnedOutboxRow(it.id) }
   }
@@ -5327,14 +5918,12 @@ class ChatController internal constructor(
    * that briefly lags the ACK is not misread as loss.
    */
   private suspend fun reconcileDurableSendsAgainstHistory(
-    outbox: ChatCommandOutbox,
     gatewayId: String,
     history: ChatHistory,
     ownerAgentId: String,
   ): Boolean {
-    val rows = runCatching { outbox.load(gatewayId) }.getOrDefault(emptyList())
+    val rows = runCatching { commandOutbox.load(gatewayId) }.getOrDefault(emptyList())
     if (rows.isEmpty()) return false
-    val provenIds = history.messages.mapNotNull(::outboxRowIdFromMessage).toSet()
     val inFlightRunId =
       history.inFlightRun
         ?.runId
@@ -5346,9 +5935,9 @@ class ChatController internal constructor(
           (row.ownerAgentId ?: resolveAgentIdFromMainSessionKey(row.sessionKey)) == ownerAgentId
       }
     var changed = false
-    val confirmed = sessionRows.filter { it.id in provenIds }.associate { it.id to it.attemptVersion }
+    val confirmed = history.persistedOutboxAttempts(sessionRows)
     if (confirmed.isNotEmpty()) {
-      val removed = runCatching { outbox.confirmDeliveredAttempts(confirmed) }.getOrDefault(0)
+      val removed = runCatching { commandOutbox.confirmDeliveredAttempts(confirmed) }.getOrDefault(0)
       confirmed.keys.forEach(unconfirmedSightings::remove)
       confirmed.keys.forEach(acknowledgedRunIdByRowId::remove)
       changed = removed > 0
@@ -5368,7 +5957,7 @@ class ChatController internal constructor(
       }
       val sightings = (unconfirmedSightings[row.id] ?: 0) + 1
       if (sightings >= 2) {
-        val persisted = updateOutboxStatusOrNull(outbox, row, ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+        val persisted = updateOutboxStatusOrNull(row, ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
         if (persisted == null) {
           // The park write failed; reporting a change anyway would spin confirm/park passes
           // against unavailable storage while the row's session stays blocked.
@@ -5394,7 +5983,12 @@ class ChatController internal constructor(
     return key.removeSuffix(":user").takeIf { it.isNotEmpty() }
   }
 
-  // Sent: acked and removed. Continue: row vanished or failed after a gateway response.
+  private fun ChatHistory.persistedOutboxAttempts(rows: List<ChatOutboxItem>): Map<String, Int> {
+    val provenIds = messages.mapNotNull(::outboxRowIdFromMessage).toSet()
+    return rows.filter { it.id in provenIds }.associate { it.id to it.attemptVersion }
+  }
+
+  // Sent: acknowledged. Continue: row vanished or failed after a gateway response.
   // Stop: transport or persistence state cannot safely advance to younger work.
   private enum class OutboxSendOutcome { Sent, Continue, Stop }
 
@@ -5420,13 +6014,12 @@ class ChatController internal constructor(
   }
 
   private suspend fun updateOutboxStatusOrNull(
-    outbox: ChatCommandOutbox,
     item: ChatOutboxItem,
     status: ChatOutboxStatus,
     lastError: String?,
   ): Int? =
     try {
-      outbox.updateStatusIfAttempt(
+      commandOutbox.updateStatusIfAttempt(
         item.id,
         item.attemptVersion,
         status,
@@ -5441,11 +6034,10 @@ class ChatController internal constructor(
     }
 
   private suspend fun claimOutboxRowOrNull(
-    outbox: ChatCommandOutbox,
     item: ChatOutboxItem,
   ): Int? =
     try {
-      outbox.claimForSendingIfAttempt(item.id, item.attemptVersion, item.retryCount, item.lastError)
+      commandOutbox.claimForSendingIfAttempt(item.id, item.attemptVersion, item.retryCount, item.lastError)
     } catch (err: CancellationException) {
       throw err
     } catch (_: Throwable) {
@@ -5453,15 +6045,14 @@ class ChatController internal constructor(
     }
 
   private suspend fun sendOutboxItem(
-    outbox: ChatCommandOutbox,
-    item: ChatOutboxItem,
+    queuedItem: ChatOutboxItem,
     flushScope: ChatCacheScope,
   ): OutboxSendOutcome {
-    val ownerAgentId = item.ownerAgentId ?: resolveAgentIdFromMainSessionKey(item.sessionKey)
+    val ownerAgentId = queuedItem.ownerAgentId ?: resolveAgentIdFromMainSessionKey(queuedItem.sessionKey)
     if (ownerAgentId == null) {
       // Pre-v5 unscoped rows have no durable owner. They must stay visible for manual resend;
       // dispatching now would bind them to whichever default agent happens to be current.
-      val parked = updateOutboxStatusOrNull(outbox, item, ChatOutboxStatus.Failed, OUTBOX_OWNER_CHANGED_ERROR)
+      val parked = updateOutboxStatusOrNull(queuedItem, ChatOutboxStatus.Failed, OUTBOX_OWNER_CHANGED_ERROR)
       if (parked == null) {
         rearmOutboxRecovery()
         _healthOk.value = false
@@ -5475,16 +6066,16 @@ class ChatController internal constructor(
     // the row's owner because the visible chat may switch while this queued turn is waiting.
     val settingsKey =
       sessionSettingsKey(
-        sessionKey = normalizeRequestedSessionKey(item.sessionKey),
+        sessionKey = normalizeRequestedSessionKey(queuedItem.sessionKey),
         gatewayScope = flushScope,
         ownerAgentId = ownerAgentId,
       )
     if (!waitForPendingSessionSettings(settingsKey)) {
       return OutboxSendOutcome.Stop
     }
-    // Atomically claim the row before sending: null means the claim could not be made durable,
-    // and 0 means the row vanished or a direct dispatch claimed it first; neither may dispatch.
-    val claimed = claimOutboxRowOrNull(outbox, item)
+    // Claiming changes Queued to Sending without changing the attempt. Carry both forward so
+    // completion's attempt/status check still rejects a later delete, retry, or branch change.
+    val claimed = claimOutboxRowOrNull(queuedItem)
     publishOutbox()
     if (claimed == null) {
       // Never bypass an older row when its claim could not be made durable.
@@ -5492,15 +6083,16 @@ class ChatController internal constructor(
       return OutboxSendOutcome.Stop
     }
     if (claimed == 0) return OutboxSendOutcome.Continue
+    val item = queuedItem.copy(status = ChatOutboxStatus.Sending)
     // Bytes are loaded once per item; a storage failure here parks the row instead of sending
     // a message without the attachments the user staged with it.
     val attachments =
       try {
-        loadOutboxAttachmentsForSend(outbox, item)
+        loadOutboxAttachmentsForSend(item)
       } catch (err: CancellationException) {
         throw err
       } catch (_: Throwable) {
-        val parked = updateOutboxStatusOrNull(outbox, item, ChatOutboxStatus.Failed, "attachments unavailable")
+        val parked = updateOutboxStatusOrNull(item, ChatOutboxStatus.Failed, "attachments unavailable")
         if (parked == null) rearmOutboxRecovery()
         publishOutbox()
         return if (parked == null) {
@@ -5510,12 +6102,12 @@ class ChatController internal constructor(
           OutboxSendOutcome.Continue
         }
       }
-    return when (val result = attemptOutboxSend(outbox, item, flushScope.gatewayId, ownerAgentId, attachments)) {
+    return when (val result = attemptOutboxSend(item, flushScope.gatewayId, ownerAgentId, attachments)) {
       is OutboxSendResult.Accepted -> {
         // Ack received: keep the row as accepted until canonical history proves the user turn
         // persisted; the started ACK alone is not durable proof (issue #86946 tracks the gap).
         if (result.runId != item.id) acknowledgedRunIdByRowId[item.id] = result.runId
-        val persisted = updateOutboxStatusOrNull(outbox, item, ChatOutboxStatus.Accepted, null)
+        val persisted = updateOutboxStatusOrNull(item, ChatOutboxStatus.Accepted, null)
         if (persisted == null) rearmOutboxRecovery()
         publishOutbox()
         if (persisted == null) {
@@ -5524,7 +6116,7 @@ class ChatController internal constructor(
           _healthOk.value = false
           OutboxSendOutcome.Stop
         } else {
-          // A zero update means a concurrent delete raced the ack; history still owns proof.
+          // Stale or removed attempts cannot adopt run ownership; history still owns proof.
           if (persisted > 0) {
             adoptFlushedSend(
               item = item,
@@ -5537,16 +6129,18 @@ class ChatController internal constructor(
           OutboxSendOutcome.Sent
         }
       }
+
       is OutboxSendResult.NotDispatched -> {
         // This frame never entered the socket queue, so reconnect may retry it safely.
-        val requeued = updateOutboxStatusOrNull(outbox, item, ChatOutboxStatus.Queued, result.error)
+        val requeued = updateOutboxStatusOrNull(item, ChatOutboxStatus.Queued, result.error)
         if (requeued == null) rearmOutboxRecovery()
         publishOutbox()
         _healthOk.value = false
         OutboxSendOutcome.Stop
       }
+
       OutboxSendResult.OwnerChanged -> {
-        val parked = updateOutboxStatusOrNull(outbox, item, ChatOutboxStatus.Failed, OUTBOX_OWNER_CHANGED_ERROR)
+        val parked = updateOutboxStatusOrNull(item, ChatOutboxStatus.Failed, OUTBOX_OWNER_CHANGED_ERROR)
         if (parked == null) rearmOutboxRecovery()
         publishOutbox()
         if (parked == null) {
@@ -5556,12 +6150,12 @@ class ChatController internal constructor(
           OutboxSendOutcome.Continue
         }
       }
+
       is OutboxSendResult.DeliveryUnconfirmed -> {
         // Every transmitted failure is ambiguous: gateway error responses can be cached after
         // agent dispatch, and gateway dedupe is process-local and time-bounded.
         val persisted =
           updateOutboxStatusOrNull(
-            outbox,
             item,
             ChatOutboxStatus.Failed,
             OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
@@ -5575,14 +6169,14 @@ class ChatController internal constructor(
             _healthOk.value = false
             OutboxSendOutcome.Stop
           }
+
           result.gatewayResponse == GatewayResponseState.Unknown -> {
             _healthOk.value = false
             OutboxSendOutcome.Stop
           }
+
           else -> {
-            // Sending is controller-owned and Retry only transitions Failed. A zero update can
-            // only mean a concurrent delete removed the claimed row; a received response makes
-            // either zero or a durable Failed transition safe to advance past.
+            // The response lets the drain continue; the store fences stale or retired attempts.
             OutboxSendOutcome.Continue
           }
         }
@@ -5591,11 +6185,10 @@ class ChatController internal constructor(
   }
 
   private suspend fun loadOutboxAttachmentsForSend(
-    outbox: ChatCommandOutbox,
     item: ChatOutboxItem,
   ): List<OutgoingAttachment> {
     if (item.attachments.isEmpty()) return emptyList()
-    return outbox.loadAttachments(item.id).map { loaded ->
+    return commandOutbox.loadAttachments(item.id).map { loaded ->
       OutgoingAttachment(
         type = loaded.attachment.type,
         mimeType = loaded.attachment.mimeType,
@@ -5641,7 +6234,6 @@ class ChatController internal constructor(
   }
 
   private suspend fun attemptOutboxSend(
-    outbox: ChatCommandOutbox,
     item: ChatOutboxItem,
     gatewayId: String,
     ownerAgentId: String,
@@ -5660,7 +6252,7 @@ class ChatController internal constructor(
         // that cannot be made durable must stop the dispatch while the row is still safe.
         val pinned =
           try {
-            outbox.pinSessionKey(item.id, queuedSessionKey)
+            commandOutbox.pinSessionKey(item.id, queuedSessionKey)
             true
           } catch (err: CancellationException) {
             throw err
@@ -5692,14 +6284,21 @@ class ChatController internal constructor(
         )
       val ack = parseChatSendAck(json, requestGatewayBound(gatewayId, "chat.send", params))
       when (ack.normalizedStatus) {
-        "ok", "started", "in_flight" ->
+        "ok", "started", "in_flight" -> {
           if (ack.runId.isNullOrBlank()) {
             OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
           } else {
             OutboxSendResult.Accepted(ack.runId)
           }
-        "timeout", "error" -> OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
-        else -> OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+        }
+
+        "timeout", "error" -> {
+          OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+        }
+
+        else -> {
+          OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+        }
       }
     } catch (err: CancellationException) {
       // Teardown must not be recorded as a send failure; the row stays 'sending' and the
@@ -5717,11 +6316,11 @@ class ChatController internal constructor(
     }
   }
 
-  private suspend fun recoverInterruptedOutboxSends(outbox: ChatCommandOutbox): Boolean =
+  private suspend fun recoverInterruptedOutboxSends(): Boolean =
     outboxRecoveryMutex.withLock {
       if (outboxRecoveryComplete) return@withLock true
       try {
-        outbox.failSendingAfterRestart()
+        commandOutbox.failSendingAfterRestart()
         outboxRecoveryComplete = true
         true
       } catch (err: CancellationException) {
@@ -5764,7 +6363,9 @@ class ChatController internal constructor(
     }
     val isPending =
       if (runId != null) synchronized(pendingRuns) { pendingRuns.contains(runId) } else true
-    val isOwned = isPending || (runId != null && unresolvedRepliesByRunId.containsKey(runId))
+    val ownsDiagnostic =
+      runDiagnosticOwner?.let { it.runId == runId && it.owner == currentChatComposerRoutingOwner() } == true
+    val isOwned = isPending || ownsDiagnostic || (runId != null && unresolvedRepliesByRunId.containsKey(runId))
 
     when (state) {
       "delta" -> {
@@ -5775,6 +6376,7 @@ class ChatController internal constructor(
           _streamingAssistantText.value = text
         }
       }
+
       "final", "aborted", "error" -> {
         val terminalHasAssistantMessage =
           state == "final" && payload["message"].asObjectOrNull()?.get("role").asStringOrNull() == "assistant"
@@ -5793,10 +6395,11 @@ class ChatController internal constructor(
               runId = runId,
               owner = currentChatComposerRoutingOwner(),
             )
-            refreshCurrentHistoryBestEffort(updateSessionInfo = true)
+            refreshCurrentHistoryBestEffort(purpose = HistoryRefreshPurpose.Transcript)
           }
           return
         }
+        if (ownsDiagnostic) runDiagnosticOwner = null
         if (runId != null) {
           lastHandledTerminalRunId = runId
           retireRunTelemetry(runId)
@@ -5820,20 +6423,20 @@ class ChatController internal constructor(
             )
           }
           publishRunPresentation()
-          refreshCurrentHistoryBestEffort(updateSessionInfo = true)
+          refreshCurrentHistoryBestEffort(purpose = HistoryRefreshPurpose.RestoreSession)
           return
+        }
+        if (state == "error" && (isPending || ownsDiagnostic)) {
+          updateLocalizedErrorText(payload["errorMessage"].asStringOrNull()?.let(::verbatimText) ?: nativeText("Chat failed"))
         }
         if (runId != null && !isPending) {
           if (resolvesWithoutReply) terminalWithoutReplyRunIds.add(runId)
           publishRunPresentation()
           refreshCurrentHistoryBestEffort(
             runIdsToReconcile = setOf(runId),
-            updateSessionInfo = true,
+            purpose = HistoryRefreshPurpose.RestoreSession,
           )
           return
-        }
-        if (state == "error") {
-          updateLocalizedErrorText(payload["errorMessage"].asStringOrNull()?.let(::verbatimText) ?: nativeText("Chat failed"))
         }
         val terminalRunIds =
           runId?.let(::setOf)
@@ -5850,7 +6453,7 @@ class ChatController internal constructor(
         clearLiveRunUi()
         refreshCurrentHistoryBestEffort(
           runIdsToReconcile = terminalRunIds,
-          updateSessionInfo = true,
+          purpose = HistoryRefreshPurpose.RestoreSession,
         )
       }
     }
@@ -5864,7 +6467,7 @@ class ChatController internal constructor(
     val swarmKind = swarmKindElement.asStringOrNull()?.trim()
     if (swarmEvent && (swarmKind == "phase" || swarmKind == "log")) return
     val reason = payload["reason"].asStringOrNull()
-    if (reason == "patch" || reason == "command-metadata" || reason == "reset" || payload["phase"].asStringOrNull() == "reset") {
+    if (isSessionSettingsMutation(payload)) {
       val session = eventSessionObject(payload)
       val key = payload["sessionKey"].asStringOrNull() ?: session?.get("key").asStringOrNull()
       val agentId =
@@ -5917,16 +6520,23 @@ class ChatController internal constructor(
     if (reason == "delete") {
       val sessionKey = payload["sessionKey"].asStringOrNull() ?: payload["key"].asStringOrNull()
       val ownerAgentId = payload["agentId"].asStringOrNull()
-      if (removeSessionEntry(sessionKey, ownerAgentId = ownerAgentId)) {
-        sessionKey?.let(::fallBackFromRetiredActiveSession)
-      } else if (sessionKey != null && resolveAgentIdFromMainSessionKey(sessionKey) == null && ownerAgentId == null) {
-        // Older gateways omitted the owner for ambiguous keys. Refresh visible state, but do
-        // not guess which agent's durable cache/outbox should be destroyed.
-        refreshSessionsAfterAmbiguousDelete(sessionKey)
+      if (
+        !removeSessionEntry(sessionKey, ownerAgentId = ownerAgentId) &&
+        sessionKey != null &&
+        resolveAgentIdFromMainSessionKey(sessionKey) == null &&
+        ownerAgentId == null
+      ) {
+        // Legacy ownerless hints cannot authorize deleting an agent's local state:
+        // absence from a filtered drawer page is not proof that its session was deleted.
+        refreshSessionsForCurrentWindow()
       }
       return
     }
-    applySessionEvent(payload, refreshWhenMissing = true)
+    applySessionEvent(
+      payload = payload,
+      refreshWhenMissing = true,
+      authoritativeSessionSettings = true,
+    )
   }
 
   private fun handleSessionObserverEvent(payloadJson: String) {
@@ -5954,11 +6564,10 @@ class ChatController internal constructor(
         ?.takeIf { ownerAgentId == null || ownerAgentId == it.ownerAgentId }
     val eventHistoryGeneration = currentSnapshot?.let { historyLoadGeneration.incrementAndGet() }
     scope.launch {
-      val outbox = commandOutbox
       val gatewayId = eventGatewayScope?.gatewayId
-      if (outbox?.supportsBranchCoordination == true && gatewayId != null) {
+      if (gatewayId != null) {
         for (branchScope in matchingScopes) {
-          outbox.demoteSessionMutationToReconciliation(gatewayId, branchScope)
+          commandOutbox.demoteSessionMutationToReconciliationState(gatewayId, branchScope)
         }
       }
       val snapshot = currentSnapshot
@@ -5973,35 +6582,89 @@ class ChatController internal constructor(
     }
   }
 
-  private fun handleSessionMessageEvent(payloadJson: String) {
-    val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
-    applySessionEvent(payload, refreshWhenMissing = false)
-  }
-
   private fun applySessionEvent(
     payload: JsonObject,
     refreshWhenMissing: Boolean,
+    authoritativeSessionSettings: Boolean = false,
   ) {
     val eventObject = eventSessionObject(payload)
     val entry = eventObject?.let(::parseSessionEntry)
-    if (entry == null) {
-      if (refreshWhenMissing) refreshSessionsForCurrentWindow()
-      return
-    }
+    val eventKey = entry?.key ?: payload["sessionKey"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
     val eventOwner =
-      resolveAgentIdFromMainSessionKey(entry.key)
-        ?: entry.ownerAgentId
+      eventKey?.let(::resolveAgentIdFromMainSessionKey)
+        ?: entry?.ownerAgentId
         ?: payload["agentId"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
     val visibleOwner = resolveAgentIdForSessionKey(_sessionKey.value)
+    // Retire remembered choices for every agent before filtering updates to the visible session.
+    if (entry?.archived == true && eventOwner != null) {
+      synchronized(gatewayScopeApplyLock) {
+        val owner = ChatAgentSessionSelectionOwner(currentCacheScope()?.gatewayId, eventOwner)
+        if (lastSelectedChatSessionByOwner[owner]?.key == entry.key) lastSelectedChatSessionByOwner.remove(owner)
+      }
+    }
     // Session keys can collide across agents. Never merge an ownerless or foreign event into
     // the visible agent-scoped snapshot; an authoritative refresh resolves ambiguous payloads.
     if (eventOwner == null || visibleOwner == null) {
-      refreshSessionsForCurrentWindow()
+      if (entry != null || refreshWhenMissing) refreshSessionsForCurrentWindow()
       return
     }
-    if (eventOwner != visibleOwner) return
-    val ownedEntry = reconcileSessionObserverProjectionOwner(entry, eventOwner)
+    if (eventOwner != visibleOwner) {
+      if (entry == null && refreshWhenMissing) refreshSessionsForCurrentWindow()
+      return
+    }
     val phase = payload["phase"].asStringOrNull()
+    // Durable transcript invalidations need no session snapshot or chat terminal event.
+    if (eventKey == _sessionKey.value && (payload["message"] is JsonObject || phase == "message")) {
+      refreshCurrentHistoryBestEffort(purpose = HistoryRefreshPurpose.Transcript)
+    }
+    val metadataMutation = isSessionSettingsMutation(payload)
+    if (entry == null) {
+      if (refreshWhenMissing) {
+        var refreshOwnedByLane = false
+        if (metadataMutation && eventKey != null) {
+          val reconciliation =
+            synchronized(gatewayScopeApplyLock) {
+              val settingsKey = sessionSettingsKey(normalizeRequestedSessionKey(eventKey), ownerAgentId = eventOwner)
+              val existingLane = pendingSettingsMutations[settingsKey]
+              // An idle selected row may be outside the drawer window. Its invalidation
+              // needs the same exact-read readiness barrier as a local settings write.
+              val started =
+                currentSelectedSession()
+                  ?.takeIf { existingLane == null && it.key == settingsKey.sessionKey && it.ownerAgentId == eventOwner }
+                  ?.let { confirmed ->
+                    val completion = SessionSettingsCompletion(CompletableDeferred(), succeeded = true)
+                    val lane =
+                      SessionSettingsLane(
+                        tail = completion.pending,
+                        confirmed = confirmed,
+                        confirmedThinkingLevel = _thinkingLevel.value,
+                        reconciliation = completion,
+                      )
+                    pendingSettingsMutations[settingsKey] = lane
+                    publishPendingSessionSettingsKeys()
+                    Triple(settingsKey, lane, completion)
+                  }
+              (existingLane ?: started?.second)?.let { lane ->
+                lane.observation = Any()
+                lane.needsRefresh = true
+                // In-flight writes drain first; failed reads retain the existing retry path.
+                refreshOwnedByLane = lane.reconciliation?.pending?.isCompleted != true
+              }
+              if (started != null || activeSessionReads.any { it.gatewayScope == settingsKey.gatewayScope }) {
+                incrementSettingsMutationRevision(settingsKey.gatewayScope)
+              }
+              if (settingsKey.sessionKey == _sessionKey.value) settingsPublicationGeneration.incrementAndGet()
+              started
+            }
+          reconciliation?.let { (settingsKey, lane, completion) ->
+            scope.launch { reconcileSessionSettings(settingsKey, lane, completion) }
+          }
+        }
+        if (!refreshOwnedByLane) refreshSessionsForCurrentWindow()
+      }
+      return
+    }
+    val ownedEntry = reconcileSessionObserverProjectionOwner(entry, eventOwner)
     val terminalRunId =
       payload["runId"]
         .asStringOrNull()
@@ -6011,11 +6674,16 @@ class ChatController internal constructor(
     val terminalWasLocal = terminalRunId?.let(::isLocallyOwnedRun) == true
     val terminalWasAdvertised = terminalRunId?.let { it in advertisedRunIds() } == true
     val settlesSelectedRun = terminalRunId != null && (terminalWasLocal || terminalWasAdvertised)
-    upsertSessionEntry(
-      entry = if (ownedEntry.ownerAgentId == eventOwner) ownedEntry else ownedEntry.copy(ownerAgentId = eventOwner),
-      clearedFields = parseExplicitSessionClears(eventObject),
-      publishRunState = !settlesSelectedRun,
-    )
+    val applied =
+      synchronized(gatewayScopeApplyLock) {
+        upsertSessionEntry(
+          entry = if (ownedEntry.ownerAgentId == eventOwner) ownedEntry else ownedEntry.copy(ownerAgentId = eventOwner),
+          clearedFields = parseExplicitSessionClears(eventObject),
+          authoritativeSessionSettings = authoritativeSessionSettings,
+          publishRunState = !settlesSelectedRun,
+        )
+      }
+    acknowledgeUnreadIfNeeded(applied.key, applied, requireActive = true)
     if (!settlesSelectedRun) return
     val settledRunId = terminalRunId
     if (!entry.hasActiveRunMetadata) retireRunTelemetry(settledRunId)
@@ -6027,7 +6695,21 @@ class ChatController internal constructor(
     }
   }
 
-  private fun eventSessionObject(payload: JsonObject): JsonObject? = payload["session"].asObjectOrNull() ?: payload.takeIf { it["key"].asStringOrNull() != null }
+  private fun isSessionSettingsMutation(payload: JsonObject): Boolean =
+    payload["phase"].asStringOrNull() == "reset" ||
+      when (payload["reason"].asStringOrNull()) {
+        "patch", "command-metadata", "reset" -> true
+        else -> false
+      }
+
+  private fun eventSessionObject(payload: JsonObject): JsonObject? =
+    payload["session"].asObjectOrNull()
+      ?: payload.takeIf {
+        it["key"].asStringOrNull() != null ||
+          // Full flattened snapshots carry both fields; identity-only invalidations
+          // must still refresh instead of clearing omitted settings.
+          (it["sessionKey"].asStringOrNull() != null && "permissionMode" in it && "permissionModePending" in it)
+      }
 
   // The gateway sends explicit JSON null for cleared label/category on session
   // events; the merge must apply those clears instead of preserving stale values.
@@ -6082,6 +6764,7 @@ class ChatController internal constructor(
           val orderedSequence = sequence ?: return
           if (applyLiveRunLifecycle(lifecycleRunId, orderedSequence, terminal = false)) publishRunPresentation()
         }
+
         "end", "error" -> {
           val accepted =
             if (sequence == null) {
@@ -6110,6 +6793,7 @@ class ChatController internal constructor(
           _streamingAssistantText.value = text
         }
       }
+
       "tool" -> {
         val phase = data?.get("phase")?.asStringOrNull()
         val name = data?.get("name")?.asStringOrNull()
@@ -6131,6 +6815,7 @@ class ChatController internal constructor(
               )
             publishPendingToolCalls()
           }
+
           "input_delta" -> {
             val diff = parseChatDiffStat(data["diff"], includeFiles = false) ?: return
             val existing = pendingToolCallsById[toolCallId]
@@ -6144,12 +6829,14 @@ class ChatController internal constructor(
                 )
             publishPendingToolCalls()
           }
+
           "result" -> {
             pendingToolCallsById.remove(toolCallId)
             publishPendingToolCalls()
           }
         }
       }
+
       "plan" -> {
         // Released Gateways through v2026.8.x only emit stream:"plan" and lack progressCard.get.
         // SUNSET 2026-10-18: this fallback is a fixed cutover window, not a permanent contract.
@@ -6171,6 +6858,7 @@ class ChatController internal constructor(
             steps = steps,
           )
       }
+
       "error" -> {
         updateLocalizedErrorText(nativeText("Event stream interrupted; try refreshing."))
         if (runId == null) {
@@ -6445,6 +7133,7 @@ class ChatController internal constructor(
       if (pendingRuns.isEmpty() && unresolvedRepliesByRunId.isNotEmpty() && !unresolvedRepliesByRunId.containsKey(runId)) return
       pendingRuns.add(runId)
     }
+    runDiagnosticOwner = currentChatComposerRoutingOwner()?.let { RunDiagnosticOwner(it, runId) }
     armPendingRunTimeout(runId)
     if (run.text.isNotEmpty()) {
       _streamingAssistantText.value = run.text
@@ -6459,7 +7148,7 @@ class ChatController internal constructor(
         val watchdogSessionKey = _sessionKey.value
         val latestAppliedBeforeRefresh =
           synchronized(gatewayScopeApplyLock) {
-            latestAppliedHistoryRequest
+            latestAppliedRunSnapshot?.requestSequence ?: 0L
           }
         val historyResult =
           refreshHistorySnapshotBestEffort(
@@ -6469,12 +7158,12 @@ class ChatController internal constructor(
           )
         val refreshState =
           synchronized(gatewayScopeApplyLock) {
-            // A concurrent recovery load can supersede this request. Its newer
-            // current-session snapshot is equally authoritative confirmation.
+            // A newer run snapshot can confirm this watchdog; a transcript-only
+            // refresh cannot prove that the run ended or is still executing.
             val currentSession = watchdogSessionKey == _sessionKey.value
             val freshSnapshotApplied =
-              historyResult is HistoryRefreshResult.Applied || latestAppliedHistoryRequest > latestAppliedBeforeRefresh
-            Triple(currentSession, freshSnapshotApplied, latestAppliedInFlightRunId == runId)
+              (latestAppliedRunSnapshot?.requestSequence ?: 0L) > latestAppliedBeforeRefresh
+            Triple(currentSession, freshSnapshotApplied, latestAppliedRunSnapshot?.runId == runId)
           }
         val (currentSession, freshSnapshotApplied, latestRunMatches) = refreshState
         if (currentSession && freshSnapshotApplied && latestRunMatches) {
@@ -6485,36 +7174,39 @@ class ChatController internal constructor(
           armPendingRunTimeout(runId)
           return@launch
         }
-        if (currentSession && !freshSnapshotApplied && historyResult == HistoryRefreshResult.Superseded) {
-          // The newer current-session load owns reconciliation but has not applied
-          // yet. Defer expiry; its snapshot or the next watchdog decides the run.
+        if (
+          currentSession &&
+          !freshSnapshotApplied &&
+          (historyResult == HistoryRefreshResult.Superseded || historyResult == HistoryRefreshResult.BranchInvalidated)
+        ) {
+          // A newer load or branch evidence fenced this snapshot. Defer expiry;
+          // fresh history or the next watchdog must decide the run.
           armPendingRunTimeout(runId)
           return@launch
         }
-        val replyStillUnresolved = unresolvedRepliesByRunId.containsKey(runId)
+        if (unresolvedRepliesByRunId.containsKey(runId)) {
+          // Clearing this run cancels its watchdog. Persist recovery ownership before that
+          // cancellation can interrupt Room and leave an invisible Accepted row behind.
+          parkUnconfirmedDurableSend(runId)
+          removeOptimisticMessage(runId)
+          unresolvedRepliesByRunId.remove(runId)
+          terminalWithoutReplyRunIds.remove(runId)
+          timedOutRunIds.add(runId)
+          updateLocalizedErrorText(nativeText("Timed out waiting for a reply; try again or refresh."))
+        }
         clearPendingRun(runId)
         clearTransientRunUiIfIdle()
-        if (!replyStillUnresolved) return@launch
-        removeOptimisticMessage(runId)
-        unresolvedRepliesByRunId.remove(runId)
-        terminalWithoutReplyRunIds.remove(runId)
-        timedOutRunIds.add(runId)
-        updateLocalizedErrorText(nativeText("Timed out waiting for a reply; try again or refresh."))
-        // The optimistic bubble is gone, so the journaled row must stay visible for review;
-        // history proof still retires it later if the turn did persist.
-        parkUnconfirmedDurableSend(runId)
       }
   }
 
   /** Parks a still-accepted journaled row as delivery-unconfirmed once local ownership expires. */
   private suspend fun parkUnconfirmedDurableSend(runId: String) {
-    val outbox = commandOutbox ?: return
     val row =
       _outboxItems.value.firstOrNull {
         it.status == ChatOutboxStatus.Accepted &&
           (it.id == runId || acknowledgedRunIdByRowId[it.id] == runId)
       } ?: return
-    val persisted = updateOutboxStatusOrNull(outbox, row, ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
+    val persisted = updateOutboxStatusOrNull(row, ChatOutboxStatus.Failed, OUTBOX_DELIVERY_UNCONFIRMED_ERROR)
     if (persisted == null) {
       rearmOutboxRecovery()
       _healthOk.value = false
@@ -6554,6 +7246,7 @@ class ChatController internal constructor(
     }
     pendingRunTimeoutJobs.clear()
     if (clearOptimisticMessages) {
+      runDiagnosticOwner = null
       recoveryHistoryReconciliationJob?.cancel()
       recoveryHistoryReconciliationGeneration = -1L
       recoveryHistoryReconciliationJob = null
@@ -6591,6 +7284,7 @@ class ChatController internal constructor(
     publishRunState: Boolean = true,
   ) {
     if (oldRunId == newRunId) return
+    runDiagnosticOwner?.takeIf { it.runId == oldRunId }?.let { runDiagnosticOwner = it.copy(runId = newRunId) }
     val pendingProjection = pendingRunProjectionsByRunId.remove(oldRunId)
     val optimistic = optimisticMessagesByRunId.remove(oldRunId)
     val unresolved = unresolvedRepliesByRunId.remove(oldRunId)
@@ -6736,7 +7430,7 @@ class ChatController internal constructor(
       fetchAndApplyHistory(
         sessionKey,
         generation,
-        updateSessionInfo = true,
+        purpose = HistoryRefreshPurpose.RestoreSession,
         runIdsToReconcile = runIdsToReconcile,
         markCompletedTranscript = runIdsToReconcile.isNotEmpty(),
       )
@@ -6749,25 +7443,29 @@ class ChatController internal constructor(
 
   private fun refreshCurrentHistoryBestEffort(
     runIdsToReconcile: Set<String> = emptySet(),
-    updateSessionInfo: Boolean = false,
+    purpose: HistoryRefreshPurpose = HistoryRefreshPurpose.ReconcileRun,
   ) {
     val sessionKey = _sessionKey.value
     val generation = historyLoadGeneration.get()
     scope.launch {
-      try {
-        fetchAndApplyHistory(
-          sessionKey = sessionKey,
-          generation = generation,
-          updateSessionInfo = updateSessionInfo,
-          runIdsToReconcile = runIdsToReconcile,
-          markCompletedTranscript = runIdsToReconcile.isNotEmpty(),
-        )
-      } catch (_: Throwable) {
-        // best-effort
-      } finally {
-        if (isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) {
-          scheduleRecoveryHistoryReconciliation(sessionKey, generation, runIdsToReconcile)
+      val result =
+        try {
+          fetchAndApplyHistory(
+            sessionKey = sessionKey,
+            generation = generation,
+            purpose = purpose,
+            runIdsToReconcile = runIdsToReconcile,
+            markCompletedTranscript = runIdsToReconcile.isNotEmpty(),
+          )
+        } catch (_: Throwable) {
+          HistoryRefreshResult.Failed
         }
+      val appliedPurpose = (result as? HistoryRefreshResult.Applied)?.purpose ?: purpose
+      if (
+        appliedPurpose != HistoryRefreshPurpose.Transcript &&
+        isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())
+      ) {
+        scheduleRecoveryHistoryReconciliation(sessionKey, generation, runIdsToReconcile)
       }
     }
   }
@@ -6813,7 +7511,7 @@ class ChatController internal constructor(
       content = content,
       timestampMs = obj["timestamp"].asLongOrNull(),
       idempotencyKey = obj["idempotencyKey"].asStringOrNull(),
-      entryId = metadata?.get("id").asJsonStringOrNull(),
+      entryId = metadata?.get("id").asJsonStringOrNull()?.takeIf { it.isNotBlank() },
       isSyntheticDisplay = obj["openclawMessageToolMirror"].asObjectOrNull() != null || obj["openclawStreamFallback"].asObjectOrNull() != null,
       truncated =
         truncated == JsonPrimitive(true) ||
@@ -6861,8 +7559,10 @@ class ChatController internal constructor(
   private data class SessionSettingsPatchResolution(
     val modelProvider: String?,
     val model: String?,
+    val agentRuntimeId: String?,
     val thinkingLevel: String?,
     val thinkingLevels: List<ChatThinkingLevelOption>?,
+    val entry: ChatSessionEntry?,
   )
 
   private fun parseSessions(jsonString: String): SessionListResult {
@@ -6939,14 +7639,32 @@ class ChatController internal constructor(
           ?.let { runCatching { json.decodeFromJsonElement<SessionObserverDigest>(it) }.getOrNull() },
       hasObserverDigestMetadata = "observerDigest" in obj,
       lastActivityAt = obj["lastActivityAt"].asLongOrNull(),
+      inputTokens = obj["inputTokens"].asLongOrNull(),
       totalTokens = obj["totalTokens"].asLongOrNull(),
+      hasTotalTokensMetadata = "totalTokens" in obj,
       totalTokensFresh = obj["totalTokensFresh"].asBooleanOrNull(),
       modelProvider = obj["modelProvider"].asStringOrNull()?.trim(),
       model = obj["model"].asStringOrNull()?.trim(),
+      modelSelectionLocked = obj["modelSelectionLocked"].asBooleanOrNull(),
+      agentRuntimeId =
+        obj["agentRuntime"]
+          .asObjectOrNull()
+          ?.get("id")
+          .asStringOrNull()
+          ?.trim()
+          ?.takeIf(String::isNotEmpty),
       thinkingLevel = obj["thinkingLevel"].asStringOrNull()?.trim(),
       thinkingLevels = parseThinkingLevels(obj["thinkingLevels"]),
       thinkingDefault = obj["thinkingDefault"].asStringOrNull()?.trim(),
+      permissionMode = ChatPermissionMode.fromWireValue(obj["permissionMode"].asStringOrNull()),
+      hasPermissionModeMetadata = "permissionMode" in obj,
+      permissionModePending = obj["permissionModePending"].asBooleanOrNull(),
+      fastMode = ChatFastMode.fromWireValue(obj["fastMode"].asStringOrNull()),
+      effectiveFastMode = ChatFastMode.fromWireValue(obj["effectiveFastMode"].asStringOrNull()),
+      hasFastModeMetadata = "fastMode" in obj,
+      hasEffectiveFastModeMetadata = "effectiveFastMode" in obj,
       contextTokens = obj["contextTokens"].asLongOrNull(),
+      estimatedCostUsd = obj["estimatedCostUsd"].asJsonNumberOrNull()?.takeIf { it.isFinite() && it >= 0.0 },
       hasContextUsageMetadata =
         "totalTokens" in obj ||
           "totalTokensFresh" in obj ||
@@ -6972,6 +7690,10 @@ class ChatController internal constructor(
       endedAt = obj["endedAt"].asLongOrNull(),
       runtimeMs = obj["runtimeMs"].asLongOrNull(),
       outputTokens = obj["outputTokens"].asLongOrNull(),
+      hasSessionUsageMetadata =
+        "inputTokens" in obj ||
+          "outputTokens" in obj ||
+          "estimatedCostUsd" in obj,
       hasRunMetadata =
         "status" in obj ||
           "lastRunError" in obj ||
@@ -6993,14 +7715,29 @@ class ChatController internal constructor(
     )
   }
 
-  private fun parseSessionSettingsPatchResolution(jsonString: String): SessionSettingsPatchResolution? {
+  private fun parseSessionSettingsPatchResolution(
+    jsonString: String,
+    key: String,
+  ): SessionSettingsPatchResolution? {
     val root = json.parseToJsonElement(jsonString).asObjectOrNull() ?: return null
-    val resolved = root["resolved"].asObjectOrNull() ?: return null
+    val resolved = root["resolved"].asObjectOrNull()
+    val entry = root["entry"].asObjectOrNull()
+    if (resolved == null && entry == null) return null
     return SessionSettingsPatchResolution(
-      modelProvider = resolved["modelProvider"].asStringOrNull()?.trim(),
-      model = resolved["model"].asStringOrNull()?.trim(),
-      thinkingLevel = resolved["thinkingLevel"].asStringOrNull()?.trim(),
-      thinkingLevels = parseThinkingLevels(resolved["thinkingLevels"]),
+      modelProvider = resolved?.get("modelProvider").asStringOrNull()?.trim(),
+      model = resolved?.get("model").asStringOrNull()?.trim(),
+      // The entry is stored state; the ACK's resolved runtime is the current owner.
+      agentRuntimeId =
+        resolved
+          ?.get("agentRuntime")
+          .asObjectOrNull()
+          ?.get("id")
+          .asStringOrNull()
+          ?.trim()
+          ?.takeIf(String::isNotEmpty),
+      thinkingLevel = resolved?.get("thinkingLevel").asStringOrNull()?.trim(),
+      thinkingLevels = parseThinkingLevels(resolved?.get("thinkingLevels")),
+      entry = parseSessionEntry(entry, fallbackKey = key),
     )
   }
 
@@ -7016,109 +7753,106 @@ class ChatController internal constructor(
       }.distinctBy { it.id }
   }
 
-  private fun applyAcceptedModelPatch(
-    key: String,
-    settingsKey: SessionSettingsKey,
-    modelRef: String?,
+  private fun applyAcceptedSessionSettings(
+    queued: QueuedSessionSettingsMutation,
+    change: SessionSettingsChange,
     resolution: SessionSettingsPatchResolution?,
-  ) {
-    val current = _sessions.value
-    val index = current.indexOfFirst { it.key == key }
-    val existing = current.getOrNull(index)
-    val previousThinkingState =
-      latestAcceptedThinkingStates[settingsKey]
-        ?: AcceptedThinkingState(
-          level =
-            existing?.thinkingLevel?.let(::normalizeThinking)
-              ?: _thinkingLevel.value.takeIf { _sessionKey.value == key }
-              ?: "off",
-          thinkingLevels =
-            existing?.thinkingLevels
-              ?: _thinkingLevelSelection.value.options.takeIf {
-                _sessionKey.value == key && _thinkingLevelSelection.value.isGatewayProvided
-              },
-        )
-    val acceptedThinkingState =
-      if (resolution?.thinkingLevel != null || resolution?.thinkingLevels != null) {
-        AcceptedThinkingState(
-          level = resolution.thinkingLevel?.let(::normalizeThinking) ?: previousThinkingState.level,
-          thinkingLevels = resolution.thinkingLevels ?: previousThinkingState.thinkingLevels,
-        )
-      } else {
-        previousThinkingState
-      }
-    latestAcceptedThinkingStates[settingsKey] = acceptedThinkingState
-    if (settingsKey != sessionSettingsKey(key)) return
-    val fallbackProvider = modelRef?.substringBefore('/', missingDelimiterValue = "")?.takeIf { it.isNotEmpty() }
-    val fallbackModel =
-      modelRef?.let { ref -> ref.substringAfter('/', missingDelimiterValue = ref) }?.takeIf { it.isNotEmpty() }
-    val applied =
-      (existing ?: ChatSessionEntry(key = key, updatedAtMs = null)).copy(
-        modelProvider = resolution?.modelProvider ?: fallbackProvider ?: existing?.modelProvider,
-        model = resolution?.model ?: fallbackModel ?: existing?.model,
-        thinkingLevel = acceptedThinkingState.level,
-        thinkingLevels = resolution?.thinkingLevels ?: acceptedThinkingState.thinkingLevels,
-        thinkingDefault = null,
+  ): ChatSessionEntry {
+    val key = queued.settingsKey.sessionKey
+    val base = _sessions.value.firstOrNull { it.key == key } ?: queued.lane.confirmed
+    val resolvedEntry = resolution?.entry
+    var applied =
+      base.copy(
+        modelProvider = resolution?.modelProvider ?: base.modelProvider,
+        model = resolution?.model ?: base.model,
+        modelSelectionLocked = resolvedEntry?.modelSelectionLocked ?: base.modelSelectionLocked,
+        agentRuntimeId = resolution?.agentRuntimeId ?: base.agentRuntimeId,
+        thinkingLevel = resolution?.thinkingLevel?.let(::normalizeThinking) ?: base.thinkingLevel,
+        thinkingLevels = resolution?.thinkingLevels ?: base.thinkingLevels,
       )
-    if (index >= 0) {
-      _sessions.value = current.toMutableList().also { it[index] = applied }
-    }
-    if (_sessionKey.value == key) {
-      val pendingThinkingLevel = latestThinkingIntents[settingsKey]?.level
-      applyThinkingMetadata(applied)
-      // A queued thinking patch owns the visible intent until it succeeds or
-      // rolls back; the preceding model response must not replace that intent.
-      pendingThinkingLevel?.let { _thinkingLevel.value = it }
-    }
-  }
-
-  private fun applyAcceptedThinkingPatch(
-    key: String,
-    settingsKey: SessionSettingsKey,
-    requestedLevel: String,
-    intent: ThinkingIntent,
-    resolution: SessionSettingsPatchResolution?,
-  ) {
-    val acceptedLevel = resolution?.thinkingLevel?.let(::normalizeThinking) ?: requestedLevel
-    latestAcceptedThinkingStates[settingsKey] =
-      AcceptedThinkingState(
-        level = acceptedLevel,
-        thinkingLevels = resolution?.thinkingLevels ?: latestAcceptedThinkingStates[settingsKey]?.thinkingLevels,
-      )
-    if (settingsKey != sessionSettingsKey(key)) {
-      latestThinkingIntents.remove(settingsKey, intent)
-      return
-    }
-    val current = _sessions.value
-    val index = current.indexOfFirst { it.key == key }
-    if (index >= 0) {
-      val existing = current[index]
-      _sessions.value =
-        current.toMutableList().also { sessions ->
-          sessions[index] =
-            existing.copy(
-              modelProvider = resolution?.modelProvider ?: existing.modelProvider,
-              model = resolution?.model ?: existing.model,
-              thinkingLevel = acceptedLevel,
-              thinkingLevels = resolution?.thinkingLevels ?: existing.thinkingLevels,
-            )
+    applied =
+      when (change) {
+        is SessionSettingsChange.Model -> {
+          val provider = change.ref?.substringBefore('/', missingDelimiterValue = "")?.takeIf(String::isNotEmpty)
+          val model = change.ref?.let { it.substringAfter('/', missingDelimiterValue = it) }
+          applied.copy(
+            modelProvider = resolution?.modelProvider ?: provider ?: base.modelProvider.takeIf { change.ref != null },
+            model = resolution?.model ?: model,
+            thinkingDefault = null,
+          )
         }
-    }
-    if (_sessionKey.value == key && latestThinkingIntents[settingsKey]?.requestId == intent.requestId) {
-      _thinkingLevel.value = acceptedLevel
-      resolution?.thinkingLevels?.let { levels ->
-        applyThinkingMetadata(
-          (_sessions.value.getOrNull(index) ?: ChatSessionEntry(key = key, updatedAtMs = null)).copy(
-            thinkingLevel = acceptedLevel,
-            thinkingLevels = levels,
-          ),
-        )
+
+        is SessionSettingsChange.Thinking -> {
+          applied.copy(thinkingLevel = resolution?.thinkingLevel?.let(::normalizeThinking) ?: change.level)
+        }
+
+        is SessionSettingsChange.Permission -> {
+          applied.copy(
+            permissionMode = if (resolvedEntry?.hasPermissionModeMetadata == true) resolvedEntry.permissionMode else change.mode,
+            hasPermissionModeMetadata = true,
+            permissionModePending = resolvedEntry?.permissionModePending ?: base.permissionModePending,
+          )
+        }
+
+        is SessionSettingsChange.FastMode -> {
+          val mode = if (resolvedEntry?.hasFastModeMetadata == true) resolvedEntry.fastMode else change.mode
+          val effective =
+            if (resolvedEntry?.hasEffectiveFastModeMetadata == true) resolvedEntry.effectiveFastMode else mode ?: base.effectiveFastMode
+          if (mode == null && resolvedEntry?.hasEffectiveFastModeMetadata != true) queued.lane.needsRefresh = true
+          applied.copy(
+            fastMode = mode,
+            effectiveFastMode = effective,
+            hasFastModeMetadata = true,
+            hasEffectiveFastModeMetadata = resolvedEntry?.hasEffectiveFastModeMetadata == true || effective != null || base.hasEffectiveFastModeMetadata,
+          )
+        }
       }
-    }
-    latestThinkingIntents.remove(settingsKey, intent)
+    return upsertSessionEntry(applied, replace = true, authoritativeSessionSettings = true)
   }
 
-  private fun applyThinkingMetadata(entry: ChatSessionEntry?) {
+  private fun observeSessionSettings(
+    entry: ChatSessionEntry,
+    snapshot: SessionSettingsSnapshot? = null,
+  ) {
+    val key =
+      sessionSettingsKey(
+        normalizeRequestedSessionKey(entry.key),
+        ownerAgentId = entry.ownerAgentId ?: resolveAgentIdForSessionKey(entry.key),
+      )
+    if (snapshot != null) {
+      // Keep the received fields, not the richer cached row. A repeated value is
+      // still newer evidence, while omitted catalog metadata must not force retries.
+      activeSessionReads
+        .filter { it.gatewayScope == key.gatewayScope && it.ownerAgentId == key.ownerAgentId }
+        .forEach { it.observe(snapshot) }
+    }
+    pendingSettingsMutations[key]?.let { lane ->
+      lane.confirmed = entry
+      lane.observation = Any()
+    }
+    if (entry.key == _sessionKey.value) {
+      settingsPublicationGeneration.incrementAndGet()
+      publishSelectedSessionSettings(entry)
+    }
+  }
+
+  private fun publishSelectedSessionSettings(entry: ChatSessionEntry?) {
+    val lane = pendingSettingsMutations[sessionSettingsKey(_sessionKey.value)]
+    _selectedModelRef.value = entry?.providerQualifiedModelRef()
+    applyThinkingMetadata(entry, lane?.confirmedThinkingLevel ?: _thinkingLevel.value)
+    lane?.confirmedThinkingLevel = _thinkingLevel.value
+    // An unsent successor is still the latest local choice. Once dispatched,
+    // canonical observations may supersede it, including before its ACK arrives.
+    lane
+      ?.thinkingIntent
+      ?.takeUnless { it.dispatched }
+      ?.let { _thinkingLevel.value = it.level }
+  }
+
+  private fun applyThinkingMetadata(
+    entry: ChatSessionEntry?,
+    fallbackLevel: String = _thinkingLevel.value,
+  ) {
     val advertised = entry?.thinkingLevels
     if (advertised == null) {
       _thinkingLevelSelection.value = defaultChatThinkingLevelSelection
@@ -7127,11 +7861,15 @@ class ChatController internal constructor(
           ?.thinkingLevel
           ?.takeIf { it.isNotBlank() }
           ?.let(::normalizeThinking)
-          ?: normalizeThinking(_thinkingLevel.value)
+          ?: normalizeThinking(fallbackLevel)
       _thinkingLevel.value =
-        requestedLevel.takeIf { candidate ->
-          defaultChatThinkingLevelSelection.options.any { it.id == candidate }
-        } ?: "off"
+        if (entry?.thinkingLevel != null) {
+          requestedLevel
+        } else {
+          requestedLevel.takeIf { candidate ->
+            defaultChatThinkingLevelSelection.options.any { it.id == candidate }
+          } ?: "off"
+        }
       return
     }
     val options =
@@ -7150,7 +7888,7 @@ class ChatController internal constructor(
         isGatewayProvided = true,
       )
     val selected = entry.thinkingLevel?.let(::normalizeThinking)
-    val currentLevel = normalizeThinking(_thinkingLevel.value)
+    val currentLevel = normalizeThinking(fallbackLevel)
     val defaultLevel = entry.thinkingDefault?.let(::normalizeThinking)
     // Lightweight picker metadata can omit a Gateway-validated effective level.
     // Preserve that send state; only local/default fallbacks require picker membership.
@@ -7171,14 +7909,22 @@ class ChatController internal constructor(
 
   private fun updateSessionFromHistory(
     history: ChatHistory,
+    ownerAgentId: String,
     publishRunState: Boolean = true,
-  ) {
-    val info = history.sessionInfo ?: return
-    upsertSessionEntry(
-      info,
+    includeSessionInfo: Boolean = true,
+    preserveSessionSettings: Boolean = false,
+  ): ChatSessionEntry? {
+    val thinkingLevel = history.thinkingLevel?.trim()?.takeIf(String::isNotEmpty)
+    val info =
+      history.sessionInfo.takeIf { includeSessionInfo }
+        ?: thinkingLevel?.let { ChatSessionEntry(key = history.sessionKey, updatedAtMs = null, thinkingLevel = it) }
+        ?: return null
+    return upsertSessionEntry(
+      info.copy(ownerAgentId = ownerAgentId, thinkingLevel = thinkingLevel ?: info.thinkingLevel),
       preserveExistingContextUsageWithoutTotal = true,
-      replaceActiveRunIds = true,
+      replaceActiveRunIds = includeSessionInfo && history.sessionInfo != null,
       publishRunState = publishRunState,
+      preserveSessionSettings = preserveSessionSettings,
     )
   }
 
@@ -7187,39 +7933,44 @@ class ChatController internal constructor(
     preserveExistingContextUsageWithoutTotal: Boolean = false,
     replaceActiveRunIds: Boolean = false,
     clearedFields: Set<String> = emptySet(),
+    authoritativeSessionSettings: Boolean = false,
     publishRunState: Boolean = true,
-  ) {
+    replace: Boolean = false,
+    preserveSessionSettings: Boolean = false,
+  ): ChatSessionEntry {
     val current = _sessions.value
     val index = current.indexOfFirst { it.key == entry.key }
-    var applied = entry
-    _sessions.value =
-      if (index >= 0) {
-        current.toMutableList().also {
-          applied =
-            mergeChatSessionEntry(
-              existing = it[index],
-              next = entry,
-              preserveExistingContextUsageWithoutTotal = preserveExistingContextUsageWithoutTotal,
-              replaceActiveRunIds = replaceActiveRunIds,
-            )
-          if (clearedFields.isNotEmpty()) {
-            applied =
-              applied.copy(
-                label = if ("label" in clearedFields) null else applied.label,
-                category = if ("category" in clearedFields) null else applied.category,
-              )
-          }
-          it[index] = applied
-        }
+    val existing = current.getOrNull(index)
+    var applied =
+      if (replace || (existing == null && !preserveSessionSettings)) {
+        entry
       } else {
-        listOf(entry) + current
+        mergeChatSessionEntry(
+          existing = existing ?: ChatSessionEntry(key = entry.key, updatedAtMs = null),
+          next = entry,
+          preserveExistingContextUsageWithoutTotal = preserveExistingContextUsageWithoutTotal,
+          replaceActiveRunIds = replaceActiveRunIds,
+          authoritativeSessionSettings = authoritativeSessionSettings,
+          preserveSessionSettings = preserveSessionSettings,
+        )
       }
+    if (clearedFields.isNotEmpty()) {
+      applied =
+        applied.copy(
+          label = if ("label" in clearedFields) null else applied.label,
+          category = if ("category" in clearedFields) null else applied.category,
+        )
+    }
+    _sessions.value =
+      if (index >= 0) current.toMutableList().also { it[index] = applied } else listOf(applied) + current
+    if (!preserveSessionSettings && (authoritativeSessionSettings || replace || entry.carriesSessionSettings())) {
+      observeSessionSettings(applied, SessionSettingsSnapshot(entry, authoritativeSessionSettings || replace))
+    }
     if (applied.key == _sessionKey.value) {
-      applyThinkingMetadata(applied)
       pruneRunTelemetryToAuthoritativeOwnership()
       if (publishRunState) publishRunPresentation()
     }
-    acknowledgeUnreadIfNeeded(applied.key, applied, requireActive = true)
+    return applied
   }
 
   /**
@@ -7284,40 +8035,63 @@ class ChatController internal constructor(
   ): Boolean {
     val key = sessionKey?.trim()?.takeIf { it.isNotEmpty() } ?: return false
     val owner = resolveAgentIdFromMainSessionKey(key) ?: ownerAgentId?.trim()?.takeIf { it.isNotEmpty() }
-    val visibleOwner = resolveAgentIdForSessionKey(_sessionKey.value)
-    val removesVisibleEntry = cacheScope == currentCacheScope() && owner != null && owner == visibleOwner
-    if (removesVisibleEntry) {
-      _sessions.value = _sessions.value.filterNot { it.key == key }
-    }
+    val (removesVisibleEntry, retiredSettings) =
+      synchronized(gatewayScopeApplyLock) {
+        val retired =
+          retireSessionSettingsLanes { settingsKey, _ ->
+            owner != null && settingsKey == SessionSettingsKey(cacheScope, key, owner)
+          }
+        val visibleOwner = resolveAgentIdForSessionKey(_sessionKey.value)
+        val removesVisibleEntry = cacheScope == currentCacheScope() && owner != null && owner == visibleOwner
+        if (removesVisibleEntry) _sessions.value = _sessions.value.filterNot { it.key == key }
+        removesVisibleEntry to retired
+      }
+    retiredSettings.forEach { it.complete(false) }
     // Gateway-side deletes must also purge the offline copy, or the deleted transcript would
     // reappear on the next offline cold open. Queued commands for the session die with it too.
-    val requestCacheScope = cacheScope
-    if (requestCacheScope != null && owner != null) {
-      purgeSessionOwnedState(key, owner, requestCacheScope)
-    }
+    if (owner != null) purgeSessionOwnedState(key, owner, cacheScope)
+    if (removesVisibleEntry) fallBackFromRetiredActiveSession(key)
     return removesVisibleEntry
   }
 
   private fun purgeSessionOwnedState(
     sessionKey: String,
     ownerAgentId: String,
-    cacheScope: ChatCacheScope,
-    mainSessionKey: String = appliedMainSessionKey,
+    cacheScope: ChatCacheScope?,
   ) {
+    synchronized(gatewayScopeApplyLock) {
+      val owner = ChatAgentSessionSelectionOwner(cacheScope?.gatewayId, ownerAgentId)
+      if (lastSelectedChatSessionByOwner[owner]?.key == sessionKey) lastSelectedChatSessionByOwner.remove(owner)
+    }
+    if (cacheScope == null) return
     onSessionDeleted(
       ChatSessionDeletion(
         gatewayId = cacheScope.gatewayId,
         agentId = ownerAgentId,
         sessionKey = sessionKey,
-        mainSessionKey = mainSessionKey,
+        mainSessionKey = appliedMainSessionKey,
       ),
     )
     scope.launch {
       cacheMutationMutex.withLock {
         transcriptCache?.let { runCatching { it.deleteSession(cacheScope.gatewayId, ownerAgentId, sessionKey) } }
-        commandOutbox?.let { runCatching { it.deleteForSession(cacheScope.gatewayId, sessionKey, ownerAgentId) } }
+        runCatching { commandOutbox.deleteForSession(cacheScope.gatewayId, sessionKey, ownerAgentId) }
       }
       publishOutbox()
+    }
+  }
+
+  private suspend fun fetchSessionDescription(
+    gatewayId: String?,
+    sessionKey: String,
+  ): JsonObject? {
+    val params = buildJsonObject { put("key", JsonPrimitive(sessionKey)) }
+    val response = requestGatewayBound(gatewayId, "sessions.describe", params.toString())
+    val root = json.parseToJsonElement(response).asObjectOrNull() ?: error("invalid sessions.describe response")
+    return when (val session = root["session"]) {
+      is JsonObject -> session
+      JsonNull -> null
+      else -> error("sessions.describe returned no valid session field")
     }
   }
 
@@ -7332,12 +8106,37 @@ class ChatController internal constructor(
       requestGatewayForGateway(gatewayId, method, paramsJson)
     }
 
-  private suspend fun requestSessionCreateWithDispositionFallback(
-    gatewayId: String?,
+  private suspend fun requestSessionCreate(
+    gatewayScope: ChatCacheScope?,
     params: JsonObject,
-  ): String =
-    try {
-      requestGatewayBound(gatewayId, "sessions.create", params.toString())
+    lease: GatewaySession.RequestLease,
+  ): String {
+    val parent =
+      params["parentSessionKey"].asStringOrNull()?.let { key ->
+        sessionSettingsKey(key, gatewayScope, params["agentId"].asStringOrNull())
+      }
+
+    fun requireMutableParent() {
+      if (gatewayScope != currentCacheScope()) throw GatewayRequestNotEnqueued("gateway connection changed")
+      if (parent != null && isSessionModelSelectionLocked(parent)) {
+        throw GatewayRequestNotEnqueued("Model-selection-locked sessions cannot create child sessions from parent context.")
+      }
+    }
+
+    synchronized(gatewayScopeApplyLock) { requireMutableParent() }
+
+    suspend fun request(createParams: JsonObject): String =
+      lease.request("sessions.create", createParams.toString()) { enqueue ->
+        // The runtime owns locked parent lineage. Recheck its current metadata
+        // after transport waiting, before the physical socket accepts the child.
+        synchronized(gatewayScopeApplyLock) {
+          requireMutableParent()
+          enqueue()
+        }
+      }
+
+    return try {
+      request(params)
     } catch (err: GatewayRequestRejected) {
       val message = err.gatewayError.message
       val isOlderGateway =
@@ -7354,10 +8153,19 @@ class ChatController internal constructor(
             key != "succeedsParent" && key != "parentSessionKey" && key != "emitCommandHooks"
           },
         )
-      requestGatewayBound(gatewayId, "sessions.create", legacyParams.toString())
+      request(legacyParams)
     }
+  }
 
   private fun currentCacheScope(): ChatCacheScope? = normalizedChatCacheScope(cacheScope())
+
+  private fun isSessionModelSelectionLocked(key: SessionSettingsKey): Boolean =
+    (
+      pendingSettingsMutations[key]?.confirmed
+        ?: _sessions.value.firstOrNull {
+          it.key == key.sessionKey && (it.ownerAgentId ?: resolveAgentIdFromMainSessionKey(it.key)) == key.ownerAgentId
+        }
+    )?.modelSelectionLocked == true
 
   /** Keeps an unscoped chat bound to its verified agent only while the same gateway reconnects. */
   private fun effectiveDefaultAgentId(): String? {
@@ -7402,34 +8210,16 @@ internal fun isCurrentHistoryLoad(
  */
 internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
   val obj = el.asObjectOrNull() ?: return null
-  return when (obj["type"].asStringOrNull() ?: "text") {
-    "text", "input_text", "output_text" ->
+  return when (val type = obj["type"].asStringOrNull() ?: "text") {
+    "text", "input_text", "output_text" -> {
       ChatMessageContent(
         type = "text",
         text = obj["text"].asStringOrNull() ?: obj["content"].asStringOrNull(),
       )
+    }
 
     "image", "audio", "video" -> {
-      val type = obj["type"].asStringOrNull() ?: "image"
-      val inlineContent = obj["content"].asStringOrNull()?.takeIf { it.isNotBlank() }
-      val url = obj["url"].asStringOrNull()
-      ChatMessageContent(
-        type = type,
-        mimeType = obj["mimeType"].asStringOrNull(),
-        fileName = obj["fileName"].asStringOrNull(),
-        artifactId =
-          obj["artifactId"].asStringOrNull()
-            ?: if (type == "image") managedImageArtifactId(url) else managedMediaArtifactId(url),
-        url = url,
-        openUrl = obj["openUrl"].asStringOrNull(),
-        alt = obj["alt"].asStringOrNull(),
-        width = obj["width"].asLongOrNull()?.toInt(),
-        height = obj["height"].asLongOrNull()?.toInt(),
-        sizeBytes = obj["sizeBytes"].asLongOrNull(),
-        base64 = inlineContent?.takeIf { type == "image" && it.length <= CHAT_IMAGE_MAX_BASE64_CHARS },
-        durationMs = obj["durationMs"].asLongOrNull(),
-        playback = obj["playback"].asStringOrNull()?.takeIf { it == "native" || it == "transcode" },
-      )
+      parseChatMediaContent(obj, type)
     }
 
     "attachment", "file" -> {
@@ -7442,20 +8232,10 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
           attachment["kind"].asStringOrNull() == "document" || !attachment.containsKey("kind") -> "file"
           else -> return null
         }
-      val url = attachment["url"].asStringOrNull()
-      ChatMessageContent(
+      parseChatMediaContent(
+        obj = attachment,
         type = type,
-        mimeType = mimeType,
         fileName = attachment["fileName"].asStringOrNull() ?: (attachment["label"] ?: attachment["name"]).asStringOrNull(),
-        artifactId = attachment["artifactId"].asStringOrNull() ?: managedMediaArtifactId(url),
-        url = url,
-        openUrl = attachment["openUrl"].asStringOrNull(),
-        alt = attachment["alt"].asStringOrNull(),
-        width = attachment["width"].asLongOrNull()?.toInt(),
-        height = attachment["height"].asLongOrNull()?.toInt(),
-        sizeBytes = attachment["sizeBytes"].asLongOrNull(),
-        durationMs = attachment["durationMs"].asLongOrNull(),
-        playback = attachment["playback"].asStringOrNull()?.takeIf { it == "native" || it == "transcode" },
       )
     }
 
@@ -7483,8 +8263,35 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
       )
     }
 
-    else -> null
+    else -> {
+      null
+    }
   }
+}
+
+private fun parseChatMediaContent(
+  obj: JsonObject,
+  type: String,
+  fileName: String? = obj["fileName"].asStringOrNull(),
+): ChatMessageContent {
+  val url = obj["url"].asStringOrNull()
+  return ChatMessageContent(
+    type = type,
+    mimeType = obj["mimeType"].asStringOrNull(),
+    fileName = fileName,
+    artifactId =
+      obj["artifactId"].asStringOrNull()
+        ?: if (type == "image") managedImageArtifactId(url) else managedMediaArtifactId(url),
+    url = url,
+    openUrl = obj["openUrl"].asStringOrNull(),
+    alt = obj["alt"].asStringOrNull(),
+    width = obj["width"].asLongOrNull()?.toInt(),
+    height = obj["height"].asLongOrNull()?.toInt(),
+    sizeBytes = obj["sizeBytes"].asLongOrNull(),
+    base64 = obj["content"].asStringOrNull()?.takeIf { type == "image" && it.isNotBlank() && it.length <= CHAT_IMAGE_MAX_BASE64_CHARS },
+    durationMs = obj["durationMs"].asLongOrNull(),
+    playback = obj["playback"].asStringOrNull()?.takeIf { it == "native" || it == "transcode" },
+  )
 }
 
 internal fun managedImageArtifactId(rawUrl: String?): String? {
@@ -7858,13 +8665,66 @@ internal fun resolveSelectedActiveRunCount(
     if (hasAdvertisedRun) 1 else 0,
   )
 
+private fun mergeChatSessionSettings(
+  existing: ChatSessionEntry,
+  settings: ChatSessionEntry,
+  authoritativeSessionSettings: Boolean,
+): ChatSessionEntry =
+  existing.copy(
+    modelProvider = settings.modelProvider ?: existing.modelProvider,
+    model = settings.model ?: existing.model,
+    modelSelectionLocked = settings.modelSelectionLocked ?: existing.modelSelectionLocked,
+    agentRuntimeId = settings.agentRuntimeId ?: existing.agentRuntimeId,
+    thinkingLevel = settings.thinkingLevel ?: existing.thinkingLevel,
+    thinkingLevels = settings.thinkingLevels ?: existing.thinkingLevels,
+    thinkingDefault = settings.thinkingDefault ?: existing.thinkingDefault,
+    permissionMode =
+      if (authoritativeSessionSettings || settings.hasPermissionModeMetadata) {
+        settings.permissionMode
+      } else {
+        existing.permissionMode
+      },
+    hasPermissionModeMetadata =
+      if (authoritativeSessionSettings) {
+        settings.hasPermissionModeMetadata
+      } else {
+        existing.hasPermissionModeMetadata || settings.hasPermissionModeMetadata
+      },
+    permissionModePending =
+      if (authoritativeSessionSettings) settings.permissionModePending else settings.permissionModePending ?: existing.permissionModePending,
+    fastMode =
+      if (authoritativeSessionSettings || settings.hasFastModeMetadata) settings.fastMode else existing.fastMode,
+    effectiveFastMode =
+      if (authoritativeSessionSettings || settings.hasEffectiveFastModeMetadata) {
+        settings.effectiveFastMode
+      } else {
+        existing.effectiveFastMode
+      },
+    hasFastModeMetadata =
+      if (authoritativeSessionSettings) settings.hasFastModeMetadata else existing.hasFastModeMetadata || settings.hasFastModeMetadata,
+    hasEffectiveFastModeMetadata =
+      if (authoritativeSessionSettings) {
+        settings.hasEffectiveFastModeMetadata
+      } else {
+        existing.hasEffectiveFastModeMetadata || settings.hasEffectiveFastModeMetadata
+      },
+  )
+
 internal fun mergeChatSessionEntry(
   existing: ChatSessionEntry,
   next: ChatSessionEntry,
   preserveExistingContextUsageWithoutTotal: Boolean = false,
   replaceActiveRunIds: Boolean = false,
+  authoritativeSessionSettings: Boolean = false,
+  preserveSessionSettings: Boolean = false,
 ): ChatSessionEntry {
+  val settings = if (preserveSessionSettings) existing else next
   val preserveExistingContextUsage = preserveExistingContextUsageWithoutTotal && next.totalTokens == null
+  val authoritativeUsageReset =
+    next.hasTotalTokensMetadata &&
+      (next.totalTokens == null || next.totalTokens == 0L) &&
+      !preserveExistingContextUsage
+  val replaceSessionUsage = next.hasSessionUsageMetadata || authoritativeUsageReset
   val hasActiveRun = if (next.hasActiveRunMetadata) next.hasActiveRun else existing.hasActiveRun
   val activeRunIds =
     if (replaceActiveRunIds || next.hasActiveRunIdsMetadata) next.activeRunIds else existing.activeRunIds
@@ -7877,7 +8737,7 @@ internal fun mergeChatSessionEntry(
       activeRunIds = activeRunIds,
       status = if (next.hasRunMetadata) next.status else existing.status,
     )
-  return existing.copy(
+  return mergeChatSessionSettings(existing, settings, authoritativeSessionSettings).copy(
     // Partial events may omit identity; retain the last observed occurrence until
     // an authoritative event supplies the replacement session ID.
     sessionId = next.sessionId ?: existing.sessionId,
@@ -7908,11 +8768,17 @@ internal fun mergeChatSessionEntry(
     observerDigest = observerDigest,
     hasObserverDigestMetadata = existing.hasObserverDigestMetadata || next.hasObserverDigestMetadata,
     lastActivityAt = next.lastActivityAt ?: existing.lastActivityAt,
+    inputTokens = if (replaceSessionUsage) next.inputTokens else existing.inputTokens,
     totalTokens =
       when {
         preserveExistingContextUsage -> existing.totalTokens
         next.hasContextUsageMetadata -> next.totalTokens
         else -> null
+      },
+    hasTotalTokensMetadata =
+      when {
+        preserveExistingContextUsage -> existing.hasTotalTokensMetadata
+        else -> next.hasTotalTokensMetadata
       },
     totalTokensFresh =
       when {
@@ -7920,17 +8786,14 @@ internal fun mergeChatSessionEntry(
         next.hasContextUsageMetadata -> next.totalTokensFresh
         else -> null
       },
-    modelProvider = next.modelProvider ?: existing.modelProvider,
-    model = next.model ?: existing.model,
-    thinkingLevel = next.thinkingLevel ?: existing.thinkingLevel,
-    thinkingLevels = next.thinkingLevels ?: existing.thinkingLevels,
-    thinkingDefault = next.thinkingDefault ?: existing.thinkingDefault,
     contextTokens =
       when {
         preserveExistingContextUsage -> next.contextTokens ?: existing.contextTokens
         next.hasContextUsageMetadata -> next.contextTokens
         else -> null
       },
+    estimatedCostUsd =
+      if (replaceSessionUsage) next.estimatedCostUsd else existing.estimatedCostUsd,
     hasContextUsageMetadata =
       when {
         preserveExistingContextUsage -> existing.hasContextUsageMetadata || next.contextTokens != null
@@ -7958,7 +8821,10 @@ internal fun mergeChatSessionEntry(
     startedAt = if (next.hasRunMetadata) next.startedAt else existing.startedAt,
     endedAt = if (next.hasRunMetadata) next.endedAt else existing.endedAt,
     runtimeMs = if (next.hasRunMetadata) next.runtimeMs else existing.runtimeMs,
-    outputTokens = if (next.hasRunMetadata) next.outputTokens else existing.outputTokens,
+    outputTokens =
+      if (replaceSessionUsage) next.outputTokens else existing.outputTokens,
+    hasSessionUsageMetadata =
+      if (replaceSessionUsage) next.hasSessionUsageMetadata else existing.hasSessionUsageMetadata,
     hasRunMetadata = existing.hasRunMetadata || next.hasRunMetadata,
   )
 }
@@ -8075,6 +8941,36 @@ private fun observerDigestIsNewer(
 ): Boolean =
   candidate.revision > previous.revision ||
     (candidate.revision == previous.revision && candidate.updatedAt > previous.updatedAt)
+
+private fun ChatSessionEntry.carriesSessionSettings(): Boolean =
+  modelProvider != null ||
+    model != null ||
+    modelSelectionLocked != null ||
+    agentRuntimeId != null ||
+    thinkingLevel != null ||
+    thinkingLevels != null ||
+    thinkingDefault != null ||
+    hasPermissionModeMetadata ||
+    permissionModePending != null ||
+    hasFastModeMetadata ||
+    hasEffectiveFastModeMetadata
+
+private fun sameSessionSettings(
+  previous: ChatSessionEntry?,
+  next: ChatSessionEntry,
+): Boolean =
+  previous != null &&
+    previous.modelProvider == next.modelProvider &&
+    previous.model == next.model &&
+    (previous.modelSelectionLocked == true) == (next.modelSelectionLocked == true) &&
+    previous.agentRuntimeId == next.agentRuntimeId &&
+    previous.thinkingLevel == next.thinkingLevel &&
+    previous.thinkingLevels == next.thinkingLevels &&
+    previous.thinkingDefault == next.thinkingDefault &&
+    previous.permissionMode == next.permissionMode &&
+    (previous.permissionModePending == true) == (next.permissionModePending == true) &&
+    previous.fastMode == next.fastMode &&
+    previous.effectiveFastMode == next.effectiveFastMode
 
 private fun ChatSessionEntry.providerQualifiedModelRef(): String? {
   val model = model?.trim()?.takeIf { it.isNotEmpty() } ?: return null

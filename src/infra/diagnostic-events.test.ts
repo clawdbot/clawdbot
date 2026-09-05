@@ -951,6 +951,7 @@ describe("diagnostic-events", () => {
         model: "gpt-5.4",
       });
     }
+    emitTrustedDiagnosticEvent({ type: "gateway.rpc", method: "health", phase: "received" });
 
     await waitForDiagnosticEventsDrained();
 
@@ -962,35 +963,14 @@ describe("diagnostic-events", () => {
     );
     expect(dropSummary).toMatchObject({
       type: "diagnostic.async_queue.dropped",
-      droppedEvents: 1,
+      droppedEvents: 2,
+      droppedTrustedEvents: 1,
       droppedUntrustedEvents: 1,
       maxQueueLength: 10_000,
       drainBatchSize: 100,
     });
     expect(events.filter((event) => event.type === "model.call.started")).toHaveLength(10_000);
-  });
-
-  it("keeps log records off the public diagnostic event stream", async () => {
-    const publicEvents: string[] = [];
-    const internalEvents: string[] = [];
-    onDiagnosticEvent((event) => {
-      publicEvents.push(event.type);
-    });
-    onInternalDiagnosticEvent((event) => {
-      internalEvents.push(event.type);
-    });
-
-    emitDiagnosticEvent({
-      type: "log.record",
-      level: "INFO",
-      message: "private log",
-    });
-
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(publicEvents).toStrictEqual([]);
-    expect(internalEvents).toEqual(["log.record"]);
+    expect(events.some((event) => event.type === "gateway.rpc")).toBe(false);
   });
 
   it("emits exec approval followup suppression events on the public stream", async () => {

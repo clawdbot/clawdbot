@@ -1,7 +1,4 @@
-import {
-  loadSessionEntry,
-  type SessionTranscriptRuntimeTarget,
-} from "../../../config/sessions/session-accessor.js";
+import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import {
   withOwnedSessionTranscriptWrites,
   SessionTranscriptWriterClaimReboundError,
@@ -224,6 +221,16 @@ export async function compactEmbeddedRunForRecovery(
             // Attach private facts to the object the delegate actually receives.
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
+                memoryTranscript: owner.sessionManager
+                  ? {
+                      sessionManager: owner.sessionManager,
+                      sessionTarget: activeSession.target,
+                      assertActive: () => {
+                        backendParams.abortSignal?.throwIfAborted();
+                        owner.assertActive();
+                      },
+                    }
+                  : undefined,
                 recordUsage: (usage) => mergeUsageIntoAccumulator(input.usageAccumulator, usage),
                 recordCompaction: (tokensAfter) => {
                   observedCompactions += 1;
@@ -280,9 +287,16 @@ export async function compactEmbeddedRunForRecovery(
     });
   }
   owner.assertActive();
-  const previousSessionId = result.compacted
-    ? await input.adoptCompactionTranscript(result, sameTarget ? undefined : recordTokensAfter)
-    : undefined;
+  // Stock compaction already updated this exact buffer; resolving its unchanged
+  // portable identity would unnecessarily consult a borrowed durable session.
+  const retainMemoryTranscript =
+    owner.sessionManager &&
+    sameTarget &&
+    (target?.threadId === undefined || target.threadId === activeSession.target.threadId);
+  const previousSessionId =
+    result.compacted && !retainMemoryTranscript
+      ? await input.adoptCompactionTranscript(result, sameTarget ? undefined : recordTokensAfter)
+      : undefined;
   input.assertRecoveryActive();
   return { result, runtimeContext, runtimeSettings, previousSessionId };
 }
@@ -342,7 +356,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
     }
   };
   const assertRecoveryActive = () => assertRecoveryTarget(sessionPromptState.sessionTarget);
-  const getPreparedTarget = (): SessionTranscriptRuntimeTarget => {
+  const getPreparedTarget = () => {
     const target = sessionPromptState.sessionTarget;
     if (!target?.agentId || !target.sessionKey || !target.storePath) {
       throw new Error("compaction recovery requires a complete transcript target");
@@ -376,6 +390,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
     };
     return {
       session: { id: sessionId, file: sessionFile, target },
+      ...(memoryManager ? { sessionManager: memoryManager } : {}),
       assertActive,
       withTranscriptWrites: <T>(signal: AbortSignal | undefined, run: () => Promise<T>) => {
         const assertInvocationActive = () => {

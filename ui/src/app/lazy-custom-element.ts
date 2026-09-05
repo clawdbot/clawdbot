@@ -323,3 +323,9 @@ export const EXEC_APPROVAL_ELEMENT = {
 export function isOptionalElementDefined(element: OptionalCustomElement): boolean {
   return customElements.get(element.tagName) !== undefined;
 }
+
+export const LOGIN_GATE_ELEMENT = {
+  tagName: "openclaw-login-gate",
+  label: t("login.subtitle"),
+  loadModule: () => import("../components/login-gate.ts"),
+} satisfies OptionalCustomElement;

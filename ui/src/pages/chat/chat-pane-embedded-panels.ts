@@ -1,7 +1,8 @@
-import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
+import type { ControlUiFocusBuildTarget } from "@openclaw/session-url-contract";
 import { html, nothing, type TemplateResult } from "lit";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
 import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
 import { icons } from "../../components/icons.ts";
 import {
@@ -13,6 +14,8 @@ import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../../lib/keyboard-shortcut-catalog.ts";
+import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
+import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -39,11 +42,13 @@ type SidebarPanelDefinitionParams = {
   desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
   desktopSource: string | null;
-  hasBoard: boolean;
-  chat: TemplateResult;
+  desktopFocusHref: string;
+  onDesktopFocusTargetChange: (
+    target: Extract<ControlUiFocusBuildTarget, { kind: "desktop" }>,
+  ) => void;
+  dashboard: TemplateResult | typeof nothing;
   workspace: TemplateResult | typeof nothing;
   tasks: TemplateResult | typeof nothing;
-  detailOpen: boolean;
   renderDetail: (content: SidebarContent) => TemplateResult;
   digest: SessionObserverDigest | null;
   activeRunId: string | null;
@@ -57,16 +62,21 @@ type SidebarPanelDefinitionParams = {
   connected: boolean;
   pendingQuestion: string | null;
   onClearCompanion: () => void;
+  onRefreshTasks: () => void;
+  tasksLoading: boolean;
   discussion: SessionDiscussionPanelConfig | null;
   discussionAvailable: boolean;
   discussionOpenUrl: string | null;
   discussionSourceGeneration: number;
+  pluginPanels: ControlUiRegistration<ControlUiPanel>[];
+  isPluginPanelPresented: (slot: SidebarSlotId) => boolean;
 };
 
 type SidebarPanelTextKey =
-  | "boardChat"
   | "browser"
+  | "conversation"
   | "companion"
+  | "dashboard"
   | "desktop"
   | "discussion"
   | "files"
@@ -76,15 +86,16 @@ type SidebarPanelTextKey =
 
 const SIDEBAR_PANEL_LOADING_VARIANTS = {
   browser: "browser",
-  chat: "chat",
+  conversation: "chat",
   companion: "chat",
+  dashboard: "review",
   desktop: "desktop",
   detail: "review",
   discussion: "discussion",
   tasks: "tasks",
   terminal: "terminal",
   workspace: "files",
-} satisfies Record<SidebarSlotId, PanelLoadingSkeletonVariant>;
+} satisfies Record<Exclude<SidebarSlotId, `plugin:${string}`>, PanelLoadingSkeletonVariant>;
 
 /** One ordered declaration for every chat side-panel slot. */
 export function sidebarPanelDefinitions(
@@ -96,11 +107,8 @@ export function sidebarPanelDefinitions(
   const terminalAvailable = state?.terminalAvailable === true;
   const browserAvailable = state?.browserPanelAvailable === true;
   const desktopAvailable = params?.desktopAvailable === true;
-  const desktopFocusHref = state
-    ? buildControlUiFocusPath({ kind: "desktop", session: state.sessionKey }, state.basePath)
-    : null;
   const definePanel = (
-    slot: SidebarSlotId,
+    slot: Exclude<SidebarSlotId, `plugin:${string}`>,
     textKey: SidebarPanelTextKey,
     icon: TemplateResult,
     content: TemplateResult | typeof nothing | null,
@@ -171,6 +179,7 @@ export function sidebarPanelDefinitions(
           .refreshOnPresentation=${params?.desktopRefreshOnPresentation ?? true}
           .requestedSource=${params?.desktopSource ?? null}
           .sessionKey=${state.sessionKey}
+          .onFocusTargetChange=${params?.onDesktopFocusTargetChange}
         ></openclaw-desktop-panel>`
       : null;
   const discussion = params?.discussion
@@ -185,16 +194,28 @@ export function sidebarPanelDefinitions(
     : null;
   const attachmentContent = state?.attachmentSidebarContent ?? null;
   const detailLoading = state ? isSessionWorkspaceItemLoading(state) : false;
+  // The region owns mounting and visibility. Hidden Review tabs must keep the
+  // same cached diff loader so their live content and selection survive.
   const detailContent =
     state?.sidebarContent ??
-    (state && params?.detailOpen && !detailLoading
-      ? resolveSessionDiffSidebarContent(state)
-      : null);
+    (state && !detailLoading ? resolveSessionDiffSidebarContent(state) : null);
   const workspaceContent =
     attachmentContent && params
       ? params.renderDetail(attachmentContent)
       : (params?.workspace ?? null);
+  const pluginPanels = new Map<SidebarSlotId, ControlUiRegistration<ControlUiPanel> | undefined>(
+    (params?.pluginPanels ?? []).map((entry) => [`plugin:${entry.key}`, entry]),
+  );
+  // Saved tabs outlive registrations, including during reconnect and activation.
+  for (const column of state?.sidebarLayout.columns ?? []) {
+    for (const { slot } of column.panels) {
+      if (slot.startsWith("plugin:") && !pluginPanels.has(slot)) {
+        pluginPanels.set(slot, undefined);
+      }
+    }
+  }
   return [
+    definePanel("conversation", "conversation", icons.messageSquare, nothing, { available: false }),
     definePanel(
       "detail",
       "review",
@@ -213,12 +234,9 @@ export function sidebarPanelDefinitions(
     definePanel("workspace", "files", icons.fileText, workspaceContent, {
       shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles),
     }),
-    definePanel(
-      "companion",
-      "companion",
-      icons.bot,
-      companion,
-      params
+    definePanel("companion", "companion", icons.messageSquarePlus, companion, {
+      shortcut: formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sideChat),
+      ...(params
         ? {
             headerAction: html`<openclaw-tooltip .content=${t("chat.rail.clear")}>
               <button
@@ -232,16 +250,34 @@ export function sidebarPanelDefinitions(
               </button>
             </openclaw-tooltip>`,
           }
+        : {}),
+    }),
+    definePanel("tasks", "tasks", icons.listChecks, params?.tasks ?? null, {
+      headerAction: params
+        ? html`<openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>
+            <button
+              class="rail-header__action chat-tasks-rail__refresh"
+              type="button"
+              aria-label=${t("chat.backgroundTasks.refresh")}
+              ?disabled=${!params.connected || params.tasksLoading}
+              @click=${params.onRefreshTasks}
+            >
+              ${
+                params.tasksLoading
+                  ? html`<span class="btn__spinner" aria-hidden="true"></span>`
+                  : icons.refresh
+              }
+            </button>
+          </openclaw-tooltip>`
         : undefined,
-    ),
-    definePanel("tasks", "tasks", icons.listChecks, params?.tasks ?? null),
+    }),
     definePanel("desktop", "desktop", icons.monitor, desktop, {
       available: desktopAvailable,
-      ...(desktopFocusHref
+      ...(params?.desktopFocusHref
         ? {
             headerAction: html`<a
               class="rail-header__action"
-              href=${desktopFocusHref}
+              href=${params.desktopFocusHref}
               target="_blank"
               rel="noopener"
               aria-label=${t("desktop.openWindow")}
@@ -267,9 +303,26 @@ export function sidebarPanelDefinitions(
           }
         : {}),
     }),
-    definePanel("chat", "boardChat", icons.messageSquare, params?.chat ?? null, {
-      available: params?.hasBoard === true,
+    definePanel("dashboard", "dashboard", icons.layoutDashboard, params?.dashboard ?? null, {
+      available: params?.dashboard !== nothing,
     }),
+    ...[...pluginPanels].map(([slot, entry]): SidebarPanelDefinition => ({
+      slot,
+      label: entry?.value.label ?? slot.slice("plugin:".length),
+      icon: icons.puzzle,
+      available: entry !== undefined,
+      content: entry
+        ? renderPluginContribution(
+            "panels",
+            entry.key,
+            { sessionKey: state?.sessionKey ?? "", agentId: params?.agentId ?? undefined },
+            nothing,
+            params?.isPluginPanelPresented(slot),
+          )
+        : null,
+      loading: renderPanelLoadingSkeleton("files", t("common.loading")),
+      empty: { description: entry?.value.label ?? t("pluginTabs.unavailableSubtitle") },
+    })),
   ];
 }
 

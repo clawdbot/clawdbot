@@ -32,6 +32,7 @@ type RootDependency = {
 type Closure = { missing: string[]; packageKeys: string[] };
 type ReportParams = { ownershipPath?: string; repoRoot?: string };
 type ParseOptions = {
+  rootDir: string;
   asJson: boolean;
   check: boolean;
   jsonPath: string | null;
@@ -478,6 +479,7 @@ function printTextReport(report: DependencyOwnershipReport) {
 
 export function parseArgs(argv: string[]): ParseOptions {
   const options: ParseOptions = {
+    rootDir: process.cwd(),
     asJson: false,
     check: false,
     jsonPath: null,
@@ -498,6 +500,11 @@ export function parseArgs(argv: string[]): ParseOptions {
     }
     if (arg === "--check") {
       options.check = true;
+      continue;
+    }
+    if (arg === "--root") {
+      setOnce(arg, "rootDir", requireOptionArgument(argv, index, arg));
+      index += 1;
       continue;
     }
     if (arg === "--json") {
@@ -533,7 +540,7 @@ function writeArtifact(filePath: string | null, content: string) {
 
 function main(argv: string[] = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  const report = collectDependencyOwnershipSurfaceReport();
+  const report = collectDependencyOwnershipSurfaceReport({ repoRoot: options.rootDir });
   writeArtifact(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`);
   writeArtifact(options.markdownPath, renderDependencyOwnershipSurfaceMarkdownReport(report));
   if (options.check) {

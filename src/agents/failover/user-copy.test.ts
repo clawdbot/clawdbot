@@ -1,15 +1,32 @@
 import { describe, expect, it } from "vitest";
 import {
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
   renderFormatErrorCopy,
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
   renderFailoverCodeUserCopy,
+  renderHeartbeatRunFailureCopy,
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
 } from "./user-copy.js";
 
 describe("failover user copy", () => {
+  it.each([
+    [undefined, HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT],
+    ["", HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT],
+    [
+      "Codex session became active in another runner; wait for it to finish before continuing",
+      "⚠️ Heartbeat check failed before it could produce an update: Codex session became active in another runner; wait for it to finish before continuing. The main chat session remains available.",
+    ],
+    [
+      "Codex session became active in another runner; wait for it to finish before continuing.",
+      "⚠️ Heartbeat check failed before it could produce an update: Codex session became active in another runner; wait for it to finish before continuing. The main chat session remains available.",
+    ],
+  ])("renders heartbeat failure copy for %j", (reason, expected) => {
+    expect(renderHeartbeatRunFailureCopy(reason)).toBe(expected);
+  });
+
   const tokenLimitCopy =
     "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.";
 

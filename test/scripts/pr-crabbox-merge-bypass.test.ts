@@ -13,6 +13,7 @@ import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatCrabboxGateCheckSummary } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
 import { validateCrabboxMergeBypass } from "../../scripts/pr-lib/crabbox-merge-bypass.mjs";
+import { validClawsweeperReviewCommentPages } from "./pr-review-artifact-fixture.js";
 
 const baseSha = "b".repeat(40);
 const headSha = "a".repeat(40);
@@ -330,6 +331,7 @@ function runProtectedShell(
   mkdirSync(join(root, ".local"));
   writeFileSync(join(root, "calls.jsonl"), "");
   const evidence = input();
+  const reviewComments = validClawsweeperReviewCommentPages(131091, headSha);
   evidence.membership.role = role;
   evidence.membership.state = state;
   writeFileSync(join(root, "input.json"), JSON.stringify(evidence));
@@ -344,6 +346,7 @@ const save = () => fs.writeFileSync("input.json", JSON.stringify(value));
 const fail = (message, code = 19) => { console.error(message); process.exit(code); };
 const out = (data) => console.log(typeof data === "string" ? data : JSON.stringify(data));
 const repo = {id:123,nameWithOwner:"openclaw/openclaw",url:"https://github.com/openclaw/openclaw"};
+const reviewComments = ${JSON.stringify(reviewComments)};
 const pr = {id:"fixture-pr",number:131091,url:repo.url+"/pull/131091",state:"OPEN",isDraft:false,
   headRefOid:value.headSha,headRefName:"topic",baseRefName:"main",baseRefOid:"${baseSha}",
   isCrossRepository:false,mergeable:"MERGEABLE",mergeStateStatus:"BLOCKED",mergeCommit:null,
@@ -363,17 +366,19 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
 } else if (endpoint === "user") out(args[args.indexOf("--jq")+1] === ".login" ? "relay-reader" : {login:"relay-reader"});
 else if (endpoint === "graphql" && args.includes("query=query { viewer { login } }")) {
   const json = JSON.stringify({data:{viewer:value.actor}});
-  out(cp.execFileSync("jq", ["-r", args[args.indexOf("--jq") + 1]], {input:json,encoding:"utf8"}).trim());
+  if (args.includes("--include")) out("HTTP/2.0 200 OK\\n\\n" + json);
+  else out(cp.execFileSync("jq", ["-r", args[args.indexOf("--jq") + 1]], {input:json,encoding:"utf8"}).trim());
 } else {
   if (!endpoint) fail("unexpected command");
   const mutable = endpoint.startsWith("orgs/") ||
     (!process.env.FAKE_DISPATCH && !/\\/compare\\/|\\/commits\\/[a-f0-9]{40}$/u.test(endpoint));
   if (mutable && !args.some((arg,i) => ["-H", "--header"].includes(arg) && args[i+1] === "Cache-Control: max-age=0")) fail("missing live header", 18);
-  if (endpoint.includes("/check-runs?") || endpoint.includes("/jobs?")) {
+  if (endpoint.includes("/check-runs?") || endpoint.includes("/jobs?") || endpoint.includes("/issues/131091/comments?")) {
     if (!args.includes("--paginate") || !args.includes("--slurp")) fail("missing pagination");
   }
   const prefix = "repos/openclaw/openclaw/";
   if (endpoint === prefix + "pulls/131091") out(value.pullRequest);
+  else if (endpoint === prefix + "issues/131091/comments?per_page=100") out(reviewComments);
   else if (endpoint === prefix + "commits/" + value.headSha + "/check-runs?filter=latest&per_page=100") out(value.checkRuns.check_runs.map(check => ({check_runs:[check]})));
   else if (endpoint === prefix + "actions/workflows/pr-crabbox-gate-publisher.yml/runs") out({workflow_runs:value.dispatched ? [{...value.publisherRun,html_url:repo.url+"/actions/runs/8001",display_title:"PR Crabbox gate #131091 / "+value.headSha}] : []});
   else if (endpoint === prefix + "actions/runs/8001") out({...value.publisherRun,html_url:repo.url+"/actions/runs/8001"});

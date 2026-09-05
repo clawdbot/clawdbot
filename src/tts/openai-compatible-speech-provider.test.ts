@@ -23,39 +23,27 @@ vi.mock("./provider-registry.js", async () => {
   };
 });
 
-const {
-  assertOkOrThrowHttpErrorMock,
-  postJsonRequestMock,
-  readProviderBinaryResponseMock,
-  resolveProviderHttpRequestConfigMock,
-} = vi.hoisted(() => ({
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  postJsonRequestMock: vi.fn(),
-  readProviderBinaryResponseMock: vi.fn(async (response: Response, label: string) => {
-    const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
-    if (contentType === "application/json" || contentType?.startsWith("text/")) {
-      throw new Error(`${label}: malformed audio response`);
-    }
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength === 0) {
-      throw new Error(`${label}: malformed audio response`);
-    }
-    return bytes;
-  }),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://example.test/v1",
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-    dispatcherPolicy: undefined,
-  })),
-}));
+const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
+  vi.hoisted(() => ({
+    assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+    postJsonRequestMock: vi.fn(),
+    resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
+      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://example.test/v1",
+      allowPrivateNetwork: false,
+      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
+      dispatcherPolicy: undefined,
+    })),
+  }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  postJsonRequest: postJsonRequestMock,
-  readProviderBinaryResponse: readProviderBinaryResponseMock,
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-}));
+vi.mock("openclaw/plugin-sdk/provider-http", async () => {
+  const { readProviderBinaryResponse } = await import("../agents/provider-http-errors.js");
+  return {
+    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+    postJsonRequest: postJsonRequestMock,
+    readProviderBinaryResponse,
+    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+  };
+});
 
 function requireFirstMockArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
   const [call] = mock.mock.calls;
@@ -73,7 +61,6 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
     postJsonRequestMock.mockReset();
-    readProviderBinaryResponseMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
     providerState.provider = undefined;
     vi.unstubAllEnvs();

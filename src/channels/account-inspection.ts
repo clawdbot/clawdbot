@@ -55,7 +55,7 @@ export async function resolveInspectedChannelAccount(params: {
   sourceConfig: OpenClawConfig;
   accountId: string;
 }): Promise<ChannelAccountInspectionResult> {
-  const unavailable = resolveUnavailableChannelAccountSnapshot({
+  const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
     channelId: params.plugin.id,
     accountId: params.accountId,
   });

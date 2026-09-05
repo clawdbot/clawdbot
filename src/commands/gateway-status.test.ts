@@ -1007,12 +1007,16 @@ describe("gateway-status command", () => {
       | {
           auth?: { token?: string };
           originScopedDeviceAuth?: boolean;
+          signal?: AbortSignal;
           suppressStoredDeviceAuth?: boolean;
         }
       | undefined;
     expect(tunnelCall?.auth?.token).toBe("rtok");
     expect(tunnelCall?.originScopedDeviceAuth).toBeUndefined();
     expect(tunnelCall?.suppressStoredDeviceAuth).toBe(true);
+    const tunnelSignal = requireSshForwardCall().signal;
+    expect(tunnelSignal).toBeInstanceOf(AbortSignal);
+    expect(tunnelCall?.signal).toBe(tunnelSignal);
     expect(sshStop).toHaveBeenCalledTimes(1);
 
     const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<string, unknown>;

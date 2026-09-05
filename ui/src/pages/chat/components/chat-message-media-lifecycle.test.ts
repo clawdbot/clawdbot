@@ -2,7 +2,7 @@
 
 import { html, render } from "lit";
 import { guard } from "lit/directives/guard.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import {
@@ -11,8 +11,8 @@ import {
   readManagedImageBlobUrl,
   releaseChatMediaResourceSubscriber,
   schedulePairingQrExpiryRefresh,
+  type ImageBlock,
   type ImageRenderOptions,
-  type RenderableImageBlock,
 } from "./chat-message-media.ts";
 
 const subscribers = new Set<() => void>();
@@ -67,9 +67,8 @@ function renderManagedImage(
   options: ImageRenderOptions = {},
   artifactId?: string,
 ) {
-  const image: RenderableImageBlock = {
+  const image: ImageBlock = {
     url: source,
-    displayUrl: source,
     alt: "Managed image",
     ...(artifactId ? { artifactId } : {}),
   };
@@ -85,9 +84,8 @@ describe("chat media resource lifecycle", () => {
   it("marks one-to-five image turns for the transcript and sent-message layouts", () => {
     const container = document.createElement("div");
     for (const count of [1, 2, 3, 4, 5]) {
-      const images: RenderableImageBlock[] = Array.from({ length: count }, (_, index) => ({
+      const images: ImageBlock[] = Array.from({ length: count }, (_, index) => ({
         url: `data:image/png;base64,image-${count}-${index}`,
-        displayUrl: `data:image/png;base64,image-${count}-${index}`,
         alt: `Image ${index + 1}`,
         width: count === 1 ? 16 : 640,
         height: count === 1 ? 16 : 640,
@@ -107,20 +105,12 @@ describe("chat media resource lifecycle", () => {
   });
 
   it("refreshes every split pane when a shared pairing QR expires", async () => {
-    const message = {
-      content: [
-        {
-          type: "openclaw_pairing_qr",
-          image_url: "data:image/png;base64,cXJwbmc=",
-          expiresAtMs: Date.now() + 1_000,
-        },
-      ],
-    };
+    const expiresAt = Date.now() + 1_000;
     const refreshFirst = observeSubscriber(vi.fn());
     const refreshSecond = observeSubscriber(vi.fn());
 
-    schedulePairingQrExpiryRefresh("shared-pairing-qr", message, refreshFirst);
-    schedulePairingQrExpiryRefresh("shared-pairing-qr", message, refreshSecond);
+    schedulePairingQrExpiryRefresh("shared-pairing-qr", expiresAt, refreshFirst);
+    schedulePairingQrExpiryRefresh("shared-pairing-qr", expiresAt, refreshSecond);
     await vi.advanceTimersByTimeAsync(1_000);
 
     expect(refreshFirst).toHaveBeenCalledOnce();
@@ -129,19 +119,7 @@ describe("chat media resource lifecycle", () => {
 
   it("releases a pairing QR expiry timer when its chat pane disconnects", async () => {
     const refresh = observeSubscriber(vi.fn());
-    schedulePairingQrExpiryRefresh(
-      "disconnected-pairing-qr",
-      {
-        content: [
-          {
-            type: "openclaw_pairing_qr",
-            image_url: "data:image/png;base64,cXJwbmc=",
-            expiresAtMs: Date.now() + 1_000,
-          },
-        ],
-      },
-      refresh,
-    );
+    schedulePairingQrExpiryRefresh("disconnected-pairing-qr", Date.now() + 1_000, refresh);
 
     releaseChatMediaResourceSubscriber(refresh);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -175,6 +153,45 @@ describe("chat media resource lifecycle", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toBe(blobUrl);
+  });
+
+  it("keeps a cached managed image mounted during rerenders and uses current callbacks", async () => {
+    const source = managedImageSource();
+    installManagedImageUrls();
+    const fetchMock = vi.fn(async () => imageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const container = document.body.appendChild(document.createElement("div"));
+    const previousOpen = vi.fn<NonNullable<ImageRenderOptions["onOpenImage"]>>();
+    const currentOpen = vi.fn<NonNullable<ImageRenderOptions["onOpenImage"]>>();
+    onTestFinished(() => {
+      for (const [item] of [...previousOpen.mock.calls, ...currentOpen.mock.calls]) {
+        item.release?.();
+      }
+      render(null, container);
+      container.remove();
+    });
+    renderManagedImage(container, source, {
+      onRequestUpdate: observeSubscriber(vi.fn()),
+      onOpenImage: previousOpen,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const displayed = container.querySelector(".chat-message-image");
+    expect(displayed).not.toBeNull();
+
+    renderManagedImage(container, source, {
+      onRequestUpdate: observeSubscriber(vi.fn()),
+      onOpenImage: currentOpen,
+    });
+    // A settled cache hit must not blank the native image for a promise turn.
+    expect(container.querySelector(".chat-message-image")).toBe(displayed);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(container.querySelector(".chat-message-image")).toBe(displayed);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(previousOpen).not.toHaveBeenCalled();
+    expect(currentOpen).toHaveBeenCalledOnce();
   });
 
   it("stops after one automatic retry for a permanently unavailable managed image", async () => {

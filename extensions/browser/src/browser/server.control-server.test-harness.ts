@@ -195,6 +195,7 @@ const pwMocks = vi.hoisted(() => {
     clickViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     closePlaywrightBrowserConnection,
+    hasCachedPlaywrightBrowserConnection: vi.fn((_cdpUrl: string) => false),
     retirePlaywrightBrowserConnection: vi.fn(() => false),
     retirePlaywrightBrowserConnectionExact: vi.fn((opts: { cdpUrl: string }) => ({
       retired: false,

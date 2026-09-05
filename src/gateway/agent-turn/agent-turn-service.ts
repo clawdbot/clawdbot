@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, type AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
+import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
 import {
   releaseMainSessionRecoveryOwner,
@@ -20,6 +21,7 @@ import { prepareAgentSession } from "../server-methods/agent-session-prepare.js"
 import { resolveAgentRunSessionCreation } from "../server-methods/session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "../server-methods/shared-types.js";
 import { authorizeResolvedSessionMutation } from "../session-sharing.js";
+import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { createAgentAdmissionController } from "./agent-admission-controller.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import { createAgentDedupeLifecycle } from "./agent-dedupe-lifecycle.js";
@@ -253,6 +255,9 @@ export function createAgentTurnService(
         agentDedupeKeys,
         preAcceptedReservedSessionKey,
         expectedSession,
+        ...(isRestartRecoveryResumeRun
+          ? { admissionOwner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER }
+          : {}),
         context,
         io,
         dedupeLifecycle,
@@ -432,7 +437,11 @@ export function createAgentTurnService(
           canonicalSessionKey,
           sessionAgentId,
           mainSessionKey,
-          creation: resolveAgentRunSessionCreation(principal),
+          creation: prepareSkillLibrarySessionCreation(
+            principal,
+            () => context.getRuntimeConfig(),
+            resolveAgentRunSessionCreation(principal),
+          ),
           ...(principal?.authenticatedUserProfile
             ? { requestingOperatorProfileId: principal.authenticatedUserProfile.profileId }
             : {}),
@@ -578,51 +587,56 @@ export function createAgentTurnService(
       // closed unpersisted ref set; admission must not retain a second owner.
       preparedOffloadedRefs = [];
       gatewayAdmissionTransferred = true;
-      // This captures ambient root admission synchronously, then settles the final
-      // frame on the existing detached chain after the router returns its acceptance.
-      startAgentRunExecution({
-        assertContextCurrent,
-        prepared: preparedDispatch,
-        mainRestartRecoveryOwnerLease,
-        request,
-        cfg,
-        cfgForAgent,
-        sessionEntry,
-        resolvedSessionKey,
-        requestedSessionKey,
-        resolvedSessionId,
-        storePath: resolvedStorePath,
-        agentId,
-        activeSessionAgentId,
-        delivery,
-        isNewSession,
-        isRawModelRun,
-        isOneShotModelRun,
-        isRestartRecoveryResumeRun,
-        suppressVisibleSessionEffects,
-        images,
-        imageOrder,
-        media,
-        inputProvenance,
-        runId,
-        agentDedupeKeys,
-        spawnedBy: spawnedByValue,
-        groupId: resolvedGroupId,
-        groupChannel: resolvedGroupChannel,
-        groupSpace: resolvedGroupSpace,
-        bestEffortDeliver,
-        lifecycleGeneration,
-        effectiveBootstrapContextRunKind,
-        preserveUserFacingSessionModelState,
-        sessionEffects,
-        skipAgentInitialSessionTouch,
-        restoredCronContinuation,
-        canUseInternalRuntimeHandoff,
-        client: principal,
-        context,
-        io,
-        releaseCronContinuationClaimWithRecovery,
-      });
+      // Retain the original command and cleanup after the caller receives acceptance.
+      void context
+        .trackExecution(() =>
+          startAgentRunExecution({
+            assertContextCurrent,
+            prepared: preparedDispatch,
+            mainRestartRecoveryOwnerLease,
+            request,
+            cfg,
+            cfgForAgent,
+            sessionEntry,
+            resolvedSessionKey,
+            requestedSessionKey,
+            resolvedSessionId,
+            storePath: resolvedStorePath,
+            agentId,
+            activeSessionAgentId,
+            delivery,
+            isNewSession,
+            isRawModelRun,
+            isOneShotModelRun,
+            isRestartRecoveryResumeRun,
+            suppressVisibleSessionEffects,
+            images,
+            imageOrder,
+            media,
+            inputProvenance,
+            runId,
+            agentDedupeKeys,
+            spawnedBy: spawnedByValue,
+            groupId: resolvedGroupId,
+            groupChannel: resolvedGroupChannel,
+            groupSpace: resolvedGroupSpace,
+            bestEffortDeliver,
+            lifecycleGeneration,
+            effectiveBootstrapContextRunKind,
+            preserveUserFacingSessionModelState,
+            sessionEffects,
+            skipAgentInitialSessionTouch,
+            restoredCronContinuation,
+            canUseInternalRuntimeHandoff,
+            client: principal,
+            context,
+            io,
+            releaseCronContinuationClaimWithRecovery,
+          }),
+        )
+        .catch((error: unknown) =>
+          context.logGateway.warn(`agent execution cleanup failed: ${String(error)}`),
+        );
       mainRestartRecoveryOwnerLease = undefined;
     } finally {
       try {
@@ -656,8 +670,6 @@ export function createAgentTurnService(
       typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
         ? Math.max(0, Math.floor(params.timeoutMs))
         : 30_000;
-    // Keep the captured entry across the wait so timeout attribution uses the
-    // same owner snapshot that selected the chat-vs-agent observation source.
     const activeChatEntry = context.chatAbortControllers.get(runId);
     const hasActiveChatRun = activeChatEntry !== undefined && activeChatEntry.kind !== "agent";
     const queuedResult = () =>
@@ -683,12 +695,9 @@ export function createAgentTurnService(
       return queuedAfterWait;
     }
     if (!snapshot) {
-      const activeRunRegistered = activeChatEntry !== undefined;
       return {
         runId,
         status: "timeout" as const,
-        timeoutPhase: activeRunRegistered ? ("gateway_draining" as const) : ("queue" as const),
-        ...(activeRunRegistered ? {} : { providerStarted: false }),
       };
     }
     return {

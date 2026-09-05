@@ -66,7 +66,6 @@ struct CompactChatAttachmentLabel: View {
     }
 }
 
-#if os(iOS)
 struct CleanChatContextUsageLabel: View {
     let usage: OpenClawChatContextUsage
 
@@ -92,7 +91,11 @@ struct CleanChatContextUsageLabel: View {
     private var tint: Color {
         guard let percent = self.usage.percentUsed else { return OpenClawChatTheme.muted }
         if percent >= 90 { return OpenClawChatTheme.danger }
+        #if os(macOS)
+        if percent >= 75 { return OpenClawChatTheme.warning }
+        #else
         if percent >= 80 { return OpenClawChatTheme.warning }
+        #endif
         return OpenClawChatTheme.success
     }
 
@@ -107,7 +110,6 @@ struct CleanChatContextUsageLabel: View {
             self.usage.usedTokens.formatted())
     }
 }
-#endif
 
 struct OpenClawChatAttachmentsStrip: View {
     let attachments: [OpenClawPendingAttachment]

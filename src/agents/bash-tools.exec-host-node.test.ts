@@ -113,16 +113,14 @@ const listNodesMock = vi.hoisted(() => vi.fn());
 const parsePreparedSystemRunPayloadMock = vi.hoisted(() => vi.fn());
 const commandRequiresSecurityAuditSuppressionApprovalMock = vi.hoisted(() => vi.fn(() => false));
 const evaluateShellAllowlistMock = vi.hoisted(() =>
-  vi.fn(
-    (_raw?: ShellAllowlistMockParams): MockAllowlistResult => ({
-      allowlistMatches: [],
-      analysisOk: true,
-      allowlistSatisfied: false,
-      segments: [{ resolution: null, argv: ["bun", "./script.ts"] }],
-      segmentAllowlistEntries: [],
-      segmentSatisfiedBy: [],
-    }),
-  ),
+  vi.fn((_raw?: ShellAllowlistMockParams): MockAllowlistResult => ({
+    allowlistMatches: [],
+    analysisOk: true,
+    allowlistSatisfied: false,
+    segments: [{ resolution: null, argv: ["bun", "./script.ts"] }],
+    segmentAllowlistEntries: [],
+    segmentSatisfiedBy: [],
+  })),
 );
 const hasNodeCommandAllowAlwaysMarkerMock = vi.hoisted(() =>
   vi.fn((raw: unknown): boolean =>
@@ -138,30 +136,26 @@ const resolveAllowAlwaysPatternCoverageMock = vi.hoisted(() =>
   })),
 );
 const resolveExecApprovalsFromFileMock = vi.hoisted(() =>
-  vi.fn(
-    (): MockExecApprovalsResolved => ({
-      allowlist: [],
-      file: { version: 1, agents: {} },
-      agent: {
-        security: "full",
-        ask: "off",
-        askFallback: "deny",
-        autoAllowSkills: false,
-      },
-    }),
-  ),
+  vi.fn((): MockExecApprovalsResolved => ({
+    allowlist: [],
+    file: { version: 1, agents: {} },
+    agent: {
+      security: "full",
+      ask: "off",
+      askFallback: "deny",
+      autoAllowSkills: false,
+    },
+  })),
 );
 const requiresExecApprovalMock = vi.hoisted(() =>
   vi.fn((_raw?: RequiresExecApprovalMockParams) => true),
 );
 const hasDurableExecApprovalMock = vi.hoisted(() => vi.fn(() => false));
 const resolveAllowAlwaysPersistenceDecisionMock = vi.hoisted(() =>
-  vi.fn(
-    (_raw: MockAllowAlwaysPersistenceInput): MockAllowAlwaysPersistenceDecision => ({
-      kind: "patterns",
-      patterns: [{ pattern: "/trusted/bin/tool" }],
-    }),
-  ),
+  vi.fn((_raw: MockAllowAlwaysPersistenceInput): MockAllowAlwaysPersistenceDecision => ({
+    kind: "patterns",
+    patterns: [{ pattern: "/trusted/bin/tool" }],
+  })),
 );
 const resolveExecApprovalAllowedDecisionsMock = vi.hoisted(() =>
   vi.fn(
@@ -715,6 +709,7 @@ describe("executeNodeHostCommand", () => {
       {
         nodeId: "node-1",
         commands: ["system.run", "system.run.prepare"],
+        connected: true,
         platform: process.platform,
       },
     ]);
@@ -3174,6 +3169,7 @@ describe("executeNodeHostCommand", () => {
       {
         nodeId: "node-1",
         commands: ["system.run", "system.which", "system.notify"],
+        connected: true,
         platform: "darwin",
       },
     ]);
@@ -3864,7 +3860,7 @@ describe("executeNodeHostCommand", () => {
         }),
       ),
     ).rejects.toThrow(
-      "exec host=node requires a connected node (node-1 is currently disconnected)",
+      "exec host=node requires a connected node that supports system.run (node-1 is not eligible; eligible node ids: none)",
     );
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
@@ -3897,7 +3893,7 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    expect(result.content).toEqual([{ type: "text", text: "(no output)" }]);
+    expect(result.content).toEqual([{ type: "text", text: "Node: node-1\n(no output)" }]);
     const details = result.details;
     expect(details?.status).toBe("completed");
     if (details?.status !== "completed") {
@@ -4019,6 +4015,7 @@ describe("executeNodeHostCommand", () => {
         nodeId: "f2396b588d391d30a79d300e196a17cf197f34969b5e2485d2734c953567f44e",
         displayName: "home-wsl-debian",
         commands: ["system.run", "system.run.prepare"],
+        connected: true,
         platform: process.platform,
       },
     ]);
@@ -4040,6 +4037,7 @@ describe("executeNodeHostCommand", () => {
         nodeId: "f2396b588d391d30a79d300e196a17cf197f34969b5e2485d2734c953567f44e",
         displayName: "home-wsl-debian",
         commands: ["system.run", "system.run.prepare"],
+        connected: true,
         platform: process.platform,
       },
     ]);
@@ -4061,12 +4059,14 @@ describe("executeNodeHostCommand", () => {
         nodeId: "f2396b588d391d30a79d300e196a17cf197f34969b5e2485d2734c953567f44e",
         displayName: "home-wsl-debian",
         commands: ["system.run", "system.run.prepare"],
+        connected: true,
         platform: process.platform,
       },
       {
         nodeId: "aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaa7777bbb88889999",
         displayName: "other-node",
         commands: ["system.run", "system.run.prepare"],
+        connected: true,
         platform: process.platform,
       },
     ]);
@@ -4089,6 +4089,7 @@ describe("executeNodeHostCommand", () => {
         nodeId: "f2396b588d391d30a79d300e196a17cf197f34969b5e2485d2734c953567f44e",
         displayName: "home-wsl-debian",
         commands: ["system.run", "system.run.prepare"],
+        connected: true,
         platform: process.platform,
       },
     ]);
@@ -4112,6 +4113,7 @@ describe("executeNodeHostCommand", () => {
         nodeId: "f2396b588d391d30a79d300e196a17cf197f34969b5e2485d2734c953567f44e",
         displayName: "home-wsl-debian",
         commands: ["system.run", "system.run.prepare"],
+        connected: true,
         platform: process.platform,
       },
     ]);

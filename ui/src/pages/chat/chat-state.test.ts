@@ -16,6 +16,7 @@ import { invalidateModelCatalogCache } from "../../lib/model-catalog-store.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { removeQueuedMessage } from "./chat-queue.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -87,6 +88,7 @@ describe("canonical session message recovery", () => {
       streamSegments: state.chatStreamSegments,
       stream: state.chatStream,
       streamStartedAt: state.chatStreamStartedAt,
+      queue: state.chatQueue,
       showToolCalls: true,
     }).flatMap((item) => {
       if (item.kind === "group") {
@@ -850,6 +852,119 @@ describe("canonical session message recovery", () => {
       { role: "user", text: "Original prompt" },
       { role: "assistant", text: replyText },
     ]);
+  });
+
+  it("keeps the owned local prompt before an early durable reply after placement abandonment", () => {
+    const runId = "local-placement-run-2";
+    const promptText = "Resume locally 2.";
+    const replyText = "Exactly one local Gateway response 2.";
+    const originalPrompt = {
+      role: "user",
+      content: [{ type: "text", text: "Continue interrupted work 2." }],
+      timestamp: 1_700_000_000_000,
+      __openclaw: {
+        id: "placement-user-2",
+        idempotencyKey: "abandoned-placement-run-2:user",
+        seq: 1,
+      },
+    };
+    const abandonedPartial = {
+      role: "assistant",
+      content: [{ type: "text", text: "Gateway-synced device response 2." }],
+      timestamp: 1_700_000_000_001,
+      __openclaw: { id: "placement-aborted-assistant-2", seq: 2 },
+      idempotencyKey: "abandoned-placement-run-2:assistant",
+      openclawAbort: {
+        aborted: true,
+        origin: "placement-abandon",
+        runId: "abandoned-placement-run-2",
+      },
+      stopReason: "stop",
+    };
+    const localUser = {
+      role: "user",
+      content: [{ type: "text", text: promptText }],
+      timestamp: 1_700_000_000_002,
+      __openclaw: { id: "placement-local-user-2", idempotencyKey: `${runId}:user`, seq: 3 },
+    };
+    const localFinalIdentity = { id: "placement-local-final-2", seq: 4 };
+    const localFinal = {
+      role: "assistant",
+      content: [{ type: "text", text: replyText }],
+      timestamp: 1_700_000_000_003,
+      __openclaw: localFinalIdentity,
+    };
+    // Begin at the settled abandonment snapshot; the new prompt still belongs
+    // to the outbox, not history. Keep the original fixture's Gateway timestamps.
+    const { state, request } = createSessionEventState({
+      chatMessages: [originalPrompt, abandonedPartial],
+      chatRunId: runId,
+      chatQueue: [
+        {
+          id: "placement-local-send-2",
+          text: promptText,
+          createdAt: Date.now(),
+          sendState: "sending",
+          sendRunId: runId,
+          sendAttempts: 1,
+        },
+      ],
+    });
+    const expected = [originalPrompt, abandonedPartial, localUser, localFinal].map((message) => ({
+      role: message.role,
+      text: extractText(message),
+    }));
+
+    try {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          seq: 5,
+          state: "delta",
+          deltaText: replyText,
+          message: {
+            role: "assistant",
+            content: localFinal.content,
+            timestamp: localFinal.timestamp,
+          },
+        },
+      });
+      expect(renderedTranscript(state)).toEqual(expected);
+
+      // setHistoryMessages in the browser fixture changes only future responses;
+      // it does not deliver a user persistence event before this assistant row.
+      request.mockResolvedValue({
+        messages: [originalPrompt, abandonedPartial, localUser, localFinal],
+        sessionId: state.currentSessionId,
+      });
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.message",
+        payload: {
+          sessionKey: state.sessionKey,
+          runId,
+          activeRunIds: null,
+          hasActiveRun: true,
+          messageId: localFinalIdentity.id,
+          messageSeq: localFinalIdentity.seq,
+          message: localFinal,
+        },
+      });
+      expect(state.chatMessages.map(extractText)).toEqual([
+        extractText(originalPrompt),
+        extractText(abandonedPartial),
+        replyText,
+      ]);
+      expect(request).not.toHaveBeenCalled();
+      // Full terminal/outbox retirement and reload use the real browser lifecycle
+      // in session-placement.move.e2e.test.ts; this boundary is before either.
+      expect(renderedTranscript(state)).toEqual(expected);
+    } finally {
+      removeQueuedMessage(state, "placement-local-send-2");
+    }
   });
 
   it.each([
@@ -2446,6 +2561,7 @@ describe("ChatStateController render lifecycle", () => {
       createPageContext(),
       { invalidate: vi.fn(), afterCommit: () => () => {} },
       {
+        dispatchEvent: () => true,
         getBoundingClientRect: () => new DOMRect(0, 0, 1_440, 0),
         querySelector: () => null,
       },
@@ -3095,6 +3211,7 @@ describe("ChatStateController render lifecycle", () => {
     controller.hostConnected();
     const renderLifecycle = controller.createRenderLifecycle();
     const state = createPageState(createPageContext(), renderLifecycle, {
+      dispatchEvent: () => true,
       querySelector: () => null,
     });
     const stop = vi.fn(() => {
@@ -3383,7 +3500,7 @@ describe("image lightbox lifecycle", () => {
     const state = createPageState(
       context,
       { invalidate: vi.fn(), afterCommit: () => () => {} },
-      { querySelector: () => null },
+      { dispatchEvent: () => true, querySelector: () => null },
     );
 
     const source = "data:video/mp4;base64,AAAA";
@@ -3437,7 +3554,7 @@ describe("image lightbox lifecycle", () => {
         invalidate,
         afterCommit: () => () => {},
       },
-      { querySelector: () => null },
+      { dispatchEvent: () => true, querySelector: () => null },
     );
     const release = vi.fn();
     state.imageLightbox = {
@@ -3498,7 +3615,7 @@ describe("loadPageAssistantIdentity", () => {
     const state = createPageState(
       context,
       { invalidate: vi.fn(), afterCommit: () => () => {} },
-      { querySelector: () => null },
+      { dispatchEvent: () => true, querySelector: () => null },
     );
     state.client = client;
     state.connected = true;
@@ -3587,13 +3704,24 @@ describe("refreshChatMetadata", () => {
   it.each(["metadata", "picker"] as const)(
     "fences a late %s result across same-client reconnect",
     async (kind) => {
-      const old = createDeferred<{ commands: never[]; models: typeof state.chatModelCatalog }>();
+      const old = createDeferred<{
+        commands: never[];
+        models: typeof state.chatModelCatalog;
+        accountSelection: NonNullable<ChatPageHost["chatAccountSelection"]>;
+      }>();
       const ready = { id: "model", name: "Model", provider: "test", available: true };
+      const accountSelection: NonNullable<ChatPageHost["chatAccountSelection"]> = {
+        kind: "personal",
+        label: "Current owner's account",
+        authProfileId: "test:current",
+        source: "user",
+      };
       const request = vi
         .fn()
         .mockReturnValueOnce(old.promise)
-        .mockResolvedValue({ commands: [], models: [ready] });
+        .mockResolvedValue({ commands: [], models: [ready], accountSelection });
       const state = createMetadataState(request);
+      state.chatAccountSelection = { kind: "automatic", label: "Automatic account selection" };
       const pending =
         kind === "picker" ? refreshChatModelCatalogOnDemand(state) : refreshChatMetadata(state);
       state.connected = false;
@@ -3601,15 +3729,22 @@ describe("refreshChatMetadata", () => {
       invalidateModelCatalogCache(state.client!);
       invalidateChatMetadataStore(state.client!);
       expect(state.chatModelCatalog).toEqual([]);
+      expect(state.chatAccountSelection).toBeNull();
       state.connectionEpoch += 1;
       state.connected = true;
       await refreshChatMetadata(state);
       old.resolve({
         commands: [],
         models: [{ ...ready, available: false, unavailableReason: "missing-auth" }],
+        accountSelection: {
+          kind: "shared",
+          label: "Old connection's account",
+          authProfileId: "test:old",
+        },
       });
       await pending;
       expect(state.chatModelCatalog).toEqual([ready]);
+      expect(state.chatAccountSelection).toEqual(accountSelection);
       expect(state.chatModelCatalogError).toBeNull();
       retireChatMetadataRequests(state);
     },

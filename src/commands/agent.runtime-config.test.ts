@@ -111,6 +111,7 @@ const prepareSecretsRuntimeSnapshotMock = vi.hoisted(() =>
       config: params.assignmentConfig,
       authStores: [],
       authStoreCredentialsRevision: 0,
+      authStoreSnapshotsRevision: 0,
       warnings: [],
       webTools: {},
     }),

@@ -343,6 +343,8 @@ Feishu/Lark supports streaming replies via interactive cards (Card Kit streaming
 
 Set `streaming.mode: "off"` to send the completed reply without streaming updates; long replies still split at the message limits above. `renderMode: "raw"` (plain text instead of cards) also disables streaming cards. `streaming.block.enabled` is off by default; enable it only when you want completed assistant blocks flushed before the final reply. Legacy boolean `streaming` and the flat `blockStreaming` / `blockStreamingCoalesce` / `chunkMode` keys migrate to this nested shape via `openclaw doctor --fix`.
 
+Replies with controls use native cards for command buttons and HTTP(S) links, including when streaming is off. The card carries the reply text; attachments remain separate messages. Unsupported controls and cards that exceed Feishu's size limits keep their full labels in a readable fallback. That fallback remains a separate message when a later reply streams. A final controls reply replaces an active streaming preview without sending the preview text again; error controls after a completed answer remain separate. If Feishu cannot delete or clear a replaced preview, delivery reports a failure and retains the original message receipt.
+
 ### Quota optimization
 
 Reduce the number of Feishu/Lark API calls with two optional flags:
@@ -391,6 +393,12 @@ The plugin ships agent tools for Feishu documents, chats, knowledge base, cloud 
 | `tools.bitable` | `feishu_bitable_*` Bitable/Base operations    | `true`              |
 
 Per-account gates live under `accounts.<id>.tools`.
+
+Bitable operations use the application token from a `/base/` URL or returned
+`app_token`, not the node token in a `/wiki/` URL. If application creation succeeds
+but table metadata is not retrieved, keep the returned `app_token` and URL. Inspect
+that existing application rather than creating another one; a missing `table_id`
+does not mean creation failed.
 
 `feishu_doc` creates title-only documents. To add Markdown, pass the returned
 `document_id` as `doc_token` in a separate `write` action. A `create` request

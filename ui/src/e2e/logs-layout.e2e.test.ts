@@ -1,7 +1,8 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -86,10 +87,12 @@ suite.define(() => {
         await expect.poll(() => new URL(page.url()).pathname).toBe("/logs");
         await expect.poll(() => page.locator(".log-row").count()).toBe(logLines.length);
         if (artifactDir) {
-          await page.screenshot({
-            path: path.join(artifactDir, proofLabel, "logs-layout.png"),
-            fullPage: true,
-          });
+          await writeFile(
+            path.join(artifactDir, proofLabel, "logs-layout.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".logs-card"), [
+              page.locator(".log-row").first(),
+            ]),
+          );
         }
 
         const metrics = await page.locator(".logs-card").evaluate((card) => {

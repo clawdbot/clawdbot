@@ -81,14 +81,6 @@ function countNonEmptyLines(value: string): number {
   return count;
 }
 
-function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
 describe("doctor session transcript repair", () => {
   let root: string;
 
@@ -350,7 +342,10 @@ describe("doctor session transcript repair", () => {
     await noteSessionTranscriptHealth({ shouldRepair: false, sessionDirs: [sessionsDir] });
 
     expect(note).toHaveBeenCalledTimes(1);
-    const [message, title] = requireFirstMockCall(note, "doctor note") as [string, string];
+    const [message, title] = expectDefined<unknown[]>(note.mock.calls[0], "doctor note") as [
+      string,
+      string,
+    ];
     expect(title).toBe("Session transcripts");
     expect(message).toContain("legacy state");
     expect(message).toContain('Run "openclaw doctor --fix"');

@@ -10,6 +10,7 @@ import type {
   SecretStoreEntryMetadata,
   SecretStoreValidationError,
 } from "../secrets/store/secret-store.js";
+import { runSecretsCommand } from "./secrets-cli-output.js";
 
 type OutputOptions = { json?: boolean; plain?: boolean; scope?: string };
 type SetOptions = {
@@ -84,25 +85,26 @@ function mapStoreError(error: unknown): SecretStoreCliFailure {
   return new SecretStoreCliFailure(1, formatErrorMessage(error));
 }
 
-async function runStoreAction(action: () => Promise<void>): Promise<void> {
-  let failure: SecretStoreCliFailure | undefined;
-  try {
-    await action();
-  } catch (error) {
-    failure = mapStoreError(error);
+async function runStoreAction<T>(
+  action: () => Promise<T>,
+  json?: boolean,
+  renderHumanSuccess?: (result: T) => void,
+): Promise<void> {
+  const result = await runSecretsCommand(
+    json,
+    action,
+    (error) => defaultRuntime.error(danger(formatErrorMessage(error))),
+    (error) => {
+      const failure = mapStoreError(error);
+      return { error: failure, exitCode: failure.exitCode };
+    },
+  );
+  if (!json) {
+    renderHumanSuccess?.(result);
   }
-  if (!failure) {
-    return;
-  }
-  defaultRuntime.error(danger(failure.message));
-  defaultRuntime.exit(failure.exitCode);
 }
 
 function renderList(entries: SecretStoreEntryMetadata[], options: OutputOptions): void {
-  if (options.json) {
-    defaultRuntime.writeJson(entries);
-    return;
-  }
   if (options.plain) {
     for (const entry of entries) {
       defaultRuntime.writeStdout(
@@ -174,12 +176,16 @@ export function registerSecretStoreCli(secrets: Command): void {
     .option("--json", "Output JSON", false)
     .option("--plain", "Output tab-separated rows", false)
     .action((options: OutputOptions) =>
-      runStoreAction(async () => {
-        assertOutputMode(options);
-        const scope = teamScope(options.scope);
-        const { listSecretStoreEntries } = await import("../secrets/store/secret-store.js");
-        renderList(listSecretStoreEntries({ scope }), options);
-      }),
+      runStoreAction(
+        async () => {
+          assertOutputMode(options);
+          const scope = teamScope(options.scope);
+          const { listSecretStoreEntries } = await import("../secrets/store/secret-store.js");
+          return listSecretStoreEntries({ scope });
+        },
+        options.json,
+        (entries) => renderList(entries, options),
+      ),
     );
 
   store
@@ -292,37 +298,41 @@ export function registerSecretStoreCli(secrets: Command): void {
     .option("--json", "Output JSON", false)
     .option("--plain", "Output only the env value", false)
     .action((name: string, options: OutputOptions) =>
-      runStoreAction(async () => {
-        assertOutputMode(options);
-        assertStoreName(name);
-        const scope = teamScope(options.scope);
-        const { listSecretStoreEntries, readSecretStoreValue } =
-          await import("../secrets/store/secret-store.js");
-        const metadata = listSecretStoreEntries({ scope }).find((entry) => entry.name === name);
-        if (!metadata) {
-          throw new SecretStoreCliFailure(3, `Secret store entry "${name}" was not found.`);
-        }
-        if (metadata.kind === "secret") {
-          throw new SecretStoreCliFailure(
-            2,
-            `Secret store entry "${name}" is write-only by design. Reference it from config with a store SecretRef.`,
-          );
-        }
-        const result = readSecretStoreValue({ scope, name });
-        if (!result.ok) {
-          throw new SecretStoreCliFailure(
-            result.error.code === "SECRET_STORE_NOT_FOUND" ? 3 : 1,
-            result.error.message,
-          );
-        }
-        if (options.json) {
-          defaultRuntime.writeJson({ name, kind: metadata.kind, value: result.value });
-        } else if (options.plain) {
-          defaultRuntime.writeStdout(result.value);
-        } else {
-          defaultRuntime.log(`${name}=${result.value}`);
-        }
-      }),
+      runStoreAction(
+        async () => {
+          assertOutputMode(options);
+          assertStoreName(name);
+          const scope = teamScope(options.scope);
+          const { listSecretStoreEntries, readSecretStoreValue } =
+            await import("../secrets/store/secret-store.js");
+          const metadata = listSecretStoreEntries({ scope }).find((entry) => entry.name === name);
+          if (!metadata) {
+            throw new SecretStoreCliFailure(3, `Secret store entry "${name}" was not found.`);
+          }
+          if (metadata.kind === "secret") {
+            throw new SecretStoreCliFailure(
+              2,
+              `Secret store entry "${name}" is write-only by design. Reference it from config with a store SecretRef.`,
+            );
+          }
+          const result = readSecretStoreValue({ scope, name });
+          if (!result.ok) {
+            throw new SecretStoreCliFailure(
+              result.error.code === "SECRET_STORE_NOT_FOUND" ? 3 : 1,
+              result.error.message,
+            );
+          }
+          return { name, kind: metadata.kind, value: result.value };
+        },
+        options.json,
+        (result) => {
+          if (options.plain) {
+            defaultRuntime.writeStdout(result.value);
+          } else {
+            defaultRuntime.log(`${name}=${result.value}`);
+          }
+        },
+      ),
     );
 
   store

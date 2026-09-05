@@ -4,7 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { readLatestSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
-import { formatTokenCount } from "../../utils/usage-format.js";
+import { formatTokenCount } from "../../utils/token-format.js";
 import type { ReplyPayload } from "../types.js";
 import { INBOUND_CONTEXT_MARKER } from "./inbound-context-marker.js";
 
@@ -229,7 +229,7 @@ export function derivePromptSegments(
             lines.slice(index, end + 1).join("\n").length,
           );
           index = end + 1;
-          while ((lines[index] ?? "") === "") {
+          while (index < lines.length && lines[index] === "") {
             index += 1;
           }
           continue;
@@ -258,7 +258,7 @@ export function derivePromptSegments(
             lines.slice(start, end + 1).join("\n").length,
           );
           index = end + 1;
-          while ((lines[index] ?? "") === "") {
+          while (index < lines.length && lines[index] === "") {
             index += 1;
           }
           continue;

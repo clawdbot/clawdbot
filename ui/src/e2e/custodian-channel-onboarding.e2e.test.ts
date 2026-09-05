@@ -211,7 +211,6 @@ describeControlUiE2e("Control UI Custodian channel onboarding mocked Gateway E2E
         search: "",
       });
       await page.getByText("No channels connected yet. Pick one below to get started.").waitFor();
-      await page.getByText("No configured channel accounts use DM sender pairing.").waitFor();
       await page.getByRole("heading", { name: "Add a channel" }).waitFor();
       expect(new URL(page.url()).searchParams.has("onboarding")).toBe(false);
       await page.screenshot({

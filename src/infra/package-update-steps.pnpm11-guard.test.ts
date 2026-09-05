@@ -382,7 +382,13 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
         );
         const postVerifyStep = vi.fn(async (packageRoot: string) => {
           expect(packageRoot).toBe(newPackageRoot);
-          return null;
+          return {
+            name: "candidate doctor",
+            command: "doctor",
+            cwd: packageRoot,
+            durationMs: 0,
+            exitCode: 0,
+          };
         });
 
         const result = await runGlobalPackageUpdateSteps({
@@ -414,6 +420,7 @@ describe("pnpm isolated install preflight (v11 layout)", () => {
           "global update",
           "pnpm package preinstall",
           "pnpm package postinstall",
+          "candidate doctor",
         ]);
         await expectPathMissing(path.join(newPackageRoot, ".openclaw-lifecycle-pending"));
         expect(postVerifyStep).toHaveBeenCalledOnce();

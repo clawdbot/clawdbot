@@ -1,14 +1,54 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  listOpenClawRegisteredAgentDatabases,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function runDoctorFix(params: { root: string; configPath: string; loaderPath: string }) {
+function writeDoctorTestLoader(root: string): string {
+  const loaderPath = path.join(root, "doctor-test-loader.mjs");
+  fs.writeFileSync(
+    loaderPath,
+    `import { registerHooks } from "node:module";
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.endsWith("/doctor-ui.js")) {
+      return {
+        shortCircuit: true,
+        url: "data:text/javascript," + encodeURIComponent(
+          [
+            "export async function detectUiProtocolFreshnessIssues() { return []; }",
+            "export function uiProtocolFreshnessIssueToHealthFinding() { return {}; }",
+            "export function uiProtocolFreshnessIssueToRepairEffects() { return []; }",
+            "export async function maybeRepairUiProtocolFreshness() {}",
+          ].join("\\n"),
+        ),
+      };
+    }
+    return nextResolve(specifier, context);
+  },
+});
+`,
+  );
+  return loaderPath;
+}
+
+function runDoctor(params: {
+  root: string;
+  configPath: string;
+  loaderPath: string;
+  repair?: boolean;
+}) {
   const entryPath = fileURLToPath(new URL("../entry.ts", import.meta.url));
   return spawnSync(
     process.execPath,
@@ -19,7 +59,7 @@ function runDoctorFix(params: { root: string; configPath: string; loaderPath: st
       params.loaderPath,
       entryPath,
       "doctor",
-      "--fix",
+      ...(params.repair ? ["--fix"] : []),
       "--non-interactive",
       "--no-workspace-suggestions",
       "--no-color",
@@ -60,32 +100,9 @@ describe("Doctor report process output", () => {
     const workspaceSource = path.join(workspaceDir, "openclaw-workspace-state.json");
     const tuiSource = path.join(stateDir, "tui", "last-session.json");
     const agentSource = path.join(stateDir, "agent", "auth.json");
-    const loaderPath = path.join(root, "doctor-test-loader.mjs");
+    const loaderPath = writeDoctorTestLoader(root);
     fs.mkdirSync(path.dirname(tuiSource), { recursive: true });
     fs.mkdirSync(workspaceDir, { recursive: true });
-    fs.writeFileSync(
-      loaderPath,
-      `import { registerHooks } from "node:module";
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier.endsWith("/doctor-ui.js")) {
-      return {
-        shortCircuit: true,
-        url: "data:text/javascript," + encodeURIComponent(
-          [
-            "export async function detectUiProtocolFreshnessIssues() { return []; }",
-            "export function uiProtocolFreshnessIssueToHealthFinding() { return {}; }",
-            "export function uiProtocolFreshnessIssueToRepairEffects() { return []; }",
-            "export async function maybeRepairUiProtocolFreshness() {}",
-          ].join("\\n"),
-        ),
-      };
-    }
-    return nextResolve(specifier, context);
-  },
-});
-`,
-    );
     const invalidConfig = {
       gatway: { port: 12345 },
       gateway: {
@@ -117,7 +134,7 @@ registerHooks({
     const tuiBefore = fs.readFileSync(tuiSource);
     const agentBefore = fs.readFileSync(agentSource);
 
-    const refused = runDoctorFix({ root, configPath, loaderPath });
+    const refused = runDoctor({ root, configPath, loaderPath, repair: true });
     const refusedOutput = `${refused.stderr}\n${refused.stdout}`;
 
     expect(refused.error, refusedOutput).toBeUndefined();
@@ -155,7 +172,7 @@ registerHooks({
         2,
       )}\n`,
     );
-    const repaired = runDoctorFix({ root, configPath, loaderPath });
+    const repaired = runDoctor({ root, configPath, loaderPath, repair: true });
     const repairedOutput = `${repaired.stderr}\n${repaired.stdout}`;
     expect(repaired.error, repairedOutput).toBeUndefined();
     expect(repaired.signal, repairedOutput).toBeNull();
@@ -168,7 +185,7 @@ registerHooks({
     );
     expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).not.toHaveProperty("gatway");
 
-    const clean = runDoctorFix({ root, configPath, loaderPath });
+    const clean = runDoctor({ root, configPath, loaderPath, repair: true });
     const cleanOutput = `${clean.stderr}\n${clean.stdout}`;
     expect(clean.error, cleanOutput).toBeUndefined();
     expect(clean.signal, cleanOutput).toBeNull();
@@ -182,36 +199,13 @@ registerHooks({
     const stateDir = path.join(root, "state");
     const configPath = path.join(root, "openclaw.json");
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-    const loaderPath = path.join(root, "doctor-test-loader.mjs");
+    const loaderPath = writeDoctorTestLoader(root);
     const original = Buffer.from('{"agent:main:legacy":');
     fs.mkdirSync(path.dirname(storePath), { recursive: true });
     fs.writeFileSync(configPath, `${JSON.stringify({ heartbeat: { every: "30m" } })}\n`);
     fs.writeFileSync(storePath, original);
-    fs.writeFileSync(
-      loaderPath,
-      `import { registerHooks } from "node:module";
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier.endsWith("/doctor-ui.js")) {
-      return {
-        shortCircuit: true,
-        url: "data:text/javascript," + encodeURIComponent(
-          [
-            "export async function detectUiProtocolFreshnessIssues() { return []; }",
-            "export function uiProtocolFreshnessIssueToHealthFinding() { return {}; }",
-            "export function uiProtocolFreshnessIssueToRepairEffects() { return []; }",
-            "export async function maybeRepairUiProtocolFreshness() {}",
-          ].join("\\n"),
-        ),
-      };
-    }
-    return nextResolve(specifier, context);
-  },
-});
-`,
-    );
 
-    const result = runDoctorFix({ root, configPath, loaderPath });
+    const result = runDoctor({ root, configPath, loaderPath, repair: true });
     const output = `${result.stderr}\n${result.stdout}`;
 
     expect(result.error, output).toBeUndefined();
@@ -225,6 +219,98 @@ registerHooks({
       agents: { defaults: { heartbeat: { every: "30m" } } },
     });
     expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).not.toHaveProperty("heartbeat");
+  }, 120_000);
+
+  it("explains and preserves retained custom agent databases in preview and repair", () => {
+    for (const repair of [false, true]) {
+      const root = tempDirs.make(
+        `openclaw-doctor-retained-database-${repair ? "repair" : "preview"}-`,
+      );
+      const stateDir = path.join(root, "state");
+      const configPath = path.join(root, "openclaw.json");
+      const loaderPath = writeDoctorTestLoader(root);
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        configPath,
+        `${JSON.stringify({
+          agents: {
+            ownership: "explicit",
+            defaults: { heartbeat: { every: "30m" } },
+            entries: { main: {} },
+          },
+        })}\n`,
+      );
+      openOpenClawAgentDatabase({ agentId: "main", env });
+      const retainedDatabase = {
+        agentId: "retired",
+        path: path.join(stateDir, "retired.sqlite"),
+      };
+      const externalDatabase = {
+        agentId: "external",
+        path: path.join(root, `external\n${String.fromCharCode(0x1b)}[31mforged`, "retired.sqlite"),
+      };
+      const sanitizedExternalPath = path.join(root, "externalforged", "retired.sqlite");
+      const retainedDatabases = [retainedDatabase, externalDatabase];
+      for (const databaseCase of retainedDatabases) {
+        const retained = openOpenClawAgentDatabase({
+          agentId: databaseCase.agentId,
+          env,
+          path: databaseCase.path,
+        });
+        retained.db
+          .prepare(
+            `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+             VALUES (?, ?, ?, ?)`,
+          )
+          .run(
+            `agent:${databaseCase.agentId}:proof`,
+            `${databaseCase.agentId}-proof-session`,
+            "{}",
+            1,
+          );
+      }
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+
+      const result = runDoctor({ root, configPath, loaderPath, repair });
+      const output = `${result.stderr}\n${result.stdout}`;
+      expect(result.error, output).toBeUndefined();
+      expect(result.signal, output).toBeNull();
+      expect(result.status, output).toBe(0);
+      expect(output).toContain('Retained unconfigured agent database "retired" at');
+      expect(output).toContain(retainedDatabase.path);
+      expect(output).toContain("Doctor will not remove it automatically because it may contain");
+      expect(output).toContain("retired or manually managed agent state.");
+      expect(output).not.toContain('Retained unconfigured agent database "main"');
+      expect(output).toContain("Skipped foreign agent database");
+      expect(output).toContain(sanitizedExternalPath);
+      expect(output).not.toContain(externalDatabase.path);
+      for (const databaseCase of retainedDatabases) {
+        expect(fs.existsSync(databaseCase.path)).toBe(true);
+        const database = new DatabaseSync(databaseCase.path, { readOnly: true });
+        try {
+          expect(
+            database
+              .prepare(
+                `SELECT session_key, current_session_id, entry_json, updated_at
+                 FROM session_nodes WHERE session_key = ?`,
+              )
+              .get(`agent:${databaseCase.agentId}:proof`),
+          ).toEqual({
+            session_key: `agent:${databaseCase.agentId}:proof`,
+            current_session_id: `${databaseCase.agentId}-proof-session`,
+            entry_json: "{}",
+            updated_at: 1,
+          });
+        } finally {
+          database.close();
+        }
+      }
+      const registeredDatabases = listOpenClawRegisteredAgentDatabases({ env });
+      expect(registeredDatabases).toContainEqual(expect.objectContaining(retainedDatabase));
+      expect(registeredDatabases).not.toContainEqual(expect.objectContaining(externalDatabase));
+    }
   }, 120_000);
 
   it("omits backup tips for Git-backed nested agent workspaces", () => {
@@ -352,6 +438,7 @@ registerHooks({
     const result = spawnNodeEvalSync(script, {
       imports: ["tsx"],
       env: {
+        ESBUILD_WORKER_THREADS: "0",
         PATH: path.dirname(process.execPath),
         HOME: root,
         USERPROFILE: root,

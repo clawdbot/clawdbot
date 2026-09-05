@@ -16,7 +16,7 @@ export type TaskBackingInstance =
 type TaskBackingDetail = TaskBackingInstance & { kind: typeof TASK_BACKING_DETAIL_KIND };
 type ManagedTaskBacking = { taskId: string; instance: TaskBackingInstance };
 
-function readTaskBackingInstance(value: unknown): TaskBackingInstance | undefined {
+export function readTaskBackingInstance(value: unknown): TaskBackingInstance | undefined {
   const detail = asOptionalRecord(value);
   if (detail?.kind !== TASK_BACKING_DETAIL_KIND) {
     return undefined;

@@ -342,7 +342,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   },
   {
     id: "gateway",
-    description: "Read Gateway config and schema",
+    description: "Read Gateway config/schema; owner-only OpenClaw self-update",
     sectionId: "automation",
     profiles: [],
     includeInOpenClawGroup: true,
@@ -458,6 +458,13 @@ const CORE_TOOL_BY_ID = new Map<string, CoreToolDefinition>(
   CORE_TOOL_DEFINITIONS.map((tool) => [tool.id, tool]),
 );
 
+// Section membership is static; capability filtering and response objects stay per request.
+const CORE_TOOL_SECTIONS = CORE_TOOL_SECTION_ORDER.map(({ id, label }) => ({
+  id,
+  label,
+  tools: CORE_TOOL_DEFINITIONS.filter((tool) => tool.sectionId === id),
+}));
+
 function listCoreToolIdsForProfile(profile: ToolProfileId): string[] {
   return CORE_TOOL_DEFINITIONS.filter((tool) => tool.profiles.includes(profile)).map(
     (tool) => tool.id,
@@ -533,21 +540,22 @@ export function listCoreToolSections(params?: {
   // Callers resolve the swarm gate and pass the fact in; resolving config here
   // would couple this ui-shared module to the server graph.
   const swarmEnabled = params?.swarmEnabled === true;
-  return CORE_TOOL_SECTION_ORDER.map((section) => ({
+  return CORE_TOOL_SECTIONS.map((section) => ({
     id: section.id,
     label: section.label,
-    tools: CORE_TOOL_DEFINITIONS.filter(
-      (tool) =>
-        tool.sectionId === section.id &&
-        (tool.id !== "agents_wait" || swarmEnabled) &&
-        (tool.id !== "github_identity_status" ||
-          params?.githubPublicationAvailable !== undefined) &&
-        (tool.id !== "github_publish" || params?.githubPublicationAvailable === true),
-    ).map((tool) => ({
-      id: tool.id,
-      label: tool.id,
-      description: tool.description,
-    })),
+    tools: section.tools
+      .filter(
+        (tool) =>
+          (tool.id !== "agents_wait" || swarmEnabled) &&
+          (tool.id !== "github_identity_status" ||
+            params?.githubPublicationAvailable !== undefined) &&
+          (tool.id !== "github_publish" || params?.githubPublicationAvailable === true),
+      )
+      .map((tool) => ({
+        id: tool.id,
+        label: tool.id,
+        description: tool.description,
+      })),
   })).filter((section) => section.tools.length > 0);
 }
 

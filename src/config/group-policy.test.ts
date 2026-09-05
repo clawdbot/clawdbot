@@ -1,9 +1,14 @@
 // Verifies group-policy normalization and runtime resolution.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parseConcreteConfigPath } from "../shared/dot-path.js";
+import { resolveMergedAccountConfig } from "./channel-account-config.js";
+import { setConfigValueAtPath } from "./config-paths.js";
 import type { OpenClawConfig } from "./config.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
+  resolveChannelGroups,
+  resolveChannelGroupsConfigPath,
   resolveToolsBySender,
 } from "./group-policy.js";
 
@@ -231,6 +236,131 @@ describe("resolveChannelGroupPolicy", () => {
         accountId: "default",
       }).allowed,
     ).toBe(false);
+  });
+});
+
+describe("resolveChannelGroupsConfigPath", () => {
+  it.each([
+    { name: "inherited root", accountId: "work", accountKey: "Work", override: false },
+    {
+      name: "normalized account override",
+      accountId: " WORK ",
+      accountKey: "Work",
+      override: true,
+    },
+    {
+      name: "explicit default account",
+      accountId: "default",
+      accountKey: "default",
+      override: true,
+    },
+  ])(
+    "updates the $name map while retaining sibling policies",
+    ({ accountId, accountKey, override }) => {
+      const rootGroups = {
+        "*": { requireMention: true, tools: { deny: ["exec"] } },
+        room: { requireMention: true, tools: { deny: ["write"] } },
+        sibling: { requireMention: true, tools: { deny: ["read"] } },
+      };
+      const accountGroups = override ? structuredClone(rootGroups) : undefined;
+      const cfg = {
+        channels: {
+          imessage: {
+            groups: rootGroups,
+            accounts: { [accountKey]: accountGroups ? { groups: accountGroups } : {} },
+          },
+        },
+      } satisfies OpenClawConfig;
+      const groups = resolveChannelGroups(cfg, "imessage", accountId);
+      const groupsPath = resolveChannelGroupsConfigPath({
+        cfg,
+        channel: "imessage",
+        accountId,
+        groups,
+      });
+      expect(groupsPath).toBe(
+        override
+          ? `channels.imessage.accounts[${JSON.stringify(accountKey)}].groups`
+          : "channels.imessage.groups",
+      );
+      const before = structuredClone(rootGroups);
+
+      setConfigValueAtPath(
+        cfg,
+        parseConcreteConfigPath(`${groupsPath}["room"].requireMention`),
+        false,
+      );
+
+      expect(resolveChannelGroups(cfg, "imessage", accountId)).toEqual({
+        ...before,
+        room: { ...before.room, requireMention: false },
+      });
+      expect(
+        resolveChannelGroupRequireMention({ cfg, channel: "imessage", accountId, groupId: "room" }),
+      ).toBe(false);
+      expect(
+        resolveChannelGroupPolicy({ cfg, channel: "imessage", accountId, groupId: "sibling" })
+          .allowed,
+      ).toBe(true);
+      if (override) {
+        expect(rootGroups).toEqual(before);
+      } else {
+        expect(cfg.channels.imessage.accounts[accountKey]).toEqual({});
+      }
+    },
+  );
+
+  it.each([
+    { name: "shared single-account inheritance", shallow: false, multiple: false, scope: "root" },
+    { name: "shared multi-account override", shallow: false, multiple: true, scope: "account" },
+    { name: "plugin-owned shallow override", shallow: true, multiple: false, scope: "account" },
+  ])("honors $name for an empty map", ({ shallow, multiple, scope }) => {
+    const channelConfig = {
+      groups: { sibling: { requireMention: false } },
+      accounts: { Work: { groups: {} }, ...(multiple ? { Other: {} } : {}) },
+    };
+    const cfg = { channels: { line: channelConfig } } satisfies OpenClawConfig;
+    const groups = shallow
+      ? resolveMergedAccountConfig<{ groups?: Record<string, { requireMention?: boolean }> }>({
+          channelConfig,
+          accounts: channelConfig.accounts,
+          accountId: "work",
+        }).groups
+      : resolveChannelGroups(cfg, "line", "work");
+    expect(
+      resolveChannelGroupsConfigPath({ cfg, channel: "line", accountId: "work", groups }),
+    ).toBe(scope === "root" ? "channels.line.groups" : 'channels.line.accounts["Work"].groups');
+  });
+
+  it.each([
+    { accountId: "work", expected: 'channels.signal.accounts["Work"].groups' },
+    { accountId: "default", expected: 'channels.signal.accounts["default"].groups' },
+    { accountId: "missing", expected: "channels.signal.groups" },
+  ])(
+    "locates a new map for $accountId without inventing a fallback account",
+    ({ accountId, expected }) => {
+      const cfg = {
+        channels: { signal: { accounts: { Work: {}, default: {} } } },
+      } satisfies OpenClawConfig;
+      expect(
+        resolveChannelGroupsConfigPath({ cfg, channel: "signal", accountId, groups: undefined }),
+      ).toBe(expected);
+    },
+  );
+
+  it("preserves exact account-key precedence when config objects share a reference", () => {
+    const account = { groups: {} };
+    const cfg = {
+      channels: { signal: { accounts: { Work: account, work: account } } },
+    } satisfies OpenClawConfig;
+    expect(
+      resolveChannelGroupsConfigPath({
+        cfg,
+        channel: "signal",
+        accountId: "work",
+        groups: account.groups,
+      }),
+    ).toBe('channels.signal.accounts["work"].groups');
   });
 });
 

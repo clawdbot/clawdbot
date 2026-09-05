@@ -1289,6 +1289,7 @@ export async function installPluginFromMarketplace(
     dryRun?: boolean;
     expectedPluginId?: string;
     onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+    beforePersistentApply?: () => void;
   },
 ): Promise<MarketplaceInstallResult> {
   const loaded = await loadMarketplace({
@@ -1340,6 +1341,7 @@ export async function installPluginFromMarketplace(
         dryRun: params.dryRun,
         expectedPluginId: params.expectedPluginId,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+        beforePersistentApply: params.beforePersistentApply,
         installPolicyRequest: {
           kind: marketplaceInstallPolicyRequestKind({
             marketplaceOrigin: loaded.marketplace.origin,

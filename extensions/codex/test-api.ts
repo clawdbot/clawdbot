@@ -14,7 +14,11 @@ import {
 } from "./src/app-server/config.js";
 import { filterCodexDynamicTools } from "./src/app-server/dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./src/app-server/dynamic-tools.js";
-import type { CodexDynamicToolSpec, JsonObject } from "./src/app-server/protocol.js";
+import {
+  flattenCodexDynamicToolFunctions,
+  type CodexDynamicToolSpec,
+  type JsonObject,
+} from "./src/app-server/protocol.js";
 import {
   buildDeveloperInstructions,
   buildThreadResumeParams,
@@ -92,6 +96,9 @@ export function buildCodexHarnessPromptSnapshot(params: {
       appServer: params.appServer,
       promptText: params.promptText,
       turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
+      sessionStatusAvailable: flattenCodexDynamicToolFunctions(params.dynamicTools).some(
+        (tool) => tool.name === "session_status",
+      ),
     }),
   };
 }

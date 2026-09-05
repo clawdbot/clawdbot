@@ -91,7 +91,7 @@ struct StatusApprovalCard: View {
                 Spacer(minLength: 4)
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let seconds = max(0, Int(ceil(self.expirationDate.timeIntervalSince(context.date))))
-                    Text(String(localized: "\(seconds)s"))
+                    Text(String(format: String(localized: "%llds"), seconds))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: 48, alignment: .trailing)

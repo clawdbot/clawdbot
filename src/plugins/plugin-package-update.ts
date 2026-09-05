@@ -9,6 +9,7 @@ import {
 import {
   hasMatchingPluginLoadPath,
   removePluginRuntimePolicyFromConfig,
+  resolveComparableUninstallPathInternal,
 } from "./uninstall-package-config.js";
 
 type PluginPackageUpdateSnapshot = ReadonlyMap<string, InstalledPluginLifecycleOwnership>;
@@ -96,6 +97,17 @@ export function reconcilePluginPackageUpdateConfig(params: {
     if (removedPluginIds.length === 0) {
       continue;
     }
+    const retainedOwnedPaths = new Set(
+      [
+        after.value.installRecord.installPath,
+        after.value.installRecord.sourcePath,
+        ...params.afterIndex.plugins
+          .filter((plugin) => afterPluginIds.has(plugin.pluginId))
+          .flatMap((plugin) => [plugin.source, plugin.rootDir]),
+      ]
+        .filter((value): value is string => Boolean(value))
+        .map(resolveComparableUninstallPathInternal),
+    );
     const retainedContributionKeys = contributionKeys(params.afterIndex, afterPluginIds);
     for (const pluginId of removedPluginIds) {
       const oldRecord = params.beforeIndex.plugins.find((plugin) => plugin.pluginId === pluginId);
@@ -105,7 +117,15 @@ export function reconcilePluginPackageUpdateConfig(params: {
       ].filter((channelId) => !retainedContributionKeys.has(channelId));
       config = removePluginRuntimePolicyFromConfig(config, pluginId, {
         channelIds,
-        loadPaths: oldRecord?.source ? [oldRecord.source] : [],
+        loadPaths: [
+          oldRecord?.source,
+          before.installRecord.installPath,
+          before.installRecord.sourcePath,
+        ]
+          .filter((value): value is string => Boolean(value))
+          .filter(
+            (value) => !retainedOwnedPaths.has(resolveComparableUninstallPathInternal(value)),
+          ),
       }).config;
     }
   }
@@ -121,10 +141,14 @@ export function pluginPackageUpdateMayMutateConfig(params: {
   const channels = params.config.channels as Record<string, unknown> | undefined;
   for (const ownership of params.snapshot.values()) {
     const pluginIds = new Set(ownership.pluginIds);
-    const ownedSources = params.index.plugins
-      .filter((plugin) => pluginIds.has(plugin.pluginId) && plugin.source)
-      .map((plugin) => plugin.source!);
-    if (hasMatchingPluginLoadPath(params.config, ownedSources)) {
+    const ownedPaths = [
+      ownership.installRecord.installPath,
+      ownership.installRecord.sourcePath,
+      ...params.index.plugins
+        .filter((plugin) => pluginIds.has(plugin.pluginId) && plugin.source)
+        .map((plugin) => plugin.source!),
+    ].filter((value): value is string => Boolean(value));
+    if (hasMatchingPluginLoadPath(params.config, ownedPaths)) {
       return true;
     }
     for (const pluginId of ownership.pluginIds) {

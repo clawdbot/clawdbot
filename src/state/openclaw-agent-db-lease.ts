@@ -60,7 +60,7 @@ export function assertAgentDatabaseMaintenanceAuthorityIfPresent(): void {
   maintenanceAuthority.getStore()?.assertOwned();
 }
 
-/** Renew a maintenance owner before a synchronous schema phase can block its heartbeat. */
+/** Verify the maintenance owner and its independent heartbeat before a synchronous phase. */
 export function renewAgentDatabaseMaintenanceAuthorityIfPresent(): void {
   const authority = maintenanceAuthority.getStore();
   if (!authority) {
@@ -72,17 +72,15 @@ export function renewAgentDatabaseMaintenanceAuthorityIfPresent(): void {
   authority.renew();
 }
 
-export function claimOpenClawAgentDatabaseLease(params: {
-  agentId: string;
-  path: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
+export function claimOpenClawAgentDatabaseLease(
+  params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
+  leaseId: string = crypto.randomUUID(),
+): string {
   const agentId = normalizeAgentId(params.agentId);
   const deletionFence = prepareAgentDeletionPathFence(
     { agentId, path: params.path },
     { env: params.env },
   );
-  const leaseId = crypto.randomUUID();
   const ownerStartTime = getFileLockProcessStartTime(process.pid);
   runOpenClawStateWriteTransaction(
     (database) => {

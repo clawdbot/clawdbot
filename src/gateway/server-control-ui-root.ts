@@ -8,8 +8,10 @@ import {
   resolveControlUiRootOverrideSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
+import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createControlUiAssetRetention } from "./control-ui-asset-retention.js";
+import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "./control-ui-root-assets.js";
 import type { ControlUiRootState } from "./control-ui.js";
 
 type GatewayControlUiRootParams = {
@@ -20,8 +22,9 @@ type GatewayControlUiRootParams = {
 };
 
 export type GatewayControlUiRootLifecycle = {
-  state: ControlUiRootState | undefined;
-  start: (isStopped: () => boolean, signal: AbortSignal) => Promise<void>;
+  state: ControlUiRootState;
+  setEnabled: (enabled: boolean) => void;
+  start: () => Promise<void>;
   stop: () => Promise<void>;
 };
 
@@ -46,6 +49,10 @@ function createResolvedRootState(root: string, configured = false): ControlUiRoo
         kind: "bundled",
         path: root,
         realPath: fs.realpathSync(root),
+        // Snapshot build metadata at the root lifecycle boundary, never per request.
+        publicAssetBuildId: new RegExp(
+          `${CONTROL_UI_BUILD_ID_ATTRIBUTE}="([a-zA-Z0-9._-]{1,161})"`,
+        ).exec(fs.readFileSync(path.join(root, "index.html"), "utf8"))?.[1],
         retainedAssets: createControlUiAssetRetention(root),
       }
     : {
@@ -76,7 +83,7 @@ function prepareResolvedRootState(params: {
 export function createGatewayControlUiRootLifecycle(
   params: GatewayControlUiRootParams,
 ): GatewayControlUiRootLifecycle {
-  let state: ControlUiRootState | undefined;
+  let state: ControlUiRootState = { kind: "preparing" };
   if (params.controlUiRootOverride) {
     const resolvedOverride = resolveControlUiRootOverrideSync(params.controlUiRootOverride);
     const resolvedOverridePath = path.resolve(params.controlUiRootOverride);
@@ -98,75 +105,107 @@ export function createGatewayControlUiRootLifecycle(
         : { kind: "preparing" };
   }
 
-  let buildPromise: Promise<void> | undefined;
-  let retentionPromise: Promise<void> | undefined;
-  const prepareRetention = (isStopped: () => boolean, signal: AbortSignal): Promise<void> => {
-    if (state?.kind !== "bundled" || !state.retainedAssets) {
-      return Promise.resolve();
+  let enabled = params.controlUiEnabled;
+  let stopped = false;
+  let preparation: { controller: AbortController; promise: Promise<void> } | undefined;
+  const prepare = async (signal: AbortSignal): Promise<void> => {
+    const isStopped = () => stopped || signal.aborted;
+    if (isStopped()) {
+      return;
     }
-    retentionPromise ??= state.retainedAssets
-      .prepare({ isCancelled: isStopped, signal })
-      .catch((error: unknown) => {
-        if (isStopped() || signal.aborted) {
-          return;
+    try {
+      if (state.kind === "preparing") {
+        // Initially disabled gateways discover assets only when enabled. Reuse a
+        // finished build after cancellation without reviving its retired preparer.
+        let resolvedRoot = resolveAutoRoot();
+        if (!resolvedRoot || !isControlUiStartupAssetsReady(resolvedRoot)) {
+          const result = await ensureControlUiAssetsBuilt(params.gatewayRuntime, { signal });
+          if (isStopped()) {
+            return;
+          }
+          if (!result.ok) {
+            Object.assign(state, { kind: "failed" });
+            params.log.warn(
+              `gateway: ${result.message ?? "Control UI assets could not be built."}`,
+            );
+            return;
+          }
+          resolvedRoot = resolveAutoRoot();
         }
-        const detail = error instanceof Error ? error.message : String(error);
-        params.log.warn(`gateway: Control UI asset retention failed: ${detail}`);
-      });
-    return retentionPromise;
-  };
-  const start = (isStopped: () => boolean, signal: AbortSignal): Promise<void> => {
-    if (isStopped() || signal.aborted) {
-      return Promise.resolve();
-    }
-    if (state?.kind !== "preparing") {
-      return prepareRetention(isStopped, signal);
-    }
-    const preparingState = state;
-    buildPromise ??= (async () => {
-      try {
-        const result = await ensureControlUiAssetsBuilt(params.gatewayRuntime, { signal });
-        if (isStopped() || signal.aborted) {
-          return;
-        }
-        if (!result.ok) {
-          const message = result.message ?? "Control UI assets could not be built.";
-          Object.assign(preparingState, { kind: "failed" });
-          params.log.warn(`gateway: ${message}`);
-          return;
-        }
-
-        const resolvedRoot = resolveAutoRoot();
         if (!resolvedRoot || !isControlUiStartupAssetsReady(resolvedRoot)) {
           const message = resolvedRoot
-            ? `Control UI assets at ${resolvedRoot} remain incomplete. Run \`openclaw doctor --fix\` or reinstall OpenClaw.`
-            : "Control UI build completed, but its assets are still unavailable. Run `pnpm ui:build`.";
-          Object.assign(preparingState, { kind: "failed" });
-          params.log.warn(`gateway: ${message}`);
+            ? `Control UI assets at ${resolvedRoot} remain incomplete.`
+            : "Control UI build completed, but its assets are still unavailable.";
+          Object.assign(state, { kind: "failed" });
+          params.log.warn(
+            `gateway: ${message} Run \`openclaw doctor --fix\` or reinstall OpenClaw.`,
+          );
           return;
         }
         // Listeners retain this object from before bind; replacing it would strand
         // their routes in the preparing state after a successful background build.
-        Object.assign(preparingState, createResolvedRootState(resolvedRoot));
-        await prepareRetention(isStopped, signal);
-      } catch (error) {
-        if (isStopped() || signal.aborted) {
-          return;
-        }
-        const detail = error instanceof Error ? error.message : String(error);
-        const message = `Control UI assets build failed: ${detail}`;
-        Object.assign(preparingState, { kind: "failed" });
-        params.log.warn(`gateway: ${message}`);
+        Object.assign(state, createResolvedRootState(resolvedRoot));
       }
-    })();
-    return buildPromise;
+    } catch (error) {
+      if (!isStopped()) {
+        Object.assign(state, { kind: "failed" });
+        const detail = error instanceof Error ? error.message : String(error);
+        params.log.warn(`gateway: Control UI assets build failed: ${detail}`);
+      }
+      return;
+    }
+    if (state.kind === "bundled") {
+      await state.retainedAssets
+        ?.prepare({ isCancelled: isStopped, signal })
+        .catch((error: unknown) => {
+          if (isStopped()) {
+            return;
+          }
+          const detail = error instanceof Error ? error.message : String(error);
+          params.log.warn(`gateway: Control UI asset retention failed: ${detail}`);
+        });
+    }
+  };
+  const start = (): Promise<void> => {
+    if (!enabled || stopped) {
+      return Promise.resolve();
+    }
+    if (preparation) {
+      return preparation.controller.signal.aborted
+        ? preparation.promise.then(start)
+        : preparation.promise;
+    }
+    const controller = new AbortController();
+    const promise = runOutsideGatewayRootWorkAdmission(() =>
+      Promise.resolve().then(() => prepare(controller.signal)),
+    ).finally(() => {
+      preparation = undefined;
+    });
+    preparation = { controller, promise };
+    return promise;
   };
 
   return {
     state,
     start,
+    setEnabled: (nextEnabled) => {
+      if (stopped || enabled === nextEnabled) {
+        return;
+      }
+      enabled = nextEnabled;
+      if (enabled) {
+        if (state.kind === "failed") {
+          Object.assign(state, { kind: "preparing" });
+        }
+        void start();
+      } else {
+        preparation?.controller.abort();
+      }
+    },
     stop: async () => {
-      await Promise.all([buildPromise, retentionPromise]);
+      stopped = true;
+      preparation?.controller.abort();
+      await preparation?.promise;
     },
   };
 }

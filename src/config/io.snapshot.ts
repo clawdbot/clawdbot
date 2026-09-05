@@ -198,7 +198,10 @@ export async function readConfigFileSnapshotInternal(
     const contextBudgetMigration = migrateLegacyContextBudgetConfig(
       readResolution.resolvedConfigRaw,
     );
-    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config);
+    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config, {
+      env: deps.env,
+      homedir: deps.homedir,
+    });
     envVarWarnings.push(
       ...contextBudgetMigration.changes,
       ...contextBudgetMigration.warnings,
