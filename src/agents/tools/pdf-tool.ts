@@ -46,7 +46,7 @@ import {
   type MediaToolSandbox,
 } from "./media-tool-shared.js";
 import { hasToolModelConfig } from "./model-config.helpers.js";
-import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
+import { anthropicAnalyzePdf, geminiAnalyzePdf, openaiAnalyzePdf } from "./pdf-native-providers.js";
 import {
   coercePdfAssistantText,
   coercePdfModelConfig,
@@ -247,7 +247,7 @@ async function runPdfPrompt(params: {
           authStorage: resolved.authStorage,
         });
 
-        if (providerSupportsNativePdf(provider)) {
+        if (providerSupportsNativePdf(provider, model.api, model.baseUrl)) {
           if (params.password) {
             throw new Error(
               `password is not supported with native PDF providers (${provider}/${modelId}). Remove password, or use a non-native model for encrypted PDFs.`,
@@ -289,6 +289,26 @@ async function runPdfPrompt(params: {
               modelId,
               prompt: params.prompt,
               pdfs,
+              baseUrl: model.baseUrl,
+              requestConfig: {
+                headers: model.headers,
+                request: getModelProviderRequestTransport(model),
+              },
+              signal: params.signal,
+            });
+            return { text, provider, model: modelId, native: true };
+          }
+
+          if (provider === "openai" && model.api === "openai-responses") {
+            // ChatGPT/Codex OAuth uses a distinct request protocol and remains
+            // on the extraction fallback until that transport supports files.
+            params.signal?.throwIfAborted();
+            const text = await openaiAnalyzePdf({
+              apiKey,
+              modelId,
+              prompt: params.prompt,
+              pdfs,
+              maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
               baseUrl: model.baseUrl,
               requestConfig: {
                 headers: model.headers,
@@ -425,7 +445,7 @@ export function createPdfTool(options?: {
       : DEFAULT_MAX_PAGES;
 
   const description =
-    'Analyze PDF(s): Anthropic/Google native when supported, else text/image extraction. pdf one; pdfs max 10; prompt says inspection. `pages` selects a page range ("1-5", "1,3,5-7"); `password` opens encrypted PDFs (both non-native only).';
+    'Analyze PDF(s): Anthropic/Google/OpenAI Responses native when supported, else text/image extraction. pdf one; pdfs max 10; prompt says inspection. `pages` selects a page range ("1-5", "1,3,5-7"); `password` opens encrypted PDFs (both non-native only).';
   const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
   return {

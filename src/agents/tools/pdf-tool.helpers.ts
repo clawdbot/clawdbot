@@ -41,9 +41,44 @@ export function resolvePdfInputs(record: Record<string, unknown>): string[] {
   return pdfInputs;
 }
 
-/** Checks whether a provider supports native PDF document input. */
-export function providerSupportsNativePdf(provider: string): boolean {
-  return providerSupportsNativePdfDocument({ providerId: provider });
+function isOfficialOpenAIPlatformBaseUrl(baseUrl?: string): boolean {
+  if (typeof baseUrl !== "string") {
+    return false;
+  }
+  try {
+    const url = new URL(baseUrl.trim());
+    const hostname = url.hostname.toLowerCase().replace(/\.$/u, "");
+    return (
+      url.protocol === "https:" &&
+      hostname === "api.openai.com" &&
+      !url.port &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      (url.pathname === "/" || url.pathname === "/v1" || url.pathname === "/v1/")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Checks whether a resolved provider route supports native PDF document input. */
+export function providerSupportsNativePdf(
+  provider: string,
+  api?: string,
+  baseUrl?: string,
+): boolean {
+  if (!providerSupportsNativePdfDocument({ providerId: provider })) {
+    return false;
+  }
+  // OpenAI's public Responses API accepts input_file. Custom Responses and
+  // ChatGPT/Codex endpoints have separate contracts, so provider metadata and
+  // adapter identity alone are not sufficient to permit raw PDF egress.
+  if (provider.trim().toLowerCase() === "openai") {
+    return api === "openai-responses" && isOfficialOpenAIPlatformBaseUrl(baseUrl);
+  }
+  return true;
 }
 
 /** Parses a page range string into sorted, unique, 1-based page numbers within `maxPages`. */

@@ -650,42 +650,6 @@ describe("createPdfTool", () => {
     });
   });
 
-  it("uses extraction fallback for non-native models", async () => {
-    await withTempPdfAgentDir(async (agentDir) => {
-      await stubPdfToolInfra(agentDir, {
-        provider: "openai",
-        api: "openai-responses",
-        input: ["text"],
-      });
-      const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
-        text: "Extracted content",
-        images: [],
-      });
-      completeMock.mockResolvedValue({
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "text", text: "fallback summary" }],
-      } as never);
-
-      const cfg = withPdfModel(OPENAI_PDF_MODEL);
-      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
-
-      const result = await tool.execute("t1", {
-        prompt: "summarize",
-        pdf: "/tmp/doc.pdf",
-      });
-
-      expect(extractSpy).toHaveBeenCalledTimes(1);
-      expect(result.content).toEqual([{ type: "text", text: "fallback summary" }]);
-      expectFields(result.details, {
-        native: false,
-        model: OPENAI_PDF_MODEL,
-        text: "fallback summary",
-      });
-      expect(firstCompletionContext()?.systemPrompt).toBeUndefined();
-    });
-  });
-
   it("uses the prepared provider stream for extraction fallback", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       const pluginRegistry = createEmptyPluginRegistry();

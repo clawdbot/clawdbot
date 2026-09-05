@@ -205,6 +205,91 @@ export async function anthropicAnalyzePdf(params: {
 }
 
 // ---------------------------------------------------------------------------
+// OpenAI – native PDF via public Responses API
+// ---------------------------------------------------------------------------
+
+export async function openaiAnalyzePdf(params: {
+  apiKey: string;
+  modelId: string;
+  prompt: string;
+  pdfs: PdfInput[];
+  maxTokens?: number;
+  baseUrl?: string;
+  requestConfig?: NativePdfProviderRequestConfig;
+  signal?: AbortSignal;
+}): Promise<string> {
+  const apiKey = normalizeSecretInput(params.apiKey);
+  if (!apiKey) {
+    throw new Error("OpenAI PDF: apiKey required");
+  }
+
+  const content: Array<Record<string, string>> = params.pdfs.map((pdf) => ({
+    type: "input_file",
+    filename: pdf.filename ?? "document.pdf",
+    file_data: `data:application/pdf;base64,${pdf.base64}`,
+  }));
+  content.push({ type: "input_text", text: params.prompt });
+
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, trustConfiguredBaseUrlOrigin } =
+    resolveProviderHttpRequestConfigWithOriginTrust({
+      baseUrl: params.baseUrl,
+      defaultBaseUrl: "https://api.openai.com/v1",
+      defaultHeaders: {
+        ...params.requestConfig?.headers,
+        Authorization: `Bearer ${apiKey}`,
+      },
+      request: params.requestConfig?.request,
+      provider: "openai",
+      api: "openai-responses",
+      capability: "other",
+      transport: "http",
+    });
+  headers.set("Content-Type", "application/json");
+  const url = new URL("/v1/responses", baseUrl).href;
+
+  const json = await postNativePdfJson({
+    url,
+    headers,
+    body: {
+      model: params.modelId,
+      input: [{ role: "user", content }],
+      max_output_tokens: params.maxTokens ?? 4096,
+      store: false,
+    },
+    allowPrivateNetwork,
+    ssrfPolicy: resolveProviderTransportSsrFPolicy({
+      baseUrl,
+      url,
+      allowPrivateNetwork,
+      trustConfiguredBaseUrlOrigin,
+    }),
+    dispatcherPolicy,
+    failureLabel: "OpenAI PDF request failed",
+    responseLabel: "OpenAI PDF response",
+    nonJsonMessage: "OpenAI PDF response was not JSON.",
+    request: params.requestConfig?.request,
+    defaultAuthHeader: "authorization",
+    signal: params.signal,
+  });
+
+  const output = Array.isArray(json.output) ? json.output : [];
+  const text = output
+    .flatMap((item) =>
+      isRecord(item) && item.type === "message" && Array.isArray(item.content) ? item.content : [],
+    )
+    .flatMap((item) =>
+      isRecord(item) && item.type === "output_text" && typeof item.text === "string"
+        ? [item.text]
+        : [],
+    )
+    .join("");
+  if (!text.trim()) {
+    throw new Error("OpenAI PDF returned no text.");
+  }
+  return text.trim();
+}
+
+// ---------------------------------------------------------------------------
 // Google Gemini – native PDF via generateContent API
 // ---------------------------------------------------------------------------
 

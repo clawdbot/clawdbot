@@ -53,6 +53,18 @@ function makeGeminiAnalyzeParams(
   };
 }
 
+function makeOpenAIAnalyzeParams(
+  overrides: Partial<Parameters<typeof pdfNativeProviders.openaiAnalyzePdf>[0]> = {},
+) {
+  return {
+    apiKey: "test-key",
+    modelId: "gpt-5.4-mini",
+    prompt: "test",
+    pdfs: [TEST_PDF_INPUT],
+    ...overrides,
+  };
+}
+
 describe("native PDF provider API calls", () => {
   const priorFetch = global.fetch;
 
@@ -490,6 +502,79 @@ describe("native PDF provider API calls", () => {
     await expect(
       pdfNativeProviders.anthropicAnalyzePdf(makeAnthropicAnalyzeParams()),
     ).rejects.toThrow("JSON response exceeds");
+  });
+
+  it.each([
+    undefined,
+    "https://api.openai.com",
+    "https://api.openai.com/",
+    "https://api.openai.com/v1",
+    "https://api.openai.com/v1/",
+  ])(
+    "openaiAnalyzePdf sends input_file to the public Responses API with base %s",
+    async (baseUrl) => {
+      const fetchMock = mockFetchResponse(
+        jsonResponse({
+          output: [
+            { type: "message", content: [{ type: "output_text", text: "OpenAI PDF analysis" }] },
+          ],
+        }),
+      );
+
+      const result = await pdfNativeProviders.openaiAnalyzePdf(
+        makeOpenAIAnalyzeParams({ prompt: "Summarize this document", baseUrl }),
+      );
+
+      expect(result).toBe("OpenAI PDF analysis");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, opts] = firstFetchCall(fetchMock) as [
+        string,
+        { body: string; headers: Headers; signal: AbortSignal },
+      ];
+      expect(url).toBe("https://api.openai.com/v1/responses");
+      expect(opts.headers.get("Authorization")).toBe("Bearer test-key");
+      expect(opts.signal).toBeInstanceOf(AbortSignal);
+      const body = JSON.parse(opts.body);
+      expect(body.store).toBe(false);
+      expect(body.input[0].content).toEqual([
+        {
+          type: "input_file",
+          filename: "doc.pdf",
+          file_data: "data:application/pdf;base64,dGVzdA==",
+        },
+        { type: "input_text", text: "Summarize this document" },
+      ]);
+    },
+  );
+
+  it("redacts reflected OpenAI bearer credentials from bounded errors", async () => {
+    const credential = "sk-openai-native-pdf-secret-value";
+    mockFetchResponse(
+      textResponse(`upstream echoed Bearer ${credential}`, {
+        status: 401,
+        statusText: "Unauthorized",
+      }),
+    );
+
+    const error = await captureError(
+      pdfNativeProviders.openaiAnalyzePdf(makeOpenAIAnalyzeParams({ apiKey: credential })),
+      "OpenAI PDF request",
+    );
+    expect(error.message).toContain("OpenAI PDF request failed (401");
+    expect(error.message).not.toContain(credential);
+    expect(error.message).toContain("upstream echoed ***");
+  });
+
+  it("forwards cancellation to the OpenAI Responses request", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled"));
+    const fetchMock = vi.fn();
+    global.fetch = Object.assign(fetchMock, { preconnect: vi.fn() }) as typeof global.fetch;
+
+    await expect(
+      pdfNativeProviders.openaiAnalyzePdf(makeOpenAIAnalyzeParams({ signal: controller.signal })),
+    ).rejects.toThrow();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("geminiAnalyzePdf sends correct request shape", async () => {

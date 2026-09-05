@@ -30,6 +30,7 @@ describe("openaiMediaUnderstandingProvider", () => {
       audio: "gpt-4o-transcribe",
     });
     expect(openaiMediaUnderstandingProvider.autoPriority).toEqual({ image: 20, audio: 20 });
+    expect(openaiMediaUnderstandingProvider.nativeDocumentInputs).toEqual(["pdf"]);
     expect(openaiMediaUnderstandingProvider.transcribeAudio).toBeTypeOf("function");
   });
 });

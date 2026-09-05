@@ -10,6 +10,7 @@ import { OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL } from "./default-models.js";
 export const openaiMediaUnderstandingProvider: MediaUnderstandingProvider = {
   id: "openai",
   capabilities: ["image", "audio"],
+  nativeDocumentInputs: ["pdf"],
   defaultModels: { image: "gpt-5.6-sol", audio: OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL },
   autoPriority: { image: 20, audio: 20 },
   describeImage: describeImageWithModel,
