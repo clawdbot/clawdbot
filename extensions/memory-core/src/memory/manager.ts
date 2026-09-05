@@ -100,7 +100,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   protected closing = false;
   protected activeManagerOperations = 0;
   protected managerIdleWaiters = new Set<() => void>();
-  protected activeBackgroundSearchSyncs = new Set<Promise<void>>();
+  protected activeBackgroundMaintenance = new Set<Promise<void>>();
   protected providerUnavailableReason?: string;
   protected override providerLifecycle: MemoryProviderLifecycleState;
   protected batch: {
@@ -263,6 +263,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       if (!transient) {
         runInMemoryBackgroundContext(() => {
           this.ensureWatcher();
+          this.ensureInitialLifecycleSafetySweep();
           this.ensureSessionListener();
           this.ensureIntervalSync();
           this.ensureSessionStartupCatchup();
@@ -279,6 +280,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       throw new Error("Memory status managers are read-only");
     }
     return await this.withPublishedDatabase(() => this.syncPublished(params));
+  }
+
+  protected override hasPublishedSyncInFlight(): boolean {
+    return this.syncing !== null;
   }
 
   adoptReindexRetryState(snapshot: MemoryReindexRetryState): void {
@@ -307,7 +312,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       async () =>
         await runMemorySearchMaintenance({
           reason: params.reason,
-          takeDirtyGeneration: () => this.takeReindexRetryStateForMaintenance(),
+          takeDirtyGeneration: () => this.takeFullReindexRetryStateForMaintenance(),
           restoreDirtyGeneration: (generation) => this.restoreReindexRetryState(generation),
           acquireManager: async () =>
             await MemoryIndexManager.get({
@@ -520,7 +525,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         this.dirty ||
         this.sessionsDirty ||
         this.indexIdentityDirty ||
-        this.activeBackgroundSearchSyncs.size > 0,
+        this.activeBackgroundMaintenance.size > 0,
       lastSyncError: this.syncOutcomes.lastError,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.databasePath,
@@ -621,6 +626,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
 
   private async closeOnce(): Promise<void> {
     this.closing = true;
+    this.clearLifecycleSafetySweepTimer();
     this.queuedArchiveFiles.clear();
     this.queuedSessions.clear();
     this.queuedForce = false;

@@ -14,6 +14,8 @@ import {
 } from "../test-helpers.js";
 import { MemoryIndexManager } from "./manager.js";
 
+const TEST_WATCH_DEBOUNCE_MS = 250;
+
 function activeFilesystemWatchers() {
   return process.getActiveResourcesInfo().filter((resource) => resource === "FSEventWrap").length;
 }
@@ -40,7 +42,7 @@ describe("memory watchers on the real filesystem", () => {
       const originalSetTimeout = globalThis.setTimeout;
       const timerObserver = vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
         // Observe the real startup pressure check and filesystem debounce timers.
-        if (args[1] === 10_000 || args[1] === 1500) {
+        if (args[1] === 10_000 || args[1] === TEST_WATCH_DEBOUNCE_MS) {
           timerContexts.push({
             turn: turnContext.getStore(),
             pendingInput: pendingInputContext.getStore(),
@@ -81,6 +83,11 @@ describe("memory watchers on the real filesystem", () => {
           throw new Error("memory manager unavailable");
         }
         const activeManager = manager;
+        // The maintained default is asserted by memory-search.test.ts. Keep this
+        // real-filesystem lifecycle test fast while exercising the same debounce path.
+        (
+          activeManager as unknown as { settings: { sync: { watchDebounceMs: number } } }
+        ).settings.sync.watchDebounceMs = TEST_WATCH_DEBOUNCE_MS;
         await activeManager.sync({ reason: "test-initial-index" });
         expect(activeManager.status().fts?.available).toBe(true);
         expect(activeFilesystemWatchers()).toBeGreaterThan(initialWatchers);

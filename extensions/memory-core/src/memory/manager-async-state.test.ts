@@ -7,34 +7,50 @@ describe("memory manager async state", () => {
     const syncMock = vi.fn(async () => {});
     await startAsyncSearchSync({
       enabled: false,
-      dirty: true,
-      sessionsDirty: false,
+      memoryFullRetryDirty: true,
+      sessionsFullRetryDirty: false,
       sync: syncMock,
       onError: vi.fn(),
     });
     expect(syncMock).not.toHaveBeenCalled();
   });
 
-  it("reports and settles background search sync failures", async () => {
+  it("reports and settles full session retry failures", async () => {
     const syncError = new Error("sync failed");
     const onError = vi.fn();
+    const syncMock = vi.fn(async () => {
+      throw syncError;
+    });
 
     await expect(
       startAsyncSearchSync({
         enabled: true,
-        dirty: false,
-        sessionsDirty: true,
-        sync: vi.fn(async () => {
-          throw syncError;
-        }),
+        memoryFullRetryDirty: false,
+        sessionsFullRetryDirty: true,
+        sync: syncMock,
         onError,
       }),
     ).resolves.toBeUndefined();
 
     await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(syncError));
+    expect(syncMock).toHaveBeenCalledExactlyOnceWith({ reason: "search" });
   });
 
-  it("waits for ordinary dirty sync", async () => {
+  it("does not start search maintenance without a full-retry flag", async () => {
+    const syncMock = vi.fn(async () => {});
+
+    await startAsyncSearchSync({
+      enabled: true,
+      memoryFullRetryDirty: false,
+      sessionsFullRetryDirty: false,
+      sync: syncMock,
+      onError: vi.fn(),
+    });
+
+    expect(syncMock).not.toHaveBeenCalled();
+  });
+
+  it("waits for full memory retry sync", async () => {
     let releaseSync = () => {};
     const pendingSync = new Promise<void>((resolve) => {
       releaseSync = () => resolve();
@@ -45,8 +61,8 @@ describe("memory manager async state", () => {
     const searchSync = Promise.resolve(
       startAsyncSearchSync({
         enabled: true,
-        dirty: true,
-        sessionsDirty: false,
+        memoryFullRetryDirty: true,
+        sessionsFullRetryDirty: false,
         sync: syncMock,
         onError: vi.fn(),
       }),
