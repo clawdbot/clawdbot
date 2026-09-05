@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { executeMemorySearchToolQuery } from "../memory-search-tool-query.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -153,6 +154,36 @@ describe("memory manager reads", () => {
       ).toHaveLength(1);
     } finally {
       syncReads.restore();
+    }
+  });
+
+  it("keeps tool queries out of storage diagnostics after a clean lifecycle sweep", async () => {
+    fixture.provider.forceNoProvider = true;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const cfg = fixture.createConfig({ provider: "none", sources: ["memory"], cacheEnabled: true });
+    const manager = await fixture.getFreshManager(cfg);
+    await manager.sync({ reason: "test" });
+    expect(manager.status().dirty).toBe(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await (Reflect.get(manager, "lifecycleSafetySweep") as Promise<void> | null);
+
+    const observation = observeReads(Reflect.get(manager, "db") as DatabaseSync);
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const result = await executeMemorySearchToolQuery({
+          initialManager: { manager },
+          refreshManager: async () => null,
+          query: { text: "zebra", resultLimit: 5, minScore: 0, defaultSources: ["memory"] },
+          visibility: { cfg, agentId: "main", sandboxed: false },
+          signal: new AbortController().signal,
+        });
+        expect(result.rawResults.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+        expect(result.status.storage).toBeUndefined();
+      }
+      expect(observation.reads.filter(({ sql }) => /\blength\s*\(/i.test(sql))).toHaveLength(0);
+    } finally {
+      observation.restore();
+      vi.useRealTimers();
     }
   });
 });

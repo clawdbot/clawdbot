@@ -767,19 +767,24 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     this.watchTimer = setTimeout(() => {
       this.watchTimer = null;
       runDetachedMemorySync(async () => {
-        if (this.closed) {
-          return;
-        }
-        if (!(await settleMemoryWatchEventPaths(this.pendingWatchPaths))) {
-          if (!this.closed) {
-            this.scheduleWatchSync();
+        this.watchSyncSettling = true;
+        try {
+          if (this.closed) {
+            return;
           }
-          return;
+          if (!(await settleMemoryWatchEventPaths(this.pendingWatchPaths))) {
+            if (!this.closed) {
+              this.scheduleWatchSync();
+            }
+            return;
+          }
+          if (this.closed) {
+            return;
+          }
+          await this.sync({ reason: "watch" });
+        } finally {
+          this.watchSyncSettling = false;
         }
-        if (this.closed) {
-          return;
-        }
-        await this.sync({ reason: "watch" });
       }, "watch");
     }, this.settings.sync.watchDebounceMs);
   }

@@ -121,7 +121,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   protected abstract closing: boolean;
   protected abstract activeManagerOperations: number;
   protected abstract managerIdleWaiters: Set<() => void>;
-  protected abstract activeBackgroundSearchSyncs: Set<Promise<void>>;
+  protected abstract activeBackgroundMaintenance: Set<Promise<void>>;
   protected abstract indexIdentityDirty: boolean;
   protected abstract indexIdentityState: MemoryIndexIdentityState;
   protected abstract syncAdmitted(
@@ -545,8 +545,8 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     // CLI request teardown must not wait after a published search result is ready;
     // its detached task owns a separate maintenance manager. Persistent managers
     // still drain maintenance before closing shared resources.
-    while (this.purpose !== "cli" && this.activeBackgroundSearchSyncs.size > 0) {
-      await Promise.all(Array.from(this.activeBackgroundSearchSyncs));
+    while (this.purpose !== "cli" && this.activeBackgroundMaintenance.size > 0) {
+      await Promise.all(Array.from(this.activeBackgroundMaintenance));
     }
   }
 

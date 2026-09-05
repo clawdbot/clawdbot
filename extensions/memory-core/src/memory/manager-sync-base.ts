@@ -133,6 +133,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected providerKey: string | null = null;
   protected watcher: FSWatcher | null = null;
   protected watchTimer: NodeJS.Timeout | null = null;
+  protected watchSyncSettling = false;
   protected sessionWatchTimer: NodeJS.Timeout | null = null;
   protected sessionUnsubscribe: (() => void) | null = null;
   protected fallbackReason?: string;
@@ -210,12 +211,25 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     };
   }
 
-  protected takeReindexRetryStateForMaintenance(): MemoryReindexRetryState {
-    const snapshot = this.snapshotReindexRetryState();
-    // The detached generation owns only the state observed here. New watcher or
-    // session events remain dirty on this manager and trigger a later generation.
-    this.clearMemoryRetryState();
-    this.clearSessionRetryState();
+  protected takeFullReindexRetryStateForMaintenance(): MemoryReindexRetryState {
+    const takeMemory = this.memoryFullRetryDirty;
+    const takeSessions = this.sessionsFullRetryDirty;
+    const snapshot: MemoryReindexRetryState = {
+      dirty: takeMemory,
+      memoryFullRetryDirty: takeMemory,
+      sessionsDirty: takeSessions,
+      sessionsFullRetryDirty: takeSessions,
+      sessionsReconcileDirty: takeSessions && this.sessionsReconcileDirty,
+      sessionsDirtyFiles: takeSessions ? new Set(this.sessionsDirtyFiles) : new Set(),
+    };
+    // Search may recover failed full rebuilds, but ordinary memory and session
+    // dirtiness stays with the lifecycle owner. New events also remain here.
+    if (takeMemory) {
+      this.clearMemoryRetryState();
+    }
+    if (takeSessions) {
+      this.clearSessionRetryState();
+    }
     return snapshot;
   }
 

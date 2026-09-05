@@ -15,116 +15,7 @@ type WatchIgnoredFn = (watchPath: string, stats?: { isDirectory?: () => boolean 
 
 const BUILT_IN_WATCH_DEBOUNCE_MS = 1_500;
 
-const {
-  createdChokidarWatchers,
-  createdNativeWatchers,
-  memoryLoggerWarn,
-  watchMock,
-  nativeWatchMock,
-  nativeWatchMockFailingDir,
-} = vi.hoisted(() => {
-  // Symbols are also declared at module top-level (CHOKIDAR_FACTORY_KEY,
-  // NATIVE_FACTORY_KEY) but vi.hoisted runs before those declarations
-  // execute, so we resolve the same Symbol.for keys inline here.
-  const chokidarKey = Symbol.for("openclaw.test.memoryWatchFactory");
-  const nativeKey = Symbol.for("openclaw.test.memoryNativeWatchFactory");
-  type ChokidarEvent = "add" | "change" | "unlink" | "unlinkDir" | "error" | "ready";
-  type ChokidarCallback = (...args: unknown[]) => void;
-  function createMockChokidarWatcher() {
-    const handlers = new Map<ChokidarEvent, ChokidarCallback[]>();
-    const onceHandlers = new Map<ChokidarEvent, ChokidarCallback[]>();
-    const watcher = {
-      watchedEntries: {} as Record<string, string[]>,
-      on: vi.fn((event: ChokidarEvent, callback: ChokidarCallback) => {
-        handlers.set(event, [...(handlers.get(event) ?? []), callback]);
-        return watcher;
-      }),
-      once: vi.fn((event: ChokidarEvent, callback: ChokidarCallback) => {
-        onceHandlers.set(event, [...(onceHandlers.get(event) ?? []), callback]);
-        return watcher;
-      }),
-      add: vi.fn((_path: string | string[]) => watcher),
-      close: vi.fn(async () => undefined),
-      getWatched: vi.fn(() => watcher.watchedEntries),
-      emit: (event: ChokidarEvent, ...args: unknown[]) => {
-        for (const callback of handlers.get(event) ?? []) {
-          callback(...args);
-        }
-        const callbacks = onceHandlers.get(event) ?? [];
-        onceHandlers.delete(event);
-        for (const callback of callbacks) {
-          callback(...args);
-        }
-      },
-    };
-    return watcher;
-  }
-
-  type NativeEvent = "error";
-  type NativeCallback = (eventType: string, filename: string | null) => void;
-  type NativeErrorCallback = (err: Error) => void;
-  function createMockNativeWatcher(
-    dir: string,
-    options: { recursive?: boolean },
-    listener: NativeCallback,
-  ) {
-    const errorHandlers: NativeErrorCallback[] = [];
-    const watcher = {
-      dir,
-      options,
-      recursive: options.recursive === true,
-      listener,
-      on: vi.fn((event: NativeEvent, callback: NativeErrorCallback) => {
-        if (event === "error") {
-          errorHandlers.push(callback);
-        }
-        return watcher;
-      }),
-      close: vi.fn(() => undefined),
-      emit: (eventType: string, filename: string | null) => {
-        listener(eventType, filename);
-      },
-      emitError: (err: Error) => {
-        for (const handler of errorHandlers) {
-          handler(err);
-        }
-      },
-    };
-    return watcher;
-  }
-
-  const chokidarWatchers: Array<ReturnType<typeof createMockChokidarWatcher>> = [];
-  const nativeWatchers: Array<ReturnType<typeof createMockNativeWatcher>> = [];
-  const failingDir = { current: null as string | null };
-
-  const result = {
-    createdChokidarWatchers: chokidarWatchers,
-    createdNativeWatchers: nativeWatchers,
-    memoryLoggerWarn: vi.fn(),
-    watchMock: vi.fn(() => {
-      const watcher = createMockChokidarWatcher();
-      chokidarWatchers.push(watcher);
-      return watcher;
-    }),
-    nativeWatchMock: vi.fn(
-      (dir: string, options: { recursive?: boolean }, listener: NativeCallback) => {
-        if (failingDir.current && dir === failingDir.current) {
-          throw new Error("simulated native fs.watch creation failure");
-        }
-        const watcher = createMockNativeWatcher(dir, options, listener);
-        nativeWatchers.push(watcher);
-        return watcher;
-      },
-    ),
-    nativeWatchMockFailingDir: failingDir,
-  };
-  (globalThis as Record<PropertyKey, unknown>)[chokidarKey] = result.watchMock;
-  (globalThis as Record<PropertyKey, unknown>)[nativeKey] = result.nativeWatchMock;
-  return result;
-});
-
-const CHOKIDAR_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
-const NATIVE_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
+const memoryLoggerWarn = vi.hoisted(() => vi.fn());
 const originalWatcherStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function setWatcherStateDir(stateDir: string): void {
@@ -173,7 +64,17 @@ vi.mock("./embeddings.js", () => ({
 import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexManager } from "./manager.js";
+import { createMemoryWatchTestHarness } from "./manager.watcher-test-support.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
+
+const watcherHarness = createMemoryWatchTestHarness();
+const {
+  createdChokidarWatchers,
+  createdNativeWatchers,
+  nativeWatchMockFailingDir,
+  watchMock,
+  nativeWatchMock,
+} = watcherHarness;
 
 describe("memory watcher config", () => {
   let manager: MemoryIndexManager | null = null;
@@ -182,6 +83,7 @@ describe("memory watcher config", () => {
   let originalPlatform: NodeJS.Platform;
 
   beforeEach(async () => {
+    watcherHarness.install();
     originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     vi.clearAllMocks();
@@ -190,18 +92,13 @@ describe("memory watcher config", () => {
   });
 
   afterAll(() => {
-    Reflect.deleteProperty(globalThis, CHOKIDAR_FACTORY_KEY);
-    Reflect.deleteProperty(globalThis, NATIVE_FACTORY_KEY);
+    watcherHarness.uninstall();
   });
 
   afterEach(async () => {
     vi.useRealTimers();
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
-    watchMock.mockClear();
-    nativeWatchMock.mockClear();
-    createdChokidarWatchers.length = 0;
-    createdNativeWatchers.length = 0;
-    nativeWatchMockFailingDir.current = null;
+    watcherHarness.reset();
     if (manager) {
       await manager.close();
       manager = null;
@@ -235,6 +132,8 @@ describe("memory watcher config", () => {
         search: {
           provider: "openai",
           model: "mock-embed",
+          rememberAcrossConversations: false,
+          sources: ["memory"],
           store: { vector: { enabled: false } },
           query: { minScore: 0 },
           extraPaths: [extraDir],
@@ -251,8 +150,13 @@ describe("memory watcher config", () => {
       throw new Error("manager missing");
     }
     expect(result.manager.status().backend).toBe("builtin");
-    expect(result.manager.status().sources).toContain("memory");
+    expect(result.manager.status().sources).toEqual(["memory"]);
     manager = result.manager as unknown as MemoryIndexManager;
+    const timer = Reflect.get(manager, "lifecycleSafetySweepTimer") as NodeJS.Timeout | null;
+    if (timer) {
+      clearTimeout(timer);
+      Reflect.set(manager, "lifecycleSafetySweepTimer", null);
+    }
     return manager;
   }
 

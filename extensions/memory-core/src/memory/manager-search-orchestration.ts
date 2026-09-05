@@ -21,7 +21,8 @@ import {
 import { applyImportanceMultiplier } from "./importance.js";
 import { startAsyncSearchSync } from "./manager-async-state.js";
 import { acquireMemoryIndexReadGeneration } from "./manager-index-generation-lease.js";
-import { MemoryKeywordRetrieval, type KeywordSearchHit } from "./manager-keyword-retrieval.js";
+import type { KeywordSearchHit } from "./manager-keyword-retrieval.js";
+import { MemoryManagerLifecycleOps } from "./manager-lifecycle-ops.js";
 import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
 import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
 import { resolveExactPathSpecificity, searchVector } from "./manager-search.js";
@@ -34,7 +35,7 @@ const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const log = createSubsystemLogger("memory");
 type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["search"]>[1]>;
 
-export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
+export abstract class MemorySearchOrchestration extends MemoryManagerLifecycleOps {
   protected abstract sessionWarm: Set<string>;
 
   protected claimSessionWarmSync(sessionKey?: string): boolean {
@@ -214,10 +215,25 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       if (repairedIndexIdentity.status !== "valid") {
         return [];
       }
+      if (
+        this.purpose === "cli" &&
+        searchSyncEnabled &&
+        (this.dirty ||
+          this.sessionsDirty ||
+          this.memoryFullRetryDirty ||
+          this.sessionsFullRetryDirty)
+      ) {
+        // Standalone CLI managers have no watcher or lifecycle sweep to consume
+        // source drift. Finish their admitted refresh before taking a read lease,
+        // including ordinary changes alongside either source's full retry.
+        await this.syncAdmitted({ reason: "search" }).catch((err: unknown) => {
+          log.warn(`memory sync failed (cli-search): ${formatErrorMessage(err)}`);
+        });
+      }
       const backgroundSearchSync = startAsyncSearchSync({
-        enabled: searchSyncEnabled,
-        dirty: this.dirty,
-        sessionsDirty: this.sessionsDirty,
+        enabled: searchSyncEnabled && this.purpose === "default",
+        memoryFullRetryDirty: this.memoryFullRetryDirty,
+        sessionsFullRetryDirty: this.sessionsFullRetryDirty,
         sync: async (params) => await this.syncPublishedIndexInBackground(params),
         onError: (err) => {
           log.warn(`memory sync failed (search): ${String(err)}`);
@@ -225,9 +241,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       });
       if (backgroundSearchSync) {
         const trackedSearchSync = backgroundSearchSync.finally(() => {
-          this.activeBackgroundSearchSyncs.delete(trackedSearchSync);
+          this.activeBackgroundMaintenance.delete(trackedSearchSync);
         });
-        this.activeBackgroundSearchSyncs.add(trackedSearchSync);
+        this.activeBackgroundMaintenance.add(trackedSearchSync);
       }
       // Bootstrap and identity repair may publish a new generation. Acquire the
       // read lease only after those writers finish so first search cannot wait on itself.
