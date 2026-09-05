@@ -94,8 +94,6 @@ export async function interruptCodexTurnAndWaitBestEffort(
     threadId: string;
     turnId: string;
     timeoutMs?: number;
-    /** Route-generation lifetime, distinct from the run abort being cleaned up. */
-    ownershipSignal?: AbortSignal;
   },
 ): Promise<boolean> {
   const timeoutMs =
@@ -105,23 +103,20 @@ export async function interruptCodexTurnAndWaitBestEffort(
   const requestParams = { threadId: params.threadId, turnId: params.turnId };
   let cancelWatch: (() => void) | undefined;
   try {
-    params.ownershipSignal?.throwIfAborted();
     if (!params.turnId) {
-      await client.request("turn/interrupt", requestParams, {
-        timeoutMs,
-        ...(params.ownershipSignal ? { signal: params.ownershipSignal } : {}),
-      });
+      await client.request("turn/interrupt", requestParams, { timeoutMs });
       return true;
     }
     const deadline = Date.now() + timeoutMs;
     const started = createDeferred<boolean>();
     // Codex acknowledges interruption before publishing turn/completed. Register
     // first so an immediate exact-turn terminal cannot race past its owner.
+    // Local yield can release its subscription before native cleanup finishes;
+    // this watch belongs to the accepted turn, not that subscription route.
     const completion = getCodexAppServerTurnRouter(client).watchNativeTurnCompletion({
       threadId: params.threadId,
       turnId: params.turnId,
       timeoutMs,
-      signal: params.ownershipSignal,
       onStarted: () => started.resolve(true),
     });
     cancelWatch = completion.cancel;

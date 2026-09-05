@@ -148,35 +148,19 @@ describe("Codex app-server attempt client cleanup", () => {
     );
   });
 
-  it.each(["", "turn-1"])(
-    "does not interrupt through an already-released route (%s)",
-    async (turnId) => {
+  it.each([
+    { name: "before native activation", startBeforeError: false, releaseRoute: false },
+    { name: "after native activation", startBeforeError: true, releaseRoute: false },
+    { name: "after subscription release", startBeforeError: false, releaseRoute: true },
+  ])(
+    "cancels an acknowledged turn when activation races an early interrupt ($name)",
+    async ({ startBeforeError, releaseRoute }) => {
       const harness = createClientHarness();
       try {
         const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
           threadId: "thread-1",
+          onNotification: vi.fn(),
         });
-        route.release();
-        await expect(
-          interruptCodexTurnAndWaitBestEffort(harness.client, {
-            threadId: "thread-1",
-            turnId,
-            ownershipSignal: route.signal,
-          }),
-        ).resolves.toBe(false);
-        expect(harness.writes).toHaveLength(0);
-        expect(harness.client.getCloseError()).toBeUndefined();
-      } finally {
-        harness.client.close();
-      }
-    },
-  );
-
-  it.each([false, true])(
-    "cancels an acknowledged turn when activation races an early interrupt (%s)",
-    async (startBeforeError) => {
-      const harness = createClientHarness();
-      try {
         const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
           threadId: "thread-1",
           turnId: "turn-1",
@@ -198,6 +182,9 @@ describe("Codex app-server attempt client cleanup", () => {
         });
         await setImmediate();
         expect(settled).not.toHaveBeenCalled();
+        if (releaseRoute) {
+          route.release();
+        }
 
         harness.send({
           method: "turn/started",
@@ -332,45 +319,30 @@ describe("Codex app-server attempt client cleanup", () => {
     }
   });
 
-  it.each(["released", "closed"])(
-    "does not act on queued activation after its owner is %s",
-    async (ended) => {
-      const harness = createClientHarness();
-      try {
-        const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
-          threadId: "thread-1",
-          onNotification: vi.fn(),
-        });
-        const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          timeoutMs: 100,
-          ownershipSignal: route.signal,
-        });
-        const first = JSON.parse(harness.writes.at(-1) ?? "{}") as { id: number };
-        harness.send({
-          method: "turn/started",
-          params: { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" } },
-        });
-        if (ended === "released") {
-          route.release();
-        } else {
-          harness.client.close();
-        }
-        harness.send({
-          id: first.id,
-          error: { code: -32_600, message: "no active turn to interrupt" },
-        });
-        await expect(completion).resolves.toBe(false);
-        expect(harness.writes).toHaveLength(1);
-        if (ended === "released") {
-          expect(harness.client.getCloseError()).toBeUndefined();
-        }
-      } finally {
-        harness.client.close();
-      }
-    },
-  );
+  it("does not act on queued activation after its physical client closes", async () => {
+    const harness = createClientHarness();
+    try {
+      const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        timeoutMs: 100,
+      });
+      const first = JSON.parse(harness.writes.at(-1) ?? "{}") as { id: number };
+      harness.send({
+        method: "turn/started",
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" } },
+      });
+      harness.client.close();
+      harness.send({
+        id: first.id,
+        error: { code: -32_600, message: "no active turn to interrupt" },
+      });
+      await expect(completion).resolves.toBe(false);
+      expect(harness.writes).toHaveLength(1);
+    } finally {
+      harness.client.close();
+    }
+  });
 
   it("uses retained bound-turn completion after a later cleanup request", async () => {
     const harness = createClientHarness();

@@ -169,11 +169,7 @@ export async function prepareCodexAttemptTurnRequest(
         try {
           resourceState.startupClientUnsafe = !(await interruptCodexTurnAndWaitBestEffort(
             resourceState.client,
-            {
-              threadId: resourceState.thread.threadId,
-              turnId: acceptedTurnId ?? "",
-              ownershipSignal: resourceState.turnRoute?.signal,
-            },
+            { threadId: resourceState.thread.threadId, turnId: acceptedTurnId ?? "" },
           ));
           if (resourceState.startupClientUnsafe) {
             await retireUnsafeCodexTurnClientBestEffort(resourceState.client, "startup interrupt");
