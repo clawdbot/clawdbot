@@ -13,6 +13,9 @@ import { snapshotOwnCronRecord } from "./own-record.js";
 
 type UnknownRecord = Record<string, unknown>;
 
+/** Hard cap for cron command payload output buffering, matching the sibling script/stream caps. */
+export const MAX_CRON_COMMAND_OUTPUT_MAX_BYTES = 64 * 1024 * 1024;
+
 function normalizeTrimmedStringArray(
   value: unknown,
   options?: { allowNull?: boolean },
@@ -187,7 +190,7 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
   if ("outputMaxBytes" in next) {
     const outputMaxBytes = parseOptionalField(TimeoutSecondsFieldSchema, next.outputMaxBytes);
     if (outputMaxBytes !== undefined && outputMaxBytes > 0) {
-      next.outputMaxBytes = Math.floor(outputMaxBytes);
+      next.outputMaxBytes = Math.min(MAX_CRON_COMMAND_OUTPUT_MAX_BYTES, Math.floor(outputMaxBytes));
     } else {
       delete next.outputMaxBytes;
     }

@@ -4,6 +4,7 @@ import {
   buildCronCommandSummary,
   isCronCommandActionCriticalLine,
 } from "./command-output-summary.js";
+import { MAX_CRON_COMMAND_OUTPUT_MAX_BYTES } from "./normalize-payload.js";
 import type { CronRunDiagnostics, CronRunOutcome, CronRunStatus, CronJob } from "./types.js";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 10 * 60_000;
@@ -104,7 +105,10 @@ export async function runCronCommandJob(params: {
       ...(payload.input !== undefined ? { input: payload.input } : {}),
       ...(payload.env ? { env: payload.env } : {}),
       ...(noOutputTimeoutMs !== undefined ? { noOutputTimeoutMs } : {}),
-      ...(payload.outputMaxBytes !== undefined ? { maxOutputBytes: payload.outputMaxBytes } : {}),
+      // Clamp here too so rows persisted before the cap cannot disable output limits.
+      ...(payload.outputMaxBytes !== undefined
+        ? { maxOutputBytes: Math.min(MAX_CRON_COMMAND_OUTPUT_MAX_BYTES, payload.outputMaxBytes) }
+        : {}),
       preserveOutputLine: isCronCommandActionCriticalLine,
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
       killProcessTree: true,
