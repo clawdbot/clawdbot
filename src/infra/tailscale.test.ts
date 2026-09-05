@@ -314,7 +314,7 @@ describe("tailscale helpers", () => {
       await markerWritten;
       expect(existsSync(marker)).toBe(true);
 
-      await vi.advanceTimersToNextTimerAsync();
+      await vi.advanceTimersByTimeAsync(15_000);
 
       await expect(claimPromise).rejects.toThrow("Funnel is not enabled on your tailnet.");
     },
