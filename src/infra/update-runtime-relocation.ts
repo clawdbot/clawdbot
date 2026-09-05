@@ -11,10 +11,7 @@ export type RuntimeRelocation = {
   sourceAliases?: string[];
 };
 
-export function relocateRuntimePath(
-  value: string,
-  relocations: readonly RuntimeRelocation[],
-): string {
+function relocateRuntimePath(value: string, relocations: readonly RuntimeRelocation[]): string {
   for (const relocation of relocations) {
     const root = [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])].find((candidate) =>
       isPathInside(candidate, value),
