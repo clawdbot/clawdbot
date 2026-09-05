@@ -550,7 +550,7 @@ export function splitCuratedMarkdownEntries(content: string): CuratedMarkdownEnt
 
 /** Takes the trailing slice of text within the weighted char budget, without splitting surrogate pairs. */
 function takeTailByEstimatedChars(text: string, budget: number): string {
-  const chars = [...text];
+  const chars = Array.from(text);
   let acc = 0;
   let start = chars.length;
   while (start > 0 && acc + estimateStringChars(chars[start - 1] ?? "") <= budget) {
