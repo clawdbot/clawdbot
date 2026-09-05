@@ -613,7 +613,13 @@ class NodeForegroundServiceTest {
 
   @Test
   @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
-  fun stopRetiresSecondaryConnectionAfterAuthRead() {
+  fun stopRetiresSecondaryConnectionAfterAuthRead() = assertSecondaryAdmissionAfterStop(reenable = false)
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
+  fun reenablingSecondaryAfterStopRetriesItsPendingAdmission() = assertSecondaryAdmissionAfterStop(reenable = true)
+
+  private fun assertSecondaryAdmissionAfterStop(reenable: Boolean) {
     val app = RuntimeEnvironment.getApplication() as NodeApp
     app.prefs.setManualTls(false)
     val runtime = app.ensureBackgroundRuntime()
@@ -633,16 +639,25 @@ class NodeForegroundServiceTest {
       fixture.operatorTokenReadGate = authRead
       runtime.setGatewayConnectionEnabled(endpoint.stableId, true)
       assertTrue("Secondary connection did not reach its credential read", authRead.entered.await(10, TimeUnit.SECONDS))
-      NodeForegroundService.stop(app)
+      if (reenable) {
+        runtime.disconnect()
+        runtime.setGatewayConnectionEnabled(endpoint.stableId, true)
+      } else {
+        NodeForegroundService.stop(app)
+      }
       assertTrue("Stop did not finish its runtime teardown", stoppedNode.await(10, TimeUnit.SECONDS))
       assertNull(fixture.sessionConnections.poll())
 
       authRead.release.countDown()
 
-      assertNull(
-        "Stopped fleet work must not start an authenticated secondary connection",
-        fixture.sessionConnections.poll(10, TimeUnit.SECONDS),
-      )
+      val connection = fixture.sessionConnections.poll(10, TimeUnit.SECONDS)
+      if (reenable) {
+        assertNotNull("Reenabled admission must reach the session owner", connection)
+        assertEquals("operator", connection!!.role)
+        assertNotNull("Reenabled admission must reach the Gateway", gateway.takeRequest(10, TimeUnit.SECONDS))
+      } else {
+        assertNull("Stopped fleet work must not start an authenticated secondary connection", connection)
+      }
     } finally {
       authRead.release.countDown()
       fixture.operatorTokenReadGate = null
@@ -665,6 +680,10 @@ class NodeForegroundServiceTest {
 
   @Test
   @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
+  fun foregroundRoundTripPreservesAcceptedOperatorTokenOrder() = assertReconnectDrainsAcceptedOperatorToken(GatewayTokenTransition.ForegroundRoundTrip)
+
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class])
   fun stoppedPrimaryReconnectReadsItsAcceptedOperatorToken() = assertReconnectDrainsAcceptedOperatorToken(GatewayTokenTransition.PrimaryReconnect)
 
   @Test
@@ -675,7 +694,7 @@ class NodeForegroundServiceTest {
   @Config(shadows = [ServiceRuntimePrefsShadow::class, SessionDisconnectShadow::class, ConnectAdmissionShadow::class])
   fun focusingSecondaryKeepsItsAdmittedOperatorWhileHelloPersists() = assertReconnectDrainsAcceptedOperatorToken(GatewayTokenTransition.SecondaryFocus, holdPrimaryWriteUntilNode = true)
 
-  private enum class GatewayTokenTransition { SecondaryReenable, PrimaryReconnect, SecondaryFocus }
+  private enum class GatewayTokenTransition { SecondaryReenable, PrimaryReconnect, SecondaryFocus, ForegroundRoundTrip }
 
   private fun assertReconnectDrainsAcceptedOperatorToken(
     transition: GatewayTokenTransition,
@@ -737,7 +756,7 @@ class NodeForegroundServiceTest {
       val drained = CompletableDeferred<Unit>()
       Shadow.extract<SessionDisconnectShadow>(first).joinStarted = drained
       val replacement =
-        if (transition == GatewayTokenTransition.SecondaryReenable) {
+        if (transition == GatewayTokenTransition.SecondaryReenable || transition == GatewayTokenTransition.ForegroundRoundTrip) {
           first
         } else {
           ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
@@ -748,6 +767,11 @@ class NodeForegroundServiceTest {
         GatewayTokenTransition.SecondaryReenable -> {
           runtime.setGatewayConnectionEnabled(endpoint.stableId, false)
           runtime.setGatewayConnectionEnabled(endpoint.stableId, true)
+        }
+
+        GatewayTokenTransition.ForegroundRoundTrip -> {
+          runtime.setForeground(false)
+          runtime.setForeground(true)
         }
 
         GatewayTokenTransition.PrimaryReconnect -> {

@@ -148,16 +148,19 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.consumeAsFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -899,6 +902,11 @@ class NodeRuntime private constructor(
   private val inlineWidgetRefreshMutex = Mutex()
   private val gatewayLifecycleIntentLock = Any()
   private val gatewayLifecycleIntentSeq = AtomicLong()
+
+  // Retain one pending request while reconciliation awaits cleanup; equal desired values can
+  // still require new work after a synchronous retirement or lifecycle invalidation.
+  // Initialize before NetworkMonitor can request work during construction.
+  private val backgroundGatewayReconciliations = Channel<Unit>(Channel.CONFLATED)
 
   private var gatewayDataGeneration = 0L
 
@@ -3001,6 +3009,7 @@ class NodeRuntime private constructor(
       true
     } finally {
       synchronized(gatewayAuthLifecycleLock) { gatewayAuthResetInProgress = false }
+      requestBackgroundGatewayReconciliation()
     }
   }
 
@@ -3027,7 +3036,8 @@ class NodeRuntime private constructor(
   private var didAutoConnect = false
 
   @Volatile private var preferredGatewayReconnectSuppressed = initialReconnectSuppressed
-  private val secondaryGatewayConnectionsEnabled = MutableStateFlow(!initialReconnectSuppressed)
+
+  @Volatile private var secondaryGatewayConnectionsEnabled = !initialReconnectSuppressed
 
   val chatSessionKey: StateFlow<String> = chat.sessionKey
   internal val chatSelectionGeneration: StateFlow<Long> = chat.selectionGeneration
@@ -3191,11 +3201,12 @@ class NodeRuntime private constructor(
           prefs.gatewayRegistry.connectedStableIds,
           prefs.gatewayRegistry.activeStableId,
           gateways,
-          combine(_isForeground, secondaryGatewayConnectionsEnabled) { foreground, enabled ->
-            foreground && enabled
-          },
+          backgroundGatewayReconciliations.consumeAsFlow().onStart { emit(Unit) },
         ) { _, _, _, _, _ -> Unit }
-          .collect { reconcileBackgroundGatewayFleet() }
+          .collect {
+            ensureActive()
+            reconcileBackgroundGatewayFleet()
+          }
       }
     } else {
       applyScreenshotFixture()
@@ -3242,6 +3253,7 @@ class NodeRuntime private constructor(
         (_isForeground.value != value).also {
           _isForeground.value = value
           if (!value) disconnectSecondaryGatewayConnections()
+          requestBackgroundGatewayReconciliation()
         }
       }
     voiceWakeManager.setForeground(value)
@@ -3370,8 +3382,12 @@ class NodeRuntime private constructor(
       entries = prefs.gatewayRegistry.entries.value,
       connectedIds = prefs.gatewayRegistry.connectedStableIds.value,
       activeId = prefs.gatewayRegistry.activeStableId.value,
-      foreground = _isForeground.value && secondaryGatewayConnectionsEnabled.value,
+      foreground = _isForeground.value && secondaryGatewayConnectionsEnabled,
     )
+
+  private fun requestBackgroundGatewayReconciliation() {
+    backgroundGatewayReconciliations.trySend(Unit)
+  }
 
   private suspend fun reconcileBackgroundGatewayFleet() =
     gatewaySwitchMutex.withLock {
@@ -3385,7 +3401,7 @@ class NodeRuntime private constructor(
             entries = entries,
             connectedIds = prefs.gatewayRegistry.connectedStableIds.value,
             activeId = prefs.gatewayRegistry.activeStableId.value,
-            foreground = _isForeground.value && secondaryGatewayConnectionsEnabled.value,
+            foreground = _isForeground.value && secondaryGatewayConnectionsEnabled,
             existingStableIds = secondaryOperatorSessions.keys.toList(),
           ) { resolveRegistryEndpoint(it) }
         synchronized(gatewayLifecycleIntentLock) {
@@ -3493,9 +3509,10 @@ class NodeRuntime private constructor(
     stableId: String,
     enabled: Boolean,
   ) = synchronized(gatewayLifecycleIntentLock) {
-    if (enabled) secondaryGatewayConnectionsEnabled.value = true
+    if (enabled) secondaryGatewayConnectionsEnabled = true
     prefs.gatewayRegistry.setConnectionEnabled(stableId, enabled)
     if (!enabled) disconnectSecondaryGatewayConnection(stableId)
+    requestBackgroundGatewayReconciliation()
   }
 
   suspend fun connectSwitchingGateway(
@@ -3537,6 +3554,7 @@ class NodeRuntime private constructor(
               prefs.gatewayRegistry.setActive(endpoint.stableId)
             }
             beginConnect(endpoint, resolveGatewayConnectAuth(endpoint, explicitAuth), intent)
+            requestBackgroundGatewayReconciliation()
             true
           }
         }
@@ -3557,6 +3575,7 @@ class NodeRuntime private constructor(
     // lifecycle intent. If any explicit connect/disconnect/switch intent already exists, stand
     // down permanently instead of overriding the user's decision with a stale auto-connect.
     if (!gatewayLifecycleIntentSeq.compareAndSet(0L, 1L)) return
+    requestBackgroundGatewayReconciliation()
     launchConnect(endpoint, explicitAuth = null, intent = gatewayLifecycleIntent(1L))
   }
 
@@ -4527,8 +4546,10 @@ class NodeRuntime private constructor(
     synchronized(gatewayLifecycleIntentLock) {
       if (!isCurrent()) return@synchronized null
       preferredGatewayReconnectSuppressed = false
-      secondaryGatewayConnectionsEnabled.value = true
-      gatewayLifecycleIntent(gatewayLifecycleIntentSeq.incrementAndGet(), isCurrent)
+      secondaryGatewayConnectionsEnabled = true
+      gatewayLifecycleIntent(gatewayLifecycleIntentSeq.incrementAndGet(), isCurrent).also {
+        requestBackgroundGatewayReconciliation()
+      }
     }
 
   private fun gatewayLifecycleIntent(
@@ -4542,7 +4563,11 @@ class NodeRuntime private constructor(
   ) {
     val guardedBlock = {
       synchronized(gatewayLifecycleIntentLock) {
-        if (isCurrent()) block()
+        try {
+          if (isCurrent()) block()
+        } finally {
+          requestBackgroundGatewayReconciliation()
+        }
       }
     }
     if (gatewaySwitchMutex.tryLock()) {
@@ -4916,10 +4941,11 @@ class NodeRuntime private constructor(
   private fun disconnectGatewayLifecycle(retireRunState: Boolean) {
     synchronized(gatewayLifecycleIntentLock) {
       preferredGatewayReconnectSuppressed = true
-      secondaryGatewayConnectionsEnabled.value = false
+      secondaryGatewayConnectionsEnabled = false
       gatewayLifecycleIntentSeq.incrementAndGet()
       disconnectSecondaryGatewayConnections()
       disconnect(retireRunState)
+      requestBackgroundGatewayReconciliation()
     }
   }
 
@@ -5040,6 +5066,7 @@ class NodeRuntime private constructor(
       true
     } finally {
       synchronized(gatewayAuthLifecycleLock) { gatewayAuthResetInProgress = false }
+      requestBackgroundGatewayReconciliation()
     }
   }
 
