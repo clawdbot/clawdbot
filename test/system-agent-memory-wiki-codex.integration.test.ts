@@ -289,7 +289,6 @@ async function submitHostedCodexAttempt(options: {
       rebindVerifiedInference: () => {},
       getVerifiedInference: () => fixture.binding,
       loadOverview: async () => ({ defaultModel: "openai/gpt-5.4" }) as never,
-      getHistory: () => [],
       verifyConfigAfterWrite: async () => null,
     },
   );
