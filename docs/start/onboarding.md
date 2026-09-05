@@ -141,7 +141,7 @@ so another provider can opt in without adding provider-specific macOS code.
 The manual key/token picker uses the same provider registry. In every route,
 the provider supplies its starter model and configuration. If the starter is an
 alias, OpenClaw tests and saves the provider's canonical model name while
-preserving its selected model settings. The credential is stored only after
+preserving existing model settings that the starter does not replace. The credential is stored only after
 that live test succeeds.
 Continuing remains locked until one backend has passed, so the first agent
 chat cannot start without working inference.

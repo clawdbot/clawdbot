@@ -3303,21 +3303,61 @@ describe("activateSetupInference", () => {
   });
 
   it.each([
-    { name: "API-key", authKind: "api_key" as const, credentialType: "api_key" as const },
-    { name: "token", authKind: "token" as const, credentialType: "token" as const },
+    {
+      name: "API-key",
+      authKind: "api_key" as const,
+      credentialType: "api_key" as const,
+      metadata: "fresh",
+    },
+    {
+      name: "token",
+      authKind: "token" as const,
+      credentialType: "token" as const,
+      metadata: "existing",
+    },
+    {
+      name: "API-key",
+      authKind: "api_key" as const,
+      credentialType: "api_key" as const,
+      metadata: "empty starter",
+    },
   ])(
-    "uses a provider-owned $name method and persists it after a passing test",
-    async ({ authKind, credentialType }) => {
+    "uses a provider-owned $name method with $metadata metadata after a passing test",
+    async ({ authKind, credentialType, metadata }) => {
       const stateDir = await suiteTempRootTracker.make("case");
       const agentDir = path.join(stateDir, "agent");
-      const initialConfig = {
-        agents: { list: [{ id: "main", default: true, agentDir }] },
+      const selectedModel = "canonical-fixture-model";
+      const selectedModelRef = `groq/${selectedModel}`;
+      const existingDefault =
+        metadata === "fresh"
+          ? {}
+          : { streaming: true, params: { temperature: 0.7, maxTokens: 256 } };
+      const existingAgent =
+        metadata === "fresh" ? {} : { codeMode: false, params: { temperature: 0.8, topP: 0.6 } };
+      const selectedMetadata =
+        metadata === "empty starter"
+          ? {}
+          : { alias: "selected-fixture", params: { temperature: 0.2 } };
+      const selectedAgentMetadata =
+        metadata === "empty starter" ? {} : { params: { temperature: 0.3 } };
+      const initialConfig: OpenClawConfig = {
+        agents: {
+          defaults: { models: metadata === "fresh" ? {} : { [selectedModelRef]: existingDefault } },
+          list: [
+            {
+              id: "main",
+              default: true,
+              agentDir,
+              models: metadata === "fresh" ? {} : { [selectedModelRef]: existingAgent },
+            },
+          ],
+        },
         auth: {
           profiles: {
             "groq:legacy": { provider: "groq", mode: credentialType },
           },
         },
-      } satisfies OpenClawConfig;
+      };
       // Custom agent directories must be bound to their configured owner before
       // the shared per-agent database is created.
       resolveAgentDir(initialConfig, "main");
@@ -3331,9 +3371,6 @@ describe("activateSetupInference", () => {
         },
         order: { groq: ["groq:legacy"] },
       });
-      const selectedModel = "canonical-fixture-model";
-      const selectedModelRef = `groq/${selectedModel}`;
-      const selectedMetadata = { alias: "selected-fixture", params: { temperature: 0.2 } };
       const runAuth = vi.fn(async (ctx: { opts?: { token?: string } }) => ({
         profiles: [
           {
@@ -3346,7 +3383,10 @@ describe("activateSetupInference", () => {
         ],
         defaultModel: "groq/starter-fixture-alias",
         configPatch: {
-          agents: { defaults: { models: { "groq/starter-fixture-alias": selectedMetadata } } },
+          agents: {
+            defaults: { models: { "groq/starter-fixture-alias": selectedMetadata } },
+            entries: { main: { models: { "groq/starter-fixture-alias": selectedAgentMetadata } } },
+          },
         },
       }));
       const provider: ProviderPlugin = {
@@ -3445,8 +3485,25 @@ describe("activateSetupInference", () => {
           runEmbeddedAgent.mock.calls[0]?.[0].config,
           configHarness.current(),
         ]) {
-          expect(config?.agents?.defaults?.models).toEqual({
-            [selectedModelRef]: selectedMetadata,
+          expect({
+            defaults: config?.agents?.defaults?.models,
+            agent: config?.agents?.entries?.main?.models,
+          }).toEqual({
+            defaults: {
+              [selectedModelRef]: {
+                ...existingDefault,
+                ...selectedMetadata,
+                params: { ...existingDefault.params, ...selectedMetadata.params },
+              },
+            },
+            agent: {
+              [selectedModelRef]: {
+                ...existingAgent,
+                ...selectedAgentMetadata,
+                params: { ...existingAgent.params, ...selectedAgentMetadata.params },
+                agentRuntime: { id: "openclaw" },
+              },
+            },
           });
         }
         expect(readInMemoryAuthProfileStore(agentDir).profiles[activatedProfileId]).toMatchObject(

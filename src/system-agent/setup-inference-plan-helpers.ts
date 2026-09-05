@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import type { AgentRunResultView } from "../agents/agent-run-result.js";
 import { listAgentEntries, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
@@ -15,6 +16,7 @@ import {
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { buildAgentRuntimeAuthPlan } from "../agents/runtime-plan/auth.js";
 import { GEMINI_CLI_DEFAULT_MODEL_REF } from "../commands/onboard-inference.js";
+import { mergeAgentModelEntryForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -327,10 +329,11 @@ function copySelectedModelMetadata(params: {
 }): void {
   const key = params.targetModelRef;
   const defaultEntry = params.prepared.agents?.defaults?.models?.[params.modelRef];
-  // The projection owns a deep clone; only selected metadata crosses from the auth result.
+  // An alias can select an existing canonical row; unspecified settings must survive projection.
   if (defaultEntry !== undefined) {
     const defaults = ((params.target.agents ??= {}).defaults ??= {});
-    (defaults.models ??= {})[key] = structuredClone(defaultEntry);
+    const models = (defaults.models ??= {});
+    models[key] = mergeAgentModelEntryForConfig(models[key], structuredClone(defaultEntry));
   }
   const defaultAgentId = resolveAmbientOwnerAgentId(params.target, params.agentId);
   const preparedAgent = listAgentEntries(params.prepared).find(
@@ -341,25 +344,9 @@ function copySelectedModelMetadata(params: {
     ([agentId]) => normalizeAgentId(agentId) === defaultAgentId,
   )?.[1];
   if (selectedEntry !== undefined && targetAgent) {
-    (targetAgent.models ??= {})[key] = structuredClone(selectedEntry);
+    const models = (targetAgent.models ??= {});
+    models[key] = mergeAgentModelEntryForConfig(models[key], structuredClone(selectedEntry));
   }
-}
-
-function findSelectedProviderConfigKey(
-  config: OpenClawConfig,
-  providerId: string,
-): string | undefined {
-  const providers = config.models?.providers;
-  if (!providers) {
-    return undefined;
-  }
-  if (Object.hasOwn(providers, providerId)) {
-    return providerId;
-  }
-  const normalizedProvider = normalizeProviderId(providerId);
-  return Object.keys(providers).find(
-    (candidate) => normalizeProviderId(candidate) === normalizedProvider,
-  );
 }
 
 /**
@@ -393,7 +380,11 @@ export function projectManualInferenceConfig(params: {
     };
   }
 
-  const providerConfigKey = findSelectedProviderConfigKey(params.preparedConfig, params.providerId);
+  const providers = params.preparedConfig.models?.providers;
+  const providerConfigKey =
+    providers && Object.hasOwn(providers, params.providerId)
+      ? params.providerId
+      : findNormalizedProviderKey(providers, params.providerId);
   if (providerConfigKey) {
     const preparedProvider = params.preparedConfig.models?.providers?.[providerConfigKey];
     if (preparedProvider === undefined) {
