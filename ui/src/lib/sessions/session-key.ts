@@ -225,19 +225,6 @@ export function hasUiSessionDefaults(host: UiSessionDefaultsHost): boolean {
   return host.agentsList != null || readSessionDefaults(host) !== undefined;
 }
 
-/** Session lookup RPCs encode a selected global owner through its main alias. */
-export function resolveUiSessionQueryKey(
-  host: UiSessionDefaultsHost,
-  sessionKey: string,
-  agentIdOverride?: string,
-): string {
-  const identity = resolveUiConversationIdentity(host, sessionKey, agentIdOverride);
-  if (identity.sessionKey !== "global" || !isUiGlobalScopeConfigured(host)) {
-    return identity.sessionKey;
-  }
-  return identity.agentId ? buildAgentMainSessionKey({ agentId: identity.agentId }) : "";
-}
-
 /** Artifact snapshots and events retain global in their owner-qualified wire key. */
 export function scopedSessionArtifactKey(sessionKey: string, agentId?: string): string {
   const key = sessionKey.trim();
