@@ -56,9 +56,9 @@ type IterationMetric = {
 
 type CompactionProof = ReliabilityReport["maintenanceProof"]["compaction"];
 
-// Keep 50% headroom above the 2 MiB staged-restore threshold without copying
-// an arbitrarily large payload through every repository and restore crash phase.
-const COMPACTION_BLOAT_ROWS = 12;
+// Keep enough work in VACUUM that the parent can observe its active journal and
+// deliver SIGKILL before the transaction commits, including on fast CI disks.
+const COMPACTION_BLOAT_ROWS = 64;
 const COMPACTION_BLOAT_PAYLOAD_BYTES = 256 * 1024;
 const VACUUM_BLOAT_ROWS = 64;
 
