@@ -57,6 +57,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         ...prepared.route,
         sessionKey: prepared.ctxPayload.SessionKey ?? prepared.route.sessionKey,
       },
+      { allowImplicitReplies: prepared.allowImplicitThreadReplies },
     );
   const upstreamLifecycle = prepared.turnAdoptionLifecycle;
   let releaseDeferred: (() => void) | undefined;
