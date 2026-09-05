@@ -1,5 +1,5 @@
 // Signal setup owns transport discovery and canonical account writes.
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
+import { normalizeAccountId, resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -11,7 +11,6 @@ import {
   listSignalAccountIds,
   resolveSignalAccount,
   resolveSignalAccountConfig,
-  resolveSignalAccountEntry,
   resolveSignalTransport,
 } from "./accounts.js";
 import { clearLegacySignalTransportFieldsForAccount } from "./config-compat.js";
@@ -86,10 +85,7 @@ function assertSignalLocalEndpointDoesNotConflictWithManagedSibling(params: {
     if (normalizeAccountId(accountId) === targetAccountId) {
       continue;
     }
-    const accountEntry = resolveSignalAccountEntry(
-      params.cfg.channels?.signal?.accounts,
-      accountId,
-    );
+    const accountEntry = resolveAccountEntry(params.cfg.channels?.signal?.accounts, accountId);
     if (accountEntry?.enabled === false) {
       continue;
     }
@@ -119,9 +115,8 @@ export function resolveConfiguredSignalTransport(
   const signal = cfg.channels?.signal;
   const normalizedAccountId = normalizeAccountId(accountId);
   return normalizedAccountId === DEFAULT_ACCOUNT_ID
-    ? (signal?.transport ??
-        resolveSignalAccountEntry(signal?.accounts, normalizedAccountId)?.transport)
-    : resolveSignalAccountEntry(signal?.accounts, normalizedAccountId)?.transport;
+    ? (signal?.transport ?? resolveAccountEntry(signal?.accounts, normalizedAccountId)?.transport)
+    : resolveAccountEntry(signal?.accounts, normalizedAccountId)?.transport;
 }
 
 function alignManagedConnectionUrlAfterBindChange(params: {

@@ -200,34 +200,6 @@ describe("prepareSignalManagedNativeTransport", () => {
     });
   });
 
-  it("preserves managed options behind a key that needs canonicalization", () => {
-    const cfg = {
-      channels: {
-        signal: {
-          accounts: {
-            "Ops Bot": {
-              account: "+15555550124",
-              transport: {
-                kind: "managed-native",
-                cliPath: "/opt/signal-cli",
-                httpPort: 8181,
-              },
-            },
-          },
-        },
-      },
-    } as const;
-
-    expect(
-      prepareSignalManagedNativeTransport({ cfg: cfg as never, accountId: "ops-bot" }),
-    ).toEqual({
-      kind: "managed-native",
-      cliPath: "/opt/signal-cli",
-      httpHost: "127.0.0.1",
-      httpPort: 8181,
-    });
-  });
-
   it("reserves a configured default account when setup will re-enable the channel", () => {
     const cfg = {
       channels: {

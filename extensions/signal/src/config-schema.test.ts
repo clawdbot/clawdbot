@@ -208,53 +208,6 @@ describe("signal groups schema", () => {
     });
   });
 
-  it("accepts a default-account number under a key that needs canonicalization", () => {
-    expectValidSignalConfig({
-      transport: {
-        kind: "container",
-        url: "http://signal-container:8080",
-      },
-      accounts: {
-        "Default.": {
-          account: "+15555550123",
-        },
-      },
-    });
-  });
-
-  it("rejects an empty default-account number under a key that needs canonicalization", () => {
-    const issues = expectInvalidSignalConfig({
-      transport: {
-        kind: "container",
-        url: "http://signal-container:8080",
-      },
-      account: "+15555550123",
-      accounts: {
-        "Default.": {
-          account: "",
-        },
-      },
-    });
-
-    expect(issues.map((issue) => issue.message)).toContain(
-      "channels.signal container transport requires an account number on the channel or default account",
-    );
-  });
-
-  it("accepts a disabled default account under a key that needs canonicalization", () => {
-    expectValidSignalConfig({
-      transport: {
-        kind: "container",
-        url: "http://signal-container:8080",
-      },
-      accounts: {
-        "Default.": {
-          enabled: false,
-        },
-      },
-    });
-  });
-
   it("rejects managed transport ports outside the TCP range", () => {
     expectInvalidSignalConfig({
       transport: {

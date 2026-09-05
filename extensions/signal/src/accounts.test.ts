@@ -4,8 +4,6 @@ import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
   resolveSignalAccount,
-  resolveSignalAccountConfig,
-  resolveSignalReplyToMode,
 } from "./accounts.js";
 
 describe("resolveSignalAccount", () => {
@@ -373,106 +371,5 @@ describe("resolveSignalAccount", () => {
     });
     expect(resolved.config.account).toBe("+15555550123");
     expect(resolved.configured).toBe(true);
-  });
-});
-
-function signalCfgWithAccounts(accounts: Record<string, unknown>) {
-  return { channels: { signal: { accounts } } } as never;
-}
-
-function externalTransport(port: number) {
-  return { transport: { kind: "external-native", url: `http://127.0.0.1:${port}` } };
-}
-
-describe("signal account key resolution", () => {
-  it("resolves a config key listed under its normalized account id", () => {
-    const cfg = signalCfgWithAccounts({
-      "Work Phone": { account: "+15555550123", ...externalTransport(9101) },
-    });
-
-    expect(listSignalAccountIds(cfg)).toEqual(["work-phone"]);
-    const resolved = resolveSignalAccount({ cfg, accountId: "work-phone" });
-    expect(resolved.configured).toBe(true);
-    expect(resolved.baseUrl).toBe("http://127.0.0.1:9101");
-  });
-
-  it("applies a raw-key account replyToMode under its normalized id", () => {
-    const cfg = {
-      channels: {
-        signal: { replyToMode: "off", accounts: { "Work Phone": { replyToMode: "first" } } },
-      },
-    } as never;
-
-    expect(resolveSignalReplyToMode({ cfg, accountId: "work-phone" })).toBe("first");
-  });
-
-  it.each([
-    {
-      order: "alias first",
-      accounts: { "work.phone": externalTransport(9101), "WORK-PHONE": externalTransport(9102) },
-    },
-    {
-      order: "case-folded key first",
-      accounts: { "WORK-PHONE": externalTransport(9102), "work.phone": externalTransport(9101) },
-    },
-  ])("keeps a case-folded key ahead of a canonical alias with $order", ({ accounts }) => {
-    const cfg = signalCfgWithAccounts(accounts);
-
-    expect(listSignalAccountIds(cfg)).toEqual(["work-phone"]);
-    expect(resolveSignalAccount({ cfg, accountId: "WORK-PHONE" }).baseUrl).toBe(
-      "http://127.0.0.1:9102",
-    );
-  });
-
-  it("prefers an exact key, then a case-folded key, then a canonical alias", () => {
-    const alias = { "work.phone": externalTransport(9101) };
-    const caseFolded = { "WORK-PHONE": externalTransport(9102) };
-    const exact = { "work-phone": externalTransport(9103) };
-
-    const resolveBaseUrl = (accounts: Record<string, unknown>) =>
-      resolveSignalAccount({ cfg: signalCfgWithAccounts(accounts), accountId: "work-phone" })
-        .baseUrl;
-
-    expect(resolveBaseUrl({ ...alias, ...caseFolded, ...exact })).toBe("http://127.0.0.1:9103");
-    expect(resolveBaseUrl({ ...alias, ...caseFolded })).toBe("http://127.0.0.1:9102");
-    expect(resolveBaseUrl(alias)).toBe("http://127.0.0.1:9101");
-  });
-
-  it.each([
-    {
-      order: "dotted key first",
-      accounts: { "work.phone": externalTransport(9101), "Work Phone": externalTransport(9102) },
-      expected: "http://127.0.0.1:9101",
-    },
-    {
-      order: "spaced key first",
-      accounts: { "Work Phone": externalTransport(9102), "work.phone": externalTransport(9101) },
-      expected: "http://127.0.0.1:9102",
-    },
-  ])(
-    // Policy: with no exact and no case-folded key, the first alias in object order wins.
-    // Object order is the config file order, so the same file always picks the same account.
-    "uses the first alias in object order with $order",
-    ({ accounts, expected }) => {
-      const cfg = signalCfgWithAccounts(accounts);
-
-      expect(resolveSignalAccount({ cfg, accountId: "work-phone" }).baseUrl).toBe(expected);
-    },
-  );
-
-  it("does not resolve an empty account id to the default account", () => {
-    const cfg = signalCfgWithAccounts({ default: { account: "+15555550100" } });
-
-    expect(resolveSignalAccountConfig(cfg, "").account).toBeUndefined();
-    expect(resolveSignalAccountConfig(cfg, "default").account).toBe("+15555550100");
-  });
-
-  it("does not resolve an id whose canonical form is a blocked object key", () => {
-    const cfg = signalCfgWithAccounts({
-      "__PROTO__!": { account: "+15555550199" },
-      default: { account: "+15555550100" },
-    });
-
-    expect(resolveSignalAccountConfig(cfg, "__proto__").account).toBeUndefined();
   });
 });

@@ -807,6 +807,7 @@ This pattern applies to channels that support `accounts`. Microsoft Teams uses o
 - If you add a non-default account via `openclaw channels add` (or channel onboarding) while still on a single-account top-level channel config, OpenClaw promotes account-scoped top-level single-account values into the channel account map first so the original account keeps working. Most channels move them into `channels.<channel>.accounts.default`; Matrix can preserve an existing matching named/default target instead.
 - Existing channel-only bindings (no `accountId`) keep matching the default account; account-scoped bindings remain optional.
 - `openclaw doctor --fix` also repairs mixed shapes by moving account-scoped top-level single-account values into the promoted account chosen for that channel. Most channels use `accounts.default`; Matrix can preserve an existing matching named/default target instead.
+- Signal lists a key such as `accounts["Work Phone"]` as `work-phone`, but its account resolver and policy readers do not select that entry until the key is repaired. Run `openclaw doctor --fix` to move a key that alone names the id. Colliding keys need a manual rename.
 
 ### Other plugin channels
 

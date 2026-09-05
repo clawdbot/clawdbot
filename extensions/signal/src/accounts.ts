@@ -1,12 +1,10 @@
 // Signal plugin module implements accounts behavior.
-import { mergeAccountConfig } from "openclaw/plugin-sdk/account-helpers";
 import {
   createAccountListHelpers,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
-  normalizeOptionalAccountId,
   resolveAccountEntry,
-  resolveNormalizedAccountEntry,
+  resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
@@ -57,20 +55,6 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("si
 export const listSignalAccountIds = listAccountIds;
 export const resolveDefaultSignalAccountId = resolveDefaultAccountId;
 
-// Preserve exact and case-folded selection before Signal's canonical alias lookup.
-// A query without a canonical form must not fall back to the default account.
-export function resolveSignalAccountEntry<T>(
-  accounts: Record<string, T> | undefined,
-  accountId: string,
-): T | undefined {
-  return (
-    resolveAccountEntry(accounts, accountId) ??
-    (normalizeOptionalAccountId(accountId)
-      ? resolveNormalizedAccountEntry(accounts, accountId, normalizeAccountId)
-      : undefined)
-  );
-}
-
 export function resolveSignalAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
@@ -78,15 +62,18 @@ export function resolveSignalAccountConfig(
   const channelConfig = cfg.channels?.signal;
   const {
     transport: _transport,
-    accounts,
+    accounts: _accounts,
     defaultAccount: _defaultAccount,
     ...shared
   } = channelConfig ?? {};
-  const merged = mergeAccountConfig<SignalAccountConfig>({
+  const merged = resolveMergedAccountConfig<SignalAccountConfig>({
     channelConfig: (accountId === DEFAULT_ACCOUNT_ID ? channelConfig : shared) as
       | SignalAccountConfig
       | undefined,
-    accountConfig: resolveSignalAccountEntry(accounts, accountId),
+    accounts: cfg.channels?.signal?.accounts as
+      | Record<string, Partial<SignalAccountConfig>>
+      | undefined,
+    accountId,
     nestedObjectKeys: ["aliases"],
   });
   if (accountId === DEFAULT_ACCOUNT_ID && channelConfig?.transport) {
@@ -301,7 +288,7 @@ export function resolveSignalReplyToMode(params: {
     params.accountId ?? resolveDefaultSignalAccountId(params.cfg),
   );
   const signalConfig = params.cfg.channels?.signal;
-  const accountConfig = resolveSignalAccountEntry(
+  const accountConfig = resolveAccountEntry(
     signalConfig?.accounts as Record<string, SignalAccountConfig> | undefined,
     accountId,
   );
