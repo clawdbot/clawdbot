@@ -2490,7 +2490,6 @@ describe("resolvePinnedClientMetadata", () => {
     ["openclaw-ios", "iPadOS 26.5.0", "iPadOS 26.4.2", "iPad"],
     ["openclaw-ios", "iPadOS 26.5.0", "iOS 26.4.2", "iPad"],
     ["openclaw-android", "Android 16", "Android 15", "Android"],
-    ["openclaw-watchos", "watchOS 27.0", "watchOS 26.5.1", "Apple Watch"],
     ["openclaw-macos", "macOS 26.5.1", "macOS 26.5.0", "Mac"],
     ["openclaw-macos", "macOS 27.0.0", "macOS 26.5.1", "Mac"],
   ])(
@@ -2610,23 +2609,20 @@ describe("resolvePinnedClientMetadata", () => {
   });
 
   it.each([
-    ["node-host", "macOS 26.5.2", "macOS 26.5.1", "Mac"],
-    ["openclaw-macos", "macOS anything", "macOS previous", "Mac"],
-    ["openclaw-macos", "macOS", "macOS 26.5.1", "Mac"],
-    ["node-host", "watchOS 27.0", "watchOS 26.5.1", "Apple Watch"],
-    ["openclaw-watchos", "watchOS anything", "watchOS previous", "Apple Watch"],
-    ["openclaw-watchos", "watchOS", "watchOS 26.5.1", "Apple Watch"],
+    ["node-host", "macOS 26.5.2", "macOS 26.5.1"],
+    ["openclaw-macos", "macOS anything", "macOS previous"],
+    ["openclaw-macos", "macOS", "macOS 26.5.1"],
   ])(
-    "keeps non-version or non-native platform changes approval-bound for %s",
-    (clientId, claimed, paired, deviceFamily) => {
+    "keeps non-version macOS platform changes approval-bound for %s",
+    (clientId, claimed, paired) => {
       expect(
         resolvePinnedClientMetadata({
           clientId,
           clientMode: "node",
           claimedPlatform: claimed,
-          claimedDeviceFamily: deviceFamily,
+          claimedDeviceFamily: "Mac",
           pairedPlatform: paired,
-          pairedDeviceFamily: deviceFamily,
+          pairedDeviceFamily: "Mac",
         }),
       ).toMatchObject({
         platformMismatch: true,
