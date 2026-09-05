@@ -34,9 +34,13 @@ removed.
 4. Until approval, node commands stay filtered; approval exposes the declared
    surface, subject to the normal command policy.
 
-Pending requests expire automatically **5 minutes after the node's last
-retry** — an actively reconnecting node keeps its one pending request alive
-rather than generating a fresh request (and approval prompt) per attempt.
+Pending **node capability** requests do not expire just because time passes.
+They remain pending until approved, rejected, superseded by a changed surface,
+or cleared by the node lifecycle, such as removal of the node role or a
+successful reconnect that no longer needs that approval.
+
+The **5-minute expiry** still applies to **device-pairing** requests,
+not to capability approvals on an already-paired device.
 
 ## One-paste node pairing
 
@@ -79,7 +83,7 @@ Events:
 
 - `node.pair.requested` - emitted when a new pending request is created.
 - `node.pair.resolved` - emitted when a request is approved, rejected, or
-  expired.
+  cleared by the node lifecycle.
 
 Methods:
 
@@ -265,7 +269,9 @@ for the full identity, app/core versions, and request metadata.
 **Approve Node** approves the node's declared capabilities; it does not rotate
 the device's access token. **Command-Return** approves only a single displayed
 request. Return alone does not approve. **Not Now** or **Escape** hides the panel
-without resolving requests; they remain pending until resolved or expired.
+without resolving requests. Device-pairing requests retain their normal
+expiry; node capability requests remain pending until their lifecycle resolves
+them.
 
 For multiple requests, **Approve All** and **Reject All** apply only to the
 displayed requests. Requests arriving after that view was displayed are not

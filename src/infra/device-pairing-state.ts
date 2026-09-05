@@ -9,19 +9,13 @@ import {
 import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
 import { createAsyncLock, pruneExpiredPending } from "./pairing-files.js";
 
-const PAIRING_PENDING_TTL_MS = 5 * 60 * 1000;
+const DEVICE_PAIRING_PENDING_TTL_MS = 5 * 60 * 1000;
 const withLock = createAsyncLock();
 
 function pruneExpiredPairingState(state: DevicePairingStoreState): void {
-  const now = Date.now();
-  pruneExpiredPending(state.pendingById, now, PAIRING_PENDING_TTL_MS);
-  // Pending node-surface requests share the pairing TTL; requests refresh
-  // their ts on reconnect so an actively retrying node keeps one alive.
-  for (const device of Object.values(state.pairedByDeviceId)) {
-    if (device.pendingNodeSurface && now - device.pendingNodeSurface.ts > PAIRING_PENDING_TTL_MS) {
-      delete device.pendingNodeSurface;
-    }
-  }
+  pruneExpiredPending(state.pendingById, Date.now(), DEVICE_PAIRING_PENDING_TTL_MS);
+  // Pending node surfaces belong to paired-device lifecycle state. Approval,
+  // rejection, node-role removal, or successful reconnect cleanup resolves them.
 }
 
 /** Run one pairing mutation under the process-wide device pairing lock. */
@@ -45,14 +39,9 @@ export async function loadDevicePairingStateReadOnly(
   return state;
 }
 
-/** Return whether one pending pairing timestamp is beyond the shared TTL. */
-export function isPairingRequestExpired(timestampMs: number, nowMs = Date.now()): boolean {
-  return nowMs - timestampMs > PAIRING_PENDING_TTL_MS;
-}
-
-/** Resolve the expiry timestamp for one pending pairing request. */
+/** Resolve the expiry timestamp for one pending device-pairing request. */
 export function resolvePairingRequestExpiry(timestampMs: number): number {
-  return timestampMs + PAIRING_PENDING_TTL_MS;
+  return timestampMs + DEVICE_PAIRING_PENDING_TTL_MS;
 }
 
 /** Normalize a device id at pairing state boundaries. */
