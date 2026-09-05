@@ -61,8 +61,6 @@ vi.mock("../utils/message-channel.js", () => {
   const isGatewayMessageChannel = (value: string) => Boolean(normalizeMessageChannel(value));
   return {
     INTERNAL_MESSAGE_CHANNEL,
-    isNativeApprovalChannel: (value?: string | null) =>
-      value === INTERNAL_MESSAGE_CHANNEL || value === "discord",
     isDeliverableMessageChannel: (value: string) => {
       const channel = normalizeMessageChannel(value);
       return Boolean(channel && channel !== INTERNAL_MESSAGE_CHANNEL && channel !== "tui");

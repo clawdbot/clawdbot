@@ -198,21 +198,27 @@ it("denies caller allowlist/off misses before dispatch to a permissive node", as
   expect(invokeCount).toBe(0);
 });
 
-it.each(["allow-once", "allow-always"])(
-  "keeps node approval %s inside the originating tool lifetime",
-  async (decision) => {
+it.each([
+  { channel: "webchat", decision: "allow-once" },
+  { channel: "webchat", decision: "allow-always" },
+  { channel: "a2a", decision: "allow-once" },
+  { channel: "a2a", decision: "allow-always" },
+])(
+  "keeps $channel node approval $decision inside the originating tool lifetime",
+  async ({ channel, decision }) => {
     let completed = false;
     const result = executeNodeHostCommand({
       ...request,
       ask: "on-miss",
       security: "allowlist",
+      turnSourceChannel: channel,
     }).finally(() => {
       completed = true;
     });
     await Promise.race([decisionEntered.promise, result]);
+    resolveDecision({ decision });
     expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
     expect(completed).toBe(false);
-    resolveDecision({ decision });
     expect((await result).details).toMatchObject({
       status: "completed",
       aggregated: "node-policy-proof",
@@ -220,6 +226,19 @@ it.each(["allow-once", "allow-always"])(
     expect(invokeCount).toBe(1);
   },
 );
+
+it("returns A2A operator denial to the originating tool without dispatch", async () => {
+  const execution = executeNodeHostCommand({
+    ...request,
+    ask: "on-miss",
+    security: "allowlist",
+    turnSourceChannel: "a2a",
+  });
+  await Promise.race([decisionEntered.promise, execution]);
+  resolveDecision({ decision: "deny" });
+  await expect(execution).rejects.toThrow("exec denied: user-denied");
+  expect(invokeCount).toBe(0);
+});
 
 it("prompts for target ask=always even when the caller is full/off", async () => {
   setRuntimeConfigSnapshot({ tools: { exec: { security: "full", ask: "always" } } });
@@ -256,29 +275,33 @@ it("reports target policy denial as not executed", async () => {
   ]);
 });
 
-it("does not dispatch a late approval after cancellation", async () => {
-  const controller = new AbortController();
-  const reason = new Error("originating turn closed");
-  const execution = executeNodeHostCommand({
-    ...request,
-    security: "allowlist",
-    ask: "on-miss",
-    signal: controller.signal,
-  });
-  const drained = execution.catch(() => undefined);
-  try {
-    await Promise.race([decisionEntered.promise, execution]);
-    expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
-    controller.abort(reason);
-    resolveDecision({ decision: "allow-once" });
-    await expect(execution).rejects.toBe(reason);
-    expect(invokeCount).toBe(0);
-  } finally {
-    controller.abort(reason);
-    resolveDecision({ decision: "deny" });
-    await drained;
-  }
-});
+it.each(["webchat", "a2a"])(
+  "does not dispatch a late %s approval after cancellation",
+  async (channel) => {
+    const controller = new AbortController();
+    const reason = new Error("originating turn closed");
+    const execution = executeNodeHostCommand({
+      ...request,
+      security: "allowlist",
+      ask: "on-miss",
+      signal: controller.signal,
+      turnSourceChannel: channel,
+    });
+    const drained = execution.catch(() => undefined);
+    try {
+      await Promise.race([decisionEntered.promise, execution]);
+      expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
+      controller.abort(reason);
+      resolveDecision({ decision: "allow-once" });
+      await expect(execution).rejects.toBe(reason);
+      expect(invokeCount).toBe(0);
+    } finally {
+      controller.abort(reason);
+      resolveDecision({ decision: "deny" });
+      await drained;
+    }
+  },
+);
 
 it("preserves a target deny introduced while approval was pending", async () => {
   const execution = executeNodeHostCommand({
