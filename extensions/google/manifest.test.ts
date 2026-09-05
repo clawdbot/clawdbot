@@ -30,6 +30,24 @@ type GoogleManifest = {
     >;
   };
   modelCatalog?: {
+    providers?: Record<
+      string,
+      {
+        api?: string;
+        baseUrl?: string;
+        models?: Array<{
+          id: string;
+          name?: string;
+          reasoning?: boolean;
+          input?: string[];
+          cost?: Record<string, unknown>;
+          contextWindow?: number;
+          maxTokens?: number;
+          thinkingLevelMap?: Record<string, unknown>;
+          compat?: Record<string, unknown>;
+        }>;
+      }
+    >;
     suppressions?: Array<{
       provider?: string;
       model?: string;
@@ -229,5 +247,4 @@ describe("google manifest webSearch headers", () => {
     }
     expect(models.length).toBeGreaterThanOrEqual(10);
   });
-
 });
