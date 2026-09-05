@@ -232,7 +232,10 @@ export function projectChatTranscript(
   const isEmpty =
     chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation && !hasTypingActors;
   transcript.setContentReady(!props.loading);
-  // Capped lists may omit the selected row; global scope precedes key classification.
+  // 1:1 exchanges do not need an avatar gutter; group threads keep it to identify
+  // multiple voices. The capped sessions list may omit the selected row, so absent
+  // or unknown rows classify by key, with global aliases taking precedence.
+  // senderLabels are not a signal: gateway sanitization also labels 1:1 channel DMs.
   const rowKind = activeSession?.kind;
   const sessionKind =
     rowKind && rowKind !== "unknown"
@@ -240,7 +243,10 @@ export function projectChatTranscript(
       : isGlobalAliasKey
         ? "global"
         : classifySessionKind(props.sessionKey);
-  // Shared and forwarded conversations keep identity chrome even in direct sessions.
+  // Only agent-solo kinds qualify. Global sessions aggregate inbound contexts,
+  // including groups/channels; identity-resolving gateways also share sessions
+  // between people, so both keep avatars. A forwarded cross-session message adds
+  // another voice to a direct exchange and restores identity chrome.
   const hasForwardedGroups = chatItems.some(
     (item) => item.kind === "group" && hasForwardedSource(item),
   );
@@ -248,6 +254,7 @@ export function projectChatTranscript(
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
     !props.userId &&
     !hasForwardedGroups;
+  // Precedence: explicit prop, subagent classification/spawnedBy/key → none, direct → footer, else gutter.
   const avatarPlacement =
     props.avatarPlacement ??
     (activeSession?.classification === "subagent" ||
