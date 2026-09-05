@@ -1,10 +1,7 @@
 // Copilot tests cover usage bridge plugin behavior.
 import type { NormalizedUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
-import {
-  buildCopilotAssistantUsage,
-  normalizeCopilotUsage,
-} from "./usage-bridge.js";
+import { buildCopilotAssistantUsage, normalizeCopilotUsage } from "./usage-bridge.js";
 
 const ZERO_SNAPSHOT: NormalizedUsage = {
   cacheRead: undefined,
@@ -249,5 +246,4 @@ describe("usage-bridge", () => {
       });
     });
   });
-
 });

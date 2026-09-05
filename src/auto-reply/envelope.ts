@@ -14,7 +14,7 @@ import {
 } from "../infra/format-time/format-datetime.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 
-type AgentEnvelopeParams = {
+export type AgentEnvelopeParams = {
   channel: string;
   from?: string;
   timestamp?: number | Date;
@@ -71,10 +71,11 @@ function sanitizeEnvelopeHeaderPart(value: string): string {
 /** Resolves envelope formatting defaults from agent config. */
 export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeFormatOptions {
   const defaults = cfg?.agents?.defaults;
+  const configuredTimezone = normalizeOptionalString(defaults?.userTimezone);
   return {
-    timezone: defaults?.envelopeTimezone,
-    includeTimestamp: defaults?.envelopeTimestamp !== "off",
-    includeElapsed: defaults?.envelopeElapsed !== "off",
+    timezone: configuredTimezone ? (resolveTimezone(configuredTimezone) ?? "local") : undefined,
+    includeTimestamp: true,
+    includeElapsed: true,
     userTimezone: defaults?.userTimezone,
   };
 }
@@ -110,11 +111,11 @@ function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEn
 }
 
 /** Formats an envelope timestamp using local, UTC, user, or explicit IANA timezone rules. */
-export function formatEnvelopeTimestamp(
+export function formatAgentEnvelopeTimestamp(
   ts: number | Date | undefined,
   options?: EnvelopeFormatOptions,
 ): string | undefined {
-  if (!ts) {
+  if (ts === undefined) {
     return undefined;
   }
   const resolved = normalizeEnvelopeOptions(options);
@@ -126,35 +127,23 @@ export function formatEnvelopeTimestamp(
     return undefined;
   }
   const zone = resolveEnvelopeTimezone(resolved);
-  // Include a weekday prefix so models do not need to derive DOW from the date
-  // (small models are notoriously unreliable at that).
-  const weekday = (() => {
-    try {
-      if (zone.mode === "utc") {
-        return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(date);
-      }
-      if (zone.mode === "local") {
-        return new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
-      }
-      return new Intl.DateTimeFormat("en-US", { timeZone: zone.timeZone, weekday: "short" }).format(
-        date,
-      );
-    } catch {
-      return undefined;
-    }
-  })();
-
-  const formatted =
-    zone.mode === "utc"
-      ? formatUtcTimestamp(date, { displaySeconds: true })
-      : zone.mode === "local"
-        ? formatZonedTimestamp(date, { displaySeconds: true })
-        : formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true });
-
-  if (!formatted) {
-    return undefined;
+  // Include the weekday so models do not need to derive it from the date.
+  if (zone.mode !== "utc") {
+    return formatZonedTimestamp(date, {
+      timeZone: zone.mode === "iana" ? zone.timeZone : undefined,
+      displaySeconds: true,
+      displayWeekday: true,
+    });
   }
-  return weekday ? `${weekday} ${formatted}` : formatted;
+  const formatted = formatUtcTimestamp(date, { displaySeconds: true });
+  try {
+    const weekday = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(
+      date,
+    );
+    return `${weekday} ${formatted}`;
+  } catch {
+    return formatted;
+  }
 }
 
 function resolveDirectEnvelopeBodyLabel(from: string | undefined): string {
@@ -201,7 +190,7 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   if (ip) {
     parts.push(sanitizeEnvelopeHeaderPart(ip));
   }
-  const ts = formatEnvelopeTimestamp(params.timestamp, resolved);
+  const ts = formatAgentEnvelopeTimestamp(params.timestamp, resolved);
   if (ts) {
     parts.push(ts);
   }

@@ -1,14 +1,15 @@
 // Builds task status summaries and formatted status text for user-facing surfaces.
 import { sanitizeUserFacingText } from "../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
+import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../agents/internal-runtime-context.js";
 import { truncateUtf16Safe } from "../utils.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import { matchesTaskStatusFilter, type TaskRecord } from "./task-registry.types.js";
 
 const ACTIVE_TASK_STATUSES = new Set(["queued", "running"]);
-const FAILURE_TASK_STATUSES = new Set(["failed", "timed_out", "lost"]);
+const FAILURE_TASK_STATUSES = new Set(["failed", "timed_out", "lost", "blocked"]);
 /** Window for showing recently completed tasks in compact status output. */
 const TASK_STATUS_RECENT_WINDOW_MS = 5 * 60_000;
 const TASK_STATUS_TITLE_MAX_CHARS = 80;
@@ -18,8 +19,12 @@ function isActiveTask(task: TaskRecord): boolean {
   return ACTIVE_TASK_STATUSES.has(task.status);
 }
 
-function isFailureTask(task: TaskRecord): boolean {
-  return FAILURE_TASK_STATUSES.has(task.status);
+export function formatTaskStatus(task: Pick<TaskRecord, "status" | "terminalOutcome">) {
+  return matchesTaskStatusFilter(task, "blocked") ? "blocked" : task.status;
+}
+
+export function isTaskStatusIssue(task: Pick<TaskRecord, "status" | "terminalOutcome">): boolean {
+  return FAILURE_TASK_STATUSES.has(formatTaskStatus(task));
 }
 
 function resolveTaskReferenceAt(task: TaskRecord): number {
@@ -72,7 +77,7 @@ function stripInlineLeakedInternalContext(value: string): string {
 
 function sanitizeTaskStatusValue(value: unknown, errorContext: boolean): unknown {
   if (typeof value === "string") {
-    const sanitized = sanitizeUserFacingText(stripInlineLeakedInternalContext(value), {
+    const sanitized = renderUserFacingText(stripInlineLeakedInternalContext(value), {
       errorContext,
     })
       .replace(/\s+/g, " ")
@@ -117,6 +122,15 @@ export function sanitizeTaskStatusText(
     return truncateTaskStatusText(sanitized, opts.maxChars);
   }
   return sanitized;
+}
+
+/** Sanitize bounded task input for detail views without flattening its layout. */
+export function sanitizeTaskPromptText(value: unknown, maxChars: number): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const sanitized = sanitizeUserFacingText(stripInlineLeakedInternalContext(value));
+  return sanitized ? truncateTaskStatusText(sanitized, maxChars) : "";
 }
 
 export function formatTaskStatusTitleText(value: unknown, fallback = "Background task"): string {
@@ -171,8 +185,7 @@ export function buildTaskStatusSnapshot(
   const active = visibleCandidates.filter(isActiveTask);
   const recentTerminal = visibleCandidates.filter((task) => isRecentTerminalTask(task, now));
   const visible = active.length > 0 ? [...active, ...recentTerminal] : recentTerminal;
-  const focus =
-    active[0] ?? recentTerminal.find((task) => isFailureTask(task)) ?? recentTerminal[0];
+  const focus = active[0] ?? recentTerminal.find(isTaskStatusIssue) ?? recentTerminal[0];
   return {
     latest: active[0] ?? recentTerminal[0],
     focus,
@@ -181,6 +194,6 @@ export function buildTaskStatusSnapshot(
     recentTerminal,
     activeCount: active.length,
     totalCount: visible.length,
-    recentFailureCount: recentTerminal.filter(isFailureTask).length,
+    recentFailureCount: recentTerminal.filter(isTaskStatusIssue).length,
   };
 }

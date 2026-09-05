@@ -3,6 +3,7 @@ import {
   buildDiscordModalCustomId as buildDiscordModalCustomIdImpl,
   parseDiscordModalCustomIdForInteraction as parseDiscordModalCustomIdForInteractionImpl,
 } from "./component-custom-id.js";
+import { createDiscordSelectMenu } from "./components.builders.js";
 import { mapTextInputStyle } from "./components.parse.js";
 import type { DiscordModalEntry, DiscordModalFieldDefinition } from "./components.types.js";
 import {
@@ -35,37 +36,15 @@ function createModalFieldComponent(
     }
     return new DynamicTextInput();
   }
-  if (field.type === "select") {
-    const options = field.options ?? [];
-    class DynamicModalSelect extends StringSelectMenu {
-      customId = field.id;
-      override options = options;
-      override required = field.required;
-      override minValues = field.minValues;
-      override maxValues = field.maxValues;
-      override placeholder = field.placeholder;
-    }
-    return new DynamicModalSelect();
-  }
-  if (field.type === "role-select") {
-    class DynamicModalRoleSelect extends RoleSelectMenu {
-      customId = field.id;
-      override required = field.required;
-      override minValues = field.minValues;
-      override maxValues = field.maxValues;
-      override placeholder = field.placeholder;
-    }
-    return new DynamicModalRoleSelect();
-  }
-  if (field.type === "user-select") {
-    class DynamicModalUserSelect extends UserSelectMenu {
-      customId = field.id;
-      override required = field.required;
-      override minValues = field.minValues;
-      override maxValues = field.maxValues;
-      override placeholder = field.placeholder;
-    }
-    return new DynamicModalUserSelect();
+  if (field.type === "select" || field.type === "role-select" || field.type === "user-select") {
+    const type =
+      field.type === "select" ? "string" : field.type === "role-select" ? "role" : "user";
+    const select = createDiscordSelectMenu(type, field.id, field.options);
+    select.required = field.required;
+    select.minValues = field.minValues;
+    select.maxValues = field.maxValues;
+    select.placeholder = field.placeholder;
+    return select;
   }
   if (field.type === "checkbox") {
     const options = field.options ?? [];

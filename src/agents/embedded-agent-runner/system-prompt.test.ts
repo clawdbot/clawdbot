@@ -1,12 +1,17 @@
 // Embedded system prompt tests cover prompt assembly for provider guidance,
 // delegation mode, workspace-only safety, memory sections, and active processes.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
+import {
+  clearMemoryPluginState,
+  registerTestMemoryPromptBuilder,
+} from "../../plugins/memory-state.test-fixtures.js";
 import type { AgentSession } from "../sessions/index.js";
 import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
-vi.mock("../../tts/tts.js", () => ({
+vi.mock("../../tts/tts-settings.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
+  resolveModelOverridePolicy: vi.fn(),
+  setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
 describe("applySystemPromptToSession", () => {
@@ -31,6 +36,7 @@ describe("buildEmbeddedSystemPrompt", () => {
   it("forwards provider prompt contributions into the embedded prompt", () => {
     const prompt = buildEmbeddedSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      runtimeCwd: "/tmp/task-repo",
       reasoningTagHint: false,
       runtimeInfo: {
         host: "local",
@@ -43,12 +49,49 @@ describe("buildEmbeddedSystemPrompt", () => {
       tools: [],
       modelAliasLines: [],
       userTimezone: "UTC",
+      userDate: "2026-01-05",
       promptContribution: {
         stablePrefix: "## Embedded Stable\n\nStable provider guidance.",
       },
     });
 
     expect(prompt).toContain("## Embedded Stable\n\nStable provider guidance.");
+    expect(prompt).toContain("Working directory: /tmp/task-repo (tools and deliverables).");
+    expect(prompt).toContain("Agent workspace: /tmp/openclaw");
+  });
+
+  it("keeps post-compaction curated context scoped to the prepared project", () => {
+    const prompt = buildEmbeddedSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      runtimeInfo: {
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+        provider: "openai",
+      },
+      tools: [],
+      modelAliasLines: [],
+      userTimezone: "UTC",
+      userDate: "2026-01-05",
+      activeProjectKeys: ["github.com/acme/Alpha"],
+      contextFiles: [
+        {
+          path: "/tmp/openclaw/MEMORY.md",
+          content: [
+            "- Alpha compaction fact. <!-- project: github.com/acme/Alpha -->",
+            "- Beta compaction fact. <!-- project: github.com/acme/Beta -->",
+            "- Global compaction fact.",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    expect(prompt).toContain("Alpha compaction fact");
+    expect(prompt).toContain("Global compaction fact");
+    expect(prompt).not.toContain("Beta compaction fact");
   });
 
   it("uses config-backed sub-agent delegation mode", () => {
@@ -76,10 +119,10 @@ describe("buildEmbeddedSystemPrompt", () => {
       },
       tools: [{ name: "sessions_spawn" } as never],
       userTimezone: "UTC",
+      userDate: "2026-01-05",
     });
 
-    expect(prompt).toContain("## Sub-Agent Delegation");
-    expect(prompt).toContain("Mode: prefer");
+    expect(prompt).toContain("## Delegation");
   });
 
   it("uses deferred capability names without listing them as visible tools", () => {
@@ -108,11 +151,44 @@ describe("buildEmbeddedSystemPrompt", () => {
       tools: [{ name: "tool_search" } as never],
       capabilityToolNames: ["sessions_spawn"],
       userTimezone: "UTC",
+      userDate: "2026-01-05",
     });
 
-    expect(prompt).toContain("## Sub-Agent Delegation");
-    expect(prompt).toContain("Mode: prefer");
+    expect(prompt).toContain("## Delegation");
     expect(prompt).not.toContain("- sessions_spawn: spawn an isolated sub-agent session");
+  });
+
+  it("forwards run-scoped proactive orchestration independently of config preference", () => {
+    const prompt = buildEmbeddedSystemPrompt({
+      config: {
+        agents: {
+          defaults: {
+            subagents: {
+              delegationMode: "suggest",
+            },
+          },
+        },
+      },
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      proactiveSubagentOrchestration: true,
+      runtimeInfo: {
+        agentId: "main",
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "openai/gpt-5.6-sol",
+        provider: "openai",
+      },
+      tools: [{ name: "sessions_spawn" } as never],
+      userTimezone: "UTC",
+      userDate: "2026-01-05",
+    });
+
+    expect(prompt).toContain("## Proactive Sub-Agent Orchestration");
+    expect(prompt).not.toContain("Mode: prefer");
   });
 
   it("adds workspace-only scratch path guidance when fs workspaceOnly is enabled", () => {
@@ -139,11 +215,12 @@ describe("buildEmbeddedSystemPrompt", () => {
       tools: [],
       modelAliasLines: [],
       userTimezone: "UTC",
+      userDate: "2026-01-05",
     });
 
-    expect(prompt).toContain("tools.fs.workspaceOnly is enabled");
+    expect(prompt).toContain("tools.fs.workspaceOnly ON");
     expect(prompt).toContain("`.openclaw/tmp/`");
-    expect(prompt).toContain("Do not write files to `/tmp/...`");
+    expect(prompt).toContain("never exec-write `/tmp`");
   });
 
   it("omits workspace-only scratch path guidance when fs workspaceOnly is disabled", () => {
@@ -168,10 +245,11 @@ describe("buildEmbeddedSystemPrompt", () => {
       tools: [],
       modelAliasLines: [],
       userTimezone: "UTC",
+      userDate: "2026-01-05",
     });
 
-    expect(prompt).not.toContain("tools.fs.workspaceOnly is enabled");
-    expect(prompt).not.toContain("Do not write files to `/tmp/...`");
+    expect(prompt).not.toContain("tools.fs.workspaceOnly ON");
+    expect(prompt).not.toContain("never exec-write `/tmp`");
   });
 
   it("forwards the subagent prompt surface to embedded prompt rendering", () => {
@@ -191,6 +269,8 @@ describe("buildEmbeddedSystemPrompt", () => {
       nativeCommandGuidanceLines: ["Subagent-only command guidance."],
       modelAliasLines: [],
       userTimezone: "UTC",
+      userDate: "2026-01-05",
+      promptMode: "minimal",
     });
 
     expect(prompt).toContain("- sessions_spawn");
@@ -199,10 +279,13 @@ describe("buildEmbeddedSystemPrompt", () => {
     expect(prompt).not.toContain("Larger work: use `sessions_spawn`");
     expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).toContain("Subagent-only command guidance.");
+    expect(prompt).toContain("## Promised Work");
+    expect(prompt).toContain("Progress such as `running` is not completion.");
+    expect(prompt.match(/## Promised Work/g)).toHaveLength(1);
   });
 
   it("can omit base memory guidance for non-legacy context engines", () => {
-    registerMemoryPromptSection(() => ["## Memory Recall", "Use memory carefully.", ""]);
+    registerTestMemoryPromptBuilder(() => ["## Memory Recall", "Use memory carefully.", ""]);
 
     const prompt = buildEmbeddedSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -218,14 +301,15 @@ describe("buildEmbeddedSystemPrompt", () => {
       tools: [],
       modelAliasLines: [],
       userTimezone: "UTC",
+      userDate: "2026-01-05",
       includeMemorySection: false,
     });
 
     expect(prompt).not.toContain("## Memory Recall");
   });
 
-  it("includes active background process references in the embedded prompt", () => {
-    const prompt = buildEmbeddedSystemPrompt({
+  it("includes active background process references only when process is callable", () => {
+    const params = {
       workspaceDir: "/tmp/openclaw",
       reasoningTagHint: false,
       runtimeInfo: {
@@ -249,15 +333,22 @@ describe("buildEmbeddedSystemPrompt", () => {
           },
         ],
       },
-      tools: [],
+      tools: [{ name: "process" } as never],
       modelAliasLines: [],
       userTimezone: "UTC",
-    });
+      userDate: "2026-01-05",
+    } satisfies Parameters<typeof buildEmbeddedSystemPrompt>[0];
+    const prompt = buildEmbeddedSystemPrompt(params);
 
-    expect(prompt).toContain("Active background exec sessions in this scope:");
+    expect(prompt).toContain("Active exec sessions:");
     expect(prompt).toContain("sess-active running pid=1234 cwd=/tmp/work :: sleep 600");
-    expect(prompt).toContain("Use process log before interactive input");
+    expect(prompt).toContain("Before input: process log");
     expect(prompt).toContain("waitingForInput/stdinWritable");
     expect(prompt).toContain("process list");
+
+    const restrictedPrompt = buildEmbeddedSystemPrompt({ ...params, tools: [] });
+    expect(restrictedPrompt).not.toContain("Active exec sessions:");
+    expect(restrictedPrompt).not.toContain("process log");
+    expect(restrictedPrompt).not.toContain("process list");
   });
 });

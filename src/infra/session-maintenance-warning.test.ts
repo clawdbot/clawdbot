@@ -1,4 +1,3 @@
-// Tests session maintenance warning formatting and suppression.
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -29,11 +28,26 @@ vi.mock("./outbound/deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
   deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
 }));
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveSessionAgentId: mocks.resolveSessionAgentId,
+}));
+vi.mock("../utils/message-channel.js", () => ({
+  normalizeMessageChannel: mocks.normalizeMessageChannel,
+  isDeliverableMessageChannel: mocks.isDeliverableMessageChannel,
+}));
+vi.mock("../utils/delivery-context.shared.js", () => ({
+  deliveryContextFromSession: mocks.deliveryContextFromSession,
+}));
+vi.mock("./outbound/deliver-runtime.js", () => ({
+  deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+}));
+vi.mock("./system-events.js", () => ({
+  enqueueSystemEvent: mocks.enqueueSystemEvent,
+}));
 
 type SessionMaintenanceWarningModule = typeof import("./session-maintenance-warning.js");
 
 let deliverSessionMaintenanceWarning: SessionMaintenanceWarningModule["deliverSessionMaintenanceWarning"];
-let resetSessionMaintenanceWarningForTests: SessionMaintenanceWarningModule["testing"]["resetSessionMaintenanceWarningForTests"];
 
 function createParams(
   overrides: Partial<Parameters<typeof deliverSessionMaintenanceWarning>[0]> = {},
@@ -55,10 +69,10 @@ function createParams(
   };
 }
 
-function expectedMaintenanceWarning(reasonText: string): string {
+function expectedMaintenanceWarning(reasonText: string, outcome = "removed"): string {
   return (
-    `\u26A0\uFE0F Session maintenance warning: this active session would be evicted (${reasonText}). ` +
-    `Maintenance is set to warn-only, so nothing was reset. ` +
+    `\u26A0\uFE0F Session maintenance warning: this active session would be ${outcome} (${reasonText}). ` +
+    `Maintenance is set to warn-only, so nothing was changed. ` +
     `To enforce cleanup, set \`session.maintenance.mode: "enforce"\` or increase the limits.`
   );
 }
@@ -76,26 +90,9 @@ describe("deliverSessionMaintenanceWarning", () => {
   let prevNodeEnv: string | undefined;
 
   beforeAll(async () => {
-    vi.doMock("../agents/agent-scope.js", () => ({
-      resolveSessionAgentId: mocks.resolveSessionAgentId,
-    }));
-    vi.doMock("../utils/message-channel.js", () => ({
-      normalizeMessageChannel: mocks.normalizeMessageChannel,
-      isDeliverableMessageChannel: mocks.isDeliverableMessageChannel,
-    }));
-    vi.doMock("../utils/delivery-context.shared.js", () => ({
-      deliveryContextFromSession: mocks.deliveryContextFromSession,
-    }));
-    vi.doMock("./outbound/deliver-runtime.js", () => ({
-      deliverOutboundPayloads: mocks.deliverOutboundPayloads,
-    }));
-    vi.doMock("./system-events.js", () => ({
-      enqueueSystemEvent: mocks.enqueueSystemEvent,
-    }));
-    ({
-      deliverSessionMaintenanceWarning,
-      testing: { resetSessionMaintenanceWarningForTests },
-    } = await import("./session-maintenance-warning.js"));
+    // Start under this suite's mocks, then reuse the owner across disjoint session keys.
+    vi.resetModules();
+    ({ deliverSessionMaintenanceWarning } = await import("./session-maintenance-warning.js"));
   });
 
   beforeEach(() => {
@@ -103,9 +100,14 @@ describe("deliverSessionMaintenanceWarning", () => {
     prevNodeEnv = process.env.NODE_ENV;
     delete process.env.VITEST;
     process.env.NODE_ENV = "development";
-    resetSessionMaintenanceWarningForTests();
     mocks.resolveSessionAgentId.mockClear();
-    mocks.deliveryContextFromSession.mockClear();
+    mocks.deliveryContextFromSession.mockReset();
+    mocks.deliveryContextFromSession.mockReturnValue({
+      channel: "mobilechat",
+      to: "+15550001",
+      accountId: "acct-1",
+      threadId: "thread-1",
+    });
     mocks.normalizeMessageChannel.mockClear();
     mocks.isDeliverableMessageChannel.mockClear();
     mocks.deliverOutboundPayloads.mockClear();
@@ -164,6 +166,7 @@ describe("deliverSessionMaintenanceWarning", () => {
         maxEntries: 10,
         wouldPrune: false,
         wouldCap: true,
+        capOutcome: "archive",
       } as never,
     });
 
@@ -171,6 +174,26 @@ describe("deliverSessionMaintenanceWarning", () => {
 
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(firstSystemEventCall()).toEqual([
+      expectedMaintenanceWarning("not in the most recent 10 sessions", "archived"),
+      { sessionKey: params.sessionKey },
+    ]);
+  });
+
+  it("describes synthetic cap overflow as removal", async () => {
+    mocks.deliveryContextFromSession.mockReturnValueOnce(undefined as never);
+    const params = createParams({
+      warning: {
+        pruneAfterMs: 3_600_000,
+        maxEntries: 10,
+        wouldPrune: false,
+        wouldCap: true,
+        capOutcome: "remove",
+      } as never,
+    });
+
+    await deliverSessionMaintenanceWarning(params);
+
     expect(firstSystemEventCall()).toEqual([
       expectedMaintenanceWarning("not in the most recent 10 sessions"),
       { sessionKey: params.sessionKey },
@@ -198,5 +221,58 @@ describe("deliverSessionMaintenanceWarning", () => {
       expectedMaintenanceWarning("older than 1 second"),
       { sessionKey: params.sessionKey },
     ]);
+  });
+
+  it("keeps a recently used context while evicting the least-recently-used entry", async () => {
+    const maxEntries = 4096;
+    const createSessionParams = (sessionKey: string) =>
+      createParams({
+        sessionKey,
+        warning: {
+          activeSessionKey: sessionKey,
+          pruneAfterMs: 1_000,
+          maxEntries: 100,
+          wouldPrune: true,
+          wouldCap: false,
+        } as never,
+      });
+    mocks.deliveryContextFromSession.mockReturnValue(undefined as never);
+
+    for (let i = 0; i < maxEntries; i++) {
+      await deliverSessionMaintenanceWarning(createSessionParams(`session:${i}`));
+    }
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(4096);
+
+    // A duplicate read promotes session:0 from the LRU head without re-delivering.
+    await deliverSessionMaintenanceWarning(createSessionParams("session:0"));
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(4096);
+
+    // Overflow evicts session:1 instead of the recently used session:0.
+    await deliverSessionMaintenanceWarning(createSessionParams("session:extra"));
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(4097);
+    await deliverSessionMaintenanceWarning(createSessionParams("session:0"));
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(4097);
+    await deliverSessionMaintenanceWarning(createSessionParams("session:1"));
+    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(4098);
+  });
+
+  it("re-delivers when the warning context changes for the same session", async () => {
+    const sessionKey = `agent:${randomUUID()}:main`;
+    const params = createParams({ sessionKey });
+    await deliverSessionMaintenanceWarning(params);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+
+    const changedParams = createParams({
+      sessionKey,
+      warning: {
+        activeSessionKey: sessionKey,
+        pruneAfterMs: 86_400_000,
+        maxEntries: 500,
+        wouldPrune: true,
+        wouldCap: true,
+      } as never,
+    });
+    await deliverSessionMaintenanceWarning(changedParams);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(2);
   });
 });

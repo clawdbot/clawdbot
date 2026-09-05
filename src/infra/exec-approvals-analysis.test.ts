@@ -10,7 +10,11 @@ import {
   resolvePlannedSegmentArgv,
   windowsEscapeArg,
 } from "./exec-approvals-analysis.js";
-import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
+import {
+  makeExecutable,
+  makePathEnv,
+  makeExecApprovalsTempDir,
+} from "./exec-approvals-test-helpers.js";
 
 describe("exec argv analysis", () => {
   it("parses argv commands", () => {
@@ -32,7 +36,7 @@ describe("exec argv analysis", () => {
     if (process.platform === "win32") {
       return;
     }
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const busybox = path.join(dir, "busybox");
     fs.writeFileSync(busybox, "");
     fs.chmodSync(busybox, 0o755);
@@ -188,9 +192,15 @@ describe("Windows shell analysis", () => {
 
 describe("Windows enforced shell command rendering", () => {
   it("builds enforced command for simple Windows command", () => {
+    // Resolve from a fixture PATH: host python3 locations (e.g. Homebrew's
+    // python@3.x Cellar path) contain characters that trigger quoting and make
+    // the rendered command host-dependent.
+    const dir = makeExecApprovalsTempDir();
+    const python3 = makeExecutable(dir, "python3");
     const analysis = analyzeWindowsShellCommand({
       command: "python3 a.py",
       platform: "win32",
+      env: makePathEnv(dir),
     });
 
     expect(analysis.ok).toBe(true);
@@ -201,7 +211,7 @@ describe("Windows enforced shell command rendering", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(result.command).toMatch(/^& .+python3(?:\.\d+)? a\.py$/);
+    expect(result.command).toBe(`& ${python3} a.py`);
   });
 
   it("rejects Windows commands with unsafe tokens", () => {
@@ -248,34 +258,30 @@ describe("windowsEscapeArg", () => {
 
 describe("Windows inline allowlist analysis", () => {
   it("evaluates inline cmd payloads against the inner executable", () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const cmdPath = path.join(dir, "cmd.exe");
     const nodePath = path.join(dir, "node.exe");
     for (const file of [cmdPath, nodePath]) {
       fs.writeFileSync(file, "");
       fs.chmodSync(file, 0o755);
     }
-    try {
-      const env = makePathEnv(dir);
-      const analysis = analyzeArgvCommand({
-        argv: ["cmd.exe", "/c", "node.exe", "app.js"],
-        cwd: dir,
-        env,
-      });
+    const env = makePathEnv(dir);
+    const analysis = analyzeArgvCommand({
+      argv: ["cmd.exe", "/c", "node.exe", "app.js"],
+      cwd: dir,
+      env,
+    });
 
-      expect(analysis.ok).toBe(true);
-      const result = evaluateExecAllowlist({
-        analysis,
-        allowlist: [{ pattern: nodePath }],
-        safeBins: new Set(),
-        cwd: dir,
-        env,
-        platform: "win32",
-      });
-      expect(result.allowlistSatisfied).toBe(true);
-      expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual([nodePath]);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    expect(analysis.ok).toBe(true);
+    const result = evaluateExecAllowlist({
+      analysis,
+      allowlist: [{ pattern: nodePath }],
+      safeBins: new Set(),
+      cwd: dir,
+      env,
+      platform: "win32",
+    });
+    expect(result.allowlistSatisfied).toBe(true);
+    expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual([nodePath]);
   });
 });

@@ -4,9 +4,6 @@
  * timing, and logging used by auth profile runtime modules.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-export {
-  AUTH_PROFILE_FILENAME,
-} from "./path-constants.js";
 
 /** Current persisted auth profile store schema version. */
 export const AUTH_STORE_VERSION = 1;
@@ -52,4 +49,4 @@ export const OAUTH_REFRESH_CALL_TIMEOUT_MS = 120_000;
 export const EXTERNAL_CLI_SYNC_TTL_MS = 15 * 60 * 1000;
 
 /** Auth profile subsystem logger. */
-export const log = createSubsystemLogger("agents/auth-profiles");
+export const authProfilesLog = createSubsystemLogger("agents/auth-profiles");

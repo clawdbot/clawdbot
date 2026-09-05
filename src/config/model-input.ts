@@ -1,5 +1,5 @@
 // Normalizes model input config into provider and model references.
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   normalizeGooglePreviewModelId,
   normalizeTogetherModelId,
@@ -61,13 +61,12 @@ const GOOGLE_PROVIDER_IDS = new Set(["google", "google-gemini-cli", "google-vert
 /** Canonicalizes provider/model refs before they are persisted to config. */
 export function normalizeAgentModelRefForConfig(model: string): string {
   const trimmed = model.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash >= trimmed.length - 1) {
+  const parsed = parseModelCatalogRef(trimmed);
+  if (!parsed) {
     return trimmed;
   }
 
-  const provider = normalizeProviderId(trimmed.slice(0, slash));
-  const modelSuffix = trimmed.slice(slash + 1);
+  const { provider, modelId: modelSuffix } = parsed;
   const normalizedModel =
     GOOGLE_PROVIDER_IDS.has(provider) || modelSuffix.startsWith("google/")
       ? normalizeGooglePreviewModelId(modelSuffix)
@@ -75,6 +74,36 @@ export function normalizeAgentModelRefForConfig(model: string): string {
         ? normalizeTogetherModelId(modelSuffix)
         : modelSuffix;
   return modelKey(provider, normalizedModel);
+}
+
+/** Normalizes primary/fallback refs without replacing unchanged config values. */
+export function normalizeAgentModelSelectionForConfig(value: unknown): unknown {
+  if (typeof value === "string") {
+    return normalizeAgentModelRefForConfig(value);
+  }
+  if (!isPlainRecord(value)) {
+    return value;
+  }
+
+  let next = value;
+  const assign = (key: string, candidate: unknown) => {
+    if (candidate !== next[key]) {
+      next = { ...next, [key]: candidate };
+    }
+  };
+  if (typeof value.primary === "string") {
+    assign("primary", normalizeAgentModelRefForConfig(value.primary));
+  }
+  if (Array.isArray(value.fallbacks)) {
+    const originalFallbacks = value.fallbacks;
+    const fallbacks = originalFallbacks.map((fallback) =>
+      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
+    );
+    if (fallbacks.some((fallback, index) => fallback !== originalFallbacks[index])) {
+      assign("fallbacks", fallbacks);
+    }
+  }
+  return next;
 }
 
 function mergeAgentModelEntryForConfig(existing: unknown, incoming: unknown): unknown {

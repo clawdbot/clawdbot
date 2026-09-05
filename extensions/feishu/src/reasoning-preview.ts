@@ -1,7 +1,7 @@
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import type { ClawdbotConfig } from "../runtime-api.js";
 // Feishu plugin module implements reasoning preview behavior.
 import { resolveFeishuConfigReasoningDefault } from "./agent-config.js";
-import { loadSessionStore, resolveSessionStoreEntry } from "./bot-runtime-api.js";
-import type { ClawdbotConfig } from "./bot-runtime-api.js";
 
 export function resolveFeishuReasoningPreviewEnabled(params: {
   cfg: ClawdbotConfig;
@@ -16,9 +16,11 @@ export function resolveFeishuReasoningPreviewEnabled(params: {
   }
 
   try {
-    const store = loadSessionStore(params.storePath, { skipCache: true });
-    const level = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing
-      ?.reasoningLevel;
+    const level = getSessionEntry({
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+      readConsistency: "latest",
+    })?.reasoningLevel;
     if (level === "on" || level === "stream" || level === "off") {
       return level === "stream";
     }

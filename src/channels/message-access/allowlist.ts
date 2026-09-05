@@ -1,23 +1,28 @@
 /**
  * Channel ingress allowlist diagnostics.
  *
- * Merges allowlists, applies mutable identifier policy, and redacts access-graph facts.
+ * Merges allowlists, applies identifier authentication policy, and redacts access-graph facts.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  meetsIdentifierAuthentication,
+  minimumIdentifierAuthenticationFrom,
+  weakestIdentifierAuthentication,
+} from "./identifier-authentication.js";
 import type {
   ChannelIngressPolicyInput,
-  ChannelIngressState,
+  NormalizedIngressState,
   IngressReasonCode,
   RedactedIngressAllowlistFacts,
   RedactedIngressEntryDiagnostic,
-  ResolvedIngressAllowlist,
+  NormalizedIngressAllowlist,
 } from "./types.js";
 
 /**
  * Returns the first access-group related failure reason for an allowlist.
  */
 export function allowlistFailureReason(
-  allowlist: ResolvedIngressAllowlist,
+  allowlist: NormalizedIngressAllowlist,
 ): IngressReasonCode | null {
   if (allowlist.accessGroups.failed.length > 0) {
     return "access_group_failed";
@@ -35,7 +40,7 @@ export function allowlistFailureReason(
  * Projects an allowlist into redacted diagnostics safe for ingress access graphs.
  */
 export function redactedAllowlistDiagnostics(
-  allowlist: ResolvedIngressAllowlist,
+  allowlist: NormalizedIngressAllowlist,
   reasonCode: IngressReasonCode,
 ): RedactedIngressAllowlistFacts {
   return {
@@ -50,77 +55,133 @@ export function redactedAllowlistDiagnostics(
 }
 
 function mergeResolvedAllowlists(
-  allowlists: readonly ResolvedIngressAllowlist[],
-): ResolvedIngressAllowlist {
-  const matches = allowlists.map((allowlist) => allowlist.match);
+  allowlists: readonly NormalizedIngressAllowlist[],
+): NormalizedIngressAllowlist {
+  const scopedAllowlists: NormalizedIngressAllowlist[] = [];
+  for (const [index, allowlist] of allowlists.entries()) {
+    const prefix = `source-${index + 1}:`;
+    const normalizedEntries = [];
+    for (const entry of allowlist.normalizedEntries) {
+      normalizedEntries.push({ ...entry, opaqueEntryId: `${prefix}${entry.opaqueEntryId}` });
+    }
+    const matchedPairs = [];
+    for (const pair of allowlist.match.matchedPairs ?? []) {
+      matchedPairs.push({ ...pair, opaqueEntryId: `${prefix}${pair.opaqueEntryId}` });
+    }
+    const matchedEntryIds = allowlist.matchedEntryIds.map((id) => `${prefix}${id}`);
+    scopedAllowlists.push({
+      ...allowlist,
+      normalizedEntries,
+      matchedEntryIds,
+      match: {
+        ...allowlist.match,
+        matchedEntryIds,
+        ...(matchedPairs.length > 0 ? { matchedPairs } : {}),
+      },
+    });
+  }
+  const matches = scopedAllowlists.map((allowlist) => allowlist.match);
   const matchedEntryIds = uniqueStrings(
-    allowlists.flatMap((allowlist) => allowlist.matchedEntryIds),
+    scopedAllowlists.flatMap((allowlist) => allowlist.matchedEntryIds),
   );
+  const matchedPairs = scopedAllowlists.flatMap((allowlist) => allowlist.match.matchedPairs ?? []);
   return {
-    rawEntryCount: allowlists.reduce((sum, allowlist) => sum + allowlist.rawEntryCount, 0),
-    normalizedEntries: allowlists.flatMap((allowlist) => allowlist.normalizedEntries),
-    invalidEntries: allowlists.flatMap((allowlist) => allowlist.invalidEntries),
-    disabledEntries: allowlists.flatMap((allowlist) => allowlist.disabledEntries),
+    rawEntryCount: scopedAllowlists.reduce((sum, allowlist) => sum + allowlist.rawEntryCount, 0),
+    normalizedEntries: scopedAllowlists.flatMap((allowlist) => allowlist.normalizedEntries),
+    invalidEntries: scopedAllowlists.flatMap((allowlist) => allowlist.invalidEntries),
+    disabledEntries: scopedAllowlists.flatMap((allowlist) => allowlist.disabledEntries),
     matchedEntryIds,
-    hasConfiguredEntries: allowlists.some((allowlist) => allowlist.hasConfiguredEntries),
-    hasMatchableEntries: allowlists.some((allowlist) => allowlist.hasMatchableEntries),
-    hasWildcard: allowlists.some((allowlist) => allowlist.hasWildcard),
+    hasConfiguredEntries: scopedAllowlists.some((allowlist) => allowlist.hasConfiguredEntries),
+    hasMatchableEntries: scopedAllowlists.some((allowlist) => allowlist.hasMatchableEntries),
+    hasWildcard: scopedAllowlists.some((allowlist) => allowlist.hasWildcard),
     accessGroups: {
       referenced: uniqueStrings(
-        allowlists.flatMap((allowlist) => allowlist.accessGroups.referenced),
+        scopedAllowlists.flatMap((allowlist) => allowlist.accessGroups.referenced),
       ),
-      matched: uniqueStrings(allowlists.flatMap((allowlist) => allowlist.accessGroups.matched)),
-      missing: uniqueStrings(allowlists.flatMap((allowlist) => allowlist.accessGroups.missing)),
+      matched: uniqueStrings(
+        scopedAllowlists.flatMap((allowlist) => allowlist.accessGroups.matched),
+      ),
+      missing: uniqueStrings(
+        scopedAllowlists.flatMap((allowlist) => allowlist.accessGroups.missing),
+      ),
       unsupported: uniqueStrings(
-        allowlists.flatMap((allowlist) => allowlist.accessGroups.unsupported),
+        scopedAllowlists.flatMap((allowlist) => allowlist.accessGroups.unsupported),
       ),
-      failed: uniqueStrings(allowlists.flatMap((allowlist) => allowlist.accessGroups.failed)),
+      failed: uniqueStrings(scopedAllowlists.flatMap((allowlist) => allowlist.accessGroups.failed)),
     },
     match: {
       matched: matches.some((match) => match.matched) || matchedEntryIds.length > 0,
       matchedEntryIds,
+      ...(matchedPairs.length > 0 ? { matchedPairs } : {}),
     },
   };
 }
 
 /**
- * Applies mutable identifier matching policy to an already-resolved allowlist.
+ * Applies identifier authentication to exact matched entry/subject pairs.
  */
-export function applyMutableIdentifierPolicy(
-  allowlist: ResolvedIngressAllowlist,
+export function applyIdentifierAuthenticationPolicy(
+  allowlist: NormalizedIngressAllowlist,
   policy: ChannelIngressPolicyInput,
-): ResolvedIngressAllowlist {
-  if (policy.mutableIdentifierMatching === "enabled") {
-    return allowlist;
+): NormalizedIngressAllowlist {
+  const minimum = minimumIdentifierAuthenticationFrom(policy);
+  const pairsByEntry = new Map<string, NonNullable<typeof allowlist.match.matchedPairs>>();
+  for (const pair of allowlist.match.matchedPairs ?? []) {
+    const pairs = pairsByEntry.get(pair.opaqueEntryId) ?? [];
+    pairs.push(pair);
+    pairsByEntry.set(pair.opaqueEntryId, pairs);
   }
-  const dangerousEntryIds = new Set(
-    allowlist.normalizedEntries
-      .filter((entry) => entry.dangerous)
-      .map((entry) => entry.opaqueEntryId),
+  const rejectedEntryIds = new Set<string>();
+  for (const entry of allowlist.normalizedEntries) {
+    const pairs = pairsByEntry.get(entry.opaqueEntryId);
+    const pairStrengths = pairs?.map((pair) =>
+      weakestIdentifierAuthentication(entry.authentication, pair.subjectAuthentication),
+    );
+    const accepted =
+      pairStrengths && pairStrengths.length > 0
+        ? pairStrengths.some((strength) => meetsIdentifierAuthentication(strength, minimum))
+        : meetsIdentifierAuthentication(entry.authentication, minimum);
+    if (!accepted) {
+      rejectedEntryIds.add(entry.opaqueEntryId);
+    }
+  }
+  const matchedEntryIds = allowlist.matchedEntryIds.filter((id) => !rejectedEntryIds.has(id));
+  const matchedPairs = allowlist.match.matchedPairs?.filter(
+    (pair) => !rejectedEntryIds.has(pair.opaqueEntryId),
   );
-  if (dangerousEntryIds.size === 0) {
-    return allowlist;
-  }
-  // Username-like mutable identifiers can be present for diagnostics, but when the policy
-  // disables them they must not authorize a sender.
-  const matchedEntryIds = allowlist.matchedEntryIds.filter((id) => !dangerousEntryIds.has(id));
   const disabledEntries: RedactedIngressEntryDiagnostic[] = [
     ...allowlist.disabledEntries,
     ...allowlist.normalizedEntries
-      .filter((entry) => entry.dangerous)
+      .filter((entry) => rejectedEntryIds.has(entry.opaqueEntryId))
       .map((entry) => ({
         opaqueEntryId: entry.opaqueEntryId,
-        reasonCode: "mutable_identifier_disabled" as const,
+        reasonCode:
+          entry.authentication === "mutable"
+            ? ("mutable_identifier_disabled" as const)
+            : ("identifier_authentication_too_weak" as const),
       })),
   ];
+  const affectedMatch = matchedEntryIds.length !== allowlist.matchedEntryIds.length;
   return {
     ...allowlist,
     disabledEntries,
     matchedEntryIds,
-    hasMatchableEntries: allowlist.normalizedEntries.some((entry) => !entry.dangerous),
+    hasMatchableEntries: allowlist.normalizedEntries.some(
+      (entry) => !rejectedEntryIds.has(entry.opaqueEntryId),
+    ),
     match: {
       matched: matchedEntryIds.length > 0,
       matchedEntryIds,
+      ...(matchedPairs ? { matchedPairs } : {}),
+    },
+    authentication: {
+      evaluated:
+        policy.minIdentifierAuthentication !== undefined ||
+        policy.mutableIdentifierMatching !== undefined ||
+        Boolean(allowlist.match.matchedPairs?.length),
+      threshold: minimum,
+      affectedMatch,
+      rejectedEntryIds: [...rejectedEntryIds],
     },
   };
 }
@@ -129,9 +190,9 @@ export function applyMutableIdentifierPolicy(
  * Resolves the sender allowlist used for group/channel ingress after route overrides.
  */
 export function effectiveGroupSenderAllowlist(params: {
-  state: ChannelIngressState;
+  state: NormalizedIngressState;
   policy: ChannelIngressPolicyInput;
-}): ResolvedIngressAllowlist {
+}): NormalizedIngressAllowlist {
   let effective =
     params.policy.groupAllowFromFallbackToAllowFrom &&
     !params.state.allowlists.group.hasConfiguredEntries
@@ -148,5 +209,5 @@ export function effectiveGroupSenderAllowlist(params: {
     // Route sender policies other than inherit replace the channel-level sender allowlist.
     effective = route.senderAllowlist;
   }
-  return applyMutableIdentifierPolicy(effective, params.policy);
+  return applyIdentifierAuthenticationPolicy(effective, params.policy);
 }

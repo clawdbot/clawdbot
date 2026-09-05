@@ -8,7 +8,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "../../infra/net/undici-runtime.js";
 import * as activationCheck from "../../plugin-sdk/facade-activation-check.runtime.js";
 import * as facadeRuntime from "../../plugin-sdk/facade-runtime.js";
 
@@ -20,6 +19,7 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 }));
 
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const originalGlobalFetch = globalThis.fetch;
 const tempDirs: string[] = [];
@@ -129,7 +129,6 @@ describe("shared runtime seam contracts", () => {
         artifactBasename: "runtime-api.js",
         location,
         sourceExtensionsRoot: bundledDir,
-        resolutionKey: `test:${pluginId}`,
       }).allowed,
     ).toBe(true);
     expect(

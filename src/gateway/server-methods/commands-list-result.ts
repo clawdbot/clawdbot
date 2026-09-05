@@ -1,6 +1,7 @@
 // Command list serialization gathers chat, skill, and plugin commands into the
 // gateway protocol result while clamping names, descriptions, aliases, and args.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   CommandEntry,
   CommandsListResult,
@@ -16,7 +17,7 @@ import {
   COMMAND_DESCRIPTION_MAX_LENGTH,
   COMMAND_LIST_MAX_ITEMS,
   COMMAND_NAME_MAX_LENGTH,
-} from "../../../packages/gateway-protocol/src/schema.js";
+} from "../../../packages/gateway-protocol/src/schema/commands.js";
 import { listChatCommandsForConfig } from "../../auto-reply/commands-registry.js";
 import type {
   ChatCommandDefinition,
@@ -24,6 +25,7 @@ import type {
   CommandArgDefinition,
 } from "../../auto-reply/commands-registry.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getPluginCommandEntrySpecs,
@@ -36,7 +38,7 @@ type SerializedArg = NonNullable<CommandEntry["args"]>[number];
 type CommandNameSurface = "text" | "native";
 
 function clampString(value: string, maxLength: number): string {
-  return value.length > maxLength ? value.slice(0, maxLength) : value;
+  return value.length > maxLength ? truncateUtf16Safe(value, maxLength) : value;
 }
 
 function trimClampNonEmpty(value: string, maxLength: number): string | null {
@@ -61,6 +63,18 @@ function resolveNativeName(cmd: ChatCommandDefinition, provider?: string): strin
       commandKey: cmd.key,
       defaultName: cmd.nativeName,
     }) ?? baseName
+  );
+}
+
+function supportsNativeProvider(cmd: ChatCommandDefinition, provider?: string): boolean {
+  if (!cmd.nativeProviders?.length) {
+    return true;
+  }
+  if (!provider) {
+    return true;
+  }
+  return cmd.nativeProviders.some(
+    (candidate) => normalizeOptionalLowercaseString(candidate) === provider,
   );
 }
 
@@ -144,7 +158,8 @@ function mapCommand(
     ...(nativeName ? { nativeName: clampString(nativeName, COMMAND_NAME_MAX_LENGTH) } : {}),
     ...(cmd.scope !== "native" ? { textAliases: resolveTextAliases(cmd) } : {}),
     description: clampDescription(cmd.description),
-    ...(cmd.category ? { category: cmd.category } : {}),
+    // The v2026.8.1 SDK category remains accepted, but clients use the current Tools group.
+    ...(cmd.category ? { category: cmd.category === "docks" ? "tools" : cmd.category } : {}),
     source,
     scope: cmd.scope,
     acceptsArgs: Boolean(cmd.acceptsArgs),
@@ -182,6 +197,7 @@ function buildPluginCommandEntries(params: {
       source: "plugin",
       scope: "both",
       acceptsArgs: spec.acceptsArgs,
+      ...(spec.clientPresentation ? { clientPresentation: spec.clientPresentation } : {}),
     });
   }
 
@@ -193,6 +209,8 @@ function buildPluginCommandEntries(params: {
 
 /** Builds the public commands.list payload for an agent/provider/scope view. */
 export function buildCommandsListResult(params: {
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
   cfg: OpenClawConfig;
   agentId: string;
   provider?: string;
@@ -204,9 +222,14 @@ export function buildCommandsListResult(params: {
   const nameSurface: CommandNameSurface = scopeFilter === "text" ? "text" : "native";
   const provider = normalizeOptionalLowercaseString(params.provider);
 
-  const skillCommands = listSkillCommandsForAgents({ cfg: params.cfg, agentIds: [params.agentId] });
+  const skillCommands = listSkillCommandsForAgents({
+    cfg: params.cfg,
+    agentIds: [params.agentId],
+    sessionEntry: params.sessionEntry,
+    sessionKey: params.sessionKey,
+  });
   const chatCommands = listChatCommandsForConfig(params.cfg, { skillCommands });
-  const skillKeys = new Set(skillCommands.map((sc) => `skill:${sc.skillName}`));
+  const skillsByKey = new Map(skillCommands.map((skill) => [`skill:${skill.skillName}`, skill]));
 
   const commands: CommandEntry[] = [];
 
@@ -214,15 +237,26 @@ export function buildCommandsListResult(params: {
     if (scopeFilter !== "both" && cmd.scope !== "both" && cmd.scope !== scopeFilter) {
       continue;
     }
-    commands.push(
-      mapCommand(
-        cmd,
-        skillKeys.has(cmd.key) ? "skill" : "native",
-        includeArgs,
-        nameSurface,
-        provider,
-      ),
-    );
+    if (
+      nameSurface === "native" &&
+      cmd.scope !== "text" &&
+      !supportsNativeProvider(cmd, provider)
+    ) {
+      continue;
+    }
+    const skill = skillsByKey.get(cmd.key);
+    commands.push({
+      ...mapCommand(cmd, skill ? "skill" : "native", includeArgs, nameSurface, provider),
+      ...(skill
+        ? {
+            skillDisplayName: clampString(
+              skill.displayName ?? skill.skillName,
+              COMMAND_NAME_MAX_LENGTH,
+            ),
+            skillModelVisible: skill.modelVisible !== false,
+          }
+        : {}),
+    });
   }
 
   commands.push(...buildPluginCommandEntries({ provider, nameSurface, cfg: params.cfg }));

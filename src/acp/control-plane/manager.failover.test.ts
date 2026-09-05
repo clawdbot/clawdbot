@@ -1,5 +1,5 @@
 /** Tests ACP manager backend failover across initialization and turn execution. */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import {
@@ -103,6 +103,7 @@ describe("AcpSessionManager backend failover", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: harness.cfg,
       sessionKey: harness.sessionKey,
       text: "use primary",
@@ -127,6 +128,7 @@ describe("AcpSessionManager backend failover", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: harness.cfg,
       sessionKey: harness.sessionKey,
       text: "use fallback",
@@ -138,6 +140,7 @@ describe("AcpSessionManager backend failover", () => {
 
     harness.fallbackRuntime.close.mockClear();
     await manager.runTurn({
+      provenance: "system",
       cfg: harness.cfg,
       sessionKey: harness.sessionKey,
       text: "return to primary",
@@ -166,6 +169,7 @@ describe("AcpSessionManager backend failover", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg: harness.cfg,
         sessionKey: harness.sessionKey,
         text: "fallback",
@@ -193,6 +197,7 @@ describe("AcpSessionManager backend failover", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg: harness.cfg,
         sessionKey: harness.sessionKey,
         text: "fallback",
@@ -218,6 +223,7 @@ describe("AcpSessionManager backend failover", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg: harness.cfg,
         sessionKey: harness.sessionKey,
         text: "fallback",
@@ -228,6 +234,81 @@ describe("AcpSessionManager backend failover", () => {
 
     expect(harness.primaryRuntime.runTurn).toHaveBeenCalledTimes(1);
     expect(harness.fallbackRuntime.runTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fail over after prompt submission even when no output was emitted", async () => {
+    const harness = setupFailoverBackends();
+    const startTurn = vi.fn<NonNullable<typeof harness.primaryRuntime.runtime.startTurn>>(
+      (input) => ({
+        requestId: input.requestId,
+        promptStarted: Promise.resolve(),
+        events: (async function* () {})(),
+        result: Promise.resolve({
+          status: "failed" as const,
+          error: { code: "ACP_TURN_FAILED", message: "backend unavailable" },
+        }),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      }),
+    );
+    harness.primaryRuntime.runtime.startTurn = startTurn;
+
+    await expect(
+      new AcpSessionManager().runTurn({
+        provenance: "system",
+        cfg: harness.cfg,
+        sessionKey: harness.sessionKey,
+        text: "do not replay submitted prompt",
+        mode: "prompt",
+        requestId: "r-submitted-no-failover",
+      }),
+    ).rejects.toMatchObject({ code: "ACP_TURN_FAILED", message: "backend unavailable" });
+
+    expect(startTurn).toHaveBeenCalledOnce();
+    expect(harness.fallbackRuntime.runTurn).not.toHaveBeenCalled();
+  });
+
+  it("fails over only after rejected prompt readiness reaches canonical terminal cleanup", async () => {
+    const harness = setupFailoverBackends();
+    const transitions: string[] = [];
+    const readinessFailure = new Error("backend unavailable");
+    const promptStarted = Promise.reject(readinessFailure);
+    promptStarted.catch(() => {});
+    harness.primaryRuntime.runtime.startTurn = vi.fn((input) => ({
+      requestId: input.requestId,
+      promptStarted,
+      events: (async function* () {})(),
+      result: Promise.resolve().then(() => {
+        transitions.push("primary-cleaned-up");
+        return {
+          status: "failed" as const,
+          error: { code: "ACP_TURN_FAILED", message: "backend unavailable" },
+        };
+      }),
+      cancel: vi.fn(async () => {}),
+      closeStream: vi.fn(async () => {}),
+    }));
+    harness.fallbackRuntime.runTurn.mockImplementation(async function* () {
+      transitions.push("fallback-started");
+      yield { type: "done" as const };
+    });
+    const lifecycleEvents: string[] = [];
+
+    await new AcpSessionManager().runTurn({
+      provenance: "system",
+      cfg: harness.cfg,
+      sessionKey: harness.sessionKey,
+      text: "fail over an unsubmitted prompt",
+      mode: "prompt",
+      requestId: "r-unsubmitted-failover",
+      onLifecycle: (event) => {
+        lifecycleEvents.push(event.type);
+      },
+    });
+
+    expect(transitions).toEqual(["primary-cleaned-up", "fallback-started"]);
+    expect(lifecycleEvents).toEqual(["prompt_submitted"]);
+    expect(harness.fallbackRuntime.runTurn).toHaveBeenCalledOnce();
   });
 
   it("does not fail over after a backend has emitted output", async () => {
@@ -241,6 +322,7 @@ describe("AcpSessionManager backend failover", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg: harness.cfg,
         sessionKey: harness.sessionKey,
         text: "do not duplicate",

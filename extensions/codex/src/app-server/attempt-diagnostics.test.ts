@@ -24,8 +24,8 @@ describe("Codex app-server attempt diagnostics", () => {
         },
       },
       codeModeOnly: false,
+      loopDetectionPreToolUseRelay: true,
       requestTimeoutMs: 60_000,
-      turnCompletionIdleTimeoutMs: 60_000,
       approvalPolicy: "never" as const,
       approvalsReviewer: "user" as const,
       sandbox: "danger-full-access" as const,
@@ -36,6 +36,7 @@ describe("Codex app-server attempt diagnostics", () => {
     const resolvedPluginPolicy = resolveCodexPluginsPolicy({
       codexPlugins: {
         enabled: true,
+        allow_all_plugins: true,
         plugins: {
           "google-calendar": {
             marketplaceName: "openai-curated",
@@ -69,6 +70,7 @@ describe("Codex app-server attempt diagnostics", () => {
         enabled: true,
         policyConfigured: true,
         policyEnabled: true,
+        allowAllPlugins: true,
         pluginConfigKeys: ["google-calendar"],
         enabledPluginConfigKeys: ["google-calendar"],
         appCacheKeyFingerprint: expect.stringMatching(/^sha256:/),

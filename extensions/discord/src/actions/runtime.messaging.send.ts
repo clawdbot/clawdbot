@@ -1,19 +1,23 @@
-// Discord plugin module implements runtime.messaging.send behavior.
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   assertMediaNotDataUrl,
   jsonResult,
-  readBooleanParam,
   readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
-  resolvePollMaxSelections,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/channel-actions";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isDiscordThreadChannelType } from "../channel-type.js";
+import { coerceDiscordComponentParam } from "../components.js";
+import {
+  createReusableDiscordReplyReference,
+  resolveDiscordReplyReference,
+} from "../reply-reference.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
-import { isThreadChannelType } from "../send.permissions.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "../send.shared.js";
 import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
+import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
 
 function hasDiscordComponentObjectKeys(value: unknown): value is Record<string, unknown> {
   return Boolean(
@@ -22,6 +26,19 @@ function hasDiscordComponentObjectKeys(value: unknown): value is Record<string, 
     !Array.isArray(value) &&
     Object.keys(value as Record<string, unknown>).length > 0,
   );
+}
+
+function resolveActionReplyReference(ctx: DiscordMessagingActionContext, replyToId?: string) {
+  const reply = ctx.options?.reply;
+  // Host-resolved facts own physical-send scope. Raw-only plugin callers keep
+  // their longstanding reusable reply semantics when no host fact exists.
+  return reply
+    ? resolveDiscordReplyReference({
+        replyToId: reply.replyToId,
+        replyToIdSource: reply.source,
+        replyToMode: reply.source === "implicit" ? reply.mode : undefined,
+      })
+    : createReusableDiscordReplyReference(replyToId);
 }
 
 function readDiscordThreadArchiveTimestamp(thread: unknown): string | undefined {
@@ -127,7 +144,7 @@ async function appendDiscordThreadRenameResult(
       channelId,
       ctx.withOpts(),
     );
-    if (!isThreadChannelType(channel.type)) {
+    if (!isDiscordThreadChannelType(channel.type)) {
       return {
         ...params.payload,
         warning: "Discord threadName was ignored because the send target is not a thread.",
@@ -163,40 +180,17 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         throw new Error("Discord stickers are disabled.");
       }
       const to = readStringParam(ctx.params, "to", { required: true });
-      const content = readStringParam(ctx.params, "content");
+      const content = readStringParam(ctx.params, "content", { trim: false });
       const stickerIds = readStringArrayParam(ctx.params, "stickerIds", {
         required: true,
         label: "stickerIds",
       });
-      await discordMessagingActionRuntime.sendStickerDiscord(
+      const result = await discordMessagingActionRuntime.sendStickerDiscord(
         to,
         stickerIds,
-        ctx.withOpts({ content }),
+        ctx.withOpts({ content, ...(ctx.params.silent === true ? { silent: true } : {}) }),
       );
-      return jsonResult({ ok: true });
-    }
-    case "poll": {
-      if (!ctx.isActionEnabled("polls")) {
-        throw new Error("Discord polls are disabled.");
-      }
-      const to = readStringParam(ctx.params, "to", { required: true });
-      const content = readStringParam(ctx.params, "content");
-      const question = readStringParam(ctx.params, "question", {
-        required: true,
-      });
-      const answers = readStringArrayParam(ctx.params, "answers", {
-        required: true,
-        label: "answers",
-      });
-      const allowMultiselect = readBooleanParam(ctx.params, "allowMultiselect");
-      const durationHours = readPositiveIntegerParam(ctx.params, "durationHours");
-      const maxSelections = resolvePollMaxSelections(answers.length, allowMultiselect);
-      await discordMessagingActionRuntime.sendPollDiscord(
-        to,
-        { question, options: answers, maxSelections, durationHours },
-        ctx.withOpts({ content }),
-      );
-      return jsonResult({ ok: true });
+      return jsonResult({ ok: true, result });
     }
     case "sendMessage": {
       if (!ctx.isActionEnabled("messages")) {
@@ -207,7 +201,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const silent = ctx.params.silent === true;
       const suppressEmbeds =
         ctx.params.suppressEmbeds === undefined ? undefined : ctx.params.suppressEmbeds === true;
-      const rawComponents = ctx.params.components;
+      const rawComponents = coerceDiscordComponentParam(ctx.params.components);
       const componentSpec = hasDiscordComponentObjectKeys(rawComponents)
         ? discordMessagingActionRuntime.readDiscordComponentSpec(rawComponents)
         : null;
@@ -219,17 +213,18 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         readStringParam(ctx.params, "mediaUrl", { trim: false }) ??
         readStringParam(ctx.params, "path", { trim: false }) ??
         readStringParam(ctx.params, "filePath", { trim: false });
-      const content = readStringParam(ctx.params, "content", {
-        required: !asVoice && !componentSpec && !components && !mediaUrl,
-        allowEmpty: true,
-      });
-      const filename = readStringParam(ctx.params, "filename");
-      const replyTo = readStringParam(ctx.params, "replyTo");
-      const threadName = readStringParam(ctx.params, "threadName");
       const rawEmbeds = ctx.params.embeds;
       const embeds: DiscordSendEmbeds | undefined = Array.isArray(rawEmbeds)
         ? (rawEmbeds as DiscordSendEmbeds)
         : undefined;
+      const content = readStringParam(ctx.params, "content", {
+        required: !asVoice && !componentSpec && !components && !embeds?.length && !mediaUrl,
+        allowEmpty: true,
+        trim: false,
+      });
+      const filename = readStringParam(ctx.params, "filename");
+      const replyTo = readStringParam(ctx.params, "replyTo");
+      const threadName = readStringParam(ctx.params, "threadName");
       const sessionKey = readStringParam(ctx.params, "__sessionKey");
       const agentId = readStringParam(ctx.params, "__agentId");
 
@@ -250,7 +245,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
           {
             ...ctx.withOpts(),
             silent,
-            replyTo: replyTo ?? undefined,
+            reply: resolveActionReplyReference(ctx, replyTo),
             sessionKey: sessionKey ?? undefined,
             agentId: agentId ?? undefined,
             mediaUrl: mediaUrl ?? undefined,
@@ -264,7 +259,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         return jsonResult(
           await appendDiscordThreadRenameResult(ctx, {
             payload: { ok: true, result, components: true },
-            target: to,
+            target: result.receipt?.threadId ?? to,
             threadName,
           }),
         );
@@ -284,8 +279,11 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         assertMediaNotDataUrl(mediaUrl);
         const result = await discordMessagingActionRuntime.sendVoiceMessageDiscord(to, mediaUrl, {
           ...ctx.withOpts(),
-          replyTo,
+          reply: resolveActionReplyReference(ctx, replyTo),
           silent,
+          mediaAccess: ctx.options?.mediaAccess,
+          mediaLocalRoots: ctx.options?.mediaLocalRoots,
+          mediaReadFile: ctx.options?.mediaReadFile,
         });
         return jsonResult(
           await appendDiscordThreadRenameResult(ctx, {
@@ -303,7 +301,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         filename: filename ?? undefined,
         mediaLocalRoots: ctx.options?.mediaLocalRoots,
         mediaReadFile: ctx.options?.mediaReadFile,
-        replyTo,
+        reply: resolveActionReplyReference(ctx, replyTo),
         components,
         embeds,
         silent,
@@ -312,7 +310,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       return jsonResult(
         await appendDiscordThreadRenameResult(ctx, {
           payload: { ok: true, result },
-          target: to,
+          target: result.receipt?.threadId ?? to,
           threadName,
         }),
       );
@@ -324,8 +322,11 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const channelId = ctx.resolveChannelId();
       const name = readStringParam(ctx.params, "name", { required: true });
       const messageId = readStringParam(ctx.params, "messageId");
-      const content = readStringParam(ctx.params, "content");
-      const autoArchiveMinutes = readPositiveIntegerParam(ctx.params, "autoArchiveMinutes");
+      const content = readStringParam(ctx.params, "content", { trim: false });
+      const autoArchiveMinutes = readDiscordAutoArchiveDurationParam(
+        ctx.params,
+        "autoArchiveMinutes",
+      );
       const appliedTags = readStringArrayParam(ctx.params, "appliedTags");
       const payload = {
         name,
@@ -343,12 +344,14 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         return jsonResult({ ok: true, thread });
       } catch (error) {
         if (error instanceof DiscordThreadInitialMessageError) {
+          const initialMessageDelivery = error.initialMessageDelivery;
           return jsonResult({
             ok: true,
             partial: true,
             thread: error.thread,
-            warning: "Discord thread was created, but sending the initial message failed.",
+            warning: `${error.initialMessageWarning}.`,
             initialMessageError: error.initialMessageError,
+            ...(initialMessageDelivery ? { initialMessageDelivery } : {}),
           });
         }
         throw error;
@@ -365,6 +368,15 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const includeArchived = readBooleanParam(ctx.params, "includeArchived");
       const before = readStringParam(ctx.params, "before");
       const limit = readPositiveIntegerParam(ctx.params, "limit");
+      if (channelId && includeArchived === true) {
+        await ctx.assertReadTargetAllowed({ guildId, channelId });
+      } else {
+        await ctx.assertGuildReadTargetAllowed({
+          guildId,
+          channelTargetRequiredMessage:
+            "Discord active thread lists require a wildcard channel allowlist so each read target can be authorized.",
+        });
+      }
       const threads = await discordMessagingActionRuntime.listThreadsDiscord(
         {
           guildId,
@@ -393,6 +405,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const channelId = ctx.resolveChannelId();
       const content = readStringParam(ctx.params, "content", {
         required: true,
+        trim: false,
       });
       const mediaUrl = readStringParam(ctx.params, "mediaUrl");
       const replyTo = readStringParam(ctx.params, "replyTo");
@@ -402,9 +415,11 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         {
           ...ctx.withOpts(),
           mediaUrl,
+          mediaAccess: ctx.options?.mediaAccess,
           mediaLocalRoots: ctx.options?.mediaLocalRoots,
           mediaReadFile: ctx.options?.mediaReadFile,
-          replyTo,
+          reply: resolveActionReplyReference(ctx, replyTo),
+          ...(ctx.params.silent === true ? { silent: true } : {}),
         },
       );
       return jsonResult({ ok: true, result });

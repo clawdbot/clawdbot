@@ -3,7 +3,6 @@ package ai.openclaw.app.node
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.gateway.GatewaySession
-import android.Manifest
 import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.content.Context
@@ -19,10 +18,13 @@ import android.os.Environment
 import android.os.PowerManager
 import android.os.StatFs
 import android.os.SystemClock
-import androidx.core.content.ContextCompat
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.put
 import java.util.Locale
 
@@ -33,6 +35,7 @@ private const val DEVICE_APPS_SYSTEM_FLAGS =
 
 internal fun isSystemDeviceApp(appInfo: ApplicationInfo): Boolean = (appInfo.flags and DEVICE_APPS_SYSTEM_FLAGS) != 0
 
+@Serializable
 internal data class DeviceAppEntry(
   val label: String,
   val packageName: String,
@@ -111,63 +114,23 @@ private data class DeviceAppsRequest(
 /**
  * Gateway device command adapter for Android status, info, permission, and health snapshots.
  */
-class DeviceHandler private constructor(
+class DeviceHandler internal constructor(
   private val appContext: Context,
   private val smsEnabled: Boolean = SensitiveFeatureConfig.smsEnabled,
   private val callLogEnabled: Boolean = SensitiveFeatureConfig.callLogEnabled,
   private val photosEnabled: Boolean = SensitiveFeatureConfig.photosEnabled,
+  backgroundLocationEnabled: Boolean = SensitiveFeatureConfig.backgroundLocationEnabled,
   private val appSource: DeviceAppSource = AndroidDeviceAppSource(appContext),
+  private val permissionSnapshot: () -> AndroidPermissionSnapshot = {
+    readAndroidPermissionSnapshot(
+      context = appContext,
+      smsEnabled = smsEnabled,
+      callLogEnabled = callLogEnabled,
+      photosEnabled = photosEnabled,
+      backgroundLocationEnabled = backgroundLocationEnabled,
+    )
+  },
 ) {
-  constructor(
-    appContext: Context,
-    smsEnabled: Boolean = SensitiveFeatureConfig.smsEnabled,
-    callLogEnabled: Boolean = SensitiveFeatureConfig.callLogEnabled,
-    photosEnabled: Boolean = SensitiveFeatureConfig.photosEnabled,
-  ) : this(
-    appContext = appContext,
-    smsEnabled = smsEnabled,
-    callLogEnabled = callLogEnabled,
-    photosEnabled = photosEnabled,
-    appSource = AndroidDeviceAppSource(appContext),
-  )
-
-  companion object {
-    internal fun forTesting(
-      appContext: Context,
-      appSource: DeviceAppSource,
-      smsEnabled: Boolean = SensitiveFeatureConfig.smsEnabled,
-      callLogEnabled: Boolean = SensitiveFeatureConfig.callLogEnabled,
-      photosEnabled: Boolean = SensitiveFeatureConfig.photosEnabled,
-    ): DeviceHandler =
-      DeviceHandler(
-        appContext = appContext,
-        smsEnabled = smsEnabled,
-        callLogEnabled = callLogEnabled,
-        photosEnabled = photosEnabled,
-        appSource = appSource,
-      )
-
-    /**
-     * SMS is available only when the feature flag, telephony hardware, and at least one SMS permission align.
-     */
-    internal fun hasAnySmsCapability(
-      smsEnabled: Boolean,
-      telephonyAvailable: Boolean,
-      smsSendGranted: Boolean,
-      smsReadGranted: Boolean,
-    ): Boolean = smsEnabled && telephonyAvailable && (smsSendGranted || smsReadGranted)
-
-    /**
-     * Prompt only when Android can grant a missing SMS permission that this build can use.
-     */
-    internal fun isSmsPromptable(
-      smsEnabled: Boolean,
-      telephonyAvailable: Boolean,
-      smsSendGranted: Boolean,
-      smsReadGranted: Boolean,
-    ): Boolean = smsEnabled && telephonyAvailable && (!smsSendGranted || !smsReadGranted)
-  }
-
   private data class BatterySnapshot(
     val status: Int,
     val plugged: Int,
@@ -209,22 +172,7 @@ class DeviceHandler private constructor(
         put("visibility", JsonPrimitive(if (request.includeNonLaunchable) "android-visible" else "launcher"))
         put("includeSystem", JsonPrimitive(request.includeSystem))
         put("includeDisabled", JsonPrimitive(request.includeDisabled))
-        put(
-          "apps",
-          buildJsonArray {
-            for (app in limitedApps) {
-              add(
-                buildJsonObject {
-                  put("label", JsonPrimitive(app.label))
-                  put("packageName", JsonPrimitive(app.packageName))
-                  put("system", JsonPrimitive(app.system))
-                  put("enabled", JsonPrimitive(app.enabled))
-                  put("launchable", JsonPrimitive(app.launchable))
-                },
-              )
-            }
-          },
-        )
+        put("apps", Json.encodeToJsonElement(limitedApps))
       }.toString(),
     )
   }
@@ -315,144 +263,39 @@ class DeviceHandler private constructor(
   }
 
   private fun permissionsPayloadJson(): String {
+    val snapshot = permissionSnapshot()
     val canSendSms = appContext.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
-    val smsSendGranted = hasPermission(Manifest.permission.SEND_SMS)
-    val smsReadGranted = hasPermission(Manifest.permission.READ_SMS)
-    val notificationAccess = DeviceNotificationListenerService.isAccessEnabled(appContext)
-    val photosGranted =
-      if (!photosEnabled) {
-        false
-      } else if (Build.VERSION.SDK_INT >= 33) {
-        // Android 13 split media permissions; earlier versions use external storage.
-        hasPermission(Manifest.permission.READ_MEDIA_IMAGES)
-      } else {
-        hasPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
-      }
-    val motionGranted = hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
-    val notificationsGranted =
-      if (Build.VERSION.SDK_INT >= 33) {
-        // POST_NOTIFICATIONS exists only on Android 13+.
-        hasPermission(Manifest.permission.POST_NOTIFICATIONS)
-      } else {
-        true
-      }
+    val smsAvailable = smsEnabled && canSendSms
     return buildJsonObject {
       put(
         "permissions",
         buildJsonObject {
-          put(
-            "camera",
-            permissionStateJson(
-              granted = hasPermission(Manifest.permission.CAMERA),
-              promptableWhenDenied = true,
-            ),
-          )
-          put(
-            "microphone",
-            permissionStateJson(
-              granted = hasPermission(Manifest.permission.RECORD_AUDIO),
-              promptableWhenDenied = true,
-            ),
-          )
-          put(
-            "location",
-            permissionStateJson(
-              granted =
-                hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) ||
-                  hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION),
-              promptableWhenDenied = true,
-            ),
-          )
+          putPermission("camera", snapshot.camera)
+          putPermission("microphone", snapshot.microphone)
+          putPermission("location", snapshot.location)
           put(
             "sms",
             buildJsonObject {
-              put(
-                "status",
-                JsonPrimitive(
-                  if (hasAnySmsCapability(
-                      smsEnabled,
-                      canSendSms,
-                      smsSendGranted,
-                      smsReadGranted,
-                    )
-                  ) {
-                    "granted"
-                  } else {
-                    "denied"
-                  },
-                ),
-              )
-              put("promptable", JsonPrimitive(isSmsPromptable(smsEnabled, canSendSms, smsSendGranted, smsReadGranted)))
+              // A partial grant is usable, but the other SMS permission can still be requested.
+              val granted = smsAvailable && (snapshot.smsSend || snapshot.smsRead)
+              put("status", if (granted) "granted" else "denied")
+              put("promptable", smsAvailable && (!snapshot.smsSend || !snapshot.smsRead))
               put(
                 "capabilities",
                 buildJsonObject {
-                  put(
-                    "send",
-                    permissionStateJson(
-                      granted = smsEnabled && smsSendGranted && canSendSms,
-                      promptableWhenDenied = smsEnabled && canSendSms,
-                    ),
-                  )
-                  put(
-                    "read",
-                    permissionStateJson(
-                      granted = smsEnabled && smsReadGranted && canSendSms,
-                      promptableWhenDenied = smsEnabled && canSendSms,
-                    ),
-                  )
+                  putPermission("send", snapshot.smsSend, smsAvailable)
+                  putPermission("read", snapshot.smsRead, smsAvailable)
                 },
               )
             },
           )
-          put(
-            "notificationListener",
-            permissionStateJson(
-              granted = notificationAccess,
-              promptableWhenDenied = true,
-            ),
-          )
-          put(
-            "notifications",
-            permissionStateJson(
-              granted = notificationsGranted,
-              promptableWhenDenied = true,
-            ),
-          )
-          put(
-            "photos",
-            permissionStateJson(
-              granted = photosGranted,
-              promptableWhenDenied = photosEnabled,
-            ),
-          )
-          put(
-            "contacts",
-            permissionStateJson(
-              granted = hasPermission(Manifest.permission.READ_CONTACTS),
-              promptableWhenDenied = true,
-            ),
-          )
-          put(
-            "calendar",
-            permissionStateJson(
-              granted = hasPermission(Manifest.permission.READ_CALENDAR),
-              promptableWhenDenied = true,
-            ),
-          )
-          put(
-            "callLog",
-            permissionStateJson(
-              granted = callLogEnabled && hasPermission(Manifest.permission.READ_CALL_LOG),
-              promptableWhenDenied = callLogEnabled,
-            ),
-          )
-          put(
-            "motion",
-            permissionStateJson(
-              granted = motionGranted,
-              promptableWhenDenied = true,
-            ),
-          )
+          putPermission("notificationListener", snapshot.notificationListener)
+          putPermission("notifications", snapshot.notifications)
+          putPermission("photos", snapshot.photos, photosEnabled)
+          putPermission("contacts", snapshot.contactsRead && snapshot.contactsWrite)
+          putPermission("calendar", snapshot.calendarRead && snapshot.calendarWrite)
+          putPermission("callLog", snapshot.callLog, callLogEnabled)
+          putPermission("motion", snapshot.motion)
         },
       )
     }.toString()
@@ -587,12 +430,16 @@ class DeviceHandler private constructor(
     val thermal = powerManager?.currentThermalStatus ?: return "nominal"
     return when (thermal) {
       PowerManager.THERMAL_STATUS_NONE, PowerManager.THERMAL_STATUS_LIGHT -> "nominal"
+
       PowerManager.THERMAL_STATUS_MODERATE -> "fair"
+
       PowerManager.THERMAL_STATUS_SEVERE -> "serious"
+
       PowerManager.THERMAL_STATUS_CRITICAL,
       PowerManager.THERMAL_STATUS_EMERGENCY,
       PowerManager.THERMAL_STATUS_SHUTDOWN,
       -> "critical"
+
       else -> "nominal"
     }
   }
@@ -601,24 +448,27 @@ class DeviceHandler private constructor(
     if (caps == null) return "unsatisfied"
     return when {
       caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) -> "satisfied"
+
       // Internet without validation mirrors iOS "requiresConnection" for captive or unproven networks.
       caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) -> "requiresConnection"
+
       else -> "unsatisfied"
     }
   }
 
-  private fun permissionStateJson(
+  private fun JsonObjectBuilder.putPermission(
+    key: String,
     granted: Boolean,
-    promptableWhenDenied: Boolean,
-  ) = buildJsonObject {
-    put("status", JsonPrimitive(if (granted) "granted" else "denied"))
-    put("promptable", JsonPrimitive(!granted && promptableWhenDenied))
-  }
-
-  private fun hasPermission(permission: String): Boolean =
-    (
-      ContextCompat.checkSelfPermission(appContext, permission) == PackageManager.PERMISSION_GRANTED
+    promptableWhenDenied: Boolean = true,
+  ) {
+    put(
+      key,
+      buildJsonObject {
+        put("status", if (granted) "granted" else "denied")
+        put("promptable", !granted && promptableWhenDenied)
+      },
     )
+  }
 
   private fun mapMemoryPressure(
     totalBytes: Long,

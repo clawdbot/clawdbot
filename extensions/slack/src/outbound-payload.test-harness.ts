@@ -25,7 +25,8 @@ export function createSlackOutboundPayloadHarness(params: {
   const ctx = {
     cfg: {},
     to: "C12345",
-    text: "",
+    text: params.payload.text ?? "",
+    mediaUrl: params.payload.mediaUrl,
     payload: params.payload,
     deps: {
       sendSlack,

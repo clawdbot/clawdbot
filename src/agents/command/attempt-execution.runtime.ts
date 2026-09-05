@@ -2,6 +2,7 @@
 // light shared helpers without pulling the full command attempt graph.
 export {
   buildAcpResult,
+  createAcpToolLifecycleTracker,
   createAcpVisibleTextAccumulator,
   emitAcpAssistantDelta,
   emitAcpLifecycleEnd,
@@ -11,6 +12,9 @@ export {
   emitAcpRuntimeEvent,
   persistAcpTurnTranscript,
   persistCliTurnTranscript,
+  resolveAcpLifecycleEndFields,
+  resolveCliTranscriptReplyText,
   runAgentAttempt,
-  sessionFileHasContent,
+  sessionTranscriptHasContent,
 } from "./attempt-execution.js";
+export type { AcpToolLifecycleTracker } from "./attempt-execution.js";

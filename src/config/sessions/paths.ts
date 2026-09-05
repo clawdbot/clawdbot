@@ -3,46 +3,44 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { safeRealpathSync } from "../../infra/boundary-path.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveStateDir } from "../paths.js";
 import { isCompactionCheckpointTranscriptFileName } from "./artifacts.js";
 
 function resolveAgentSessionsDir(
-  agentId?: string,
+  agentId: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
 ): string {
+  if (!agentId?.trim()) {
+    throw new Error("Session storage path requires an explicit agent id.");
+  }
   const root = resolveStateDir(env, homedir);
-  const id = normalizeAgentId(agentId ?? DEFAULT_AGENT_ID);
+  const id = normalizeAgentId(agentId);
   return path.join(root, "agents", id, "sessions");
 }
 
-export function resolveSessionTranscriptsDir(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
-): string {
-  return resolveAgentSessionsDir(DEFAULT_AGENT_ID, env, homedir);
-}
-
 export function resolveSessionTranscriptsDirForAgent(
-  agentId?: string,
+  agentId: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
 ): string {
   return resolveAgentSessionsDir(agentId, env, homedir);
 }
 
-export function resolveDefaultSessionStorePath(agentId?: string): string {
+export function resolveDefaultSessionStorePath(agentId: string): string {
   return path.join(resolveAgentSessionsDir(agentId), "sessions.json");
 }
 
-export type SessionFilePathOptions = {
+type SessionFilePathOptions = {
   agentId?: string;
   sessionsDir?: string;
 };
 
 const MULTI_STORE_PATH_SENTINEL = "(multiple)";
+const SQLITE_TRANSCRIPT_TARGET_PREFIX = "sqlite:";
 
 export function resolveSessionFilePathOptions(params: {
   agentId?: string;
@@ -60,12 +58,14 @@ export function resolveSessionFilePathOptions(params: {
   return undefined;
 }
 
-export const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
+const SAFE_SESSION_ID_RE = /^[\p{L}\p{N}][\p{L}\p{N}\p{M}._-]{0,127}$/u;
 
 export function validateSessionId(sessionId: string): string {
   const trimmed = sessionId.trim();
   if (
+    trimmed !== trimmed.normalize("NFC") ||
     !SAFE_SESSION_ID_RE.test(trimmed) ||
+    Buffer.byteLength(`${trimmed}.jsonl`, "utf8") > 255 ||
     isCompactionCheckpointTranscriptFileName(`${trimmed}.jsonl`)
   ) {
     throw new Error(`Invalid session ID: ${sessionId}`);
@@ -78,7 +78,10 @@ function resolveSessionsDir(opts?: SessionFilePathOptions): string {
   if (sessionsDir) {
     return path.resolve(sessionsDir);
   }
-  return resolveAgentSessionsDir(opts?.agentId);
+  if (!opts?.agentId?.trim()) {
+    throw new Error("Session storage path requires an explicit agent id.");
+  }
+  return resolveAgentSessionsDir(opts.agentId);
 }
 
 function resolvePathFromAgentSessionsDir(
@@ -91,9 +94,35 @@ function resolvePathFromAgentSessionsDir(
   const relative = path.relative(agentBase, realCandidate);
   // Realpath both sides when possible so symlinked session dirs still enforce containment.
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-    return undefined;
+    return resolveRerootedSessionPath(agentBase, candidateAbsPath);
   }
   return path.resolve(agentBase, relative);
+}
+
+// Absolute sessionFile paths recorded under another state root (restored
+// backups, moved OPENCLAW_STATE_DIR, rehearsal copies) never satisfy the
+// relative-containment check above. Re-root the canonical
+// `agents/<id>/sessions/<suffix>` tail onto the current sessions dir, but only
+// when the file exists there: genuine cross-root layouts keep their foreign
+// path via the structural fallback.
+function resolveRerootedSessionPath(
+  agentSessionsDir: string,
+  candidateAbsPath: string,
+): string | undefined {
+  const parsed = resolveAgentSessionsPathParts(candidateAbsPath);
+  if (!parsed) {
+    return undefined;
+  }
+  const relativeSegments = parsed.parts.slice(parsed.sessionsIndex + 1);
+  if (relativeSegments.length === 0) {
+    return undefined;
+  }
+  const rerooted = path.resolve(agentSessionsDir, ...relativeSegments);
+  const contained = path.relative(agentSessionsDir, rerooted);
+  if (!contained || contained.startsWith("..") || path.isAbsolute(contained)) {
+    return undefined;
+  }
+  return fs.existsSync(rerooted) ? rerooted : undefined;
 }
 
 function resolveSiblingAgentSessionsDir(
@@ -167,14 +196,6 @@ function resolveStructuralSessionFallbackPath(
     return undefined;
   }
   return path.normalize(path.resolve(candidateAbsPath));
-}
-
-function safeRealpathSync(filePath: string): string | undefined {
-  try {
-    return fs.realpathSync(filePath);
-  } catch {
-    return undefined;
-  }
 }
 
 function resolvePathWithinSessionsDir(
@@ -257,34 +278,33 @@ export function resolveSessionTranscriptPathInDir(
     safeTopicId !== undefined
       ? `${safeSessionId}-topic-${safeTopicId}.jsonl`
       : `${safeSessionId}.jsonl`;
+  if (Buffer.byteLength(fileName, "utf8") > 255) {
+    throw new Error(`Invalid session transcript filename: ${fileName}`);
+  }
   return resolvePathWithinSessionsDir(sessionsDir, fileName);
 }
 
 export function resolveSessionTranscriptPath(
   sessionId: string,
-  agentId?: string,
+  agentId: string,
   topicId?: string | number,
 ): string {
   return resolveSessionTranscriptPathInDir(sessionId, resolveAgentSessionsDir(agentId), topicId);
 }
-
-export function resolveExplicitSessionFilePath(
-  sessionFile: string,
-  opts?: SessionFilePathOptions,
-): string {
-  return resolvePathWithinSessionsDir(resolveSessionsDir(opts), sessionFile, {
-    agentId: opts?.agentId,
-  });
-}
-
-export function resolveSessionFilePath(
+export function resolveSessionFilePathCore(
   sessionId: string,
-  entry?: { sessionFile?: string },
+  entry?: object,
   opts?: SessionFilePathOptions,
 ): string {
   const sessionsDir = resolveSessionsDir(opts);
-  const candidate = entry?.sessionFile?.trim();
+  const candidate =
+    entry && "sessionFile" in entry && typeof entry.sessionFile === "string"
+      ? entry.sessionFile.trim()
+      : undefined;
   if (candidate) {
+    if (candidate.startsWith(SQLITE_TRANSCRIPT_TARGET_PREFIX)) {
+      return candidate;
+    }
     try {
       return resolvePathWithinSessionsDir(sessionsDir, candidate, { agentId: opts?.agentId });
     } catch {
@@ -294,17 +314,32 @@ export function resolveSessionFilePath(
   return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
 }
 
-export function resolveStorePath(
+export class SessionStoreAgentIdRequiredError extends Error {
+  constructor() {
+    super("Session store path requires an explicit agent id.");
+    this.name = "SessionStoreAgentIdRequiredError";
+  }
+}
+
+/** Resolves fixed literal paths without an owner; derived or templated paths require agentId. */
+export function resolveSessionStorePathCore(
   store?: string,
   opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ) {
-  const agentId = normalizeAgentId(opts?.agentId ?? DEFAULT_AGENT_ID);
   const env = opts?.env ?? process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   if (!store) {
+    if (!opts?.agentId?.trim()) {
+      throw new SessionStoreAgentIdRequiredError();
+    }
+    const agentId = normalizeAgentId(opts.agentId);
     return path.join(resolveAgentSessionsDir(agentId, env, homedir), "sessions.json");
   }
   if (store.includes("{agentId}")) {
+    if (!opts?.agentId?.trim()) {
+      throw new SessionStoreAgentIdRequiredError();
+    }
+    const agentId = normalizeAgentId(opts.agentId);
     // Template expansion is the only supported way to share one config path across agent stores.
     const expanded = store.replaceAll("{agentId}", agentId);
     if (expanded.startsWith("~")) {

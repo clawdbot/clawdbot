@@ -2,35 +2,39 @@
  * Resolves workspace bootstrap files for agent runs and converts them into
  * bounded context files.
  */
-import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ChatType } from "../channels/chat-type.js";
+import { readRecentSessionTranscriptActiveEvents } from "../config/sessions/session-accessor.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isMemoryOriginEligibleForAutomaticInjection } from "../memory-host-sdk/host/types.js";
+import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
+import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
+import type { BootstrapContextRunKind } from "./bootstrap-mode.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import {
   buildBootstrapContextFiles,
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "./embedded-agent-helpers.js";
-import { shouldIncludeHeartbeatGuidanceForSystemPrompt } from "./heartbeat-system-prompt.js";
+import type { AgentRunSessionTarget } from "./run-session-target.js";
 import {
-  DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_USER_FILENAME,
   filterBootstrapFilesForSession,
   isWorkspaceSetupCompleted,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
+  workspaceFilesShareSourceIdentity,
 } from "./workspace.js";
 
 export type BootstrapContextMode = "full" | "lightweight";
-type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
 
-const CONTINUATION_SCAN_MAX_TAIL_BYTES = 256 * 1024;
 const CONTINUATION_SCAN_MAX_RECORDS = 500;
 export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:full";
 const BOOTSTRAP_WARNING_DEDUPE_LIMIT = 1024;
@@ -54,12 +58,6 @@ function rememberBootstrapWarning(key: string): boolean {
   return true;
 }
 
-/** Clears the per-process bootstrap warning dedupe cache for isolated tests. */
-export function resetBootstrapWarningCacheForTest(): void {
-  seenBootstrapWarnings.clear();
-  bootstrapWarningOrder.length = 0;
-}
-
 /** Resolves the effective bootstrap injection mode for a session agent. */
 export function resolveContextInjectionMode(
   config?: OpenClawConfig,
@@ -73,75 +71,30 @@ export function resolveContextInjectionMode(
   return config?.agents?.defaults?.contextInjection ?? "always";
 }
 
-/** Checks whether the session transcript still has a valid full-bootstrap marker. */
-export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<boolean> {
+/** Checks the active SQLite transcript branch for a valid full-bootstrap marker. */
+export async function hasCompletedBootstrapTurn(
+  sessionTarget?: AgentRunSessionTarget,
+): Promise<boolean> {
+  const { agentId, sessionId, sessionKey, storePath } = sessionTarget ?? {};
+  if (!agentId || !sessionId || !sessionKey || !storePath) {
+    return false;
+  }
   try {
-    const stat = await fs.lstat(sessionFile);
-    if (stat.isSymbolicLink()) {
-      return false;
-    }
-
-    const fh = await fs.open(sessionFile, "r");
-    try {
-      const bytesToRead = Math.min(stat.size, CONTINUATION_SCAN_MAX_TAIL_BYTES);
-      if (bytesToRead <= 0) {
+    const records = readRecentSessionTranscriptActiveEvents(
+      { agentId, sessionId, sessionKey, storePath },
+      CONTINUATION_SCAN_MAX_RECORDS,
+    );
+    for (const entry of records.toReversed()) {
+      const record = entry as { type?: string; customType?: string } | null | undefined;
+      // Context before compaction/reset is not reusable on the active branch.
+      if (record?.type === "compaction" || record?.type === "reset") {
         return false;
       }
-      const start = stat.size - bytesToRead;
-      const buffer = Buffer.allocUnsafe(bytesToRead);
-      const { bytesRead } = await fh.read(buffer, 0, bytesToRead, start);
-      let text = buffer.toString("utf-8", 0, bytesRead);
-      if (start > 0) {
-        const firstNewline = text.indexOf("\n");
-        if (firstNewline === -1) {
-          return false;
-        }
-        text = text.slice(firstNewline + 1);
+      if (record?.type === "custom" && record.customType === FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE) {
+        return true;
       }
-
-      const records = text
-        .split(/\r?\n/u)
-        .filter((line) => line.trim().length > 0)
-        .slice(-CONTINUATION_SCAN_MAX_RECORDS);
-      let compactedAfterLatestAssistant = false;
-
-      for (let i = records.length - 1; i >= 0; i--) {
-        // Only the tail matters: compaction after the marker makes earlier
-        // bootstrap context unreliable for continuation prompts.
-        const line = records[i];
-        if (!line) {
-          continue;
-        }
-        let entry: unknown;
-        try {
-          entry = JSON.parse(line);
-        } catch {
-          continue;
-        }
-        const record = entry as
-          | {
-              type?: string;
-              customType?: string;
-              message?: { role?: string };
-            }
-          | null
-          | undefined;
-        if (record?.type === "compaction") {
-          compactedAfterLatestAssistant = true;
-          continue;
-        }
-        if (
-          record?.type === "custom" &&
-          record.customType === FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE
-        ) {
-          return !compactedAfterLatestAssistant;
-        }
-      }
-
-      return false;
-    } finally {
-      await fh.close();
     }
+    return false;
   } catch {
     return false;
   }
@@ -204,50 +157,12 @@ function applyContextModeFilter(params: {
   runKind?: BootstrapContextRunKind;
 }): WorkspaceBootstrapFile[] {
   const contextMode = params.contextMode ?? "full";
-  const runKind = params.runKind ?? "default";
   if (contextMode !== "lightweight") {
     return params.files;
   }
-  if (runKind === "heartbeat") {
-    return params.files.filter((file) => file.name === "HEARTBEAT.md");
-  }
-  // cron/default lightweight mode keeps bootstrap context empty on purpose.
+  // Heartbeat scratch is injected by the heartbeat runner, not bootstrap files.
+  // Cron/default lightweight mode also keeps bootstrap context empty on purpose.
   return [];
-}
-
-function shouldExcludeHeartbeatBootstrapFile(params: {
-  config?: OpenClawConfig;
-  sessionKey?: string;
-  sessionId?: string;
-  agentId?: string;
-  runKind?: BootstrapContextRunKind;
-}): boolean {
-  if (!params.config || params.runKind === "heartbeat") {
-    return false;
-  }
-  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey ?? params.sessionId,
-    config: params.config,
-    agentId: params.agentId,
-  });
-  if (sessionAgentId !== defaultAgentId) {
-    return false;
-  }
-  return !shouldIncludeHeartbeatGuidanceForSystemPrompt({
-    config: params.config,
-    agentId: sessionAgentId,
-    defaultAgentId,
-  });
-}
-
-function filterHeartbeatBootstrapFile(
-  files: WorkspaceBootstrapFile[],
-  excludeHeartbeatBootstrapFile: boolean,
-): WorkspaceBootstrapFile[] {
-  if (!excludeHeartbeatBootstrapFile) {
-    return files;
-  }
-  return files.filter((file) => file.name !== DEFAULT_HEARTBEAT_FILENAME);
 }
 
 function filterCompletedWorkspaceBootstrapFile(
@@ -277,37 +192,176 @@ function filterCompletedWorkspaceBootstrapFile(
   });
 }
 
-async function isWorkspaceSetupCompletedForContext(workspaceDir: string): Promise<boolean> {
+async function isWorkspaceSetupCompletedForContext(
+  workspaceDir: string,
+  readOnlyState = false,
+): Promise<boolean> {
   try {
-    return await isWorkspaceSetupCompleted(workspaceDir);
+    return await isWorkspaceSetupCompleted(workspaceDir, readOnlyState ? { readOnly: true } : {});
   } catch {
     return false;
   }
 }
 
+function filterBootstrapFilesAfterHooks(params: {
+  files: WorkspaceBootstrapFile[];
+  session: {
+    sessionKey?: string;
+    chatType?: ChatType;
+    workspaceDir: string;
+  };
+  protectedFiles?: WorkspaceBootstrapFile[];
+}): WorkspaceBootstrapFile[] {
+  const sessionFiltered = filterBootstrapFilesForSession(params.files, params.session);
+  const protectedFiles = params.protectedFiles ?? [];
+  if (protectedFiles.length === 0) {
+    return sessionFiltered;
+  }
+  // Hooks can relabel or alias loader-produced records. Reapply lexical/session
+  // policy first, then enforce protected sources captured by the pinned opens.
+  return sessionFiltered.filter(
+    (file) =>
+      !protectedFiles.some((protectedFile) => {
+        if (workspaceFilesShareSourceIdentity(file, protectedFile)) {
+          return true;
+        }
+        const filePath = normalizeOptionalString(file.path);
+        const protectedPath = normalizeOptionalString(protectedFile.path);
+        return Boolean(
+          filePath && protectedPath && path.resolve(filePath) === path.resolve(protectedPath),
+        );
+      }),
+  );
+}
+
+async function resolveIneligibleAutomaticMemoryFiles(params: {
+  files: WorkspaceBootstrapFile[];
+  workspaceDir: string;
+  config?: OpenClawConfig;
+  agentId?: string;
+  warn?: (message: string) => void;
+}): Promise<WorkspaceBootstrapFile[]> {
+  const candidates = params.files.filter(
+    (file) =>
+      !file.missing &&
+      (file.name === DEFAULT_MEMORY_FILENAME || file.name === DEFAULT_USER_FILENAME),
+  );
+  if (candidates.length === 0 || !params.config) {
+    return [];
+  }
+  let agentId: string;
+  try {
+    agentId = params.agentId ?? resolveDefaultAgentId(params.config);
+  } catch (error) {
+    params.warn?.(`excluding automatic memory context: ${String(error)}`);
+    return candidates;
+  }
+  const relativePaths = candidates.map((file) =>
+    path.relative(resolveUserPath(params.workspaceDir), file.path).replaceAll(path.sep, "/"),
+  );
+  let classificationResult: Awaited<ReturnType<typeof classifyActiveMemoryWorkspacePaths>>;
+  try {
+    classificationResult = await classifyActiveMemoryWorkspacePaths({
+      cfg: params.config,
+      agentId,
+      workspaceDir: params.workspaceDir,
+      relativePaths,
+    });
+  } catch (error) {
+    params.warn?.(`excluding automatic memory context: ${String(error)}`);
+    return candidates;
+  }
+  if (classificationResult.status === "unavailable") {
+    return [];
+  }
+  if (classificationResult.status === "unsupported") {
+    params.warn?.(
+      "excluding automatic memory context: selected memory runtime does not support provenance classification",
+    );
+    return candidates;
+  }
+  const origins = new Map(
+    classificationResult.classifications.map((entry) => [entry.relativePath, entry.originClass]),
+  );
+  return candidates.filter(
+    (_file, index) =>
+      !isMemoryOriginEligibleForAutomaticInjection(origins.get(relativePaths[index]!)),
+  );
+}
+
 /** Resolves hook-adjusted, session-filtered bootstrap files for a run. */
-export async function resolveBootstrapFilesForRun(params: {
+type BootstrapFileResolutionParams = {
   workspaceDir: string;
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
+  chatType?: ChatType;
   agentId?: string;
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
-}): Promise<WorkspaceBootstrapFile[]> {
-  const excludeHeartbeatBootstrapFile = shouldExcludeHeartbeatBootstrapFile(params);
+  readOnlyState?: boolean;
+};
+
+/** Prepare the same bounded workspace facts without invoking run-owned bootstrap hooks. */
+export async function resolveBootstrapFilesForPreparation(
+  params: BootstrapFileResolutionParams,
+): Promise<WorkspaceBootstrapFile[]> {
+  return resolveBootstrapFiles({ ...params, readOnlyState: true }, false);
+}
+
+export async function resolveBootstrapFilesForRun(
+  params: BootstrapFileResolutionParams,
+): Promise<WorkspaceBootstrapFile[]> {
+  return resolveBootstrapFiles(params, true);
+}
+
+async function resolveBootstrapFiles(
+  params: BootstrapFileResolutionParams,
+  applyHooks: boolean,
+): Promise<WorkspaceBootstrapFile[]> {
   const sessionKey = params.sessionKey ?? params.sessionId;
-  const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(params.workspaceDir);
+  const session = {
+    sessionKey,
+    chatType: params.chatType,
+    workspaceDir: params.workspaceDir,
+  };
+  const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(
+    params.workspaceDir,
+    params.readOnlyState,
+  );
   const rawFiles = params.sessionKey
     ? await getOrLoadBootstrapFiles({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+  const ineligibleAutomaticMemoryFiles = await resolveIneligibleAutomaticMemoryFiles({
+    files: rawFiles,
+    workspaceDir: params.workspaceDir,
+    config: params.config,
+    agentId: params.agentId,
+    warn: params.warn,
+  });
+  const rootMemoryFile = rawFiles.find(
+    (file) => file.name === DEFAULT_MEMORY_FILENAME && !file.missing,
+  );
+  const protectedRootMemoryFile =
+    rootMemoryFile && filterBootstrapFilesForSession([rootMemoryFile], session).length === 0
+      ? rootMemoryFile
+      : undefined;
+  const protectedFiles = [
+    ...(protectedRootMemoryFile ? [protectedRootMemoryFile] : []),
+    ...ineligibleAutomaticMemoryFiles,
+  ];
   const bootstrapFiles = applyContextModeFilter({
     files: filterCompletedWorkspaceBootstrapFile(
-      filterBootstrapFilesForSession(rawFiles, sessionKey),
+      filterBootstrapFilesForSession(rawFiles, session).filter(
+        (file) =>
+          !ineligibleAutomaticMemoryFiles.some((ineligible) =>
+            workspaceFilesShareSourceIdentity(file, ineligible),
+          ),
+      ),
       workspaceSetupCompleted,
       params.workspaceDir,
     ),
@@ -315,24 +369,26 @@ export async function resolveBootstrapFilesForRun(params: {
     runKind: params.runKind,
   });
 
-  const updated = await applyBootstrapHookOverrides({
-    files: bootstrapFiles,
-    workspaceDir: params.workspaceDir,
-    config: params.config,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-  });
+  const updated = applyHooks
+    ? await applyBootstrapHookOverrides({
+        files: bootstrapFiles,
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        agentId: params.agentId,
+      })
+    : bootstrapFiles;
   const filteredUpdated = filterCompletedWorkspaceBootstrapFile(
-    updated,
+    filterBootstrapFilesAfterHooks({
+      files: updated,
+      session,
+      protectedFiles,
+    }),
     workspaceSetupCompleted,
     params.workspaceDir,
   );
-  return sanitizeBootstrapFiles(
-    filterHeartbeatBootstrapFile(filteredUpdated, excludeHeartbeatBootstrapFile),
-    params.workspaceDir,
-    params.warn,
-  );
+  return sanitizeBootstrapFiles(filteredUpdated, params.workspaceDir, params.warn);
 }
 
 /** Resolves both raw bootstrap metadata and bounded context files for a run. */
@@ -341,10 +397,12 @@ export async function resolveBootstrapContextForRun(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
+  chatType?: ChatType;
   agentId?: string;
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;
+  readOnlyState?: boolean;
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];

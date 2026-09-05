@@ -8,21 +8,20 @@ read_when:
   - You need to understand provider auth, catalogs, and runtime hooks
 ---
 
-This guide walks through building a provider plugin that adds a model provider
-(LLM) to OpenClaw. By the end you will have a provider with a model catalog,
-API key auth, and dynamic model resolution.
+Build a provider plugin to add a model provider (LLM) to OpenClaw: a model
+catalog, API-key auth, and dynamic model resolution.
 
 <Info>
-  If you have not built any OpenClaw plugin before, read
-  [Getting Started](/plugins/building-plugins) first for the basic package
-  structure and manifest setup.
+  New to OpenClaw plugins? Read [Getting Started](/plugins/building-plugins)
+  first for package structure and manifest setup.
 </Info>
 
 <Tip>
-  Provider plugins add models to OpenClaw's normal inference loop. If the model
-  must run through a native agent daemon that owns threads, compaction, or tool
-  events, pair the provider with an [agent harness](/plugins/sdk-agent-harness)
-  instead of putting daemon protocol details in core.
+  Provider plugins add models to OpenClaw's normal inference loop. If the
+  model must run through a native agent daemon that owns threads, compaction,
+  or tool events, pair the provider with an [agent
+  harness](/plugins/sdk-agent-harness) instead of putting daemon protocol
+  details in core.
 </Tip>
 
 ## Walkthrough
@@ -93,13 +92,15 @@ API key auth, and dynamic model resolution.
     ```
     </CodeGroup>
 
-    The manifest declares `setup.providers[].envVars` so OpenClaw can detect
-    credentials without loading your plugin runtime. Add `providerAuthAliases`
-    when a provider variant should reuse another provider id's auth. `modelSupport`
-    is optional and lets OpenClaw auto-load your provider plugin from shorthand
-    model ids like `acme-large` before runtime hooks exist. If you publish the
-    provider on ClawHub, those `openclaw.compat` and `openclaw.build` fields
-    are required in `package.json`.
+    `setup.providers[].envVars` lets OpenClaw detect credentials without
+    loading your plugin runtime. Add `providerAuthAliases` when a provider
+    variant should reuse another provider id's auth. `modelSupport` is
+    optional and lets OpenClaw auto-load your provider plugin from shorthand
+    model ids like `acme-large` before runtime hooks exist. `openclaw.compat`
+    and `openclaw.build` in `package.json` are required for ClawHub
+    publishing (`openclaw.compat.pluginApi` and `openclaw.build.openclawVersion`
+    are the two required fields; `minGatewayVersion` falls back to
+    `openclaw.install.minHostVersion` when omitted).
 
   </Step>
 
@@ -196,23 +197,108 @@ API key auth, and dynamic model resolution.
     ```
 
     `registerModelCatalogProvider` is the newer control-plane catalog surface
-    for list/help/picker UI. Use it for text, image-generation,
-    video-generation, and music-generation rows. Keep vendor endpoint calls and
-    response mapping in the plugin; OpenClaw owns the shared row shape, source
-    labels, and help rendering.
+    for list/help/picker UI, covering `text`, `voice`, `image_generation`,
+    `video_generation`, and `music_generation` rows. Keep vendor endpoint
+    calls and response mapping in the plugin; OpenClaw owns the shared row
+    shape, source labels, and help rendering.
 
-    That is a working provider. Users can now
+    That is a working provider. Users can now run
     `openclaw onboard --acme-ai-api-key <key>` and select
     `acme-ai/acme-large` as their model.
 
+    For provider-key lookup and selection from an already loaded auth store,
+    import `findNormalizedProviderValue` and `resolveAuthProfileOrder` from
+    `openclaw/plugin-sdk/provider-auth`. This keeps provider entrypoints from
+    loading the full agent runtime just to select a credential. The deprecated
+    `agent-runtime` exports remain available for compatibility; use the narrower
+    `provider-auth` route in new code.
+
+    A custom interactive auth method that mints a static token or API key can
+    request protected persistence on its returned profile:
+
+    ```typescript
+    return {
+      profiles: [
+        {
+          profileId: "acme-ai:device",
+          credential: { type: "token", provider: "acme-ai", token },
+          secretStorage: {
+            kind: "store",
+            namePrefix: "ACME_AI_TOKEN",
+          },
+        },
+      ],
+    };
+    ```
+
+    OpenClaw keeps the inline value only while staged validation runs. At the
+    final persistence boundary it writes the value to the protected local store
+    and saves a `tokenRef` or `keyRef` in the auth profile. `namePrefix` must be
+    an uppercase environment-style name. OpenClaw adds a stable suffix derived
+    from the provider and final profile id so multiple profiles remain separate.
+    Use this only for provider-minted static credentials, not rotating OAuth
+    credentials or values already supplied as SecretRefs.
+
     ### Live model discovery
 
-    If your provider exposes a `/models`-style API, keep the provider-specific
-    endpoint and row projection in your plugin and use
-    `openclaw/plugin-sdk/provider-catalog-live-runtime` for the shared fetch
-    lifecycle. The helper gives you guarded HTTP fetches, provider-auth headers,
-    structured HTTP errors, TTL caching, and static fallback behavior without
-    putting provider policy in OpenClaw core.
+    If your provider exposes an OpenAI-compatible `/models` API, opt the
+    single-provider helper into shared discovery:
+
+    ```typescript
+    catalog: {
+      buildProvider: () => ({
+        api: "openai-completions",
+        baseUrl: "https://api.acme-ai.com/v1",
+        models: [...STATIC_MODELS],
+      }),
+      buildStaticProvider: () => ({
+        api: "openai-completions",
+        baseUrl: "https://api.acme-ai.com/v1",
+        models: [...STATIC_MODELS],
+      }),
+      liveModelDiscovery: true,
+    },
+    ```
+
+    `liveModelDiscovery: true` is a public Plugin SDK contract with these
+    behaviors:
+
+    | Area | Contract |
+    | --- | --- |
+    | Credentials | Discovery uses the catalog's resolved provider credential, preferring `discoveryApiKey` when auth supplies one. Secret-reference markers are never sent as tokens. The default request uses `Authorization: Bearer <token>`; use `buildRequestHeaders` for another vendor auth scheme. |
+    | Endpoint | The default URL is `models` relative to the effective provider `baseUrl`, including an operator override when `allowExplicitBaseUrl` is enabled. Use `endpointPath` for another relative path. Use `endpointUrl: { url, requireBaseUrl }` only for a fixed vendor URL; discovery is skipped unless the effective base URL still equals `requireBaseUrl`, so a custom proxy credential is not sent to the vendor. |
+    | Network limits | Fetches use OpenClaw's SSRF guard, one 5-second timeout budget across pagination, a 4 MiB response limit per page, and a 50-page limit. Cross-origin pagination links are rejected; credentials are removed after a cross-origin redirect. |
+    | Cache | Successful, non-empty catalogs are cached for 60 seconds by provider, endpoint, and resolved credential. Empty or unusable results are not cached. |
+    | Filtering | Exact live IDs keep their trusted static metadata. New rows are projected conservatively as text/chat models. Disabled, archived, deprecated, explicitly non-chat, embedding, reranking, moderation, speech, image-only, and video-only rows are excluded. Use `readRows` only to select rows from a nonstandard response envelope; provider-specific model semantics still belong in a custom catalog. |
+    | Admission | Optional. Set `acceptUnknownModel: ({ id, record }) => boolean` when your request shaping is model-version specific, so discovery cannot publish a model you cannot yet build a valid request for. It is called only for IDs your static catalog does not already publish; known IDs bypass it and keep their published metadata. Return `false` to drop the row. Providers that omit it keep the previous behavior unchanged. Prefer comparing the vendor's advertised capabilities against your own contract checks over a hand-maintained model list, and fail closed when the row carries no capability data. |
+    | Failure | Live discovery is advisory. Auth, network, timeout, pagination, parsing, empty-catalog, and filtering failures return the provider-owned static seed instead of removing the provider. |
+
+    For a non-Bearer or nonstandard list endpoint, pass options instead of
+    `true`:
+
+    ```typescript
+    liveModelDiscovery: {
+      endpointPath: "model-catalog",
+      buildRequestHeaders: ({ apiKey, discoveryApiKey }) => ({
+        "vendor-version": "2026-01-01",
+        "x-api-key": discoveryApiKey ?? apiKey ?? "",
+      }),
+      readRows: (body) =>
+        body && typeof body === "object" &&
+        Array.isArray((body as { models?: unknown }).models)
+          ? (body as { models: unknown[] }).models
+          : [],
+    },
+    ```
+
+    Do not use `endpointUrl` as an unconditional alternate host. Its
+    `requireBaseUrl` check is the credential-isolation boundary for providers
+    whose model-list host differs from their inference host.
+
+    If the provider needs custom model semantics rather than the conservative
+    OpenAI-compatible projection, keep only that projection in the plugin. Pass
+    it as `projectRows`; the shared runtime still owns guarded fetches,
+    provider-auth headers, cache admission, and static fallback.
 
     Use `buildLiveModelProviderConfig` when the live API only tells you which
     provider-owned static catalog rows are currently available:
@@ -263,6 +349,11 @@ API key auth, and dynamic model resolution.
         fetchGuard: params.fetchGuard,
         ttlMs: 60_000,
         auditContext: "acme-ai-model-discovery",
+        projectRows: (rows, fallback) =>
+          rows.flatMap((row) => {
+            const model = projectAcmeModel(row, fallback);
+            return model ? [model] : [];
+          }),
       });
     }
 
@@ -303,37 +394,6 @@ API key auth, and dynamic model resolution.
     });
     ```
 
-    Use `getCachedLiveProviderModelRows` when the provider API returns richer
-    metadata and the plugin needs to project rows into OpenClaw model
-    definitions itself:
-
-    ```typescript index.ts
-    import {
-      getCachedLiveProviderModelRows,
-      LiveModelCatalogHttpError,
-    } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-
-    async function discoverAcmeModels(apiKey: string) {
-      try {
-        const rows = await getCachedLiveProviderModelRows({
-          providerId: "acme-ai",
-          endpoint: "https://api.acme-ai.com/v1/models",
-          apiKey,
-          ttlMs: 60_000,
-          auditContext: "acme-ai-model-discovery",
-        });
-        return rows
-          .map((row) => projectAcmeModel(row))
-          .filter((model) => model !== null);
-      } catch (error) {
-        if (error instanceof LiveModelCatalogHttpError) {
-          return STATIC_MODELS;
-        }
-        throw error;
-      }
-    }
-    ```
-
     `run` should stay auth-gated and return `null` when no usable credential is
     available. Keep an offline `staticRun` or static fallback so setup, docs,
     tests, and picker surfaces do not depend on live network access. Use a TTL
@@ -341,6 +401,57 @@ API key auth, and dynamic model resolution.
     and pass a provider-specific `readRows` / `readModelId` only when the
     upstream response is not an OpenAI-compatible `{ data: [{ id, object }] }`
     shape.
+
+    For a separate authoritative metadata feed, the same
+    `provider-catalog-live-runtime` subpath exposes `ProviderCatalogSnapshot`:
+    each entry pairs a runtime model with its lifecycle status.
+    `projectUpstreamProviderCatalogSnapshot` rebuilds that snapshot from a
+    trusted seed and accepted upstream rows, dropping withdrawn upstream-only
+    models. `projectProviderCatalogSnapshotRows` intersects advertised IDs with
+    active snapshot entries, deduplicating in endpoint order;
+    `listProviderCatalogSnapshotEntries` projects the same lifecycle facts for
+    catalog consumers. Keep seed lifecycle policy and model-specific decoration
+    in the owning plugin. Derive static fallback eligibility after refreshing
+    metadata so the first failed or fully filtered discovery uses current status.
+    Public metadata never establishes account entitlement or expands the
+    credential scope of discovery.
+
+    Official plugins use the private, pure
+    `openclaw/plugin-sdk/model-catalog-pricing` runtime subpath. It exposes
+    `normalizeModelPricingCatalog(rows, normalizePricing, options?)` for
+    provider-owned pricing feeds. It returns a map of complete costs: absent
+    prices are omitted, while malformed declared prices, invalid or duplicate
+    model IDs, and a feed with no usable prices return `undefined`. Supply the
+    provider's unit conversion. Options can select `readModelId(model)` (default
+    `model.id`), `readPricing(model)` (default `model.pricing`), and
+    `isSupportedPricing(rawPricing)` (default `true`). Declared prices are
+    normalized and validated before unsupported schedules are omitted; duplicate
+    IDs are rejected even on unpriced or unsupported rows. Non-token domains
+    can return `undefined` from `readPricing`. No auth, discovery, or runtime
+    loader is imported.
+
+    DeepInfra's `pricing-api.ts` uses these selectors for its native array and
+    `model_name` identities. Release plugins using the options contract (including
+    DeepInfra and Venice) with a matching host, and coordinate their plugin API
+    and minimum-host floors at release time. The private subpath is not an
+    independently versioned third-party compatibility API.
+
+    This subpath also exposes `normalizeOpenRouterModelPricing(pricing)` for
+    native OpenRouter pricing objects. It converts per-token rates and static
+    prompt-length overrides into a complete per-million cost schedule, without
+    network access or prices from another source. Overrides apply strictly above
+    `min_prompt_tokens`, counting uncached input, cache reads, and cache writes.
+    Matching entries apply in source order: later entries win per price key,
+    including at equal thresholds; omitted keys inherit the native base or an
+    earlier matching entry. Cache rates absent from the base default to zero.
+    Invalid effective token rates return `undefined`. Entries with time-based or
+    unknown conditions are skipped; other known charge dimensions are ignored.
+
+    When `ctx.providerIds` is present, it contains the normalized provider
+    identities selected for that catalog owner. Return `null` before resolving
+    credentials or making network requests when the hook serves none of them;
+    OpenClaw also filters returned identities to that scope. An absent scope
+    means the caller requested the full catalog.
 
     If the upstream provider uses different control tokens than OpenClaw, add a
     small bidirectional text transform instead of replacing the stream path:
@@ -458,8 +569,10 @@ API key auth, and dynamic model resolution.
     });
     ```
 
-    If resolving requires a network call, use `prepareDynamicModel` for async
-    warm-up - `resolveDynamicModel` runs again after it completes.
+    If resolving requires a network call, return the requested model directly
+    from `prepareDynamicModel`. OpenClaw applies the same configured overrides
+    and normalization as synchronous dynamic resolution. Existing hooks that
+    return nothing still retry `resolveDynamicModel` after preparation.
 
   </Step>
 
@@ -493,7 +606,8 @@ API key auth, and dynamic model resolution.
     | Family | What it wires in | Bundled examples |
     | --- | --- | --- |
     | `openai-compatible` | Shared OpenAI-style replay policy for OpenAI-compatible transports, including tool-call-id sanitation, assistant-first ordering fixes, and generic Gemini-turn validation where the transport needs it | `moonshot`, `ollama`, `xai`, `zai` |
-    | `anthropic-by-model` | Claude-aware replay policy chosen by `modelId`, so Anthropic-message transports only get Claude-specific thinking-block cleanup when the resolved model is actually a Claude id | `amazon-bedrock`, `anthropic-vertex` |
+    | `anthropic-by-model` | Claude-aware replay policy chosen by `modelId`, so Anthropic-message transports only get Claude-specific thinking-block cleanup when the resolved model is actually a Claude id | `amazon-bedrock` |
+    | `native-anthropic-by-model` | Same Claude-by-model policy as `anthropic-by-model`, plus tool-call-id sanitation and native Anthropic tool-use id preservation for transports that must keep vendor-native ids | `anthropic-vertex`, `clawrouter` |
     | `google-gemini` | Native Gemini replay policy plus bootstrap replay sanitation. The shared family keeps the text-output Gemini CLI on tagged reasoning; the direct `google` provider overrides `resolveReasoningOutputMode` to `native` because Gemini API thinking arrives as native thought parts. | `google`, `google-gemini-cli` |
     | `passthrough-gemini` | Gemini thought-signature sanitation for Gemini models running through OpenAI-compatible proxy transports; does not enable native Gemini replay validation or bootstrap rewrites | `openrouter`, `kilocode`, `opencode`, `opencode-go` |
     | `hybrid-anthropic-openai` | Hybrid policy for providers that mix Anthropic-message and OpenAI-compatible model surfaces in one plugin; optional Claude-only thinking-block dropping stays scoped to the Anthropic side | `minimax` |
@@ -503,7 +617,7 @@ API key auth, and dynamic model resolution.
     | Family | What it wires in | Bundled examples |
     | --- | --- | --- |
     | `google-thinking` | Gemini thinking payload normalization on the shared stream path | `google`, `google-gemini-cli` |
-    | `kilocode-thinking` | Kilo reasoning wrapper on the shared proxy stream path, with `kilo/auto` and unsupported proxy reasoning ids skipping injected thinking | `kilocode` |
+    | `kilocode-thinking` | Kilo reasoning wrapper on the shared proxy stream path, with `kilo-auto/balanced` and unsupported proxy reasoning ids skipping injected thinking | `kilocode` |
     | `moonshot-thinking` | Moonshot binary native-thinking payload mapping from config + `/think` level | `moonshot` |
     | `minimax-fast-mode` | MiniMax fast-mode model rewrite on the shared stream path | `minimax`, `minimax-portal` |
     | `openai-responses-defaults` | Shared native OpenAI/Codex Responses wrappers: attribution headers, `/fast`/`serviceTier`, text verbosity, native Codex web search, reasoning-compat payload shaping, and Responses context management | `openai` |
@@ -553,15 +667,23 @@ API key auth, and dynamic model resolution.
         wrapStreamFn: (ctx) => {
           if (!ctx.streamFn) return undefined;
           const inner = ctx.streamFn;
-          return async (params) => {
-            params.headers = {
-              ...params.headers,
-              "X-Acme-Version": "2",
-            };
-            return inner(params);
-          };
+          return (model, context, options) =>
+            inner(model, context, {
+              ...options,
+              headers: {
+                ...options?.headers,
+                "X-Acme-Version": "2",
+              },
+            });
         },
         ```
+
+        Existing wrappers may still pass the deprecated `maxRetries` stream option,
+        including `0`. Built-in text transports ignore it: the embedded runner owns
+        retry budgeting, and SDK-internal retries stay disabled. New wrappers should
+        omit the option. This shipped source contract is retained until a future
+        Plugin SDK major release and a published-plugin reader sweep confirm removal
+        is safe; it does not change image-generation or native-runtime retry policy.
       </Tab>
       <Tab title="Native transport identity">
         For providers that need native request/session headers or metadata on
@@ -576,14 +698,18 @@ API key auth, and dynamic model resolution.
             session_id: ctx.sessionId ?? "",
             turn_id: ctx.turnId,
           },
-        }),
-        resolveWebSocketSessionPolicy: (ctx) => ({
-          headers: {
-            "x-session-id": ctx.sessionId ?? "",
+          websocket: {
+            headers: {
+              "x-session-id": ctx.sessionId ?? "",
+            },
+            degradeCooldownMs: 60_000,
           },
-          degradeCooldownMs: 60_000,
         }),
         ```
+
+        The older `resolveWebSocketSessionPolicy` hook remains supported but is
+        deprecated. Move its fields under `resolveTransportTurnState.websocket`;
+        fields from the new hook take precedence during migration.
       </Tab>
       <Tab title="Usage and billing">
         For providers that expose usage/billing data:
@@ -598,73 +724,121 @@ API key auth, and dynamic model resolution.
         },
         ```
 
-        `resolveUsageAuth` has three outcomes. Return `{ token, accountId? }`
-        when the provider has a usage/billing credential. Return
+        `resolveUsageAuth` has three outcomes. Return
+        `{ token, accountId?, subscriptionType?, rateLimitTier? }` when the
+        provider has a usage/billing credential (the optional fields carry
+        non-secret plan metadata from the resolved profile into
+        `fetchUsageSnapshot`). Return
         `{ handled: true }` only when the provider has definitively handled usage
         auth but has no usable usage token, and OpenClaw must skip generic
         API-key/OAuth fallback. Return `null` or `undefined` when the provider did
         not handle the request and OpenClaw should continue with generic fallback.
+
+        Declare the provider id in `contracts.usageProviders`. When that manifest
+        contract and **both** hooks are present, OpenClaw automatically includes
+        the provider in usage collection without loading unrelated provider
+        plugins. No core allowlist update is required.
+        `fetchUsageSnapshot` returns the shared provider-neutral shape:
+
+        - `plan`: provider-reported subscription or key label
+        - `windows`: resettable quota windows as used percentages
+        - `billing`: typed `balance`, `spend`, or `budget` entries; `unit` can be
+          an ISO currency or a provider unit such as `credits`
+        - `summary`: compact provider-specific context that does not fit those
+          structured fields
+
+        Keep currency semantics exact. A provider credit is not USD unless the
+        upstream contract says so. A plugin that implements only
+        `fetchUsageSnapshot` remains available for explicit/synthetic callers but
+        is not auto-discovered, because OpenClaw cannot resolve its usage credential.
       </Tab>
     </Tabs>
 
-    <Accordion title="All available provider hooks">
-      OpenClaw calls hooks in this order. Most providers only use 2-3:
+    <Accordion title="Common provider hooks">
+      OpenClaw calls hooks in roughly this order for model/provider plugins.
+      Most providers only use 2-3. This is not the full `ProviderPlugin`
+      contract - see [Internals: Provider Runtime
+      Hooks](/plugins/architecture-internals#provider-runtime-hooks) for the
+      complete, currently-accurate hook list and fallback notes.
       Compatibility-only provider fields that OpenClaw no longer calls, such as
       `ProviderPlugin.capabilities` and `suppressBuiltInModel`, are not listed
       here.
 
-      | # | Hook | When to use |
-      | --- | --- | --- |
-      | 1 | `catalog` | Model catalog or base URL defaults |
-      | 2 | `applyConfigDefaults` | Provider-owned global defaults during config materialization |
-      | 3 | `normalizeModelId` | Legacy/preview model-id alias cleanup before lookup |
-      | 4 | `normalizeTransport` | Provider-family `api` / `baseUrl` cleanup before generic model assembly |
-      | 5 | `normalizeConfig` | Normalize `models.providers.<id>` config |
-      | 6 | `applyNativeStreamingUsageCompat` | Native streaming-usage compat rewrites for config providers |
-      | 7 | `resolveConfigApiKey` | Provider-owned env-marker auth resolution |
-      | 8 | `resolveSyntheticAuth` | Local/self-hosted or config-backed synthetic auth |
-      | 9 | `shouldDeferSyntheticProfileAuth` | Lower synthetic stored-profile placeholders behind env/config auth |
-      | 10 | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
-      | 11 | `prepareDynamicModel` | Async metadata fetch before resolving |
-      | 12 | `normalizeResolvedModel` | Transport rewrites before the runner |
-      | 13 | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
-      | 14 | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
-      | 15 | `resolveReasoningOutputMode` | Tagged vs native reasoning-output contract |
-      | 16 | `prepareExtraParams` | Default request params |
-      | 17 | `createStreamFn` | Fully custom StreamFn transport |
-      | 19 | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
-      | 20 | `resolveTransportTurnState` | Native per-turn headers/metadata |
-      | 21 | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
-      | 22 | `formatApiKey` | Custom runtime token shape |
-      | 23 | `refreshOAuth` | Custom OAuth refresh |
-      | 24 | `buildAuthDoctorHint` | Auth repair guidance |
-      | 25 | `matchesContextOverflowError` | Provider-owned overflow detection |
-      | 26 | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
-      | 27 | `isCacheTtlEligible` | Prompt cache TTL gating |
-      | 28 | `buildMissingAuthMessage` | Custom missing-auth hint |
-      | 29 | `augmentModelCatalog` | Synthetic forward-compat rows |
-      | 30 | `resolveThinkingProfile` | Model-specific `/think` option set |
-      | 31 | `isBinaryThinking` | Binary thinking on/off compatibility |
-      | 32 | `supportsXHighThinking` | `xhigh` reasoning support compatibility |
-      | 33 | `resolveDefaultThinkingLevel` | Default `/think` policy compatibility |
-      | 34 | `isModernModelRef` | Live/smoke model matching |
-      | 35 | `prepareRuntimeAuth` | Token exchange before inference |
-      | 36 | `resolveUsageAuth` | Custom usage credential parsing |
-      | 37 | `fetchUsageSnapshot` | Custom usage endpoint |
-      | 38 | `createEmbeddingProvider` | Provider-owned embedding adapter for memory/search |
-      | 39 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
-      | 40 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
-      | 41 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
-      | 42 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
+      Keep `resolveSyntheticAuth` synchronous and bounded. External process/network login
+      checks belong in `prepareSyntheticAuth`, which receives the captured config,
+      environment, and cancellation signal and returns a synthetic auth result or
+      no result. OpenClaw retains completed availability within that preparation
+      generation. Read-only workers receive the final provider-ref outcome (including
+      unavailable), preserving alias precedence without rerunning external checks.
+      Cancelled preparation must reject after cleanup, not report a missing login.
+
+      | Hook | When to use |
+      | --- | --- |
+      | `catalog` | Model catalog or base URL defaults |
+      | `applyConfigDefaults` | Provider-owned global defaults during config materialization |
+      | `normalizeModelId` | Legacy/preview model-id alias cleanup before lookup |
+      | `normalizeTransport` | Provider-family `api` / `baseUrl` cleanup before generic model assembly |
+      | `normalizeConfig` | Normalize `models.providers.<id>` config |
+      | `applyNativeStreamingUsageCompat` | Native streaming-usage compat rewrites for config providers |
+      | `resolveConfigApiKey` | Provider-owned env-marker auth resolution |
+      | `resolveSyntheticAuth` | Local/self-hosted or config-backed synthetic auth |
+      | `prepareSyntheticAuth` | Asynchronously verify external auth before synchronous availability reads |
+      | `resolveExternalAuthProfiles` | Overlay provider-owned external auth profiles for CLI/app-managed credentials |
+      | `shouldDeferSyntheticProfileAuth` | Lower synthetic stored-profile placeholders behind env/config auth |
+      | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
+      | `prepareDynamicModel` | Return an asynchronously discovered model, or warm reusable metadata before sync resolution |
+      | `normalizeResolvedModel` | Transport rewrites before the runner |
+      | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
+      | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
+      | `resolveReasoningOutputMode` | Tagged vs native reasoning-output contract |
+      | `prepareExtraParams` | Default request params |
+      | `createStreamFn` | Fully custom StreamFn transport |
+      | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
+      | `resolveTransportTurnState` | Native per-turn headers/metadata and WebSocket headers/cool-down |
+      | `resolveWebSocketSessionPolicy` | Deprecated WebSocket compatibility hook; use `resolveTransportTurnState` |
+      | `formatApiKey` | Custom runtime token shape |
+      | `loginOAuth` | Callback-based OAuth login for the session SDK `AuthStorage` API |
+      | `refreshOAuth` | Custom OAuth refresh |
+      | `buildAuthDoctorHint` | Auth repair guidance |
+      | `matchesContextOverflowError` | Provider-owned overflow detection |
+      | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
+      | `isCacheTtlEligible` | Prompt cache TTL gating |
+      | `buildMissingAuthMessage` | Custom missing-auth hint |
+      | `augmentModelCatalog` | Synthetic forward-compat rows (deprecated - prefer `registerModelCatalogProvider`) |
+      | `resolveThinkingProfile` | Model-specific `/think` option set |
+      | `isBinaryThinking` | Binary thinking on/off compatibility (deprecated - prefer `resolveThinkingProfile`) |
+      | `supportsXHighThinking` | `xhigh` reasoning support compatibility (deprecated - prefer `resolveThinkingProfile`) |
+      | `resolveDefaultThinkingLevel` | Default `/think` policy compatibility (deprecated - prefer `resolveThinkingProfile`) |
+      | `isModernModelRef` | Live/smoke model matching |
+      | `prepareRuntimeAuth` | Token exchange before inference |
+      | `resolveUsageAuth` | Custom usage credential parsing |
+      | `fetchUsageSnapshot` | Custom usage endpoint |
+      | `createEmbeddingProvider` | Provider-owned embedding adapter for memory/search |
+      | `buildReplayPolicy` | Custom transcript replay/compaction policy |
+      | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
+      | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
+      | `onModelSelected` | Post-selection callback (e.g. telemetry) |
 
       Runtime fallback notes:
 
-      - `normalizeConfig` checks the matched provider first, then other hook-capable provider plugins until one actually changes the config. If no provider hook rewrites a supported Google-family config entry, the bundled Google config normalizer still applies.
+      - Error classification uses the prepared provider owner or already loaded provider hooks. `matchesContextOverflowError` and `classifyFailoverReason` never trigger plugin discovery while handling an error; provider preparation owns loading those hooks.
+      - `normalizeConfig` resolves one owning plugin per provider id (bundled providers first, then the matched runtime plugin) and calls only that hook - there is no scan across other providers. Google's own `normalizeConfig` hook is what normalizes `google` / `google-vertex` / `google-antigravity` config entries; it is not a separate core fallback.
       - `resolveConfigApiKey` uses the provider hook when exposed. Amazon Bedrock keeps AWS env-marker resolution in its provider plugin; runtime auth itself still uses the AWS SDK default chain when configured with `auth: "aws-sdk"`.
       - `resolveThinkingProfile(ctx)` receives the selected `provider`, `modelId`, optional merged `reasoning` catalog hint, and optional merged model `compat` facts. Use `compat` only to select the provider's thinking UI/profile.
-      - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over `before_prompt_build` when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
+      - `normalizeResolvedModel(ctx)` can set `compactionThinkingDefault` on the returned `ProviderRuntimeModel` when the provider has a preferred embedded-summary effort. This is prepared runtime metadata, not an operator setting or catalog field. Explicit `agents.defaults.compaction.thinkingLevel` takes precedence; otherwise the host uses this preference and then `low`. The chosen effort is still clamped to the actual compaction candidate.
+      - `resolveSystemPromptContribution` lets a provider inject cache-aware system-prompt guidance for a model family. Prefer it over the legacy plugin-wide `before_prompt_build` hook when the behavior belongs to one provider/model family and should preserve the stable/dynamic cache split.
 
-      For detailed descriptions and real-world examples, see [Internals: Provider Runtime Hooks](/plugins/architecture-internals#provider-runtime-hooks).
+      Bundled and trusted official plugins can also export
+      `resolveToolSearchMode(ctx)` from their lightweight `provider-policy-api`
+      artifact. The context contains the final `provider`, `modelId`, `api`, and
+      optional `baseUrl`; its type is exported from
+      `openclaw/plugin-sdk/provider-model-types`. Return `"tools"` to prefer
+      structured Tool Search, `false` to veto the managed-local-service default,
+      or `undefined` to leave that decision to the host. The host records the
+      result on the resolved runtime model rather than writing configuration.
+      Explicit `tools.toolSearch` settings take precedence. This hook changes
+      schema exposure, not tool permissions or availability.
+
     </Accordion>
 
   </Step>
@@ -721,9 +895,21 @@ API key auth, and dynamic model resolution.
 
         Use `assertOkOrThrowProviderError(...)` for provider HTTP failures so
         plugins share capped error-body reads, JSON error parsing, and
-        request-id suffixes.
+        request-id suffixes. Pass `{ requestHeaders: headers }` as its third
+        argument when requests carry credentials: this redacts reflected header
+        values before error details and metadata are retained. Pass the same
+        option to `readProviderJsonResponse(...)` to omit unsafe parser excerpts.
+        For provider-specific failure payloads, use
+        `redactProviderResponseErrorText(text, headers)` or the bounded
+        `readProviderResponseErrorText(response, limitBytes, headers)` helper
+        from the same SDK entrypoint.
       </Tab>
       <Tab title="Realtime transcription">
+        Consumers can pass candidate provider IDs as the optional second argument
+        to `listRealtimeTranscriptionProviders(cfg, providerIds)`. This discovers
+        providers named in plugin-local config without broadening the active
+        registry or bypassing plugin enablement and allow/deny policy.
+
         Prefer `createRealtimeTranscriptionWebSocketSession(...)` - the shared
         helper handles proxy capture, reconnect backoff, close flushing, ready
         handshakes, audio queueing, and close-event diagnostics. Your plugin
@@ -770,8 +956,22 @@ API key auth, and dynamic model resolution.
         `openclaw/plugin-sdk/provider-http`. The helper normalizes upload
         filenames, including AAC uploads that need an M4A-style filename for
         compatible transcription APIs.
+
+        Official plugins can use the private `blob-runtime` helper
+        `bufferToBlobPart(buffer)` for other multipart uploads. Pass it directly to
+        `new Blob(...)` to preserve the Buffer range without an intermediate copy;
+        shared backing is copied when needed. Construct the Blob before awaiting
+        other work so it snapshots the bytes immediately.
       </Tab>
       <Tab title="Realtime voice">
+        Consumers can pass candidate provider IDs as the optional second argument
+        to `listRealtimeVoiceProviders(cfg, providerIds)`. Omit the argument for
+        ordinary catalog discovery; per-call candidates do not change that catalog.
+        Automatic realtime voice and Voice Call transcription selection uses declared alias config as
+        defaults, with earlier aliases preferred and canonical values taking precedence.
+        An explicitly selected alias still overrides canonical config without inheriting
+        settings from other aliases.
+
         ```typescript
         api.registerRealtimeVoiceProvider({
           id: "acme-ai",
@@ -781,6 +981,7 @@ API key auth, and dynamic model resolution.
             inputAudioFormats: [{ encoding: "pcm16", sampleRateHz: 24000, channels: 1 }],
             outputAudioFormats: [{ encoding: "pcm16", sampleRateHz: 24000, channels: 1 }],
             supportsBargeIn: true,
+            handlesInputAudioBargeIn: true,
             supportsToolCalls: true,
           },
           isConfigured: ({ providerConfig }) => Boolean(providerConfig.apiKey),
@@ -806,8 +1007,141 @@ API key auth, and dynamic model resolution.
         clients. Implement `handleBargeIn` when a transport can detect that a
         human is interrupting assistant playback and the provider supports
         truncating or clearing the active audio response.
+        When native audio events identify an item, pass that identity alongside
+        PCM as `req.onAudio(audio, { itemId })`; omit
+        metadata for transports without native item IDs. If supplied,
+        `req.getPlaybackState()` returns retained items in playback order with
+        cumulative, item-relative `audioEndMs`; queued items have zero duration.
+        Snapshot these offsets before clearing output and synchronize discarded
+        output using the provider's native cancellation and truncation semantics.
+        An empty snapshot means no retained audio, even if a new response is
+        generating. Hosts without playback measurements omit the callback and
+        keep the existing media-timestamp and playback-mark contract.
+
+        After emitting PCM, providers can call `req.onMark?.(name, acknowledge)`
+        with an acknowledgment callback bound to that exact provider connection.
+        The callback must reject replaced connections and retired marks, while
+        remaining valid if a newer response starts before older playback drains.
+        Transports invoke scoped callbacks in order after consuming the associated
+        PCM, not when receiving or encoding it. Cancellation and failure retire
+        provider mark ownership separately; discarded PCM is never reported as played.
+        The existing `onMark(name)` and `bridge.acknowledgeMark(name)` contract
+        remains available to remote transports and installed providers. Discord
+        retains immediate acknowledgments for those legacy unscoped marks.
+        `onEvent` observes diagnostic events. OpenAI and xAI report outbound
+        frames after submitting them to the local socket; the callback neither
+        acknowledges remote receipt nor vetoes the frame. Control requested
+        inside an observer runs after that frame.
+        `submitToolResult` may return `void` for synchronous submission, or a
+        `Promise<void>` for an asynchronous completion boundary the provider
+        bridge can expose. Gateway relay sessions wait for that promise before
+        confirming a final result or clearing the linked run; reject it when
+        submission fails.
+        Set `supportsToolResultSuppression: false` when the provider cannot
+        honor `options.suppressResponse`. OpenClaw then avoids suppression for
+        internal forced-consult and cancellation results, and rejects direct
+        suppressed-result requests instead of silently starting a response.
+        Consumers of `createRealtimeVoiceBridgeSession` may likewise return a
+        promise from `onToolCall`; synchronous throws and rejections are routed
+        to the session's `onError` callback.
+        The host may pass `sendUserMessage(text, { toolChoice })` while the
+        response state is idle to force one named function for that response;
+        later responses return to the session's configured tool choice.
+        Set `handlesInputAudioBargeIn` only when provider VAD confirms an
+        interruption by calling `onClearAudio("barge-in")`. Providers that omit
+        the flag use OpenClaw's local input-audio fallback detection.
+
+        A browser-session request's `clientControl: { owner: "gateway" }`
+        records explicitly negotiated server-owned control. The request type
+        requires `gatewayControl.bindControl` with that claim; requests without
+        it retain the legacy callback shape. The presence of
+        `gatewayControl` callbacks alone is not that negotiation: native
+        delegation can also use them for lifecycle handling while the browser
+        retains its data channel and transcript reporting.
+
+        For negotiated control, keep vendor authentication and signaling
+        private, bind supported `submitToolResult` and `sendUserMessage`
+        commands with `gatewayControl.bindControl(...)`, and forward provider
+        readiness, transcripts, and terminal events through the supplied
+        callbacks. Bind instance methods to their receiver. A sideband does not
+        need to invent media methods or create another audio peer.
+        `bindBridge(fullBridge)` remains available for the stable 2026.8.1 SDK
+        contract and is removed only with a versioned SDK break. The Gateway
+        remains the owner of tool policy and run lifecycle; never infer control
+        ownership from a model name or duplicate client-owned transcript writes.
+
+        Bridge requests and negotiated browser `gatewayControl` may provide
+        `handleDelegationInput(rawText, respond): "control" | "consult"`.
+        Invoke this synchronous, side-effectful admission hook on native delegation
+        input before consuming transcript context, replacing pending work, or
+        aborting an active consultation. Only `consult` permits task fallthrough.
+        A `control` result consumes the request, including refusal or failure; do
+        not launch a task or send a task receipt. Status and cancellation are
+        controls even while idle; redirects and follow-ups require call-owned work.
+        Ordinary idle requests still fall through to consultation.
+
+        The host prepares delegation ownership from the resolved
+        `handlesAgentConsult` capability, not `supportsToolCalls: false` or callback
+        presence. In this mode, finalized transcripts only update history and
+        observability. Tool-capable, unspecified, and tool-less nondelegating
+        providers retain their existing transcript behavior. Without the hook,
+        retain the existing delegation and acknowledgment policy.
+
+        The host binds steering authority to the actual admitted backend attempt
+        after harness policy preparation. Backing agent harnesses forward the
+        existing attempt fingerprint when registering their handle. Realtime voice
+        providers do not calculate authority or copy a target fingerprint into
+        incoming user input. Caller
+        policy is projected by the host against the exact live registration, and
+        closed or replaced owners refuse injection. Normal reply-owned attempts
+        retain their original authority snapshot and concrete model route. A
+        maintenance attempt that only borrows a reply operation for lifecycle
+        management receives authority from its own prepared execution instead.
+        Backend queues revalidate ownership after asynchronous input preparation,
+        immediately before inserting a message or answering a pending question.
+
+        Bind `respond(message)` to the incoming control delegation and exact
+        call/transport instance. Submit at most once, consuming the response before
+        the first send attempt; multiple wire chunks are one response. Do not retry
+        it on send failure, target a newer delegation/socket, or deliver after
+        close/detach. Cancellation may abort the backing task without invalidating
+        its control reply. Keep delegation IDs and wire encoding inside the provider;
+        independent host speech and task receipts use session context instead.
+        Submission does not establish completion or audible delivery.
+
+        The session facade admits this hook after bridge adoption, including before
+        readiness, and fences actions and replies after closure. Callback failures
+        are contained without task fallthrough. `onTranscript` retains its `void`
+        callback contract, including assignable async handlers and close-time final
+        transcript flushing.
+
+        A host `runAgentConsult` rejection named `AbortError` represents
+        cancellation, even when the provider's own signal is still live. Do not
+        turn it into a failed-task or retry reply. `TimeoutError` remains a
+        failure. Closing a transport and canceling accepted host work are
+        separate lifecycle operations.
       </Tab>
       <Tab title="Media understanding">
+        Audio providers with their own credential and endpoint contracts can
+        implement `transcribeAudioWithContext(request)`. The host calls it after
+        loading each audio file. The request includes the audio bytes, filename,
+        model, prompt, language, timeout, transport settings, configuration,
+        agent directory, and selected profile. Resolve credentials for that call;
+        do not retain credentials across attachment downloads.
+
+        Return `{ ok: true, value: { text, model } }` after transcription. Return
+        `{ ok: false, error }` only for authentication or configuration rejected
+        **before uploading audio**. The host records that error and automatic
+        selection may try the next provider or local backend. Canonical missing
+        provider auth leaves the automatic candidate unavailable without a failed
+        attempt. Upload and HTTP failures must throw: automatic selection then
+        stops without sending the recording to another provider. Explicit model
+        lists retain their authored fallback order.
+
+        Return the model when known; otherwise the host retains the requested
+        model in its result. `transcribeAudio` remains available for providers
+        using host-owned API-key resolution and rotation.
+
         ```typescript
         api.registerMediaUnderstandingProvider({
           id: "acme-ai",
@@ -864,28 +1198,53 @@ API key auth, and dynamic model resolution.
 
         Declare the same id in `contracts.embeddingProviders`. This is the
         general embedding contract for reusable vector generation, including
-        memory search. `registerMemoryEmbeddingProvider(...)` is deprecated
-        compatibility for existing memory-specific adapters.
+        memory search. The retired memory-specific registrar and manifest
+        contract are no longer accepted.
+
+        Providers that accept model aliases can expose
+        `normalizeModel(options): string`. Memory uses this synchronous hook for
+        both creation options and cold index identity checks. Keep it configuration-only:
+        do not authenticate or access the network. Make normalization idempotent and
+        reuse it in `create`, which may receive an already-normalized model or be
+        called outside memory. Return an empty string only when the
+        model remains unknown until discovery; do not turn an invalid explicit
+        model into an omitted selection. For an exact pre-initialization identity,
+        `resolveIndexIdentity(options)` additionally supplies the required
+        `cacheKeyData` and any equivalent persisted aliases.
       </Tab>
       <Tab title="Image and video generation">
-        Video capabilities use a **mode-aware** shape: `generate`,
-        `imageToVideo`, and `videoToVideo`. Flat aggregate fields like
-        `maxInputImages` / `maxInputVideos` / `maxDurationSeconds` are not
-        enough to advertise transform-mode support or disabled modes cleanly.
-        Music generation follows the same pattern with explicit `generate` /
-        `edit` blocks.
+        Image and video capabilities use a **mode-aware** shape. Image
+        providers declare required `generate` and `edit` capability blocks;
+        video providers declare `generate`, `imageToVideo`, and
+        `videoToVideo`. Flat aggregate fields like `maxInputImages` /
+        `maxInputVideos` / `maxDurationSeconds` are not enough to advertise
+        transform-mode support or disabled modes cleanly. Music generation
+        follows the same `generate` / `edit` pattern.
 
         ```typescript
         api.registerImageGenerationProvider({
           id: "acme-ai",
           label: "Acme Images",
-          generate: async (req) => ({ /* image result */ }),
+          capabilities: {
+            generate: { maxCount: 4, supportsSize: true },
+            edit: { enabled: false },
+          },
+          generateImage: async (req) => ({
+            images: [
+              {
+                buffer: await generateAcmeImageBytes(req),
+                mimeType: "image/png",
+                fileName: "acme-image.png",
+              },
+            ],
+          }),
         });
 
         api.registerVideoGenerationProvider({
           id: "acme-ai",
           label: "Acme Video",
           defaultTimeoutMs: 600_000,
+          models: ["acme-video", "acme-image-video"],
           capabilities: {
             generate: { maxVideos: 1, maxDurationSeconds: 10, supportsResolution: true },
             imageToVideo: {
@@ -897,9 +1256,49 @@ API key auth, and dynamic model resolution.
             },
             videoToVideo: { enabled: false },
           },
-          generateVideo: async (req) => ({ videos: [] }),
+          catalogByModel: {
+            "acme-image-video": {
+              modes: ["imageToVideo"],
+              capabilities: {
+                imageToVideo: {
+                  enabled: true,
+                  maxVideos: 1,
+                  maxInputImages: 1,
+                  resolutions: ["480P", "720P", "1080P"],
+                  supportsResolution: true,
+                },
+                videoToVideo: { enabled: false },
+              },
+            },
+          },
+          generateVideo: async (req) => ({
+            videos: [
+              {
+                url: await generateAcmeVideoUrl(req),
+                mimeType: "video/mp4",
+              },
+            ],
+          }),
         });
         ```
+
+        The illustrative helpers stand in for provider calls: the image helper
+        returns non-empty encoded bytes, while the video helper returns a hosted
+        media URL. Video providers may return non-empty encoded bytes instead,
+        or both when the URL is a delivery fallback. Empty result arrays and
+        empty buffers are candidate failures, except that a video asset with a
+        usable URL ignores an empty buffer and continues with the URL.
+
+        `capabilities` is required on both provider types; `edit` and the
+        video transform blocks (`imageToVideo`, `videoToVideo`) always need an
+        explicit `enabled` flag.
+
+        Use `catalogByModel` when a listed model's static modes or capabilities
+        differ from the provider defaults. This metadata keeps
+        `video_generate action=list` and model catalogs accurate without
+        invoking provider code. Request-time capability lookup and enforcement
+        still belong in `resolveModelCapabilities` and `generateVideo`; reuse
+        the same capability constant for both paths when possible.
       </Tab>
       <Tab title="Web fetch and search">
         ```typescript
@@ -926,9 +1325,43 @@ API key auth, and dynamic model resolution.
         api.registerWebSearchProvider({
           id: "acme-ai-search",
           label: "Acme Search",
-          search: async (req) => ({ content: [] }),
+          hint: "Search the web through Acme's search backend.",
+          envVars: ["ACME_SEARCH_API_KEY"],
+          placeholder: "acme-...",
+          signupUrl: "https://acme.example.com/search",
+          credentialPath: "plugins.entries.acme.config.webSearch.apiKey",
+          getCredentialValue: (searchConfig) => searchConfig?.acme?.apiKey,
+          setCredentialValue: (searchConfigTarget, value) => {
+            const acme = (searchConfigTarget.acme ??= {});
+            acme.apiKey = value;
+          },
+          createTool: () => ({
+            description: "Search the web through Acme Search.",
+            parameters: {},
+            execute: async (args) => ({ content: [] }),
+          }),
         });
         ```
+
+        Both provider types share the same credential-wiring shape:
+        `hint`, `envVars`, `placeholder`, `signupUrl`, `credentialPath`,
+        `getCredentialValue`, `setCredentialValue`, and `createTool` are all
+        required.
+
+        Search providers using `openclaw/plugin-sdk/provider-web-search` should
+        resolve `resolveSearchCacheTtlMs(searchConfig)` once per execution and
+        pass that value to both `readCachedSearchPayload(cacheKey, ttlMs)` and
+        `writeCachedSearchPayload(cacheKey, payload, ttlMs)`. A zero TTL bypasses
+        reads and writes; a positive TTL bounds entry age without extending its
+        original expiry. Reads return a payload marked `cached: true`, or
+        `undefined` on a miss. The reader's `ttlMs` argument is optional:
+        existing one-argument calls continue to use the stored expiry alone.
+
+        Both tool definitions accept `execute(args, context?)`, where the optional
+        context carries `signal?: AbortSignal`. Forward that signal to network
+        requests and check cancellation after asynchronous work. Existing
+        one-argument implementations remain valid; OpenClaw rejects late fetch
+        results after cancellation before publishing them to its fetch cache.
       </Tab>
     </Tabs>
 
@@ -979,8 +1412,8 @@ clawhub package publish your-org/your-plugin --dry-run
 clawhub package publish your-org/your-plugin
 ```
 
-Do not use the legacy skill-only publish alias here; plugin packages should use
-`clawhub package publish`.
+`clawhub skill publish <path>` is a different command for publishing a skill
+folder, not a plugin package - do not use it here.
 
 ## File structure
 

@@ -10,9 +10,9 @@ export {
   OPENAI_DEFAULT_TTS_MODEL,
   OPENAI_DEFAULT_TTS_VOICE,
 } from "./default-models.js";
-export { buildOpenAICodexProvider } from "./openai-chatgpt-catalog.js";
+export { openaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 export { loginOpenAICodexOAuth } from "./openai-chatgpt-oauth.runtime.js";
 export { refreshOpenAICodexToken } from "./openai-chatgpt-provider.runtime.js";
-export { buildOpenAICodexProviderPlugin, buildOpenAIProvider } from "./openai-provider.js";
+export { buildOpenAIProvider } from "./openai-provider.js";
 export { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 export { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";

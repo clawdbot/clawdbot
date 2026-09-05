@@ -3,112 +3,57 @@
  *
  * Implements only the Gateway calls needed by session tools and rejects unsupported methods.
  */
+import { normalizeFastMode, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsListParams,
   SessionsResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import type {
-  ReadSessionMessagesAsyncOptions,
-  SessionTranscriptReadScope,
-} from "../../gateway/session-transcript-readers.js";
-import type { SessionsListResult } from "../../gateway/session-utils.types.js";
-import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
+import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { parseAgentSessionKey, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import {
-  normalizeFastMode,
-  type FastMode,
-} from "@openclaw/normalization-core/string-coerce";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { readPositiveIntegerParam } from "./common.js";
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readToolStringParam,
+} from "./common.js";
 
 type EmbeddedCallGateway = <T = Record<string, unknown>>(opts: CallGatewayOptions) => Promise<T>;
 
-interface EmbeddedGatewayRuntime {
-  resolveSessionAgentId: (opts: {
-    sessionKey: string;
-    config: OpenClawConfig;
-    agentId?: string;
-  }) => string;
-  getRuntimeConfig: () => OpenClawConfig;
-  augmentChatHistoryWithCliSessionImports: (opts: {
-    entry: unknown;
-    provider: string | undefined;
-    localMessages: unknown[];
-  }) => unknown[];
-  getMaxChatHistoryMessagesBytes: () => number;
-  augmentChatHistoryWithCanvasBlocks: (msgs: unknown[]) => unknown[];
-  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: number;
-  enforceChatHistoryFinalBudget: (opts: { messages: unknown[]; maxBytes: number }) => {
-    messages: unknown[];
-  };
-  replaceOversizedChatHistoryMessages: (opts: {
-    messages: unknown[];
-    maxSingleMessageBytes: number;
-  }) => { messages: unknown[] };
-  resolveEffectiveChatHistoryMaxChars: (cfg: OpenClawConfig) => number;
-  projectRecentChatDisplayMessages: (
-    msgs: unknown[],
-    opts?: { maxChars?: number; maxMessages?: number },
-  ) => unknown[];
-  capArrayByJsonBytes: (items: unknown[], maxBytes: number) => { items: unknown[] };
-  listSessionsFromStoreAsync: (opts: {
-    cfg: OpenClawConfig;
-    storePath: string;
-    store: unknown;
-    opts: SessionsListParams;
-  }) => Promise<SessionsListResult>;
-  loadCombinedSessionStoreForGateway: (
-    cfg: OpenClawConfig,
-    opts?: { agentId?: string },
-  ) => {
-    storePath: string;
-    store: unknown;
-  };
-  resolveSessionKeyFromResolveParams: (opts: {
-    cfg: OpenClawConfig;
-    p: SessionsResolveParams;
-  }) => Promise<SessionsResolveResult>;
-  loadSessionEntry: (
-    sessionKey: string,
-    opts?: { agentId?: string },
-  ) => {
-    cfg: OpenClawConfig;
-    storePath: string | undefined;
-    entry: Record<string, unknown> | undefined;
-  };
-  readSessionMessagesAsync: (
-    scope: SessionTranscriptReadScope,
-    opts: ReadSessionMessagesAsyncOptions,
-  ) => Promise<unknown[]>;
-  resolveSessionModelRef: (
-    cfg: OpenClawConfig,
-    entry: unknown,
-    sessionAgentId: string,
-  ) => { provider: string | undefined };
-}
+const SESSIONS_SEARCH_MAX_QUERY_CHARS = 4096;
+
+type EmbeddedGatewayRuntime = typeof import("./embedded-gateway-stub.runtime.js");
 
 let runtimeMod: EmbeddedGatewayRuntime | undefined;
 
 async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
   if (!runtimeMod) {
     // Lazy import keeps embedded tools cheap and gives tests a single mock boundary.
-    runtimeMod = (await import("./embedded-gateway-stub.runtime.js")) as EmbeddedGatewayRuntime;
+    runtimeMod = await import("./embedded-gateway-stub.runtime.js");
   }
   return runtimeMod;
+}
+
+function readOffsetParam(params: Record<string, unknown>): number | undefined {
+  const offset = readNonNegativeIntegerParam(params, "offset");
+  if (params.offset !== undefined && offset === undefined) {
+    throw new Error("offset must be a non-negative integer");
+  }
+  return offset;
 }
 
 async function handleSessionsList(params: Record<string, unknown>) {
   const rt = await getRuntime();
   const cfg = rt.getRuntimeConfig();
   const opts = params as SessionsListParams;
-  const { storePath, store } = rt.loadCombinedSessionStoreForGateway(cfg, {
+  const { storePath, store, targetsBySessionKey } = rt.loadCombinedSessionStoreForGatewayCore(cfg, {
     agentId: opts.agentId,
+    projection: "list",
   });
   return rt.listSessionsFromStoreAsync({
     cfg,
     storePath,
     store,
+    targetsBySessionKey,
     opts,
   });
 }
@@ -118,6 +63,7 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   const cfg = rt.getRuntimeConfig();
   const resolved = await rt.resolveSessionKeyFromResolveParams({
     cfg,
+    client: null,
     p: params as SessionsResolveParams,
   });
   if (!resolved.ok) {
@@ -126,13 +72,83 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   if ("missing" in resolved) {
     return { ok: false };
   }
-  return { ok: true, key: resolved.key };
+  if ("ambiguous" in resolved) {
+    return { ok: false, candidates: resolved.candidates };
+  }
+  return { ok: true, key: resolved.key, agentId: resolved.agentId };
+}
+
+async function handleSessionsSearch(params: Record<string, unknown>) {
+  const rt = await getRuntime();
+  const cfg = rt.getRuntimeConfig();
+  const query = typeof params.query === "string" ? params.query.trim() : "";
+  if (!query) {
+    throw new Error("query must not be empty");
+  }
+  if (query.length > SESSIONS_SEARCH_MAX_QUERY_CHARS) {
+    throw new Error(`query must not exceed ${SESSIONS_SEARCH_MAX_QUERY_CHARS} characters`);
+  }
+  if (params.agentId !== undefined && params.sessionKeys === undefined) {
+    throw new Error("agentId requires sessionKeys");
+  }
+  const requestedSessionKeys = Array.isArray(params.sessionKeys)
+    ? params.sessionKeys.filter(
+        (sessionKey): sessionKey is string => typeof sessionKey === "string",
+      )
+    : undefined;
+  // Mirror the gateway protocol validator: an explicit sessionKeys filter must
+  // stay non-empty, or an empty array would silently widen to an unfiltered
+  // agent-wide search.
+  if (params.sessionKeys !== undefined && (requestedSessionKeys?.length ?? 0) === 0) {
+    throw new Error("sessionKeys must be a non-empty array of session keys");
+  }
+  const requestedAgentId = typeof params.agentId === "string" ? params.agentId.trim() : undefined;
+  const sessionKeys = requestedSessionKeys?.map((sessionKey) =>
+    requestedAgentId
+      ? rt.resolveStoredSessionKeyForAgentStore({ cfg, agentId: requestedAgentId, sessionKey })
+      : rt.resolveSessionStoreKey({ cfg, sessionKey }),
+  );
+  const agentIds = new Set(
+    sessionKeys?.map((sessionKey) =>
+      rt.resolveSessionAgentId({
+        sessionKey,
+        config: cfg,
+        ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+      }),
+    ),
+  );
+  if (
+    agentIds.size > 1 ||
+    (requestedAgentId && [...agentIds].some((agentId) => agentId !== requestedAgentId))
+  ) {
+    throw new Error("sessions.search supports one agent per call");
+  }
+  const agentId =
+    requestedAgentId ??
+    agentIds.values().next().value ??
+    rt.resolveSessionAgentId({ sessionKey: "main", config: cfg });
+  const result = rt.searchSessionTranscripts({
+    agentId,
+    storePath: rt.resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+    query,
+    limit: readPositiveIntegerParam(params, "limit"),
+    sessionKeys,
+  });
+  return {
+    results: result.hits,
+    ...(result.indexing ? { indexing: true } : {}),
+    ...(result.truncated ? { truncated: true } : {}),
+  };
 }
 
 async function handleChatHistory(params: Record<string, unknown>): Promise<{
   sessionKey: string;
   sessionId: string | undefined;
   messages: unknown[];
+  offset?: number;
+  nextOffset?: number;
+  hasMore?: boolean;
+  totalMessages?: number;
   thinkingLevel?: string;
   fastMode?: FastMode;
   verboseLevel?: string;
@@ -144,79 +160,116 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
   const requestedAgentId = agentId ?? parsedAgentId;
   const limit = readPositiveIntegerParam(params, "limit");
+  const offset = readOffsetParam(params) ?? 0;
+  const messageId = readToolStringParam(params, "messageId", {
+    required: params.messageId !== undefined,
+  });
+  const requestedSessionId = readToolStringParam(params, "sessionId", {
+    required: params.sessionId !== undefined,
+  });
+  if (params.offset !== undefined && messageId !== undefined) {
+    throw new Error("offset and messageId cannot be used together");
+  }
+  if (requestedSessionId !== undefined && messageId === undefined) {
+    throw new Error("sessionId requires messageId");
+  }
 
   const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-  const { cfg, storePath, entry } = rt.loadSessionEntry(sessionKey, sessionLoadOptions);
-  const sessionId = entry?.sessionId as string | undefined;
+  const { cfg, storePath, entry, canonicalKey } = rt.loadSessionEntry(
+    sessionKey,
+    sessionLoadOptions,
+  );
   const sessionAgentId = rt.resolveSessionAgentId({
     sessionKey,
     config: cfg,
     agentId: requestedAgentId,
   });
+  if (requestedSessionId) {
+    const transcriptSessionKey = rt.resolveTranscriptSessionKeyBySessionId({
+      agentId: sessionAgentId,
+      sessionId: requestedSessionId,
+      storePath,
+    });
+    if (
+      !transcriptSessionKey ||
+      scopeLegacySessionKeyToAgent({
+        sessionKey: transcriptSessionKey,
+        agentId: sessionAgentId,
+      }) !== scopeLegacySessionKeyToAgent({ sessionKey: canonicalKey, agentId: sessionAgentId })
+    ) {
+      throw new Error("sessionId does not belong to sessionKey");
+    }
+  }
+  const sessionId = requestedSessionId ?? entry?.sessionId;
+  // Reset archives share a logical key, but not the replacement's start boundary or CLI binding.
+  const historyEntry =
+    requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
   const resolvedSessionModel = rt.resolveSessionModelRef(cfg, entry, sessionAgentId);
   const hardMax = 1000;
   const defaultLimit = 200;
   const requested = typeof limit === "number" ? limit : defaultLimit;
   const max = Math.min(hardMax, requested);
   const maxHistoryBytes = rt.getMaxChatHistoryMessagesBytes();
-  const sessionEntry =
-    typeof entry?.sessionId === "string"
-      ? {
-          sessionId: entry.sessionId,
-          ...(typeof entry.sessionFile === "string" ? { sessionFile: entry.sessionFile } : {}),
-        }
-      : undefined;
-
-  const localMessages =
-    sessionId && storePath
-      ? await rt.readSessionMessagesAsync(
-          {
-            agentId: sessionAgentId,
-            sessionEntry,
-            sessionId,
-            sessionKey,
-            storePath,
-          },
-          {
-            mode: "recent",
-            maxMessages: max,
-            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-            allowResetArchiveFallback: true,
-          },
-        )
-      : [];
-
-  const rawMessages = rt.augmentChatHistoryWithCliSessionImports({
-    entry,
+  const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);
+  const page = await rt.readChatHistoryPage({
+    entry: historyEntry,
     provider: resolvedSessionModel.provider,
-    localMessages,
+    sessionId,
+    storePath,
+    sessionAgentId,
+    canonicalKey,
+    max,
+    maxHistoryBytes,
+    effectiveMaxChars,
+    offset: params.offset === undefined ? undefined : offset,
+    messageId,
   });
 
-  const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);
-
-  // Mirror Gateway chat.history trimming so embedded mode has the same byte ceilings.
-  const normalized = rt.augmentChatHistoryWithCanvasBlocks(
-    rt.projectRecentChatDisplayMessages(rawMessages, {
-      maxChars: effectiveMaxChars,
-      maxMessages: max,
-    }),
-  );
-
+  // Keep transport-level byte limits identical after the shared reader projects the page.
   const perMessageHardCap = Math.min(rt.CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
   const replaced = rt.replaceOversizedChatHistoryMessages({
-    messages: normalized,
+    messages: page.messages,
     maxSingleMessageBytes: perMessageHardCap,
   });
-  const capped = rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-  const bounded = rt.enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+  const capped = messageId
+    ? (rt.capChatHistoryAroundMessage({
+        messages: replaced.messages,
+        messageId,
+        // Reserve array framing and separators without evicting the requested anchor.
+        maxCost: maxHistoryBytes - 1,
+        messageCost: (message) => jsonUtf8Bytes(message) + 1,
+      }) ?? rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items)
+    : rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
+  const pagination = params.offset === undefined ? undefined : page.pagination;
+  const nextOffset =
+    pagination !== undefined
+      ? rt.resolveChatHistoryNextOffset({
+          messages: capped,
+          totalMessages: pagination.totalMessages,
+          offset: pagination.offset,
+          rawPageMessages: pagination.rawPageMessages,
+          replayOldestRecord: rt.shouldReplayOldestChatHistoryRecord({
+            projected: page.messages,
+            bounded: capped,
+          }),
+        })
+      : 0;
+  const hasMore =
+    pagination !== undefined &&
+    pagination.exhausted !== true &&
+    nextOffset < pagination.totalMessages;
 
   return {
     sessionKey,
     sessionId,
-    messages: bounded.messages,
-    thinkingLevel: entry?.thinkingLevel as string | undefined,
+    messages: capped,
+    ...(params.offset !== undefined
+      ? { offset, hasMore, totalMessages: pagination?.totalMessages ?? page.messages.length }
+      : {}),
+    ...(hasMore ? { nextOffset } : {}),
+    thinkingLevel: entry?.thinkingLevel,
     fastMode: normalizeFastMode(entry?.fastMode),
-    verboseLevel: entry?.verboseLevel as string | undefined,
+    verboseLevel: entry?.verboseLevel,
   };
 }
 
@@ -231,6 +284,8 @@ export function createEmbeddedCallGateway(): EmbeddedCallGateway {
         return (await handleSessionsList(params)) as T;
       case "sessions.resolve":
         return (await handleSessionsResolve(params)) as T;
+      case "sessions.search":
+        return (await handleSessionsSearch(params)) as T;
       case "chat.history":
         return (await handleChatHistory(params)) as T;
       default:

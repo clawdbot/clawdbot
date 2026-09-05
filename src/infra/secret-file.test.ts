@@ -147,6 +147,57 @@ describe("readSecretFileSync", () => {
   });
 });
 
+describe("tryReadSecretFileSync diagnostics", () => {
+  it("keeps an explicitly configured empty file unavailable", async () => {
+    const file = await createSecretPath(async (dir) => {
+      const emptyFile = path.join(dir, "empty-token.txt");
+      await fsPromises.writeFile(emptyFile, " \n\t ", "utf8");
+      return emptyFile;
+    });
+
+    const result = tryReadSecretFileSync(file, "Telegram bot token", undefined, {
+      configPath: "channels.telegram.tokenFile",
+    });
+
+    expect(result).toEqual({
+      status: "configured_unavailable",
+      diagnostic: {
+        code: "CREDENTIAL_FILE_UNAVAILABLE",
+        path: "channels.telegram.tokenFile",
+        reason: "invalid-path",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(file);
+  });
+
+  it("returns a redacted diagnostic for an unavailable explicit file", async () => {
+    const dir = await createTempDir();
+    const file = path.join(dir, "missing-token.txt");
+
+    const result = tryReadSecretFileSync(file, "Telegram bot token", undefined, {
+      configPath: "channels.telegram.tokenFile",
+    });
+
+    expect(result).toEqual({
+      status: "configured_unavailable",
+      diagnostic: {
+        code: "CREDENTIAL_FILE_UNAVAILABLE",
+        path: "channels.telegram.tokenFile",
+        reason: "not-found",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(file);
+  });
+
+  it("distinguishes missing input from an unavailable configured file", () => {
+    expect(
+      tryReadSecretFileSync(undefined, "Telegram bot token", undefined, {
+        configPath: "channels.telegram.tokenFile",
+      }),
+    ).toEqual({ status: "missing" });
+  });
+});
+
 describe("writePrivateSecretFileAtomic", () => {
   it("writes a private file with owner-only permissions", async () => {
     const dir = await createTempDir();
@@ -228,5 +279,30 @@ describe("writePrivateSecretFileAtomic", () => {
         content: '{"ok":true}\n',
       }),
     ).rejects.toThrow("must not be a symlink");
+  });
+
+  it("rejects a symlinked root without chmodding its destination", async () => {
+    const dir = await createTempDir();
+    const targetDir = await createTempDir();
+    if (process.platform !== "win32") {
+      await fsPromises.chmod(targetDir, 0o777);
+    }
+    const rootLink = path.join(dir, "root-link");
+    await fsPromises.symlink(targetDir, rootLink);
+
+    await expect(
+      writePrivateSecretFileAtomic({
+        rootDir: rootLink,
+        filePath: path.join(rootLink, "auth.json"),
+        content: '{"ok":true}\n',
+      }),
+    ).rejects.toThrow("must not be a symlink");
+
+    if (process.platform !== "win32") {
+      // The tightening wrapper must never resolve-and-chmod a symlinked root;
+      // the destination's permissions stay exactly as they were.
+      const targetStat = await fsPromises.stat(targetDir);
+      expect(targetStat.mode & 0o777).toBe(0o777);
+    }
   });
 });

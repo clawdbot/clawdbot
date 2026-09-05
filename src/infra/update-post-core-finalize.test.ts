@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   foldPostCoreFinalizeIntoResult,
-  type PostCoreFinalizeSpawner,
   runPostCoreFinalizeAfterGatewayUpdate,
 } from "./update-post-core-finalize.js";
 import type { UpdateRunResult } from "./update-runner.js";
@@ -22,6 +25,9 @@ function gitOkResult(overrides: Partial<UpdateRunResult> = {}): UpdateRunResult 
 
 const ENTRYPOINT = "/srv/openclaw/dist/index.mjs";
 const resolveEntrypointOk = async () => ENTRYPOINT;
+type PostCoreFinalizeSpawner = NonNullable<
+  Parameters<typeof runPostCoreFinalizeAfterGatewayUpdate>[0]["spawnFinalize"]
+>;
 
 describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
   it("skips non-git update modes", async () => {
@@ -78,7 +84,10 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
     });
     expect(outcome).toEqual({ status: "ok", entrypoint: ENTRYPOINT });
     expect(spawnFinalize).toHaveBeenCalledTimes(1);
-    const call = spawnFinalize.mock.calls[0][0];
+    const call = expectDefined(
+      spawnFinalize.mock.calls[0],
+      "spawnFinalize.mock.calls[0] test invariant",
+    )[0];
     // Reconcile runs through the designed finalizer; never restarts (RPC owns
     // restart). No `--channel` — the channel is passed as effective-only via env
     // so the finalizer does not persist it.
@@ -116,11 +125,98 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
         OPENCLAW_GATEWAY_SERVICE_PID: "4242",
       },
     });
-    const { env } = spawnFinalize.mock.calls[0][0];
+    const { env } = expectDefined(
+      spawnFinalize.mock.calls[0],
+      "spawnFinalize.mock.calls[0] test invariant",
+    )[0];
     expect(env.PATH).toBe("/usr/bin");
     expect(env.OPENCLAW_SERVICE_MARKER).toBeUndefined();
     expect(env.OPENCLAW_SERVICE_KIND).toBeUndefined();
     expect(env.OPENCLAW_GATEWAY_SERVICE_PID).toBeUndefined();
+  });
+
+  it("isolates stale handoff values at the RPC finalizer boundary", async () => {
+    const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({ code: 0 }));
+    const baseEnv: NodeJS.ProcessEnv = {
+      PATH: "/usr/bin",
+      OPENCLAW_COMPATIBILITY_HOST_VERSION: "stale-version",
+      OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL: "dev",
+      OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: "/tmp/stale-config.json",
+      OPENCLAW_UNRELATED: "preserved",
+    };
+    await runPostCoreFinalizeAfterGatewayUpdate({
+      result: gitOkResult({ after: undefined }),
+      resolveEntrypoint: resolveEntrypointOk,
+      spawnFinalize,
+      env: baseEnv,
+    });
+
+    const { env } = expectDefined(
+      spawnFinalize.mock.calls[0],
+      "spawnFinalize.mock.calls[0] test invariant",
+    )[0];
+    expect(env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
+    expect(env.OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL).toBeUndefined();
+    expect(env.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH).toBeUndefined();
+    expect(env.OPENCLAW_UNRELATED).toBe("preserved");
+    expect(baseEnv.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("stale-version");
+    expect(baseEnv.OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL).toBe("dev");
+    expect(baseEnv.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH).toBe("/tmp/stale-config.json");
+  });
+
+  it("keeps the default process wrapper from restoring ambient handoff values", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-post-core-finalize-"));
+    const entrypoint = path.join(root, "capture-env.mjs");
+    const outputPath = path.join(root, "child-env.json");
+    await fs.writeFile(
+      entrypoint,
+      `import fs from "node:fs";
+fs.writeFileSync(process.env.OPENCLAW_TEST_OUTPUT_PATH, JSON.stringify({
+  compatibilityHostVersion: process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION ?? null,
+  requestedChannel: process.env.OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL ?? null,
+  sourceConfigPath: process.env.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH ?? null,
+}));`,
+      "utf8",
+    );
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_COMPATIBILITY_HOST_VERSION: "stale-version",
+          OPENCLAW_TEST_OUTPUT_PATH: outputPath,
+          OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL: "beta",
+          OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: "/tmp/stale-config.json",
+        },
+        async () => {
+          const outcome = await runPostCoreFinalizeAfterGatewayUpdate({
+            result: gitOkResult({ root, after: undefined }),
+            resolveEntrypoint: async () => entrypoint,
+          });
+          expect(outcome).toEqual({ status: "ok", entrypoint });
+        },
+      );
+      await expect(fs.readFile(outputPath, "utf8").then(JSON.parse)).resolves.toEqual({
+        compatibilityHostVersion: null,
+        requestedChannel: null,
+        sourceConfigPath: null,
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("carries the external service-repair policy into the finalizer", async () => {
+    const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({ code: 0 }));
+    await runPostCoreFinalizeAfterGatewayUpdate({
+      result: gitOkResult(),
+      resolveEntrypoint: resolveEntrypointOk,
+      spawnFinalize,
+      serviceRepairPolicy: "external",
+    });
+
+    expect(
+      expectDefined(spawnFinalize.mock.calls[0], "spawnFinalize.mock.calls[0] test invariant")[0]
+        .env.OPENCLAW_SERVICE_REPAIR_POLICY,
+    ).toBe("external");
   });
 
   it("carries effective git/dev channel via env without --channel for a no-config update", async () => {
@@ -130,7 +226,10 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
       resolveEntrypoint: resolveEntrypointOk,
       spawnFinalize,
     });
-    const call = spawnFinalize.mock.calls[0][0];
+    const call = expectDefined(
+      spawnFinalize.mock.calls[0],
+      "spawnFinalize.mock.calls[0] test invariant",
+    )[0];
     // No configured channel → effective channel defaults to the git/dev channel
     // the core update ran on, carried via env (convergence-only, not persisted),
     // never as `--channel` (which `update finalize` would persist to openclaw.json).

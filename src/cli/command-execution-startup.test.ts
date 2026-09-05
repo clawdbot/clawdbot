@@ -1,5 +1,5 @@
 // Command execution startup tests cover startup behavior before CLI command execution.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
@@ -9,9 +9,13 @@ vi.mock("./banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
 }));
 
-vi.mock("../logging/console.js", () => ({
-  routeLogsToStderr: routeLogsToStderrMock,
-}));
+vi.mock("../logging/console.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/console.js")>();
+  return {
+    ...actual,
+    routeLogsToStderr: routeLogsToStderrMock,
+  };
+});
 
 vi.mock("./command-bootstrap.js", () => ({
   ensureCliCommandBootstrap: ensureCliCommandBootstrapMock,
@@ -20,10 +24,21 @@ vi.mock("./command-bootstrap.js", () => ({
 describe("command-execution-startup", () => {
   let mod: typeof import("./command-execution-startup.js");
 
-  beforeEach(async () => {
-    vi.clearAllMocks();
+  beforeAll(async () => {
     vi.resetModules();
     mod = await import("./command-execution-startup.js");
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("preserves console exports for a co-sharded subsystem logger", async () => {
+    const { createSubsystemLogger } = await import("../logging/subsystem.js");
+
+    expect(() =>
+      createSubsystemLogger("test/cli-startup").isEnabled("info", "console"),
+    ).not.toThrow();
   });
 
   it("resolves startup context from argv and mode", () => {
@@ -32,7 +47,6 @@ describe("command-execution-startup", () => {
         argv: ["node", "openclaw", "status", "--json"],
         jsonOutputMode: true,
         env: {},
-        routeMode: true,
       }),
     ).toEqual({
       invocation: {
@@ -45,8 +59,8 @@ describe("command-execution-startup", () => {
       commandPath: ["status"],
       startupPolicy: {
         suppressDoctorStdout: true,
-        hideBanner: false,
-        skipConfigGuard: false,
+        hideBanner: true,
+        skipConfigGuard: true,
         loadPlugins: false,
         pluginRegistry: { scope: "channels" },
       },
@@ -80,6 +94,18 @@ describe("command-execution-startup", () => {
     }
   });
 
+  it("keeps plain machine stdout clean without treating the command as JSON", () => {
+    const startupPolicy = mod.resolveCliExecutionStartupContext({
+      argv: ["node", "openclaw", "models", "aliases", "list", "--plain"],
+      jsonOutputMode: false,
+      machineOutputMode: true,
+      env: {},
+    }).startupPolicy;
+
+    expect(startupPolicy.suppressDoctorStdout).toBe(true);
+    expect(startupPolicy.hideBanner).toBe(true);
+  });
+
   it("skips local plugin bootstrap for JSON gateway agent calls", () => {
     expect(
       mod.resolveCliExecutionStartupContext({
@@ -108,7 +134,36 @@ describe("command-execution-startup", () => {
         argv: ["node", "openclaw", "agent", "--agent", "main", "--message", "hi"],
         jsonOutputMode: false,
       }).startupPolicy.loadPlugins,
+    ).toBe(false);
+  });
+
+  it("uses the resolved action command path for every execution startup decision", () => {
+    const context = mod.resolveCliExecutionStartupContext({
+      argv: ["node", "openclaw", "gateway", "--token", "secret", "call", "health"],
+      commandPath: ["gateway", "call"],
+      jsonOutputMode: false,
+      env: {},
+    });
+
+    expect(context.invocation.commandPath).toEqual(["gateway", "secret"]);
+    expect(context.commandPath).toEqual(["gateway", "call"]);
+
+    expect(
+      mod.resolveCliExecutionStartupContext({
+        argv: ["node", "openclaw", "acp", "--token", "-secret"],
+        commandPath: ["acp"],
+        jsonOutputMode: false,
+        env: {},
+      }).startupPolicy.suppressDoctorStdout,
     ).toBe(true);
+    expect(
+      mod.resolveCliExecutionStartupContext({
+        argv: ["node", "openclaw", "acp", "--verbose", "client"],
+        commandPath: ["acp", "client"],
+        jsonOutputMode: false,
+        env: {},
+      }).startupPolicy.suppressDoctorStdout,
+    ).toBe(false);
   });
 
   it("routes logs to stderr and emits banner only when allowed", async () => {
@@ -144,7 +199,7 @@ describe("command-execution-startup", () => {
     expect(emitCliBannerMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not import the banner module for JSON output", async () => {
+  it("does not emit the banner for JSON output", async () => {
     await mod.applyCliExecutionStartupPresentation({
       startupPolicy: {
         suppressDoctorStdout: true,
@@ -198,6 +253,8 @@ describe("command-execution-startup", () => {
       },
       allowInvalid: true,
       loadPlugins: true,
+      skipPristineCoreStateMigrations: true,
+      skipPristineStartupStateMigrations: true,
     });
 
     expect(ensureCliCommandBootstrapMock).toHaveBeenLastCalledWith({
@@ -208,6 +265,8 @@ describe("command-execution-startup", () => {
       loadPlugins: true,
       pluginRegistry: { scope: "all" },
       skipConfigGuard: false,
+      skipPristineCoreStateMigrations: true,
+      skipPristineStartupStateMigrations: true,
     });
   });
 });

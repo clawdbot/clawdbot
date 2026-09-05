@@ -1,14 +1,10 @@
 // Registry contract tests cover plugin contract registry contents and lookup behavior.
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { describe, expect, it } from "vitest";
-import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.js";
-import { loadPluginManifestRegistry, type PluginManifestRecord } from "../manifest-registry.js";
+import { loadPluginManifestRegistryCore, type PluginManifestRecord } from "../manifest-registry.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
-import {
-  pluginRegistrationContractRegistry,
-  providerContractLoadError,
-  providerContractPluginIds,
-} from "./registry.js";
+import { pluginRegistrationContractRegistry, providerContractLoadError } from "./registry.js";
 
 const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS = ["codex", "qa-lab"] as const;
 const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_ID_SET = new Set<string>(
@@ -24,7 +20,7 @@ describe("plugin contract registry", () => {
     actualPluginIds: readonly string[];
     predicate: (plugin: PluginManifestRecord) => boolean;
   }) {
-    expect(uniqueSortedStrings(params.actualPluginIds)).toEqual(
+    expect(sortUniqueStrings(params.actualPluginIds)).toEqual(
       resolveBundledManifestPluginIds(params.predicate),
     );
   }
@@ -39,6 +35,7 @@ describe("plugin contract registry", () => {
             providers: entry.providerIds,
             contracts: {
               embeddingProviders: entry.embeddingProviderIds,
+              workerProviders: entry.workerProviderIds,
               speechProviders: entry.speechProviderIds,
               realtimeTranscriptionProviders: entry.realtimeTranscriptionProviderIds,
               realtimeVoiceProviders: entry.realtimeVoiceProviderIds,
@@ -63,7 +60,7 @@ describe("plugin contract registry", () => {
     const snapshotPluginIds = new Set(
       BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => entry.pluginId),
     );
-    return loadPluginManifestRegistry({})
+    return loadPluginManifestRegistryCore({})
       .plugins.filter((plugin) => snapshotPluginIds.has(plugin.id) && predicate(plugin))
       .map((plugin) => plugin.id)
       .toSorted((left, right) => left.localeCompare(right));
@@ -80,6 +77,10 @@ describe("plugin contract registry", () => {
     {
       name: "does not duplicate bundled provider ids",
       ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.providerIds),
+    },
+    {
+      name: "does not duplicate bundled worker provider ids",
+      ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.workerProviderIds),
     },
     {
       name: "does not duplicate bundled web fetch provider ids",
@@ -128,15 +129,31 @@ describe("plugin contract registry", () => {
     expectUniqueIds(pluginRegistrationContractRegistry.flatMap((entry) => entry.speechProviderIds));
   });
 
-  it("covers every bundled provider plugin discovered from manifests", () => {
+  it.each([
+    ["azure-speech", "speechProviderIds", ["azure-speech", "azure"]],
+    ["microsoft", "speechProviderIds", ["microsoft", "edge"]],
+    ["tts-local-cli", "speechProviderIds", ["tts-local-cli", "cli"]],
+    ["volcengine", "speechProviderIds", ["volcengine", "bytedance", "doubao"]],
+    ["xiaomi", "speechProviderIds", ["xiaomi", "mimo"]],
+    ["xai", "realtimeVoiceProviderIds", ["xai", "grok-voice", "xai-realtime-voice"]],
+  ] as const)("declares canonical-first %s %s aliases", (pluginId, contract, providerIds) => {
+    expect(
+      pluginRegistrationContractRegistry.find((entry) => entry.pluginId === pluginId)?.[contract],
+    ).toEqual(providerIds);
+  });
+
+  it("covers every bundled worker provider plugin discovered from manifests", () => {
     expectRegistryPluginIds({
-      actualPluginIds: providerContractPluginIds,
-      predicate: (plugin) => plugin.origin === "bundled" && plugin.providers.length > 0,
+      actualPluginIds: pluginRegistrationContractRegistry
+        .filter((entry) => entry.workerProviderIds.length > 0)
+        .map((entry) => entry.pluginId),
+      predicate: (plugin) =>
+        plugin.origin === "bundled" && (plugin.contracts?.workerProviders?.length ?? 0) > 0,
     });
   });
 
   it("keeps video-only provider auth choices out of text onboarding", () => {
-    const registry = loadPluginManifestRegistry({});
+    const registry = loadPluginManifestRegistryCore({});
 
     for (const pluginId of ["alibaba", "runway"]) {
       const plugin = registry.plugins.find(
@@ -166,7 +183,7 @@ describe("plugin contract registry", () => {
   });
 
   it("exposes the GitHub Copilot non-interactive onboarding token flag from manifest metadata", () => {
-    const registry = loadPluginManifestRegistry({});
+    const registry = loadPluginManifestRegistryCore({});
     const plugin = registry.plugins.find(
       (entry) => entry.origin === "bundled" && entry.id === "github-copilot",
     );
@@ -175,16 +192,31 @@ describe("plugin contract registry", () => {
       {
         provider: "github-copilot",
         method: "device",
+        appGuidedAuth: "device-code",
+        appGuidedSecret: true,
         choiceId: "github-copilot",
         choiceLabel: "GitHub Copilot",
         choiceHint: "Device login with your GitHub account",
+        assistantPriority: 1,
         groupId: "copilot",
         groupLabel: "Copilot",
-        groupHint: "GitHub + local proxy",
+        groupHint: "GitHub, GitHub Enterprise + Local Proxy",
         optionKey: "githubCopilotToken",
         cliFlag: "--github-copilot-token",
         cliOption: "--github-copilot-token <token>",
         cliDescription: "GitHub Copilot OAuth token",
+      },
+      {
+        provider: "github-copilot",
+        method: "device-enterprise",
+        appGuidedAuth: "device-code",
+        choiceId: "github-copilot-enterprise",
+        choiceLabel: "GitHub Copilot (Enterprise / data residency)",
+        choiceHint: "Device login against your GitHub Enterprise (*.ghe.com) tenant",
+        assistantPriority: 2,
+        groupId: "copilot",
+        groupLabel: "Copilot",
+        groupHint: "GitHub, GitHub Enterprise + Local Proxy",
       },
     ]);
   });
@@ -238,7 +270,7 @@ describe("plugin contract registry", () => {
     });
 
     expect(
-      uniqueSortedStrings(
+      sortUniqueStrings(
         pluginRegistrationContractRegistry
           .filter((entry) => entry.webFetchProviderIds.length > 0)
           .map((entry) => entry.pluginId),
@@ -258,11 +290,11 @@ describe("plugin contract registry", () => {
         snapshotPluginIds.has(pluginId) &&
         !ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_ID_SET.has(pluginId),
     );
-    const expectedPluginIds = uniqueSortedStrings([
+    const expectedPluginIds = sortUniqueStrings([
       ...bundledWebSearchPluginIds,
       ...ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS,
     ]);
-    const actualPluginIds = uniqueSortedStrings(
+    const actualPluginIds = sortUniqueStrings(
       pluginRegistrationContractRegistry
         .filter((entry) => entry.webSearchProviderIds.length > 0)
         .map((entry) => entry.pluginId),

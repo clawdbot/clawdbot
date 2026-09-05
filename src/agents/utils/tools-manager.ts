@@ -3,7 +3,7 @@
  *
  * Locates or downloads pinned helper binaries such as fd and ripgrep.
  */
-import { type SpawnSyncReturns, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -16,33 +16,45 @@ import {
 } from "node:fs";
 import { arch, platform } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import chalk from "chalk";
+import { extractArchive } from "../../infra/archive.js";
+import { isTruthyEnvValue } from "../../infra/env.js";
+import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
+import { cancelUnreadResponseBody } from "../../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import {
-  getWindowsPowerShellExePath,
-  getWindowsSystem32ExePath,
-} from "../../infra/windows-install-roots.js";
 import { APP_NAME, getBinDir } from "../config.js";
+import { readProviderJsonResponse } from "../provider-http-errors.js";
 
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
-}
+const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
+const MAX_EXTRACTED_BYTES = 500 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRIES = 1_000;
+const ARCHIVE_EXTRACT_TIMEOUT_MS = 60_000;
+const CONTENT_LENGTH_RE = /^\d+$/;
+const GITHUB_RELEASE_JSON_MAX_BYTES = 1024 * 1024;
+const TOOL_INSTALL_STALE_MS =
+  DOWNLOAD_TIMEOUT_MS + ARCHIVE_EXTRACT_TIMEOUT_MS + NETWORK_TIMEOUT_MS + 30_000;
+const toolInstallations = new Map<"fd" | "rg", Promise<string>>();
+const TOOL_INSTALL_LOCK_OPTIONS: FileLockOptions = {
+  retries: {
+    // The minimum backoff total is about 234s, beyond the full 220s install bound.
+    retries: 480,
+    factor: 1.2,
+    minTimeout: 25,
+    maxTimeout: 500,
+    randomize: true,
+  },
+  stale: TOOL_INSTALL_STALE_MS,
+  staleRecovery: "remove-if-unchanged",
+};
 
 function isOfflineModeEnabled(): boolean {
-  const value = process.env.OPENCLAW_OFFLINE;
-  if (!value) {
-    return false;
-  }
-  return value === "1" || value.toLowerCase() === "true" || value.toLowerCase() === "yes";
+  return isTruthyEnvValue(process.env.OPENCLAW_OFFLINE);
 }
 
 interface ToolConfig {
@@ -54,7 +66,7 @@ interface ToolConfig {
   getAssetName: (version: string, plat: string, architecture: string) => string | null;
 }
 
-const TOOLS: Record<string, ToolConfig> = {
+const TOOLS: Record<"fd" | "rg", ToolConfig> = {
   fd: {
     name: "fd",
     repo: "sharkdp/fd",
@@ -101,20 +113,24 @@ const TOOLS: Record<string, ToolConfig> = {
 // Check if a command exists in PATH by trying to run it
 function commandExists(cmd: string): boolean {
   try {
-    const result = spawnSync(cmd, ["--version"], { stdio: "pipe" });
-    // Check for ENOENT error (command not found)
-    return result.error === undefined || result.error === null;
+    const result = spawnSync(cmd, ["--version"], {
+      killSignal: "SIGKILL",
+      stdio: "pipe",
+      timeout: 5_000,
+    });
+    // Require a clean exit, not just a successful spawn. An installed-but-broken
+    // binary (e.g. GLIBC mismatch after a system upgrade, missing shared lib)
+    // spawns fine but exits non-zero; without the status check it would be
+    // misreported as available and block ensureTool's auto-install fallback.
+    return !result.error && result.status === 0;
   } catch {
     return false;
   }
 }
 
 // Get the path to a tool (system-wide or in our tools dir)
-export function getToolPath(tool: "fd" | "rg"): string | null {
+function getToolPath(tool: "fd" | "rg"): string | null {
   const config = TOOLS[tool];
-  if (!config) {
-    return null;
-  }
 
   // Check our tools directory first
   const localPath = join(TOOLS_DIR, config.binaryName + (platform() === "win32" ? ".exe" : ""));
@@ -151,15 +167,16 @@ async function getLatestVersion(repo: string): Promise<string> {
       throw new Error(`GitHub API error: ${response.status}`);
     }
 
-    const data = (await response.json()) as { tag_name: string };
+    const data = await readProviderJsonResponse<{ tag_name: string }>(response, "GitHub release", {
+      maxBytes: GITHUB_RELEASE_JSON_MAX_BYTES,
+    });
     return data.tag_name.replace(/^v/, "");
   } finally {
     await guarded.release();
   }
 }
 
-// Download a file from URL
-async function downloadFile(url: string, dest: string): Promise<void> {
+async function downloadFile(url: string, dest: string, maxBytes: number): Promise<void> {
   const guarded = await fetchWithSsrFGuard({
     url,
     timeoutMs: DOWNLOAD_TIMEOUT_MS,
@@ -177,8 +194,44 @@ async function downloadFile(url: string, dest: string): Promise<void> {
       throw new Error("No response body");
     }
 
+    const rawContentLength = response.headers.get("content-length");
+    if (rawContentLength !== null) {
+      const contentLength = rawContentLength.trim();
+      if (CONTENT_LENGTH_RE.test(contentLength)) {
+        const declaredBytes = Number(contentLength);
+        if (!Number.isSafeInteger(declaredBytes) || declaredBytes > maxBytes) {
+          await cancelUnreadResponseBody(response);
+          throw new Error(`Download exceeds the ${maxBytes}-byte archive limit`);
+        }
+      }
+    }
+
     const fileStream = createWriteStream(dest);
-    await pipeline(Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>), fileStream);
+
+    let downloadCompleted = false;
+    try {
+      let downloadedBytes = 0;
+      const byteCap = new Transform({
+        transform(chunk: Uint8Array, _encoding, callback) {
+          downloadedBytes += chunk.byteLength;
+          if (downloadedBytes > maxBytes) {
+            callback(new Error(`Download exceeded the ${maxBytes}-byte archive limit`));
+            return;
+          }
+          callback(null, chunk);
+        },
+      });
+      await pipeline(
+        Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>),
+        byteCap,
+        fileStream,
+      );
+      downloadCompleted = true;
+    } finally {
+      if (!downloadCompleted) {
+        rmSync(dest, { force: true });
+      }
+    }
   } finally {
     await guarded.release();
   }
@@ -208,97 +261,33 @@ function findBinaryRecursively(rootDir: string, binaryFileName: string): string 
   return null;
 }
 
-function formatSpawnFailure(result: SpawnSyncReturns<Buffer>): string {
-  if (result.error?.message) {
-    return result.error.message;
-  }
-  const stderr = result.stderr?.toString().trim();
-  if (stderr) {
-    return stderr;
-  }
-  const stdout = result.stdout?.toString().trim();
-  if (stdout) {
-    return stdout;
-  }
-  return `exit status ${result.status ?? "unknown"}`;
-}
-
-function runExtractionCommand(command: string, args: string[]): string | null {
-  const result = spawnSync(command, args, { stdio: "pipe" });
-  if (!result.error && result.status === 0) {
-    return null;
-  }
-  return `${command}: ${formatSpawnFailure(result)}`;
-}
-
-function extractTarGzArchive(archivePath: string, extractDir: string, assetName: string): void {
-  const failure = runExtractionCommand("tar", ["xzf", archivePath, "-C", extractDir]);
-  if (failure) {
-    throw new Error(`Failed to extract ${assetName}: ${failure}`);
-  }
-}
-
-function getWindowsTarCommand(): string {
-  return getWindowsSystem32ExePath("tar.exe");
-}
-
-function extractZipArchive(archivePath: string, extractDir: string, assetName: string): void {
-  const failures: string[] = [];
-
-  if (platform() === "win32") {
-    // Windows ships bsdtar as tar.exe, which supports zip files. Prefer the
-    // System32 binary over Git Bash's GNU tar, which does not handle zip archives.
-    const tarFailure = runExtractionCommand(getWindowsTarCommand(), [
-      "xf",
+async function extractArchiveSafe(
+  archivePath: string,
+  extractDir: string,
+  assetName: string,
+): Promise<void> {
+  try {
+    await extractArchive({
       archivePath,
-      "-C",
-      extractDir,
-    ]);
-    if (!tarFailure) {
-      return;
-    }
-    failures.push(tarFailure);
-
-    const script =
-      "& { param($archive, $destination) $ErrorActionPreference = 'Stop'; Expand-Archive -LiteralPath $archive -DestinationPath $destination -Force }";
-    const powershellFailure = runExtractionCommand(getWindowsPowerShellExePath(), [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      script,
-      archivePath,
-      extractDir,
-    ]);
-    if (!powershellFailure) {
-      return;
-    }
-    failures.push(powershellFailure);
-  } else {
-    const unzipFailure = runExtractionCommand("unzip", ["-q", archivePath, "-d", extractDir]);
-    if (!unzipFailure) {
-      return;
-    }
-    failures.push(unzipFailure);
-
-    const tarFailure = runExtractionCommand("tar", ["xf", archivePath, "-C", extractDir]);
-    if (!tarFailure) {
-      return;
-    }
-    failures.push(tarFailure);
+      destDir: extractDir,
+      timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
+      limits: {
+        maxArchiveBytes: MAX_ARCHIVE_BYTES,
+        maxExtractedBytes: MAX_EXTRACTED_BYTES,
+        maxEntries: MAX_ARCHIVE_ENTRIES,
+      },
+    });
+  } catch (err) {
+    throw new Error(
+      `Failed to extract ${assetName}: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
   }
-
-  throw new Error(`Failed to extract ${assetName}: ${failures.join("; ")}`);
 }
 
 // Download and install a tool
 async function downloadTool(tool: "fd" | "rg"): Promise<string> {
   const config = TOOLS[tool];
-  if (!config) {
-    throw new Error(`Unknown tool: ${tool}`);
-  }
 
   const plat = platform();
   const architecture = arch();
@@ -319,26 +308,25 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
   mkdirSync(TOOLS_DIR, { recursive: true });
 
   const downloadUrl = `https://github.com/${config.repo}/releases/download/${config.tagPrefix}${version}/${assetName}`;
-  const archivePath = join(TOOLS_DIR, assetName);
   const binaryExt = plat === "win32" ? ".exe" : "";
   const binaryPath = join(TOOLS_DIR, config.binaryName + binaryExt);
-
-  // Download
-  await downloadFile(downloadUrl, archivePath);
-
-  // Extract into a unique temp directory. fd and rg downloads can run concurrently
-  // during startup, so sharing a fixed directory causes races.
-  const extractDir = join(
+  // Keep every installation's archive and extracted files together so parallel
+  // processes cannot remove or overwrite another installation's staging files.
+  const stagingDir = join(
     TOOLS_DIR,
-    `extract_tmp_${config.binaryName}_${process.pid}_${randomUUID()}`,
+    `install_tmp_${config.binaryName}_${process.pid}_${randomUUID()}`,
   );
+  const archivePath = join(stagingDir, assetName);
+  const extractDir = join(stagingDir, "extract");
   mkdirSync(extractDir, { recursive: true });
 
   try {
-    if (assetName.endsWith(".tar.gz")) {
-      extractTarGzArchive(archivePath, extractDir, assetName);
-    } else if (assetName.endsWith(".zip")) {
-      extractZipArchive(archivePath, extractDir, assetName);
+    // Download with byte cap so oversized archives are rejected before
+    // hitting disk, not just during extraction.
+    await downloadFile(downloadUrl, archivePath, MAX_ARCHIVE_BYTES);
+
+    if (assetName.endsWith(".tar.gz") || assetName.endsWith(".zip")) {
+      await extractArchiveSafe(archivePath, extractDir, assetName);
     } else {
       throw new Error(`Unsupported archive format: ${assetName}`);
     }
@@ -370,12 +358,39 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
       chmodSync(binaryPath, 0o755);
     }
   } finally {
-    // Cleanup
-    rmSync(archivePath, { force: true });
-    rmSync(extractDir, { recursive: true, force: true });
+    rmSync(stagingDir, { recursive: true, force: true });
   }
 
   return binaryPath;
+}
+
+function installTool(tool: "fd" | "rg"): Promise<string> {
+  const currentInstallation = toolInstallations.get(tool);
+  if (currentInstallation) {
+    return currentInstallation;
+  }
+
+  const config = TOOLS[tool];
+  const binaryPath = join(TOOLS_DIR, config.binaryName + (platform() === "win32" ? ".exe" : ""));
+  mkdirSync(TOOLS_DIR, { recursive: true });
+  const installation = withFileLock(binaryPath, TOOL_INSTALL_LOCK_OPTIONS, async () => {
+    const existingPath = getToolPath(tool);
+    return existingPath ?? downloadTool(tool);
+  });
+  toolInstallations.set(tool, installation);
+  void installation.then(
+    () => {
+      if (toolInstallations.get(tool) === installation) {
+        toolInstallations.delete(tool);
+      }
+    },
+    () => {
+      if (toolInstallations.get(tool) === installation) {
+        toolInstallations.delete(tool);
+      }
+    },
+  );
+  return installation;
 }
 
 // Termux package names for tools
@@ -393,9 +408,6 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
   }
 
   const config = TOOLS[tool];
-  if (!config) {
-    return undefined;
-  }
 
   if (isOfflineModeEnabled()) {
     if (!silent) {
@@ -422,7 +434,7 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
   }
 
   try {
-    const path = await downloadTool(tool);
+    const path = await installTool(tool);
     if (!silent) {
       console.log(chalk.dim(`${config.name} installed to ${path}`));
     }
@@ -437,4 +449,14 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
     }
     return undefined;
   }
+}
+
+const testing = {
+  downloadFile,
+};
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.toolsManagerTestApi")] = {
+    testing,
+  };
 }

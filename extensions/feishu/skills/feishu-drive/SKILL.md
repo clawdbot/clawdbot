@@ -1,97 +1,28 @@
 ---
 name: feishu-drive
 description: |
-  Feishu cloud storage file management. Activate when user mentions cloud space, folders, drive.
+  Feishu cloud-storage and comment workflows. Activate when the user mentions cloud space, folders, Drive files, or document comments.
 ---
 
-# Feishu Drive Tool
+# Feishu Drive
 
-Single tool `feishu_drive` for cloud storage operations.
+Use the single `feishu_drive` tool and its current action schema.
 
-## Token Extraction
+From `https://example.feishu.cn/drive/folder/ABC123`, use `ABC123` as `folder_token`.
 
-From URL `https://xxx.feishu.cn/drive/folder/ABC123` → `folder_token` = `ABC123`
+## Files and folders
 
-## Actions
+- Start from a folder shared with the bot. Bot credentials normally have no usable personal root folder.
+- For paginated folder listings, keep the same `folder_token` and pass the returned `page_token` until no continuation token remains.
+- Use `info` with the exact file token and type returned by Drive or wiki discovery.
+- Resolve the exact source and destination before moving or deleting. Confirm destructive deletes when the user's intent or target is unclear.
+- Create subfolders inside a shared folder; creating at the account root normally fails for bots.
 
-### List Folder Contents
+## Comments
 
-```json
-{ "action": "list" }
-```
+- Use `list_comments`, then `list_comment_replies` with the exact `comment_id` to inspect a discussion.
+- Use `add_comment` for a document-level comment. Include `block_id` only when the user wants a comment on one known Docx block.
+- Use `reply_comment` for an existing comment thread.
+- Preserve the file type and pagination fields returned by the tool. The schema is authoritative for which file types each comment action accepts.
 
-Root directory (no folder_token).
-
-```json
-{ "action": "list", "folder_token": "fldcnXXX" }
-```
-
-Returns: files with token, name, type, url, timestamps.
-
-### Get File Info
-
-```json
-{ "action": "info", "file_token": "ABC123", "type": "docx" }
-```
-
-Searches for the file in the root directory. Note: file must be in root or use `list` to browse folders first.
-
-`type`: `doc`, `docx`, `sheet`, `bitable`, `folder`, `file`, `mindnote`, `shortcut`
-
-### Create Folder
-
-```json
-{ "action": "create_folder", "name": "New Folder" }
-```
-
-In parent folder:
-
-```json
-{ "action": "create_folder", "name": "New Folder", "folder_token": "fldcnXXX" }
-```
-
-### Move File
-
-```json
-{ "action": "move", "file_token": "ABC123", "type": "docx", "folder_token": "fldcnXXX" }
-```
-
-### Delete File
-
-```json
-{ "action": "delete", "file_token": "ABC123", "type": "docx" }
-```
-
-## File Types
-
-| Type       | Description             |
-| ---------- | ----------------------- |
-| `doc`      | Old format document     |
-| `docx`     | New format document     |
-| `sheet`    | Spreadsheet             |
-| `bitable`  | Multi-dimensional table |
-| `folder`   | Folder                  |
-| `file`     | Uploaded file           |
-| `mindnote` | Mind map                |
-| `shortcut` | Shortcut                |
-
-## Configuration
-
-```yaml
-channels:
-  feishu:
-    tools:
-      drive: true # default: true
-```
-
-## Permissions
-
-- `drive:drive` - Full access (create, move, delete)
-- `drive:drive:readonly` - Read only (list, info)
-
-## Known Limitations
-
-- **Bots have no root folder**: Feishu bots use `tenant_access_token` and don't have their own "My Space". The root folder concept only exists for user accounts. This means:
-  - `create_folder` without `folder_token` will fail (400 error)
-  - Bot can only access files/folders that have been **shared with it**
-  - **Workaround**: User must first create a folder manually and share it with the bot, then bot can create subfolders inside it
+Only expose or forward file and comment contents needed for the user's request; shared Drive data may be private.

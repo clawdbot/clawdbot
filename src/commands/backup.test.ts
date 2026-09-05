@@ -2,24 +2,26 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatCliOperatorError } from "../cli/failure-output.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import * as backupShared from "./backup-shared.js";
 import {
+  buildBackupArchivePath,
   buildBackupArchiveRoot,
-  encodeAbsolutePathForBackupArchive,
-  formatBackupArchiveTimestamp,
   type BackupAsset,
-  resolveBackupPlanFromPaths,
   resolveBackupPlanFromDisk,
 } from "./backup-shared.js";
 import {
   backupVerifyCommandMock,
+  createMockTarStream,
   createBackupTestRuntime,
   mockStateOnlyBackupPlan,
   resetBackupTempHome,
+  resolveBackupPlanFromPaths,
   tarCreateMock,
 } from "./backup.test-support.js";
 
@@ -39,6 +41,7 @@ type CapturedBackupManifest = {
     configPath: string;
     oauthDir: string;
     workspaceDirs: string[];
+    agentRoots: Array<{ agentId: string; sourcePath: string }>;
   };
   assets: Array<Pick<BackupAsset, "kind" | "sourcePath" | "archivePath">>;
   skipped: Array<{ kind: string; sourcePath: string; reason: string; coveredBy?: string }>;
@@ -46,15 +49,6 @@ type CapturedBackupManifest = {
 
 describe("backup commands", () => {
   let tempHome: TempHomeEnv;
-
-  function requireFirstMockArg<T>(mock: { mock: { calls: T[][] } }, label: string): T {
-    const call = mock.mock.calls[0];
-    if (!call) {
-      throw new Error(`expected ${label} call`);
-    }
-    const [arg] = call;
-    return arg;
-  }
 
   async function mockWorkspaceBackupPlan(stateDir: string, workspaceDir: string, nowMs: number) {
     vi.spyOn(backupShared, "resolveBackupPlanFromDisk").mockResolvedValue(
@@ -64,8 +58,6 @@ describe("backup commands", () => {
         oauthDir: path.join(stateDir, "credentials"),
         workspaceDirs: [workspaceDir],
         includeWorkspace: true,
-        configInsideState: true,
-        oauthInsideState: true,
         nowMs,
       }),
     );
@@ -78,9 +70,7 @@ describe("backup commands", () => {
   beforeEach(async () => {
     await resetBackupTempHome(tempHome);
     tarCreateMock.mockReset();
-    tarCreateMock.mockImplementation(async ({ file }: { file: string }) => {
-      await fs.writeFile(file, "archive-bytes", "utf8");
-    });
+    tarCreateMock.mockImplementation(() => createMockTarStream());
     backupVerifyCommandMock.mockReset();
     backupVerifyCommandMock.mockResolvedValue({
       ok: true,
@@ -130,11 +120,7 @@ describe("backup commands", () => {
         kind: "state",
         sourcePath: stateSourcePath,
         displayPath: included.displayPath,
-        archivePath: path.posix.join(
-          buildBackupArchiveRoot(123),
-          "payload",
-          encodeAbsolutePathForBackupArchive(stateSourcePath),
-        ),
+        archivePath: buildBackupArchivePath(buildBackupArchiveRoot(123), stateSourcePath),
       },
     ]);
     const workspaceSourcePath = path.join(included.sourcePath, "workspace");
@@ -165,13 +151,20 @@ describe("backup commands", () => {
     ]);
   }
 
-  it("formats backup archive timestamps in local time with an explicit offset", () => {
-    expect(formatBackupArchiveTimestamp(Date.UTC(2026, 2, 14, 1, 2, 3, 456), 8 * 60)).toBe(
-      "2026-03-14T09-02-03.456+08-00",
-    );
-    expect(formatBackupArchiveTimestamp(Date.UTC(2026, 2, 14, 1, 2, 3, 456), -5 * 60)).toBe(
-      "2026-03-13T20-02-03.456-05-00",
-    );
+  it("formats backup archive timestamps in local time", () => {
+    const envSnapshot = captureEnv(["TZ"]);
+    try {
+      setTestEnvValue("TZ", "Asia/Shanghai");
+      expect(buildBackupArchiveRoot(Date.UTC(2026, 2, 14, 1, 2, 3, 456))).toBe(
+        "2026-03-14T09-02-03.456+08-00-openclaw-backup",
+      );
+      setTestEnvValue("TZ", "America/New_York");
+      expect(buildBackupArchiveRoot(Date.UTC(2026, 2, 14, 1, 2, 3, 456))).toBe(
+        "2026-03-13T21-02-03.456-04-00-openclaw-backup",
+      );
+    } finally {
+      envSnapshot.restore();
+    }
   });
 
   it("collapses default config, credentials, and workspace into the state backup root", async () => {
@@ -191,8 +184,6 @@ describe("backup commands", () => {
       oauthDir,
       workspaceDirs: [workspaceDir],
       includeWorkspace: true,
-      configInsideState: true,
-      oauthInsideState: true,
       nowMs: 123,
     });
     expectWorkspaceCoveredByState(plan);
@@ -217,8 +208,6 @@ describe("backup commands", () => {
         oauthDir: path.join(stateDir, "credentials"),
         workspaceDirs: [workspaceLink],
         includeWorkspace: true,
-        configInsideState: true,
-        oauthInsideState: true,
         nowMs: 123,
       });
       expectWorkspaceCoveredByState(plan);
@@ -262,23 +251,23 @@ describe("backup commands", () => {
           oauthDir: path.join(stateDir, "credentials"),
           workspaceDirs: [externalWorkspace],
           includeWorkspace: true,
-          configInsideState: false,
-          oauthInsideState: true,
           nowMs,
         }),
       );
       tarCreateMock.mockImplementationOnce(
-        async (
-          options: { file: string; onWriteEntry?: (entry: { path: string }) => void },
-          entryPaths: string[],
-        ) => {
-          capturedManifest = JSON.parse(
-            await fs.readFile(entryPaths[0], "utf8"),
-          ) as CapturedBackupManifest;
-          capturedEntryPaths = entryPaths;
-          capturedOnWriteEntry = options.onWriteEntry ?? null;
-          await fs.writeFile(options.file, "archive-bytes", "utf8");
-        },
+        (options: { onWriteEntry?: (entry: { path: string }) => void }, entryPaths: string[]) =>
+          createMockTarStream({
+            beforeRead: async () => {
+              capturedManifest = JSON.parse(
+                await fs.readFile(
+                  expectDefined(entryPaths[0], "entryPaths[0] test invariant"),
+                  "utf8",
+                ),
+              ) as CapturedBackupManifest;
+              capturedEntryPaths = entryPaths;
+              capturedOnWriteEntry = options.onWriteEntry ?? null;
+            },
+          }),
       );
       const result = await backupCreateCommand(runtime, {
         output: backupDir,
@@ -305,6 +294,7 @@ describe("backup commands", () => {
         configPath,
         oauthDir: path.join(stateDir, "credentials"),
         workspaceDirs: [externalWorkspace],
+        agentRoots: [],
       });
       expect(manifest.assets).toEqual(
         result.assets.map((asset) => ({
@@ -327,7 +317,7 @@ describe("backup commands", () => {
       }
       expect(capturedEntryPaths).toHaveLength(result.assets.length + 1);
 
-      const manifestPath = capturedEntryPaths[0];
+      const manifestPath = expectDefined(capturedEntryPaths[0], "manifest archive path");
       const remappedManifestEntry = { path: manifestPath };
       onWriteEntry(remappedManifestEntry);
       expect(remappedManifestEntry.path).toBe(
@@ -337,21 +327,13 @@ describe("backup commands", () => {
       const remappedStateEntry = { path: stateAsset.sourcePath };
       onWriteEntry(remappedStateEntry);
       expect(remappedStateEntry.path).toBe(
-        path.posix.join(
-          buildBackupArchiveRoot(nowMs),
-          "payload",
-          encodeAbsolutePathForBackupArchive(stateAsset.sourcePath),
-        ),
+        buildBackupArchivePath(buildBackupArchiveRoot(nowMs), stateAsset.sourcePath),
       );
 
       const remappedWorkspaceEntry = { path: workspaceAsset.sourcePath };
       onWriteEntry(remappedWorkspaceEntry);
       expect(remappedWorkspaceEntry.path).toBe(
-        path.posix.join(
-          buildBackupArchiveRoot(nowMs),
-          "payload",
-          encodeAbsolutePathForBackupArchive(workspaceAsset.sourcePath),
-        ),
+        buildBackupArchivePath(buildBackupArchiveRoot(nowMs), workspaceAsset.sourcePath),
       );
     } finally {
       envSnapshot.restore();
@@ -367,21 +349,29 @@ describe("backup commands", () => {
       const runtime = createBackupTestRuntime();
       await mockStateOnlyBackupPlan(stateDir);
       tarCreateMock.mockImplementationOnce(
-        async (
-          options: { file: string; filter?: (entryPath: string) => boolean },
+        (
+          options: {
+            filter?: (entryPath: string, entryStat: { isDirectory: () => boolean }) => boolean;
+          },
           entryPaths: string[],
-        ) => {
-          const manifestPath = entryPaths[0];
-          const stateRoot = entryPaths[1];
-          if (!manifestPath || !stateRoot) {
-            throw new Error("backup test expected manifest and state entries");
-          }
-          expect(options.filter?.(manifestPath)).toBe(true);
-          expect(
-            options.filter?.(path.join(stateRoot, "agents", "main", "sessions", "s.jsonl")),
-          ).toBe(false);
-          await fs.writeFile(options.file, "archive-bytes", "utf8");
-        },
+        ) =>
+          createMockTarStream({
+            beforeRead: () => {
+              const manifestPath = entryPaths[0];
+              const stateRoot = entryPaths[1];
+              if (!manifestPath || !stateRoot) {
+                throw new Error("backup test expected manifest and state entries");
+              }
+              const fileStat = { isDirectory: () => false };
+              expect(options.filter?.(manifestPath, fileStat)).toBe(true);
+              expect(
+                options.filter?.(
+                  path.join(stateRoot, "agents", "main", "sessions", "s.jsonl"),
+                  fileStat,
+                ),
+              ).toBe(false);
+            },
+          }),
       );
 
       const result = await backupCreateCommand(runtime, {
@@ -391,13 +381,12 @@ describe("backup commands", () => {
 
       expect(result.skippedVolatileCount).toBe(1);
       expect(runtime.log).toHaveBeenCalledTimes(1);
-      const payload = requireFirstMockArg(vi.mocked(runtime.log), "runtime log");
+      const [payload] = expectDefined(vi.mocked(runtime.log).mock.calls[0], "runtime log call");
       if (typeof payload !== "string") {
         throw new Error("backup test expected JSON string output");
       }
       expect(payload).not.toContain("Backup skipped");
-      const parsedPayload = JSON.parse(payload) as { skippedVolatileCount?: unknown };
-      expect(parsedPayload.skippedVolatileCount).toBe(1);
+      expect(JSON.parse(payload)).toHaveProperty("skippedVolatileCount", 1);
     } finally {
       await fs.rm(backupDir, { recursive: true, force: true });
     }
@@ -415,6 +404,85 @@ describe("backup commands", () => {
         output: path.join(stateDir, "backups"),
       }),
     ).rejects.toThrow(/must not be written inside a source path/i);
+  });
+
+  it("creates missing output parent directories", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const outputPath = path.join(tempHome.home, "backups", "daily", "backup.tar.gz");
+    await mockStateOnlyBackupPlan(stateDir);
+
+    const result = await backupCreateCommand(createBackupTestRuntime(), { output: outputPath });
+
+    expect(result.archivePath).toBe(outputPath);
+    expect(await fs.readFile(outputPath, "utf8")).toBe("archive-bytes");
+  });
+
+  it.each([
+    {
+      code: "ENOENT",
+      detail: "Backup output directory could not be created",
+      recovery: "Check the path and run `openclaw backup create --output <archive>` again.",
+    },
+    {
+      code: "EACCES",
+      detail: "Backup output directory is not writable",
+      recovery:
+        "Check the path and directory permissions, then run `openclaw backup create --output <archive>` again.",
+    },
+    {
+      code: "ENOSPC",
+      detail: "The destination does not have enough free space",
+      recovery: "Free up disk space and run `openclaw backup create --output <archive>` again.",
+    },
+    {
+      code: "EIO",
+      detail: "The output path could not be prepared",
+      recovery:
+        "Check the path and filesystem, then run `openclaw backup create --output <archive>` again.",
+    },
+  ])("reports an actionable $code output-parent failure", async ({ code, detail, recovery }) => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const outputParent = path.join(tempHome.home, "missing-parent", "daily");
+    const outputPath = path.join(outputParent, "backup.tar.gz");
+    await mockStateOnlyBackupPlan(stateDir);
+    vi.spyOn(fs, "mkdir").mockRejectedValueOnce(
+      Object.assign(new Error(`${code}: filesystem error, mkdir '${outputParent}'`), {
+        code,
+        path: outputParent,
+        syscall: "mkdir",
+      }),
+    );
+
+    const error = await backupCreateCommand(createBackupTestRuntime(), {
+      output: outputPath,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    const operatorMessage = `Backup archive creation failed: ${outputPath}. ${detail}: ${outputParent}. ${recovery}`;
+    expect(formatCliOperatorError(error, { argv: [], env: {} })).toBe(operatorMessage);
+    const debugMessage = `${operatorMessage} | ${code}: filesystem error, mkdir '${outputParent}' | ${code}`;
+    expect(formatCliOperatorError(error, { argv: [], env: { OPENCLAW_DEBUG: "1" } })).toBe(
+      debugMessage,
+    );
+  });
+
+  it("does not describe an output parent file as a missing directory", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const outputParent = path.join(tempHome.home, "not-a-directory");
+    const outputPath = path.join(outputParent, "backup.tar.gz");
+    await fs.writeFile(outputParent, "file\n", "utf8");
+    await mockStateOnlyBackupPlan(stateDir);
+
+    const error = await backupCreateCommand(createBackupTestRuntime(), {
+      output: outputPath,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    const operatorMessage = `Backup archive creation failed: ${outputPath}. Backup output parent is not a directory: ${outputParent}. Choose a directory path and run \`openclaw backup create --output <archive>\` again.`;
+    expect(formatCliOperatorError(error, { argv: [], env: {} })).toBe(operatorMessage);
+    expect(formatCliOperatorError(error, { argv: [], env: { OPENCLAW_DEBUG: "1" } })).toMatch(
+      /\| EEXIST: .*mkdir.*\| EEXIST/u,
+    );
   });
 
   it("rejects symlinked output paths even when intermediate directories do not exist yet", async () => {
@@ -493,8 +561,6 @@ describe("backup commands", () => {
         configPath: path.join(stateDir, "openclaw.json"),
         oauthDir: path.join(stateDir, "credentials"),
         includeWorkspace: false,
-        configInsideState: true,
-        oauthInsideState: true,
         nowMs: 123,
       }),
     );
@@ -534,6 +600,43 @@ describe("backup commands", () => {
     });
   });
 
+  it("discovers workspaces through the stable upgrade compatibility view", async () => {
+    const stateDir = path.join(tempHome.home, ".openclaw");
+    const configPath = path.join(tempHome.home, "stable-openclaw.json");
+    const workspaceDir = path.join(tempHome.home, "stable-workspace");
+    const stableConfig = {
+      meta: {
+        lastTouchedAt: "2026-08-01T00:00:00.000Z",
+        lastTouchedVersion: "2026.7.1-2",
+      },
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          heartbeat: { skipWhenBusy: true },
+        },
+      },
+      gateway: { mode: "local" },
+    };
+    const originalRaw = `${JSON.stringify(stableConfig, null, 2)}\n`;
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(configPath, originalRaw, "utf8");
+    const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
+    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH"]);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    try {
+      const plan = await resolveBackupPlanFromDisk({ nowMs: 123 });
+
+      expect(plan.included).toContainEqual(
+        expect.objectContaining({ kind: "workspace", sourcePath: canonicalWorkspaceDir }),
+      );
+      expect(await fs.readFile(configPath, "utf8")).toBe(originalRaw);
+      expect(plan.configPath).toBe(configPath);
+      expect(plan.stateDir).toBe(stateDir);
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
   it("backs up only the active config file when --only-config is requested", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -548,8 +651,6 @@ describe("backup commands", () => {
         oauthDir: path.join(stateDir, "credentials"),
         includeWorkspace: false,
         onlyConfig: true,
-        configInsideState: true,
-        oauthInsideState: true,
         nowMs: 123,
       }),
     );

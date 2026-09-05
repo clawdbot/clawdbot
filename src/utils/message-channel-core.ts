@@ -29,8 +29,8 @@ export function normalizeMessageChannel(raw?: string | null): string | undefined
   return normalizeAnyChannelId(normalized) ?? normalized;
 }
 
-/** Returns true only when a value is already a normalized, non-internal delivery channel id. */
-export function isDeliverableMessageChannel(value: string): boolean {
+/** Returns true for already-normalized channel ids except internal webchat. */
+export function isNormalizedMessageChannel(value: string): boolean {
   const normalized = normalizeMessageChannel(value);
   return (
     normalized !== undefined && normalized !== INTERNAL_MESSAGE_CHANNEL && normalized === value

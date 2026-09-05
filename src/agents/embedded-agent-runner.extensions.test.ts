@@ -4,8 +4,20 @@ import {
   textToolResult,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 // Covers embedded runner extension factories and tool-result middleware bridge.
-import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import {
+  AuthStorage,
+  createEventBus,
+  createExtensionRuntime,
+  ExtensionRunner,
+  loadExtensionFromFactory,
+  ModelRegistry,
+  SessionManager,
+} from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  AgentToolResultMiddlewareContext,
+  AgentToolResultMiddlewareEvent,
+} from "../plugins/agent-tool-result-middleware-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -13,8 +25,9 @@ import {
   recordAdjustedParamsForToolCall,
 } from "./agent-tools.before-tool-call.js";
 import { buildEmbeddedExtensionFactories } from "./embedded-agent-runner/extensions.js";
-import { consumeEmbeddedToolSendReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
+import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import { cleanupTempPluginTestEnvironment } from "./test-helpers/temp-plugin-extension-fixtures.js";
+import { jsonResult } from "./tools/common.js";
 
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const tempDirs: string[] = [];
@@ -24,6 +37,101 @@ afterEach(() => {
 });
 
 describe("buildEmbeddedExtensionFactories", () => {
+  it.each([
+    {
+      label: "normal embedded run",
+      identity: {
+        agentId: "main",
+        sessionId: "session-normal",
+        sessionKey: "agent:main:discord:channel:normal",
+        runId: "run-normal",
+      },
+    },
+    {
+      label: "embedded compaction run",
+      identity: {
+        agentId: "compactor",
+        sessionId: "session-compaction",
+        sessionKey: "agent:compactor:discord:channel:compaction",
+        runId: "run-compaction",
+      },
+    },
+  ])("passes the prepared $label identity to installed result middleware", async ({ identity }) => {
+    const middleware = vi.fn(
+      (event: AgentToolResultMiddlewareEvent, _context: AgentToolResultMiddlewareContext) => ({
+        result: {
+          content: [{ type: "text" as const, text: "middleware-observed" }],
+          details: { observedTool: event.toolName },
+          terminate: true,
+        },
+      }),
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "identity-proof",
+      pluginName: "identity-proof",
+      rawHandler: middleware,
+      handler: middleware,
+      runtimes: ["openclaw"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const sessionManager = SessionManager.inMemory();
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+      ...identity,
+    });
+    const factory = factories[0];
+    expect(factory).toBeDefined();
+    if (!factory) {
+      throw new Error("Expected embedded tool-result extension factory");
+    }
+
+    const runtime = createExtensionRuntime();
+    const extension = await loadExtensionFromFactory(
+      factory,
+      "/tmp",
+      createEventBus(),
+      runtime,
+      "<middleware-identity-test>",
+    );
+    const runner = new ExtensionRunner(
+      [extension],
+      runtime,
+      "/tmp",
+      sessionManager,
+      ModelRegistry.inMemory(AuthStorage.inMemory()),
+    );
+    const result = await runner.emitToolResult({
+      type: "tool_result",
+      toolName: "read",
+      toolCallId: `${identity.runId}-read`,
+      input: { path: "README.md" },
+      content: [{ type: "text", text: "original tool output" }],
+      details: {},
+      isError: false,
+    });
+
+    expect(middleware).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        toolName: "read",
+        toolCallId: `${identity.runId}-read`,
+        args: { path: "README.md" },
+      }),
+      { runtime: "openclaw", ...identity },
+    );
+    expect(result).toMatchObject({
+      content: [{ type: "text", text: "middleware-observed" }],
+      details: { observedTool: "read" },
+      terminate: true,
+    });
+  });
+
   it("bridges middleware mutations with unique fallback tool call ids", async () => {
     // Middleware invoked from app-server style tool_result events may not have a
     // call id; synthesize stable unique ids for downstream audit/mutation hooks.
@@ -341,7 +449,7 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
   });
 
-  it("stores provider send receipts without overriding middleware details", async () => {
+  it("stores private send receipts without overriding middleware details", async () => {
     const registry = createEmptyPluginRegistry();
     registry.agentToolResultMiddlewares.push({
       pluginId: "redactor",
@@ -383,6 +491,12 @@ describe("buildEmbeddedExtensionFactories", () => {
             to: "channel:resolved-id",
             threadId: "root-1",
           },
+          messageDelivery: {
+            status: "settled",
+            primaryPlatformMessageId: "message-1",
+            partialDelivery: false,
+            createdThreadIds: ["root-1"],
+          },
         },
       },
       { cwd: "/tmp" },
@@ -392,15 +506,21 @@ describe("buildEmbeddedExtensionFactories", () => {
       content: [{ type: "text", text: "Sent." }],
       details: { redacted: true },
     });
-    expect(consumeEmbeddedToolSendReceipt(sessionManager, "call-message")).toEqual({
+    expect(consumeEmbeddedToolReceipt(sessionManager, "call-message")).toEqual({
       details: {
         toolSend: {
           to: "channel:resolved-id",
           threadId: "root-1",
         },
+        messageDelivery: {
+          status: "settled",
+          primaryPlatformMessageId: "message-1",
+          partialDelivery: false,
+          createdThreadIds: ["root-1"],
+        },
       },
     });
-    expect(consumeEmbeddedToolSendReceipt(sessionManager, "call-message")).toBeUndefined();
+    expect(consumeEmbeddedToolReceipt(sessionManager, "call-message")).toBeUndefined();
   });
 
   it("keeps a confirmed send successful when result middleware fails", async () => {
@@ -442,6 +562,12 @@ describe("buildEmbeddedExtensionFactories", () => {
           ok: true,
           result: { messageId: "1700000000.000100", channelId: "C123" },
           toolSend: { to: "channel:C123" },
+          messageDelivery: {
+            status: "settled",
+            primaryPlatformMessageId: "1700000000.000100",
+            partialDelivery: false,
+            createdThreadIds: [],
+          },
         },
       },
       { cwd: "/tmp" },
@@ -455,8 +581,16 @@ describe("buildEmbeddedExtensionFactories", () => {
         middlewareWarning: "post-processing failed",
       },
     });
-    expect(consumeEmbeddedToolSendReceipt(sessionManager, "call-message")).toEqual({
-      details: { toolSend: { to: "channel:C123" } },
+    expect(consumeEmbeddedToolReceipt(sessionManager, "call-message")).toEqual({
+      details: {
+        toolSend: { to: "channel:C123" },
+        messageDelivery: {
+          status: "settled",
+          primaryPlatformMessageId: "1700000000.000100",
+          partialDelivery: false,
+          createdThreadIds: [],
+        },
+      },
     });
   });
 
@@ -495,6 +629,168 @@ describe("buildEmbeddedExtensionFactories", () => {
       details: { status: "timeout", tool: "exec", error: "Timed out" },
       isError: true,
     });
+  });
+
+  it("keeps an accepted sessions_spawn launch successful even when the event is flagged as an error", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+
+    const factory = factories[0];
+    expect(factory).toBeDefined();
+    if (!factory) {
+      throw new Error("Expected embedded tool-result extension factory");
+    }
+    const runtime = createExtensionRuntime();
+    const extension = await loadExtensionFromFactory(
+      factory,
+      "/tmp",
+      createEventBus(),
+      runtime,
+      "<embedded-test>",
+    );
+    const runner = new ExtensionRunner(
+      [extension],
+      runtime,
+      "/tmp",
+      SessionManager.inMemory(),
+      ModelRegistry.inMemory(AuthStorage.inMemory()),
+    );
+    const acceptedResult = jsonResult({
+      status: "accepted",
+      childSessionKey: "agent:watcher:subagent:abc",
+      runId: "run-123",
+      mode: "run",
+    });
+
+    const result = await runner.emitToolResult({
+      type: "tool_result",
+      toolName: "sessions_spawn",
+      toolCallId: "call-spawn",
+      input: {},
+      content: acceptedResult.content,
+      details: acceptedResult.details,
+      isError: true,
+    });
+
+    expect(result).toEqual({ ...acceptedResult, isError: false });
+  });
+
+  it("still marks a forbidden sessions_spawn as a model-visible failure", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+    const handler = handlers.get("tool_result");
+    const content = [{ type: "text", text: "spawn denied" }];
+    const details = { status: "forbidden", reason: "subagents disabled" };
+
+    const result = await handler?.(
+      {
+        toolName: "sessions_spawn",
+        toolCallId: "call-spawn-forbidden",
+        content,
+        details,
+        isError: true,
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(result).toEqual({ content, details, isError: true });
+  });
+
+  it("still flags an accepted-status sessions_spawn that is missing spawn identity", async () => {
+    // Only the full accepted contract (runId + childSessionKey) is a launch; an
+    // accepted status alone must not clear an error flag.
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+    const handler = handlers.get("tool_result");
+    const content = [{ type: "text", text: "partial" }];
+    const details = { status: "accepted" };
+
+    const result = await handler?.(
+      {
+        toolName: "sessions_spawn",
+        toolCallId: "call-spawn-partial",
+        content,
+        details,
+        isError: true,
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(result).toEqual({ content, details, isError: true });
+  });
+
+  it("does not clear the error flag for a non-spawn tool with accepted-shaped details", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+    const handler = handlers.get("tool_result");
+    const content = [{ type: "text", text: "boom" }];
+    const details = jsonResult({
+      status: "accepted",
+      childSessionKey: "agent:watcher:subagent:abc",
+      runId: "run-123",
+    }).details;
+
+    const result = await handler?.(
+      {
+        toolName: "exec",
+        toolCallId: "call-exec-accepted-shape",
+        content,
+        details,
+        isError: true,
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(result).toEqual({ content, details, isError: true });
   });
 
   it("does not mark results as errors when status is absent or non-error", async () => {

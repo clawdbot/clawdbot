@@ -1,6 +1,7 @@
 /** Collects and analyzes command-scoped secret assignments from OpenClaw config. */
+import { getAuthoredConfigSecretRef, resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { getPath } from "./path-utils.js";
 import { isExpectedResolvedSecretValue } from "./secret-value.js";
 import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
@@ -13,12 +14,6 @@ export type CommandSecretAssignment = {
   value: unknown;
 };
 
-/** Resolved command assignments plus non-fatal diagnostics. */
-export type ResolveAssignmentsFromSnapshotResult = {
-  assignments: CommandSecretAssignment[];
-  diagnostics: string[];
-};
-
 /** Active or inactive command target that could not be materialized. */
 export type UnresolvedCommandSecretAssignment = {
   path: string;
@@ -26,7 +21,7 @@ export type UnresolvedCommandSecretAssignment = {
 };
 
 /** Full command assignment analysis before unresolved active refs are rejected. */
-export type AnalyzeAssignmentsFromSnapshotResult = {
+type AnalyzeAssignmentsFromSnapshotResult = {
   assignments: CommandSecretAssignment[];
   diagnostics: string[];
   unresolved: UnresolvedCommandSecretAssignment[];
@@ -54,18 +49,26 @@ export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
     if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
       continue;
     }
-    const { explicitRef, ref } = resolveSecretInputRef({
+    const inlineCandidateRef = resolveConfigSecretRef({
+      config: params.sourceConfig,
+      path: target.path,
       value: target.value,
+      defaults,
+    });
+    const { explicitRef, ref } = resolveSecretInputRef({
+      value: inlineCandidateRef,
       refValue: target.refValue,
       defaults,
     });
-    const inlineCandidateRef = explicitRef ? coerceSecretRef(target.value, defaults) : null;
     if (!ref) {
       continue;
     }
 
     const resolved = getPath(params.resolvedConfig, target.pathSegments);
-    if (!isExpectedResolvedSecretValue(resolved, target.entry.expectedResolvedValue)) {
+    if (
+      getAuthoredConfigSecretRef(params.resolvedConfig, target.path) ||
+      !isExpectedResolvedSecretValue(resolved, target.entry.expectedResolvedValue)
+    ) {
       // Inactive surfaces are diagnostics, not hard failures; active unresolved refs block the
       // command because the runtime snapshot promised that target was usable.
       if (params.inactiveRefPaths?.has(target.path)) {
@@ -102,33 +105,4 @@ export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
   }
 
   return { assignments, diagnostics, unresolved, inactive };
-}
-
-/**
- * Returns resolved command assignments and throws when an active required ref is unresolved.
- */
-export function collectCommandSecretAssignmentsFromSnapshot(params: {
-  sourceConfig: OpenClawConfig;
-  resolvedConfig: OpenClawConfig;
-  commandName: string;
-  targetIds: ReadonlySet<string>;
-  inactiveRefPaths?: ReadonlySet<string>;
-  allowedPaths?: ReadonlySet<string>;
-}): ResolveAssignmentsFromSnapshotResult {
-  const analyzed = analyzeCommandSecretAssignmentsFromSnapshot({
-    sourceConfig: params.sourceConfig,
-    resolvedConfig: params.resolvedConfig,
-    targetIds: params.targetIds,
-    inactiveRefPaths: params.inactiveRefPaths,
-    allowedPaths: params.allowedPaths,
-  });
-  if (analyzed.unresolved.length > 0) {
-    throw new Error(
-      `${params.commandName}: ${analyzed.unresolved[0]?.path ?? "target"} is unresolved in the active runtime snapshot.`,
-    );
-  }
-  return {
-    assignments: analyzed.assignments,
-    diagnostics: analyzed.diagnostics,
-  };
 }

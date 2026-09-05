@@ -1,3 +1,5 @@
+import type { SessionTranscriptDeliveryMirror } from "../../config/sessions/transcript.js";
+
 /**
  * Transcript append data emitted after an outbound send completes.
  */
@@ -7,6 +9,8 @@ export type OutboundMirror = {
   text?: string;
   mediaUrls?: string[];
   idempotencyKey?: string;
+  expectedSessionId?: string;
+  deliveryMirror?: SessionTranscriptDeliveryMirror;
 };
 
 /**

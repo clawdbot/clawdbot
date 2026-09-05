@@ -24,7 +24,7 @@ const resolveOwningPluginIdsForProviderMock = vi.hoisted(() =>
   vi.fn<ResolveOwningPluginIdsForProvider>(() => undefined),
 );
 const resolveCatalogHookProviderPluginIdsMock = vi.hoisted(() =>
-  vi.fn<ResolveCatalogHookProviderPluginIds>((_) => [] as string[]),
+  vi.fn<ResolveCatalogHookProviderPluginIds>((_params) => [] as string[]),
 );
 
 vi.mock("openclaw/plugin-sdk/provider-catalog-runtime", async () => {
@@ -118,7 +118,7 @@ export function describeOpenAIProviderCatalogContract() {
         const { openaiProvider } = await contractDepsPromise;
         expectCodexMissingAuthHint(
           (params) => openaiProvider.buildMissingAuthMessage?.(params.context) ?? undefined,
-          "openai/gpt-5.5",
+          "openai/gpt-5.6-sol",
         );
       });
 

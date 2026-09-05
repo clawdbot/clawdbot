@@ -3,18 +3,25 @@
  */
 import { randomBytes } from "node:crypto";
 import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
-import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
+import {
+  generatePkceVerifierChallenge,
+  type OAuthCredential,
+} from "openclaw/plugin-sdk/provider-auth";
 import {
   parseOAuthCallbackInput,
   waitForLocalOAuthCallback,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowProviderError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
+import { buildOAuthRequestSignal } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const CHUTES_AUTHORIZE_ENDPOINT = "https://api.chutes.ai/idp/authorize";
 const CHUTES_TOKEN_ENDPOINT = "https://api.chutes.ai/idp/token";
 const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
-const CHUTES_TOKEN_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const CHUTES_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
 
 type OAuthPrompt = {
   message: string;
@@ -111,18 +118,59 @@ function resolveChutesExpiresAt(value: unknown, now: number): number | undefined
   });
 }
 
+async function requestChutesTokenGrant(params: {
+  body: URLSearchParams;
+  responseLabel: "Chutes token exchange" | "Chutes token refresh";
+  fetchFn?: typeof fetch;
+  now?: number;
+  signal?: AbortSignal;
+}): Promise<{ access: string; refresh: string | undefined; expires: number }> {
+  const response = await (params.fetchFn ?? fetch)(CHUTES_TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.body,
+    signal: buildOAuthRequestSignal({
+      timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS,
+      ...(params.signal ? { signal: params.signal } : {}),
+    }),
+  });
+  await assertOkOrThrowProviderError(response, `${params.responseLabel} failed`);
+
+  const data = await readProviderJsonResponse<{
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+  }>(response, params.responseLabel);
+  const access = normalizeOptionalString(data.access_token);
+  const expires = resolveChutesExpiresAt(data.expires_in, params.now ?? Date.now());
+  if (!access) {
+    throw new Error(`${params.responseLabel} returned no access_token`);
+  }
+  if (expires === undefined) {
+    throw new Error(`${params.responseLabel} returned invalid expires_in`);
+  }
+  return { access, refresh: normalizeOptionalString(data.refresh_token), expires };
+}
+
 async function fetchChutesUserInfo(params: {
   accessToken: string;
   fetchFn?: typeof fetch;
+  signal?: AbortSignal;
 }): Promise<ChutesUserInfo | null> {
   const fetchFn = params.fetchFn ?? fetch;
   const response = await fetchFn(CHUTES_USERINFO_ENDPOINT, {
     headers: { Authorization: `Bearer ${params.accessToken}` },
+    signal: buildOAuthRequestSignal({
+      timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS,
+      ...(params.signal ? { signal: params.signal } : {}),
+    }),
   });
   if (!response.ok) {
+    // Release the connection instead of leaving the error body to idle timeout.
+    await response.body?.cancel().catch(() => undefined);
     return null;
   }
-  const data = (await response.json()) as unknown;
+  const data = await readProviderJsonResponse<unknown>(response, "Chutes userinfo");
   return data && typeof data === "object" ? (data as ChutesUserInfo) : null;
 }
 
@@ -132,62 +180,95 @@ async function exchangeChutesCodeForTokens(params: {
   codeVerifier: string;
   fetchFn?: typeof fetch;
   now?: number;
+  signal?: AbortSignal;
 }): Promise<ChutesStoredOAuth> {
   const fetchFn = params.fetchFn ?? fetch;
   const now = params.now ?? Date.now();
-  const body = new URLSearchParams(
-    toFormUrlEncoded({
-      grant_type: "authorization_code",
-      client_id: params.app.clientId,
-      code: params.code,
-      redirect_uri: params.app.redirectUri,
-      code_verifier: params.codeVerifier,
-    }),
-  );
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    client_id: params.app.clientId,
+    code: params.code,
+    redirect_uri: params.app.redirectUri,
+    code_verifier: params.codeVerifier,
+  });
   if (params.app.clientSecret) {
     body.set("client_secret", params.app.clientSecret);
   }
 
-  const response = await fetchFn(CHUTES_TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  const token = await requestChutesTokenGrant({
     body,
+    responseLabel: "Chutes token exchange",
+    fetchFn,
+    now,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
-  if (!response.ok) {
-    const detail = await readResponseTextLimited(
-      response,
-      CHUTES_TOKEN_ERROR_BODY_LIMIT_BYTES,
-    ).catch(() => "");
-    throw new Error(`Chutes token exchange failed: ${detail}`);
-  }
-
-  const data = (await response.json()) as {
-    access_token?: string;
-    refresh_token?: string;
-    expires_in?: number;
-  };
-  const access = normalizeOptionalString(data.access_token);
-  const refresh = normalizeOptionalString(data.refresh_token);
-  const expires = resolveChutesExpiresAt(data.expires_in, now);
-  if (!access) {
-    throw new Error("Chutes token exchange returned no access_token");
-  }
-  if (!refresh) {
+  if (!token.refresh) {
     throw new Error("Chutes token exchange returned no refresh_token");
   }
-  if (expires === undefined) {
-    throw new Error("Chutes token exchange returned invalid expires_in");
-  }
 
-  const info = await fetchChutesUserInfo({ accessToken: access, fetchFn });
+  let info: ChutesUserInfo | null = null;
+  try {
+    info = await fetchChutesUserInfo({
+      accessToken: token.access,
+      fetchFn,
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+  } catch (error) {
+    if (params.signal?.aborted) {
+      throw error;
+    }
+    // Token exchange completes authentication; optional profile enrichment must
+    // not discard issued credentials when userinfo is unavailable or times out.
+  }
   return {
-    access,
-    refresh,
-    expires,
+    access: token.access,
+    refresh: token.refresh,
+    expires: token.expires,
     email: info?.username,
     accountId: info?.sub,
     clientId: params.app.clientId,
   } as ChutesStoredOAuth;
+}
+
+/** Refreshes a stored Chutes OAuth credential through the provider token endpoint. */
+export async function refreshChutesOAuthCredential(
+  credential: OAuthCredential,
+  options: { fetchFn?: typeof fetch; now?: number } = {},
+): Promise<OAuthCredential> {
+  const refreshToken = normalizeOptionalString(credential.refresh);
+  if (!refreshToken) {
+    throw new Error("Chutes OAuth credential is missing refresh token");
+  }
+
+  const clientId = normalizeOptionalString(credential.clientId ?? process.env.CHUTES_CLIENT_ID);
+  if (!clientId) {
+    throw new Error("Missing CHUTES_CLIENT_ID for Chutes OAuth refresh (set env var or re-auth).");
+  }
+  const clientSecret = normalizeOptionalString(process.env.CHUTES_CLIENT_SECRET);
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: clientId,
+    refresh_token: refreshToken,
+  });
+  if (clientSecret) {
+    body.set("client_secret", clientSecret);
+  }
+
+  const token = await requestChutesTokenGrant({
+    body,
+    responseLabel: "Chutes token refresh",
+    fetchFn: options.fetchFn,
+    now: options.now,
+  });
+
+  return {
+    ...credential,
+    access: token.access,
+    // RFC 6749 section 6 makes replacement refresh tokens optional.
+    refresh: token.refresh ?? refreshToken,
+    expires: token.expires,
+    clientId,
+  };
 }
 
 /** Runs Chutes OAuth and returns refreshable stored credentials. */
@@ -200,6 +281,7 @@ export async function loginChutes(params: {
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
   onProgress?: (message: string) => void;
   fetchFn?: typeof fetch;
+  signal?: AbortSignal;
 }): Promise<ChutesStoredOAuth> {
   const { verifier, challenge } = generatePkceVerifierChallenge();
   const state = params.createState?.() ?? randomBytes(16).toString("hex");
@@ -234,7 +316,11 @@ export async function loginChutes(params: {
       successTitle: "Chutes OAuth complete",
       hostname: redirect.hostname,
       onProgress: params.onProgress,
-    }).catch(async () => {
+      ...(params.signal ? { signal: params.signal } : {}),
+    }).catch(async (error: unknown) => {
+      if (params.signal?.aborted) {
+        throw error;
+      }
       params.onProgress?.("OAuth callback not detected; paste redirect URL...");
       return parseManualOAuthInput(
         await params.onPrompt({
@@ -255,5 +341,6 @@ export async function loginChutes(params: {
     code: codeAndState.code,
     codeVerifier: verifier,
     fetchFn: params.fetchFn,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 }

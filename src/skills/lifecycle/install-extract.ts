@@ -1,6 +1,4 @@
 // Install extraction helpers validate and unpack skill archives into install roots.
-import { createHash } from "node:crypto";
-import fs from "node:fs";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   createTarEntryPreflightChecker,
@@ -9,39 +7,28 @@ import {
   prepareArchiveDestinationDir,
   withStagedArchiveDestination,
 } from "../../infra/archive.js";
+import { sha256File } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { hasBinary } from "../loading/config.js";
 import { parseTarVerboseMetadata } from "./install-tar-verbose.js";
 
 type ArchiveExtractResult = { stdout: string; stderr: string; code: number | null };
+type TarListingResult = ArchiveExtractResult & { stdoutTruncatedBytes?: number };
 type TarPreflightResult = {
   entries: string[];
   metadata: ReturnType<typeof parseTarVerboseMetadata>;
 };
 
-async function hashFileSha256(filePath: string): Promise<string> {
-  const hash = createHash("sha256");
-  const stream = fs.createReadStream(filePath);
-  return await new Promise<string>((resolve, reject) => {
-    stream.on("data", (chunk) => {
-      hash.update(chunk as Buffer);
-    });
-    stream.on("error", reject);
-    stream.on("end", () => {
-      resolve(hash.digest("hex"));
-    });
-  });
-}
-
 function commandFailureResult(
-  result: { stdout: string; stderr: string; code: number | null },
+  result: TarListingResult,
   fallbackStderr: string,
 ): ArchiveExtractResult {
+  const truncated = (result.stdoutTruncatedBytes ?? 0) > 0;
   return {
     stdout: result.stdout,
-    stderr: result.stderr || fallbackStderr,
-    code: result.code,
+    stderr: truncated ? "tar listing output was truncated; refusing to extract" : fallbackStderr,
+    code: truncated ? 1 : result.code,
   };
 }
 
@@ -64,16 +51,16 @@ async function readTarPreflight(params: {
   const listResult = await runCommandWithTimeout(["tar", "tf", params.archivePath], {
     timeoutMs: params.timeoutMs,
   });
-  if (listResult.code !== 0) {
-    return commandFailureResult(listResult, "tar list failed");
+  if (listResult.code !== 0 || listResult.stdoutTruncatedBytes) {
+    return commandFailureResult(listResult, listResult.stderr || "tar list failed");
   }
   const entries = normalizeStringEntries(listResult.stdout.split("\n"));
 
   const verboseResult = await runCommandWithTimeout(["tar", "tvf", params.archivePath], {
     timeoutMs: params.timeoutMs,
   });
-  if (verboseResult.code !== 0) {
-    return commandFailureResult(verboseResult, "tar verbose list failed");
+  if (verboseResult.code !== 0 || verboseResult.stdoutTruncatedBytes) {
+    return commandFailureResult(verboseResult, verboseResult.stderr || "tar verbose list failed");
   }
   const metadata = parseTarVerboseMetadata(verboseResult.stdout);
   if (metadata.length !== entries.length) {
@@ -96,7 +83,7 @@ async function verifyArchiveHashStable(params: {
   archivePath: string;
   expectedHash: string;
 }): Promise<ArchiveExtractResult | null> {
-  const postPreflightHash = await hashFileSha256(params.archivePath);
+  const postPreflightHash = await sha256File(params.archivePath);
   if (postPreflightHash === params.expectedHash) {
     return null;
   }
@@ -180,7 +167,7 @@ export async function extractArchive(params: {
       }
 
       const destinationRealDir = await prepareArchiveDestinationDir(targetDir);
-      const preflightHash = await hashFileSha256(archivePath);
+      const preflightHash = await sha256File(archivePath);
 
       // Preflight list to prevent zip-slip style traversal before extraction.
       const preflight = await readTarPreflight({ archivePath, timeoutMs });

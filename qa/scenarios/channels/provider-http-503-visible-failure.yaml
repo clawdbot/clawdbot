@@ -1,0 +1,123 @@
+title: Provider HTTP 503 remains visible after tool execution
+
+scenario:
+  id: provider-http-503-visible-failure
+  surface: channel
+  coverage:
+    primary:
+      - agent-runtime.structured-provider-diagnostics
+      - channels.group-final-reply
+    secondary:
+      - agent-runtime.failure-recovery-retry-policy
+      - channels.qa-channel-final-reply
+  objective: Verify a provider HTTP 503 after tool execution produces one safe visible channel reply without replaying the tool.
+  gatewayConfigPatch:
+    # Isolate this scenario from model-fallback replay policy. The regression
+    # target is the outer channel failure mapping after a post-tool 503.
+    agents:
+      defaults:
+        model:
+          fallbacks: []
+      entries:
+        qa:
+          model:
+            fallbacks: []
+  successCriteria:
+    - The mock provider plans one read before returning HTTP 503 on the post-tool request.
+    - The channel receives the existing sanitized temporary-provider-error reply exactly once.
+    - OpenClaw does not replay the tool-backed turn after the HTTP 503.
+    - Raw provider diagnostics are not delivered to the channel.
+  docsRefs:
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/auto-reply/reply/agent-runner-failure-reply.ts
+    - src/auto-reply/reply/agent-runner-error-handler.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+  execution:
+    kind: flow
+    retryCount: 0
+    channel: qa-channel
+    summary: Run one channel turn whose mock provider returns HTTP 503 after a tool result, then verify one sanitized reply and no tool replay.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-provider-http-503
+      promptSnippet: Provider HTTP 503 after tool QA check
+      prompt: "@openclaw Provider HTTP 503 after tool QA check: read QA_KICKOFF_TASK.md, then reply."
+      expectedReply: "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening."
+
+flow:
+  steps:
+    - name: surfaces one sanitized failure without replaying the tool
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: requestCursorBefore
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: channel
+              title: QA Provider Failure
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: config.prompt
+        - call: state.waitFor
+          saveAs: outbound
+          args:
+            - kind: message-text
+              direction: outbound
+              textIncludes:
+                ref: config.expectedReply
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 180000)
+        - assert:
+            expr: "!outbound.deleted && outbound.accountId === env.transport.accountId && outbound.conversation.id === config.conversationId && outbound.conversation.kind === 'channel' && outbound.isError === true && outbound.text === config.expectedReply"
+            message: expected one classified provider failure on the original account and conversation
+        - call: sleep
+          args:
+            - expr: liveTurnTimeoutMs(env, 8000)
+        - set: conversationOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && message.conversation.kind === 'channel')"
+        - set: scenarioRequests
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : []"
+        - set: plannedReads
+          value:
+            expr: "scenarioRequests.filter((request) => request.plannedToolName === 'read')"
+        - set: postToolRequests
+          value:
+            expr: "scenarioRequests.filter((request) => String(request.toolOutput ?? '').trim().length > 0)"
+        - assert:
+            expr: conversationOutbound.length === 1
+            message:
+              expr: "`expected exactly one channel reply after settling, saw ${conversationOutbound.length}: ${JSON.stringify(conversationOutbound.map((message) => String(message.text ?? '')))}`"
+        - assert:
+            expr: "String(conversationOutbound[0]?.text ?? '') === config.expectedReply"
+            message:
+              expr: "`expected the sanitized provider failure reply, saw ${String(conversationOutbound[0]?.text ?? '')}`"
+        - assert:
+            expr: "!env.mock || plannedReads.length === 1"
+            message:
+              expr: "`provider failure turn must plan the read exactly once, saw ${plannedReads.length}`"
+        - assert:
+            expr: "!env.mock || postToolRequests.length >= 1"
+            message: expected at least one post-tool HTTP 503 request
+        - assert:
+            expr: "conversationOutbound.every((message) => !String(message.text ?? '').includes('Service Unavailable') && !String(message.text ?? '').includes('biscuit_baker'))"
+            message:
+              expr: "`raw provider diagnostics leaked into channel replies: ${JSON.stringify(conversationOutbound.map((message) => String(message.text ?? '')))}`"
+      detailsExpr: "`reply=${conversationOutbound.length}; plannedReads=${plannedReads.length}; postTool503=${postToolRequests.length}`"

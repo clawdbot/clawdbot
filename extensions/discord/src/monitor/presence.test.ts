@@ -1,4 +1,5 @@
 // Discord tests cover presence plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 
@@ -12,6 +13,10 @@ function expectPresenceUpdate(
   }
   expect(Array.isArray(result.activities)).toBe(true);
   return result;
+}
+
+function expectActivity(result: DiscordPresenceUpdate) {
+  return expectDefined(result.activities[0], "Discord presence activity");
 }
 
 describe("resolveDiscordPresenceUpdate", () => {
@@ -32,21 +37,21 @@ describe("resolveDiscordPresenceUpdate", () => {
     );
     expect(result.status).toBe("online");
     expect(result.activities).toHaveLength(1);
-    expect(result.activities[0].state).toBe("Helping humans");
+    expect(expectActivity(result).state).toBe("Helping humans");
   });
 
   it("uses custom activity type by default", () => {
     const result = expectPresenceUpdate(resolveDiscordPresenceUpdate({ activity: "test" }));
-    expect(result.activities[0].type).toBe(4);
-    expect(result.activities[0].name).toBe("Custom Status");
+    expect(expectActivity(result).type).toBe(4);
+    expect(expectActivity(result).name).toBe("Custom Status");
   });
 
   it("respects explicit activityType", () => {
     const result = expectPresenceUpdate(
       resolveDiscordPresenceUpdate({ activity: "test", activityType: 3 }),
     );
-    expect(result.activities[0].type).toBe(3);
-    expect(result.activities[0].name).toBe("test");
+    expect(expectActivity(result).type).toBe(3);
+    expect(expectActivity(result).name).toBe("test");
   });
 
   it("sets streaming URL for type 1", () => {
@@ -57,6 +62,6 @@ describe("resolveDiscordPresenceUpdate", () => {
         activityUrl: "https://twitch.tv/test",
       }),
     );
-    expect(result.activities[0].url).toBe("https://twitch.tv/test");
+    expect(expectActivity(result).url).toBe("https://twitch.tv/test");
   });
 });

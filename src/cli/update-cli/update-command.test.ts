@@ -2,36 +2,36 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import {
-  buildGatewayInstallEntrypointCandidates as resolveGatewayInstallEntrypointCandidates,
-  resolveGatewayInstallEntrypoint,
-} from "../../daemon/gateway-entrypoint.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import type { GatewayService } from "../../daemon/service.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
-  buildInvalidConfigPostCoreUpdateResult,
-  collectMissingPluginInstallPayloads,
-  formatPostUpdateGatewayRecoveryInstructions,
-  recoverInstalledLaunchAgentAfterUpdate,
-  recoverLaunchAgentAndRecheckGatewayHealth,
-  resolvePostCoreUpdateChildStdio,
-  resolvePostUpdateServiceStateReadEnv,
-  resolvePostInstallDoctorEnv,
-  shouldPrepareUpdatedInstallRestart,
-  resolveUpdatedGatewayRestartPort,
-  shouldUseLegacyProcessRestartAfterUpdate,
   updatePluginsAfterCoreUpdate,
-} from "./update-command.js";
+  type PostCorePluginUpdateResult,
+} from "./update-command-plugins.js";
+import { testing as updateCommandPluginsTesting } from "./update-command-plugins.test-support.js";
+import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
+import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
+import {
+  resolveUpdateTargetEnv,
+  resolveOwnedManagedUpdateEnv,
+  resolveUpdatedInstallCommandEnv,
+} from "./update-command-service-env.js";
+import {
+  resolvePostUpdateServiceStateReadEnv,
+  resolveUpdatedGatewayRestartPort,
+  shouldPrepareUpdatedInstallRestart,
+} from "./update-command-service.js";
+import { testing as updateCommandServiceTesting } from "./update-command-service.test-support.js";
 
-describe("resolveGatewayInstallEntrypointCandidates", () => {
-  it("prefers index.js before legacy entry.js", () => {
-    expect(resolveGatewayInstallEntrypointCandidates("/tmp/openclaw-root")).toEqual([
-      path.join("/tmp/openclaw-root", "dist", "index.js"),
-      path.join("/tmp/openclaw-root", "dist", "index.mjs"),
-      path.join("/tmp/openclaw-root", "dist", "entry.js"),
-      path.join("/tmp/openclaw-root", "dist", "entry.mjs"),
-    ]);
-  });
+const tempDirs = createTempDirTracker();
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  tempDirs.cleanup();
 });
 
 describe("resolveGatewayInstallEntrypoint", () => {
@@ -55,6 +55,45 @@ describe("resolveGatewayInstallEntrypoint", () => {
     await expect(
       resolveGatewayInstallEntrypoint(root, async (candidate) => candidate === entryPath),
     ).resolves.toBe(entryPath);
+  });
+});
+
+describe("applyPostPluginConfigValidation", () => {
+  const pluginUpdate = {
+    status: "ok",
+    changed: true,
+    sync: {
+      changed: true,
+      switchedToBundled: [],
+      switchedToNpm: [],
+      warnings: [],
+      errors: [],
+    },
+    npm: { changed: true, outcomes: [] },
+    integrityDrifts: [],
+    warnings: [],
+  } satisfies PostCorePluginUpdateResult;
+
+  it("fails closed when updated plugin migrations leave config invalid", () => {
+    expect(applyPostPluginConfigValidation(pluginUpdate, false)).toMatchObject({
+      status: "error",
+      reason: "post-plugin-doctor-invalid-config",
+      warnings: [
+        {
+          guidance: ["Run `openclaw doctor --fix`, then rerun `openclaw update repair`."],
+        },
+      ],
+    });
+  });
+
+  it("preserves an earlier plugin update error", () => {
+    const failed = {
+      ...pluginUpdate,
+      status: "error" as const,
+      reason: "plugin-sync-failed",
+    };
+
+    expect(applyPostPluginConfigValidation(failed, false)).toBe(failed);
   });
 });
 
@@ -118,9 +157,9 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
 });
 
 describe("resolveUpdatedGatewayRestartPort", () => {
-  it("uses the managed service port ahead of the caller environment", () => {
+  it("uses the managed service port ahead of the caller environment", async () => {
     expect(
-      resolveUpdatedGatewayRestartPort({
+      await resolveUpdatedGatewayRestartPort({
         config: { gateway: { port: 19000 } } as never,
         processEnv: { OPENCLAW_GATEWAY_PORT: "19001" },
         serviceEnv: { OPENCLAW_GATEWAY_PORT: "19002" },
@@ -128,9 +167,9 @@ describe("resolveUpdatedGatewayRestartPort", () => {
     ).toBe(19002);
   });
 
-  it("falls back to the post-update config when no service port is available", () => {
+  it("falls back to the post-update config when no service port is available", async () => {
     expect(
-      resolveUpdatedGatewayRestartPort({
+      await resolveUpdatedGatewayRestartPort({
         config: { gateway: { port: 19000 } } as never,
         processEnv: {},
         serviceEnv: {},
@@ -140,91 +179,123 @@ describe("resolveUpdatedGatewayRestartPort", () => {
 });
 
 describe("resolvePostUpdateServiceStateReadEnv", () => {
-  it("keeps package restart preparation anchored to the pre-update service env", () => {
-    const processEnv = {
-      OPENCLAW_STATE_DIR: "/source/state",
-      OPENCLAW_CONFIG_PATH: "/source/openclaw.json",
-    } as NodeJS.ProcessEnv;
-    const prePackageServiceEnv = {
-      OPENCLAW_STATE_DIR: "/managed/state",
-      OPENCLAW_CONFIG_PATH: "/managed/openclaw.json",
-    } as NodeJS.ProcessEnv;
+  it.each(["git", "npm", "pnpm", "bun"] as const)(
+    "keeps %s restart preparation anchored to the pre-update service env",
+    (updateMode) => {
+      const processEnv = { OPENCLAW_STATE_DIR: "/source/state" };
+      const preManagedServiceEnv = { OPENCLAW_STATE_DIR: "/managed/state" };
+      expect(
+        resolvePostUpdateServiceStateReadEnv({ updateMode, processEnv, preManagedServiceEnv }),
+      ).toEqual(preManagedServiceEnv);
+    },
+  );
 
-    expect(
-      resolvePostUpdateServiceStateReadEnv({
-        updateMode: "npm",
-        processEnv,
-        prePackageServiceEnv,
-      }),
-    ).toBe(prePackageServiceEnv);
-  });
-
-  it("keeps git updates tied to the caller environment", () => {
-    const processEnv = { OPENCLAW_STATE_DIR: "/source/state" } as NodeJS.ProcessEnv;
-    const prePackageServiceEnv = { OPENCLAW_STATE_DIR: "/managed/state" } as NodeJS.ProcessEnv;
-
-    expect(
-      resolvePostUpdateServiceStateReadEnv({
-        updateMode: "git",
-        processEnv,
-        prePackageServiceEnv,
-      }),
-    ).toBe(processEnv);
-  });
-
-  it("uses the managed service environment for git updates stopped by this updater", () => {
-    const processEnv = { OPENCLAW_STATE_DIR: "/source/state" } as NodeJS.ProcessEnv;
-    const preManagedServiceEnv = { OPENCLAW_STATE_DIR: "/managed/state" } as NodeJS.ProcessEnv;
-
-    expect(
-      resolvePostUpdateServiceStateReadEnv({
-        updateMode: "git",
-        processEnv,
-        preManagedServiceEnv,
-      }),
-    ).toBe(preManagedServiceEnv);
+  it("uses the caller environment when no managed service context was captured", () => {
+    const processEnv = { OPENCLAW_STATE_DIR: "/source/state" };
+    expect(resolvePostUpdateServiceStateReadEnv({ updateMode: "git", processEnv })).toEqual(
+      processEnv,
+    );
   });
 });
 
-describe("resolvePostInstallDoctorEnv", () => {
+describe("resolveUpdateTargetEnv", () => {
   it("uses the managed service profile paths for post-install doctor", () => {
-    const env = resolvePostInstallDoctorEnv({
+    const env = resolveUpdateTargetEnv({
       invocationCwd: "/srv/openclaw",
       baseEnv: {
         PATH: "/bin",
+        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
         OPENCLAW_STATE_DIR: "/wrong/state",
         OPENCLAW_CONFIG_PATH: "/wrong/openclaw.json",
         OPENCLAW_PROFILE: "wrong",
+        OPENCLAW_SYSTEMD_UNIT: "wrong.service",
       },
       serviceEnv: {
         OPENCLAW_STATE_DIR: "daemon-state",
         OPENCLAW_CONFIG_PATH: "daemon-state/openclaw.json",
         OPENCLAW_PROFILE: "work",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-work.service",
       },
     });
 
     expect(env.PATH).toBe("/bin");
+    expect(env.OPENCLAW_SERVICE_REPAIR_POLICY).toBe("external");
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
     expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
     expect(env.OPENCLAW_CONFIG_PATH).toBe(
       path.join("/srv/openclaw", "daemon-state", "openclaw.json"),
     );
     expect(env.OPENCLAW_PROFILE).toBe("work");
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-work.service");
   });
 
   it("keeps the caller env when no managed service env is available", () => {
-    const env = resolvePostInstallDoctorEnv({
+    const env = resolveUpdateTargetEnv({
       baseEnv: {
         PATH: "/bin",
+        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
         OPENCLAW_STATE_DIR: "/caller/state",
         OPENCLAW_PROFILE: "caller",
       },
     });
 
     expect(env.PATH).toBe("/bin");
+    expect(env.OPENCLAW_SERVICE_REPAIR_POLICY).toBe("external");
     expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
     expect(env.OPENCLAW_STATE_DIR).toBe("/caller/state");
     expect(env.OPENCLAW_PROFILE).toBe("caller");
+  });
+});
+
+describe("resolveUpdatedInstallCommandEnv", () => {
+  it("keeps runtime SecretRef inputs while applying managed service overrides", () => {
+    const env = resolveUpdatedInstallCommandEnv({
+      invocationCwd: "/srv/openclaw",
+      processEnv: {
+        OPENCLAW_GATEWAY_AUTH_TOKEN: "runtime-token",
+        OPENCLAW_STATE_DIR: "/wrong/state",
+        PATH: "/caller/bin",
+      },
+      serviceEnv: {
+        OPENCLAW_STATE_DIR: "daemon-state",
+        PATH: "/daemon/bin",
+      },
+    });
+
+    expect(env.OPENCLAW_GATEWAY_AUTH_TOKEN).toBe("runtime-token");
+    expect(env.OPENCLAW_STATE_DIR).toBe(path.join("/srv/openclaw", "daemon-state"));
+    expect(env.PATH).toBe("/daemon/bin");
+    expect(env.NODE_DISABLE_COMPILE_CACHE).toBe("1");
+    expect(resolveUpdatedInstallCommandEnv({ processEnv: env })).toEqual(env);
+  });
+
+  it("preserves effective base-owned selectors while clearing unowned caller selectors", () => {
+    const env = resolveOwnedManagedUpdateEnv({
+      processEnv: {
+        HOME: "/home/operator",
+        OPENCLAW_HOME: "/home/operator/openclaw-home",
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: "/home/operator/.openclaw-personal",
+        OPENCLAW_CONFIG_PATH: "/home/operator/.openclaw-personal/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "19111",
+      },
+      serviceEnv: {
+        HOME: "/home/operator",
+        OPENCLAW_HOME: "/home/operator/openclaw-home",
+        OPENCLAW_PROFILE: "personal",
+        OPENCLAW_STATE_DIR: "/home/operator/.openclaw-personal",
+        OPENCLAW_CONFIG_PATH: "/effective/openclaw.json",
+        OPENCLAW_GATEWAY_PORT: "19111",
+      },
+      serviceDefinitionEnv: { OPENCLAW_CONFIG_PATH: "/managed/openclaw.json" },
+    });
+
+    expect(env.HOME).toBe("/home/operator");
+    expect(env.OPENCLAW_HOME).toBeUndefined();
+    expect(env.OPENCLAW_PROFILE).toBeUndefined();
+    expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
+    expect(env.OPENCLAW_CONFIG_PATH).toBe("/effective/openclaw.json");
+    expect(env.OPENCLAW_GATEWAY_PORT).toBeUndefined();
   });
 });
 
@@ -247,7 +318,7 @@ describe("collectMissingPluginInstallPayloads", () => {
       await fs.mkdir(noPackageJsonDir, { recursive: true });
 
       await expect(
-        collectMissingPluginInstallPayloads({
+        updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
           env: { HOME: tmpDir } as NodeJS.ProcessEnv,
           records: {
             present: {
@@ -297,12 +368,132 @@ describe("collectMissingPluginInstallPayloads", () => {
     }
   });
 
+  it("accepts tracked bundle records validated by the shared bundle loader", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
+    const bundleDir = path.join(tmpDir, "state", "clawhub", "cursor-bundle");
+    try {
+      await fs.mkdir(path.join(bundleDir, ".cursor-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(bundleDir, ".cursor-plugin", "plugin.json"),
+        JSON.stringify({ name: "cursor-bundle" }),
+        "utf8",
+      );
+      await expect(
+        updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
+          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
+          records: {
+            "cursor-bundle": {
+              source: "clawhub",
+              clawhubFamily: "bundle-plugin",
+              installPath: bundleDir,
+            },
+          },
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts persisted marketplace bundle records without transient format metadata", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
+    const bundleDir = path.join(tmpDir, "state", "marketplace", "cursor-bundle");
+    try {
+      await fs.mkdir(path.join(bundleDir, ".cursor-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(bundleDir, ".cursor-plugin", "plugin.json"),
+        JSON.stringify({ name: "cursor-bundle" }),
+        "utf8",
+      );
+      await expect(
+        updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
+          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
+          records: {
+            "cursor-bundle": {
+              source: "marketplace",
+              installPath: bundleDir,
+              marketplaceName: "Local",
+              marketplaceSource: "local/repo",
+              marketplacePlugin: "cursor-bundle",
+            },
+          },
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps dual-format bundle records on the native package payload path", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
+    const bundleDir = path.join(tmpDir, "state", "clawhub", "dual-format-bundle");
+    try {
+      await fs.mkdir(path.join(bundleDir, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(
+        path.join(bundleDir, ".codex-plugin", "plugin.json"),
+        JSON.stringify({ name: "dual-format-bundle" }),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(bundleDir, "package.json"),
+        JSON.stringify({
+          name: "dual-format-bundle",
+          openclaw: { extensions: ["./missing-extension.js"] },
+        }),
+        "utf8",
+      );
+      await expect(
+        updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
+          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
+          records: {
+            "dual-format-bundle": {
+              source: "clawhub",
+              clawhubFamily: "bundle-plugin",
+              installPath: bundleDir,
+            },
+          },
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps corrupt tracked bundle records eligible for payload repair", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
+    const bundleDir = path.join(tmpDir, "state", "clawhub", "bad-bundle");
+    try {
+      await fs.mkdir(path.join(bundleDir, ".codex-plugin"), { recursive: true });
+      await fs.writeFile(path.join(bundleDir, ".codex-plugin", "plugin.json"), "[]", "utf8");
+      await expect(
+        updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
+          env: { HOME: tmpDir } as NodeJS.ProcessEnv,
+          records: {
+            "bad-bundle": {
+              source: "clawhub",
+              clawhubFamily: "bundle-plugin",
+              installPath: bundleDir,
+            },
+          },
+        }),
+      ).resolves.toEqual([
+        {
+          pluginId: "bad-bundle",
+          installPath: bundleDir,
+          reason: "missing-package-json",
+        },
+      ]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("skips disabled tracked records when requested", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-plugin-payload-"));
     const missingDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "missing");
     try {
       await expect(
-        collectMissingPluginInstallPayloads({
+        updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
           env: { HOME: tmpDir } as NodeJS.ProcessEnv,
           skipDisabledPlugins: true,
           config: {
@@ -333,7 +524,7 @@ describe("collectMissingPluginInstallPayloads", () => {
     const missingDir = path.join(tmpDir, "state", "npm", "node_modules", "@openclaw", "codex");
     try {
       await expect(
-        collectMissingPluginInstallPayloads({
+        updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
           env: { HOME: tmpDir } as NodeJS.ProcessEnv,
           skipDisabledPlugins: true,
           syncOfficialPluginInstalls: true,
@@ -373,7 +564,7 @@ describe("collectMissingPluginInstallPayloads", () => {
     const missingDir = path.join(tmpDir, "state", "clawhub", "diagnostics-otel");
     try {
       await expect(
-        collectMissingPluginInstallPayloads({
+        updateCommandPluginsTesting.collectMissingPluginInstallPayloads({
           env: { HOME: tmpDir } as NodeJS.ProcessEnv,
           skipDisabledPlugins: true,
           syncOfficialPluginInstalls: true,
@@ -409,14 +600,26 @@ describe("collectMissingPluginInstallPayloads", () => {
 
 describe("shouldUseLegacyProcessRestartAfterUpdate", () => {
   it("never restarts package updates through the pre-update process", () => {
-    expect(shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "npm" })).toBe(false);
-    expect(shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "pnpm" })).toBe(false);
-    expect(shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "bun" })).toBe(false);
+    expect(
+      updateCommandServiceTesting.shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "npm" }),
+    ).toBe(false);
+    expect(
+      updateCommandServiceTesting.shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "pnpm" }),
+    ).toBe(false);
+    expect(
+      updateCommandServiceTesting.shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "bun" }),
+    ).toBe(false);
   });
 
   it("keeps the in-process restart path for non-package updates", () => {
-    expect(shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "git" })).toBe(true);
-    expect(shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "unknown" })).toBe(true);
+    expect(
+      updateCommandServiceTesting.shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "git" }),
+    ).toBe(true);
+    expect(
+      updateCommandServiceTesting.shouldUseLegacyProcessRestartAfterUpdate({
+        updateMode: "unknown",
+      }),
+    ).toBe(true);
   });
 });
 
@@ -429,7 +632,10 @@ describe("formatPostUpdateGatewayRecoveryInstructions", () => {
   };
 
   it("uses systemd wording on Linux instead of macOS LaunchAgent instructions", () => {
-    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "linux");
+    const [line] = updateCommandServiceTesting.formatPostUpdateGatewayRecoveryInstructions(
+      result,
+      "linux",
+    );
 
     expect(line).toContain("the systemd user service");
     expect(line).toContain("openclaw gateway restart");
@@ -441,14 +647,20 @@ describe("formatPostUpdateGatewayRecoveryInstructions", () => {
   });
 
   it("keeps LaunchAgent recovery wording on macOS", () => {
-    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "darwin");
+    const [line] = updateCommandServiceTesting.formatPostUpdateGatewayRecoveryInstructions(
+      result,
+      "darwin",
+    );
 
     expect(line).toContain("the LaunchAgent is installed but not loaded");
     expect(line).toContain("logged-in macOS user session");
   });
 
   it("uses Windows service-manager wording on Windows", () => {
-    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "win32");
+    const [line] = updateCommandServiceTesting.formatPostUpdateGatewayRecoveryInstructions(
+      result,
+      "win32",
+    );
 
     expect(line).toContain("the gateway Scheduled Task or Windows login item");
     expect(line).not.toContain("LaunchAgent");
@@ -456,7 +668,10 @@ describe("formatPostUpdateGatewayRecoveryInstructions", () => {
   });
 
   it("uses generic service-manager wording for unsupported Node platforms", () => {
-    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "freebsd");
+    const [line] = updateCommandServiceTesting.formatPostUpdateGatewayRecoveryInstructions(
+      result,
+      "freebsd",
+    );
 
     expect(line).toContain("local service manager");
     expect(line).not.toContain("systemd");
@@ -466,50 +681,59 @@ describe("formatPostUpdateGatewayRecoveryInstructions", () => {
 });
 
 describe("recoverInstalledLaunchAgentAfterUpdate", () => {
-  it("re-bootstraps an installed-but-not-loaded macOS LaunchAgent after update", async () => {
-    const service = {} as never;
-    const serviceEnv = { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv;
-    const recoveredEnv = { ...serviceEnv, OPENCLAW_PORT: "18790" } as NodeJS.ProcessEnv;
-    const readState = vi.fn(async () => ({
-      installed: true,
-      loaded: false,
-      running: false,
-      env: recoveredEnv,
-      command: null,
-      runtime: { status: "unknown", missingSupervision: true },
-    }));
-    const recover = vi.fn(async () => ({
-      result: "restarted" as const,
-      loaded: true as const,
-      message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
-    }));
+  it.each(["recovered", "failed", "system owner"] as const)(
+    "reports installed-but-not-loaded LaunchAgent recovery: %s",
+    async (outcome) => {
+      const service = {} as never;
+      const serviceEnv = { OPENCLAW_PROFILE: "stomme" };
+      const recoveredEnv = { ...serviceEnv, OPENCLAW_PORT: "18790" };
+      const readState = vi.fn(async () => ({
+        installed: true,
+        loadState: { status: "not-loaded" },
+        running: false,
+        env: recoveredEnv,
+        command: null,
+        runtime: { status: "unknown", missingSupervision: true },
+      }));
+      const message =
+        "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.";
+      const guidance = "System LaunchDaemon system/ai.openclaw.stomme owns this label";
+      const recover = vi.fn(async () => {
+        if (outcome === "system owner") {
+          throw new Error(guidance);
+        }
+        return outcome === "recovered" ? { result: "restarted", loaded: true, message } : null;
+      });
 
-    await expect(
-      recoverInstalledLaunchAgentAfterUpdate({
-        service,
-        env: serviceEnv,
-        deps: {
-          platform: "darwin",
-          readState: readState as never,
-          recover: recover as never,
-        },
-      }),
-    ).resolves.toEqual({
-      attempted: true,
-      recovered: true,
-      message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
-    });
-
-    expect(readState).toHaveBeenCalledWith(service, { env: serviceEnv });
-    expect(recover).toHaveBeenCalledWith({ result: "restarted", env: recoveredEnv });
-  });
+      await expect(
+        updateCommandServiceTesting.recoverInstalledLaunchAgentAfterUpdate({
+          service,
+          env: serviceEnv,
+          deps: { platform: "darwin", readState: readState as never, recover: recover as never },
+        }),
+      ).resolves.toEqual(
+        outcome === "recovered"
+          ? { attempted: true, recovered: true, message }
+          : {
+              attempted: true,
+              recovered: false,
+              detail:
+                outcome === "system owner"
+                  ? guidance
+                  : "LaunchAgent was installed but not loaded; automatic bootstrap/kickstart recovery failed.",
+            },
+      );
+      expect(readState).toHaveBeenCalledWith(service, { env: serviceEnv });
+      expect(recover).toHaveBeenCalledWith({ result: "restarted", env: recoveredEnv });
+    },
+  );
 
   it("does not touch non-macOS service managers", async () => {
     const readState = vi.fn();
     const recover = vi.fn();
 
     await expect(
-      recoverInstalledLaunchAgentAfterUpdate({
+      updateCommandServiceTesting.recoverInstalledLaunchAgentAfterUpdate({
         service: {} as never,
         deps: {
           platform: "linux",
@@ -526,7 +750,7 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
   it("does not recover a loaded LaunchAgent", async () => {
     const readState = vi.fn(async () => ({
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: true,
       env: { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv,
       command: null,
@@ -535,7 +759,7 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
     const recover = vi.fn();
 
     await expect(
-      recoverInstalledLaunchAgentAfterUpdate({
+      updateCommandServiceTesting.recoverInstalledLaunchAgentAfterUpdate({
         service: {} as never,
         deps: {
           platform: "darwin",
@@ -547,87 +771,96 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
 
     expect(recover).not.toHaveBeenCalled();
   });
-
-  it("returns an explicit failed recovery state when bootstrap repair fails", async () => {
-    const readState = vi.fn(async () => ({
-      installed: true,
-      loaded: false,
-      running: false,
-      env: { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv,
-      command: null,
-      runtime: { status: "unknown", missingSupervision: true },
-    }));
-    const recover = vi.fn(async () => null);
-
-    await expect(
-      recoverInstalledLaunchAgentAfterUpdate({
-        service: {} as never,
-        deps: {
-          platform: "darwin",
-          readState: readState as never,
-          recover: recover as never,
-        },
-      }),
-    ).resolves.toEqual({
-      attempted: true,
-      recovered: false,
-      detail:
-        "LaunchAgent was installed but not loaded; automatic bootstrap/kickstart recovery failed.",
-    });
-  });
 });
 
 describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
-  it("does not report recovered update health until the gateway passes the post-recovery wait", async () => {
-    const service = {} as never;
-    const unhealthy = {
-      runtime: { status: "stopped" },
-      portUsage: { port: 18790, status: "free", listeners: [], hints: [] },
-      healthy: false,
-      staleGatewayPids: [],
-      waitOutcome: "stopped-free",
-    } as never;
-    const healthy = {
-      runtime: { status: "running", pid: 4242 },
-      portUsage: { port: 18790, status: "busy", listeners: [{ pid: 4242 }], hints: [] },
-      healthy: true,
-      staleGatewayPids: [],
-      gatewayVersion: "2026.5.3",
-      waitOutcome: "healthy",
-    } as never;
-    const recoverLaunchAgent = vi.fn(async () => ({
-      attempted: true as const,
-      recovered: true as const,
-      message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
-    }));
-    const waitForHealthy = vi.fn(async () => healthy);
+  it.each(["recovered", "failed", "not attempted"] as const)(
+    "records only attempted native repair before rechecking update health (%s)",
+    async (outcome) => {
+      const env = {
+        OPENCLAW_STATE_DIR: tempDirs.make("update-native-repair-"),
+        OPENCLAW_PROFILE: "stomme",
+        OPENCLAW_PORT: "18790",
+      };
+      const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+      const service = {} as never;
+      const unhealthy = {
+        runtime: { status: "stopped" },
+        portUsage: { port: 18790, status: "free", listeners: [], hints: [] },
+        healthy: false,
+        staleGatewayPids: [],
+        waitOutcome: "stopped-free",
+      } as never;
+      const healthy = {
+        runtime: { status: "running", pid: 4242 },
+        portUsage: { port: 18790, status: "busy", listeners: [{ pid: 4242 }], hints: [] },
+        healthy: true,
+        staleGatewayPids: [],
+        gatewayVersion: "2026.5.3",
+        waitOutcome: "healthy",
+      } as never;
+      const message =
+        "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.";
+      const recovery =
+        outcome === "recovered"
+          ? ({ attempted: true, recovered: true, message } as const)
+          : outcome === "failed"
+            ? ({ attempted: true, recovered: false, detail: "Bootstrap failed." } as const)
+            : ({ attempted: false, recovered: false } as const);
+      const recoverLaunchAgent = vi.fn(async () => recovery);
+      const waitForHealthy = vi.fn(async () => {
+        expect(getUpdateRun(runId, { env })?.repair).toMatchObject([{ status: "succeeded" }]);
+        return healthy;
+      });
+      const startedAtMs = Date.now();
 
-    await expect(
-      recoverLaunchAgentAndRecheckGatewayHealth({
-        health: unhealthy,
-        service,
-        port: 18790,
-        expectedVersion: "2026.5.3",
-        env: { OPENCLAW_PROFILE: "stomme", OPENCLAW_PORT: "18790" },
-        deps: { recoverLaunchAgent, waitForHealthy },
-      }),
-    ).resolves.toEqual({
-      health: healthy,
-      launchAgentRecovery: {
-        attempted: true,
-        recovered: true,
-        message:
-          "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
-      },
-    });
+      await expect(
+        updateCommandServiceTesting.recoverLaunchAgentAndRecheckGatewayHealth({
+          updateRun: { runId, env },
+          health: unhealthy,
+          service,
+          port: 18790,
+          expectedVersion: "2026.5.3",
+          expectedBuildId: "new-build",
+          env,
+          deps: { recoverLaunchAgent, waitForHealthy },
+        }),
+      ).resolves.toEqual({
+        health: outcome === "recovered" ? healthy : unhealthy,
+        launchAgentRecovery: recovery,
+      });
 
-    expect(waitForHealthy).toHaveBeenCalledWith({
-      service,
-      port: 18790,
-      expectedVersion: "2026.5.3",
-      env: { OPENCLAW_PROFILE: "stomme", OPENCLAW_PORT: "18790" },
-    });
-  });
+      if (outcome === "recovered") {
+        expect(waitForHealthy).toHaveBeenCalledWith({
+          service,
+          port: 18790,
+          expectedVersion: "2026.5.3",
+          expectedBuildId: "new-build",
+          env,
+          supervisorKeepsAlive: true,
+          settle: { probes: 12 },
+        });
+      } else {
+        expect(waitForHealthy).not.toHaveBeenCalled();
+      }
+      const repair = getUpdateRun(runId, { env })?.repair;
+      if (outcome === "not attempted") {
+        expect(repair).toEqual([]);
+      } else {
+        expect(repair).toEqual([
+          {
+            attempt: 1,
+            status: outcome === "recovered" ? "succeeded" : "failed",
+            startedAtMs: expect.any(Number),
+            endedAtMs: expect.any(Number),
+            summary: outcome === "recovered" ? message : "Bootstrap failed.",
+          },
+        ]);
+        expect(repair?.[0]?.startedAtMs).toBeGreaterThanOrEqual(startedAtMs);
+        expect(repair?.[0]?.endedAtMs).toBeGreaterThanOrEqual(repair?.[0]?.startedAtMs ?? Infinity);
+      }
+    },
+  );
 
   it("keeps the update unhealthy when LaunchAgent repair succeeds but health does not recover", async () => {
     const service = {} as never;
@@ -650,7 +883,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
     }));
     const waitForHealthy = vi.fn(async () => stillUnhealthy);
 
-    const result = await recoverLaunchAgentAndRecheckGatewayHealth({
+    const result = await updateCommandServiceTesting.recoverLaunchAgentAndRecheckGatewayHealth({
       health: unhealthy,
       service,
       port: 18790,
@@ -661,6 +894,41 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
     expect(result.health.waitOutcome).toBe("timeout");
     expect(result.launchAgentRecovery?.attempted).toBe(true);
     expect(result.launchAgentRecovery?.recovered).toBe(true);
+  });
+});
+
+describe("hasLoadedLaunchdKeepAliveSupervisor", () => {
+  it("requires a loaded LaunchAgent before extending restart health", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const isLoaded = vi.fn().mockResolvedValue(false);
+    const service = { isLoaded } as unknown as GatewayService;
+
+    await expect(
+      updateCommandServiceTesting.hasLoadedLaunchdKeepAliveSupervisor({
+        service,
+        env: { OPENCLAW_PROFILE: "work" },
+      }),
+    ).resolves.toBe(false);
+    isLoaded.mockResolvedValue(true);
+    await expect(
+      updateCommandServiceTesting.hasLoadedLaunchdKeepAliveSupervisor({ service }),
+    ).resolves.toBe(true);
+
+    platformSpy.mockRestore();
+  });
+
+  it("does not inspect KeepAlive supervision outside macOS", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const isLoaded = vi.fn().mockResolvedValue(true);
+
+    await expect(
+      updateCommandServiceTesting.hasLoadedLaunchdKeepAliveSupervisor({
+        service: { isLoaded } as unknown as GatewayService,
+      }),
+    ).resolves.toBe(false);
+    expect(isLoaded).not.toHaveBeenCalled();
+
+    platformSpy.mockRestore();
   });
 });
 
@@ -676,15 +944,15 @@ describe("resolvePostCoreUpdateChildStdio", () => {
     expect(resolvePostCoreUpdateChildStdio("linux")).toBe("inherit");
     expect(resolvePostCoreUpdateChildStdio("darwin")).toBe("inherit");
   });
+
+  it('returns "pipe" for JSON output on every platform', () => {
+    expect(resolvePostCoreUpdateChildStdio("linux", true)).toBe("pipe");
+    expect(resolvePostCoreUpdateChildStdio("darwin", true)).toBe("pipe");
+  });
 });
 
-describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {
-  it("returns status:error (not skipped) when configSnapshot is invalid, so the pre-restart gate fires", async () => {
-    // The pre-restart gate in `updateCommand` is literally
-    //   if (postCorePluginUpdate?.status === "error") { exit(1) }
-    // so asserting that this function returns status:"error" on invalid
-    // config is sufficient to prove the gate fires end-to-end. We pass
-    // `json: true` to suppress logging side-effects without mocking.
+describe("updatePluginsAfterCoreUpdate (invalid config)", () => {
+  it("reports invalid config as an error with repair guidance", async () => {
     const result = await updatePluginsAfterCoreUpdate({
       root: "/tmp/openclaw-test",
       channel: "stable",
@@ -695,7 +963,7 @@ describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {
       } as unknown as Awaited<
         ReturnType<typeof import("../../config/io.js").readConfigFileSnapshot>
       >,
-      opts: { json: true } as never,
+      json: true,
       timeoutMs: 1000,
     });
     expect(result.status).toBe("error");
@@ -716,15 +984,15 @@ describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {
 });
 
 describe("buildInvalidConfigPostCoreUpdateResult", () => {
-  it("returns status:error so the existing pre-restart gate exits 1 instead of restarting on invalid config", () => {
-    const built = buildInvalidConfigPostCoreUpdateResult();
+  it("builds an error result for invalid post-core config", () => {
+    const built = updateCommandPluginsTesting.buildInvalidConfigPostCoreUpdateResult();
     expect(built.result.status).toBe("error");
     expect(built.result.reason).toBe("invalid-config");
     expect(built.result.changed).toBe(false);
   });
 
   it("surfaces actionable repair guidance in both the structural warnings and the message string", () => {
-    const built = buildInvalidConfigPostCoreUpdateResult();
+    const built = updateCommandPluginsTesting.buildInvalidConfigPostCoreUpdateResult();
     expect(built.guidance).toStrictEqual([
       "Run `openclaw doctor` to inspect the config validation errors.",
       "Once the config parses, rerun `openclaw update repair`.",

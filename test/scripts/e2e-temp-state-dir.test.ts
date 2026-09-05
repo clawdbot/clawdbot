@@ -17,11 +17,12 @@ import { describe, expect, it } from "vitest";
 import { createE2eStateDir } from "../../scripts/e2e/lib/temp-state-dir.ts";
 
 async function waitForFile(filePath: string) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  // Preserve the 2-second file budget while detecting child readiness sooner.
+  for (let attempt = 0; attempt < 400; attempt += 1) {
     if (existsSync(filePath)) {
       return;
     }
-    await delay(20);
+    await delay(5);
   }
   throw new Error(`Timed out waiting for ${filePath}`);
 }
@@ -97,14 +98,16 @@ describe("E2E temp state dirs", () => {
       const helperUrl = pathToFileURL(path.resolve("scripts/e2e/lib/temp-state-dir.ts")).href;
       writeFileSync(
         scriptPath,
-        `import { writeFileSync } from "node:fs";
+        `import { renameSync, writeFileSync } from "node:fs";
 import { createE2eStateDir } from ${JSON.stringify(helperUrl)};
 
 const state = await createE2eStateDir("openclaw-e2e-temp-state-signal-", {
   OPENCLAW_STATE_DIR: "",
 });
 state.registerExitCleanup();
-writeFileSync(${JSON.stringify(statePathFile)}, state.stateDir);
+// Publish atomically so the polling parent cannot observe an empty state-path file.
+writeFileSync(${JSON.stringify(`${statePathFile}.tmp`)}, state.stateDir);
+renameSync(${JSON.stringify(`${statePathFile}.tmp`)}, ${JSON.stringify(statePathFile)});
 setInterval(() => {}, 1000);
 `,
       );

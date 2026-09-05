@@ -1,102 +1,60 @@
 // Policy doctor checks and findings for gateway exposure policy.
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
 import type { PolicyEvidence } from "../../policy-state.js";
-import { CHECK_IDS } from "../metadata.js";
+import { repairPolicyAutomaticNarrower } from "../automatic-repairs.js";
+import { createPolicyScopedChecks } from "../check-factory.js";
+import { CHECK_IDS } from "../check-ids.js";
+import { previewPolicyReviewRequiredRepair } from "../review-required-repairs.js";
 import type { PolicyDoctorCheckDeps } from "../types.js";
 import { readPolicyBoolean, readStringList } from "../utils.js";
 
 export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly HealthCheck[] {
-  const { evaluatePolicy, findingsForCheck } = deps;
-
-  const policyGatewayNonLoopbackBindCheck: HealthCheck = {
-    id: CHECK_IDS.policyGatewayNonLoopbackBind,
-    kind: "plugin",
-    description: "Gateway bind posture matches policy exposure requirements.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayNonLoopbackBind);
-    },
-  };
-  const policyGatewayAuthDisabledCheck: HealthCheck = {
-    id: CHECK_IDS.policyGatewayAuthDisabled,
-    kind: "plugin",
-    description: "Gateway authentication remains enabled when required by policy.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayAuthDisabled);
-    },
-  };
-  const policyGatewayRateLimitMissingCheck: HealthCheck = {
-    id: CHECK_IDS.policyGatewayRateLimitMissing,
-    kind: "plugin",
-    description: "Gateway authentication rate-limit posture is explicit when required by policy.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayRateLimitMissing);
-    },
-  };
-  const policyGatewayControlUiInsecureCheck: HealthCheck = {
-    id: CHECK_IDS.policyGatewayControlUiInsecure,
-    kind: "plugin",
-    description: "Gateway Control UI insecure exposure toggles remain disabled by policy.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayControlUiInsecure);
-    },
-  };
-  const policyGatewayTailscaleFunnelCheck: HealthCheck = {
-    id: CHECK_IDS.policyGatewayTailscaleFunnel,
-    kind: "plugin",
-    description: "Gateway Tailscale Funnel exposure matches policy.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayTailscaleFunnel);
-    },
-  };
-  const policyGatewayRemoteEnabledCheck: HealthCheck = {
-    id: CHECK_IDS.policyGatewayRemoteEnabled,
-    kind: "plugin",
-    description: "Remote gateway mode matches policy.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayRemoteEnabled);
-    },
-  };
-  const policyGatewayHttpEndpointEnabledCheck: HealthCheck = {
-    id: CHECK_IDS.policyGatewayHttpEndpointEnabled,
-    kind: "plugin",
-    description: "Gateway HTTP API endpoints match policy.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(
-        await evaluatePolicy(ctx),
-        CHECK_IDS.policyGatewayHttpEndpointEnabled,
-      );
-    },
-  };
-  const policyGatewayHttpUrlFetchUnrestrictedCheck: HealthCheck = {
-    id: CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
-    kind: "plugin",
-    description: "Gateway HTTP URL-fetch inputs have allowlists when required by policy.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(
-        await evaluatePolicy(ctx),
-        CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
-      );
-    },
-  };
-
-  return [
-    policyGatewayNonLoopbackBindCheck,
-    policyGatewayAuthDisabledCheck,
-    policyGatewayRateLimitMissingCheck,
-    policyGatewayControlUiInsecureCheck,
-    policyGatewayTailscaleFunnelCheck,
-    policyGatewayRemoteEnabledCheck,
-    policyGatewayHttpEndpointEnabledCheck,
-    policyGatewayHttpUrlFetchUnrestrictedCheck,
-  ];
+  return createPolicyScopedChecks(deps, [
+    [
+      CHECK_IDS.policyGatewayNonLoopbackBind,
+      "Gateway bind posture matches policy exposure requirements.",
+      (ctx, findings) =>
+        previewPolicyReviewRequiredRepair(ctx, findings, CHECK_IDS.policyGatewayNonLoopbackBind),
+    ],
+    [
+      CHECK_IDS.policyGatewayAuthDisabled,
+      "Gateway authentication remains enabled when required by policy.",
+    ],
+    [
+      CHECK_IDS.policyGatewayRateLimitMissing,
+      "Gateway authentication rate-limit posture is explicit when required by policy.",
+    ],
+    [
+      CHECK_IDS.policyGatewayControlUiInsecure,
+      "Gateway Control UI insecure exposure toggles remain disabled by policy.",
+      (ctx, findings) =>
+        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyGatewayControlUiInsecure),
+    ],
+    [CHECK_IDS.policyGatewayTailscaleFunnel, "Gateway Tailscale Funnel exposure matches policy."],
+    [
+      CHECK_IDS.policyGatewayRemoteEnabled,
+      "Remote gateway mode matches policy.",
+      (ctx, findings) =>
+        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyGatewayRemoteEnabled),
+    ],
+    [
+      CHECK_IDS.policyGatewayHttpEndpointEnabled,
+      "Gateway HTTP API endpoints match policy.",
+      (ctx, findings) =>
+        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyGatewayHttpEndpointEnabled),
+    ],
+    [
+      CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
+      "Gateway HTTP URL-fetch inputs have allowlists when required by policy.",
+    ],
+    [
+      CHECK_IDS.policyGatewayNodeCommandDenied,
+      "Gateway node command allowlists match policy.",
+      (ctx, findings) =>
+        previewPolicyReviewRequiredRepair(ctx, findings, CHECK_IDS.policyGatewayNodeCommandDenied),
+    ],
+  ]);
 }
 
 export function gatewayExposureFindings(
@@ -112,6 +70,7 @@ export function gatewayExposureFindings(
     ...gatewayRemoteFindings(policy, policyDocName, evidence),
     ...gatewayHttpEndpointFindings(policy, policyDocName, evidence),
     ...gatewayHttpUrlFetchFindings(policy, policyDocName, evidence),
+    ...gatewayNodeCommandFindings(policy, policyDocName, evidence),
   ];
 }
 
@@ -330,4 +289,55 @@ function gatewayHttpUrlFetchFindings(
         fixHint: "Add a urlAllowlist for this URL-fetch input or update policy after review.",
       };
     });
+}
+
+function gatewayNodeCommandFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  if (!hasValidOptionalStringList(policy, ["gateway", "nodes", "denyCommands"])) {
+    return [];
+  }
+  const policyDenied = readStringList(policy, ["gateway", "nodes", "denyCommands"], {
+    lowercase: false,
+  });
+  if (policyDenied.length === 0) {
+    return [];
+  }
+  const configDenied = new Set(
+    (evidence.gatewayExposure ?? [])
+      .filter((entry) => entry.kind === "nodeDenyCommand" && entry.command !== undefined)
+      .map((entry) => entry.command),
+  );
+  return policyDenied
+    .filter((command) => !configDenied.has(command))
+    .map((command): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyGatewayNodeCommandDenied,
+        severity: "error",
+        message: `Gateway node command '${command}' is denied by policy but not denied by OpenClaw config.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: "oc://openclaw.config/gateway/nodes/commands/deny",
+        target: "oc://openclaw.config/gateway/nodes/commands/deny",
+        requirement: `oc://${policyDocName}/gateway/nodes/denyCommands`,
+        fixHint: `Add '${command}' to gateway.nodes.commands.deny or update policy after review.`,
+      };
+    });
+}
+
+function hasValidOptionalStringList(policy: unknown, path: readonly string[]): boolean {
+  let current: unknown = policy;
+  for (const part of path) {
+    if (!isRecord(current)) {
+      return true;
+    }
+    current = current[part];
+  }
+  return (
+    current === undefined ||
+    (Array.isArray(current) &&
+      current.every((entry) => typeof entry === "string" && entry.trim() !== ""))
+  );
 }

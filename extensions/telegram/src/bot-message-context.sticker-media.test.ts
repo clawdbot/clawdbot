@@ -1,6 +1,9 @@
 // Telegram tests cover bot message context.sticker media plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import type { TelegramInboundBodyResult } from "./bot-message-context.body.js";
+
+type ResolveTelegramInboundBody =
+  typeof import("./bot-message-context.body.js").resolveTelegramInboundBody;
+type TelegramInboundBodyResult = NonNullable<Awaited<ReturnType<ResolveTelegramInboundBody>>>;
 
 type InboundBodyMock = (arg: unknown) => Promise<TelegramInboundBodyResult>;
 
@@ -11,12 +14,12 @@ const inboundBodyMock = vi.hoisted(() =>
     historyKey: undefined,
     commandAuthorized: false,
     effectiveWasMentioned: false,
+    inboundEventKind: "user_request",
     mentionFacts: {
       canDetectMention: true,
       wasMentioned: false,
       effectiveWasMentioned: false,
       requireMention: false,
-      shouldSkip: false,
     },
     canDetectMention: true,
     shouldBypassMention: false,
@@ -58,6 +61,7 @@ describe("buildTelegramMessageContext sticker media", () => {
         {
           path: stickerPath,
           contentType: "image/webp",
+          kind: "sticker",
           stickerMetadata: {
             emoji: "🔥",
             setName: "NewSet",
@@ -69,12 +73,9 @@ describe("buildTelegramMessageContext sticker media", () => {
       ],
     });
 
-    expect(ctx?.ctxPayload.MediaPath).toBe(stickerPath);
-    expect(ctx?.ctxPayload.MediaUrl).toBe(stickerPath);
-    expect(ctx?.ctxPayload.MediaType).toBe("image/webp");
-    expect(ctx?.ctxPayload.MediaPaths).toEqual([stickerPath]);
-    expect(ctx?.ctxPayload.MediaUrls).toEqual([stickerPath]);
-    expect(ctx?.ctxPayload.MediaTypes).toEqual(["image/webp"]);
+    expect(ctx?.ctxPayload.media).toEqual([
+      expect.objectContaining({ path: stickerPath, contentType: "image/webp" }),
+    ]);
     expect(ctx?.ctxPayload.StickerMediaIncluded).toBe(true);
     expect(ctx?.ctxPayload.SkipStickerMediaUnderstanding).toBe(true);
     expect(ctx?.ctxPayload.Sticker).toMatchObject({

@@ -6,11 +6,17 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  AgentSelectionRequiredError,
+  listAgentIds,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
+import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
 import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
@@ -19,48 +25,69 @@ import {
   isValidAgentId,
   normalizeAgentId,
 } from "../routing/session-key.js";
+import {
+  isAgentHarnessSessionKey,
+  isAgentHarnessSessionStoreEntryProtected,
+} from "../sessions/agent-harness-session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { getHeader } from "./http-auth-utils.js";
+import { getHeader, type AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
+import { ADMIN_SCOPE } from "./method-scopes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { authorizeResolvedSessionMutation, isResolvedIncognitoSession } from "./session-sharing.js";
+import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 
 export {
+  authorizeControlUiReadRequestOrReply,
+  authorizeControlUiSessionOwnerReadRequestOrReply,
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeGatewayHttpRequestOrReply,
   authorizeScopedGatewayHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
   getBearerToken,
   getHeader,
-  isGatewayBearerHttpRequest,
-  resolveHttpBrowserOriginPolicy,
-  resolveHttpSenderIsOwner,
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
   resolveSharedSecretHttpOperatorScopes,
   resolveTrustedHttpOperatorScopes,
   type AuthorizedGatewayHttpRequest,
-  type GatewayHttpRequestAuthCheckResult,
 } from "./http-auth-utils.js";
 
 export const OPENCLAW_MODEL_ID = "openclaw";
 /** Default OpenAI-compatible model alias that targets the default OpenClaw agent. */
 export const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
 
-export class UnknownGatewayAgentError extends Error {
+class UnknownGatewayAgentError extends Error {
   constructor(readonly agentId: string) {
     super(`Unknown agent '${agentId}'.`);
     this.name = "UnknownGatewayAgentError";
   }
 }
 
-export class GatewaySessionKeyOverrideError extends Error {
+class GatewaySessionKeyOverrideError extends Error {
   constructor() {
     super("`x-openclaw-session-key` cannot use reserved internal session namespaces.");
     this.name = "GatewaySessionKeyOverrideError";
   }
 }
 
+class InvalidGatewayModelError extends Error {
+  constructor() {
+    super("Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.");
+    this.name = "InvalidGatewayModelError";
+  }
+}
+
 export function isUnknownGatewayAgentError(err: unknown): err is UnknownGatewayAgentError {
   return err instanceof UnknownGatewayAgentError;
+}
+
+export function isAgentSelectionRequiredError(err: unknown): err is AgentSelectionRequiredError {
+  return err instanceof AgentSelectionRequiredError;
+}
+
+export function isInvalidGatewayModelError(err: unknown): err is InvalidGatewayModelError {
+  return err instanceof InvalidGatewayModelError;
 }
 
 export function isGatewaySessionKeyOverrideError(
@@ -113,6 +140,22 @@ export function resolveAgentIdFromModel(
   return normalizeAgentId(agentId);
 }
 
+/** Checks OpenClaw routing-model syntax without resolving fleet ownership. */
+export function isOpenClawAgentModelId(model: string | undefined): boolean {
+  const raw = model?.trim();
+  if (!raw) {
+    return false;
+  }
+  const lowered = normalizeLowercaseStringOrEmpty(raw);
+  if (lowered === OPENCLAW_MODEL_ID || lowered === OPENCLAW_DEFAULT_MODEL_ID) {
+    return true;
+  }
+  return (
+    /^openclaw[:/][a-z0-9][a-z0-9_-]{0,63}$/i.test(raw) ||
+    /^agent:[a-z0-9][a-z0-9_-]{0,63}$/i.test(raw)
+  );
+}
+
 /** Validates and resolves the `x-openclaw-model` override for OpenAI-compatible requests. */
 export async function resolveOpenAiCompatModelOverride(params: {
   req: IncomingMessage;
@@ -120,7 +163,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
   model: string | undefined;
 }): Promise<{ modelOverride?: string; errorMessage?: string }> {
   const requestModel = params.model?.trim();
-  if (requestModel && !resolveAgentIdFromModel(requestModel)) {
+  if (requestModel && !isOpenClawAgentModelId(requestModel)) {
     return {
       errorMessage: "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
     };
@@ -134,12 +177,14 @@ export async function resolveOpenAiCompatModelOverride(params: {
   const cfg = getRuntimeConfig();
   const defaultModelRef = resolveDefaultModelForAgent({ cfg, agentId: params.agentId });
   const defaultProvider = defaultModelRef.provider;
-  const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
+  const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
+  const manifestMetadataSnapshot = getCurrentPluginMetadataSnapshot({
     config: cfg,
     env: process.env,
+    ...(workspaceDir ? { workspaceDir } : {}),
   });
   const modelManifestContext = {
-    manifestPlugins: manifestMetadataSnapshot.plugins,
+    manifestPlugins: manifestMetadataSnapshot,
   };
   const parsed = parseModelRef(raw, defaultProvider, {
     allowManifestNormalization: true,
@@ -152,7 +197,7 @@ export async function resolveOpenAiCompatModelOverride(params: {
 
   // Overrides must pass the same visibility policy as model picker surfaces;
   // otherwise API clients could target hidden plugin/provider models by header.
-  const catalog = await loadGatewayModelCatalog();
+  const catalog = await loadGatewayModelCatalog({ agentId: params.agentId });
   const policy = createModelVisibilityPolicy({
     cfg,
     catalog,
@@ -178,6 +223,10 @@ export function resolveAgentIdForRequest(params: {
   model: string | undefined;
 }): string {
   const cfg = getRuntimeConfig();
+  if (params.model?.trim() && !isOpenClawAgentModelId(params.model)) {
+    throw new InvalidGatewayModelError();
+  }
+
   const fromHeader = resolveAgentIdFromHeader(params.req);
   if (fromHeader) {
     assertKnownAgentId(fromHeader, cfg);
@@ -201,7 +250,7 @@ function resolveSessionKey(params: {
 }): string {
   const explicit = getHeader(params.req, "x-openclaw-session-key")?.trim();
   if (explicit) {
-    if (isReservedSessionKeyOverride(explicit)) {
+    if (isReservedSessionKeyOverride(explicit, params.agentId)) {
       throw new GatewaySessionKeyOverrideError();
     }
     return explicit;
@@ -212,12 +261,25 @@ function resolveSessionKey(params: {
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
 }
 
-function isReservedSessionKeyOverride(sessionKey: string): boolean {
+function isReservedSessionKeyOverride(sessionKey: string, agentId: string): boolean {
   const lowered = normalizeLowercaseStringOrEmpty(sessionKey);
+  const harnessLookupKey = sessionKey.startsWith("agent:")
+    ? sessionKey
+    : canonicalizeSessionKeyForAgent(agentId, sessionKey);
+  const harnessEntry = isAgentHarnessSessionKey(sessionKey)
+    ? resolveSessionEntryAccessTarget({
+        cfg: getRuntimeConfig(),
+        sessionKey: harnessLookupKey,
+      }).entry
+    : undefined;
+  const harnessKeyReserved =
+    isAgentHarnessSessionKey(sessionKey) &&
+    (!harnessEntry || isAgentHarnessSessionStoreEntryProtected(sessionKey, harnessEntry));
   return (
     lowered.startsWith("subagent:") ||
     lowered.startsWith("cron:") ||
     lowered.startsWith("acp:") ||
+    harnessKeyReserved ||
     isSubagentSessionKey(sessionKey) ||
     isCronSessionKey(sessionKey) ||
     isAcpSessionKey(sessionKey)
@@ -247,4 +309,35 @@ export function resolveGatewayRequestContext(params: {
     : params.defaultMessageChannel;
 
   return { agentId, sessionKey, messageChannel };
+}
+
+export function authorizeOpenAiCompatibleHttpSession(params: {
+  agentId: string;
+  sessionKey: string;
+  requestAuth: AuthorizedGatewayHttpRequest;
+  senderIsOwner: boolean;
+}): { allowed: true } | { allowed: false; message: string } {
+  const cfg = getRuntimeConfig();
+  const authenticatedUserProfile = params.requestAuth.authenticatedUserProfile;
+  const authorizationError = authorizeResolvedSessionMutation({
+    cfg,
+    client: createSyntheticPluginRuntimeClient({
+      ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+      operatorRoleActor: params.requestAuth.operatorRoleActor,
+      scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [],
+    }),
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  if (authorizationError) {
+    return { allowed: false, message: authorizationError.message };
+  }
+  if (
+    !params.senderIsOwner &&
+    !authenticatedUserProfile &&
+    isResolvedIncognitoSession({ cfg, sessionKey: params.sessionKey, agentId: params.agentId })
+  ) {
+    return { allowed: false, message: `missing scope: ${ADMIN_SCOPE}` };
+  }
+  return { allowed: true };
 }

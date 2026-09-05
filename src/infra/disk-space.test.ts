@@ -17,6 +17,7 @@ function statfsFixture(params: {
     bfree: params.bavail,
     bavail: params.bavail,
     files: 0,
+    frsize: params.bsize ?? 1024,
     ffree: 0,
   };
 }

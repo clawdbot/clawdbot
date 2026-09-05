@@ -12,7 +12,16 @@ function runSummary(report: unknown, extraArgs: string[] = []) {
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
   const result = spawnSync(
     process.execPath,
-    ["scripts/kova-ci-summary.mjs", "--report", reportPath, "--output", outputPath, ...extraArgs],
+    [
+      "--import",
+      "tsx",
+      "scripts/kova-ci-summary.mts",
+      "--report",
+      reportPath,
+      "--output",
+      outputPath,
+      ...extraArgs,
+    ],
     {
       cwd: process.cwd(),
       encoding: "utf8",
@@ -28,24 +37,34 @@ function runSummary(report: unknown, extraArgs: string[] = []) {
 
 describe("scripts/kova-ci-summary", () => {
   it("prints help without treating --help as a valued option", () => {
-    const result = spawnSync(process.execPath, ["scripts/kova-ci-summary.mjs", "--help"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/kova-ci-summary.mts", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("usage: node scripts/kova-ci-summary.mjs --report");
+    expect(result.stdout).toContain(
+      "usage: node --import tsx scripts/kova-ci-summary.mts --report",
+    );
   });
 
   it.each([
     ["flag-shaped value", ["--report", "-h"]],
     ["option separator before help", ["--report", "--", "--help"]],
   ])("rejects %s before help handling", (_name, args) => {
-    const result = spawnSync(process.execPath, ["scripts/kova-ci-summary.mjs", ...args], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/kova-ci-summary.mts", ...args],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(2);
     expect(result.stdout).toBe("");
@@ -128,7 +147,37 @@ describe("scripts/kova-ci-summary", () => {
     expect(output).toContain("| gateway | clean | CPU max | 12 % | 12 % | 12 % |");
   });
 
-  it("rejects performance summaries without resource metrics", () => {
+  it("renders blocked reports without resource metrics", () => {
+    const { output, result } = runSummary({
+      performance: {
+        repeat: 1,
+        groups: [
+          {
+            metrics: {
+              timeToHealthReadyMs: {
+                count: 1,
+                max: 30,
+                median: 20,
+                p95: 30,
+                title: "Health ready",
+                unit: "ms",
+              },
+            },
+            scenario: "gateway",
+            state: "clean",
+          },
+        ],
+      },
+      records: [{ scenario: "gateway", state: "clean", status: "BLOCKED" }],
+      summary: { statuses: { BLOCKED: 1 } },
+    });
+
+    expect(result.status).toBe(0);
+    expect(output).toContain("| gateway | clean | Health ready | 20 ms | 30 ms | 30 ms |");
+    expect(output).toContain("| gateway | clean | BLOCKED |");
+  });
+
+  it("rejects successful reports without resource metrics", () => {
     const { result } = runSummary({
       performance: {
         repeat: 1,
@@ -149,8 +198,8 @@ describe("scripts/kova-ci-summary", () => {
           },
         ],
       },
-      records: [{ scenario: "gateway", state: "clean", status: "pass" }],
-      summary: { statuses: { pass: 1 } },
+      records: [{ scenario: "gateway", state: "clean", status: "PASS" }],
+      summary: { statuses: { PASS: 1 } },
     });
 
     expect(result.status).toBe(1);
@@ -159,8 +208,8 @@ describe("scripts/kova-ci-summary", () => {
     );
   });
 
-  it("rejects performance summaries without CPU metrics", () => {
-    const { result } = runSummary({
+  it("renders available metrics from failed reports when CPU samples are absent", () => {
+    const { output, result } = runSummary({
       performance: {
         repeat: 1,
         groups: [
@@ -188,8 +237,38 @@ describe("scripts/kova-ci-summary", () => {
           },
         ],
       },
-      records: [{ scenario: "gateway", state: "clean", status: "pass" }],
-      summary: { statuses: { pass: 1 } },
+      records: [{ scenario: "gateway", state: "clean", status: "FAIL" }],
+      summary: { statuses: { FAIL: 1 } },
+    });
+
+    expect(result.status).toBe(0);
+    expect(output).toContain("| gateway | clean | Gateway RSS | 256 MB | 256 MB | 256 MB |");
+    expect(output).toContain("| gateway | clean | FAIL |");
+  });
+
+  it("rejects successful reports without CPU metrics", () => {
+    const { result } = runSummary({
+      performance: {
+        repeat: 1,
+        groups: [
+          {
+            metrics: {
+              resourcePeakGatewayRssMb: {
+                count: 1,
+                max: 256,
+                median: 256,
+                p95: 256,
+                title: "Gateway RSS",
+                unit: "MB",
+              },
+            },
+            scenario: "gateway",
+            state: "clean",
+          },
+        ],
+      },
+      records: [{ scenario: "gateway", state: "clean", status: "PASS" }],
+      summary: { statuses: { PASS: 1 } },
     });
 
     expect(result.status).toBe(1);
@@ -198,8 +277,8 @@ describe("scripts/kova-ci-summary", () => {
     );
   });
 
-  it("rejects malformed resource metric counts instead of treating them as sampled", () => {
-    const { result } = runSummary({
+  it("omits malformed resource metrics instead of rejecting failure evidence", () => {
+    const { output, result } = runSummary({
       performance: {
         repeat: 1,
         groups: [
@@ -227,14 +306,12 @@ describe("scripts/kova-ci-summary", () => {
           },
         ],
       },
-      records: [{ scenario: "gateway", state: "clean", status: "pass" }],
-      summary: { statuses: { pass: 1 } },
+      records: [{ scenario: "gateway", state: "clean", status: "FAIL" }],
+      summary: { statuses: { FAIL: 1 } },
     });
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      "invalid Kova report: missing sampled RSS metric in performance groups",
-    );
+    expect(result.status).toBe(0);
+    expect(output).toContain("No sampled key metrics were available");
   });
 
   it("omits key metric rows with invalid sample counts", () => {

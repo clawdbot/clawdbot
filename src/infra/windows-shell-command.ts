@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ExecCommandAnalysis } from "./exec-command-analysis-types.js";
 import { resolveCommandResolutionFromArgv } from "./exec-command-resolution.js";
@@ -27,7 +28,7 @@ function findWindowsUnsupportedToken(command: string): string | null {
   // cmd.exe does not recognise single quotes, so they are not treated as safe
   // quoting for this cross-host safety check.
   for (let i = 0; i < command.length; i++) {
-    const ch = command[i];
+    const ch = command.charAt(i);
     if (ch === '"') {
       inDouble = !inDouble;
       continue;
@@ -68,7 +69,7 @@ export function tokenizeWindowsSegment(segment: string): string[] | null {
   };
 
   for (let i = 0; i < segment.length; i += 1) {
-    const ch = segment[i];
+    const ch = segment.charAt(i);
     if (ch === '"' && !inSingle) {
       if (!inDouble) {
         wasQuoted = true;
@@ -115,33 +116,34 @@ function stripWindowsShellWrapper(command: string): string {
   return result;
 }
 
+const POWERSHELL_FLAGS =
+  /(?:-(?!c(?:ommand)?\b|-command\b)\w+(?:\s+(?!-)(?:"[^"]*(?:""[^"]*)*"|'[^']*(?:''[^']*)*'|\S+))?\s+)*/i
+    .source;
+const POWERSHELL_INVOKE_PREFIX = `^(?:powershell|pwsh)(?:\\.exe)?\\s+${POWERSHELL_FLAGS}(?:-command|-c|--command)\\s+`;
+const POWERSHELL_DOUBLE_QUOTED = new RegExp(`${POWERSHELL_INVOKE_PREFIX}"(.+)"$`, "is");
+const POWERSHELL_SINGLE_QUOTED = new RegExp(`${POWERSHELL_INVOKE_PREFIX}'(.+)'$`, "is");
+const POWERSHELL_UNQUOTED = new RegExp(`${POWERSHELL_INVOKE_PREFIX}(.+)$`, "is");
+
 function stripWindowsShellWrapperOnce(command: string): string {
   const psCallMatch = command.match(/^&\s+(.+)$/s);
   if (psCallMatch) {
-    return psCallMatch[1];
+    return expectDefined(psCallMatch[1], "ps call match capture group 1");
   }
 
-  const psFlags =
-    /(?:-(?!c(?:ommand)?\b|-command\b)\w+(?:\s+(?!-)(?:"[^"]*(?:""[^"]*)*"|'[^']*(?:''[^']*)*'|\S+))?\s+)*/i
-      .source;
-  const psCommandFlag = `(?:-command|-c|--command)`;
-  const psInvokeMatch = command.match(
-    new RegExp(`^(?:powershell|pwsh)(?:\\.exe)?\\s+${psFlags}${psCommandFlag}\\s+"(.+)"$`, "is"),
-  );
+  const psInvokeMatch = command.match(POWERSHELL_DOUBLE_QUOTED);
   if (psInvokeMatch) {
-    return psInvokeMatch[1].replace(/""/g, '"');
+    return expectDefined(psInvokeMatch[1], "ps invoke match capture group 1").replace(/""/g, '"');
   }
-  const psInvokeSingleQuote = command.match(
-    new RegExp(`^(?:powershell|pwsh)(?:\\.exe)?\\s+${psFlags}${psCommandFlag}\\s+'(.+)'$`, "is"),
-  );
+  const psInvokeSingleQuote = command.match(POWERSHELL_SINGLE_QUOTED);
   if (psInvokeSingleQuote) {
-    return psInvokeSingleQuote[1].replace(/''/g, "'");
+    return expectDefined(psInvokeSingleQuote[1], "ps invoke single quote capture group 1").replace(
+      /''/g,
+      "'",
+    );
   }
-  const psInvokeNoQuote = command.match(
-    new RegExp(`^(?:powershell|pwsh)(?:\\.exe)?\\s+${psFlags}${psCommandFlag}\\s+(.+)$`, "is"),
-  );
+  const psInvokeNoQuote = command.match(POWERSHELL_UNQUOTED);
   if (psInvokeNoQuote) {
-    return psInvokeNoQuote[1];
+    return expectDefined(psInvokeNoQuote[1], "ps invoke no quote capture group 1");
   }
 
   // `cmd /c` stays intact because PowerShell execution would change cmd.exe
@@ -206,11 +208,9 @@ export function windowsEscapeArg(value: string): { ok: true; escaped: string } |
   return { ok: true, escaped: `"${escaped}"` };
 }
 
-export type ShellSegmentRenderResult =
-  | { ok: true; rendered: string }
-  | { ok: false; reason: string };
+type ShellSegmentRenderResult = { ok: true; rendered: string } | { ok: false; reason: string };
 
-export type RebuiltShellCommandResult = {
+type RebuiltShellCommandResult = {
   ok: boolean;
   command?: string;
   reason?: string;

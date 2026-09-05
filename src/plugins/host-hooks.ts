@@ -5,6 +5,7 @@ import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
+  PluginToolMatcher,
 } from "./hook-types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 import type {
@@ -14,7 +15,7 @@ import type {
 } from "./host-hook-turn-types.js";
 
 export { isPluginJsonValue } from "./host-hook-json.js";
-export type { PluginJsonPrimitive, PluginJsonValue } from "./host-hook-json.js";
+export type { PluginJsonValue } from "./host-hook-json.js";
 export type {
   PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
@@ -22,14 +23,13 @@ export type {
   PluginHeartbeatPromptContributionResult,
   PluginNextTurnInjection,
   PluginNextTurnInjectionEnqueueResult,
-  PluginNextTurnInjectionPlacement,
   PluginNextTurnInjectionRecord,
 } from "./host-hook-turn-types.js";
 
 /** Reason passed to plugin cleanup callbacks when host-owned state changes. */
 export type PluginHostCleanupReason = "disable" | "reset" | "delete" | "restart";
 
-export type PluginSessionExtensionProjectionContext = {
+type PluginSessionExtensionProjectionContext = {
   sessionKey: string;
   sessionId?: string;
   state: PluginJsonValue | undefined;
@@ -66,7 +66,7 @@ export type PluginSessionExtensionProjection = {
   value: PluginJsonValue;
 };
 
-export type PluginToolPolicyDecision =
+type PluginToolPolicyDecision =
   | PluginHookBeforeToolCallResult
   | {
       allow?: boolean;
@@ -76,6 +76,7 @@ export type PluginToolPolicyDecision =
 export type PluginTrustedToolPolicyRegistration = {
   id: string;
   description: string;
+  matcher?: PluginToolMatcher;
   evaluate: (
     event: PluginHookBeforeToolCallEvent,
     ctx: PluginHookToolContext,
@@ -90,20 +91,36 @@ export type PluginToolMetadataRegistration = {
   tags?: string[];
 };
 
+type PluginControlUiTabGroup = "control" | "agent";
+
 export type PluginControlUiDescriptor = {
   id: string;
-  surface: "session" | "tool" | "run" | "settings";
+  /** "tab" adds a sidebar tab; "widget" advertises a trusted dashboard renderer. */
+  surface: "session" | "tool" | "run" | "settings" | "tab" | "widget";
   label: string;
   description?: string;
+  /** Bundled plugins may claim their matching native route as `route:<pluginId>`. */
   placement?: string;
   schema?: PluginJsonValue;
   requiredScopes?: OperatorScope[];
+  /** Icon name hint for tab descriptors; unknown names fall back to a generic icon. */
+  icon?: string;
+  /**
+   * Gateway HTTP path (e.g. /plugins/<id>/panel) rendered in a sandboxed frame
+   * when the Control UI has no bundled view for this tab.
+   */
+  path?: string;
+  /** Sidebar group for tab descriptors; defaults to "control". */
+  group?: PluginControlUiTabGroup;
+  /** Sort order among plugin tabs; lower renders first. */
+  order?: number;
 };
 
 export type PluginSessionActionContext = {
   pluginId: string;
   actionId: string;
   sessionKey?: string;
+  agentId?: string;
   payload?: PluginJsonValue;
   client?: {
     connId?: string;
@@ -204,11 +221,17 @@ export type PluginSessionSchedulerJobHandle = {
   kind: string;
 };
 
-export type PluginSessionAttachmentFile = {
+type PluginSessionAttachmentFile = {
   path: string;
 };
 
 export type PluginAttachmentChannelHints = {
+  parseMode?: "HTML";
+  silent?: boolean;
+  /** Require host detection to match this MIME before forcing document delivery. */
+  forceDocumentMime?: string;
+  threadId?: string | number;
+  /** @deprecated Put portable attachment hints directly on `channelHints`. */
   telegram?: {
     parseMode?: "HTML";
     disableNotification?: boolean;
@@ -218,6 +241,7 @@ export type PluginAttachmentChannelHints = {
      */
     forceDocumentMime?: string;
   };
+  /** @deprecated Use `channelHints.threadId`. */
   slack?: {
     threadTs?: string;
   };
@@ -244,11 +268,6 @@ export type PluginSessionAttachmentResult =
       count: number;
     }
   | { ok: false; error: string };
-
-export type PluginSessionTurnSchedule =
-  | { at: string | number | Date }
-  | { delayMs: number }
-  | { cron: string; tz?: string };
 
 type PluginSessionTurnScheduleCommonParams = {
   sessionKey: string;

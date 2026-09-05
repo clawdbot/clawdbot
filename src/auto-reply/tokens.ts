@@ -37,9 +37,20 @@ function getSilentTrailingRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  const regex = new RegExp(`(?:^|\\s+|\\*+)${escaped}\\s*$`, "i");
+  // Keep main's whitespace/Markdown boundaries: punctuation-attached tokens
+  // can be visible text. Consume repeated tokens only after a real delimiter.
+  // Start at the end so ordinary replies never scan for an absent suffix.
+  const regex = new RegExp(`$(?<=((?:^|\\s+|\\*+)${escaped}(?:\\s+${escaped})*\\s*))`, "i");
   silentTrailingRegexByToken.set(token, regex);
   return regex;
+}
+
+function stripEdgePunctuation(text: string): string {
+  const start = text.match(/^\p{P}+/u)?.[0].length ?? 0;
+  // Anchor at the end before matching backwards, so ordinary replies do not
+  // get scanned in full while searching for a punctuation suffix.
+  const tail = text.match(/$(?<=(\p{P}+))/u)?.[1]?.length ?? 0;
+  return text.slice(start, text.length - tail);
 }
 
 /** Returns true only for token-only silent replies. */
@@ -52,7 +63,12 @@ export function isSilentReplyText(
   }
   // Match only token-only replies, including repeated tokens separated by whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
-  return getSilentExactRegex(token).test(text);
+  // Models sometimes wrap the token in punctuation. Preserve exact custom-token matching,
+  // but keep symbols such as emoji substantive so they are still delivered.
+  return (
+    getSilentExactRegex(token).test(text) ||
+    getSilentExactRegex(token).test(stripEdgePunctuation(text.trim()))
+  );
 }
 
 type SilentReplyActionEnvelope = { action?: unknown };
@@ -223,7 +239,8 @@ export function isSilentReplyPayloadText(
  * If the result is empty, the entire message should be treated as silent.
  */
 export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKEN): string {
-  return text.replace(getSilentTrailingRegex(token), "").trim();
+  const tail = getSilentTrailingRegex(token).exec(text)?.[1]?.length ?? 0;
+  return text.slice(0, text.length - tail).trim();
 }
 
 const silentLeadingRegexByToken = new Map<string, RegExp>();
@@ -249,8 +266,9 @@ function getSilentLeadingRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  // Match one or more leading occurrences of the token, each optionally followed by whitespace
-  const regex = new RegExp(`^(?:\\s*${escaped})+\\s*`, "i");
+  // Keep the final separator distinct: earlier blank lines or spacing between
+  // repeated sentinels do not establish a boundary for the visible remainder.
+  const regex = new RegExp(`^\\s*${escaped}((?:\\s*${escaped})*)(\\s*)`, "i");
   silentLeadingRegexByToken.set(token, regex);
   return regex;
 }
@@ -275,7 +293,16 @@ export function startsWithSilentToken(
   if (!text) {
     return false;
   }
-  return getSilentLeadingAttachedRegex(token).test(text);
+  if (getSilentLeadingAttachedRegex(token).test(text)) {
+    return true;
+  }
+  const leading = getSilentLeadingRegex(token).exec(text);
+  // Only the separator after the final sentinel establishes a boundary; a
+  // leading blank line must not turn same-line token mentions into controls.
+  if (!leading || !/[\r\n]/.test(leading[2] ?? "")) {
+    return false;
+  }
+  return text.slice(leading[0].length).trimStart().length > 0;
 }
 
 export function isSilentReplyPrefixText(
@@ -285,34 +312,38 @@ export function isSilentReplyPrefixText(
   if (!text) {
     return false;
   }
+  const tokenUpper = token.toUpperCase();
   const trimmed = text.trimStart();
-  if (!trimmed) {
-    return false;
-  }
-  // Guard against suppressing natural-language "No..." text while still
-  // catching uppercase lead fragments like "NO" from streamed NO_REPLY.
-  if (trimmed !== trimmed.toUpperCase()) {
+  // Uppercasing never shortens text, so overlong candidates cannot match.
+  // Reject before scanning each streamed reply's growing buffer.
+  if (!trimmed || trimmed.length > tokenUpper.length) {
     return false;
   }
   const normalized = trimmed.toUpperCase();
-  if (!normalized) {
+  // Guard against suppressing natural-language "No..." text while still
+  // catching uppercase lead fragments like "NO" from streamed NO_REPLY.
+  if (trimmed !== normalized) {
     return false;
   }
   if (normalized.length < 2) {
     return false;
   }
-  if (/[^A-Z_]/.test(normalized)) {
-    return false;
-  }
-  const tokenUpper = token.toUpperCase();
   if (!tokenUpper.startsWith(normalized)) {
     return false;
   }
   if (normalized.includes("_")) {
     return true;
   }
-  // Keep underscore guard for generic tokens to avoid suppressing unrelated
-  // uppercase words (e.g. HEART/HE with HEARTBEAT_OK). Only allow bare "NO"
-  // because NO_REPLY streaming can transiently emit that fragment.
+  // Full-token match is safe for any token.
+  if (normalized === tokenUpper) {
+    return true;
+  }
+  // For custom tokens containing non-letter characters (digits, hyphens),
+  // only match if the prefix includes at least one non-letter character
+  // from the token. Otherwise, a pure-letter prefix like "HE" for "HELP-QUIET"
+  // would suppress natural language that happens to share that prefix (#100007).
+  if (/[^A-Z_]/.test(tokenUpper)) {
+    return /[^A-Z_]/.test(normalized);
+  }
   return tokenUpper === SILENT_REPLY_TOKEN && normalized === "NO";
 }

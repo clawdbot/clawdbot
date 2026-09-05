@@ -1,4 +1,5 @@
 // Xai tests cover tool auth shared plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -12,7 +13,7 @@ describe("xai tool auth helpers", () => {
     vi.unstubAllEnvs();
   });
 
-  it("prefers plugin web search keys over legacy grok keys", () => {
+  it("uses plugin web search keys", () => {
     expect(
       resolveFallbackXaiAuth({
         plugins: {
@@ -22,15 +23,6 @@ describe("xai tool auth helpers", () => {
                 webSearch: {
                   apiKey: "plugin-key", // pragma: allowlist secret
                 },
-              },
-            },
-          },
-        },
-        tools: {
-          web: {
-            search: {
-              grok: {
-                apiKey: "legacy-key", // pragma: allowlist secret
               },
             },
           },
@@ -60,23 +52,6 @@ describe("xai tool auth helpers", () => {
     ).toEqual({
       apiKey: NON_ENV_SECRETREF_MARKER,
       source: "plugins.entries.xai.config.webSearch.apiKey",
-    });
-
-    expect(
-      resolveFallbackXaiAuth({
-        tools: {
-          web: {
-            search: {
-              grok: {
-                apiKey: "legacy-key", // pragma: allowlist secret
-              },
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      apiKey: "legacy-key",
-      source: "tools.web.search.grok.apiKey",
     });
   });
 
@@ -177,6 +152,53 @@ describe("xai tool auth helpers", () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  it.each(
+    [undefined, "   "].flatMap((envValue) =>
+      [
+        undefined,
+        { source: "env" as const },
+        { source: "file" as const, path: "/unused" },
+        { source: "exec" as const, command: "/unused" },
+        { source: "store" as const },
+      ].map((declaration) => ({
+        envValue,
+        declaration,
+        source: declaration?.source ?? "undeclared",
+      })),
+    ),
+  )(
+    "does not borrow profile auth for a missing configured env ref ($source, $envValue)",
+    async ({ envValue, declaration }) => {
+      vi.stubEnv("XAI_API_KEY", envValue);
+      const auth = {
+        hasAuthForProvider: vi.fn(() => true),
+        resolveApiKeyForProvider: vi.fn(async () => "profile-key"),
+      };
+      const sourceConfig: OpenClawConfig = {
+        secrets: {
+          defaults: { env: "selected" },
+          providers: declaration ? { selected: declaration } : undefined,
+        },
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "selected", id: "XAI_API_KEY" },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      expect(isXaiToolEnabled({ sourceConfig, auth })).toBe(false);
+      await expect(resolveXaiToolApiKeyWithAuth({ sourceConfig, auth })).resolves.toBeUndefined();
+      expect(auth.hasAuthForProvider).not.toHaveBeenCalled();
+      expect(auth.resolveApiKeyForProvider).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not bypass blocked explicit tool config with auth profiles", async () => {
     const auth = {

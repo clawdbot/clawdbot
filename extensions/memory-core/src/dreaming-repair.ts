@@ -5,7 +5,6 @@ import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   clearMemoryCoreWorkspaceNamespace,
-  DREAMING_DAILY_INGESTION_NAMESPACE,
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
   DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
   readMemoryCoreWorkspaceEntries,
@@ -68,7 +67,7 @@ async function resolveExistingDreamsPath(workspaceDir: string): Promise<string |
       await fs.access(candidate);
       return candidate;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      if (extractErrorCode(err) !== "ENOENT") {
         throw err;
       }
     }
@@ -165,7 +164,7 @@ export async function auditDreamingArtifacts(params: {
       issues.push({
         severity: "error",
         code: "dreaming-diary-unreadable",
-        message: `Dream diary could not be inspected: ${(err as NodeJS.ErrnoException).code ?? "error"}.`,
+        message: `Dream diary could not be inspected: ${extractErrorCode(err) ?? "error"}.`,
         fixable: false,
       });
     }
@@ -186,11 +185,11 @@ export async function auditDreamingArtifacts(params: {
       }
     }
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+    if (extractErrorCode(err) !== "ENOENT") {
       issues.push({
         severity: "error",
         code: "dreaming-session-corpus-unreadable",
-        message: `Dreaming session corpus could not be inspected: ${(err as NodeJS.ErrnoException).code ?? "error"}.`,
+        message: `Dreaming session corpus could not be inspected: ${extractErrorCode(err) ?? "error"}.`,
         fixable: false,
       });
     }
@@ -200,11 +199,11 @@ export async function auditDreamingArtifacts(params: {
     await fs.access(sessionIngestionPath);
     sessionIngestionExists = true;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+    if (extractErrorCode(err) !== "ENOENT") {
       issues.push({
         severity: "error",
         code: "dreaming-session-ingestion-unreadable",
-        message: `Dreaming session-ingestion state could not be inspected: ${(err as NodeJS.ErrnoException).code ?? "error"}.`,
+        message: `Dreaming session-ingestion state could not be inspected: ${extractErrorCode(err) ?? "error"}.`,
         fixable: false,
       });
     }
@@ -213,10 +212,11 @@ export async function auditDreamingArtifacts(params: {
   // Fall back to SQLite plugin state when the legacy JSON file was archived by migration.
   if (!sessionIngestionExists) {
     try {
+      // Daily ingestion tracks memory/*.md independently; session repair must not
+      // report or clear that healthy bookkeeping when rebuilding the session corpus.
       const ingestionNamespaces = [
         DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
         DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
-        DREAMING_DAILY_INGESTION_NAMESPACE,
       ] as const;
       for (const namespace of ingestionNamespaces) {
         const entries = await readMemoryCoreWorkspaceEntries({

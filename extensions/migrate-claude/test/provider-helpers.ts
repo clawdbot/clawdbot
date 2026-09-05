@@ -3,9 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-
-const tempRoots = new Set<string>();
 
 const logger = {
   info() {},
@@ -13,21 +10,6 @@ const logger = {
   error() {},
   debug() {},
 };
-
-export async function makeTempRoot() {
-  const root = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-migrate-claude-"),
-  );
-  tempRoots.add(root);
-  return root;
-}
-
-export async function cleanupTempRoots() {
-  for (const root of tempRoots) {
-    await fs.rm(root, { force: true, recursive: true });
-  }
-  tempRoots.clear();
-}
 
 export async function writeFile(filePath: string, content: string) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -107,6 +89,8 @@ export function makeContext(params: {
   config?: OpenClawConfig;
   includeSecrets?: boolean;
   overwrite?: boolean;
+  targetAgentId?: string;
+  itemKinds?: readonly string[];
   reportDir?: string;
   runtime?: MigrationProviderContext["runtime"];
 }): MigrationProviderContext {
@@ -125,6 +109,8 @@ export function makeContext(params: {
     source: params.source,
     includeSecrets: params.includeSecrets,
     overwrite: params.overwrite,
+    targetAgentId: params.targetAgentId,
+    itemKinds: params.itemKinds,
     reportDir: params.reportDir,
     runtime: params.runtime,
     logger,

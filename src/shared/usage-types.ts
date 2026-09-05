@@ -9,7 +9,7 @@ import type {
   SessionMessageCounts,
   SessionModelUsage,
   SessionToolUsage,
-} from "../infra/session-cost-usage.js";
+} from "../infra/session-cost-usage.types.js";
 
 /** One session or session-family row returned by the gateway usage endpoint. */
 export type SessionUsageEntry = {
@@ -48,11 +48,17 @@ export type SessionUsageEntry = {
   modelProvider?: string;
   model?: string;
   usage: SessionCostSummary | null;
+  /** Context availability without transferring the full report in overview queries. */
+  hasContextWeight?: boolean;
   contextWeight?: SessionSystemPromptReport | null;
 };
 
 /** Cross-session aggregate buckets returned alongside usage rows. */
 export type SessionsUsageAggregates = {
+  /** Sessions with activity in the requested range, before the row `limit` cap. */
+  sessionCount?: number;
+  /** Longest single-row duration across every matched session, not just returned rows. */
+  longestSessionDurationMs?: number;
   messages: SessionMessageCounts;
   tools: SessionToolUsage;
   byModel: SessionModelUsage[];

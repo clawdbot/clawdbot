@@ -1,8 +1,8 @@
 // Nvidia provider module implements model/runtime integration.
 import { lookup as dnsLookup } from "node:dns/promises";
 import {
-  clearLiveCatalogCacheForTests,
   getCachedLiveProviderModelRows,
+  readLiveModelCatalogStringField,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
@@ -13,10 +13,12 @@ import {
   type LookupFn,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 export const NVIDIA_DEFAULT_MODEL_ID = "nvidia/nemotron-3-ultra-550b-a55b";
-export const NVIDIA_FEATURED_MODELS_URL =
+const NVIDIA_MODELS_URL = "https://integrate.api.nvidia.com/v1/models";
+const NVIDIA_FEATURED_MODELS_URL =
   "https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json";
 
 const FEATURED_MODEL_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -38,6 +40,11 @@ const NVIDIA_ULTRA_DEFAULT_PARAMS = {
     force_nonempty_content: true,
   },
 } as const;
+const DEPRECATED_NVIDIA_MODEL_IDS = new Set<string>(
+  manifest.modelCatalog.providers.nvidia.models
+    .filter((model) => "status" in model && model.status === "deprecated")
+    .map((model) => model.id),
+);
 
 type NvidiaFeaturedModel = {
   model: string;
@@ -78,35 +85,84 @@ export function buildNvidiaProvider(): ModelProviderConfig {
   };
 }
 
-export async function buildLiveNvidiaProvider(): Promise<ModelProviderConfig> {
+export function buildSelectableNvidiaProvider(): ModelProviderConfig {
   const provider = buildNvidiaProvider();
-  const featuredModels = await loadNvidiaFeaturedModels();
-  if (!featuredModels || featuredModels.length === 0) {
-    return provider;
-  }
   return {
     ...provider,
-    models: applyNvidiaModelDefaults(featuredModels),
+    models: filterSelectableNvidiaModels(provider.models ?? []),
+  };
+}
+
+export async function buildLiveNvidiaProvider(): Promise<ModelProviderConfig> {
+  const provider = buildNvidiaProvider();
+  return {
+    ...provider,
+    models:
+      (await loadNvidiaLiveModels(provider.models)) ??
+      filterSelectableNvidiaModels(provider.models),
   };
 }
 
 export async function buildSelectableLiveNvidiaProvider(): Promise<ModelProviderConfig> {
   const provider = buildNvidiaProvider();
-  const featuredModels = await loadNvidiaFeaturedModels();
-  if (!featuredModels || featuredModels.length === 0) {
-    return {
-      ...provider,
-      models: [],
-    };
-  }
   return {
     ...provider,
-    models: applyNvidiaModelDefaults(featuredModels),
+    models: (await loadNvidiaLiveModels(provider.models)) ?? [],
   };
 }
 
-export function clearNvidiaFeaturedModelCacheForTests() {
-  clearLiveCatalogCacheForTests();
+async function loadNvidiaLiveModels(
+  bundledModels: ModelDefinitionConfig[],
+): Promise<ModelDefinitionConfig[] | null> {
+  try {
+    const [rows, featured] = await Promise.all([
+      getCachedLiveProviderModelRows({
+        providerId: "nvidia",
+        endpoint: NVIDIA_MODELS_URL,
+        requireHttps: true,
+        readRows: (payload) => {
+          if (!isRecord(payload) || !Array.isArray(payload.data)) {
+            throw new Error("NVIDIA model inventory must contain data[]");
+          }
+          if (payload.data.some((row) => !readLiveModelCatalogStringField(row, "id"))) {
+            throw new Error("NVIDIA model inventory contains a row without an id");
+          }
+          return payload.data;
+        },
+      }),
+      loadNvidiaFeaturedModels(),
+    ]);
+    const available = new Set(rows.map((row) => readLiveModelCatalogStringField(row, "id")));
+    const known = new Map(bundledModels.map((model) => [model.id, model]));
+    // /models includes embeddings and other non-chat endpoints without capabilities.
+    // Only exact known chat metadata or the vendor's featured chat rows are selectable.
+    const ranked = new Map(
+      (featured ?? []).map((model) => {
+        const bundled = known.get(model.id);
+        return [
+          model.id,
+          bundled
+            ? {
+                ...bundled,
+                name: model.name,
+                contextWindow: model.contextWindow,
+                maxTokens: model.maxTokens,
+              }
+            : model,
+        ];
+      }),
+    );
+    for (const [id, model] of known) {
+      if (!ranked.has(id)) {
+        ranked.set(id, model);
+      }
+    }
+    // A fresh inventory can restore a republished legacy id, but a stale featured
+    // recommendation cannot restore an id the inference endpoint no longer lists.
+    return [...ranked.values()].filter((model) => available.has(model.id));
+  } catch {
+    return null;
+  }
 }
 
 async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | null> {
@@ -165,8 +221,8 @@ function applyNvidiaModelDefaults(models: ModelDefinitionConfig[]): ModelDefinit
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+function filterSelectableNvidiaModels(models: ModelDefinitionConfig[]): ModelDefinitionConfig[] {
+  return models.filter((model) => !DEPRECATED_NVIDIA_MODEL_IDS.has(model.id));
 }
 
 function parseNvidiaFeaturedModel(row: unknown): ModelDefinitionConfig | null {

@@ -9,7 +9,7 @@ import {
   type AbortCutoff,
 } from "./abort-cutoff.js";
 import {
-  abortSessionRunTarget,
+  abortSessionRunTargetWithOutcome,
   formatAbortReplyText,
   isAbortTrigger,
   setAbortMemory,
@@ -82,6 +82,8 @@ function resolveAbortCutoffForTarget(params: {
 }
 
 async function applyAbortTarget(params: {
+  isCurrent?: () => boolean;
+  clearQueues?: boolean;
   abortTarget: AbortTarget;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -89,18 +91,37 @@ async function applyAbortTarget(params: {
   abortCutoff?: AbortCutoff;
 }) {
   const { abortTarget } = params;
-  abortSessionRunTarget({ key: abortTarget.key, sessionId: abortTarget.sessionId });
+  if (params.isCurrent?.() === false) {
+    throw new Error("The selected session changed before it could be stopped.");
+  }
+  if (params.clearQueues) {
+    const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
+    if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
+      logVerbose(
+        `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
+      );
+    }
+  }
+  const abortOutcome = abortSessionRunTargetWithOutcome({
+    key: abortTarget.key,
+    sessionId: abortTarget.sessionId,
+  });
+  if (abortOutcome.active && !abortOutcome.aborted) {
+    return abortOutcome;
+  }
 
   const persisted = await persistAbortTargetEntry({
+    isCurrent: params.isCurrent,
     entry: abortTarget.entry,
     key: abortTarget.key,
     sessionStore: params.sessionStore,
     storePath: params.storePath,
     abortCutoff: params.abortCutoff,
   });
-  if (!persisted && params.abortKey) {
+  if (!persisted && params.abortKey && params.isCurrent?.() !== false) {
     setAbortMemory(params.abortKey, true);
   }
+  return abortOutcome;
 }
 
 function buildAbortTargetApplyParams(
@@ -108,6 +129,7 @@ function buildAbortTargetApplyParams(
   abortTarget: AbortTarget,
 ) {
   return {
+    isCurrent: params.opts?.isCommandTargetCurrent,
     abortTarget,
     sessionStore: params.sessionStore,
     storePath: params.storePath,
@@ -137,34 +159,41 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
   });
-  const cleared = clearSessionQueues([abortTarget.key, abortTarget.sessionId]);
-  if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
-    logVerbose(
-      `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
-    );
-  }
-  await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
-
-  // Trigger internal hook for stop command
-  const hookEvent = createInternalHookEvent(
-    "command",
-    "stop",
-    abortTarget.key ?? params.sessionKey ?? "",
-    {
-      sessionEntry: abortTarget.entry,
-      sessionId: abortTarget.sessionId,
-      commandSource: params.command.surface,
-      senderId: params.command.senderId,
-    },
-  );
-  await triggerInternalHook(hookEvent);
-
-  const { stopped } = stopSubagentsForRequester({
+  let abortOutcome = { active: false, aborted: false };
+  // Capture child generations before signalling the parent; cleanup must not discover
+  // a replacement conversation's children after the original publisher finishes.
+  const { stopped, failed } = await stopSubagentsForRequester({
     cfg: params.cfg,
     requesterSessionKey: abortTarget.key ?? params.sessionKey,
+    beforeKill: async () => {
+      abortOutcome = await applyAbortTarget({
+        ...buildAbortTargetApplyParams(params, abortTarget),
+        clearQueues: true,
+      });
+
+      // Trigger internal hook for stop command
+      const hookEvent = createInternalHookEvent(
+        "command",
+        "stop",
+        abortTarget.key ?? params.sessionKey ?? "",
+        {
+          sessionEntry: abortTarget.entry,
+          sessionId: abortTarget.sessionId,
+          commandSource: params.command.surface,
+          senderId: params.command.senderId,
+        },
+      );
+      await triggerInternalHook(hookEvent);
+      return true;
+    },
   });
 
-  return { shouldContinue: false, reply: { text: formatAbortReplyText(stopped) } };
+  const rejectionReason =
+    abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
+  return {
+    shouldContinue: false,
+    reply: { text: formatAbortReplyText(stopped, rejectionReason, failed) },
+  };
 };
 
 export const handleAbortTrigger: CommandHandler = async (params, allowTextCommands) => {
@@ -184,6 +213,11 @@ export const handleAbortTrigger: CommandHandler = async (params, allowTextComman
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
   });
-  await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
-  return { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } };
+  const abortOutcome = await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
+  const rejectionReason =
+    abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
+  return {
+    shouldContinue: false,
+    reply: { text: formatAbortReplyText(undefined, rejectionReason) },
+  };
 };

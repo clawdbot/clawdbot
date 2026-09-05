@@ -16,8 +16,8 @@ OpenClaw Discord channel plugin for channels, DMs, commands, and app events.
 
 ## Surface
 
-channels: discord; contracts: transcriptSourceProviders; skills
+channels: `discord`; contracts: `transcriptSourceProviders`; skills
 
 ## Related docs
 
-- [discord](/channels/discord)
+- [Discord](/channels/discord)

@@ -7,8 +7,13 @@
   },
   "enabledByDefault": true,
   "providers": ["amazon-bedrock"],
+  "modelCatalog": {
+    "discovery": {
+      "amazon-bedrock": "refreshable"
+    }
+  },
   "contracts": {
-    "memoryEmbeddingProviders": ["bedrock"]
+    "embeddingProviders": ["bedrock"]
   },
   "configSchema": {
     "type": "object",

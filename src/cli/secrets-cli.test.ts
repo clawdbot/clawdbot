@@ -1,7 +1,9 @@
 // Secrets CLI tests cover secret command registration, reads, writes, and redaction.
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,6 +12,9 @@ import {
   mockFirstObjectArg,
 } from "../test-utils/mock-call-assertions.js";
 import { registerSecretsCli } from "./secrets-cli.js";
+
+const execFileAsync = promisify(execFile);
+const missingPlan = path.join(os.tmpdir(), "openclaw-secrets-cli-missing-plan.json");
 
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
@@ -45,6 +50,11 @@ vi.mock("./gateway-rpc.js", () => ({
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
+}));
+
+vi.mock("./one-shot-exit.js", () => ({
+  exitCliAfterOutput: (runtime: typeof mocks.defaultRuntime, exitCode: number) =>
+    runtime.exit(exitCode),
 }));
 
 vi.mock("../secrets/audit.js", () => ({
@@ -105,6 +115,29 @@ function createConfigureInteractiveResult(options?: {
   };
 }
 
+function createConfigureInteractiveResultWithPlanBytes(bytes: number) {
+  const configured = createConfigureInteractiveResult({
+    targets: [
+      {
+        type: "models.providers.apiKey",
+        path: "models.providers.openai.apiKey",
+        pathSegments: ["models", "providers", "openai", "apiKey"],
+        ref: {
+          source: "file",
+          provider: "default",
+          id: "",
+        },
+        providerId: "openai",
+      },
+    ],
+  });
+  const target = configured.plan.targets[0] as { ref: { id: string } };
+  const emptyBytes = Buffer.byteLength(`${JSON.stringify(configured.plan, null, 2)}\n`, "utf8");
+  target.ref.id = "x".repeat(bytes - emptyBytes);
+  expect(Buffer.byteLength(`${JSON.stringify(configured.plan, null, 2)}\n`, "utf8")).toBe(bytes);
+  return configured;
+}
+
 function createSecretsApplyResult(options?: {
   mode?: "dry-run" | "write";
   changed?: boolean;
@@ -125,12 +158,15 @@ function createSecretsApplyResult(options?: {
   };
 }
 
-async function withPlanFile(run: (planPath: string) => Promise<void>) {
+async function withPlanFile(
+  run: (planPath: string) => Promise<void>,
+  contents = `${JSON.stringify(createManualSecretsPlan())}\n`,
+) {
   const planPath = path.join(
     os.tmpdir(),
     `openclaw-secrets-cli-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
   );
-  await fs.writeFile(planPath, `${JSON.stringify(createManualSecretsPlan())}\n`, "utf8");
+  await fs.writeFile(planPath, contents, "utf8");
   try {
     await run(planPath);
   } finally {
@@ -182,6 +218,54 @@ describe("secrets CLI", () => {
     expect(runtimeLogs.at(-1)).toContain('"ok": true');
   });
 
+  it.each([
+    {
+      name: "reload",
+      prepare: () => callGatewayFromCli.mockRejectedValue(new Error("reload failed")),
+      args: ["secrets", "reload", "--json"],
+      exitCode: 1,
+      message: "reload failed",
+    },
+    {
+      name: "audit",
+      prepare: () => runSecretsAudit.mockRejectedValue(new Error("audit failed")),
+      args: ["secrets", "audit", "--json"],
+      exitCode: 2,
+      message: "audit failed",
+    },
+    {
+      name: "configure",
+      prepare: () =>
+        runSecretsConfigureInteractive.mockRejectedValue(new Error("configure failed")),
+      args: ["secrets", "configure", "--json"],
+      exitCode: 1,
+      message: "configure failed",
+    },
+    {
+      name: "apply",
+      prepare: async () => {
+        await fs.rm(missingPlan, { force: true });
+      },
+      args: ["secrets", "apply", "--from", missingPlan, "--json"],
+      exitCode: 1,
+      message: `Secrets plan file not found: ${missingPlan}`,
+    },
+  ])("prints one JSON failure when $name fails", async (testCase) => {
+    await testCase.prepare();
+
+    await expect(createProgram().parseAsync(testCase.args, { from: "user" })).rejects.toThrow(
+      `__exit__:${testCase.exitCode}`,
+    );
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    expect(runtimeLogs).toHaveLength(1);
+    expect(JSON.parse(runtimeLogs[0] ?? "")).toEqual({
+      ok: false,
+      error: { type: "cli_error", message: testCase.message },
+    });
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
   it("explains Gateway reload failures without duplicate doctor noise", async () => {
     callGatewayFromCli.mockRejectedValue(
       new Error(
@@ -201,8 +285,8 @@ describe("secrets CLI", () => {
     expect(runtimeErrors.at(-1)).not.toContain("diagnostics..");
   });
 
-  it("runs secrets audit and exits via check code", async () => {
-    runSecretsAudit.mockResolvedValue({
+  it("writes one audit report before exiting with the check code", async () => {
+    const report = {
       version: 1,
       status: "findings",
       filesScanned: [],
@@ -210,6 +294,7 @@ describe("secrets CLI", () => {
         plaintextCount: 1,
         unresolvedRefCount: 0,
         shadowedRefCount: 0,
+        storeResidueCount: 0,
         legacyResidueCount: 0,
       },
       resolution: {
@@ -218,18 +303,54 @@ describe("secrets CLI", () => {
         resolvabilityComplete: true,
       },
       findings: [],
-    });
+    };
+    runSecretsAudit.mockResolvedValue(report);
     resolveSecretsAuditExitCode.mockReturnValue(1);
 
     await expect(
-      createProgram().parseAsync(["secrets", "audit", "--check"], { from: "user" }),
-    ).rejects.toThrow("__exit__:2");
+      createProgram().parseAsync(["secrets", "audit", "--check", "--json"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
     expect(mockFirstObjectArg(runSecretsAudit).allowExec).toBe(false);
     const exitCodeCall = mockCall(resolveSecretsAuditExitCode);
     if (exitCodeCall[0] === undefined) {
       throw new Error("Expected secrets audit result for exit-code resolution");
     }
     expect(exitCodeCall[1]).toBe(true);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    expect(mockFirstObjectArg(defaultRuntime.writeJson)).toBe(report);
+    expect(runtimeLogs).toHaveLength(1);
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("keeps an unresolved audit report intact at exit 2", async () => {
+    const report = {
+      version: 1,
+      status: "unresolved",
+      filesScanned: [],
+      summary: {
+        plaintextCount: 0,
+        unresolvedRefCount: 1,
+        shadowedRefCount: 0,
+        storeResidueCount: 0,
+        legacyResidueCount: 0,
+      },
+      resolution: {
+        refsChecked: 1,
+        skippedExecRefs: 0,
+        resolvabilityComplete: true,
+      },
+      findings: [],
+    };
+    runSecretsAudit.mockResolvedValue(report);
+    resolveSecretsAuditExitCode.mockReturnValue(2);
+
+    await expect(
+      createProgram().parseAsync(["secrets", "audit", "--json"], { from: "user" }),
+    ).rejects.toThrow("__exit__:2");
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    expect(mockFirstObjectArg(defaultRuntime.writeJson)).toBe(report);
+    expect(runtimeErrors).toHaveLength(0);
   });
 
   it("forwards --allow-exec to secrets audit", async () => {
@@ -241,6 +362,7 @@ describe("secrets CLI", () => {
         plaintextCount: 0,
         unresolvedRefCount: 0,
         shadowedRefCount: 0,
+        storeResidueCount: 0,
         legacyResidueCount: 0,
       },
       resolution: {
@@ -354,6 +476,120 @@ describe("secrets CLI", () => {
     });
   });
 
+  it("writes generated secrets plan files at the apply limit", async () => {
+    const planPath = path.join(
+      os.tmpdir(),
+      `openclaw-secrets-configure-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    runSecretsConfigureInteractive.mockResolvedValue(
+      createConfigureInteractiveResultWithPlanBytes(16 * 1024 * 1024),
+    );
+    confirm.mockResolvedValue(false);
+
+    try {
+      await createProgram().parseAsync(["secrets", "configure", "--plan-out", planPath], {
+        from: "user",
+      });
+
+      expect((await fs.stat(planPath)).size).toBe(16 * 1024 * 1024);
+      expect(runtimeLogs).toContain(`Plan written to ${planPath}`);
+      expect(runSecretsApply).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(planPath, { force: true });
+    }
+  });
+
+  it("rejects generated secrets plan files that exceed the apply limit", async () => {
+    const planPath = path.join(
+      os.tmpdir(),
+      `openclaw-secrets-configure-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    runSecretsConfigureInteractive.mockResolvedValue(
+      createConfigureInteractiveResultWithPlanBytes(16 * 1024 * 1024 + 1),
+    );
+
+    try {
+      await expect(
+        createProgram().parseAsync(["secrets", "configure", "--plan-out", planPath], {
+          from: "user",
+        }),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors.at(-1)).toContain("Secrets plan exceeds 16777216 bytes");
+      await expect(fs.access(planPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(confirm).not.toHaveBeenCalled();
+      expect(runSecretsApply).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(planPath, { force: true });
+    }
+  });
+
+  it("rejects oversized secrets plan files before parsing", async () => {
+    await withPlanFile(async (planPath) => {
+      await fs.truncate(planPath, 16 * 1024 * 1024 + 1);
+      await expect(
+        createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--dry-run"], {
+          from: "user",
+        }),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runSecretsApply).not.toHaveBeenCalled();
+      expect(runtimeErrors.at(-1)).toContain("Secrets plan file exceeds 16777216 bytes");
+    });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects FIFO secrets plan paths without blocking",
+    async () => {
+      runSecretsApply.mockResolvedValue(createSecretsApplyResult());
+      await withPlanFile(async (planPath) => {
+        await createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--dry-run"], {
+          from: "user",
+        });
+      });
+      runSecretsApply.mockReset();
+      runtimeLogs.length = 0;
+      runtimeErrors.length = 0;
+
+      const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-cli-fifo-"));
+      const fifoPath = path.join(tmpDir, "plan.json");
+      await execFileAsync("mkfifo", [fifoPath]);
+
+      let timedOut = false;
+      let timeout: NodeJS.Timeout | undefined;
+      const parse = createProgram().parseAsync(
+        ["secrets", "apply", "--from", fifoPath, "--dry-run"],
+        { from: "user" },
+      );
+
+      try {
+        await expect(
+          Promise.race([
+            parse,
+            new Promise<never>((_, reject) => {
+              timeout = setTimeout(() => {
+                timedOut = true;
+                reject(new Error("Timed out waiting for FIFO plan rejection"));
+              }, 1_000);
+            }),
+          ]),
+        ).rejects.toThrow("__exit__:1");
+
+        expect(runSecretsApply).not.toHaveBeenCalled();
+        expect(runtimeErrors.at(-1)).toContain("Secrets plan path is not a regular file");
+      } finally {
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+        if (timedOut) {
+          const releaseWriter = execFileAsync("sh", ["-c", 'printf x > "$1"', "sh", fifoPath]);
+          await Promise.allSettled([parse, releaseWriter]);
+        }
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("forwards --allow-exec to secrets apply dry-run", async () => {
     await withPlanFile(async (planPath) => {
       runSecretsApply.mockResolvedValue(createSecretsApplyResult());
@@ -382,6 +618,57 @@ describe("secrets CLI", () => {
         write: true,
         allowExec: true,
       });
+    });
+  });
+
+  it("shows a user-friendly error when the secrets plan file is malformed JSON", async () => {
+    await withPlanFile(async (planPath) => {
+      await expect(
+        createProgram().parseAsync(["secrets", "apply", "--from", planPath], { from: "user" }),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors.at(-1)).toContain(`Malformed JSON in secrets plan file: ${planPath}`);
+      expect(runSecretsApply).not.toHaveBeenCalled();
+    }, "{invalid json");
+  });
+
+  it("rejects --from when the plan file does not exist", async () => {
+    await expect(
+      createProgram().parseAsync(["secrets", "apply", "--from", "/nonexistent/path/plan.json"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    const errorOutput = runtimeErrors.join("\n");
+    expect(errorOutput).toContain("Secrets plan file not found: /nonexistent/path/plan.json");
+    expect(errorOutput).not.toContain("ENOENT");
+    expect(runSecretsApply).not.toHaveBeenCalled();
+  });
+
+  it("treats --help as the required --from value", async () => {
+    await expect(
+      createProgram().parseAsync(["secrets", "apply", "--from", "--help"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.join("\n")).toContain("Secrets plan file not found: --help");
+    expect(runSecretsApply).not.toHaveBeenCalled();
+  });
+
+  it("preserves causes for unrelated apply errors with a similar message", async () => {
+    await withPlanFile(async (planPath) => {
+      runSecretsApply.mockRejectedValueOnce(
+        new Error("Secrets plan file not found during apply", {
+          cause: new Error("provider diagnostic"),
+        }),
+      );
+
+      await expect(
+        createProgram().parseAsync(["secrets", "apply", "--from", planPath], { from: "user" }),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors.join("\n")).toContain(
+        "Secrets plan file not found during apply | provider diagnostic",
+      );
     });
   });
 

@@ -5,7 +5,6 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { upsertAuthProfileWithLock } from "../agents/auth-profiles.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
@@ -14,26 +13,27 @@ import { openUrl } from "../infra/browser-open.js";
 import { isRemoteEnvironment } from "../infra/remote-env.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
+import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { enablePluginInConfig } from "./enable.js";
-import {
-  applyProviderAuthConfigPatch,
-  applyDefaultModel,
-  pickAuthMethod,
-  resolveProviderMatch,
-} from "./provider-auth-choice-helpers.js";
+import { enablePluginWithCapabilityConsent } from "./enable.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { applyProviderAuthConfigPatch, applyDefaultModel } from "./provider-auth-choice-helpers.js";
 import {
   resolveManifestProviderAuthChoice,
   type ProviderAuthChoiceMetadata,
 } from "./provider-auth-choices.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
+import { persistProviderAuthProfileBatch } from "./provider-auth-persistence.js";
 import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.js";
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
-import type { ProviderAuthMethod, ProviderAuthOptionBag, ProviderPlugin } from "./types.js";
+import type {
+  ProviderAuthMethod,
+  ProviderAuthOptionBag,
+  ProviderAuthResult,
+  ProviderPlugin,
+} from "./types.js";
 
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-
-export type ApplyProviderAuthChoiceParams = {
+type ApplyProviderAuthChoiceParams = {
   authChoice: string;
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -43,22 +43,33 @@ export type ApplyProviderAuthChoiceParams = {
   setDefaultModel: boolean;
   preserveExistingDefaultModel?: boolean;
   agentId?: string;
+  workspaceDir?: string;
+  signal?: AbortSignal;
+  isRemote?: boolean;
+  beforePersistentEffect?: () => void | Promise<void>;
   opts?: Partial<ProviderAuthOptionBag>;
 };
 
-export type ApplyProviderAuthChoiceResult = {
+type ApplyProviderAuthChoiceResult = {
   config: OpenClawConfig;
   agentModelOverride?: string;
   retrySelection?: boolean;
 };
 
-export type PluginProviderAuthChoiceOptions = {
-  authChoice: string;
-  pluginId: string;
-  providerId: string;
-  methodId?: string;
-  label: string;
+type PreparedApplyProviderAuthChoiceResult = ApplyProviderAuthChoiceResult & {
+  authProfiles: ProviderAuthResult["profiles"];
+  persistAuthProfiles: (profiles?: ProviderAuthResult["profiles"]) => Promise<void>;
 };
+
+function preparedWithoutAuthProfiles(
+  result: ApplyProviderAuthChoiceResult,
+): PreparedApplyProviderAuthChoiceResult {
+  return {
+    ...result,
+    authProfiles: [],
+    persistAuthProfiles: async () => {},
+  };
+}
 
 function formatModelRefForDisplay(modelRef: string, provider: ProviderPlugin): string {
   if (!provider.preserveLiteralProviderPrefix) {
@@ -141,21 +152,22 @@ async function noteDefaultModelResult(params: {
 
 async function applyDefaultModelFromAuthChoice(params: {
   config: OpenClawConfig;
-  configBeforeProviderAuth?: OpenClawConfig;
+  entryConfig: OpenClawConfig;
   selectedModel: string;
   selectedModelDisplay?: string;
   preserveExistingDefaultModel: boolean | undefined;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   workspaceDir?: string;
+  beforePersistentEffect?: () => void | Promise<void>;
   runSelectedModelHook: (config: OpenClawConfig) => Promise<void>;
-}): Promise<OpenClawConfig> {
-  const defaultModelBaseConfig = params.configBeforeProviderAuth ?? params.config;
-  const previousPrimary = resolveConfiguredDefaultModelPrimary(defaultModelBaseConfig);
+}): Promise<OpenClawConfig | null> {
+  const previousPrimary = resolveConfiguredDefaultModelPrimary(params.entryConfig);
   const preservesDifferentPrimary =
     params.preserveExistingDefaultModel === true &&
     previousPrimary !== undefined &&
     previousPrimary !== params.selectedModel;
+  const defaultModelBaseConfig = params.entryConfig;
   const defaultModelConfig =
     params.preserveExistingDefaultModel === true
       ? restoreConfiguredPrimaryModel(params.config, defaultModelBaseConfig)
@@ -164,18 +176,22 @@ async function applyDefaultModelFromAuthChoice(params: {
     preserveExistingPrimary: params.preserveExistingDefaultModel === true,
   });
   if (!preservesDifferentPrimary) {
-    const { CODEX_RUNTIME_PLUGIN_ID, ensureCodexRuntimePluginForModelSelection } =
-      await import("../commands/codex-runtime-plugin-install.js");
-    const codexInstall = await ensureCodexRuntimePluginForModelSelection({
+    const runtimePlugins = await import("../commands/runtime-plugin-install.js");
+    const installed = await runtimePlugins.ensureModelSelectionRuntimePlugins({
       cfg: nextConfig,
       model: params.selectedModel,
       prompter: params.prompter,
       runtime: params.runtime,
+      beforePersistentEffect: params.beforePersistentEffect,
       ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
     });
-    nextConfig = codexInstall.cfg;
+    if (!installed.ok) {
+      await params.prompter.note(installed.message, "Runtime unavailable");
+      return null;
+    }
+    nextConfig = installed.cfg;
     await params.runSelectedModelHook(nextConfig);
-    if (codexInstall.installed) {
+    if (installed.codexInstalled) {
       // Offer Codex CLI state migration whenever the harness is in place for
       // the selected model, regardless of whether this run was a fresh install
       // or a repair against an already-present harness. The user can always
@@ -187,20 +203,10 @@ async function applyDefaultModelFromAuthChoice(params: {
         config: nextConfig,
         runtime: params.runtime,
         prompter: params.prompter,
-        installedPluginIds: [CODEX_RUNTIME_PLUGIN_ID],
+        installedPluginIds: [runtimePlugins.CODEX_RUNTIME_PLUGIN_ID],
       });
       nextConfig = migrationResult.config;
     }
-    const { ensureCopilotRuntimePluginForModelSelection } =
-      await import("../commands/copilot-runtime-plugin-install.js");
-    const copilotInstall = await ensureCopilotRuntimePluginForModelSelection({
-      cfg: nextConfig,
-      model: params.selectedModel,
-      prompter: params.prompter,
-      runtime: params.runtime,
-      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-    });
-    nextConfig = copilotInstall.cfg;
   }
   await noteDefaultModelResult({
     previousPrimary,
@@ -214,15 +220,8 @@ async function applyDefaultModelFromAuthChoice(params: {
 
 type ProviderAuthChoiceRuntime = typeof import("./provider-auth-choice.runtime.js");
 
-const defaultProviderAuthChoiceDeps = {
-  loadPluginProviderRuntime: async (): Promise<ProviderAuthChoiceRuntime> =>
-    import("./provider-auth-choice.runtime.js"),
-};
-
-let providerAuthChoiceDeps = defaultProviderAuthChoiceDeps;
-
-async function loadPluginProviderRuntime() {
-  return await providerAuthChoiceDeps.loadPluginProviderRuntime();
+async function loadPluginProviderRuntime(): Promise<ProviderAuthChoiceRuntime> {
+  return await import("./provider-auth-choice.runtime.js");
 }
 
 function resolveManifestAuthChoiceScope(params: {
@@ -242,60 +241,55 @@ function resolveManifestAuthChoiceScope(params: {
 function withProviderPluginId(provider: ProviderPlugin, pluginId: string): ProviderPlugin {
   return provider.pluginId === pluginId ? provider : { ...provider, pluginId };
 }
-
-export const testing = {
-  resetDepsForTest(): void {
-    providerAuthChoiceDeps = defaultProviderAuthChoiceDeps;
-  },
-  setDepsForTest(deps: Partial<typeof defaultProviderAuthChoiceDeps>): void {
-    providerAuthChoiceDeps = {
-      ...defaultProviderAuthChoiceDeps,
-      ...deps,
-    };
-  },
-} as const;
-
-export async function runProviderPluginAuthMethod(params: {
+export async function runProviderPluginAuthMethodUnpersisted(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   runtime: RuntimeEnv;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
+  /** Force remote/manual browser presentation for a connected GUI client. */
+  isRemote?: boolean;
   prompter: WizardPrompter;
   method: ProviderAuthMethod;
   agentDir?: string;
-  agentId?: string;
   workspaceDir?: string;
-  emitNotes?: boolean;
   secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
   allowSecretRefPrompt?: boolean;
   opts?: Partial<ProviderAuthOptionBag>;
-}): Promise<{ config: OpenClawConfig; defaultModel?: string }> {
-  const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
-  const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
-  const workspaceDir =
-    params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.config, agentId) ??
-    resolveDefaultAgentWorkspaceDir();
-
-  const result = await params.method.run({
+}): Promise<ProviderAuthResult> {
+  return await params.method.run({
     config: params.config,
     env: params.env,
-    agentDir,
-    workspaceDir,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     prompter: params.prompter,
     runtime: params.runtime,
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
     opts: params.opts,
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,
-    isRemote: isRemoteEnvironment(),
+    isRemote: params.isRemote ?? isRemoteEnvironment(),
     openUrl: async (url) => {
+      if (params.isRemote === true) {
+        await params.prompter.openUrl?.(url);
+        return;
+      }
       await openUrl(url);
     },
     oauth: {
       createVpsAwareHandlers: (opts) => createVpsAwareOAuthHandlers(opts),
     },
   });
+}
 
+export function applyProviderPluginAuthMethodResultConfig(params: {
+  config: OpenClawConfig;
+  result: ProviderAuthResult;
+}): OpenClawConfig {
+  const { result } = params;
   let nextConfig = params.config;
+
   if (result.configPatch) {
     nextConfig = applyProviderAuthConfigPatch(nextConfig, result.configPatch, {
       replaceDefaultModels: result.replaceDefaultModels,
@@ -303,12 +297,6 @@ export async function runProviderPluginAuthMethod(params: {
   }
 
   for (const profile of result.profiles) {
-    await upsertAuthProfileWithLockOrThrow({
-      profileId: profile.profileId,
-      credential: profile.credential,
-      agentDir,
-    });
-
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: profile.profileId,
       provider: profile.credential.provider,
@@ -321,137 +309,242 @@ export async function runProviderPluginAuthMethod(params: {
         : {}),
     });
   }
+  return nextConfig;
+}
+
+export async function runProviderPluginAuthMethod(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  runtime: RuntimeEnv;
+  prompter: WizardPrompter;
+  method: ProviderAuthMethod;
+  agentDir?: string;
+  agentId?: string;
+  workspaceDir?: string;
+  signal?: AbortSignal;
+  isRemote?: boolean;
+  beforePersistentEffect?: () => void | Promise<void>;
+  emitNotes?: boolean;
+  secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
+  allowSecretRefPrompt?: boolean;
+  opts?: Partial<ProviderAuthOptionBag>;
+}): Promise<{ config: OpenClawConfig; defaultModel?: string }> {
+  const prepared = await prepareProviderPluginAuthMethod(params);
+  await prepared.persistAuthProfiles();
+
+  return {
+    config: prepared.config,
+    ...(prepared.defaultModel ? { defaultModel: prepared.defaultModel } : {}),
+  };
+}
+
+async function prepareProviderPluginAuthMethod(
+  params: Parameters<typeof runProviderPluginAuthMethod>[0],
+): Promise<{
+  config: OpenClawConfig;
+  defaultModel?: string;
+  authProfiles: ProviderAuthResult["profiles"];
+  persistAuthProfiles: (profiles?: ProviderAuthResult["profiles"]) => Promise<void>;
+}> {
+  const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
+  const workspaceDir =
+    params.workspaceDir ??
+    resolveAgentWorkspaceDir(params.config, agentId) ??
+    resolveDefaultAgentWorkspaceDir();
+  const result = await runProviderPluginAuthMethodUnpersisted({
+    config: params.config,
+    env: params.env,
+    runtime: params.runtime,
+    prompter: params.prompter,
+    method: params.method,
+    agentDir,
+    workspaceDir,
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.isRemote !== undefined ? { isRemote: params.isRemote } : {}),
+    secretInputMode: params.secretInputMode,
+    allowSecretRefPrompt: params.allowSecretRefPrompt,
+    opts: params.opts,
+  });
 
   if (params.emitNotes !== false && result.notes && result.notes.length > 0) {
     await params.prompter.note(result.notes.join("\n"), "Provider notes");
   }
 
+  const nextConfig = applyProviderPluginAuthMethodResultConfig({
+    config: params.config,
+    result,
+  });
   const defaultModel = result.defaultModel
     ? normalizeAgentModelRefForConfig(result.defaultModel)
     : undefined;
 
+  let profilesPersisted = false;
+  const persistAuthProfiles = async (profiles = result.profiles) => {
+    if (profilesPersisted) {
+      return;
+    }
+    await params.beforePersistentEffect?.();
+    await persistProviderAuthProfileBatch({
+      profiles,
+      config: nextConfig,
+      agentDir,
+      ...(params.env ? { env: params.env } : {}),
+      ...(params.env?.OPENCLAW_STATE_DIR ? { stateDir: params.env.OPENCLAW_STATE_DIR } : {}),
+    });
+    profilesPersisted = true;
+  };
+
   return {
     config: nextConfig,
     ...(defaultModel ? { defaultModel } : {}),
+    authProfiles: result.profiles,
+    persistAuthProfiles,
   };
 }
 
-export async function applyAuthChoiceLoadedPluginProvider(
+export async function prepareAuthChoiceLoadedPluginProvider(
   params: ApplyProviderAuthChoiceParams,
-): Promise<ApplyProviderAuthChoiceResult | null> {
+): Promise<PreparedApplyProviderAuthChoiceResult | null> {
+  const entryConfig = params.config;
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const workspaceDir =
-    resolveAgentWorkspaceDir(params.config, agentId) ?? resolveDefaultAgentWorkspaceDir();
-  let nextConfig = params.config;
-  let enabledConfig = params.config;
+    params.workspaceDir ??
+    resolveAgentWorkspaceDir(params.config, agentId) ??
+    resolveDefaultAgentWorkspaceDir();
   const {
     resolvePluginProviders,
     resolvePluginSetupProvider,
     resolveProviderPluginChoice,
     runProviderModelSelectedHook,
   } = await loadPluginProviderRuntime();
-  const manifestAuthChoice = resolveManifestAuthChoiceScope({
-    authChoice: params.authChoice,
-    config: nextConfig,
-    workspaceDir,
-    env: params.env,
-  });
-  const installCatalogEntry = resolveProviderInstallCatalogEntry(params.authChoice, {
-    config: nextConfig,
-    workspaceDir,
-    env: params.env,
-    includeUntrustedWorkspacePlugins: false,
-  });
-  const choicePlugin = manifestAuthChoice
-    ? { pluginId: manifestAuthChoice.pluginId, label: manifestAuthChoice.choiceLabel }
-    : installCatalogEntry
-      ? { pluginId: installCatalogEntry.pluginId, label: installCatalogEntry.label }
-      : undefined;
-  if (choicePlugin) {
-    const enableResult = enablePluginInConfig(nextConfig, choicePlugin.pluginId);
-    if (!enableResult.enabled) {
-      const safeLabel = sanitizeTerminalText(choicePlugin.label);
-      await params.prompter.note(
-        `${safeLabel} plugin is disabled (${enableResult.reason ?? "blocked"}).`,
-        safeLabel,
-      );
-      return { config: nextConfig };
-    }
-    enabledConfig = enableResult.config;
-  }
-
-  const resolveScopedRuntimeProviders = (config: OpenClawConfig): ProviderPlugin[] =>
-    resolvePluginProviders({
-      config,
+  // Import the reviewed generation while locked; authentication may outlive the lease.
+  const prepared = await withPluginLifecycleLease({ env: params.env }, async () => {
+    let nextConfig = params.config;
+    let enabledConfig = params.config;
+    const manifestAuthChoice = resolveManifestAuthChoiceScope({
+      authChoice: params.authChoice,
+      config: nextConfig,
       workspaceDir,
       env: params.env,
-      mode: "setup",
-      ...(manifestAuthChoice
-        ? {
-            onlyPluginIds: [manifestAuthChoice.pluginId],
-          }
-        : {}),
     });
+    const installCatalogEntry = resolveProviderInstallCatalogEntry(params.authChoice, {
+      config: nextConfig,
+      workspaceDir,
+      env: params.env,
+      includeUntrustedWorkspacePlugins: false,
+    });
+    const choicePlugin = manifestAuthChoice
+      ? { pluginId: manifestAuthChoice.pluginId, label: manifestAuthChoice.choiceLabel }
+      : installCatalogEntry
+        ? { pluginId: installCatalogEntry.pluginId, label: installCatalogEntry.label }
+        : undefined;
+    if (choicePlugin) {
+      const enableResult = await enablePluginWithCapabilityConsent(
+        nextConfig,
+        choicePlugin.pluginId,
+        {
+          env: params.env,
+          workspaceDir,
+          onCapabilityConsent: createPluginCapabilityConsentPrompter(
+            params.prompter,
+            params.beforePersistentEffect,
+          ),
+        },
+      );
+      if (!enableResult.enabled) {
+        const safeLabel = sanitizeTerminalText(choicePlugin.label);
+        await params.prompter.note(
+          `${safeLabel} plugin is disabled (${enableResult.reason ?? "blocked"}).`,
+          safeLabel,
+        );
+        return preparedWithoutAuthProfiles({ config: nextConfig });
+      }
+      enabledConfig = enableResult.config;
+    }
 
-  const setupProvider = manifestAuthChoice
-    ? resolvePluginSetupProvider({
-        provider: manifestAuthChoice.providerId,
-        config: enabledConfig,
+    const resolveScopedRuntimeProviders = (config: OpenClawConfig): ProviderPlugin[] =>
+      resolvePluginProviders({
+        config,
         workspaceDir,
         env: params.env,
-        pluginIds: [manifestAuthChoice.pluginId],
-      })
-    : undefined;
-  let providers = setupProvider
-    ? [withProviderPluginId(setupProvider, manifestAuthChoice!.pluginId)]
-    : resolveScopedRuntimeProviders(enabledConfig);
-  let resolved = resolveProviderPluginChoice({
-    providers,
-    choice: params.authChoice,
-  });
-  if (!resolved && setupProvider) {
-    providers = resolveScopedRuntimeProviders(enabledConfig);
-    resolved = resolveProviderPluginChoice({
-      providers,
-      choice: params.authChoice,
-    });
-  }
-  if (!resolved && installCatalogEntry) {
-    const { ensureOnboardingPluginInstalled } =
-      await import("../commands/onboarding-plugin-install.js");
-    const installResult = await ensureOnboardingPluginInstalled({
-      cfg: nextConfig,
-      entry: {
-        pluginId: installCatalogEntry.pluginId,
-        label: installCatalogEntry.label,
-        install: installCatalogEntry.install,
-        ...(installCatalogEntry.origin === "bundled"
-          ? { trustedSourceLinkedOfficialInstall: true }
+        mode: "setup",
+        ...(manifestAuthChoice
+          ? {
+              onlyPluginIds: [manifestAuthChoice.pluginId],
+            }
           : {}),
-      },
-      prompter: params.prompter,
-      runtime: params.runtime,
-      workspaceDir,
-    });
-    if (!installResult.installed) {
-      return { config: installResult.cfg, retrySelection: true };
-    }
-    nextConfig = installResult.cfg;
-    providers = resolveScopedRuntimeProviders(nextConfig);
-    resolved = resolveProviderPluginChoice({
+      });
+
+    const setupProvider = manifestAuthChoice
+      ? resolvePluginSetupProvider({
+          provider: manifestAuthChoice.providerId,
+          config: enabledConfig,
+          workspaceDir,
+          env: params.env,
+          pluginIds: [manifestAuthChoice.pluginId],
+        })
+      : undefined;
+    let providers = setupProvider
+      ? [withProviderPluginId(setupProvider, manifestAuthChoice!.pluginId)]
+      : resolveScopedRuntimeProviders(enabledConfig);
+    let resolved = resolveProviderPluginChoice({
       providers,
       choice: params.authChoice,
     });
-  }
-  if (!resolved) {
-    return nextConfig === params.config ? null : { config: nextConfig, retrySelection: true };
-  }
-  if (nextConfig === params.config && enabledConfig !== params.config) {
-    nextConfig = enabledConfig;
-  }
+    if (!resolved && setupProvider) {
+      providers = resolveScopedRuntimeProviders(enabledConfig);
+      resolved = resolveProviderPluginChoice({
+        providers,
+        choice: params.authChoice,
+      });
+    }
+    if (!resolved && installCatalogEntry) {
+      const { ensureOnboardingPluginInstalled } =
+        await import("../commands/onboarding-plugin-install.js");
+      const installResult = await ensureOnboardingPluginInstalled({
+        cfg: nextConfig,
+        entry: {
+          pluginId: installCatalogEntry.pluginId,
+          label: installCatalogEntry.label,
+          install: installCatalogEntry.install,
+          ...(installCatalogEntry.origin === "bundled"
+            ? { trustedSourceLinkedOfficialInstall: true }
+            : {}),
+        },
+        prompter: params.prompter,
+        runtime: params.runtime,
+        workspaceDir,
+        beforePersistentEffect: params.beforePersistentEffect,
+      });
+      if (!installResult.installed) {
+        return preparedWithoutAuthProfiles({ config: installResult.cfg, retrySelection: true });
+      }
+      nextConfig = installResult.cfg;
+      providers = resolveScopedRuntimeProviders(nextConfig);
+      resolved = resolveProviderPluginChoice({
+        providers,
+        choice: params.authChoice,
+      });
+    }
+    if (!resolved) {
+      return nextConfig === params.config
+        ? null
+        : preparedWithoutAuthProfiles({ config: nextConfig, retrySelection: true });
+    }
+    if (nextConfig === params.config && enabledConfig !== params.config) {
+      nextConfig = enabledConfig;
+    }
 
-  const configBeforeProviderAuth = nextConfig;
-  const applied = await runProviderPluginAuthMethod({
+    return { nextConfig, resolved };
+  });
+  if (!prepared || !("resolved" in prepared)) {
+    return prepared;
+  }
+  let { nextConfig } = prepared;
+  const { resolved } = prepared;
+
+  const applied = await prepareProviderPluginAuthMethod({
     config: nextConfig,
     env: params.env,
     runtime: params.runtime,
@@ -460,6 +553,11 @@ export async function applyAuthChoiceLoadedPluginProvider(
     agentDir: params.agentDir,
     agentId: params.agentId,
     workspaceDir,
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.isRemote !== undefined ? { isRemote: params.isRemote } : {}),
+    ...(params.beforePersistentEffect
+      ? { beforePersistentEffect: params.beforePersistentEffect }
+      : {}),
     secretInputMode: params.opts?.secretInputMode,
     allowSecretRefPrompt: false,
     opts: params.opts,
@@ -471,15 +569,16 @@ export async function applyAuthChoiceLoadedPluginProvider(
     const selectedModel = applied.defaultModel;
     const selectedModelDisplay = formatModelRefForDisplay(selectedModel, resolved.provider);
     if (params.setDefaultModel) {
-      nextConfig = await applyDefaultModelFromAuthChoice({
+      const defaultModelConfig = await applyDefaultModelFromAuthChoice({
         config: nextConfig,
-        configBeforeProviderAuth,
+        entryConfig,
         selectedModel,
         selectedModelDisplay,
         preserveExistingDefaultModel: params.preserveExistingDefaultModel,
         prompter: params.prompter,
         runtime: params.runtime,
         workspaceDir,
+        beforePersistentEffect: params.beforePersistentEffect,
         runSelectedModelHook: async (config) => {
           await runProviderModelSelectedHook({
             config,
@@ -490,124 +589,42 @@ export async function applyAuthChoiceLoadedPluginProvider(
           });
         },
       });
-      return { config: nextConfig };
+      if (!defaultModelConfig) {
+        return preparedWithoutAuthProfiles({
+          config: entryConfig,
+          retrySelection: true,
+        });
+      }
+      nextConfig = defaultModelConfig;
+      return {
+        config: nextConfig,
+        authProfiles: applied.authProfiles,
+        persistAuthProfiles: applied.persistAuthProfiles,
+      };
     }
     nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);
     agentModelOverride = selectedModel;
   }
 
-  return { config: nextConfig, agentModelOverride };
+  return {
+    config: nextConfig,
+    agentModelOverride,
+    authProfiles: applied.authProfiles,
+    persistAuthProfiles: applied.persistAuthProfiles,
+  };
 }
 
-export async function applyAuthChoicePluginProvider(
+export async function applyAuthChoiceLoadedPluginProvider(
   params: ApplyProviderAuthChoiceParams,
-  options: PluginProviderAuthChoiceOptions,
 ): Promise<ApplyProviderAuthChoiceResult | null> {
-  if (params.authChoice !== options.authChoice) {
+  const prepared = await prepareAuthChoiceLoadedPluginProvider(params);
+  if (!prepared) {
     return null;
   }
-
-  const enableResult = enablePluginInConfig(params.config, options.pluginId);
-  let nextConfig = enableResult.config;
-  if (!enableResult.enabled) {
-    await params.prompter.note(
-      `${options.label} plugin is disabled (${enableResult.reason ?? "blocked"}).`,
-      options.label,
-    );
-    return { config: nextConfig };
-  }
-
-  const agentId = params.agentId ?? resolveDefaultAgentId(nextConfig);
-  const agentDir = params.agentDir ?? resolveAgentDir(nextConfig, agentId);
-  const workspaceDir =
-    resolveAgentWorkspaceDir(nextConfig, agentId) ?? resolveDefaultAgentWorkspaceDir();
-
-  const { resolvePluginProviders, runProviderModelSelectedHook } =
-    await loadPluginProviderRuntime();
-  const providers = resolvePluginProviders({
-    config: nextConfig,
-    workspaceDir,
-    env: params.env,
-    mode: "setup",
-  });
-  const provider = resolveProviderMatch(providers, options.providerId);
-  if (!provider) {
-    await params.prompter.note(
-      `${options.label} auth plugin is not available. Install or enable the plugin, then rerun onboarding. If this started after an update, run "openclaw doctor --fix" first.`,
-      options.label,
-    );
-    return { config: nextConfig };
-  }
-
-  const method = pickAuthMethod(provider, options.methodId) ?? provider.auth[0];
-  if (!method) {
-    await params.prompter.note(`${options.label} auth method missing.`, options.label);
-    return { config: nextConfig };
-  }
-
-  const configBeforeProviderAuth = nextConfig;
-  const applied = await runProviderPluginAuthMethod({
-    config: nextConfig,
-    env: params.env,
-    runtime: params.runtime,
-    prompter: params.prompter,
-    method,
-    agentDir,
-    agentId,
-    workspaceDir,
-    secretInputMode: params.opts?.secretInputMode,
-    allowSecretRefPrompt: false,
-    opts: params.opts,
-  });
-
-  nextConfig = applied.config;
-  if (applied.defaultModel) {
-    const selectedModel = applied.defaultModel;
-    const selectedModelDisplay = formatModelRefForDisplay(selectedModel, provider);
-    if (params.setDefaultModel) {
-      nextConfig = await applyDefaultModelFromAuthChoice({
-        config: nextConfig,
-        configBeforeProviderAuth,
-        selectedModel,
-        selectedModelDisplay,
-        preserveExistingDefaultModel: params.preserveExistingDefaultModel,
-        prompter: params.prompter,
-        runtime: params.runtime,
-        workspaceDir,
-        runSelectedModelHook: async (config) => {
-          await runProviderModelSelectedHook({
-            config,
-            model: selectedModel,
-            prompter: params.prompter,
-            agentDir,
-            workspaceDir,
-          });
-        },
-      });
-      return { config: nextConfig };
-    }
-    if (params.agentId) {
-      await params.prompter.note(
-        t("wizard.model.defaultSetForAgent", {
-          agent: params.agentId,
-          model: selectedModelDisplay,
-        }),
-        t("wizard.model.configuredTitle"),
-      );
-    }
-    nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);
-    return { config: nextConfig, agentModelOverride: selectedModel };
-  }
-
-  return { config: nextConfig };
+  await prepared.persistAuthProfiles();
+  return {
+    config: prepared.config,
+    ...(prepared.agentModelOverride ? { agentModelOverride: prepared.agentModelOverride } : {}),
+    ...(prepared.retrySelection ? { retrySelection: true } : {}),
+  };
 }
-
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
-}
-export { testing as __testing };

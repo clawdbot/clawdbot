@@ -13,7 +13,7 @@ import {
   readTelegramRetryAfterMs,
 } from "./network-errors.js";
 
-export type TelegramSendChatActionLogger = (message: string) => void;
+type TelegramSendChatActionLogger = (message: string) => void;
 
 type ChatAction =
   | "typing"
@@ -50,7 +50,7 @@ export type TelegramSendChatActionHandler = {
   reset: () => void;
 };
 
-export type CreateTelegramSendChatActionHandlerParams = {
+type CreateTelegramSendChatActionHandlerParams = {
   sendChatActionFn: SendChatActionFn;
   logger: TelegramSendChatActionLogger;
   maxConsecutive401?: number;
@@ -89,18 +89,11 @@ function is401Error(error: unknown): boolean {
   return normalizeLowercaseStringOrEmpty(message).includes("unauthorized");
 }
 
-class TelegramSendChatActionTransientCooldownError extends Error {
-  constructor(remainingMs: number) {
-    super(`sendChatAction transient cooldown active for ${Math.ceil(remainingMs)}ms`);
-    this.name = "TelegramSendChatActionTransientCooldownError";
-  }
-}
-
 function isTransientSendChatActionError(error: unknown): boolean {
   return (
     isTelegramRateLimitError(error) ||
     isTelegramServerError(error) ||
-    isRecoverableTelegramNetworkError(error, { context: "send" })
+    isRecoverableTelegramNetworkError(error, { context: "action" })
   );
 }
 
@@ -160,7 +153,9 @@ export function createTelegramSendChatActionHandler({
     if (remainingTransientCooldownMs > 0) {
       // Reject transient cooldown starts so channel typing guards can count the
       // failure and stop keepalive loops instead of silently hammering Telegram.
-      throw new TelegramSendChatActionTransientCooldownError(remainingTransientCooldownMs);
+      throw new Error(
+        `sendChatAction transient cooldown active for ${Math.ceil(remainingTransientCooldownMs)}ms`,
+      );
     }
 
     const key = minIntervalMs > 0 ? `${String(chatId)}:${action}` : undefined;
@@ -199,7 +194,7 @@ export function createTelegramSendChatActionHandler({
           logger(
             `CRITICAL: sendChatAction suspended after ${consecutive401Failures} consecutive 401 errors. ` +
               `Bot token is likely invalid. Telegram may DELETE the bot if requests continue. ` +
-              `Replace the token and restart: openclaw channels restart telegram`,
+              `Replace the Telegram token in config/env, then restart the Gateway.`,
           );
         } else {
           logger(

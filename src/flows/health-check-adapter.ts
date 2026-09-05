@@ -3,17 +3,27 @@ import type {
   HealthCheckInput,
   HealthCheckRunResult,
   RegisteredHealthCheck,
+  SplitHealthCheckDefinition,
+  SplitHealthCheckInput,
 } from "./health-check-runner-types.js";
-import type { HealthCheck, HealthRepairContext } from "./health-checks.js";
+import type { HealthRepairContext } from "./health-checks.js";
+
+export function defineSplitHealthCheckInput(
+  check: SplitHealthCheckDefinition,
+): SplitHealthCheckInput {
+  return { ...check, sourceContract: "split" };
+}
 
 // Adapts legacy split detect/repair checks and newer runnable checks to one runner contract.
 /** Wraps a detect/repair health check in the runnable health-check contract. */
-export function defineSplitHealthCheck(check: HealthCheck): RegisteredHealthCheck {
+function defineSplitHealthCheck(check: SplitHealthCheckInput): RegisteredHealthCheck {
   return {
     id: check.id,
     kind: check.kind,
     description: check.description,
     source: check.source,
+    defaultEnabled: check.defaultEnabled,
+    updateReadiness: check.updateReadiness,
     sourceContract: "split",
     detect: (ctx, scope) => check.detect(ctx, scope),
     repair:
@@ -55,31 +65,21 @@ export function defineSplitHealthCheck(check: HealthCheck): RegisteredHealthChec
 
 /** Normalizes any supported health-check shape before lint/fix execution. */
 export function normalizeHealthCheck(check: HealthCheckInput): RegisteredHealthCheck {
-  if (
-    "detect" in check &&
-    check.detect !== undefined &&
-    "run" in check &&
-    check.run !== undefined &&
-    "sourceContract" in check
-  ) {
-    return check as RegisteredHealthCheck;
-  }
-  if ("detect" in check && check.detect !== undefined) {
+  if (check.sourceContract === "split") {
     return defineSplitHealthCheck(check);
   }
-  if ("run" in check && check.run !== undefined) {
-    return {
-      id: check.id,
-      kind: check.kind,
-      description: check.description,
-      source: check.source,
-      sourceContract: "run",
-      async detect(ctx, scope) {
-        const result = await check.run({ ...ctx, repair: false }, scope);
-        return result.findings ?? [];
-      },
-      run: (ctx, scope) => check.run(ctx, scope),
-    };
-  }
-  throw new Error(`health check ${check.id} must define run() or detect()`);
+  return {
+    id: check.id,
+    kind: check.kind,
+    description: check.description,
+    source: check.source,
+    defaultEnabled: check.defaultEnabled,
+    updateReadiness: check.updateReadiness,
+    sourceContract: "run",
+    async detect(ctx, scope) {
+      const result = await check.run({ ...ctx, repair: false }, scope);
+      return result.findings ?? [];
+    },
+    run: (ctx, scope) => check.run(ctx, scope),
+  };
 }

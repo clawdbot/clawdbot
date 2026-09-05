@@ -1,139 +1,297 @@
 /** Tests CLI runner prompt/image/system-prompt helper utilities. */
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { buildInboundMediaNoteProjection } from "../auto-reply/media-note.js";
+import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { escapeRegExp } from "../shared/regexp.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import {
+  formatCliImageTurnContext,
+  hashCliImageTurnEntryId,
+  readCliImageTurnContext,
+} from "./cli-image-turn-correlation.js";
 import {
   buildCliArgs,
-  buildClaudeOwnerKey,
-  loadPromptRefImages,
   prepareCliPromptImagePayload,
   resolveCliRunQueueKey,
-  writeCliImages,
   writeCliSystemPromptFile,
 } from "./cli-runner/helpers.js";
 import * as promptImageUtils from "./embedded-agent-runner/run/images.js";
-import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import * as toolImages from "./tool-images.js";
 
-describe("loadPromptRefImages", () => {
+describe("prepareCliPromptImagePayload prompt references", () => {
   beforeEach(() => {
     // Restore spies because these helpers use real modules with per-test mocks.
     vi.restoreAllMocks();
   });
 
   it("returns empty results when the prompt has no image refs", async () => {
-    const loadImageFromRefSpy = vi.spyOn(promptImageUtils, "loadImageFromRef");
+    const detectAndLoadPromptImagesSpy = vi.spyOn(promptImageUtils, "detectAndLoadPromptImages");
     const sanitizeImageBlocksSpy = vi.spyOn(toolImages, "sanitizeImageBlocks");
 
     await expect(
-      loadPromptRefImages({
+      prepareCliPromptImagePayload({
+        backend: { command: "gemini", imagePathScope: "workspace" },
         prompt: "just text",
         workspaceDir: "/workspace",
       }),
-    ).resolves.toStrictEqual([]);
+    ).resolves.toStrictEqual({ prompt: "just text" });
 
-    expect(loadImageFromRefSpy).not.toHaveBeenCalled();
+    expect(detectAndLoadPromptImagesSpy).not.toHaveBeenCalled();
     expect(sanitizeImageBlocksSpy).not.toHaveBeenCalled();
   });
 
+  it("does not hydrate marker or bare paths from recalled memory context", async () => {
+    const detectAndLoadPromptImagesSpy = vi.spyOn(promptImageUtils, "detectAndLoadPromptImages");
+    const recalledMemory = [
+      "<relevant-memories>",
+      "1. [fact] stale [media attached: /tmp/some.png] and /tmp/other.png",
+      "</relevant-memories>",
+    ].join("\n");
+
+    const result = await prepareCliPromptImagePayload({
+      backend: { command: "gemini", imagePathScope: "workspace" },
+      prompt: `${recalledMemory}\n\ncurrent question`,
+      imagePrompt: "current question",
+      workspaceDir: "/workspace",
+    });
+
+    expect(result.imagePaths).toBeUndefined();
+    expect(detectAndLoadPromptImagesSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: "current question" }),
+    );
+  });
+
   it("does not reload OpenClaw CLI image cache paths from prior prompt text", async () => {
-    const loadImageFromRefSpy = vi.spyOn(promptImageUtils, "loadImageFromRef");
+    const detectAndLoadPromptImagesSpy = vi.spyOn(promptImageUtils, "detectAndLoadPromptImages");
     const sanitizeImageBlocksSpy = vi.spyOn(toolImages, "sanitizeImageBlocks");
 
     await expect(
-      loadPromptRefImages({
+      prepareCliPromptImagePayload({
+        backend: { command: "gemini", imagePathScope: "workspace" },
         prompt:
           'Called the Read tool with {"file_path":"/workspace/.openclaw-cli-images/stale.png"}',
         workspaceDir: "/workspace",
       }),
-    ).resolves.toStrictEqual([]);
+    ).resolves.toStrictEqual({
+      prompt: 'Called the Read tool with {"file_path":"/workspace/.openclaw-cli-images/stale.png"}',
+    });
 
     // Cached image paths are generated output, not fresh user references.
-    expect(loadImageFromRefSpy).not.toHaveBeenCalled();
+    expect(detectAndLoadPromptImagesSpy).not.toHaveBeenCalled();
     expect(sanitizeImageBlocksSpy).not.toHaveBeenCalled();
   });
 
-  it("passes the max-byte guardrail through load and sanitize", async () => {
-    const loadedImage: ImageContent = {
-      type: "image",
-      data: "c29tZS1pbWFnZQ==",
-      mimeType: "image/png",
-    };
-    const sanitizedImage: ImageContent = {
-      type: "image",
-      data: "c2FuaXRpemVkLWltYWdl",
-      mimeType: "image/jpeg",
-    };
-    const sandbox = {
-      root: "/sandbox",
-      bridge: {} as SandboxFsBridge,
+  it("hydrates explicit prompt refs through the shared image loader", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-ref-image-"),
+    );
+    const imagePath = path.join(workspaceDir, "photo.png");
+    const image = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    await fs.writeFile(imagePath, image);
+
+    try {
+      const result = await prepareCliPromptImagePayload({
+        backend: { command: "gemini", imagePathScope: "workspace" },
+        prompt: `Look at ${imagePath}`,
+        workspaceDir,
+      });
+
+      expect(result.imagePaths).toHaveLength(1);
+      await expect(
+        fs.readFile(expectDefined(result.imagePaths?.[0], "image path")),
+      ).resolves.toEqual(image);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("hydrates structured media from the active agent workspace without widening sibling access", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-agent-image-"));
+    const workspaceDir = path.join(stateDir, "workspace-arthur");
+    const siblingWorkspaceDir = path.join(stateDir, "workspace-merlin");
+    const imagePath = path.join(workspaceDir, "media", "inbound", "photo.png");
+    const siblingImagePath = path.join(siblingWorkspaceDir, "media", "inbound", "photo.png");
+    const image = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.mkdir(path.dirname(siblingImagePath), { recursive: true });
+    await fs.writeFile(imagePath, image);
+    await fs.writeFile(siblingImagePath, image);
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const config = {
+      agents: {
+        entries: {
+          arthur: { default: true, workspace: workspaceDir },
+          merlin: { workspace: siblingWorkspaceDir },
+        },
+      },
     };
 
-    const loadImageFromRefSpy = vi
-      .spyOn(promptImageUtils, "loadImageFromRef")
-      .mockResolvedValueOnce(loadedImage);
-    const sanitizeImageBlocksSpy = vi
-      .spyOn(toolImages, "sanitizeImageBlocks")
-      .mockResolvedValueOnce({ images: [sanitizedImage], dropped: 0 });
+    try {
+      const localRoots = getAgentScopedMediaLocalRoots(config, "arthur");
+      const prepared = await prepareCliPromptImagePayload({
+        backend: { command: "claude", input: "stdin" },
+        prompt: "describe the attachment",
+        workspaceDir,
+        localRoots,
+        media: [{ path: imagePath, contentType: "image/png" }],
+      });
 
-    const result = await loadPromptRefImages({
-      prompt: "Look at /tmp/photo.png",
-      workspaceDir: "/workspace",
-      workspaceOnly: true,
-      sandbox,
-    });
-
-    const [ref, workspaceDir, options] = loadImageFromRefSpy.mock.calls[0] ?? [];
-    expect(ref?.resolved).toBe("/tmp/photo.png");
-    expect(ref?.type).toBe("path");
-    expect(workspaceDir).toBe("/workspace");
-    expect(options).toEqual({
-      maxBytes: MAX_IMAGE_BYTES,
-      workspaceOnly: true,
-      sandbox,
-    });
-    expect(sanitizeImageBlocksSpy).toHaveBeenCalledWith([loadedImage], "prompt:images", {
-      maxBytes: MAX_IMAGE_BYTES,
-    });
-    expect(result).toEqual([sanitizedImage]);
+      expect(prepared.imagePaths).toHaveLength(1);
+      await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(image);
+      await expect(
+        prepareCliPromptImagePayload({
+          backend: { command: "claude", input: "stdin" },
+          prompt: "describe the attachment",
+          workspaceDir,
+          localRoots,
+          media: [{ path: siblingImagePath, contentType: "image/png" }],
+        }),
+      ).rejects.toThrow("failed to hydrate 1 structured image attachment");
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("dedupes repeated refs and skips failed loads before sanitizing", async () => {
-    const loadedImage: ImageContent = {
-      type: "image",
-      data: "b25lLWltYWdl",
-      mimeType: "image/png",
-    };
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-ref-dedupe-"),
+    );
+    const imagePath = path.join(workspaceDir, "a.png");
+    await fs.writeFile(imagePath, createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 }));
+    try {
+      const result = await prepareCliPromptImagePayload({
+        backend: { command: "gemini", imagePathScope: "workspace" },
+        prompt: `Compare ${imagePath} with ${imagePath} and ${path.join(workspaceDir, "missing.png")}`,
+        workspaceDir,
+      });
 
-    const loadImageFromRefSpy = vi
-      .spyOn(promptImageUtils, "loadImageFromRef")
-      .mockResolvedValueOnce(loadedImage)
-      .mockResolvedValueOnce(null);
-    const sanitizeImageBlocksSpy = vi
-      .spyOn(toolImages, "sanitizeImageBlocks")
-      .mockResolvedValueOnce({ images: [loadedImage], dropped: 0 });
+      expect(result.imagePaths).toHaveLength(1);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
 
-    const result = await loadPromptRefImages({
-      prompt: "Compare /tmp/a.png with /tmp/a.png and /tmp/b.png",
-      workspaceDir: "/workspace",
-    });
+  it("surfaces structured image hydration failures", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-structured-failure-"),
+    );
+    try {
+      await expect(
+        prepareCliPromptImagePayload({
+          backend: { command: "codex" },
+          prompt: "describe the attachment",
+          workspaceDir,
+          media: [{ path: path.join(workspaceDir, "missing.png"), contentType: "image/png" }],
+        }),
+      ).rejects.toThrow("failed to hydrate 1 structured image attachment");
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
 
-    expect(loadImageFromRefSpy).toHaveBeenCalledTimes(2);
-    expect(
-      loadImageFromRefSpy.mock.calls.map(
-        (call) => (call[0] as { resolved?: string } | undefined)?.resolved,
-      ),
-    ).toEqual(["/tmp/a.png", "/tmp/b.png"]);
-    expect(sanitizeImageBlocksSpy).toHaveBeenCalledWith([loadedImage], "prompt:images", {
-      maxBytes: MAX_IMAGE_BYTES,
-    });
-    expect(result).toEqual([loadedImage]);
+  it("does not hydrate media suppressed during current-turn admission", async () => {
+    await expect(
+      prepareCliPromptImagePayload({
+        backend: { command: "claude" },
+        prompt: "describe the attachment",
+        imagePrompt: "describe the attachment",
+        workspaceDir: "/workspace",
+        images: [],
+        imageOrder: [],
+        mediaImageLayout: { slots: [], suppressedFactIndexes: [0] },
+        media: [
+          {
+            path: "/openclaw-test-missing/current.png",
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+        ],
+      }),
+    ).resolves.toEqual({ prompt: "describe the attachment" });
+  });
+
+  it("delivers readable structured images when an unresolved attachment is hydration-suppressed", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-mixed-media-"),
+    );
+    const imagePath = path.join(workspaceDir, "present.png");
+    const image = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    await fs.writeFile(imagePath, image);
+    try {
+      const result = await prepareCliPromptImagePayload({
+        backend: { command: "codex" },
+        prompt: "describe the attachments",
+        workspaceDir,
+        images: [{ type: "image", data: image.toString("base64"), mimeType: "image/png" }],
+        imageOrder: ["inline"],
+        media: [
+          { path: imagePath, contentType: "image/png" },
+          {
+            path: path.join(workspaceDir, "missing.png"),
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+        ],
+      });
+
+      expect(result.imagePaths).toHaveLength(1);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("surfaces inline sanitization failure when a preceding image fact is suppressed", async () => {
+    await expect(
+      prepareCliPromptImagePayload({
+        backend: { command: "codex" },
+        prompt: "already described",
+        workspaceDir: "/tmp",
+        images: [{ type: "image", data: "%%%", mimeType: "image/png" }],
+        imageOrder: ["inline"],
+        media: [
+          {
+            path: "/tmp/described-missing.png",
+            contentType: "image/png",
+            hydrationSuppressed: true,
+          },
+          { path: "/tmp/inline.png", contentType: "image/png" },
+        ],
+      }),
+    ).rejects.toThrow("failed to hydrate 1 structured image attachment");
+  });
+
+  it("accepts an intentionally non-hydrating remote-only image fact", async () => {
+    const media = buildInboundMediaNoteProjection({
+      media: [{ url: "https://example.com/described.png", contentType: "image/png" }],
+      MediaUnderstanding: [
+        {
+          kind: "image.description",
+          attachmentIndex: 0,
+          text: "already described",
+          provider: "test",
+        },
+      ],
+    }).media;
+
+    await expect(
+      prepareCliPromptImagePayload({
+        backend: { command: "codex" },
+        prompt: "already described",
+        workspaceDir: "/tmp",
+        media,
+      }),
+    ).resolves.toEqual({ prompt: "already described" });
   });
 });
 
@@ -236,31 +394,72 @@ describe("writeCliImages", () => {
       mimeType: "image/png",
     };
 
-    const first = await writeCliImages({
+    const first = await prepareCliPromptImagePayload({
       backend: { command: "codex" },
+      prompt: "",
       workspaceDir,
       images: [image],
     });
-    const second = await writeCliImages({
+    const second = await prepareCliPromptImagePayload({
       backend: { command: "codex" },
+      prompt: "",
       workspaceDir,
       images: [image],
     });
 
     try {
-      expect(first.paths).toStrictEqual([
+      expect(first.imagePaths).toStrictEqual([
         expect.stringMatching(
           new RegExp(
             `^${escapeRegExp(`${resolvePreferredOpenClawTmpDir()}/openclaw-cli-images/`)}.*\\.png$`,
           ),
         ),
       ]);
-      expect(second.paths).toEqual(first.paths);
-      await expect(fs.readFile(first.paths[0])).resolves.toEqual(Buffer.from(image.data, "base64"));
+      expect(second.imagePaths).toEqual(first.imagePaths);
+      await expect(
+        fs.readFile(expectDefined(first.imagePaths?.[0], "first image path test invariant")),
+      ).resolves.toEqual(Buffer.from(image.data, "base64"));
     } finally {
-      await fs.rm(first.paths[0], { force: true });
+      await fs.rm(expectDefined(first.imagePaths?.[0], "first image path test invariant"), {
+        force: true,
+      });
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
+  });
+
+  it("carries exact image-turn correlation beside Claude prompt paths", async () => {
+    const turnKey = hashCliImageTurnEntryId("transcript-entry-1");
+    const prepared = await prepareCliPromptImagePayload({
+      backend: { command: "claude", imageArg: "@" },
+      prompt: "describe this",
+      workspaceDir: "/workspace",
+      images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+      imageTurnKey: turnKey,
+    });
+
+    try {
+      expect(readCliImageTurnContext(prepared.prompt)).toBe(turnKey);
+      expect(stripInboundMetadata(prepared.prompt)).not.toContain(turnKey);
+      expect(stripInboundMetadata(prepared.prompt)).toContain(
+        `@${expectDefined(prepared.imagePaths?.[0], "correlated image path")}`,
+      );
+    } finally {
+      await fs.rm(expectDefined(prepared.imagePaths?.[0], "correlated image path"), {
+        force: true,
+      });
+    }
+  });
+
+  it("rejects conflicting or malformed image-turn correlation", () => {
+    const first = hashCliImageTurnEntryId("transcript-entry-1");
+    const second = hashCliImageTurnEntryId("transcript-entry-2");
+
+    expect(
+      readCliImageTurnContext(
+        `${formatCliImageTurnContext(first)}\n\n${formatCliImageTurnContext(second)}`,
+      ),
+    ).toBeUndefined();
+    expect(readCliImageTurnContext(formatCliImageTurnContext("not-a-key"))).toBeUndefined();
   });
 
   it("uses the shared media extension map for image formats beyond the tiny builtin list", async () => {
@@ -273,16 +472,56 @@ describe("writeCliImages", () => {
       mimeType: "image/heic",
     };
 
-    const written = await writeCliImages({
+    const written = await prepareCliPromptImagePayload({
       backend: { command: "codex" },
+      prompt: "",
       workspaceDir,
       images: [image],
     });
 
     try {
-      expect(written.paths[0]).toMatch(/\.heic$/);
+      expect(written.imagePaths?.[0]).toMatch(/\.heic$/);
     } finally {
-      await fs.rm(written.paths[0], { force: true });
+      await fs.rm(expectDefined(written.imagePaths?.[0], "written image path test invariant"), {
+        force: true,
+      });
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("sweeps stale workspace-scoped CLI image files", async () => {
+    const workspaceDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-write-sweep-"),
+    );
+    const imageRoot = path.join(workspaceDir, ".openclaw-cli-images");
+    const stalePath = path.join(imageRoot, "stale.png");
+    const freshPath = path.join(imageRoot, "fresh.png");
+    const image: ImageContent = {
+      type: "image",
+      data: "bmV3LWltYWdl",
+      mimeType: "image/png",
+    };
+
+    await fs.mkdir(imageRoot, { recursive: true });
+    await fs.writeFile(stalePath, "stale");
+    await fs.writeFile(freshPath, "fresh");
+    const staleTime = new Date(Date.now() - 8 * 24 * 60 * 60 * 1_000);
+    await fs.utimes(stalePath, staleTime, staleTime);
+
+    const written = await prepareCliPromptImagePayload({
+      backend: { command: "gemini", imagePathScope: "workspace" },
+      prompt: "",
+      workspaceDir,
+      images: [image],
+    });
+
+    try {
+      await expect(fs.access(stalePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(freshPath, "utf-8")).resolves.toBe("fresh");
+      await expect(
+        fs.readFile(expectDefined(written.imagePaths?.[0], "written image path test invariant")),
+      ).resolves.toEqual(Buffer.from(image.data, "base64"));
+    } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
@@ -303,6 +542,7 @@ describe("writeCliImages", () => {
           input: "arg",
         },
         prompt: `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`,
+        media: [{ path: sourceImage, contentType: "image/png" }],
         workspaceDir: tempDir,
       });
       const argv = buildCliArgs({
@@ -348,6 +588,7 @@ describe("writeCliImages", () => {
           input: "stdin",
         },
         prompt,
+        media: [{ path: sourceImage, contentType: "image/png" }],
         workspaceDir: tempDir,
       });
       const promptWithImages = prepared.prompt;
@@ -458,6 +699,60 @@ describe("writeCliImages", () => {
       await prepared.cleanupImages?.();
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("merges inline payloads with offloaded refs in attachment order", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mixed-images-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const mediaId = "offloaded.png";
+    const historyImagePath = path.join(workspaceDir, "history.png");
+    const offloadedImage = createSolidPngBuffer(1, 1, { r: 255, g: 0, b: 0 });
+    const inlineImage = createSolidPngBuffer(1, 1, { r: 0, g: 0, b: 255 });
+    const historyImage = createSolidPngBuffer(1, 1, { r: 0, g: 255, b: 0 });
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.writeFile(path.join(inboundDir, mediaId), offloadedImage);
+    await fs.writeFile(historyImagePath, historyImage);
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const currentTurn = `compare these\n[media attached: media://inbound/${mediaId}]`;
+
+    try {
+      const prepared = await prepareCliPromptImagePayload({
+        backend: {
+          command: "codex",
+          imageArg: "--image",
+          imageMode: "repeat",
+          input: "arg",
+        },
+        prompt: `[Earlier history: ${historyImagePath}]\n\n[Retry after failure]\n\n${currentTurn}`,
+        imagePrompt: currentTurn,
+        workspaceDir,
+        images: [
+          {
+            type: "image",
+            data: inlineImage.toString("base64"),
+            mimeType: "image/png",
+          },
+        ],
+        imageOrder: ["offloaded", "inline"],
+        mediaImageLayout: {
+          slots: [{ kind: "offloaded", factIndex: 0 }, { kind: "inline" }],
+          suppressedFactIndexes: [],
+        },
+        media: [{ url: `media://inbound/${mediaId}`, contentType: "image/png" }],
+      });
+
+      expect(prepared.imagePaths).toHaveLength(2);
+      await expect(fs.readFile(prepared.imagePaths?.[0] ?? "")).resolves.toEqual(offloadedImage);
+      await expect(fs.readFile(prepared.imagePaths?.[1] ?? "")).resolves.toEqual(inlineImage);
+
+      await prepared.cleanupImages?.();
+    } finally {
+      envSnapshot.restore();
+      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 });
@@ -576,6 +871,19 @@ describe("resolveCliRunQueueKey", () => {
     ).toBe("claude-cli:owner:abcd1234");
   });
 
+  it("keeps third-party live sessions serialized on their exact owner even when serialize=false", () => {
+    expect(
+      resolveCliRunQueueKey({
+        backendId: "acme-cli",
+        liveSession: "claude-stdio",
+        serialize: false,
+        runId: "run-third-party-live",
+        workspaceDir: "/tmp/project-a",
+        ownerKey: "third-party-owner",
+      }),
+    ).toBe("acme-cli:owner:third-party-owner");
+  });
+
   it("keeps resumed Claude live sessions on the owner lane", () => {
     expect(
       resolveCliRunQueueKey({
@@ -588,34 +896,5 @@ describe("resolveCliRunQueueKey", () => {
         ownerKey: "abcd1234",
       }),
     ).toBe("claude-cli:owner:abcd1234");
-  });
-});
-
-describe("buildClaudeOwnerKey", () => {
-  it("is deterministic and distinguishes session keys", () => {
-    const base = {
-      agentAccountId: "acct-1",
-      agentId: "agent-main",
-      authProfileId: "profile-a",
-      sessionId: "sess-1",
-      sessionKey: "key-a",
-    };
-    const a1 = buildClaudeOwnerKey(base);
-    const a2 = buildClaudeOwnerKey(base);
-    expect(a1).toBe(a2);
-    const b = buildClaudeOwnerKey({ ...base, sessionKey: "key-b" });
-    expect(a1).not.toBe(b);
-  });
-
-  it("matches the legacy buildClaudeLiveKey hash for a frozen fixture (DO NOT EDIT — splits queue from live-session map)", () => {
-    expect(
-      buildClaudeOwnerKey({
-        agentAccountId: "acct-1",
-        agentId: "agent-main",
-        authProfileId: "profile-a",
-        sessionId: "sess-1",
-        sessionKey: "key-a",
-      }),
-    ).toBe("718b9a6cf473526c3c357883dfc8f1da1cf90b709d9ed38d675b52314abe6800");
   });
 });

@@ -1,10 +1,45 @@
 /** Manual-control promise cache for lazy runtime resources. */
 export type LazyPromiseLoader<T> = {
   /** Resolves the cached value, creating one load promise when needed. */
-  load(): Promise<T>;
+  load: () => Promise<T>;
+  /** Returns the current cached promise without starting a load. */
+  peek: () => Promise<T> | undefined;
   /** Drops the cached promise so the next load starts fresh. */
-  clear(): void;
+  clear: () => void;
 };
+
+type KeyedPromiseCacheOptions = {
+  /** Defaults to true; set false to allow retry after a rejected load. */
+  cacheRejections?: boolean;
+  /** Remove the promise after either outcome when the map only tracks in-flight work. */
+  evictOnSettled?: boolean;
+};
+
+/** Returns the cached promise for a key, creating and storing it when absent. */
+export function getOrCreatePromise<K, V>(
+  cache: Map<K, Promise<V>>,
+  key: K,
+  create: () => Promise<V>,
+  options: KeyedPromiseCacheOptions = {},
+): Promise<V> {
+  const cached = cache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const created = create();
+  cache.set(key, created);
+  const evict = () => {
+    if (cache.get(key) === created) {
+      cache.delete(key);
+    }
+  };
+  if (options.evictOnSettled === true) {
+    void created.then(evict, evict);
+  } else if (options.cacheRejections === false) {
+    void created.catch(evict);
+  }
+  return created;
+}
 
 /** Options for controlling lazy promise cache behavior. */
 type LazyPromiseLoaderOptions = {
@@ -38,14 +73,26 @@ export function createLazyPromiseLoader<T>(
   };
 
   return {
-    async load(): Promise<T> {
+    load(): Promise<T> {
       promise ??= createPromise();
-      return await promise;
+      return promise;
+    },
+    peek(): Promise<T> | undefined {
+      return promise;
     },
     clear(): void {
       promise = undefined;
     },
   };
+}
+
+/** Creates a reusable function that resolves one cached promise at a time. */
+export function createLazyPromise<T>(
+  load: () => T | Promise<T>,
+  options?: LazyPromiseLoaderOptions,
+): () => Promise<T> {
+  const loader = createLazyPromiseLoader(load, options);
+  return () => loader.load();
 }
 
 /** Convenience wrapper for dynamic-import-shaped loaders. */

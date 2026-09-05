@@ -5,6 +5,7 @@
  * before-finalize retry/finalize decisions with bounded retry accounting.
  */
 import { createHash } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -62,16 +63,6 @@ function pruneFinalizeRetryBudget(budget: FinalizeRetryBudget): void {
 
 function buildFinalizeRetryInstructionKey(instruction: string): string {
   return `instruction:${createHash("sha256").update(instruction).digest("hex")}`;
-}
-
-/** Clears before-finalize retry budgets globally or for one run. */
-export function clearAgentHarnessFinalizeRetryBudget(params?: { runId?: string }): void {
-  const budget = getFinalizeRetryBudget();
-  if (!params?.runId) {
-    budget.clear();
-    return;
-  }
-  budget.delete(params.runId);
 }
 
 /** Dispatches best-effort LLM input hooks for a harness attempt. */
@@ -250,5 +241,5 @@ function readBeforeAgentFinalizeRetryCandidates(
 function isBeforeAgentFinalizeRetry(
   value: unknown,
 ): value is NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }

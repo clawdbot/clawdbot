@@ -1,8 +1,9 @@
 // Verifies plugin hook security constraints and rejections.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { addStaticTestHooks } from "./hooks.test-helpers.js";
-import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
+import { addStaticTestHooks } from "./hooks.test-fixtures.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import type { PluginRegistry } from "./registry.js";
 import type { PluginHookBeforeToolCallResult, PluginHookMessageSendingResult } from "./types.js";
 
 const toolEvent = { toolName: "bash", params: { command: "echo hello" } };

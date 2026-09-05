@@ -1,134 +1,8 @@
 // Covers rich shell-command extraction, fake parser shapes, source span mapping,
 // nested wrapper parsing, and parser error handling.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Node as TreeSitterNode, Parser, Tree } from "web-tree-sitter";
-import { explainShellCommand } from "./extract.js";
-import {
-  getBashParserForCommandExplanation,
-  parseBashForCommandExplanation,
-  resolvePackageFileForCommandExplanation,
-  setBashParserLoaderForCommandExplanationForTest,
-} from "./tree-sitter-runtime.js";
-
-let parserLoaderOverridden = false;
-
-function setParserLoaderForTest(loader: () => Promise<Parser>): void {
-  parserLoaderOverridden = true;
-  setBashParserLoaderForCommandExplanationForTest(loader);
-}
-
-type FakeNodeInit = {
-  type: string;
-  text: string;
-  startIndex: number;
-  endIndex: number;
-  startPosition: TreeSitterNode["startPosition"];
-  endPosition: TreeSitterNode["endPosition"];
-  namedChildren?: TreeSitterNode[];
-  fieldChildren?: Record<string, TreeSitterNode>;
-  hasError?: boolean;
-};
-
-function fakeNode(init: FakeNodeInit): TreeSitterNode {
-  const named = init.namedChildren ?? [];
-  const children = named;
-  return {
-    type: init.type,
-    text: init.text,
-    startIndex: init.startIndex,
-    endIndex: init.endIndex,
-    startPosition: init.startPosition,
-    endPosition: init.endPosition,
-    childCount: children.length,
-    namedChildCount: named.length,
-    hasError: init.hasError ?? false,
-    child(index: number): TreeSitterNode | null {
-      return children[index] ?? null;
-    },
-    namedChild(index: number): TreeSitterNode | null {
-      return named[index] ?? null;
-    },
-    childForFieldName(name: string): TreeSitterNode | null {
-      return init.fieldChildren?.[name] ?? null;
-    },
-  } as unknown as TreeSitterNode;
-}
-
-function createByteIndexedUnicodeCommandTree(source: string): Tree {
-  const firstCommand = "echo café";
-  const separator = " && ";
-  const secondCommand = "echo ok";
-  const firstCommandEnd = Buffer.byteLength(firstCommand, "utf8");
-  const secondCommandStart = Buffer.byteLength(firstCommand + separator, "utf8");
-  const sourceEnd = Buffer.byteLength(source, "utf8");
-
-  const firstName = fakeNode({
-    type: "command_name",
-    text: "echo",
-    startIndex: 0,
-    endIndex: 4,
-    startPosition: { row: 0, column: 0 },
-    endPosition: { row: 0, column: 4 },
-  });
-  const firstArgument = fakeNode({
-    type: "word",
-    text: "café",
-    startIndex: 5,
-    endIndex: firstCommandEnd,
-    startPosition: { row: 0, column: 5 },
-    endPosition: { row: 0, column: firstCommandEnd },
-  });
-  const first = fakeNode({
-    type: "command",
-    text: firstCommand,
-    startIndex: 0,
-    endIndex: firstCommandEnd,
-    startPosition: { row: 0, column: 0 },
-    endPosition: { row: 0, column: firstCommandEnd },
-    namedChildren: [firstName, firstArgument],
-    fieldChildren: { name: firstName },
-  });
-
-  const secondName = fakeNode({
-    type: "command_name",
-    text: "echo",
-    startIndex: secondCommandStart,
-    endIndex: secondCommandStart + 4,
-    startPosition: { row: 0, column: secondCommandStart },
-    endPosition: { row: 0, column: secondCommandStart + 4 },
-  });
-  const secondArgument = fakeNode({
-    type: "word",
-    text: "ok",
-    startIndex: secondCommandStart + 5,
-    endIndex: sourceEnd,
-    startPosition: { row: 0, column: secondCommandStart + 5 },
-    endPosition: { row: 0, column: sourceEnd },
-  });
-  const second = fakeNode({
-    type: "command",
-    text: secondCommand,
-    startIndex: secondCommandStart,
-    endIndex: sourceEnd,
-    startPosition: { row: 0, column: secondCommandStart },
-    endPosition: { row: 0, column: sourceEnd },
-    namedChildren: [secondName, secondArgument],
-    fieldChildren: { name: secondName },
-  });
-
-  return {
-    rootNode: fakeNode({
-      type: "program",
-      text: source,
-      startIndex: 0,
-      endIndex: sourceEnd,
-      startPosition: { row: 0, column: 0 },
-      endPosition: { row: 0, column: sourceEnd },
-      namedChildren: [first, second],
-    }),
-    delete: vi.fn(),
-  } as unknown as Tree;
-}
+import { describe, expect, it } from "vitest";
+import { CommandExplanationWorkLimitError, explainShellCommand } from "./extract.js";
+import { parseBashForCommandExplanation } from "./tree-sitter-runtime.js";
 
 function riskMatches(risk: unknown, fields: Record<string, unknown>): boolean {
   if (!risk || typeof risk !== "object") {
@@ -155,13 +29,9 @@ function spanText(source: string, span: { startIndex: number; endIndex: number }
   return source.slice(span.startIndex, span.endIndex);
 }
 
-afterEach(() => {
-  if (parserLoaderOverridden) {
-    setBashParserLoaderForCommandExplanationForTest();
-    parserLoaderOverridden = false;
-  }
-  vi.restoreAllMocks();
-});
+function nestShellSyntax(open: string, inner: string, close: string, depth: number): string {
+  return open.repeat(depth) + inner + close.repeat(depth);
+}
 
 describe("command explainer tree-sitter runtime", () => {
   it("loads tree-sitter bash and parses a simple command", async () => {
@@ -181,78 +51,18 @@ describe("command explainer tree-sitter runtime", () => {
     );
   });
 
-  it("retries parser initialization after a loader rejection", async () => {
-    const parser = {} as Parser;
-    let calls = 0;
-    setParserLoaderForTest(async () => {
-      calls += 1;
-      if (calls === 1) {
-        throw new Error("transient parser load failure");
-      }
-      return parser;
-    });
-
-    await expect(getBashParserForCommandExplanation()).rejects.toThrow(
-      "transient parser load failure",
-    );
-    await expect(getBashParserForCommandExplanation()).resolves.toBe(parser);
-    expect(calls).toBe(2);
-  });
-
-  it("reports missing parser packages and wasm files with explainer context", () => {
-    expect(() =>
-      resolvePackageFileForCommandExplanation(
-        "definitely-missing-openclaw-parser-package",
-        "parser.wasm",
-      ),
-    ).toThrow("Unable to resolve definitely-missing-openclaw-parser-package");
-
-    expect(() =>
-      resolvePackageFileForCommandExplanation("web-tree-sitter", "missing-openclaw-parser.wasm"),
-    ).toThrow("Unable to locate missing-openclaw-parser.wasm in web-tree-sitter");
-  });
-
-  it("reports parser progress cancellation as a timeout", async () => {
-    const reset = vi.fn();
-    const parser = {
-      parse: (
-        _source: string,
-        _oldTree: unknown,
-        options?: { progressCallback?: (state: unknown) => boolean },
-      ) => {
-        options?.progressCallback?.({ currentOffset: 0, hasError: false });
-        return null;
-      },
-      reset,
-    } as unknown as Parser;
-    vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(501);
-    setParserLoaderForTest(async () => parser);
-
-    await expect(parseBashForCommandExplanation("echo hi")).rejects.toThrow(
-      "tree-sitter-bash timed out after 500ms while parsing shell command",
-    );
-    expect(reset).toHaveBeenCalledOnce();
-  });
-
-  it("maps parser byte offsets to JavaScript string spans for Unicode source", async () => {
-    const source = "echo café && echo ok";
-    const parser = {
-      parse: vi.fn(() => createByteIndexedUnicodeCommandTree(source)),
-      reset: vi.fn(),
-    };
-    setParserLoaderForTest(async () => parser as unknown as Parser);
-
+  it("uses native JavaScript string offsets for Unicode source", async () => {
+    const source = "echo café😀 && echo 雪";
     const explanation = await explainShellCommand(source);
 
-    expect(explanation.topLevelCommands).toHaveLength(2);
-    expect(explanation.topLevelCommands[0]?.executable).toBe("echo");
-    expect(explanation.topLevelCommands[0]?.argv).toEqual(["echo", "café"]);
-    expect(explanation.topLevelCommands[0]?.span.startIndex).toBe(0);
-    expect(explanation.topLevelCommands[0]?.span.endIndex).toBe(9);
-    expect(explanation.topLevelCommands[1]?.executable).toBe("echo");
-    expect(explanation.topLevelCommands[1]?.argv).toEqual(["echo", "ok"]);
-    expect(explanation.topLevelCommands[1]?.span.startIndex).toBe(13);
-    expect(explanation.topLevelCommands[1]?.span.endIndex).toBe(20);
+    expect(explanation.topLevelCommands.map((command) => command.argv)).toEqual([
+      ["echo", "café😀"],
+      ["echo", "雪"],
+    ]);
+    expect(explanation.topLevelCommands.map((command) => command.span)).toMatchObject([
+      { startIndex: 0, endIndex: 11 },
+      { startIndex: 15, endIndex: 21 },
+    ]);
     for (const command of explanation.topLevelCommands) {
       expect(source.slice(command.span.startIndex, command.span.endIndex)).toBe(command.text);
       expect(command.span.endPosition.column).toBe(command.span.endIndex);
@@ -386,7 +196,10 @@ describe("command explainer tree-sitter runtime", () => {
       }),
     ]);
     expect(
-      spanText(stderrPipe.source, stderrPipe.operators?.[0]?.span ?? { startIndex: 0, endIndex: 0 }),
+      spanText(
+        stderrPipe.source,
+        stderrPipe.operators?.[0]?.span ?? { startIndex: 0, endIndex: 0 },
+      ),
     ).toBe("|&");
 
     const newline = await explainShellCommand("echo a\npwd");
@@ -468,6 +281,35 @@ describe("command explainer tree-sitter runtime", () => {
     expect(doubleBracket.topLevelCommands).toHaveLength(1);
     expect(doubleBracket.topLevelCommands[0]?.executable).toBe("[[");
     expect(doubleBracket.topLevelCommands[0]?.argv).toEqual(["[[", "-f", "package.json"]);
+  });
+
+  it.each([
+    ["echo 42 $VALUE", ["echo", "42", "$VALUE"], "echo", 2, "$VALUE"],
+    [
+      "export COUNT=42 NEXT=$VALUE",
+      ["export", "COUNT=42", "NEXT=$VALUE"],
+      "export",
+      2,
+      "NEXT=$VALUE",
+    ],
+    ["[[ 42 -gt $LIMIT ]]", ["[[", "42", "-gt", "$LIMIT"], "[[", 3, "$LIMIT"],
+  ] as const)("projects command arguments for %s", async (source, argv, command, index, text) => {
+    const explanation = await explainShellCommand(source);
+
+    expect(explanation.topLevelCommands[0]?.argv).toEqual(argv);
+    const risk = expectRisk(explanation.risks, {
+      kind: "dynamic-argument",
+      command,
+      argumentIndex: index,
+      text,
+    });
+    const startIndex = source.indexOf(text);
+    expect(risk.span).toEqual({
+      startIndex,
+      endIndex: startIndex + text.length,
+      startPosition: { row: 0, column: startIndex },
+      endPosition: { row: 0, column: startIndex + text.length },
+    });
   });
 
   it("detects shell wrappers", async () => {
@@ -660,6 +502,14 @@ describe("command explainer tree-sitter runtime", () => {
     ]);
     expectRisk(continuedArgument.risks, { kind: "line-continuation" });
 
+    const escapedWordBoundary = await explainShellCommand("tr x\n\\id");
+    expect(escapedWordBoundary.topLevelCommands).toHaveLength(1);
+    expect(escapedWordBoundary.topLevelCommands[0]?.argv).toEqual(["tr", "x", "\nid"]);
+    expectRisk(escapedWordBoundary.risks, {
+      kind: "line-continuation",
+      text: "\n\\id",
+    });
+
     const invalidObfuscation = await explainShellCommand("e'c'h'o hi");
     expect(invalidObfuscation.ok).toBe(false);
     expectRisk(invalidObfuscation.risks, { kind: "syntax-error" });
@@ -773,6 +623,34 @@ describe("command explainer tree-sitter runtime", () => {
     const span = syntaxError.span as { startIndex?: unknown; endIndex?: unknown } | undefined;
     expect(typeof span?.startIndex).toBe("number");
     expect(typeof span?.endIndex).toBe("number");
+  });
+
+  it.each([
+    {
+      name: "command substitutions",
+      source: nestShellSyntax("$( ", "/approve abc123 allow-once", " )", 5_000),
+      executable: "/approve",
+    },
+    {
+      name: "test expressions",
+      source: `[[ ${"! ".repeat(15_000)}x ]]`,
+      executable: "[[",
+    },
+  ])("walks deeply nested $name without overflowing", async ({ source, executable }) => {
+    const explanation = await explainShellCommand(source);
+
+    expect(explanation.ok).toBe(true);
+    expect(
+      [...explanation.topLevelCommands, ...explanation.nestedCommands].some(
+        (command) => command.executable === executable,
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects syntax trees beyond the explanation work limit without returning partial data", async () => {
+    const source = nestShellSyntax("$( ", "echo hi", " )", 11_000);
+
+    await expect(explainShellCommand(source)).rejects.toThrow(CommandExplanationWorkLimitError);
   });
 
   it("parses and extracts a repeated approval-sized corpus without parser state leakage", async () => {

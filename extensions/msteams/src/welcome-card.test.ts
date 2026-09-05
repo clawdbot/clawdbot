@@ -47,6 +47,32 @@ describe("buildMSTeamsPresentationCard", () => {
     });
   });
 
+  it("keeps unavailable select commands visible in the Adaptive Card", () => {
+    expect(
+      buildMSTeamsPresentationCard({
+        presentation: {
+          blocks: [
+            {
+              type: "select",
+              placeholder: "Environment",
+              options: [
+                { label: "Production", action: { type: "command", command: "/deploy production" } },
+                { label: "Opaque", action: { type: "callback", value: "private-callback-token" } },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      body: [
+        {
+          type: "TextBlock",
+          text: "Environment:\n- Production: `/deploy production`\n- Opaque",
+        },
+      ],
+    });
+  });
+
   it("renders web app button links as open-url actions", () => {
     expect(
       buildMSTeamsPresentationCard({
@@ -83,6 +109,15 @@ describe("buildWelcomeCard", () => {
     const actions = card.actions as Array<{ title: string; data: unknown }>;
     expect(actions.length).toBe(3);
     expect(actions[0]?.title).toBe("What can you do?");
+  });
+
+  it("styles the heading with valid PascalCase Adaptive Card enum values", () => {
+    // Lowercase weight/size fall back to Default in the Teams renderer, so the heading must use the
+    // schema's PascalCase enums to render bold/medium.
+    const card = buildWelcomeCard();
+    const heading = (card.body as Array<{ weight?: string; size?: string }>)[0];
+    expect(heading?.weight).toBe("Bolder");
+    expect(heading?.size).toBe("Medium");
   });
 
   it("uses custom bot name", () => {

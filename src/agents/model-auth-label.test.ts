@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
     () => null,
   ),
   resolveEnvApiKey: vi.fn<() => { apiKey: string; source: string } | null>(() => null),
-  readClaudeCliCredentialsCached: vi.fn<(options?: unknown) => unknown>(() => null),
   readCodexCliCredentialsCached: vi.fn<(options?: unknown) => unknown>(() => null),
 }));
 
@@ -32,7 +31,6 @@ vi.mock("./model-auth.js", () => ({
 }));
 
 vi.mock("./cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: mocks.readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached: mocks.readCodexCliCredentialsCached,
 }));
 
@@ -50,8 +48,6 @@ describe("resolveModelAuthLabel", () => {
     mocks.resolveUsableCustomProviderApiKey.mockReturnValue(null);
     mocks.resolveEnvApiKey.mockReset();
     mocks.resolveEnvApiKey.mockReturnValue(null);
-    mocks.readClaudeCliCredentialsCached.mockReset();
-    mocks.readClaudeCliCredentialsCached.mockReturnValue(null);
     mocks.readCodexCliCredentialsCached.mockReset();
     mocks.readCodexCliCredentialsCached.mockReturnValue(null);
   });
@@ -192,30 +188,51 @@ describe("resolveModelAuthLabel", () => {
     });
   });
 
-  it("shows claude cli auth for claude-cli provider without auth profiles", () => {
+  it("uses Codex CLI auth for Codex-backed OpenAI before env fallback", () => {
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
       profiles: {},
     } as never);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
-    mocks.readClaudeCliCredentialsCached.mockReturnValue({
+    mocks.readCodexCliCredentialsCached.mockReturnValue({
       type: "oauth",
-      provider: "claude-cli",
+      provider: "openai",
       access: "token",
       refresh: "refresh",
       expires: Date.now() + 60_000,
     });
+    mocks.resolveEnvApiKey.mockReturnValue({
+      apiKey: "env-key-placeholder",
+      source: "env: OPENAI_API_KEY",
+    });
 
+    const label = resolveModelAuthLabel({
+      provider: "openai",
+      cfg: {},
+      codexCliCredentialsHome: "/tmp/openclaw-agent/codex-home",
+    });
+
+    expect(label).toBe("oauth (codex-cli)");
+    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledWith({
+      codexHome: "/tmp/openclaw-agent/codex-home",
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    });
+    expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
+  });
+
+  it("shows native Claude CLI auth without reading credential storage", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
     const label = resolveModelAuthLabel({
       provider: "claude-cli",
       cfg: {},
     });
 
-    expect(label).toBe("oauth (claude-cli)");
-    expect(mocks.readClaudeCliCredentialsCached).toHaveBeenCalledWith({
-      ttlMs: 5_000,
-      allowKeychainPrompt: false,
-    });
+    expect(label).toBe("native (claude-cli)");
   });
 
   it("can skip external auth profile overlays for status labels", () => {

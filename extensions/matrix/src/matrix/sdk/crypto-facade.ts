@@ -1,4 +1,5 @@
 // Matrix plugin module implements crypto facade behavior.
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { ensureMatrixCryptoRuntime } from "../deps.js";
 import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
 import type { EncryptedFile } from "./types.js";
@@ -10,7 +11,6 @@ import type {
 } from "./verification-manager.js";
 
 type MatrixCryptoFacadeClient = {
-  getRoom: (roomId: string) => { hasEncryptionStateEvent: () => boolean } | null;
   getCrypto: () => unknown;
   getUserId: () => string | null;
 };
@@ -67,15 +67,18 @@ export type MatrixCryptoFacade = {
 };
 
 type MatrixCryptoNodeRuntime = typeof import("./crypto-node.runtime.js");
-let matrixCryptoNodeRuntimePromise: Promise<MatrixCryptoNodeRuntime> | null = null;
+const matrixCryptoNodeRuntimeLoader = createLazyRuntimeModule(
+  () => import("./crypto-node.runtime.js"),
+);
 
 async function loadMatrixCryptoNodeRuntime(): Promise<MatrixCryptoNodeRuntime> {
   // Keep the native crypto package out of the main CLI startup graph.
-  matrixCryptoNodeRuntimePromise ??= import("./crypto-node.runtime.js").catch((error: unknown) => {
-    matrixCryptoNodeRuntimePromise = null;
+  try {
+    return await matrixCryptoNodeRuntimeLoader();
+  } catch (error) {
+    matrixCryptoNodeRuntimeLoader.clear();
     throw error;
-  });
-  return await matrixCryptoNodeRuntimePromise;
+  }
 }
 
 async function loadMatrixCryptoNodeBindings() {
@@ -102,11 +105,7 @@ export function createMatrixCryptoFacade(deps: {
   client: MatrixCryptoFacadeClient;
   verificationManager: MatrixVerificationManager;
   recoveryKeyStore: MatrixRecoveryKeyStore;
-  getRoomStateEvent: (
-    roomId: string,
-    eventType: string,
-    stateKey?: string,
-  ) => Promise<Record<string, unknown>>;
+  isRoomEncrypted: (roomId: string) => Promise<boolean>;
   downloadContent: (
     mxcUrl: string,
     opts?: { maxBytes?: number; readIdleTimeoutMs?: number },
@@ -125,18 +124,7 @@ export function createMatrixCryptoFacade(deps: {
     ) => {
       // compatibility no-op
     },
-    isRoomEncrypted: async (roomId: string): Promise<boolean> => {
-      const room = deps.client.getRoom(roomId);
-      if (room?.hasEncryptionStateEvent()) {
-        return true;
-      }
-      try {
-        const event = await deps.getRoomStateEvent(roomId, "m.room.encryption", "");
-        return typeof event.algorithm === "string" && event.algorithm.length > 0;
-      } catch {
-        return false;
-      }
-    },
+    isRoomEncrypted: deps.isRoomEncrypted,
     requestOwnUserVerification: async () => {
       const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;
       return await deps.verificationManager.requestOwnUserVerification(crypto);
@@ -165,8 +153,8 @@ export function createMatrixCryptoFacade(deps: {
       file: EncryptedFile,
       opts?: { maxBytes?: number; readIdleTimeoutMs?: number },
     ): Promise<Buffer> => {
-      const { Attachment, EncryptedAttachment } = await loadMatrixCryptoNodeBindings();
       const encrypted = await deps.downloadContent(file.url, opts);
+      const { Attachment, EncryptedAttachment } = await loadMatrixCryptoNodeBindings();
       const metadata: EncryptedFile = {
         url: file.url,
         key: file.key,

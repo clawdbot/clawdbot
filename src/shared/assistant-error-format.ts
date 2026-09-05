@@ -1,4 +1,7 @@
 // Assistant error formatting helpers normalize assistant-visible error payloads.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { extractHttpResponseBody } from "./http-error-response.js";
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error)(?:\s+\d{3})?[:\s-]+/i;
 const HTTP_STATUS_DELIMITER_RE = /(?:\s*:\s*|\s+)/;
@@ -10,6 +13,14 @@ const HTTP_STATUS_CODE_PREFIX_RE = new RegExp(
   `^(?:http\\s*)?(\\d{3})(?:${HTTP_STATUS_DELIMITER_RE.source}([\\s\\S]+))?$`,
   "i",
 );
+// Built-in provider adapters format status as `OpenAI API error (500): ...` (also
+// Azure OpenAI / Mistral / Provider). Keep this anchored so mid-string numbers
+// like model ids or image dimensions never become fake HTTP statuses.
+const PROVIDER_WRAPPED_HTTP_STATUS_RE =
+  /^(?:[a-z][\w-]*(?:\s+[a-z][\w-]*){0,3}\s+)?api\s*error\s*\((\d{3})\)(?:\s*:\s*([\s\S]*))?$/i;
+const LABELED_HTTP_STATUS_RE =
+  /^(?:status code|unexpected status|http status)\s*[:=]?\s*(\d{3})\b(?:\s*[:,]?\s*(?:message\s*:\s*)?([\s\S]*))?$/i;
+const ERROR_STATUS_ENVELOPE_RE = /^error\s*[:,]\s*/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
@@ -33,6 +44,21 @@ type ApiErrorInfo = {
   message?: string;
   requestId?: string;
 };
+
+export function formatProviderRefusalText(message: { diagnostics?: unknown }): string | undefined {
+  const refusal = Array.isArray(message.diagnostics)
+    ? message.diagnostics.find(
+        (diagnostic) => asOptionalRecord(diagnostic)?.type === "provider_refusal",
+      )
+    : undefined;
+  if (!refusal) {
+    return undefined;
+  }
+  const category = asOptionalRecord(asOptionalRecord(refusal)?.details)?.category;
+  const safeCategory =
+    typeof category === "string" && /^[a-z0-9_-]{1,64}$/i.test(category) ? category : undefined;
+  return `The provider refused this request${safeCategory ? ` (category: ${safeCategory})` : ""}. Revise the request and try again.`;
+}
 
 function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -93,16 +119,48 @@ export function parseApiErrorPayload(raw?: string): ErrorPayload | null {
   return null;
 }
 
-export function extractLeadingHttpStatus(raw: string): { code: number; rest: string } | null {
-  const match = raw.match(HTTP_STATUS_CODE_PREFIX_RE);
+function extractHttpStatusMatch(
+  match: RegExpMatchArray | null,
+): { code: number; rest: string } | null {
   if (!match) {
     return null;
   }
   const code = Number(match[1]);
-  if (!Number.isFinite(code)) {
+  if (!Number.isInteger(code) || code < 100 || code > 599) {
     return null;
   }
   return { code, rest: (match[2] ?? "").trim() };
+}
+
+export function extractLeadingHttpStatus(raw: string): { code: number; rest: string } | null {
+  return extractHttpStatusMatch(raw.match(HTTP_STATUS_CODE_PREFIX_RE));
+}
+
+export function extractProviderWrappedHttpStatus(
+  raw: string,
+): { code: number; rest: string } | null {
+  return extractHttpStatusMatch(raw.match(PROVIDER_WRAPPED_HTTP_STATUS_RE));
+}
+
+/** Extract an explicitly labeled provider HTTP status without matching embedded numeric text. */
+export function extractErrorHttpStatus(raw: string): { code: number; rest: string } | null {
+  const trimmed = raw.trim();
+  const direct =
+    extractLeadingHttpStatus(trimmed) ??
+    extractProviderWrappedHttpStatus(trimmed) ??
+    extractHttpStatusMatch(trimmed.match(LABELED_HTTP_STATUS_RE));
+  if (direct) {
+    return direct;
+  }
+  const unwrapped = trimmed.replace(ERROR_STATUS_ENVELOPE_RE, "");
+  if (unwrapped === trimmed) {
+    return null;
+  }
+  return (
+    extractLeadingHttpStatus(unwrapped) ??
+    extractProviderWrappedHttpStatus(unwrapped) ??
+    extractHttpStatusMatch(unwrapped.match(LABELED_HTTP_STATUS_RE))
+  );
 }
 
 export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
@@ -119,7 +177,7 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
     return true;
   }
 
-  const status = extractLeadingHttpStatus(trimmed);
+  const status = extractHttpResponseBody(extractLeadingHttpStatus(trimmed));
   if (!status || status.code < 500) {
     return false;
   }
@@ -129,7 +187,7 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   }
 
   return (
-    status.code < 600 && HTML_ERROR_PREFIX_RE.test(status.rest) && HTML_CLOSE_RE.test(status.rest)
+    status.code < 600 && HTML_ERROR_PREFIX_RE.test(status.body) && HTML_CLOSE_RE.test(status.body)
   );
 }
 
@@ -156,10 +214,10 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   let httpCode: string | undefined;
   let candidate = trimmed;
 
-  const httpPrefixMatch = candidate.match(/^(\d{3})\s+(.+)$/s);
-  if (httpPrefixMatch) {
-    httpCode = httpPrefixMatch[1];
-    candidate = httpPrefixMatch[2].trim();
+  const httpPrefix = extractHttpStatusMatch(candidate.match(/^(\d{3})\s+(.+)$/s));
+  if (httpPrefix) {
+    httpCode = String(httpPrefix.code);
+    candidate = httpPrefix.rest;
   }
 
   const payload = parseApiErrorPayload(candidate);
@@ -231,11 +289,10 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     );
   }
 
-  const httpMatch = trimmed.match(HTTP_STATUS_PREFIX_RE);
+  const httpMatch = extractHttpStatusMatch(trimmed.match(HTTP_STATUS_PREFIX_RE));
   if (httpMatch) {
-    const rest = httpMatch[2].trim();
-    if (!rest.startsWith("{")) {
-      return `HTTP ${httpMatch[1]}: ${rest}`;
+    if (!httpMatch.rest.startsWith("{")) {
+      return `HTTP ${httpMatch.code}: ${httpMatch.rest}`;
     }
   }
 
@@ -246,5 +303,5 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     return `${prefix}${type}: ${info.message}`;
   }
 
-  return trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
+  return trimmed.length > 600 ? `${truncateUtf16Safe(trimmed, 600)}…` : trimmed;
 }

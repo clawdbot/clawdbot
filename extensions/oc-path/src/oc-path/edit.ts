@@ -10,10 +10,11 @@
  */
 
 import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
+import { formatFrontmatterValue } from "./frontmatter-format.js";
 import { formatOcPath, type OcPath } from "./oc-path.js";
 import { guardSentinel } from "./sentinel.js";
 
-export type MdEditResult =
+type MdEditResult =
   | { readonly ok: true; readonly ast: MdAst }
   | {
       readonly ok: false;
@@ -138,14 +139,4 @@ function finalize(ast: MdAst): MdEditResult {
     }
   }
   return { ok: true, ast: { ...ast, raw: parts.join("\n") } };
-}
-
-function formatFrontmatterValue(value: string): string {
-  if (value.length === 0) {
-    return '""';
-  }
-  if (/[:#&*?|<>=!%@`,[\]{}\r\n]/.test(value)) {
-    return JSON.stringify(value);
-  }
-  return value;
 }

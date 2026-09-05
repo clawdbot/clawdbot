@@ -51,7 +51,7 @@ dump_debug_logs() {
     node -e "const fs=require('fs'); const cfg=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); console.error(JSON.stringify({model:cfg.agents?.defaults?.model, tools:cfg.tools, provider:cfg.models?.providers?.openai && {api:cfg.models.providers.openai.api, baseUrl:cfg.models.providers.openai.baseUrl, agentRuntime:cfg.models.providers.openai.agentRuntime}}, null, 2));" "$OPENCLAW_CONFIG_PATH" || true
   fi
 }
-trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 entry="$(openclaw_e2e_resolve_entrypoint)"
 mkdir -p "$OPENCLAW_STATE_DIR" "$OPENCLAW_TEST_WORKSPACE_DIR"
@@ -62,6 +62,7 @@ gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$GATEWAY_LOG")"
 for _ in $(seq 1 360); do
   if ! kill -0 "$gateway_pid" 2>/dev/null; then
     echo "gateway exited before listening" >&2
+    openclaw_e2e_print_log "$GATEWAY_LOG" >&2
     exit 1
   fi
   if node "$entry" gateway health \

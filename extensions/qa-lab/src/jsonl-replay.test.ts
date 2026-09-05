@@ -1,18 +1,20 @@
 // Qa Lab tests cover jsonl replay plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createMockJsonlReplayCellRunner,
-  extractJsonlReplayUserTurns,
   renderJsonlReplayMarkdownReport,
   runJsonlReplay,
-  type JsonlReplayCellRunner,
 } from "./jsonl-replay.js";
 import type { RuntimeId, RuntimeParityCell, RuntimeParityToolCall } from "./runtime-parity.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-const tempRoots: string[] = [];
+type JsonlReplayCellRunner = NonNullable<
+  NonNullable<Parameters<typeof runJsonlReplay>[1]>["runCell"]
+>;
+
+const tempDirs = createTempDirHarness();
 
 function makeCell(
   runtime: RuntimeId,
@@ -43,21 +45,15 @@ function makeToolCall(overrides: Partial<RuntimeParityToolCall> = {}): RuntimePa
   };
 }
 
-async function makeTempDir() {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "jsonl-replay-"));
-  tempRoots.push(tempRoot);
-  return tempRoot;
-}
-
 afterEach(async () => {
-  await Promise.all(
-    tempRoots.splice(0).map((tempRoot) => fs.rm(tempRoot, { recursive: true, force: true })),
-  );
+  await tempDirs.cleanup();
 });
 
 describe("jsonl replay", () => {
-  it("extracts user-turn boundaries while ignoring system, tool-only, empty, and malformed rows", () => {
-    const turns = extractJsonlReplayUserTurns(
+  it("extracts user-turn boundaries while ignoring system, tool-only, empty, and malformed rows", async () => {
+    const transcriptDir = await tempDirs.makeTempDir("jsonl-replay-");
+    await fs.writeFile(
+      path.join(transcriptDir, "turns.jsonl"),
       [
         `{"message":{"role":"system","content":"System setup"}}`,
         `{"message":{"role":"tool","content":"tool-only prelude"}}`,
@@ -67,6 +63,21 @@ describe("jsonl replay", () => {
         `{"message":{"role":"user","content":[{"type":"text","text":"Plan the release"},{"type":"tool_result","content":"ignored"}]}}`,
         `{"role":"user","content":[{"type":"input_text","text":"Check the follow-up"}]}`,
       ].join("\n"),
+      "utf8",
+    );
+    let turns: readonly Parameters<JsonlReplayCellRunner>[0]["turn"][] = [];
+    const runCell: JsonlReplayCellRunner = async (params) => {
+      turns = params.turns;
+      return createMockJsonlReplayCellRunner()(params);
+    };
+
+    await runJsonlReplay(
+      {
+        directory: transcriptDir,
+        runtimePair: ["openclaw", "codex"],
+        providerMode: "mock-openai",
+      },
+      { runCell },
     );
 
     expect(turns).toEqual([
@@ -86,7 +97,7 @@ describe("jsonl replay", () => {
   });
 
   it("reports the earliest divergent turn using runtime parity drift classes", async () => {
-    const transcriptDir = await makeTempDir();
+    const transcriptDir = await tempDirs.makeTempDir("jsonl-replay-");
     await fs.writeFile(
       path.join(transcriptDir, "three-turns.jsonl"),
       [
@@ -102,7 +113,7 @@ describe("jsonl replay", () => {
     const runCell: JsonlReplayCellRunner = async ({ runtime, turn }) => {
       if (turn.turn === 2) {
         return {
-          scenarioStatus: "pass",
+          status: "pass",
           cell: makeCell(runtime, {
             toolCalls: [makeToolCall(runtime === "openclaw" ? {} : { argsHash: "args-codex" })],
           }),
@@ -110,14 +121,14 @@ describe("jsonl replay", () => {
       }
       if (turn.turn === 3) {
         return {
-          scenarioStatus: "pass",
+          status: "pass",
           cell: makeCell(runtime, {
             finalText: runtime === "openclaw" ? "openclaw wording" : "codex wording",
           }),
         };
       }
       return {
-        scenarioStatus: "pass",
+        status: "pass",
         cell: makeCell(runtime),
       };
     };

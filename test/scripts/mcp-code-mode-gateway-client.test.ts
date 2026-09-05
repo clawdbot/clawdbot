@@ -1,6 +1,9 @@
 // Mcp Code Mode Gateway Client tests cover mcp code mode gateway client script behavior.
 import { describe, expect, it } from "vitest";
-import { validateMcpCodeModeResult } from "../../scripts/e2e/lib/mcp-code-mode-validation.ts";
+import {
+  extractMcpCodeModePlannedTools,
+  validateMcpCodeModeResult,
+} from "../../scripts/e2e/lib/mcp-code-mode-validation.ts";
 import {
   fetchJson,
   readMcpCodeModeClientFetchLimits,
@@ -148,10 +151,10 @@ describe("MCP code-mode gateway Docker client result validation", () => {
         ...okMentions,
         mcpTool: 0,
       }),
-    ).toThrow("session log lacks fixture__lookup_note call");
+    ).toThrow("session log lacks MCP.fixture.lookupNote call");
   });
 
-  it("rejects MCP.$api and tools.search fallback pollution", () => {
+  it("rejects MCP.$api and catalog.search fallback pollution", () => {
     expect(() =>
       validateMcpCodeModeResult(okResponse, {
         ...okMentions,
@@ -163,13 +166,13 @@ describe("MCP code-mode gateway Docker client result validation", () => {
         ...okMentions,
         toolSearchPollution: 1,
       }),
-    ).toThrow("agent should not use tools.search");
+    ).toThrow("agent should not use catalog.search");
   });
 
   it("requires planned exec evidence for the source gateway E2E", () => {
     expect(() =>
       validateMcpCodeModeResult(okResponse, okMentions, {
-        plannedTools: ["tools.search"],
+        plannedTools: ["catalog.search"],
         requireExec: true,
       }),
     ).toThrow("agent did not call code-mode exec");
@@ -179,5 +182,66 @@ describe("MCP code-mode gateway Docker client result validation", () => {
         requireExec: true,
       }),
     ).not.toThrow();
+  });
+
+  it("rejects success and exec mentions without a real assistant tool call", () => {
+    const plannedTools = extractMcpCodeModePlannedTools([
+      {
+        type: "message",
+        message: {
+          role: "user",
+          content: [{ type: "toolCall", name: "exec" }],
+        },
+      },
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "I called exec, API.list, API.read, and MCP.fixture.lookupNote.",
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(plannedTools).toEqual([]);
+    expect(() =>
+      validateMcpCodeModeResult(okResponse, okMentions, {
+        plannedTools,
+        requireExec: true,
+      }),
+    ).toThrow("agent did not call code-mode exec");
+  });
+
+  it("accepts success backed by a structured assistant exec tool call", () => {
+    const plannedTools = extractMcpCodeModePlannedTools([
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "mcp-code-mode-exec",
+              name: "exec",
+              arguments: {
+                language: "javascript",
+                code: 'return await MCP.fixture.lookupNote({ id: "alpha" });',
+              },
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(plannedTools).toEqual(["exec"]);
+    const result = validateMcpCodeModeResult(okResponse, okMentions, {
+      plannedTools,
+      requireExec: true,
+    });
+    expect(result).toBe("MCP_CODE_MODE_FILE_OK note=fixture-note-alpha unclear=none");
   });
 });

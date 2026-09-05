@@ -4,14 +4,18 @@
  */
 import {
   resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
   resolveClaudeThinkingProfile,
-} from "openclaw/plugin-sdk/provider-model-shared";
+} from "openclaw/plugin-sdk/claude-model-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
-import { CLAUDE_CLI_OFF_THINKING_PROFILE } from "./cli-shared.js";
+import { CLAUDE_CLI_OFF_THINKING_PROFILE, CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
 import {
   applyAnthropicConfigDefaults,
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
+
+/** Profile ids that native Claude auth has retired from OpenClaw ownership. */
+export const deprecatedProfileIds = [CLAUDE_CLI_PROFILE_ID] as const;
 
 /** Normalize Anthropic provider config without importing runtime registration. */
 export function normalizeConfig(params: { provider: string; providerConfig: ModelProviderConfig }) {
@@ -39,9 +43,11 @@ export function resolveThinkingProfile(params: {
         includeNativeMax: true,
       });
     case "claude-cli":
-      if (contractModelId.startsWith("claude-fable-5")) {
+      if (resolveClaudeMythos5ModelIdentity({ id: contractModelId })) {
         return CLAUDE_CLI_OFF_THINKING_PROFILE;
       }
+      // Claude Code exposes Fable's native effort ladder. Keep subscription-
+      // backed and API-backed Fable routes on one model contract.
       return resolveClaudeThinkingProfile(contractModelId, undefined, {
         includeNativeMax: true,
       });

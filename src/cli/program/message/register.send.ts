@@ -11,7 +11,10 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
           message
             .command("send")
             .description("Send a message")
-            .option("-m, --message <text>", "Message body (required unless --media is set)"),
+            .option(
+              "-m, --message <text>",
+              "Message body (required unless --media or --presentation is set)",
+            ),
         )
         .option(
           "--media <path-or-url>",
@@ -19,7 +22,7 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
         )
         .option(
           "--presentation <json>",
-          "Shared presentation payload as JSON (text, context, dividers, buttons, selects)",
+          "Shared presentation payload as JSON (text, context, dividers, charts, tables, buttons, selects)",
         )
         .option("--delivery <json>", "Shared delivery preferences as JSON")
         .option("--pin", "Request that the delivered message be pinned when supported", false)
@@ -28,7 +31,7 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
         .option("--gif-playback", "Treat video media as GIF playback (WhatsApp only).", false)
         .option(
           "--force-document",
-          "Send media as document to avoid channel compression (Telegram, WhatsApp). Applies to images, GIFs, and videos.",
+          "Preserve original image bytes on Slack, or send images, GIFs, and videos as documents on Telegram and WhatsApp, to avoid channel compression.",
           false,
         )
         .option(
@@ -37,7 +40,5 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
           false,
         ),
     )
-    .action(async (opts) => {
-      await helpers.runMessageAction("send", opts);
-    });
+    .action((opts) => helpers.runMessageAction("send", opts));
 }

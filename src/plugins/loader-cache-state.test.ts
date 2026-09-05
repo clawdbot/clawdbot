@@ -1,6 +1,6 @@
 /** Tests plugin loader cache state keys, invalidation, and reset behavior. */
 import { describe, expect, it } from "vitest";
-import { PluginLoaderCacheState, PluginLoadReentryError } from "./loader-cache-state.js";
+import { PluginLoaderCacheState } from "./loader-cache-state.js";
 
 describe("PluginLoaderCacheState", () => {
   it("evicts the least recently used registry cache entry", () => {
@@ -18,15 +18,16 @@ describe("PluginLoaderCacheState", () => {
     expect(cache.get("c")).toBe("charlie");
   });
 
-  it("tracks in-flight loads and reports reentry by cache key", () => {
+  it("bounds open-allowlist warning suppression by loader cache capacity", () => {
     const cache = new PluginLoaderCacheState<string>(2);
 
-    cache.beginLoad("demo");
-    expect(cache.isLoadInFlight("demo")).toBe(true);
-    expect(() => cache.beginLoad("demo")).toThrow(PluginLoadReentryError);
+    cache.recordOpenAllowlistWarning("first");
+    cache.recordOpenAllowlistWarning("second");
+    cache.recordOpenAllowlistWarning("third");
 
-    cache.finishLoad("demo");
-    expect(cache.isLoadInFlight("demo")).toBe(false);
+    expect(cache.hasOpenAllowlistWarning("first")).toBe(false);
+    expect(cache.hasOpenAllowlistWarning("second")).toBe(true);
+    expect(cache.hasOpenAllowlistWarning("third")).toBe(true);
   });
 
   it("clears registry, in-flight, and warning state together", () => {

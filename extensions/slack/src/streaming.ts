@@ -12,9 +12,12 @@
  */
 
 import type { AnyChunk, MessageMetadata } from "@slack/types";
-import type { WebClient } from "@slack/web-api";
+import type { WebClient, WebClientOptions } from "@slack/web-api";
 import type { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { getSlackListenerWriteClient } from "./client.js";
+import type { SlackSendIdentity } from "./send.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,13 +30,13 @@ export type SlackStreamSession = {
   channel: string;
   /** Thread timestamp (required for streaming). */
   threadTs: string;
-  /** True once stop() has been called. */
+  /** True once stopped locally, by Slack, or after an ambiguous delivery failure. */
   stopped: boolean;
+  /** Slack's native Stop event cancelled this stream, including any buffered tail. */
+  stoppedBySlack?: boolean;
   /**
-   * True once any Slack API call (startStream / appendStream) has succeeded.
-   * The SDK buffers appended text locally until the buffer exceeds
-   * `buffer_size` (default 256 chars); only then does it issue a network
-   * call. Until `delivered` flips, nothing has actually reached Slack.
+   * True once Slack acknowledges a start, append, or stop. Short appends can
+   * remain buffered locally; a lost response also leaves delivery unconfirmed.
    */
   delivered: boolean;
   /** Text accepted by the SDK but not yet acknowledged by Slack. */
@@ -42,6 +45,7 @@ export type SlackStreamSession = {
 
 type StartSlackStreamParams = {
   client: WebClient;
+  clientOptions?: WebClientOptions;
   channel: string;
   threadTs: string;
   /** Optional initial markdown text to include in the stream start. */
@@ -50,6 +54,8 @@ type StartSlackStreamParams = {
   chunks?: AnyChunk[];
   /** Native Slack task display mode for task_update chunks. */
   taskDisplayMode?: "plan" | "timeline";
+  /** Optional custom authorship supported by chat.startStream. */
+  identity?: SlackSendIdentity;
   /**
    * The team ID of the workspace this stream belongs to.
    * Required by the Slack API for `chat.startStream` / `chat.stopStream`.
@@ -72,8 +78,6 @@ type AppendSlackStreamParams = {
 
 type StopSlackStreamParams = {
   session: SlackStreamSession;
-  /** Optional final markdown text to append before stopping. */
-  text?: string;
   /** Optional final stream chunks to append before stopping. */
   chunks?: AnyChunk[];
   metadata?: MessageMetadata;
@@ -102,6 +106,62 @@ export class SlackStreamNotDeliveredError extends Error {
 // Stream lifecycle
 // ---------------------------------------------------------------------------
 
+type SlackClientStreams = {
+  sessions: Set<SlackStreamSession>;
+  stopped: Map<string, true>;
+};
+const streamsByClient = new WeakMap<WebClient, SlackClientStreams>();
+const stateBySession = new WeakMap<SlackStreamSession, SlackClientStreams>();
+const SLACK_STOPPED_STREAMS_MAX = 1024;
+
+function getSlackClientStreams(client: WebClient): SlackClientStreams {
+  let state = streamsByClient.get(client);
+  if (!state) {
+    state = { sessions: new Set(), stopped: new Map() };
+    streamsByClient.set(client, state);
+  }
+  return state;
+}
+
+function releaseSlackStream(session: SlackStreamSession): void {
+  stateBySession.get(session)?.sessions.delete(session);
+}
+
+function applySlackStreamStop(session: SlackStreamSession): boolean {
+  if (session.stoppedBySlack) {
+    return true;
+  }
+  const state = stateBySession.get(session);
+  const ts = session.streamer.ts;
+  if (!ts || !state?.stopped.delete(`${session.channel}:${ts}`)) {
+    return false;
+  }
+  session.stopped = true;
+  session.stoppedBySlack = true;
+  // Retain the unacknowledged tail for delivery bookkeeping; stopped state
+  // prevents it from ever being flushed or used for fallback.
+  releaseSlackStream(session);
+  return true;
+}
+
+/** Record streams Slack already halted; never flush their locally buffered tail. */
+export function markSlackStreamsStopped(
+  client: WebClient,
+  channelId: string,
+  streamingMessageTs: string[],
+): void {
+  const state = getSlackClientStreams(client);
+  for (const ts of streamingMessageTs) {
+    state.stopped.set(`${channelId}:${ts}`, true);
+  }
+  // The SDK learns ts only after startStream returns. Keep bounded unmatched
+  // events so a Stop arriving before that response still cancels the stream.
+  for (const session of state.sessions) {
+    applySlackStreamStop(session);
+  }
+  pruneMapToMaxSize(state.stopped, SLACK_STOPPED_STREAMS_MAX);
+}
+
 /**
  * Start a new Slack text stream.
  *
@@ -113,18 +173,40 @@ export class SlackStreamNotDeliveredError extends Error {
 export async function startSlackStream(
   params: StartSlackStreamParams,
 ): Promise<SlackStreamSession> {
-  const { client, channel, threadTs, text, chunks, taskDisplayMode, teamId, userId } = params;
+  const { client, channel, threadTs, text, chunks, taskDisplayMode, teamId, userId, identity } =
+    params;
+  const identityPayload = identity?.iconUrl
+    ? { ...(identity.username ? { username: identity.username } : {}), icon_url: identity.iconUrl }
+    : identity?.iconEmoji
+      ? {
+          ...(identity.username ? { username: identity.username } : {}),
+          icon_emoji: identity.iconEmoji,
+        }
+      : identity?.username
+        ? { username: identity.username }
+        : {};
 
   logVerbose(
     `slack-stream: starting stream in ${channel} thread=${threadTs}${teamId ? ` team=${teamId}` : ""}${userId ? ` user=${userId}` : ""}`,
   );
 
-  const streamer = client.chatStream({
+  const writeClient = getSlackListenerWriteClient({
+    listenerClient: client,
+    clientOptions: params.clientOptions,
+    teamId: params.clientOptions?.teamId,
+  });
+  if (!writeClient) {
+    throw new Error(
+      "Slack streaming requires an authenticated client with matching workspace scope",
+    );
+  }
+  const streamer = writeClient.chatStream({
     channel,
     thread_ts: threadTs,
     ...(taskDisplayMode ? { task_display_mode: taskDisplayMode } : {}),
     ...(teamId ? { recipient_team_id: teamId } : {}),
     ...(userId ? { recipient_user_id: userId } : {}),
+    ...identityPayload,
   });
 
   const session: SlackStreamSession = {
@@ -135,6 +217,10 @@ export async function startSlackStream(
     delivered: false,
     pendingText: "",
   };
+  // Stop events carry the listener identity; the derived writer only owns I/O.
+  const state = getSlackClientStreams(client);
+  state.sessions.add(session);
+  stateBySession.set(session, state);
 
   if (text || chunks?.length) {
     if (text) {
@@ -147,25 +233,24 @@ export async function startSlackStream(
     try {
       const result = await streamer.append({
         ...(text ? { markdown_text: text } : {}),
-        ...(chunks?.length ? { chunks } : {}),
+        ...(chunks ? { chunks } : {}),
       });
       if (result) {
         session.delivered = true;
         session.pendingText = "";
       }
+      applySlackStreamStop(session);
       logVerbose(
         `slack-stream: appended initial payload (${text?.length ?? 0} chars, ${
           chunks?.length ?? 0
         } chunks, ${result ? "flushed" : "buffered"})`,
       );
     } catch (err) {
-      if (isBenignSlackFinalizeError(err) && session.pendingText) {
-        throw new SlackStreamNotDeliveredError(
-          session.pendingText,
-          extractSlackErrorCode(err) ?? "unknown",
-        );
+      if (applySlackStreamStop(session)) {
+        return session;
       }
-      throw err;
+      releaseSlackStream(session);
+      throwSlackStreamFailure(session, err);
     }
   }
 
@@ -178,7 +263,7 @@ export async function startSlackStream(
 export async function appendSlackStream(params: AppendSlackStreamParams): Promise<void> {
   const { session, text, chunks } = params;
 
-  if (session.stopped) {
+  if (applySlackStreamStop(session) || session.stopped) {
     logVerbose("slack-stream: attempted to append to a stopped stream, ignoring");
     return;
   }
@@ -195,30 +280,29 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
     // non-null means Slack accepted the pending buffer/chunks and it is visible.
     const result = await session.streamer.append({
       ...(text ? { markdown_text: text } : {}),
-      ...(chunks?.length ? { chunks } : {}),
+      ...(chunks ? { chunks } : {}),
     });
     if (result) {
       session.delivered = true;
       session.pendingText = "";
     }
+    applySlackStreamStop(session);
     logVerbose(
       `slack-stream: appended ${text?.length ?? 0} chars, ${chunks?.length ?? 0} chunks (${
         result ? "flushed" : "buffered"
       })`,
     );
   } catch (err) {
-    if (isBenignSlackFinalizeError(err) && session.pendingText) {
-      throw new SlackStreamNotDeliveredError(
-        session.pendingText,
-        extractSlackErrorCode(err) ?? "unknown",
-      );
+    if (applySlackStreamStop(session)) {
+      return;
     }
-    throw err;
+    releaseSlackStream(session);
+    throwSlackStreamFailure(session, err);
   }
 }
 
 /** Result of {@link stopSlackStream}. */
-export type StopSlackStreamResult = {
+type StopSlackStreamResult = {
   /**
    * The Slack `ts` of the finalized streamed message, when `chat.stopStream`
    * reports it. Used to populate `MessageSentEvent.messageId` for the
@@ -232,7 +316,7 @@ export type StopSlackStreamResult = {
  * Stop (finalize) a Slack stream.
  *
  * After calling this the stream message becomes a normal Slack message.
- * Optionally include final text to append before stopping.
+ * Optionally include final chunks to append before stopping.
  *
  * If Slack's `chat.stopStream` responds with a definitive recipient/channel
  * rejection while text is still buffered locally, this function throws a
@@ -253,34 +337,29 @@ export type StopSlackStreamResult = {
 export async function stopSlackStream(
   params: StopSlackStreamParams,
 ): Promise<StopSlackStreamResult> {
-  const { session, text, chunks, metadata } = params;
+  const { session, chunks, metadata } = params;
 
-  if (session.stopped) {
+  if (applySlackStreamStop(session) || session.stopped) {
     logVerbose("slack-stream: stream already stopped, ignoring duplicate stop");
     return {};
   }
 
   session.stopped = true;
-  if (text) {
-    session.pendingText += text;
-  }
-
-  logVerbose(
-    `slack-stream: stopping stream in ${session.channel} thread=${session.threadTs}${
-      text ? ` (final text: ${text.length} chars)` : ""
-    }`,
-  );
+  logVerbose(`slack-stream: stopping stream in ${session.channel} thread=${session.threadTs}`);
 
   try {
     const stopResponse = await session.streamer.stop(
-      text || chunks?.length || metadata
+      chunks?.length || metadata
         ? {
-            ...(text ? { markdown_text: text } : {}),
             ...(chunks?.length ? { chunks } : {}),
             ...(metadata ? { metadata } : {}),
           }
         : undefined,
     );
+    // Accept a Stop racing the SDK's internal start/finalize when ts was unknown.
+    if (applySlackStreamStop(session)) {
+      return {};
+    }
     session.delivered = true;
     session.pendingText = "";
     logVerbose("slack-stream: stream stopped");
@@ -289,22 +368,19 @@ export async function stopSlackStream(
     const messageId = stopResponse?.ts ?? stopResponse?.message?.ts;
     return messageId ? { messageId } : {};
   } catch (err) {
-    if (isBenignSlackFinalizeError(err)) {
-      const code = extractSlackErrorCode(err) ?? "unknown";
-      if (session.pendingText) {
-        // stop() can be the first network call for short replies. If Slack
-        // definitively rejects that finalize, the user has not seen the
-        // SDK-buffered text. Let the caller fall back to chat.postMessage.
-        throw new SlackStreamNotDeliveredError(session.pendingText, code);
-      }
-      if (session.delivered) {
-        logVerbose(
-          `slack-stream: finalize rejected by Slack (${code}); prior appends delivered, treating stream as stopped`,
-        );
-        return {};
-      }
+    if (applySlackStreamStop(session)) {
+      return {};
     }
-    throw err;
+    const code = extractSlackErrorCode(err) ?? "unknown";
+    if (!session.pendingText && session.delivered && BENIGN_SLACK_FINALIZE_ERROR_CODES.has(code)) {
+      logVerbose(
+        `slack-stream: finalize rejected by Slack (${code}); prior appends delivered, treating stream as stopped`,
+      );
+      return {};
+    }
+    return throwSlackStreamFailure(session, err);
+  } finally {
+    releaseSlackStream(session);
   }
 }
 
@@ -328,16 +404,30 @@ const BENIGN_SLACK_FINALIZE_ERROR_CODES = new Set<string>([
   "team_not_found",
   // DMs that closed between stream start and stop.
   "missing_recipient_user_id",
+  "missing_recipient_team_id",
+  // Slack expires established streams server-side; rejected tails can still post normally.
+  "message_not_in_streaming_state",
   // Channels where Slack accepts ordinary messages but not native streaming.
   "method_not_supported_for_channel_type",
+  "channel_type_not_supported",
+  "enterprise_is_restricted",
 ]);
 
-export function isBenignSlackFinalizeError(err: unknown): boolean {
-  const code = extractSlackErrorCode(err);
-  return code !== undefined && BENIGN_SLACK_FINALIZE_ERROR_CODES.has(code);
+function throwSlackStreamFailure(session: SlackStreamSession, err: unknown): never {
+  const code = extractSlackErrorCode(err) ?? "unknown";
+  if (
+    session.pendingText &&
+    (BENIGN_SLACK_FINALIZE_ERROR_CODES.has(code) || code === "missing_scope")
+  ) {
+    throw new SlackStreamNotDeliveredError(session.pendingText, code);
+  }
+  // Slack may have accepted the request despite a lost response. The SDK
+  // retains that buffer; retire it so later append/stop cannot replay it.
+  session.stopped = true;
+  throw err;
 }
 
-export function extractSlackErrorCode(err: unknown): string | undefined {
+function extractSlackErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
@@ -356,7 +446,10 @@ export function extractSlackErrorCode(err: unknown): string | undefined {
 }
 
 export function markSlackStreamFallbackDelivered(session: SlackStreamSession): void {
-  const nativeStreamWasStarted = session.delivered;
+  if (applySlackStreamStop(session)) {
+    return;
+  }
+  const nativeStreamWasStarted = session.delivered || Boolean(session.streamer.ts);
   session.pendingText = "";
   // @slack/web-api 7.16.0 retains its private buffer after a failed flush.
   // Clear fallback-owned text before retrying stop(), or the SDK resends it.
@@ -364,4 +457,9 @@ export function markSlackStreamFallbackDelivered(session: SlackStreamSession): v
   // A visible native stream still needs stop() to leave streaming state. If no
   // native call succeeded, there is no Slack stream to finalize.
   session.stopped = !nativeStreamWasStarted;
+  if (session.stopped) {
+    releaseSlackStream(session);
+  } else {
+    stateBySession.get(session)?.sessions.add(session);
+  }
 }

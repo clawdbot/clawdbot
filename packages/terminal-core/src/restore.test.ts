@@ -111,4 +111,16 @@ describe("restoreTerminalState", () => {
     expect(output).toContain("\x1b[<u");
     expect(output).toContain("\x1b[>4;0m");
   });
+
+  it("writes reset sequences only to a custom TTY stream", () => {
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const resetWrite = vi.fn(() => true);
+    const resetStream = { isTTY: true, write: resetWrite } as unknown as NodeJS.WriteStream;
+
+    configureTerminalIO({ stdinIsTTY: false, stdoutIsTTY: true });
+    restoreTerminalState("test", { resetStream });
+
+    expect(resetWrite).toHaveBeenCalledWith(expect.stringContaining("\x1b[?25h"));
+    expect(stdoutWrite).not.toHaveBeenCalled();
+  });
 });

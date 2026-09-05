@@ -34,7 +34,8 @@ extension AttributedString {
             var ranges: [Range<AttributedString.Index>] = []
             for wordRange in wordRanges {
                 if let lastRange = ranges.last,
-                   self[lastRange].characters.count + self[wordRange].characters.count <= maxLength {
+                   self[lastRange].characters.count + self[wordRange].characters.count <= maxLength
+                {
                     ranges[ranges.count - 1] = lastRange.lowerBound..<wordRange.upperBound
                 } else {
                     ranges.append(wordRange)
@@ -54,17 +55,17 @@ extension AttributedString {
 
     @available(macOS 26.0, iOS 26.0, *)
     private func sentenceWithAudioTimeRange(_ range: Range<AttributedString.Index>) -> AttributedString? {
-            let audioTimeRanges = self[range].runs.filter {
-                !String(self[$0.range].characters)
-                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            }.compactMap(\.audioTimeRange)
-            guard !audioTimeRanges.isEmpty else { return nil }
-            let start = audioTimeRanges.first!.start
-            let end = audioTimeRanges.last!.end
-            var attributes = AttributeContainer()
-            attributes[AttributeScopes.SpeechAttributes.TimeRangeAttribute.self] = CMTimeRange(
-                start: start,
-                end: end)
-            return AttributedString(self[range].characters, attributes: attributes)
+        let audioTimeRanges = self[range].runs.filter {
+            !String(self[$0.range].characters)
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }.compactMap(\.audioTimeRange)
+        guard !audioTimeRanges.isEmpty else { return nil }
+        let start = audioTimeRanges.first!.start
+        let end = audioTimeRanges.last!.end
+        var attributes = AttributeContainer()
+        attributes[AttributeScopes.SpeechAttributes.TimeRangeAttribute.self] = CMTimeRange(
+            start: start,
+            end: end)
+        return AttributedString(self[range].characters, attributes: attributes)
     }
 }

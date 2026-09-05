@@ -1,13 +1,14 @@
 {
   "id": "mattermost",
-  "icon": "https://cdn.simpleicons.org/mattermost",
+  "name": "Mattermost",
+  "description": "OpenClaw Mattermost channel plugin.",
+  "doctorContract": {
+    "configRepair": true
+  },
   "activation": {
     "onStartup": false
   },
   "channels": ["mattermost"],
-  "channelEnvVars": {
-    "mattermost": ["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]
-  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

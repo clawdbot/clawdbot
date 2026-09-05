@@ -1,14 +1,16 @@
-/** Tests ACP translator initialize/session lifecycle and prompt bridge behavior. */
 import type {
   CloseSessionRequest,
   InitializeRequest,
   ListSessionsRequest,
+  NewSessionRequest,
   PromptRequest,
   PromptResponse,
   ResumeSessionRequest,
 } from "@agentclientprotocol/sdk";
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
+/** Tests ACP translator initialize/session lifecycle and prompt bridge behavior. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
@@ -76,6 +78,14 @@ function createPromptRequest(sessionId: string): PromptRequest {
   } as PromptRequest;
 }
 
+function createNewSessionRequest(): NewSessionRequest {
+  return {
+    cwd: "/tmp/openclaw",
+    mcpServers: [],
+    _meta: {},
+  } as NewSessionRequest;
+}
+
 function createGatewaySessions(rows: GatewaySessionRow[]) {
   return {
     ts: Date.now(),
@@ -132,7 +142,7 @@ async function startPendingPrompt(params: {
   });
   return {
     promptPromise,
-    runId: params.sentRunIds[before],
+    runId: expectDefined(params.sentRunIds[before], "params.sentRunIds[before] test invariant"),
   };
 }
 
@@ -159,30 +169,6 @@ describe("acp translator stable lifecycle handlers", () => {
     expect(typeof agent.closeSession).toBe("function");
     expect(capabilities.sessionCapabilities?.fork).toBeUndefined();
     expect("unstable_listSessions" in agent).toBe(false);
-
-    sessionStore.clearAllSessionsForTest();
-  });
-
-  it("captures ACP client capabilities during initialize", async () => {
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway());
-
-    expect(agent.supportsClientReadTextFile()).toBe(false);
-    expect(agent.supportsClientWriteTextFile()).toBe(false);
-    expect(agent.supportsClientTerminal()).toBe(false);
-
-    await agent.initialize({
-      ...createInitializeRequest(),
-      clientCapabilities: {
-        fs: { readTextFile: true, writeTextFile: false },
-        terminal: true,
-      },
-      clientInfo: { name: "test-client", version: "1.2.3" },
-    } as InitializeRequest);
-
-    expect(agent.supportsClientReadTextFile()).toBe(true);
-    expect(agent.supportsClientWriteTextFile()).toBe(false);
-    expect(agent.supportsClientTerminal()).toBe(true);
-    expect(agent.getClientInfo()).toEqual({ name: "test-client", version: "1.2.3" });
   });
 
   it("lists Gateway sessions through the stable handler with opaque cursors and cwd filtering", async () => {
@@ -227,6 +213,11 @@ describe("acp translator stable lifecycle handlers", () => {
     ]);
     expect(second.sessions.map((session) => session.cwd)).toEqual(["/work/a", "/work/a"]);
     expect(second.nextCursor).toBeNull();
+    await expect(
+      agent.listSessions(
+        createListSessionsRequest({ cwd: "/work/a", cursor: ` ${first.nextCursor} ` }),
+      ),
+    ).rejects.toThrow("Invalid ACP session list cursor.");
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
       limit: 3,
       includeDerivedTitles: true,
@@ -235,8 +226,6 @@ describe("acp translator stable lifecycle handlers", () => {
       limit: 5,
       includeDerivedTitles: true,
     });
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("does not include sessions without workspace metadata in cwd-filtered lists", async () => {
@@ -260,8 +249,6 @@ describe("acp translator stable lifecycle handlers", () => {
 
     expect(result.sessions.map((session) => session.sessionId)).toEqual(["agent:main:a1"]);
     expect(result.sessions.map((session) => session.cwd)).toEqual(["/work/a"]);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("lists Gateway sessions with invalid updated timestamps", async () => {
@@ -287,8 +274,6 @@ describe("acp translator stable lifecycle handlers", () => {
 
     expect(result.sessions).toHaveLength(1);
     expect(result.sessions[0]?.updatedAt).toBeUndefined();
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("rejects session/list cursors when the cwd filter changes", async () => {
@@ -330,8 +315,6 @@ describe("acp translator stable lifecycle handlers", () => {
     await expect(
       agent.listSessions(createListSessionsRequest({ cursor: filtered.nextCursor })),
     ).rejects.toThrow(/cursor does not match the cwd filter/i);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("rejects relative cwd filters for session/list", async () => {
@@ -343,8 +326,6 @@ describe("acp translator stable lifecycle handlers", () => {
     await expect(
       agent.listSessions(createListSessionsRequest({ cwd: "relative/path" })),
     ).rejects.toThrow(/requires an absolute cwd/i);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("resumes an existing Gateway session without replaying transcript history", async () => {
@@ -394,8 +375,6 @@ describe("acp translator stable lifecycle handlers", () => {
         },
       },
     });
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("rejects resume for a missing Gateway session without creating bridge state", async () => {
@@ -415,7 +394,6 @@ describe("acp translator stable lifecycle handlers", () => {
     ).rejects.toThrow(/Session missing-session not found/i);
 
     expect(sessionStore.hasSession("missing-session")).toBe(false);
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("resolves prompts when chat send returns a terminal timeout ack", async () => {
@@ -528,6 +506,64 @@ describe("acp translator stable lifecycle handlers", () => {
     expect(sessionStore.hasSession("session-1")).toBe(false);
   });
 
+  it("drains only its own pending work and sessions during shutdown", async () => {
+    const sentRunIds: string[] = [];
+    const requestA = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        const runId = params?.idempotencyKey;
+        if (typeof runId === "string") {
+          sentRunIds.push(runId);
+        }
+        return { runId, status: "started" };
+      }
+      if (method === "sessions.list") {
+        return createGatewaySessions([]);
+      }
+      return { ok: true };
+    });
+    const requestB = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return createGatewaySessions([]);
+      }
+      return { ok: true };
+    });
+    const agentA = new AcpGatewayAgent(
+      createAcpConnection(),
+      createAcpGateway(requestA as GatewayClient["request"]),
+    );
+    const agentB = new AcpGatewayAgent(
+      createAcpConnection(),
+      createAcpGateway(requestB as GatewayClient["request"]),
+    );
+    const sessionA = await agentA.newSession(createNewSessionRequest());
+    const sessionB = await agentB.newSession(createNewSessionRequest());
+    const pending = await startPendingPrompt({
+      agent: agentA,
+      sentRunIds,
+      sessionId: sessionA.sessionId,
+    });
+
+    await agentA.shutdown();
+
+    await expect(settlePromptQuickly(pending.promptPromise)).resolves.toEqual({
+      stopReason: "cancelled",
+    });
+    const abortCall = requestA.mock.calls.find(([method]) => method === "chat.abort");
+    expect(abortCall?.[1]).toEqual({
+      sessionKey: `acp-bridge:${sessionA.sessionId}`,
+      runId: pending.runId,
+    });
+    await expect(
+      agentA.closeSession(createCloseSessionRequest(sessionA.sessionId)),
+    ).rejects.toThrow(`Session ${sessionA.sessionId} not found`);
+    await expect(
+      agentB.closeSession(createCloseSessionRequest(sessionA.sessionId)),
+    ).rejects.toThrow(`Session ${sessionA.sessionId} not found`);
+    await expect(
+      agentB.closeSession(createCloseSessionRequest(sessionB.sessionId)),
+    ).resolves.toEqual({});
+  });
+
   it("rejects close for missing sessions", async () => {
     const sessionStore = createInMemorySessionStore();
     const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
@@ -537,7 +573,5 @@ describe("acp translator stable lifecycle handlers", () => {
     await expect(agent.closeSession(createCloseSessionRequest("missing-session"))).rejects.toThrow(
       /Session missing-session not found/i,
     );
-
-    sessionStore.clearAllSessionsForTest();
   });
 });

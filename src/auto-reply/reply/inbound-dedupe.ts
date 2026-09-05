@@ -29,7 +29,7 @@ const inboundDedupeInFlight = resolveGlobalSingleton(
   () => new Set<string>(),
 );
 
-export type InboundDedupeClaimResult =
+type InboundDedupeClaimResult =
   | { status: "invalid" }
   | { status: "duplicate"; key: string }
   | { status: "inflight"; key: string }
@@ -39,8 +39,12 @@ const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
 
 function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
-  const sessionKey =
-    resolveCommandTurnTargetSessionKey(ctx) || normalizeOptionalString(ctx.SessionKey) || "";
+  const commandTarget = resolveCommandTurnTargetSessionKey(ctx);
+  // One command event can target several sessions; dedupe each addressed operation.
+  if (commandTarget) {
+    return commandTarget;
+  }
+  const sessionKey = normalizeOptionalString(ctx.SessionKey) || "";
   if (!sessionKey) {
     return "";
   }
@@ -53,7 +57,7 @@ function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
   return `agent:${parsed.agentId}`;
 }
 
-export function buildInboundDedupeKey(ctx: MsgContext): string | null {
+function buildInboundDedupeKey(ctx: MsgContext): string | null {
   const provider =
     normalizeOptionalLowercaseString(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface) || "";
   const messageId = normalizeOptionalString(ctx.MessageSid);

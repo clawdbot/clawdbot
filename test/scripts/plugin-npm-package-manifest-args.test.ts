@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseRunArgs } from "../../scripts/lib/plugin-npm-package-manifest.mjs";
+import { parseRunArgs } from "../../scripts/lib/plugin-npm-package-manifest.mts";
 
 const usage =
   "usage: node scripts/lib/plugin-npm-package-manifest.mjs --run <package-dir> -- <command> [args...]";

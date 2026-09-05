@@ -4,34 +4,20 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   formatUpdateAvailableHint,
   formatUpdateOneLiner,
+  resolveStatusRegistryUpdateChannel,
   resolveUpdateAvailability,
 } from "../../commands/status.update.js";
 import { readSourceConfigBestEffort } from "../../config/config.js";
 import {
   normalizeUpdateChannel,
-  resolveRegistryUpdateChannel,
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
-import { checkUpdateStatus } from "../../infra/update-check.js";
+import { checkUpdateStatus, formatGitInstallLabel } from "../../infra/update-check.js";
+import { findActiveUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
 import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
-
-function formatGitStatusLine(params: {
-  branch: string | null;
-  tag: string | null;
-  sha: string | null;
-}): string {
-  const shortSha = params.sha ? params.sha.slice(0, 8) : null;
-  const branch = params.branch && params.branch !== "HEAD" ? params.branch : null;
-  const tag = params.tag;
-  const parts = [
-    branch ?? (tag ? "detached" : "git"),
-    tag ? `tag ${tag}` : null,
-    shortSha ? `@ ${shortSha}` : null,
-  ].filter(Boolean);
-  return parts.join(" · ");
-}
 
 /** Print update status in JSON or table form for scripts and humans. */
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
@@ -40,19 +26,21 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     return;
   }
 
-  const root = await resolveUpdateRoot();
-  const config = await readSourceConfigBestEffort();
+  const [root, config] = await Promise.all([resolveUpdateRoot(), readSourceConfigBestEffort()]);
   const configChannel = normalizeUpdateChannel(config.update?.channel);
 
   const update = await checkUpdateStatus({
     root,
     timeoutMs: timeoutMs ?? 3500,
     fetchGit: true,
+    useDetachedDevUpstream: configChannel === "dev",
     includeRegistry: true,
-    registryChannel: resolveRegistryUpdateChannel({
-      configChannel,
-      currentVersion: VERSION,
-    }),
+    resolveRegistryChannel: ({ installKind, git }) =>
+      resolveStatusRegistryUpdateChannel({
+        configChannel,
+        installKind,
+        git,
+      }),
   });
 
   const channelInfo = resolveUpdateChannelDisplay({
@@ -64,17 +52,10 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   });
   const channelLabel = channelInfo.label;
 
-  const gitLabel =
-    update.installKind === "git"
-      ? formatGitStatusLine({
-          branch: update.git?.branch ?? null,
-          tag: update.git?.tag ?? null,
-          sha: update.git?.sha ?? null,
-        })
-      : null;
-
   const updateAvailability = resolveUpdateAvailability(update);
-  const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
+
+  const activeRun = findActiveUpdateRun();
+  const lastRun = listUpdateRuns({ limit: 1 })[0];
 
   if (opts.json) {
     defaultRuntime.writeJson({
@@ -86,10 +67,14 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
         config: configChannel,
       },
       availability: updateAvailability,
+      ...(activeRun ? { activeRun } : {}),
+      ...(lastRun ? { lastRun } : {}),
     });
     return;
   }
 
+  const gitLabel = formatGitInstallLabel(update);
+  const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
   const tableWidth = getTerminalTableWidth();
   const installLabel =
     update.installKind === "git"
@@ -121,6 +106,16 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
     }).trimEnd(),
   );
   defaultRuntime.log("");
+
+  const run = activeRun ?? lastRun;
+  if (run) {
+    const report = renderUpdateRunReport(run);
+    defaultRuntime.log(report.headline);
+    for (const line of report.lines) {
+      defaultRuntime.log(line);
+    }
+    defaultRuntime.log("");
+  }
 
   const updateHint = formatUpdateAvailableHint(update);
   if (updateHint) {

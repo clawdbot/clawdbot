@@ -77,21 +77,6 @@
           }
         }
       }
-    },
-    {
-      "id": "legacy_payload_fallback",
-      "defaultProvider": "elevenlabs",
-      "payloadValid": true,
-      "expectedSelection": {
-        "provider": "elevenlabs",
-        "normalizedPayload": true,
-        "voiceId": "voice-legacy",
-        "apiKey": "xxxxx"
-      },
-      "talk": {
-        "voiceId": "voice-legacy",
-        "apiKey": "xxxxx"
-      }
     }
   ],
   "timeoutCases": [

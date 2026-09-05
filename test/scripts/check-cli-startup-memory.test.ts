@@ -1,30 +1,48 @@
 // Check Cli Startup Memory tests cover check cli startup memory script behavior.
 import { spawnSync } from "node:child_process";
-import { readdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/check-cli-startup-memory.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempRoots: string[] = [];
-
-function makeTempRoot(): string {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-startup-memory-test-"));
-  tempRoots.push(root);
-  return root;
-}
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
 function expectNoNodeStack(stderr: string): void {
   expect(stderr).not.toContain("Node.js");
   expect(stderr).not.toContain("\n    at ");
 }
 
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+function runStartupMemoryCheckWithHelpSamples(
+  helpSamplesMb: number[],
+  tempRoot = tempRoots.make("openclaw-startup-memory-test-"),
+) {
+  let sampleIndex = 0;
+  return testing.runStartupMemoryCheck(
+    [
+      "--json",
+      path.join(tempRoot, "startup-memory.json"),
+      "--summary",
+      path.join(tempRoot, "summary.md"),
+    ],
+    {
+      platform: "linux",
+      spawnSync: () => {
+        const caseIndex = Math.floor(sampleIndex / testing.sampleCount);
+        const caseSampleIndex = sampleIndex % testing.sampleCount;
+        sampleIndex += 1;
+        const rssMb = caseIndex === 0 ? (helpSamplesMb[caseSampleIndex] ?? 1) : 1;
+        return {
+          signal: null,
+          status: 0,
+          stderr: `__OPENCLAW_MAX_RSS_KB__=${rssMb * 1024}\n`,
+          stdout: "",
+        };
+      },
+    },
+  );
+}
 
 describe("check-cli-startup-memory", () => {
   it("resolves the repository root from the script location", () => {
@@ -50,6 +68,64 @@ describe("check-cli-startup-memory", () => {
   it("keeps the Linux help startup budget tight while allowing macOS RSS overhead", () => {
     expect(testing.resolveDefaultLimitsMb("linux").help).toBe(100);
     expect(testing.resolveDefaultLimitsMb("darwin").help).toBeGreaterThan(100);
+  });
+
+  it("guards packaged plugin listing startup memory", () => {
+    expect(testing.resolveDefaultLimitsMb("linux").pluginsList).toBe(400);
+    expect(testing.resolveDefaultLimitsMb("darwin").pluginsList).toBeGreaterThan(350);
+    expect(testing.cases).toContainEqual(
+      expect.objectContaining({
+        id: "pluginsList",
+        args: ["openclaw.mjs", "plugins", "list", "--json"],
+      }),
+    );
+  });
+
+  it("keeps status startup headroom above Linux runner RSS variance", () => {
+    expect(testing.resolveDefaultLimitsMb("linux").statusJson).toBe(450);
+  });
+
+  it("applies bounded runner RSS tolerance to the median of three cold-start samples", () => {
+    if (process.platform !== "darwin" && process.platform !== "linux") {
+      return;
+    }
+
+    const tempRoot = tempRoots.make("openclaw-startup-memory-test-");
+    const helpLimitMb = testing.resolveDefaultLimitsMb(process.platform).help;
+    const helpSamplesMb = [helpLimitMb + 20, helpLimitMb + 0.5, helpLimitMb - 20];
+    const result = runStartupMemoryCheckWithHelpSamples(helpSamplesMb, tempRoot);
+
+    expect(result.results[0]).toMatchObject({
+      limitMb: helpLimitMb,
+      rssToleranceMb: 1,
+      effectiveLimitMb: helpLimitMb + 1,
+      maxRssMb: helpLimitMb + 0.5,
+      rssSamplesMb: helpSamplesMb,
+      status: "pass",
+    });
+    const report = JSON.parse(readFileSync(path.join(tempRoot, "startup-memory.json"), "utf8"));
+    expect(report.results[0]).toMatchObject({
+      limitMb: helpLimitMb,
+      rssToleranceMb: 1,
+      effectiveLimitMb: helpLimitMb + 1,
+      rssSamplesMb: helpSamplesMb,
+    });
+    expect(readFileSync(path.join(tempRoot, "summary.md"), "utf8")).toContain(
+      `base limit ${helpLimitMb.toFixed(1)} MB; RSS tolerance 1.0 MB; effective ceiling ${(helpLimitMb + 1).toFixed(1)} MB; samples: ${helpSamplesMb.map((sample) => `${sample.toFixed(1)} MB`).join(", ")}`,
+    );
+  });
+
+  it("still fails when most cold-start RSS samples exceed the bounded tolerance", () => {
+    if (process.platform !== "darwin" && process.platform !== "linux") {
+      return;
+    }
+
+    const helpLimitMb = testing.resolveDefaultLimitsMb(process.platform).help;
+    const helpSamplesMb = [helpLimitMb + 1.5, helpLimitMb + 1.25, helpLimitMb - 20];
+
+    expect(() => runStartupMemoryCheckWithHelpSamples(helpSamplesMb)).toThrow(
+      `--help median max RSS ${(helpLimitMb + 1.25).toFixed(1)} MB exceeded effective ceiling ${helpLimitMb + 1} MB (base limit ${helpLimitMb} MB; RSS tolerance 1 MB; samples: ${helpSamplesMb.map((sample) => sample.toFixed(1)).join(", ")} MB)`,
+    );
   });
 
   it("keeps invalid startup memory env values from bypassing budgets", () => {
@@ -121,7 +197,7 @@ describe("check-cli-startup-memory", () => {
       return;
     }
 
-    const tempRoot = makeTempRoot();
+    const tempRoot = tempRoots.make("openclaw-startup-memory-test-");
     const result = spawnSync(process.execPath, ["scripts/check-cli-startup-memory.mjs", "--json"], {
       cwd: path.resolve(__dirname, "..", ".."),
       encoding: "utf8",
@@ -154,7 +230,7 @@ describe("check-cli-startup-memory", () => {
       return;
     }
 
-    const tempRoot = makeTempRoot();
+    const tempRoot = tempRoots.make("openclaw-startup-memory-test-");
     const seenTimeouts: Array<number | undefined> = [];
     const seenKillSignals: Array<string | undefined> = [];
     const timeoutError = Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT" });
@@ -188,8 +264,8 @@ describe("check-cli-startup-memory", () => {
         },
       ),
     ).toThrow("--help timed out after 1234ms");
-    expect(seenTimeouts).toEqual([1234, 1234, 1234]);
-    expect(seenKillSignals).toEqual(["SIGKILL", "SIGKILL", "SIGKILL"]);
+    expect(seenTimeouts).toEqual(testing.cases.map(() => 1234));
+    expect(seenKillSignals).toEqual(testing.cases.map(() => "SIGKILL"));
   });
 
   it("rejects zero RSS markers instead of passing empty resource evidence", () => {
@@ -197,7 +273,7 @@ describe("check-cli-startup-memory", () => {
       return;
     }
 
-    const tempRoot = makeTempRoot();
+    const tempRoot = tempRoots.make("openclaw-startup-memory-test-");
     expect(() =>
       testing.runStartupMemoryCheck(
         [
@@ -224,8 +300,9 @@ describe("check-cli-startup-memory", () => {
       return;
     }
 
-    const tempRoot = makeTempRoot();
+    const tempRoot = tempRoots.make("openclaw-startup-memory-test-");
     const seenArgs: string[][] = [];
+    const seenHomes: string[] = [];
 
     const result = testing.runStartupMemoryCheck(
       [
@@ -236,8 +313,13 @@ describe("check-cli-startup-memory", () => {
       ],
       {
         platform: "linux",
-        spawnSync: (_command: string, args: string[]) => {
+        spawnSync: (_command: string, args: string[], options: { env: Record<string, string> }) => {
           seenArgs.push(args);
+          const home = options.env.HOME;
+          if (!home) {
+            throw new Error("benchmark HOME was not set");
+          }
+          seenHomes.push(home);
           return {
             error: null,
             signal: null,
@@ -250,10 +332,15 @@ describe("check-cli-startup-memory", () => {
     );
 
     expect(result.skipped).toBe(false);
-    expect(seenArgs).toHaveLength(testing.cases.length);
+    expect(seenArgs).toHaveLength(testing.cases.length * testing.sampleCount);
+    expect(new Set(seenHomes).size).toBe(seenArgs.length);
     for (const args of seenArgs) {
-      expect(args[0]).toBe("--import");
-      expect(args[1]).toMatch(/^file:/u);
+      // The bench entry runs the launcher in-process instead of preloading an
+      // --import hook, which would disable the dist ESM resolve fast path and
+      // measure a non-default resolution configuration.
+      expect(args[0]).toMatch(/bench-entry\.mjs$/u);
+      expect(args[0]).not.toBe("--import");
+      expect(args[1]).not.toBe("openclaw.mjs");
     }
   });
 });

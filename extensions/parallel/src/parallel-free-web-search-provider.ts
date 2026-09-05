@@ -1,6 +1,9 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
-import { createParallelFreeWebSearchProviderBase } from "./parallel-free-web-search-provider.shared.js";
-import { PARALLEL_FREE_SESSION_ID_MAX_LENGTH } from "./parallel-search-normalize.js";
+import {
+  createParallelFreeWebSearchProviderBase,
+  PARALLEL_FREE_SESSION_ID_MAX_LENGTH,
+} from "./parallel-free-web-search-provider.shared.js";
 // Reuse the paid provider's tool schema — both transports accept the same
 // objective + search_queries shape — but the free Search MCP caps session_id at
 // 100 chars (its `tools/list` schema), tighter than the paid v1 REST limit, so
@@ -18,14 +21,9 @@ const ParallelFreeSearchSchema = {
   },
 } satisfies Record<string, unknown>;
 
-type ParallelFreeWebSearchRuntime = typeof import("./parallel-free-web-search-provider.runtime.js");
-
-let parallelFreeWebSearchRuntimePromise: Promise<ParallelFreeWebSearchRuntime> | undefined;
-
-function loadParallelFreeWebSearchRuntime(): Promise<ParallelFreeWebSearchRuntime> {
-  parallelFreeWebSearchRuntimePromise ??= import("./parallel-free-web-search-provider.runtime.js");
-  return parallelFreeWebSearchRuntimePromise;
-}
+const loadParallelFreeWebSearchRuntime = createLazyRuntimeModule(
+  () => import("./parallel-free-web-search-provider.runtime.js"),
+);
 
 export function createParallelFreeWebSearchProvider(): WebSearchProviderPlugin {
   return {

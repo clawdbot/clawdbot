@@ -1,5 +1,8 @@
 // Discord tests cover config schema plugin behavior.
+import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
+import { resolveUpgradeSurvivorConfigStepsForBaseline } from "../../../scripts/e2e/lib/upgrade-survivor/config-recipe.mts";
+import { DiscordChannelConfigSchema } from "../channel-config-api.js";
 import { DiscordConfigSchema } from "../config-api.js";
 
 function expectValidDiscordConfig(config: unknown) {
@@ -21,6 +24,41 @@ function expectInvalidDiscordConfig(config: unknown) {
 }
 
 describe("discord config schema", () => {
+  it.each([
+    ["2026.3.13", true],
+    ["2026.7.1-2", true],
+    ["2026.7.2-beta.3", true],
+    ["2026.7.2-beta.4", false],
+    ["2026.8.1-beta.1", false],
+    ["2026.8.1-beta.2", false],
+    ["2026.8.1", false],
+    [null, false],
+  ] as const)("preserves supported Discord DM input for baseline %s", (version, legacy) => {
+    const step = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(
+      (entry) => entry.id === "channels-discord",
+    );
+    expect(step).toBeDefined();
+    const discord = JSON.parse(step?.argv[3] ?? "{}");
+    if (legacy) {
+      expect(discord.dm).toEqual({ policy: "allowlist", allowFrom: ["111111111111111111"] });
+      expect(discord.dmPolicy).toBeUndefined();
+      expect(discord.allowFrom).toBeUndefined();
+    } else {
+      expect(discord.dm).toBeUndefined();
+      expect(discord.dmPolicy).toBe("allowlist");
+      expect(discord.allowFrom).toEqual(["111111111111111111"]);
+    }
+    // The public schema is the config-set boundary; runtime Zod preprocessing
+    // would silently normalize the legacy specimen and miss a bad baseline cutoff.
+    expect(
+      validateJsonSchemaValue({
+        schema: DiscordChannelConfigSchema.schema,
+        cacheKey: "upgrade-survivor-discord-config",
+        value: discord,
+      }).ok,
+    ).toBe(!legacy);
+  });
+
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     const issues = expectInvalidDiscordConfig({
       dmPolicy: "open",
@@ -39,19 +77,77 @@ describe("discord config schema", () => {
     expect(issues[0]?.path.join(".")).toBe("allowFrom");
   });
 
-  it('rejects legacy dm.policy="open" with empty dm.allowFrom', () => {
-    const issues = expectInvalidDiscordConfig({
-      dm: { policy: "open", allowFrom: [] },
-    });
-
-    expect(issues[0]?.path.join(".")).toBe("dm.allowFrom");
+  it('rejects dmPolicy="allowlist" without allowFrom', () => {
+    const issues = expectInvalidDiscordConfig({ dmPolicy: "allowlist" });
+    expect(issues.some((issue) => issue.path.includes("allowFrom"))).toBe(true);
   });
 
-  it('accepts legacy dm.policy="open" with top-level allowFrom alias', () => {
+  it("accepts account allowlist policy inherited from the channel", () => {
     expectValidDiscordConfig({
-      dm: { policy: "open", allowFrom: ["123"] },
-      allowFrom: ["*"],
+      allowFrom: ["123456789"],
+      accounts: { work: { dmPolicy: "allowlist" } },
     });
+  });
+
+  it("accepts progress commentary in streaming config", () => {
+    expectValidDiscordConfig({
+      streaming: {
+        mode: "progress",
+        progress: { commentary: true },
+      },
+    });
+  });
+
+  it("rejects retired subagent progress config", () => {
+    expectInvalidDiscordConfig({ subagentProgress: true });
+    expectInvalidDiscordConfig({ subagentProgress: { enabled: true } });
+  });
+
+  it("validates mention aliases at channel and account scope", () => {
+    expectValidDiscordConfig({
+      mentionAliases: { opslead: "123456789012345678" },
+      accounts: {
+        work: { mentionAliases: { vladislava: "234567890123456789" } },
+      },
+    });
+    expectInvalidDiscordConfig({ mentionAliases: { opslead: "not-a-user-id" } });
+  });
+
+  it("normalizes shipped nested DM access keys at root and account scope", () => {
+    const cfg = expectValidDiscordConfig({
+      dmPolicy: "pairing",
+      allowFrom: ["canonical-root"],
+      dm: { enabled: false, policy: "open", allowFrom: ["legacy-root"] },
+      accounts: {
+        work: {
+          dmPolicy: "allowlist",
+          allowFrom: ["canonical-account"],
+          dm: { groupEnabled: true, policy: "disabled", allowFrom: ["legacy-account"] },
+        },
+        personal: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        },
+      },
+    });
+
+    expect(cfg).toMatchObject({
+      dmPolicy: "pairing",
+      allowFrom: ["canonical-root"],
+      dm: { enabled: false },
+      accounts: {
+        work: {
+          dmPolicy: "allowlist",
+          allowFrom: ["canonical-account"],
+          dm: { groupEnabled: true },
+        },
+        personal: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          dm: { enabled: true },
+        },
+      },
+    });
+    expectInvalidDiscordConfig({ dm: { enabled: false, unexpected: true } });
   });
 
   it("accepts textChunkLimit without reviving legacy message limits", () => {
@@ -69,6 +165,19 @@ describe("discord config schema", () => {
     const cfg = expectValidDiscordConfig({});
 
     expect(cfg.groupPolicy).toBe("allowlist");
+  });
+
+  it("accepts join introductions at channel and account scope without masking inheritance", () => {
+    const defaults = expectValidDiscordConfig({ accounts: { work: {} } });
+    const configured = expectValidDiscordConfig({
+      joinIntro: false,
+      accounts: { work: { joinIntro: true } },
+    });
+
+    expect(defaults.joinIntro).toBeUndefined();
+    expect(defaults.accounts?.work?.joinIntro).toBeUndefined();
+    expect(configured.joinIntro).toBe(false);
+    expect(configured.accounts?.work?.joinIntro).toBe(true);
   });
 
   it("accepts historyLimit", () => {
@@ -130,9 +239,9 @@ describe("discord config schema", () => {
   it("loads guild map and dm group settings", () => {
     const cfg = expectValidDiscordConfig({
       enabled: true,
+      allowFrom: ["steipete"],
       dm: {
         enabled: true,
-        allowFrom: ["steipete"],
         groupEnabled: true,
         groupChannels: ["openclaw-dm"],
       },
@@ -284,6 +393,16 @@ describe("discord config schema", () => {
     expect(cfg.voice?.allowedChannels).toEqual([{ guildId: "123", channelId: "456" }]);
   });
 
+  it("accepts occupancy-managed Discord voice auto-join channels", () => {
+    const cfg = expectValidDiscordConfig({
+      voice: {
+        autoJoin: [{ guildId: "123", channelId: "456", whenOccupied: true }],
+      },
+    });
+
+    expect(cfg.voice?.autoJoin).toEqual([{ guildId: "123", channelId: "456", whenOccupied: true }]);
+  });
+
   it("rejects invalid Discord voice allowed channels", () => {
     for (const voice of [
       { allowedChannels: [{ guildId: "", channelId: "456" }] },
@@ -309,7 +428,7 @@ describe("discord config schema", () => {
   it("coerces safe-integer numeric allowlist entries to strings", () => {
     const cfg = expectValidDiscordConfig({
       allowFrom: [123],
-      dm: { allowFrom: [456], groupChannels: [789] },
+      dm: { groupChannels: [789] },
       guilds: {
         "123": {
           users: [111],
@@ -323,7 +442,6 @@ describe("discord config schema", () => {
     });
 
     expect(cfg.allowFrom).toEqual(["123"]);
-    expect(cfg.dm?.allowFrom).toEqual(["456"]);
     expect(cfg.dm?.groupChannels).toEqual(["789"]);
     expect(cfg.guilds?.["123"]?.users).toEqual(["111"]);
     expect(cfg.guilds?.["123"]?.roles).toEqual(["222"]);
@@ -369,12 +487,89 @@ describe("discord config schema", () => {
           enabled: true,
           intervalMs: 30000,
           minUpdateIntervalMs: 15000,
-          exhaustedText: "token exhausted",
         },
       },
     },
   ] as const)("accepts $name", ({ config }) => {
     expect(DiscordConfigSchema.safeParse(config).success).toBe(true);
+  });
+
+  it("accepts guild online-presence event routing", () => {
+    const cfg = expectValidDiscordConfig({
+      intents: { presence: true },
+      guilds: {
+        "123456789012345678": {
+          presenceEvents: {
+            channelId: "234567890123456789",
+            users: ["345678901234567890"],
+          },
+        },
+      },
+    });
+
+    expect(cfg.guilds?.["123456789012345678"]?.presenceEvents?.channelId).toBe(
+      "234567890123456789",
+    );
+  });
+
+  it("accepts mention-only gateway intent mode", () => {
+    const cfg = expectValidDiscordConfig({
+      intents: { messageContent: false },
+    });
+
+    expect(cfg.intents?.messageContent).toBe(false);
+  });
+
+  it("accepts online-presence throttling knobs", () => {
+    const cfg = expectValidDiscordConfig({
+      intents: { presence: true },
+      guilds: {
+        "123456789012345678": {
+          presenceEvents: {
+            channelId: "234567890123456789",
+            reconnectSuppressSeconds: 0,
+            burstLimit: 4,
+            burstWindowSeconds: 30,
+          },
+        },
+      },
+    });
+
+    expect(cfg.guilds?.["123456789012345678"]?.presenceEvents?.burstLimit).toBe(4);
+  });
+
+  it("rejects invalid online-presence throttling values", () => {
+    const issues = expectInvalidDiscordConfig({
+      guilds: {
+        "123456789012345678": {
+          presenceEvents: {
+            channelId: "234567890123456789",
+            reconnectSuppressSeconds: -1,
+            burstLimit: 0,
+            burstWindowSeconds: 0,
+          },
+        },
+      },
+    });
+
+    for (const field of ["reconnectSuppressSeconds", "burstLimit", "burstWindowSeconds"]) {
+      expect(issues.some((issue) => issue.path.join(".").endsWith(field))).toBe(true);
+    }
+  });
+
+  it("rejects mutable names in online-presence event routing", () => {
+    const issues = expectInvalidDiscordConfig({
+      guilds: {
+        maintainers: {
+          presenceEvents: {
+            channelId: "maintainers",
+            users: ["alice"],
+          },
+        },
+      },
+    });
+
+    expect(issues.some((issue) => issue.path.join(".").includes("presenceEvents"))).toBe(true);
   });
 
   it.each([

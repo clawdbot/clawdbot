@@ -1,4 +1,9 @@
 // Mattermost plugin module implements gateway auth bypass behavior.
+import {
+  asOptionalRecord,
+  normalizeOptionalString as readTrimmedString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+
 const DEFAULT_SLASH_CALLBACK_PATH = "/api/channels/mattermost/command";
 
 type MattermostSlashCommandConfigInput = {
@@ -14,10 +19,6 @@ type MattermostConfigInput = MattermostAccountConfigInput & {
   accounts?: Record<string, unknown>;
 };
 
-function readTrimmedString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function normalizeCallbackPath(value: unknown): string {
   const trimmed = readTrimmedString(value);
   if (!trimmed) {
@@ -27,18 +28,14 @@ function normalizeCallbackPath(value: unknown): string {
 }
 
 function readMattermostCommands(value: unknown): MattermostSlashCommandConfigInput | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as MattermostSlashCommandConfigInput)
-    : undefined;
+  return asOptionalRecord(value) as MattermostSlashCommandConfigInput | undefined;
 }
 
 function isMattermostBypassPath(path: string): boolean {
   return path === DEFAULT_SLASH_CALLBACK_PATH || path.startsWith("/api/channels/mattermost/");
 }
 
-export function collectMattermostSlashCallbackPaths(
-  raw?: MattermostSlashCommandConfigInput,
-): string[] {
+function collectMattermostSlashCallbackPaths(raw?: MattermostSlashCommandConfigInput): string[] {
   const paths = new Set<string>([normalizeCallbackPath(raw?.callbackPath)]);
   const callbackUrl = readTrimmedString(raw?.callbackUrl);
   if (callbackUrl) {
@@ -54,12 +51,17 @@ export function collectMattermostSlashCallbackPaths(
   return [...paths];
 }
 
-export function resolveMattermostGatewayAuthBypassPaths(cfg: {
-  channels?: Record<string, unknown>;
+// Params shape is the core gateway-auth artifact contract: core invokes the
+// public `gateway-auth-api.js` export as `resolveGatewayAuthBypassPaths({ cfg })`
+// (src/channels/plugins/gateway-auth-bypass.ts), so a positional `cfg` param
+// would silently drop configured callback paths on the pre-plugin fast path.
+export function resolveMattermostGatewayAuthBypassPaths(params: {
+  cfg: { channels?: Record<string, unknown> };
 }): string[] {
+  const channels = params.cfg.channels;
   const base =
-    cfg.channels?.mattermost && typeof cfg.channels.mattermost === "object"
-      ? (cfg.channels.mattermost as MattermostConfigInput)
+    channels?.mattermost && typeof channels.mattermost === "object"
+      ? (channels.mattermost as MattermostConfigInput)
       : undefined;
   const callbackPaths = new Set(
     collectMattermostSlashCallbackPaths(readMattermostCommands(base?.commands)).filter(

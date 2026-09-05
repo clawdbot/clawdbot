@@ -1,9 +1,14 @@
 // Transcript redaction tests cover structured and text transcript fields so
 // secrets do not persist in logs or replay artifacts.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as loggingConfigModule from "../logging/config.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
 
 // AgentMessage includes custom message types without content; this accessor
@@ -13,17 +18,29 @@ function msgContent(msg: AgentMessage): unknown {
 }
 
 function textMessage(text: string): AgentMessage {
-  return {
+  return castAgentMessage({
     role: "assistant",
     content: [{ type: "text", text }],
-  } as unknown as AgentMessage;
+  });
 }
 
-function cfg(mode: "tools" | "off", patterns?: string[]): OpenClawConfig {
+function cfg(_mode: "tools" | "off", patterns?: string[]): OpenClawConfig {
   return {
-    logging: {
-      redactSensitive: mode,
-      ...(patterns ? { redactPatterns: patterns } : {}),
+    logging: patterns ? { redactPatterns: patterns } : {},
+  } satisfies OpenClawConfig;
+}
+
+function googleCompatCfg(): OpenClawConfig {
+  return {
+    ...cfg("tools"),
+    models: {
+      providers: {
+        "google-compatible-proxy": {
+          api: "openai-completions",
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+          models: [],
+        },
+      },
     },
   } satisfies OpenClawConfig;
 }
@@ -39,6 +56,10 @@ const CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES =
   "gAAAAABpQnQrXzzZqcAfo3unbAY-ku84xgsvB0fpLkbDvSh3WS5qzfSCmcgwr8_abcdefghijvK2RyV2GQ4ohzcfYwhRwTvY76TvR7Tvr_";
 const GOOGLE_THOUGHT_SIGNATURE = Buffer.from(`thought-${"x".repeat(32)}`).toString("base64");
 const SHORT_GOOGLE_THOUGHT_SIGNATURE = "c2ln";
+const GOOGLE_CREDENTIAL_COLLISION = `AAAAAIza${"A".repeat(20)}`;
+const ALIBABA_CREDENTIAL_COLLISION = `AAAALTAI${"B".repeat(12)}`;
+const OPAQUE_CREDENTIAL_COLLISION = `signature.v2:${GOOGLE_CREDENTIAL_COLLISION}`;
+const OPENAI_COMPAT_OPAQUE_COLLISION = `SIG-${GOOGLE_CREDENTIAL_COLLISION}`;
 const COPILOT_CONNECTION_BOUND_ID = Buffer.from(`message-${"y".repeat(24)}`).toString("base64");
 const OPENAI_REASONING_REPLAY_METADATA = {
   v: 1,
@@ -52,23 +73,312 @@ const OPENAI_REASONING_REPLAY_METADATA = {
 } as const;
 
 describe("redactTranscriptMessage", () => {
+  it.each(["private-prefix", "person"])(
+    "drops human mention bindings when redacting %s without mutating source metadata",
+    (pattern) => {
+      const mentions = [{ profileId: "person", start: 15, end: 19 }];
+      const message = castAgentMessage({
+        role: "user",
+        content: "private-prefix @Ada",
+        timestamp: 1,
+        __openclaw: { humanMentions: mentions },
+      });
+      expect(redactTranscriptMessage(message, cfg("tools", []))).toBe(message);
+      const redacted = redactTranscriptMessage(message, cfg("tools", [pattern]));
+      expect(redacted).not.toHaveProperty("__openclaw.humanMentions");
+      expect(message).toHaveProperty("__openclaw.humanMentions", mentions);
+    },
+  );
+
+  it.each([
+    { type: "profile", id: "person" },
+    { type: "remote", pluginId: "chat", domain: "workspace", idKind: "user", id: "person" },
+    {
+      type: "observation",
+      pluginId: "chat",
+      accountId: "account",
+      senderKind: "human",
+      id: "person",
+    },
+  ])("sender provenance survives label redaction but not identity redaction: $type", (identity) => {
+    const message = castAgentMessage({
+      role: "user",
+      content: "private-label",
+      timestamp: 1,
+      __openclaw: { senderId: identity.id, senderIdentity: identity, senderName: "private-label" },
+    });
+    expect(redactTranscriptMessage(message, cfg("tools", []))).toBe(message);
+    const labelOnly = redactTranscriptMessage(message, cfg("tools", ["private-label"]));
+    expect(labelOnly).toMatchObject({
+      __openclaw: { senderIdentity: identity, senderId: "person" },
+    });
+    expect(JSON.stringify(labelOnly)).not.toContain("private-label");
+    const redacted = redactTranscriptMessage(message, cfg("tools", ["person"]));
+    expect(Reflect.get(redacted, "__openclaw")).not.toHaveProperty("senderIdentity");
+    expect(JSON.stringify(redacted)).not.toContain('"person"');
+    expect(Reflect.get(message, "__openclaw").senderIdentity).toBe(identity);
+  });
+
+  it.each([
+    { senderId: "private-raw-id", senderIdentity: { type: "profile", id: "person" } },
+    {
+      senderId: "person",
+      senderIdentity: {
+        type: "remote",
+        pluginId: "chat",
+        domain: "private-domain",
+        idKind: "user",
+        id: "person",
+      },
+    },
+    {
+      senderId: "person",
+      senderIdentity: {
+        type: "observation",
+        pluginId: "chat",
+        accountId: "private-account",
+        senderKind: "human",
+        id: "person",
+      },
+    },
+  ])(
+    "drops sender provenance when any qualified source fact or paired ID is redacted: %j",
+    (metadata) => {
+      const message = castAgentMessage({
+        role: "user",
+        content: "visible",
+        timestamp: 1,
+        __openclaw: metadata,
+      });
+      const redacted = redactTranscriptMessage(message, cfg("tools", ["private-[a-z-]+"]));
+      expect(Reflect.get(redacted, "__openclaw")).not.toHaveProperty("senderIdentity");
+      expect(JSON.stringify(redacted)).not.toContain("private-");
+      expect(Reflect.get(message, "__openclaw")).toBe(metadata);
+    },
+  );
+
+  it.each(["default", "custom", "registered"] as const)(
+    "preserves canonical tool correlation IDs while applying %s redaction to payloads",
+    (policy) => {
+      const ids =
+        policy === "default"
+          ? [
+              "call_lookup|fc-jztpgrWaMLTnokJk",
+              "call_lookup|fc-jztDifferentokJk",
+              "call_lookup:nested:1|fc-jztpgrWaMLTnokJk",
+            ]
+          : [
+              "call_lookup|opaque-first-identity",
+              "call_lookup|opaque-second-identity",
+              "call_lookup:nested:1|opaque-first-identity",
+            ];
+      const payload = {
+        id: ids[0],
+        role: "toolResult",
+        toolCallId: ids[1],
+        assistant: {
+          role: "assistant",
+          content: ids.map((id) => ({ type: "toolCall", id })),
+        },
+      };
+      const message = castAgentMessage({
+        role: "assistant",
+        content: ids.map((id) => ({ type: "toolCall", id, name: "lookup", arguments: payload })),
+      });
+      const config = cfg(
+        "tools",
+        policy === "custom" ? [String.raw`call_lookup[^\s"]+`] : undefined,
+      );
+      if (policy === "registered") {
+        ids.forEach(registerSecretValueForRedaction);
+      }
+      try {
+        const assistant = redactTranscriptMessage(message, config);
+        expect(assistant).toMatchObject({ content: ids.map((id) => ({ type: "toolCall", id })) });
+        const blocks = msgContent(assistant) as Array<{ arguments: unknown }>;
+        const results = ids.map((toolCallId) =>
+          redactTranscriptMessage(
+            castAgentMessage({
+              role: "toolResult",
+              toolCallId,
+              toolName: "lookup",
+              content: [{ type: "text", text: JSON.stringify(payload) }],
+              details: payload,
+              isError: false,
+              timestamp: 1,
+            }),
+            config,
+          ),
+        );
+        expect(results).toMatchObject(
+          ids.map((toolCallId) => ({ role: "toolResult", toolCallId })),
+        );
+        const userPayload = redactTranscriptMessage(
+          castAgentMessage({ role: "user", content: msgContent(message), toolCallId: ids[0] }),
+          config,
+        );
+        const noncanonical = [
+          {
+            role: "assistant",
+            id: ids[0],
+            content: [{ type: "text", id: ids[1], text: "visible" }],
+          },
+          { role: "assistant", content: [{ type: "toolCall", id: payload }] },
+          { role: "assistant", content: [msgContent(message)] },
+          { role: "toolResult", toolCallId: [ids[0]], content: [] },
+        ].map((value) => redactTranscriptMessage(castAgentMessage(value), config));
+        const redactedPayloads = JSON.stringify([
+          blocks.map((block) => block.arguments),
+          results.map((result) => {
+            expect(result.role).toBe("toolResult");
+            return result.role === "toolResult" ? [result.content, result.details] : [];
+          }),
+          userPayload,
+          noncanonical,
+        ]);
+        for (const id of ids) {
+          expect(redactedPayloads).not.toContain(id);
+        }
+        expect(msgContent(message)).toEqual(
+          ids.map((id) => ({ type: "toolCall", id, name: "lookup", arguments: payload })),
+        );
+      } finally {
+        resetSecretRedactionRegistryForTest();
+      }
+    },
+  );
+
   it("redacts text block matching default patterns (sk- token)", () => {
     const msg = textMessage("key is sk-abcdef1234567890xyz end");
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const text = (msgContent(result) as Array<{ text: string }>)[0].text;
+    const text = expectDefined(
+      (msgContent(result) as Array<{ text: string }>)[0],
+      "(msgContent(result) as Array<{ text: string }>)[0] test invariant",
+    ).text;
     expect(text).not.toContain("sk-abcdef1234567890xyz");
     expect(text).toContain("end");
   });
 
+  it("preserves source assignments in tool results while redacting explicit credentials", () => {
+    const sourceLines = [
+      "        if let token = timeObserverToken {",
+      "        if let token=timeObserverToken {",
+      "        let token = ForwardingCancellableTokenReference",
+      "    token = get_bearer_token()",
+      '        token = "LibraryViewController.swift"',
+      "        secret = resolvedSecret",
+      "        password = getpass()",
+      '        credential = "fixture"',
+      "        jwt = decodedPayload",
+      "        let API_TOKEN = timeObserverToken",
+      "API_TOKEN = computeToken()",
+      "API_KEY: str = computeKey()",
+      "        register(timeObserverToken)",
+      "        struct.timeObserverToken",
+    ];
+    const apiKey = "sk-abcdef1234567890abcdef1234567890";
+    const envToken = "environment-token-value-1234567890";
+    const input = [...sourceLines, `"apiKey": "${apiKey}"`, `API_TOKEN=${envToken}`].join("\n");
+    const msg = castAgentMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [{ type: "text", text: input }],
+      isError: false,
+      timestamp: Date.now(),
+    });
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const text = expectDefined(
+      (msgContent(result) as Array<{ text: string }>)[0],
+      "tool result text block",
+    ).text;
+
+    for (const sourceLine of sourceLines) {
+      expect(text).toContain(sourceLine);
+    }
+    expect(text).not.toContain(apiKey);
+    expect(text).toContain(envToken);
+  });
+
+  it("keeps broad assignment masking for non-tool transcript messages", () => {
+    const credential = "assistant-credential-value-127697";
+    const result = redactTranscriptMessage(textMessage(`password = ${credential}`), cfg("tools"));
+    const text = expectDefined(
+      (msgContent(result) as Array<{ text: string }>)[0],
+      "assistant text block",
+    ).text;
+
+    expect(text).not.toContain(credential);
+  });
+
+  it("keeps pagination cursors readable while still masking credential tool args (#104992)", () => {
+    const msg = castAgentMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "feishu_doc",
+          arguments: {
+            page_token: "PGabc123XYZ",
+            next_page_token: "NXTpage456",
+            page_cursor: "PC789",
+            doc_token: "DOCsecret999",
+            app_secret: "REALSECRETzzz",
+          },
+        },
+      ],
+    });
+    const args = (
+      msgContent(redactTranscriptMessage(msg, cfg("tools"))) as Array<{
+        arguments: Record<string, string>;
+      }>
+    )[0]!.arguments;
+    // Pagination cursors are opaque paging state — replaying a "***" mask as a
+    // real cursor silently pages from the start, so keep them intact.
+    expect(args.page_token).toBe("PGabc123XYZ");
+    expect(args.next_page_token).toBe("NXTpage456");
+    expect(args.page_cursor).toBe("PC789");
+    // Genuine credentials stay masked.
+    expect(args.doc_token).toBe("***");
+    expect(args.app_secret).toBe("***");
+  });
+
+  it("still masks a secret-shaped value even under an exempt pagination key (#104992)", () => {
+    const msg = castAgentMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "feishu_doc",
+          arguments: { page_token: "sk-abcdef1234567890xyz" },
+        },
+      ],
+    });
+    const args = (
+      msgContent(redactTranscriptMessage(msg, cfg("tools"))) as Array<{
+        arguments: Record<string, string>;
+      }>
+    )[0]!.arguments;
+    // Value-pattern redaction still runs on exempt keys, so an embedded real
+    // secret shape is masked even though the key itself is allowed through.
+    expect(args.page_token).not.toContain("sk-abcdef1234567890xyz");
+  });
+
   it("redacts thinking block", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [
         { type: "thinking", thinking: "secret sk-abcdef1234567890xyz", thinkingSignature: "sig" },
       ],
-    } as unknown as AgentMessage;
+    });
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const block = (msgContent(result) as Array<{ thinking: string }>)[0];
+    const block = expectDefined(
+      (msgContent(result) as Array<{ thinking: string }>)[0],
+      "(msgContent(result) as Array<{ thinking: string }>)[0] test invariant",
+    );
     expect(block.thinking).not.toContain("sk-abcdef1234567890xyz");
   });
 
@@ -84,7 +394,7 @@ describe("redactTranscriptMessage", () => {
         secret: "sk-abcdef1234567890xyz",
       },
     });
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       api: "openai-responses",
       model: "gpt-5.5",
@@ -114,13 +424,16 @@ describe("redactTranscriptMessage", () => {
           },
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(
       msg,
       cfg("tools", ["reasoning-1", "reasoning", "summary_text"]),
     );
-    const block = (msgContent(result) as Array<{ thinking: string; thinkingSignature: string }>)[0];
+    const block = expectDefined(
+      (msgContent(result) as Array<{ thinking: string; thinkingSignature: string }>)[0],
+      "(msgContent(result) as Array<{ thinking: string; thinkingSignature: s... test invariant",
+    );
     const replayItem = JSON.parse(block.thinkingSignature) as {
       id: string;
       type: string;
@@ -131,8 +444,10 @@ describe("redactTranscriptMessage", () => {
     };
     const blockMetadata = (block as unknown as { openclawReasoningReplay: Record<string, unknown> })
       .openclawReasoningReplay;
-    const rejectedSignature = (msgContent(result) as Array<{ thinkingSignature: string }>)[1]
-      .thinkingSignature;
+    const rejectedSignature = expectDefined(
+      (msgContent(result) as Array<{ thinkingSignature: string }>)[1],
+      "(msgContent(result) as Array<{ thinkingSignature: string }>)[1] test invariant",
+    ).thinkingSignature;
     expect(block.thinking).not.toContain("sk-abcdef1234567890xyz");
     expect(replayItem.id).toBe("reasoning-1");
     expect(replayItem.type).toBe("reasoning");
@@ -145,6 +460,405 @@ describe("redactTranscriptMessage", () => {
     expect(JSON.stringify(blockMetadata)).not.toContain("sk-abcdef1234567890xyz");
     expect(rejectedSignature).not.toContain("sk-abcdef1234567890xyz");
     expect(JSON.stringify(msgContent(result))).not.toContain("sk-abcdef1234567890xyz");
+  });
+
+  it.each([
+    ["streamed", "openai-responses-compaction", 0],
+    ["retained-user", "openai-responses-retained-compaction", undefined],
+  ] as const)(
+    "preserves only validated %s OpenAI compaction replay state",
+    (_name, type, replayIndex) => {
+      const compactedWindow = {
+        state: "ready",
+        output: JSON.stringify(
+          [
+            {
+              type: "message",
+              role: "developer",
+              content: [{ type: "input_text", text: "rules" }],
+            },
+            { type: "message", role: "system", content: [{ type: "input_text", text: "context" }] },
+            {
+              type: "message",
+              role: "user",
+              content: [
+                { type: "input_text", text: "retained request" },
+                {
+                  type: "input_image",
+                  detail: "auto",
+                  image_url: `data:image/png;base64,${IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`,
+                },
+                { type: "input_file", file_id: "file_document", filename: "document.pdf" },
+              ],
+            },
+            {
+              type: "compaction",
+              id: "cmp_1",
+              encrypted_content: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+              created_by: "responses",
+            },
+          ],
+          null,
+          2,
+        ),
+      };
+      const msg = castAgentMessage({
+        role: "assistant",
+        api: "openclaw-openai-responses-transport",
+        model: "gpt-5.6-luna",
+        provider: "openai",
+        content: [{ type: "text", text: "visible" }],
+        providerReplay: {
+          v: 1,
+          type,
+          id: "cmp_1",
+          data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+          ...(replayIndex === undefined ? {} : { replayIndex }),
+          provider: "openai",
+          api: "openai-responses",
+          model: "gpt-5.6-luna",
+          baseUrlHash: "ozhevd1smnk8s",
+          sessionHash: "171dzdv17gum5g",
+          authProfileHash: "oe8bkr3r8947",
+          compactedWindow,
+          secret: "sk-abcdef1234567890xyz",
+        },
+      });
+
+      const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+        providerReplay: Record<string, unknown>;
+      };
+
+      expect(result.providerReplay).toEqual({
+        v: 1,
+        type,
+        id: "cmp_1",
+        data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+        ...(replayIndex === undefined ? {} : { replayIndex }),
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        baseUrlHash: "ozhevd1smnk8s",
+        sessionHash: "171dzdv17gum5g",
+        authProfileHash: "oe8bkr3r8947",
+        compactedWindow,
+      });
+      expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
+    },
+  );
+
+  it.each([
+    ["plaintext secret", { type: "input_text", text: "sk-abcdef1234567890xyz" }, {}],
+    ["custom text rule", { type: "input_text", text: "retained-private" }, {}],
+    ["structured secret", { type: "input_text", text: "safe", apiKey: "plainsecretvalue123" }, {}],
+    [
+      "file reference",
+      { type: "input_file", file_url: "https://example.com/retained-private" },
+      {},
+    ],
+    [
+      "image normalization",
+      {
+        type: "input_image",
+        detail: "auto",
+        image_url: `data:image/jpeg;base64,${IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`,
+      },
+      {},
+    ],
+    [
+      "compaction metadata",
+      { type: "input_text", text: "safe" },
+      { created_by: "retained-private" },
+    ],
+    [
+      "mismatched opaque item",
+      { type: "input_text", text: "safe" },
+      { encrypted_content: "other-token" },
+    ],
+    ["malformed content", { type: "input_text", text: 42 }, {}],
+  ])(
+    "invalidates the whole canonical window for %s without erasing its replay barrier",
+    (_name, content, itemOverride) => {
+      const providerReplay = {
+        v: 1,
+        type: "openai-responses-retained-compaction",
+        id: "cmp_1",
+        data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        baseUrlHash: "ozhevd1smnk8s",
+        sessionHash: "171dzdv17gum5g",
+        authProfileHash: "oe8bkr3r8947",
+        compactedWindow: {
+          state: "ready",
+          output: JSON.stringify([
+            { type: "message", role: "user", content: [content] },
+            {
+              type: "compaction",
+              id: "cmp_1",
+              encrypted_content: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+              ...itemOverride,
+            },
+          ]),
+        },
+      };
+      const message = castAgentMessage({
+        role: "assistant",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        provider: "openai",
+        content: [],
+        providerReplay,
+      });
+      const result = redactTranscriptMessage(message, cfg("tools", ["retained-private"]));
+      expect(result).toHaveProperty("providerReplay", {
+        ...providerReplay,
+        compactedWindow: { state: "refresh-required" },
+      });
+      expect(redactTranscriptMessage(result, cfg("tools"))).toEqual(result);
+      expect(message).toHaveProperty("providerReplay.compactedWindow.state", "ready");
+    },
+  );
+
+  it("preserves validated OpenAI compaction suppression state", () => {
+    const msg = castAgentMessage({
+      role: "assistant",
+      api: "openclaw-openai-responses-transport",
+      model: "gpt-5.6-luna",
+      provider: "openai",
+      content: [{ type: "text", text: "visible" }],
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction-suppression",
+        id: "unexpected-suppression-id",
+        data: "rejected",
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        baseUrlHash: "ozhevd1smnk8s",
+        sessionHash: "171dzdv17gum5g",
+        authProfileHash: "oe8bkr3r8947",
+        secret: "sk-abcdef1234567890xyz",
+      },
+    });
+
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      providerReplay: Record<string, unknown>;
+    };
+
+    expect(result.providerReplay).toEqual({
+      v: 1,
+      type: "openai-responses-compaction-suppression",
+      data: "rejected",
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "ozhevd1smnk8s",
+      sessionHash: "171dzdv17gum5g",
+      authProfileHash: "oe8bkr3r8947",
+    });
+    expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
+  });
+
+  it("preserves validated Anthropic compaction state while redacting its summary", () => {
+    const msg = castAgentMessage({
+      role: "assistant",
+      api: "anthropic-messages",
+      model: "claude-sonnet-4-6",
+      provider: "anthropic",
+      content: [{ type: "text", text: "visible" }],
+      providerReplay: {
+        v: 1,
+        type: "anthropic-compaction",
+        data: "summary containing sk-abcdef1234567890xyz",
+        replayIndex: 0,
+        provider: "anthropic",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        baseUrlHash: "ozhevd1smnk8s",
+        sessionHash: "171dzdv17gum5g",
+        authProfileHash: "oe8bkr3r8947",
+        secret: "sk-another-secret-value",
+      },
+    });
+
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      providerReplay: Record<string, unknown>;
+    };
+
+    expect(result.providerReplay).toMatchObject({
+      v: 1,
+      type: "anthropic-compaction",
+      replayIndex: 0,
+      provider: "anthropic",
+      api: "anthropic-messages",
+      model: "claude-sonnet-4-6",
+      baseUrlHash: "ozhevd1smnk8s",
+      sessionHash: "171dzdv17gum5g",
+      authProfileHash: "oe8bkr3r8947",
+    });
+    expect(result.providerReplay.data).toContain("summary containing");
+    expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
+    expect(result.providerReplay).not.toHaveProperty("secret");
+  });
+
+  it("preserves Anthropic suppression and drops malformed or foreign replay state", () => {
+    const base = {
+      role: "assistant",
+      api: "anthropic-messages",
+      model: "claude-sonnet-4-6",
+      provider: "anthropic",
+      content: [{ type: "text", text: "visible" }],
+    };
+    const suppression = redactTranscriptMessage(
+      castAgentMessage({
+        ...base,
+        providerReplay: {
+          v: 1,
+          type: "anthropic-compaction-suppression",
+          data: "rejected",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-sonnet-4-6",
+          baseUrlHash: "ozhevd1smnk8s",
+        },
+      }),
+      cfg("tools"),
+    ) as unknown as { providerReplay: Record<string, unknown> };
+    expect(suppression.providerReplay).toMatchObject({
+      type: "anthropic-compaction-suppression",
+      data: "rejected",
+    });
+
+    for (const providerReplay of [
+      {
+        v: 1,
+        type: "anthropic-compaction",
+        data: "",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        baseUrlHash: "ozhevd1smnk8s",
+      },
+      {
+        v: 1,
+        type: "anthropic-compaction",
+        data: "summary",
+        provider: "other-provider",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        baseUrlHash: "ozhevd1smnk8s",
+      },
+    ]) {
+      const result = redactTranscriptMessage(
+        castAgentMessage({ ...base, providerReplay }),
+        cfg("tools"),
+      );
+      expect(result).not.toHaveProperty("providerReplay");
+    }
+  });
+
+  it.each([
+    ["oversized", "i".repeat(10_000)],
+    ["non-string", 42],
+  ])("removes an %s optional OpenAI compaction id while preserving state", (_name, id) => {
+    const msg = castAgentMessage({
+      role: "assistant",
+      api: "openclaw-openai-responses-transport",
+      model: "gpt-5.6-luna",
+      provider: "openai",
+      content: [{ type: "text", text: "visible" }],
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction",
+        id,
+        data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+        replayIndex: 0,
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.6-luna",
+        baseUrlHash: "ozhevd1smnk8s",
+      },
+    });
+
+    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+      providerReplay: Record<string, unknown>;
+    };
+
+    expect(result.providerReplay).toEqual({
+      v: 1,
+      type: "openai-responses-compaction",
+      data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+      replayIndex: 0,
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "ozhevd1smnk8s",
+    });
+  });
+
+  it.each([
+    ["malformed content", { data: "" }],
+    ["invalid replay index", { replayIndex: -1 }],
+    ["retained compaction index", { type: "openai-responses-retained-compaction", replayIndex: 0 }],
+    ["invalid context hash", { baseUrlHash: "not-a-context-hash" }],
+    ["foreign route", { provider: "azure" }],
+  ])("omits invalid OpenAI compaction replay state for %s", (_name, override) => {
+    const providerReplay = {
+      v: 1,
+      type: "openai-responses-compaction",
+      id: "cmp_1",
+      data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+      provider: "openai",
+      api: "openai-responses",
+      model: "gpt-5.6-luna",
+      baseUrlHash: "ozhevd1smnk8s",
+      ...override,
+    };
+    const msg = castAgentMessage({
+      role: "assistant",
+      api: "openclaw-openai-responses-transport",
+      model: "gpt-5.6-luna",
+      provider: "openai",
+      content: [{ type: "text", text: "visible" }],
+      providerReplay,
+    });
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+
+    expect(result).not.toHaveProperty("providerReplay");
+    expect(msg).toHaveProperty("providerReplay", providerReplay);
+  });
+
+  it("handles configured providers without explicit models", () => {
+    const msg = castAgentMessage({
+      role: "assistant",
+      api: "openai-responses",
+      model: "gpt-5.5",
+      provider: "openai",
+      content: [{ type: "text", text: "visible", textSignature: "response-item-1" }],
+    });
+    const inputCfg = {
+      logging: { redactSensitive: "tools" },
+      models: { providers: { openai: { apiKey: "test-key" } } },
+    } as unknown as OpenClawConfig;
+
+    const result = redactTranscriptMessage(msg, inputCfg) as unknown as {
+      api: string;
+      model: string;
+      provider: string;
+      content: Array<{ textSignature: string }>;
+    };
+
+    expect(result).toMatchObject({
+      api: "openai-responses",
+      model: "gpt-5.5",
+      provider: "openai",
+    });
+    expect(expectDefined(result.content[0], "result.content[0] test invariant").textSignature).toBe(
+      "response-item-1",
+    );
   });
 
   it.each([
@@ -220,13 +934,13 @@ describe("redactTranscriptMessage", () => {
   ])(
     "preserves replay signatures for managed transport $api",
     ({ api, provider, block, signatureKey, expectedSignature }) => {
-      const msg = {
+      const msg = castAgentMessage({
         role: "assistant",
         api,
         model: "managed-model",
         provider,
         content: [block],
-      } as unknown as AgentMessage;
+      });
 
       const result = redactTranscriptMessage(
         msg,
@@ -236,8 +950,13 @@ describe("redactTranscriptMessage", () => {
           SHORT_GOOGLE_THOUGHT_SIGNATURE,
         ]),
       );
-      const preservedBlock = (msgContent(result) as Array<Record<string, string>>)[0];
-      expect(preservedBlock[signatureKey]).toBe(expectedSignature);
+      const preservedBlock = expectDefined(
+        (msgContent(result) as Array<Record<string, string>>)[0],
+        "(msgContent(result) as Array<Record<string, string>>)[0] test invariant",
+      );
+      expect(
+        expectDefined(preservedBlock[signatureKey], "preservedBlock[signatureKey] test invariant"),
+      ).toBe(expectedSignature);
     },
   );
 
@@ -250,7 +969,7 @@ describe("redactTranscriptMessage", () => {
       index: 1,
       secret: "sk-abcdef1234567890xyz",
     });
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       api: "openai-completions",
       model: "anthropic/claude-sonnet-4.6",
@@ -264,10 +983,13 @@ describe("redactTranscriptMessage", () => {
           thoughtSignature,
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const block = (msgContent(result) as Array<{ thoughtSignature: string }>)[0];
+    const block = expectDefined(
+      (msgContent(result) as Array<{ thoughtSignature: string }>)[0],
+      "(msgContent(result) as Array<{ thoughtSignature: string }>)[0] test invariant",
+    );
     expect(JSON.parse(block.thoughtSignature)).toEqual({
       type: "reasoning.encrypted",
       data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
@@ -283,7 +1005,7 @@ describe("redactTranscriptMessage", () => {
       data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
       format: null,
     });
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       api: "openai-completions",
       provider: "openrouter",
@@ -296,10 +1018,13 @@ describe("redactTranscriptMessage", () => {
           thoughtSignature,
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const block = (msgContent(result) as Array<{ thoughtSignature: string }>)[0];
+    const block = expectDefined(
+      (msgContent(result) as Array<{ thoughtSignature: string }>)[0],
+      "(msgContent(result) as Array<{ thoughtSignature: string }>)[0] test invariant",
+    );
     expect(JSON.parse(block.thoughtSignature)).toEqual({
       type: "reasoning.encrypted",
       data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
@@ -308,7 +1033,7 @@ describe("redactTranscriptMessage", () => {
   });
 
   it("preserves Google tool-call thought signatures while redacting arguments", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       api: "google-generative-ai",
       provider: "google",
@@ -317,7 +1042,7 @@ describe("redactTranscriptMessage", () => {
           type: "toolCall",
           id: "call_1",
           name: "send_request",
-          thoughtSignature: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+          thoughtSignature: GOOGLE_THOUGHT_SIGNATURE,
           arguments: {
             apiKey: "plainsecretvalue123",
             thinkingSignature: "sk-abcdef1234567890xyz",
@@ -336,22 +1061,25 @@ describe("redactTranscriptMessage", () => {
           },
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const block = (
-      msgContent(result) as Array<{
-        thoughtSignature: string;
-        arguments: Record<string, string>;
-      }>
-    )[0];
-    expect(block.thoughtSignature).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
+    const block = expectDefined(
+      (
+        msgContent(result) as Array<{
+          thoughtSignature: string;
+          arguments: Record<string, string>;
+        }>
+      )[0],
+      "( msgContent(result) as Array<{ thoughtSignature: string; arguments: ... test invariant",
+    );
+    expect(block.thoughtSignature).toBe(GOOGLE_THOUGHT_SIGNATURE);
     expect(JSON.stringify(block.arguments)).not.toContain("sk-abcdef1234567890xyz");
     expect(block.arguments.apiKey).toBe("plains…e123");
   });
 
   it("preserves Google text and legacy thinking signatures", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       api: "google-generative-ai",
       provider: "google",
@@ -369,39 +1097,73 @@ describe("redactTranscriptMessage", () => {
         {
           type: "thinking",
           thinking: "secret sk-abcdef1234567890xyz",
-          thought_signature: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+          thought_signature: SHORT_GOOGLE_THOUGHT_SIGNATURE,
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools", [GOOGLE_THOUGHT_SIGNATURE]));
     const blocks = msgContent(result) as Array<Record<string, string>>;
-    expect(blocks[0].text).not.toContain("sk-abcdef1234567890xyz");
-    expect(blocks[0].textSignature).toBe(GOOGLE_THOUGHT_SIGNATURE);
-    expect(blocks[1].textSignature).not.toContain("sk-abcdef1234567890xyz");
-    expect(blocks[2].thinking).not.toContain("sk-abcdef1234567890xyz");
-    expect(blocks[2].thought_signature).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
+    expect(expectDefined(blocks[0], "blocks[0] test invariant").text).not.toContain(
+      "sk-abcdef1234567890xyz",
+    );
+    expect(expectDefined(blocks[0], "blocks[0] test invariant").textSignature).toBe(
+      GOOGLE_THOUGHT_SIGNATURE,
+    );
+    expect(expectDefined(blocks[1], "blocks[1] test invariant").textSignature).not.toContain(
+      "sk-abcdef1234567890xyz",
+    );
+    expect(expectDefined(blocks[2], "blocks[2] test invariant").thinking).not.toContain(
+      "sk-abcdef1234567890xyz",
+    );
+    expect(expectDefined(blocks[2], "blocks[2] test invariant").thought_signature).toBe(
+      SHORT_GOOGLE_THOUGHT_SIGNATURE,
+    );
   });
 
   it.each(["openai-responses", "openclaw-openai-responses-transport"])(
     "preserves structured OpenAI text signatures for %s",
     (api) => {
       const textSignature = JSON.stringify({ v: 1, id: COPILOT_CONNECTION_BOUND_ID });
-      const msg = {
+      const msg = castAgentMessage({
         role: "assistant",
         api,
         provider: "github-copilot",
         content: [{ type: "text", text: "visible", textSignature }],
-      } as unknown as AgentMessage;
+      });
 
       const result = redactTranscriptMessage(msg, cfg("tools", [COPILOT_CONNECTION_BOUND_ID]));
-      const block = (msgContent(result) as Array<{ textSignature: string }>)[0];
+      const block = expectDefined(
+        (msgContent(result) as Array<{ textSignature: string }>)[0],
+        "(msgContent(result) as Array<{ textSignature: string }>)[0] test invariant",
+      );
       expect(block.textSignature).toBe(textSignature);
     },
   );
 
+  it.each([
+    ["openai-completions", "openrouter", "deepseek/deepseek-v4-flash"],
+    ["anthropic-messages", "anthropic", "claude-sonnet-4-6"],
+  ])("preserves commentary phase signatures for %s", (api, provider, model) => {
+    const textSignature = JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" });
+    const msg = castAgentMessage({
+      role: "assistant",
+      api,
+      provider,
+      model,
+      content: [{ type: "text", text: "I will check.", textSignature }],
+    });
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const block = expectDefined(
+      (msgContent(result) as Array<{ textSignature: string }>)[0],
+      "commentary text block",
+    );
+    expect(block.textSignature).toBe(textSignature);
+  });
+
   it("preserves Anthropic redacted_thinking data while redacting siblings", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       api: "anthropic-messages",
       provider: "anthropic",
@@ -422,20 +1184,24 @@ describe("redactTranscriptMessage", () => {
           },
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const thinkingBlock = (
-      msgContent(result) as Array<{ thinking: string; thinkingSignature: string }>
-    )[0];
-    const redactedBlock = (
-      msgContent(result) as Array<{
-        data: string;
-        signature: string;
-        thinkingSignature: string;
-        metadata: { accessToken: string };
-      }>
-    )[1];
+    const thinkingBlock = expectDefined(
+      (msgContent(result) as Array<{ thinking: string; thinkingSignature: string }>)[0],
+      "( msgContent(result) as Array<{ thinking: string; thinkingSignature: ... test invariant",
+    );
+    const redactedBlock = expectDefined(
+      (
+        msgContent(result) as Array<{
+          data: string;
+          signature: string;
+          thinkingSignature: string;
+          metadata: { accessToken: string };
+        }>
+      )[1],
+      "( msgContent(result) as Array<{ data: string; signature: string; thin... test invariant",
+    );
     expect(thinkingBlock.thinking).not.toContain("sk-abcdef1234567890xyz");
     expect(thinkingBlock.thinkingSignature).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
     expect(redactedBlock.data).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
@@ -444,16 +1210,15 @@ describe("redactTranscriptMessage", () => {
     expect(redactedBlock.metadata.accessToken).toBe("nested…t123");
   });
 
-  it("redacts credential-shaped values even on provider signature fields", () => {
-    const googleApiKey = `AIza${"a".repeat(32)}`;
+  it("preserves credential-shaped bytes in recognized provider replay fields", () => {
     const githubToken = `ghp_${"b".repeat(36)}`;
-    const awsAccessKey = "AKIAIOSFODNN7EXAMPLE";
     const encryptedDetail = JSON.stringify({
       type: "reasoning.encrypted",
       data: githubToken,
       id: "reasoning-encrypted-1",
+      secret: "sk-abcdef1234567890xyz",
     });
-    const googleMsg = {
+    const googleMsg = castAgentMessage({
       role: "assistant",
       api: "google-generative-ai",
       provider: "google",
@@ -463,24 +1228,29 @@ describe("redactTranscriptMessage", () => {
           id: "call_1",
           name: "send_request",
           arguments: {},
-          thoughtSignature: awsAccessKey,
+          thoughtSignature: GOOGLE_CREDENTIAL_COLLISION,
         },
         {
-          type: "toolCall",
-          id: "call_2",
-          name: "send_request",
-          arguments: {},
-          thoughtSignature: googleApiKey,
+          type: "thinking",
+          thinking: "visible",
+          thinkingSignature: ALIBABA_CREDENTIAL_COLLISION,
         },
       ],
-    } as unknown as AgentMessage;
-    const anthropicMsg = {
+    });
+    const anthropicMsg = castAgentMessage({
       role: "assistant",
-      api: "anthropic-messages",
-      provider: "anthropic",
-      content: [{ type: "redacted_thinking", data: githubToken }],
-    } as unknown as AgentMessage;
-    const openAICompletionsMsg = {
+      api: "bedrock-converse-stream",
+      provider: "amazon-bedrock",
+      content: [
+        {
+          type: "thinking",
+          thinking: "visible",
+          signature: OPENAI_COMPAT_OPAQUE_COLLISION,
+        },
+        { type: "redacted_thinking", data: githubToken },
+      ],
+    });
+    const openAICompletionsMsg = castAgentMessage({
       role: "assistant",
       api: "openai-completions",
       provider: "openrouter",
@@ -492,9 +1262,141 @@ describe("redactTranscriptMessage", () => {
           arguments: {},
           thoughtSignature: encryptedDetail,
         },
+        {
+          type: "toolCall",
+          id: "call_secret",
+          name: "send_request",
+          arguments: {},
+          thoughtSignature: githubToken,
+        },
       ],
-    } as unknown as AgentMessage;
-    const customProviderMsg = {
+    });
+    const googleOpenAICompletionsMsg = castAgentMessage({
+      role: "assistant",
+      api: "openclaw-openai-completions-transport",
+      model: "gemini-3.1-pro",
+      provider: "google-compatible-proxy",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_2",
+          name: "send_request",
+          arguments: {},
+          thoughtSignature: OPENAI_COMPAT_OPAQUE_COLLISION,
+        },
+      ],
+    });
+    const veniceGeminiMsg = castAgentMessage({
+      role: "assistant",
+      api: "openai-completions",
+      model: "gemini-3-6-flash",
+      provider: "venice",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_venice",
+          name: "send_request",
+          arguments: {},
+          thoughtSignature: OPENAI_COMPAT_OPAQUE_COLLISION,
+        },
+      ],
+    });
+    const openAIResponsesMsg = castAgentMessage({
+      role: "assistant",
+      api: "openai-responses",
+      model: "gpt-5.5",
+      provider: "openai",
+      content: [
+        {
+          type: "thinking",
+          thinking: "visible",
+          thinkingSignature: JSON.stringify({
+            id: "reasoning-1",
+            type: "reasoning",
+            encrypted_content: GOOGLE_CREDENTIAL_COLLISION,
+            summary: [{ type: "summary_text", text: "secret sk-abcdef1234567890xyz" }],
+            secret: "sk-abcdef1234567890xyz",
+          }),
+        },
+      ],
+    });
+
+    const googleBlocks = msgContent(redactTranscriptMessage(googleMsg, cfg("tools"))) as Array<
+      Record<string, string>
+    >;
+    expect(expectDefined(googleBlocks[0], "googleBlocks[0] test invariant").thoughtSignature).toBe(
+      GOOGLE_CREDENTIAL_COLLISION,
+    );
+    expect(expectDefined(googleBlocks[1], "googleBlocks[1] test invariant").thinkingSignature).toBe(
+      ALIBABA_CREDENTIAL_COLLISION,
+    );
+
+    const anthropicBlocks = msgContent(
+      redactTranscriptMessage(anthropicMsg, cfg("tools")),
+    ) as Array<Record<string, string>>;
+    expect(expectDefined(anthropicBlocks[0], "anthropicBlocks[0] test invariant").signature).toBe(
+      OPENAI_COMPAT_OPAQUE_COLLISION,
+    );
+    expect(expectDefined(anthropicBlocks[1], "anthropicBlocks[1] test invariant").data).toBe(
+      githubToken,
+    );
+
+    const completionsBlocks = msgContent(
+      redactTranscriptMessage(openAICompletionsMsg, cfg("tools")),
+    ) as Array<{ thoughtSignature: string }>;
+    expect(
+      JSON.parse(
+        expectDefined(completionsBlocks[0], "completionsBlocks[0] test invariant").thoughtSignature,
+      ),
+    ).toEqual({
+      type: "reasoning.encrypted",
+      data: githubToken,
+      id: "reasoning-encrypted-1",
+    });
+    expect(
+      expectDefined(completionsBlocks[1], "completionsBlocks[1] test invariant").thoughtSignature,
+    ).not.toBe(githubToken);
+
+    const googleCompletionsBlock = expectDefined(
+      (
+        msgContent(
+          redactTranscriptMessage(googleOpenAICompletionsMsg, googleCompatCfg()),
+        ) as Array<{
+          thoughtSignature: string;
+        }>
+      )[0],
+      "( msgContent(redactTranscriptMessage(googleOpenAICompletionsMsg, goog... test invariant",
+    );
+    expect(googleCompletionsBlock.thoughtSignature).toBe(OPENAI_COMPAT_OPAQUE_COLLISION);
+
+    const veniceGeminiBlock = expectDefined(
+      (
+        msgContent(redactTranscriptMessage(veniceGeminiMsg, cfg("tools"))) as Array<{
+          thoughtSignature: string;
+        }>
+      )[0],
+      "Venice Gemini tool-call block",
+    );
+    expect(veniceGeminiBlock.thoughtSignature).toBe(OPENAI_COMPAT_OPAQUE_COLLISION);
+
+    const responsesBlock = expectDefined(
+      (
+        msgContent(redactTranscriptMessage(openAIResponsesMsg, cfg("tools"))) as Array<{
+          thinkingSignature: string;
+        }>
+      )[0],
+      '( msgContent(redactTranscriptMessage(openAIResponsesMsg, cfg("tools")... test invariant',
+    );
+    expect(JSON.parse(responsesBlock.thinkingSignature)).toEqual({
+      id: "reasoning-1",
+      type: "reasoning",
+      summary: [],
+      encrypted_content: GOOGLE_CREDENTIAL_COLLISION,
+    });
+  });
+
+  it("keeps unknown and malformed replay fields credential-safe", () => {
+    const customProviderMsg = castAgentMessage({
       role: "assistant",
       api: "custom-provider-api",
       model: "custom-model",
@@ -503,30 +1405,85 @@ describe("redactTranscriptMessage", () => {
         {
           type: "thinking",
           thinking: "visible",
-          thinkingSignature: awsAccessKey,
+          thinkingSignature: ALIBABA_CREDENTIAL_COLLISION,
+        },
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "send_request",
+          arguments: {},
+          thoughtSignature: JSON.stringify({
+            type: "reasoning.encrypted",
+            data: GOOGLE_CREDENTIAL_COLLISION,
+            id: "reasoning-encrypted-1",
+          }),
         },
       ],
-    } as unknown as AgentMessage;
+    });
+    const malformedGoogleMsg = castAgentMessage({
+      role: "assistant",
+      api: "google-generative-ai",
+      model: "gemini-3.1-pro",
+      provider: "google",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "send_request",
+          arguments: {},
+          thoughtSignature: OPAQUE_CREDENTIAL_COLLISION,
+        },
+      ],
+    });
+    const malformedKnownOpaqueMessages = [
+      {
+        role: "assistant",
+        api: "anthropic-messages",
+        model: "claude-opus-4-8",
+        provider: "anthropic",
+        content: [
+          {
+            type: "thinking",
+            thinking: "visible",
+            thinkingSignature: "secret sk-abcdef1234567890xyz",
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        api: "openai-completions",
+        model: "gemini-3.1-pro",
+        provider: "google",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "send_request",
+            arguments: {},
+            thoughtSignature: "secret sk-abcdef1234567890xyz",
+          },
+        ],
+      },
+    ] as unknown as AgentMessage[];
 
     expect(
-      JSON.stringify(msgContent(redactTranscriptMessage(googleMsg, cfg("tools")))),
-    ).not.toContain(awsAccessKey);
-    expect(
-      JSON.stringify(msgContent(redactTranscriptMessage(googleMsg, cfg("tools")))),
-    ).not.toContain(googleApiKey);
-    expect(
-      JSON.stringify(msgContent(redactTranscriptMessage(anthropicMsg, cfg("tools")))),
-    ).not.toContain(githubToken);
-    expect(
-      JSON.stringify(msgContent(redactTranscriptMessage(openAICompletionsMsg, cfg("tools")))),
-    ).not.toContain(githubToken);
+      JSON.stringify(msgContent(redactTranscriptMessage(customProviderMsg, cfg("tools")))),
+    ).not.toContain(ALIBABA_CREDENTIAL_COLLISION);
     expect(
       JSON.stringify(msgContent(redactTranscriptMessage(customProviderMsg, cfg("tools")))),
-    ).not.toContain(awsAccessKey);
+    ).not.toContain(GOOGLE_CREDENTIAL_COLLISION);
+    expect(
+      JSON.stringify(msgContent(redactTranscriptMessage(malformedGoogleMsg, cfg("tools")))),
+    ).not.toContain(OPAQUE_CREDENTIAL_COLLISION);
+    for (const message of malformedKnownOpaqueMessages) {
+      expect(
+        JSON.stringify(msgContent(redactTranscriptMessage(message, cfg("tools")))),
+      ).not.toContain("sk-abcdef1234567890xyz");
+    }
   });
 
   it("redacts provider-shaped fields when the assistant route is missing", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [
         {
@@ -542,7 +1499,7 @@ describe("redactTranscriptMessage", () => {
           thoughtSignature: GOOGLE_THOUGHT_SIGNATURE,
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(
       msg,
@@ -559,7 +1516,7 @@ describe("redactTranscriptMessage", () => {
       encrypted_content: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
       summary: [],
     });
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       api: "custom-provider-api",
       model: "custom-model",
@@ -578,21 +1535,28 @@ describe("redactTranscriptMessage", () => {
           thoughtSignature: SHORT_GOOGLE_THOUGHT_SIGNATURE,
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(
       msg,
       cfg("tools", [CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES, SHORT_GOOGLE_THOUGHT_SIGNATURE]),
     );
     const blocks = msgContent(result) as Array<Record<string, string>>;
-    expect(JSON.parse(blocks[0].thinkingSignature).encrypted_content).toBe(
-      CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+    expect(
+      JSON.parse(
+        expectDefined(
+          expectDefined(blocks[0], "thinking block").thinkingSignature,
+          "thinking signature",
+        ),
+      ).encrypted_content,
+    ).toBe(CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES);
+    expect(expectDefined(blocks[1], "blocks[1] test invariant").thoughtSignature).toBe(
+      SHORT_GOOGLE_THOUGHT_SIGNATURE,
     );
-    expect(blocks[1].thoughtSignature).toBe(SHORT_GOOGLE_THOUGHT_SIGNATURE);
   });
 
   it("redacts provider-shaped fields outside direct assistant content blocks", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [
         {
@@ -609,24 +1573,27 @@ describe("redactTranscriptMessage", () => {
           },
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
     expect(JSON.stringify(msgContent(result))).not.toContain("sk-abcdef1234567890xyz");
   });
 
   it("redacts partialJson block", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [{ type: "toolCallDelta", partialJson: '{"key":"sk-abcdef1234567890xyz"}' }],
-    } as unknown as AgentMessage;
+    });
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const block = (msgContent(result) as Array<{ partialJson: string }>)[0];
+    const block = expectDefined(
+      (msgContent(result) as Array<{ partialJson: string }>)[0],
+      "(msgContent(result) as Array<{ partialJson: string }>)[0] test invariant",
+    );
     expect(block.partialJson).not.toContain("sk-abcdef1234567890xyz");
   });
 
   it("redacts nested strings in assistant tool-call arguments", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [
         {
@@ -640,10 +1607,13 @@ describe("redactTranscriptMessage", () => {
           },
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const block = (msgContent(result) as Array<{ arguments: unknown }>)[0];
+    const block = expectDefined(
+      (msgContent(result) as Array<{ arguments: unknown }>)[0],
+      "(msgContent(result) as Array<{ arguments: unknown }>)[0] test invariant",
+    );
     const argumentsValue = block.arguments as {
       command: string;
       env: { nested: string[] };
@@ -656,12 +1626,15 @@ describe("redactTranscriptMessage", () => {
     expect(argumentsValue.count).toBe(1);
     expect(serializedArguments).toContain("openclaw health");
     expect(block.arguments).not.toBe(
-      (msgContent(msg) as Array<{ arguments: unknown }>)[0].arguments,
+      expectDefined(
+        (msgContent(msg) as Array<{ arguments: unknown }>)[0],
+        "(msgContent(msg) as Array<{ arguments: unknown }>)[0] test invariant",
+      ).arguments,
     );
   });
 
   it("redacts structured secret fields in assistant tool-call arguments", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [
         {
@@ -676,10 +1649,13 @@ describe("redactTranscriptMessage", () => {
           },
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const block = (msgContent(result) as Array<{ arguments: unknown }>)[0];
+    const block = expectDefined(
+      (msgContent(result) as Array<{ arguments: unknown }>)[0],
+      "(msgContent(result) as Array<{ arguments: unknown }>)[0] test invariant",
+    );
     const argumentsValue = block.arguments as {
       apiKey: string;
       password: string;
@@ -697,7 +1673,7 @@ describe("redactTranscriptMessage", () => {
   });
 
   it("redacts structured tool-use input payloads", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [
         {
@@ -712,10 +1688,13 @@ describe("redactTranscriptMessage", () => {
           },
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const block = (msgContent(result) as Array<{ input: unknown }>)[0];
+    const block = expectDefined(
+      (msgContent(result) as Array<{ input: unknown }>)[0],
+      "(msgContent(result) as Array<{ input: unknown }>)[0] test invariant",
+    );
     const inputValue = block.input as {
       apiKey: string;
       nested: { accessToken: string[] };
@@ -733,7 +1712,7 @@ describe("redactTranscriptMessage", () => {
   });
 
   it("redacts defensive function-call input payloads", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [
         {
@@ -746,10 +1725,13 @@ describe("redactTranscriptMessage", () => {
           },
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const block = (msgContent(result) as Array<{ input: unknown }>)[0];
+    const block = expectDefined(
+      (msgContent(result) as Array<{ input: unknown }>)[0],
+      "(msgContent(result) as Array<{ input: unknown }>)[0] test invariant",
+    );
     const inputValue = block.input as {
       password: string;
       nested: { accessToken: string[] };
@@ -762,7 +1744,7 @@ describe("redactTranscriptMessage", () => {
   });
 
   it("redacts arbitrary gateway/custom content-block fields recursively", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [
         {
@@ -779,7 +1761,7 @@ describe("redactTranscriptMessage", () => {
           safe: "visible",
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
     const block = (msgContent(result) as Array<Record<string, unknown>>)[0];
@@ -797,7 +1779,7 @@ describe("redactTranscriptMessage", () => {
       apiKey: "plainsecretvalue123",
     };
     details.self = details;
-    const msg = {
+    const msg = castAgentMessage({
       role: "toolResult",
       toolCallId: "call_1",
       toolName: "send_request",
@@ -805,7 +1787,7 @@ describe("redactTranscriptMessage", () => {
       details,
       isError: false,
       timestamp: Date.now(),
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
       details: Record<string, unknown>;
@@ -815,7 +1797,7 @@ describe("redactTranscriptMessage", () => {
   });
 
   it("redacts structured secret fields in tool-result details", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "toolResult",
       toolCallId: "call_1",
       toolName: "send_request",
@@ -828,7 +1810,7 @@ describe("redactTranscriptMessage", () => {
       },
       isError: false,
       timestamp: Date.now(),
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
       content: Array<{ text: string }>;
@@ -841,7 +1823,9 @@ describe("redactTranscriptMessage", () => {
       nested: { accessToken: string[] };
       safe: string;
     };
-    expect(result.content[0].text).not.toContain("sk-abcdef1234567890xyz");
+    expect(expectDefined(result.content[0], "result.content[0] test invariant").text).not.toContain(
+      "sk-abcdef1234567890xyz",
+    );
     expect(serializedDetails).not.toContain("plainsecretvalue123");
     expect(serializedDetails).not.toContain("hunter2");
     expect(serializedDetails).not.toContain("nestedplainsecret123");
@@ -852,16 +1836,16 @@ describe("redactTranscriptMessage", () => {
   });
 
   it("redacts string-form content", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "user",
       content: "my key is sk-abcdef1234567890xyz",
-    } as unknown as AgentMessage;
+    });
     const result = redactTranscriptMessage(msg, cfg("tools"));
     expect(msgContent(result) as string).not.toContain("sk-abcdef1234567890xyz");
   });
 
   it("preserves image data while redacting adjacent transcript text", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "user",
       content: [
         { type: "text", text: "my key is sk-abcdef1234567890xyz" },
@@ -871,17 +1855,21 @@ describe("redactTranscriptMessage", () => {
           mimeType: "image/png",
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
     const content = msgContent(result) as Array<{ type: string; text?: string; data?: string }>;
-    expect(content[0].text).not.toContain("sk-abcdef1234567890xyz");
-    expect(content[1].data).toBe(IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING);
+    expect(expectDefined(content[0], "content[0] test invariant").text).not.toContain(
+      "sk-abcdef1234567890xyz",
+    );
+    expect(expectDefined(content[1], "content[1] test invariant").data).toBe(
+      IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING,
+    );
     expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
   });
 
   it("redacts fake image payloads that are not valid image base64", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "user",
       content: [
         {
@@ -890,15 +1878,15 @@ describe("redactTranscriptMessage", () => {
           mimeType: "image/png",
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
     const content = msgContent(result) as Array<{ data: string }>;
-    expect(content[0].data).toBe("sk-abc…0xyz");
+    expect(expectDefined(content[0], "content[0] test invariant").data).toBe("sk-abc…0xyz");
   });
 
   it("preserves valid BMP image base64 while redacting adjacent text", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "user",
       content: [
         { type: "text", text: "my key is sk-abcdef1234567890xyz" },
@@ -908,16 +1896,20 @@ describe("redactTranscriptMessage", () => {
           mimeType: "image/bmp",
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
     const content = msgContent(result) as Array<{ type: string; text?: string; data?: string }>;
-    expect(content[0].text).not.toContain("sk-abcdef1234567890xyz");
-    expect(content[1].data).toBe(BMP_BASE64_WITH_SECRET_TOKEN_SUBSTRING);
+    expect(expectDefined(content[0], "content[0] test invariant").text).not.toContain(
+      "sk-abcdef1234567890xyz",
+    );
+    expect(expectDefined(content[1], "content[1] test invariant").data).toBe(
+      BMP_BASE64_WITH_SECRET_TOKEN_SUBSTRING,
+    );
   });
 
   it("preserves provider-style image base64 source data", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [
         {
@@ -930,16 +1922,19 @@ describe("redactTranscriptMessage", () => {
           apiKey: "plainsecretvalue123",
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const block = (msgContent(result) as Array<{ source: { data: string }; apiKey: string }>)[0];
+    const block = expectDefined(
+      (msgContent(result) as Array<{ source: { data: string }; apiKey: string }>)[0],
+      "(msgContent(result) as Array<{ source: { data: string }; apiKey: stri... test invariant",
+    );
     expect(block.source.data).toBe(IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING);
     expect(block.apiKey).toBe("plains…e123");
   });
 
   it("canonicalizes preserved image MIME from sniffed base64 bytes", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [
         {
@@ -951,19 +1946,20 @@ describe("redactTranscriptMessage", () => {
           },
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const block = (
-      msgContent(result) as Array<{ source: { data: string; media_type: string } }>
-    )[0];
+    const block = expectDefined(
+      (msgContent(result) as Array<{ source: { data: string; media_type: string } }>)[0],
+      "( msgContent(result) as Array<{ source: { data: string; media_type: s... test invariant",
+    );
     expect(block.source.data).toBe(IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING);
     expect(block.source.media_type).toBe("image/png");
   });
 
   it("preserves image data URLs without exempting non-image data fields", () => {
     const dataUrl = `data:image/png;base64,${IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`;
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [
         {
@@ -972,17 +1968,20 @@ describe("redactTranscriptMessage", () => {
           data: "AKIDABCDEFGHIJKLMNOP",
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const block = (msgContent(result) as Array<{ image_url: string; data: string }>)[0];
+    const block = expectDefined(
+      (msgContent(result) as Array<{ image_url: string; data: string }>)[0],
+      "(msgContent(result) as Array<{ image_url: string; data: string }>)[0] test invariant",
+    );
     expect(block.image_url).toBe(dataUrl);
     expect(block.data).toBe("AKIDAB…MNOP");
   });
 
   it("preserves valid non-browser image data URLs in transcripts", () => {
     const dataUrl = `data:image/bmp;base64,${BMP_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`;
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [
         {
@@ -990,17 +1989,20 @@ describe("redactTranscriptMessage", () => {
           image_url: dataUrl,
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const block = (msgContent(result) as Array<{ image_url: string }>)[0];
+    const block = expectDefined(
+      (msgContent(result) as Array<{ image_url: string }>)[0],
+      "(msgContent(result) as Array<{ image_url: string }>)[0] test invariant",
+    );
     expect(block.image_url).toBe(dataUrl);
   });
 
   it("preserves image data URLs with metadata parameters before base64", () => {
     const dataUrl = `data:image/png;charset=utf-8;base64,${IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`;
     const canonicalDataUrl = `data:image/png;base64,${IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`;
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [
         {
@@ -1008,16 +2010,19 @@ describe("redactTranscriptMessage", () => {
           image_url: dataUrl,
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const block = (msgContent(result) as Array<{ image_url: string }>)[0];
+    const block = expectDefined(
+      (msgContent(result) as Array<{ image_url: string }>)[0],
+      "(msgContent(result) as Array<{ image_url: string }>)[0] test invariant",
+    );
     expect(block.image_url).toBe(canonicalDataUrl);
   });
 
   it("preserves nested image_url data URL payloads", () => {
     const dataUrl = `data:image/png;base64,${IMAGE_BASE64_WITH_SECRET_TOKEN_SUBSTRING}`;
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [
         {
@@ -1025,15 +2030,18 @@ describe("redactTranscriptMessage", () => {
           image_url: { url: dataUrl },
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools"));
-    const block = (msgContent(result) as Array<{ image_url: { url: string } }>)[0];
+    const block = expectDefined(
+      (msgContent(result) as Array<{ image_url: { url: string } }>)[0],
+      "(msgContent(result) as Array<{ image_url: { url: string } }>)[0] test invariant",
+    );
     expect(block.image_url.url).toBe(dataUrl);
   });
 
   it("redacts documented transcript text fields on content-less message types", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "bashExecution",
       command: "OPENAI_API_KEY=sk-abcdef1234567890xyz openclaw health",
       output: "failed with sk-abcdef1234567890xyz",
@@ -1041,7 +2049,7 @@ describe("redactTranscriptMessage", () => {
       cancelled: false,
       truncated: false,
       timestamp: Date.now(),
-    } as unknown as AgentMessage;
+    });
 
     const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
       command: string;
@@ -1052,17 +2060,17 @@ describe("redactTranscriptMessage", () => {
   });
 
   it("redacts assistant error and summary transcript fields", () => {
-    const assistant = {
+    const assistant = castAgentMessage({
       role: "assistant",
       content: [{ type: "text", text: "safe" }],
       errorMessage: "provider rejected sk-abcdef1234567890xyz",
-    } as unknown as AgentMessage;
-    const summary = {
+    });
+    const summary = castAgentMessage({
       role: "compactionSummary",
       summary: "summary mentions sk-abcdef1234567890xyz",
       tokensBefore: 10,
       timestamp: Date.now(),
-    } as unknown as AgentMessage;
+    });
 
     const assistantResult = redactTranscriptMessage(assistant, cfg("tools")) as unknown as {
       errorMessage: string;
@@ -1077,20 +2085,24 @@ describe("redactTranscriptMessage", () => {
   it("redacts using custom pattern without dropping default patterns", () => {
     const msg = textMessage("email peter@dc.io and key sk-abcdef1234567890xyz ok");
     const result = redactTranscriptMessage(msg, cfg("tools", [EMAIL_PATTERN]));
-    const text = (msgContent(result) as Array<{ text: string }>)[0].text;
+    const text = expectDefined(
+      (msgContent(result) as Array<{ text: string }>)[0],
+      "(msgContent(result) as Array<{ text: string }>)[0] test invariant",
+    ).text;
     expect(text).not.toContain("peter@dc.io");
     expect(text).not.toContain("sk-abcdef1234567890xyz");
     expect(text).toContain("ok");
   });
 
-  it("passes through unchanged when redactSensitive is off", () => {
+  it("redacts text even when a caller supplies the retired off spelling", () => {
     const msg = textMessage("key is sk-abcdef1234567890xyz");
     const result = redactTranscriptMessage(msg, cfg("off"));
-    expect(result).toBe(msg); // same reference; nothing changed
+    expect(result).not.toBe(msg);
+    expect(JSON.stringify(msgContent(result))).not.toContain("sk-abcdef1234567890xyz");
   });
 
-  it("leaves structured tool-call secrets unchanged when redactSensitive is off", () => {
-    const msg = {
+  it("redacts structured tool-call secrets regardless of retired mode input", () => {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [
         {
@@ -1100,15 +2112,15 @@ describe("redactTranscriptMessage", () => {
           arguments: { apiKey: "plainsecretvalue123", password: "hunter2" },
         },
       ],
-    } as unknown as AgentMessage;
+    });
     const result = redactTranscriptMessage(msg, cfg("off"));
-    expect(result).toBe(msg);
-    expect(JSON.stringify(msgContent(result))).toContain("plainsecretvalue123");
-    expect(JSON.stringify(msgContent(result))).toContain("hunter2");
+    expect(result).not.toBe(msg);
+    expect(JSON.stringify(msgContent(result))).not.toContain("plainsecretvalue123");
+    expect(JSON.stringify(msgContent(result))).not.toContain("hunter2");
   });
 
-  it("leaves structured tool-result details unchanged when redactSensitive is off", () => {
-    const msg = {
+  it("redacts structured tool-result details regardless of retired mode input", () => {
+    const msg = castAgentMessage({
       role: "toolResult",
       toolCallId: "call_1",
       toolName: "send_request",
@@ -1116,11 +2128,11 @@ describe("redactTranscriptMessage", () => {
       details: { apiKey: "plainsecretvalue123", password: "hunter2" },
       isError: false,
       timestamp: Date.now(),
-    } as unknown as AgentMessage;
+    });
     const result = redactTranscriptMessage(msg, cfg("off")) as unknown as { details: unknown };
-    expect(result).toBe(msg);
-    expect(JSON.stringify(result.details)).toContain("plainsecretvalue123");
-    expect(JSON.stringify(result.details)).toContain("hunter2");
+    expect(result).not.toBe(msg);
+    expect(JSON.stringify(result.details)).not.toContain("plainsecretvalue123");
+    expect(JSON.stringify(result.details)).not.toContain("hunter2");
   });
 
   it("returns same object reference when nothing matches", () => {
@@ -1129,11 +2141,11 @@ describe("redactTranscriptMessage", () => {
     expect(result).toBe(msg);
   });
 
-  it("passes through signatures unchanged when global redaction is off", () => {
+  it("redacts signature summaries with the fixed global policy", () => {
     const readLoggingConfig = vi
       .spyOn(loggingConfigModule, "readLoggingConfig")
-      .mockReturnValue({ redactSensitive: "off" });
-    const msg = {
+      .mockReturnValue({});
+    const msg = castAgentMessage({
       role: "assistant",
       content: [
         {
@@ -1147,10 +2159,10 @@ describe("redactTranscriptMessage", () => {
           }),
         },
       ],
-    } as unknown as AgentMessage;
+    });
 
     try {
-      expect(redactTranscriptMessage(msg)).toBe(msg);
+      expect(JSON.stringify(redactTranscriptMessage(msg))).not.toContain("sk-abcdef1234567890xyz");
     } finally {
       readLoggingConfig.mockRestore();
     }
@@ -1159,15 +2171,19 @@ describe("redactTranscriptMessage", () => {
   it("redacts with cfg=undefined (falls back to default patterns)", () => {
     const msg = textMessage("key is sk-abcdef1234567890xyz");
     const result = redactTranscriptMessage(msg, undefined);
-    const text = (msgContent(result) as Array<{ text: string }>)[0].text;
+    const text = expectDefined(
+      (msgContent(result) as Array<{ text: string }>)[0],
+      "(msgContent(result) as Array<{ text: string }>)[0] test invariant",
+    ).text;
     expect(text).not.toContain("sk-abcdef1234567890xyz");
   });
 
   it("passes through non-object and null blocks without throwing", () => {
-    const msg = {
+    const msg = castAgentMessage({
       role: "assistant",
       content: [null, 42, "raw string"],
-    } as unknown as AgentMessage;
+    });
     expect(() => redactTranscriptMessage(msg, cfg("tools"))).not.toThrow();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

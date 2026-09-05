@@ -1,6 +1,10 @@
 // Tool schema quarantine tests cover diagnostic logging for unreadable runtime
 // tool entries without touching the broken tool object again.
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  onTrustedToolExecutionEvent,
+  type TrustedToolExecutionEvent,
+} from "../infra/diagnostic-events.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
@@ -16,6 +20,8 @@ afterEach(() => {
 
 describe("runtime tool schema quarantine logging", () => {
   it("does not re-read unreadable tool entries while logging diagnostics", () => {
+    const events: TrustedToolExecutionEvent[] = [];
+    const stop = onTrustedToolExecutionEvent((event) => events.push(event));
     const tools = new Proxy([] as AnyAgentTool[], {
       get(target, property, receiver) {
         if (property === "0") {
@@ -25,19 +31,32 @@ describe("runtime tool schema quarantine logging", () => {
       },
     });
 
-    expect(() =>
-      logRuntimeToolSchemaQuarantine({
-        diagnostics: [
-          {
-            toolName: "tool[0]",
-            toolIndex: 0,
-            violations: ["tool[0] is unreadable"],
-          },
-        ],
-        tools,
+    try {
+      expect(() =>
+        logRuntimeToolSchemaQuarantine({
+          diagnostics: [
+            {
+              toolName: "tool[0]",
+              toolIndex: 0,
+              violations: ["tool[0] is unreadable"],
+            },
+          ],
+          tools,
+          runId: "run-fuzzplugin-unreadable-tool",
+          agentId: "main",
+        }),
+      ).not.toThrow();
+    } finally {
+      stop();
+    }
+    expect(events).toMatchObject([
+      {
+        type: "tool.execution.blocked",
         runId: "run-fuzzplugin-unreadable-tool",
-      }),
-    ).not.toThrow();
+        agentId: "main",
+        toolName: "tool[0]",
+      },
+    ]);
   });
 
   it("clears this process's persisted quarantine after the tool schema recovers", async () => {
@@ -60,6 +79,7 @@ describe("runtime tool schema quarantine logging", () => {
           },
         ],
         runId: "run-recovered-tool",
+        agentId: "main",
       });
 
       expect(listPersistedRuntimeToolSchemaQuarantines()).toEqual([]);

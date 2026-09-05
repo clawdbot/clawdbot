@@ -1,13 +1,16 @@
 import Foundation
 import OpenClawKit
 
-enum TalkModeExecutionMode {
+enum TalkModeExecutionMode: Equatable {
     case native
+    case realtimeWebRTC
     case realtimeRelay
 }
 
 struct TalkRuntimeIssue: Equatable {
     enum Code: String {
+        case audioInputUnavailable = "audio_input_unavailable"
+        case realtimeOutputCancelFailed = "realtime_output_cancel_failed"
         case realtimeUnavailable = "realtime_unavailable"
     }
 
@@ -17,7 +20,6 @@ struct TalkRuntimeIssue: Equatable {
     let model: String?
     let transport: String?
     let phase: String?
-    let occurredAt: Date
 
     init(
         code: Code,
@@ -25,8 +27,7 @@ struct TalkRuntimeIssue: Equatable {
         provider: String? = nil,
         model: String? = nil,
         transport: String? = nil,
-        phase: String? = nil,
-        occurredAt: Date = Date())
+        phase: String? = nil)
     {
         self.code = code
         self.message = message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -34,33 +35,32 @@ struct TalkRuntimeIssue: Equatable {
         self.model = model?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.transport = transport?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.phase = phase?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.occurredAt = occurredAt
     }
 
     var displayMessage: String {
         if !self.message.isEmpty { return self.message }
-        return "Realtime voice did not start."
+        return String(localized: "Realtime voice did not start.")
     }
 
     var fallbackStatusText: String {
-        "Listening (iOS Speech fallback)"
+        String(localized: "Listening (iOS Speech fallback)")
     }
 
     var fallbackBannerTitle: String {
-        "Using iOS Speech fallback"
+        String(localized: "Using iOS Speech fallback")
     }
 
     var fallbackBannerOwnerLabel: String {
-        "Fallback active"
+        String(localized: "Fallback active")
     }
 
     var fallbackBannerMessage: String {
-        "Realtime voice did not start. Talk is running with iOS speech recognition and TTS."
+        String(localized: "Realtime voice did not start. Talk is running with iOS speech recognition and TTS.")
     }
 
     var technicalDetails: String {
         var lines = [
-            "code: \(self.code.rawValue)",
+            "code: \(code.rawValue)",
             "message: \(self.displayMessage)",
         ]
         if let provider, !provider.isEmpty { lines.append("provider: \(provider)") }
@@ -71,7 +71,7 @@ struct TalkRuntimeIssue: Equatable {
     }
 
     var diagnosticSummary: String {
-        var parts = [self.displayMessage]
+        var parts = [displayMessage]
         if let provider, !provider.isEmpty { parts.append("provider: \(provider)") }
         if let model, !model.isEmpty { parts.append("model: \(model)") }
         if let transport, !transport.isEmpty { parts.append("transport: \(transport)") }
@@ -201,7 +201,7 @@ enum TalkModeProviderSelection: String, CaseIterable, Identifiable {
     static let storageKey = "talk.providerSelection"
 
     var id: String {
-        self.rawValue
+        rawValue
     }
 
     var label: String {
@@ -221,19 +221,108 @@ enum TalkModeProviderSelection: String, CaseIterable, Identifiable {
     }
 }
 
+enum TalkModeRuntimeRoute: Equatable {
+    case localElevenLabs
+    case gatewayTalkSpeak
+    case realtimeWebRTC
+    case realtimeRelay
+
+    var usesRealtime: Bool {
+        self == .realtimeRelay || self == .realtimeWebRTC
+    }
+
+    var usesGatewayTalkSpeak: Bool {
+        self == .gatewayTalkSpeak
+    }
+
+    var gatewayOwnsCredentials: Bool {
+        self != .localElevenLabs
+    }
+}
+
+struct TalkModeResolvedRouting: Equatable {
+    let activeProvider: String
+    let executionMode: TalkModeExecutionMode
+    let realtimeProvider: String?
+    let realtimeModelId: String?
+    let route: TalkModeRuntimeRoute
+}
+
+enum TalkModeRoutingResolver {
+    static func resolve(
+        parsed: TalkModeGatewayConfigState,
+        providerSelection: TalkModeProviderSelection,
+        defaultProvider: String,
+        defaultRealtimeModelId: String) -> TalkModeResolvedRouting
+    {
+        var activeProvider = parsed.activeProvider
+        var realtimeProvider = parsed.realtimeProvider
+        var realtimeModelId = parsed.realtimeModelId
+        let route: TalkModeRuntimeRoute
+
+        switch providerSelection {
+        case .gatewayDefault:
+            // Only an explicit realtime config selects the realtime transport. Other Gateway
+            // speech providers stay native and synthesize through talk.speak.
+            if parsed.executionMode == .realtimeWebRTC {
+                route = .realtimeWebRTC
+            } else if parsed.executionMode == .realtimeRelay {
+                route = .realtimeRelay
+            } else if Self.normalized(activeProvider) == Self.normalized(defaultProvider) {
+                // Preserve the shipped local ElevenLabs path, including its streaming playback.
+                route = .localElevenLabs
+            } else {
+                route = .gatewayTalkSpeak
+            }
+        case .nativeElevenLabs:
+            activeProvider = defaultProvider
+            route = .localElevenLabs
+        case .openAIRealtime:
+            activeProvider = "openai"
+            realtimeProvider = "openai"
+            realtimeModelId = defaultRealtimeModelId
+            // Provider selection can replace provider details, but an explicit Gateway-owned
+            // realtime route must remain on the Gateway (for example, Azure-backed OpenAI).
+            route = parsed.openAIRequiresGatewayRealtimeTransport ? .realtimeRelay : .realtimeWebRTC
+        }
+
+        return TalkModeResolvedRouting(
+            activeProvider: activeProvider,
+            executionMode: Self.executionMode(for: route),
+            realtimeProvider: realtimeProvider,
+            realtimeModelId: realtimeModelId,
+            route: route)
+    }
+
+    private static func executionMode(for route: TalkModeRuntimeRoute) -> TalkModeExecutionMode {
+        switch route {
+        case .localElevenLabs, .gatewayTalkSpeak:
+            .native
+        case .realtimeWebRTC:
+            .realtimeWebRTC
+        case .realtimeRelay:
+            .realtimeRelay
+        }
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+}
+
 enum TalkModeRealtimeVoiceSelection {
     static let storageKey = "talk.realtime.voiceSelection"
     static let voices = [
         "alloy",
         "ash",
         "ballad",
+        "cedar",
         "coral",
         "echo",
+        "marin",
         "sage",
         "shimmer",
         "verse",
-        "marin",
-        "cedar",
     ]
 
     static func resolvedOverride(_ raw: String?) -> String? {
@@ -252,8 +341,11 @@ struct TalkModeGatewayConfigState {
     let normalizedPayload: Bool
     let missingResolvedPayload: Bool
     let executionMode: TalkModeExecutionMode
+    let requiresGatewayRealtimeTransport: Bool
+    let openAIRequiresGatewayRealtimeTransport: Bool
     let defaultVoiceId: String?
     let voiceAliases: [String: String]
+    let configuredModelId: String?
     let defaultModelId: String
     let defaultOutputFormat: String?
     let realtimeProvider: String?
@@ -280,37 +372,41 @@ enum TalkModeGatewayConfigParser {
             allowLegacyFallback: false)
         let activeProvider = selection?.provider ?? defaultProvider
         let activeConfig = selection?.config
-        let voiceAliases: [String: String]
-        if let aliases = activeConfig?["voiceAliases"]?.dictionaryValue {
-            var resolved: [String: String] = [:]
-            for (key, value) in aliases {
-                guard let id = value.stringValue else { continue }
-                let normalizedKey = key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                let trimmedId = id.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !normalizedKey.isEmpty, !trimmedId.isEmpty else { continue }
-                resolved[normalizedKey] = trimmedId
-            }
-            voiceAliases = resolved
-        } else {
-            voiceAliases = [:]
-        }
-        let model = Self.firstString(activeConfig, keys: ["modelId", "model"])
+        let voiceAliases = TalkVoiceAliases.normalizedMap(activeConfig?["voiceAliases"])
+        let model = TalkConfigParsing.firstNonEmptyString(activeConfig, keys: ["modelId", "model"])
         let defaultModelId = (model?.isEmpty == false) ? model! : defaultModelIdFallback
-        let defaultVoiceId = Self.firstString(activeConfig, keys: ["voiceId", "voice"])
-        let defaultOutputFormat = Self.firstString(activeConfig, keys: ["outputFormat"])
+        let defaultVoiceId = TalkConfigParsing.firstNonEmptyString(activeConfig, keys: ["voiceId", "voice"])
+        let defaultOutputFormat = TalkConfigParsing.firstNonEmptyString(activeConfig, keys: ["outputFormat"])
         let realtime = talk?["realtime"]?.dictionaryValue
         let realtimeProviders = realtime?["providers"]?.dictionaryValue
-        let realtimeProvider = Self.firstString(realtime, keys: ["provider"])
-            ?? Self.singleRealtimeProviderId(realtimeProviders)
-        let realtimeProviderConfig = Self.realtimeProviderConfig(
+        let realtimeProvider = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["provider"])
+            ?? TalkConfigParsing.singleRealtimeProviderID(realtimeProviders)
+        let realtimeProviderConfig = TalkConfigParsing.realtimeProviderConfig(
             providers: realtimeProviders,
             provider: realtimeProvider)
-        let realtimeModel = Self.firstString(realtime, keys: ["model"])
-            ?? Self.firstString(realtimeProviderConfig, keys: ["model"])
+        let realtimeModel = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["model"])
+            ?? TalkConfigParsing.firstNonEmptyString(realtimeProviderConfig, keys: ["model"])
         let realtimeModelId = realtimeModel ?? defaultRealtimeModelIdFallback
-        let realtimeVoiceId = Self.firstString(realtime, keys: ["voice"])
-            ?? Self.firstString(realtimeProviderConfig, keys: ["voice"])
-        let executionMode = Self.resolvedExecutionMode(realtime)
+        let realtimeVoiceId = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["voice"])
+            ?? TalkConfigParsing.firstNonEmptyString(realtimeProviderConfig, keys: ["voice"])
+        let realtimeTransport = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["transport"])?.lowercased()
+        // Direct provider WebRTC can answer before consulting the agent, so this explicit
+        // policy must stay on the relay that enforces final-transcript consultations.
+        let requiresForcedAgentConsultRelay = Self.requiresForcedAgentConsultRelay(realtime)
+        let requiresGatewayRealtimeTransport = requiresForcedAgentConsultRelay
+            || realtimeTransport == "gateway-relay"
+            || realtimeTransport == "provider-websocket"
+            || Self.usesAzureOpenAI(provider: realtimeProvider, config: realtimeProviderConfig)
+        let openAIProviderConfig = TalkConfigParsing.realtimeProviderConfig(
+            providers: realtimeProviders,
+            provider: "openai")
+        let openAIRequiresGatewayRealtimeTransport = requiresForcedAgentConsultRelay
+            || realtimeTransport == "gateway-relay"
+            || realtimeTransport == "provider-websocket"
+            || Self.usesAzureOpenAI(provider: "openai", config: openAIProviderConfig)
+        let executionMode = Self.resolvedExecutionMode(
+            realtime,
+            requiresGatewayRealtimeTransport: requiresGatewayRealtimeTransport)
         let rawConfigApiKey = activeConfig?["apiKey"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
         let interruptOnSpeech = talk?["interruptOnSpeech"]?.boolValue
         let silenceTimeoutMs = TalkConfigParsing.resolvedSilenceTimeoutMs(
@@ -323,8 +419,11 @@ enum TalkModeGatewayConfigParser {
             normalizedPayload: selection?.normalizedPayload == true,
             missingResolvedPayload: talk != nil && selection == nil,
             executionMode: executionMode,
+            requiresGatewayRealtimeTransport: requiresGatewayRealtimeTransport,
+            openAIRequiresGatewayRealtimeTransport: openAIRequiresGatewayRealtimeTransport,
             defaultVoiceId: defaultVoiceId,
             voiceAliases: voiceAliases,
+            configuredModelId: model,
             defaultModelId: defaultModelId,
             defaultOutputFormat: defaultOutputFormat,
             realtimeProvider: realtimeProvider,
@@ -336,51 +435,55 @@ enum TalkModeGatewayConfigParser {
             speechLocaleID: speechLocaleID)
     }
 
-    private static func firstString(_ config: [String: AnyCodable]?, keys: [String]) -> String? {
-        guard let config else { return nil }
-        for key in keys {
-            let value = config[key]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if value?.isEmpty == false {
-                return value
-            }
-        }
-        return nil
+    private static func requiresForcedAgentConsultRelay(_ realtime: [String: AnyCodable]?) -> Bool {
+        TalkConfigParsing.firstNonEmptyString(realtime, keys: ["consultRouting"])?.lowercased() == "force-agent-consult"
     }
 
-    private static func resolvedExecutionMode(_ realtime: [String: AnyCodable]?) -> TalkModeExecutionMode {
+    private static func resolvedExecutionMode(
+        _ realtime: [String: AnyCodable]?,
+        requiresGatewayRealtimeTransport: Bool) -> TalkModeExecutionMode
+    {
         guard let realtime else { return .native }
-        let mode = Self.firstString(realtime, keys: ["mode"])?.lowercased()
-        let transport = Self.firstString(realtime, keys: ["transport"])?.lowercased()
-        let brain = Self.firstString(realtime, keys: ["brain"])?.lowercased()
+        let mode = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["mode"])?.lowercased()
+        let transport = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["transport"])?.lowercased()
+        let provider = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["provider"])?.lowercased()
+            ?? TalkConfigParsing.singleRealtimeProviderID(realtime["providers"]?.dictionaryValue)?.lowercased()
+        let brain = TalkConfigParsing.firstNonEmptyString(realtime, keys: ["brain"])?.lowercased()
         guard mode == "realtime" else {
-            return .native
-        }
-        if transport == "managed-room" {
             return .native
         }
         if brain != nil, brain != "agent-consult" {
             return .native
         }
-        return .realtimeRelay
+        if requiresGatewayRealtimeTransport {
+            return .realtimeRelay
+        }
+        switch transport {
+        case "managed-room":
+            return .native
+        case "gateway-relay":
+            return .realtimeRelay
+        case "provider-websocket":
+            return .realtimeRelay
+        case "webrtc":
+            if provider != "openai" {
+                return .realtimeRelay
+            }
+        case nil:
+            if provider != "openai" {
+                return .realtimeRelay
+            }
+        default:
+            return .realtimeRelay
+        }
+        return .realtimeWebRTC
     }
 
-    private static func singleRealtimeProviderId(_ providers: [String: AnyCodable]?) -> String? {
-        guard let providers, providers.count == 1 else { return nil }
-        let provider = providers.keys.first?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return provider?.isEmpty == false ? provider : nil
-    }
-
-    private static func realtimeProviderConfig(
-        providers: [String: AnyCodable]?,
-        provider: String?) -> [String: AnyCodable]?
+    private static func usesAzureOpenAI(
+        provider: String?,
+        config: [String: AnyCodable]?) -> Bool
     {
-        guard let providers else { return nil }
-        if let provider {
-            return providers[provider]?.dictionaryValue
-        }
-        if providers.count == 1 {
-            return providers.values.first?.dictionaryValue
-        }
-        return nil
+        guard provider?.caseInsensitiveCompare("openai") == .orderedSame else { return false }
+        return TalkConfigParsing.firstNonEmptyString(config, keys: ["azureEndpoint", "azureDeployment"]) != nil
     }
 }

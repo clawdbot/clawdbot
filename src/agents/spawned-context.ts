@@ -4,9 +4,11 @@
  * Projects tool runtime context into persisted lineage, group routing, workspace, and inherited policy metadata.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
+import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.types.js";
 
 export type SpawnedRunMetadata = {
   spawnedBy?: string | null;
@@ -22,6 +24,9 @@ export type SpawnedToolContext = {
   agentGroupSpace?: string | null;
   agentMemberRoleIds?: string[];
   workspaceDir?: string;
+  /** Effective parent-turn level, including one-shot overrides, for child inheritance. */
+  requesterThinkingLevel?: ThinkLevel;
+  sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
 };
@@ -79,10 +84,19 @@ export function resolveSpawnedWorkspaceInheritance(params: {
   return agentId ? resolveAgentWorkspaceDir(params.config, normalizeAgentId(agentId)) : undefined;
 }
 
-/** Return a spawned run's ingress workspace override only for child runs. */
-export function resolveIngressWorkspaceOverrideForSpawnedRun(
-  metadata?: Pick<SpawnedRunMetadata, "spawnedBy" | "workspaceDir"> | null,
+/** Resolve the persisted workspace used when a session re-enters an agent runtime. */
+export function resolveIngressWorkspaceOverrideForSessionRun(
+  metadata?:
+    | (Pick<SpawnedRunMetadata, "spawnedBy" | "workspaceDir"> & {
+        cwd?: string | null;
+      })
+    | null,
 ): string | undefined {
   const normalized = normalizeSpawnedRunMetadata(metadata);
-  return normalized.spawnedBy ? normalized.workspaceDir : undefined;
+  if (normalized.spawnedBy) {
+    return normalized.workspaceDir;
+  }
+  // Dashboard worktree sessions are not subagents, so their managed cwd is
+  // also the workspace that sandbox setup must mount on every later turn.
+  return normalizeOptionalString(metadata?.cwd);
 }

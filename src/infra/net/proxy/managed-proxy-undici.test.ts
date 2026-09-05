@@ -5,13 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  resetActiveManagedProxyStateForTests,
   registerActiveManagedProxyUrl,
+  stopActiveManagedProxyRegistration,
+  type ActiveManagedProxyRegistration,
 } from "./active-proxy-state.js";
 import {
   addActiveManagedProxyTlsOptions,
   resolveActiveManagedProxyTlsOptions,
-  resolveManagedEnvHttpProxyAgentOptions,
 } from "./managed-proxy-undici.js";
 
 describe("managed proxy undici TLS options", () => {
@@ -24,16 +24,18 @@ describe("managed proxy undici TLS options", () => {
     "OPENCLAW_PROXY_CA_FILE",
   ] as const;
   const tempDirs: string[] = [];
+  const activeRegistrations: ActiveManagedProxyRegistration[] = [];
 
   beforeEach(() => {
-    resetActiveManagedProxyStateForTests();
     for (const key of envKeys) {
       vi.stubEnv(key, "");
     }
   });
 
   afterEach(() => {
-    resetActiveManagedProxyStateForTests();
+    for (const registration of activeRegistrations.splice(0)) {
+      stopActiveManagedProxyRegistration(registration);
+    }
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -50,10 +52,12 @@ describe("managed proxy undici TLS options", () => {
 
   it("adds active proxy CA trust only to matching explicit proxy URLs", () => {
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
-    registerActiveManagedProxyUrl(new URL("https://managed.example:8443"), {
-      loopbackMode: "gateway-only",
-      proxyTls: { ca: "active-managed-ca" },
-    });
+    activeRegistrations.push(
+      registerActiveManagedProxyUrl(new URL("https://managed.example:8443"), {
+        loopbackMode: "gateway-only",
+        proxyTls: { ca: "active-managed-ca" },
+      }),
+    );
 
     expect(
       addActiveManagedProxyTlsOptions({
@@ -95,20 +99,5 @@ describe("managed proxy undici TLS options", () => {
         proxyUrl: "https://account-proxy.example:8443",
       }),
     ).toBeUndefined();
-  });
-
-  it("loads inherited proxy CA trust from supplied env", () => {
-    const caFile = writeTempCa("supplied-env-managed-ca");
-
-    expect(
-      resolveManagedEnvHttpProxyAgentOptions({
-        OPENCLAW_PROXY_ACTIVE: "1",
-        HTTPS_PROXY: "https://managed.example:8443",
-        OPENCLAW_PROXY_CA_FILE: caFile,
-      }),
-    ).toStrictEqual({
-      httpsProxy: "https://managed.example:8443",
-      proxyTls: { ca: "supplied-env-managed-ca" },
-    });
   });
 });

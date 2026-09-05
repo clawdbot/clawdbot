@@ -20,7 +20,6 @@ export const boundaryTestFiles = [
   "test/extension-import-boundaries.test.ts",
   "test/extension-test-boundary.test.ts",
   "test/plugin-extension-import-boundary.test.ts",
-  "test/web-provider-boundary.test.ts",
 ];
 
 export const bundledPluginDependentUnitTestFiles = [
@@ -31,6 +30,8 @@ export const bundledPluginDependentUnitTestFiles = [
 
 export const unitTestAdditionalExcludePatterns = [
   "src/gateway/**",
+  "packages/gateway-client/**",
+  "packages/gateway-protocol/**",
   "src/hooks/**",
   "src/infra/**",
   `${BUNDLED_PLUGIN_ROOT_DIR}/**`,

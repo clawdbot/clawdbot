@@ -1,2 +1,5 @@
 // Firecrawl provider module implements model/runtime integration.
-export { createFirecrawlWebSearchProvider } from "./src/firecrawl-search-provider.js";
+export {
+  createFirecrawlFreeWebSearchProvider,
+  createFirecrawlWebSearchProvider,
+} from "./src/firecrawl-search-provider.js";

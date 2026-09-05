@@ -1,6 +1,8 @@
 // Collects startup speech provider metadata from plugin manifests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { resolveConfiguredTalkSpeechProviderId } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEffectiveTtsConfig } from "../tts/tts-config.js";
 
@@ -31,14 +33,8 @@ function isConfigActivationValueEnabled(value: unknown): boolean {
 }
 
 /** Normalizes configured TTS provider ids for startup plugin selection. */
-export function normalizeConfiguredSpeechProviderIdForStartup(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
+function normalizeConfiguredSpeechProviderIdForStartup(value: unknown): string | undefined {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return undefined;
-  }
   return normalized === "edge" ? "microsoft" : normalized;
 }
 
@@ -141,25 +137,20 @@ function addConfiguredTtsProviderIds(target: Set<string>, value: unknown): void 
   }
 }
 
-/** Collects TTS provider ids referenced by root, agent, channel, account, and plugin config. */
+/** Collects active Talk and TTS provider ids across root, agent, channel, and plugin config. */
 export function collectConfiguredSpeechProviderIds(config: OpenClawConfig): ReadonlySet<string> {
   const configured = new Set<string>();
   addConfiguredTtsProviderIds(configured, resolveEffectiveTtsConfig(config));
+  const talkProviderId = resolveConfiguredTalkSpeechProviderId(config);
+  if (talkProviderId) {
+    configured.add(talkProviderId.toLowerCase());
+  }
 
-  const agents = config.agents;
-  if (isRecord(agents) && Array.isArray(agents.list)) {
-    for (const agent of agents.list) {
-      if (isRecord(agent)) {
-        if (typeof agent.id === "string") {
-          addConfiguredTtsProviderIds(
-            configured,
-            resolveEffectiveTtsConfig(config, { agentId: agent.id }),
-          );
-        } else {
-          addConfiguredTtsProviderIds(configured, agent.tts);
-        }
-      }
-    }
+  for (const agent of listAgentEntries(config)) {
+    addConfiguredTtsProviderIds(
+      configured,
+      resolveEffectiveTtsConfig(config, { agentId: agent.id }),
+    );
   }
 
   const channels = config.channels;

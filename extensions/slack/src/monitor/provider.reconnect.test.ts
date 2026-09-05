@@ -2,15 +2,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   gracefulStopSlackApp,
+  publishSlackBlockedStatus,
   publishSlackConnectedStatus,
   publishSlackDisconnectedStatus,
   startSlackSocketAndWaitForDisconnect,
 } from "./provider-support.js";
 import {
-  formatSlackSocketReconnectMessage,
-  formatSlackSocketStartRetryMessage,
-} from "./provider.js";
-import { formatUnknownError, waitForSlackSocketDisconnect } from "./reconnect-policy.js";
+  formatSlackSocketModeSharedConnectionWarning,
+  formatUnknownError,
+  registerSlackSocketModeConnectionDiagnostics,
+  waitForSlackSocketDisconnect,
+} from "./reconnect-policy.js";
 
 class FakeEmitter {
   private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
@@ -62,10 +64,44 @@ describe("slack socket reconnect helpers", () => {
     expect(setStatus).toHaveBeenCalledTimes(1);
     const status = statusCallAt(setStatus, 0);
     expect(status?.connected).toBe(true);
+    expect(status?.running).toBe(true);
     expect(status?.lastConnectedAt).toBe(1_711_406_400_000);
-    expect(status?.healthState).toBe("healthy");
+    expect(status?.lifecycle).toBe("ready");
     expect(status?.lastError).toBeNull();
+    expect(status?.terminalDisconnect).toBeUndefined();
     expect(status).not.toHaveProperty("lastEventAt");
+  });
+
+  it("marks socket mode degraded when boot identity is unavailable", () => {
+    const setStatus = vi.fn();
+    vi.spyOn(Date, "now").mockReturnValue(1_711_406_400_500);
+
+    publishSlackConnectedStatus(setStatus, {
+      lifecycle: "blocked",
+      lastError: "auth.test returned no user_id",
+    });
+
+    expect(setStatus).toHaveBeenCalledTimes(1);
+    expect(setStatus).toHaveBeenCalledWith({
+      connected: true,
+      lastConnectedAt: 1_711_406_400_500,
+      terminalDisconnect: true,
+      lifecycle: "blocked",
+      lastError: "auth.test returned no user_id",
+    });
+  });
+
+  it("marks non-recoverable socket authentication failures blocked", () => {
+    const setStatus = vi.fn();
+
+    publishSlackBlockedStatus(setStatus, new Error("invalid_auth"));
+
+    expect(setStatus).toHaveBeenCalledWith({
+      connected: false,
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+      lastError: "invalid_auth",
+    });
   });
 
   it("marks socket mode disconnected when an error closes the socket", () => {
@@ -78,7 +114,7 @@ describe("slack socket reconnect helpers", () => {
     expect(setStatus).toHaveBeenCalledTimes(1);
     expect(setStatus).toHaveBeenCalledWith({
       connected: false,
-      healthState: "disconnected",
+      lifecycle: "recovering",
       lastDisconnect: {
         at: 1_711_406_401_000,
         error: "dns down",
@@ -96,22 +132,12 @@ describe("slack socket reconnect helpers", () => {
     expect(setStatus).toHaveBeenCalledTimes(1);
     expect(setStatus).toHaveBeenCalledWith({
       connected: false,
-      healthState: "disconnected",
+      lifecycle: "recovering",
       lastDisconnect: {
         at: 1_711_406_402_000,
       },
       lastError: null,
     });
-  });
-
-  it("formats recoverable disconnects beyond the former cap as unlimited", () => {
-    expect(
-      formatSlackSocketReconnectMessage({
-        event: "disconnect",
-        attempt: 13,
-        delayMs: 2_340,
-      }),
-    ).toBe("slack socket disconnected (disconnect); reconnecting in 2s (attempt 13/∞)");
   });
 
   it("formats missing and unserializable socket errors without leaking undefined", () => {
@@ -142,29 +168,57 @@ describe("slack socket reconnect helpers", () => {
     );
   });
 
-  it("formats socket start retries with an explicit reason field", () => {
-    expect(
-      formatSlackSocketStartRetryMessage({
-        attempt: 13,
-        delayMs: 2_340,
-        error: undefined,
-      }),
-    ).toBe(
-      'slack socket mode failed to start; retry 13/∞ in 2s reason="Slack Socket Mode start failed without error detail"',
+  it("formats shared Socket Mode connection warnings with remediation", () => {
+    expect(formatSlackSocketModeSharedConnectionWarning(2)).toContain(
+      "slack socket mode reports 2 active connections for this Slack app",
+    );
+    expect(formatSlackSocketModeSharedConnectionWarning(2)).toContain(
+      "equivalent routing and authorization",
     );
   });
 
-  it("includes last SDK log context when start errors have no detail", () => {
-    expect(
-      formatSlackSocketStartRetryMessage({
-        attempt: 1,
-        delayMs: 2_340,
-        error: undefined,
-        sdkContext: "socket-mode:SlackWebSocket:1 Failed to retrieve WSS URL",
-      }),
-    ).toBe(
-      'slack socket mode failed to start; retry 1/∞ in 2s reason="Slack Socket Mode start failed without error detail; last SDK log: socket-mode:SlackWebSocket:1 Failed to retrieve WSS URL"',
+  it("warns once when Slack reports a shared Socket Mode app token", () => {
+    const client = new FakeEmitter();
+    const onSharedConnection = vi.fn();
+    const unregister = registerSlackSocketModeConnectionDiagnostics({
+      app: { receiver: { client } },
+      onSharedConnection,
+    });
+
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "events_api", payload: { text: "hello" } })),
+      false,
     );
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: "2" })),
+      false,
+    );
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: 1 })),
+      false,
+    );
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: 4 })),
+      true,
+    );
+    client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 2 }), false);
+    client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 3 }), false);
+
+    expect(onSharedConnection).toHaveBeenCalledTimes(1);
+    expect(onSharedConnection).toHaveBeenCalledWith(2);
+
+    unregister();
+    client.emit(
+      "ws_message",
+      Buffer.from(JSON.stringify({ type: "hello", num_connections: 2 })),
+      false,
+    );
+    expect(onSharedConnection).toHaveBeenCalledTimes(1);
+    expect(client.listenerCount("ws_message")).toBe(0);
   });
 
   it("resolves disconnect waiter on socket disconnect event", async () => {
@@ -175,17 +229,6 @@ describe("slack socket reconnect helpers", () => {
     client.emit("disconnected");
 
     await expect(waiter).resolves.toEqual({ event: "disconnect" });
-  });
-
-  it("resolves disconnect waiter on socket error event", async () => {
-    const client = new FakeEmitter();
-    const app = { receiver: { client } };
-    const err = new Error("dns down");
-
-    const waiter = waitForSlackSocketDisconnect(app as never);
-    client.emit("error", err);
-
-    await expect(waiter).resolves.toEqual({ event: "error", error: err });
   });
 
   it("installs the disconnect waiter before socket start completes", async () => {

@@ -1,0 +1,363 @@
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
+import { upsertSessionEntryCore } from "./session-accessor.js";
+import {
+  addSessionSuggestion,
+  claimSessionSuggestionDispatch,
+  finalizeSessionSuggestionClaim,
+  listSessionSuggestions,
+  releaseSessionSuggestionDispatch,
+  SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
+} from "./session-suggestion-store.js";
+
+const MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR = 20;
+const MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS = 200;
+
+function resolvePendingSuggestion(params: {
+  scope: { agentId: string; env: NodeJS.ProcessEnv; sessionKey: string };
+  id: string;
+  state: "accepted" | "dismissed";
+  expectedSessionId: string;
+}) {
+  const claim = claimSessionSuggestionDispatch(params.scope, {
+    id: params.id,
+    resolution: params.state === "accepted" ? "edit" : "dismiss",
+    expectedSessionId: params.expectedSessionId,
+  });
+  return claim?.kind === "claimed"
+    ? finalizeSessionSuggestionClaim(params.scope, {
+        id: params.id,
+        token: claim.token,
+        state: params.state,
+        expectedSessionId: params.expectedSessionId,
+      })
+    : null;
+}
+
+afterEach(() => closeOpenClawAgentDatabasesForTest());
+
+describe("session suggestion store", () => {
+  it("keeps deterministic rows and resolves only pending suggestions", async () => {
+    await withTestDir({ prefix: "openclaw-session-suggestions-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
+
+      expect(listSessionSuggestions(scope)).toEqual([]);
+      addSessionSuggestion(scope, {
+        id: "b",
+        authorId: "bob",
+        text: "second",
+        createdAt: 3,
+        expectedSessionId: "session-a",
+      });
+      addSessionSuggestion(scope, {
+        id: "a",
+        authorId: "alice",
+        authorLabel: "Alice",
+        text: "  first\n",
+        createdAt: 2,
+        expectedSessionId: "session-a",
+      });
+
+      expect(listSessionSuggestions(scope).map((item) => item.id)).toEqual(["a", "b"]);
+      expect(listSessionSuggestions(scope, { authorId: "alice" })).toEqual([
+        expect.objectContaining({ text: "  first\n" }),
+      ]);
+      expect(
+        resolvePendingSuggestion({
+          scope,
+          id: "a",
+          state: "accepted",
+          expectedSessionId: "session-a",
+        })?.state,
+      ).toBe("accepted");
+      expect(
+        resolvePendingSuggestion({
+          scope,
+          id: "a",
+          state: "dismissed",
+          expectedSessionId: "session-a",
+        }),
+      ).toBeNull();
+      expect(listSessionSuggestions(scope, { pendingOnly: true }).map((item) => item.id)).toEqual([
+        "b",
+      ]);
+    });
+  });
+
+  it("does not recreate a missing canonical suggestions table", async () => {
+    await withTestDir({ prefix: "openclaw-session-suggestions-missing-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
+      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+      database.db.exec("DROP TABLE session_suggestions;");
+
+      expect(() => listSessionSuggestions(scope)).toThrow(/no such table: session_suggestions/);
+      expect(
+        database.db
+          .prepare(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'session_suggestions'",
+          )
+          .get(),
+      ).toBeUndefined();
+    });
+  });
+
+  it("binds writes to the session instance and clears rows on replacement", async () => {
+    await withTestDir({ prefix: "openclaw-session-suggestions-reset-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
+      addSessionSuggestion(scope, {
+        id: "suggestion",
+        authorId: "alice",
+        text: "do this",
+        expectedSessionId: "session-a",
+      });
+      expect(() =>
+        addSessionSuggestion(scope, {
+          authorId: "alice",
+          text: "stale",
+          expectedSessionId: "session-b",
+        }),
+      ).toThrow(/session changed/);
+
+      await upsertSessionEntryCore(scope, { sessionId: "session-b", updatedAt: 2 });
+      expect(listSessionSuggestions(scope)).toEqual([]);
+    });
+  });
+
+  it("skips suggestion identity checks only when the expected instance is omitted", async () => {
+    await withTestDir({ prefix: "openclaw-session-suggestions-identity-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
+      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+      database.db
+        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+        .run("{", scope.sessionKey);
+      const mutations = [
+        (expectedSessionId?: string) =>
+          addSessionSuggestion(scope, {
+            id: "suggestion",
+            authorId: "author",
+            text: "idea",
+            expectedSessionId,
+          }),
+        (expectedSessionId?: string) =>
+          claimSessionSuggestionDispatch(scope, {
+            id: "suggestion",
+            resolution: "edit",
+            expectedSessionId,
+          }),
+        (expectedSessionId?: string) =>
+          releaseSessionSuggestionDispatch(scope, {
+            id: "suggestion",
+            token: "other-token",
+            expectedSessionId,
+          }),
+        (expectedSessionId?: string) =>
+          finalizeSessionSuggestionClaim(scope, {
+            id: "suggestion",
+            token: "other-token",
+            state: "accepted",
+            expectedSessionId,
+          }),
+      ];
+      for (const mutate of mutations) {
+        for (const expectedSessionId of ["session-a", ""]) {
+          expect(() => mutate(expectedSessionId)).toThrow(SessionWorkStartInvalidatedError);
+          expect(() => mutate(expectedSessionId)).toThrow(
+            "session changed before suggestion mutation",
+          );
+        }
+        expect(() => mutate()).not.toThrow();
+      }
+    });
+  });
+
+  it.each([
+    ["ordinary", "alice", true],
+    ["embedded NUL", "a\0b", true],
+    ["lone surrogate", "\ud800", false],
+  ] as const)("bounds pending suggestions for %s author IDs", async (_, authorId, capped) => {
+    await withTestDir({ prefix: "openclaw-session-suggestions-limit-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
+      for (let index = 0; index < MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR; index += 1) {
+        addSessionSuggestion(scope, {
+          id: `suggestion-${index}`,
+          authorId,
+          text: `idea ${index}`,
+          expectedSessionId: "session-a",
+        });
+      }
+      const addAtLimit = () =>
+        addSessionSuggestion(scope, {
+          authorId,
+          text: "one too many",
+          expectedSessionId: "session-a",
+        });
+      if (capped) {
+        expect(addAtLimit).toThrow(/author pending suggestion limit/);
+      } else {
+        expect(addAtLimit).not.toThrow();
+      }
+
+      resolvePendingSuggestion({
+        scope,
+        id: "suggestion-0",
+        state: "dismissed",
+        expectedSessionId: "session-a",
+      });
+      expect(() =>
+        addSessionSuggestion(scope, {
+          authorId,
+          text: "replacement",
+          expectedSessionId: "session-a",
+        }),
+      ).not.toThrow();
+    });
+  });
+
+  it("checks the session cap before the author cap and frees admission after resolution", async () => {
+    await withTestDir({ prefix: "openclaw-session-suggestions-session-limit-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
+      for (let index = 0; index < 100; index += 1) {
+        addSessionSuggestion(scope, {
+          id: `suggestion-${index}`,
+          authorId: `author-${Math.floor(index / MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR)}`,
+          text: "idea",
+          expectedSessionId: "session-a",
+        });
+      }
+      const add = (authorId: string) =>
+        addSessionSuggestion(scope, { authorId, text: "next", expectedSessionId: "session-a" });
+      expect(() => add("author-0")).toThrow("session pending suggestion limit reached");
+      resolvePendingSuggestion({
+        scope,
+        id: "suggestion-20",
+        state: "dismissed",
+        expectedSessionId: "session-a",
+      });
+      expect(() => add("author-0")).toThrow("author pending suggestion limit reached");
+      expect(() => add("author-1")).not.toThrow();
+      expect(listSessionSuggestions(scope, { pendingOnly: true })).toHaveLength(100);
+    });
+  });
+
+  it("prunes old resolved suggestions on subsequent writes", async () => {
+    await withTestDir({ prefix: "openclaw-session-suggestions-retention-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
+      for (let index = 0; index <= MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS; index += 1) {
+        const id = index === 0 ? "z-oldest" : index === 1 ? "a-oldest" : `resolved-${index}`;
+        addSessionSuggestion(scope, {
+          id,
+          authorId: "alice",
+          text: `resolved ${index}`,
+          createdAt: index < 2 ? 1 : index + 1,
+          expectedSessionId: "session-a",
+        });
+        resolvePendingSuggestion({
+          scope,
+          id,
+          state: index % 2 === 0 ? "accepted" : "dismissed",
+          expectedSessionId: "session-a",
+        });
+      }
+      const rows = listSessionSuggestions(scope);
+      expect(rows.filter((row) => row.state !== "pending")).toHaveLength(
+        MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS,
+      );
+      expect(rows.some((row) => row.id === "a-oldest")).toBe(false);
+      expect(rows.some((row) => row.id === "z-oldest")).toBe(true);
+    });
+  });
+
+  it("durably claims dispatch and permits only same-action stale recovery", async () => {
+    await withTestDir({ prefix: "openclaw-session-suggestions-claim-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntryCore(scope, { sessionId: "session-a", updatedAt: 1 });
+      addSessionSuggestion(scope, {
+        id: "claimed",
+        authorId: "alice",
+        text: "dispatch me",
+        expectedSessionId: "session-a",
+      });
+
+      const first = claimSessionSuggestionDispatch(scope, {
+        id: "claimed",
+        resolution: "send",
+        expectedSessionId: "session-a",
+        now: 1_000,
+      });
+      expect(first?.kind).toBe("claimed");
+      expect(
+        claimSessionSuggestionDispatch(scope, {
+          id: "claimed",
+          resolution: "send",
+          expectedSessionId: "session-a",
+          now: 1_001,
+        }),
+      ).toEqual({ kind: "busy" });
+      expect(
+        resolvePendingSuggestion({
+          scope,
+          id: "claimed",
+          state: "dismissed",
+          expectedSessionId: "session-a",
+        }),
+      ).toBeNull();
+
+      expect(
+        claimSessionSuggestionDispatch(scope, {
+          id: "claimed",
+          resolution: "queue",
+          expectedSessionId: "session-a",
+          now: 1_000 + SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
+        }),
+      ).toEqual({ kind: "mismatch", resolution: "send" });
+      const recovered = claimSessionSuggestionDispatch(scope, {
+        id: "claimed",
+        resolution: "send",
+        expectedSessionId: "session-a",
+        now: 1_000 + SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
+      });
+      expect(recovered?.kind).toBe("claimed");
+      if (recovered?.kind !== "claimed") {
+        throw new Error("expected recovered claim");
+      }
+      expect(
+        first?.kind === "claimed"
+          ? finalizeSessionSuggestionClaim(scope, {
+              id: "claimed",
+              token: first.token,
+              state: "accepted",
+              expectedSessionId: "session-a",
+            })
+          : null,
+      ).toBeNull();
+      expect(
+        finalizeSessionSuggestionClaim(scope, {
+          id: "claimed",
+          token: recovered.token,
+          state: "accepted",
+          expectedSessionId: "session-a",
+        })?.state,
+      ).toBe("accepted");
+    });
+  });
+});

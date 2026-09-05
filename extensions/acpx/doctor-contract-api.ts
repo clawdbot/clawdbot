@@ -1,7 +1,12 @@
-// ACPX doctor contract migrates shipped plugin-owned runtime state.
+// ACPX doctor contract repairs shipped config and migrates plugin-owned runtime state.
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  archiveLegacyStateSource,
+  asObjectRecord,
+  type PluginDoctorStateMigration,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   normalizeAcpxProcessLease,
   normalizeAcpxProcessLeaseFile,
@@ -18,21 +23,53 @@ import {
   type AcpxGatewayInstanceRecord,
 } from "./src/state.js";
 
+const ACPX_CONFIG_PATH = ["plugins", "entries", "acpx", "config"] as const;
+const RETIRED_ACPX_CONFIG_KEYS = ["strictWindowsCmdWrapper", "queueOwnerTtlSeconds"] as const;
+
+/** Retired ACPX config that `openclaw doctor --fix` removes before strict validation. */
+export const legacyConfigRules = RETIRED_ACPX_CONFIG_KEYS.map((key) => ({
+  path: [...ACPX_CONFIG_PATH, key],
+  message: `${[...ACPX_CONFIG_PATH, key].join(".")} is retired and ignored by the embedded ACPX runtime. Run "openclaw doctor --fix".`,
+}));
+
+/** Removes retired plugin-owned config without keeping runtime compatibility keys. */
+export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  const entry = asObjectRecord(cfg.plugins?.entries?.acpx);
+  const pluginConfig = asObjectRecord(entry?.config);
+  const retiredKeys = RETIRED_ACPX_CONFIG_KEYS.filter((key) =>
+    Object.hasOwn(pluginConfig ?? {}, key),
+  );
+  if (!pluginConfig || retiredKeys.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+
+  const nextConfig = structuredClone(cfg);
+  const nextEntry = asObjectRecord(nextConfig.plugins?.entries?.acpx);
+  const nextPluginConfig = asObjectRecord(nextEntry?.config);
+  if (!nextPluginConfig) {
+    return { config: cfg, changes: [] };
+  }
+  for (const key of retiredKeys) {
+    delete nextPluginConfig[key];
+  }
+
+  return {
+    config: nextConfig,
+    changes: [
+      `Removed retired ACPX plugin config: ${retiredKeys.map((key) => [...ACPX_CONFIG_PATH, key].join(".")).join(", ")}.`,
+    ],
+  };
+}
+
 function resolveLegacyGatewayInstancePath(stateDir: string): string {
   return path.join(stateDir, ACPX_LEGACY_GATEWAY_INSTANCE_FILE);
 }
 
 function resolveLegacyProcessLeasePath(stateDir: string): string {
   return path.join(stateDir, "acpx", ACPX_LEGACY_PROCESS_LEASE_FILE);
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
 }
 
 async function readLegacyGatewayInstanceId(filePath: string): Promise<string | null> {
@@ -52,27 +89,6 @@ async function readLegacyOpenProcessLeases(filePath: string): Promise<AcpxProces
     return leaseFile.leases.filter((lease) => lease.state === "open" || lease.state === "closing");
   } catch {
     return [];
-  }
-}
-
-async function archiveLegacySource(params: {
-  filePath: string;
-  label: string;
-  changes: string[];
-  warnings: string[];
-}): Promise<void> {
-  const archivedPath = `${params.filePath}.migrated`;
-  if (await fileExists(archivedPath)) {
-    params.warnings.push(
-      `Left migrated ACPX ${params.label} source in place because ${archivedPath} already exists`,
-    );
-    return;
-  }
-  try {
-    await fs.rename(params.filePath, archivedPath);
-    params.changes.push(`Archived ACPX ${params.label} legacy source -> ${archivedPath}`);
-  } catch (err) {
-    params.warnings.push(`Failed archiving ACPX ${params.label} legacy source: ${String(err)}`);
   }
 }
 
@@ -171,9 +187,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       }
 
       if (gatewayInstanceId) {
-        await archiveLegacySource({
+        await archiveLegacyStateSource({
           filePath: gatewayInstancePath,
-          label: "gateway-instance-id",
+          label: "ACPX gateway-instance-id",
           changes,
           warnings,
         });
@@ -193,15 +209,31 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         changes.push(
           `Migrated ACPX process leases -> plugin state (${imported} imported, ${alreadyPresent} already present)`,
         );
-        await archiveLegacySource({
+        await archiveLegacyStateSource({
           filePath: processLeasePath,
-          label: "process-leases",
+          label: "ACPX process-leases",
           changes,
           warnings,
         });
       }
 
       return { changes, warnings };
+    },
+  },
+  {
+    id: "acpx-session-owner-resources",
+    label: "ACP session owners",
+    doctorOnly: true,
+    phase: "after-session-repair",
+    async detectLegacyState(input) {
+      return (
+        await import("./src/session-owner-migration.js")
+      ).acpxSessionOwnerMigration.detectLegacyState(input);
+    },
+    async migrateLegacyState(input) {
+      return (
+        await import("./src/session-owner-migration.js")
+      ).acpxSessionOwnerMigration.migrateLegacyState(input);
     },
   },
 ];

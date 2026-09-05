@@ -10,6 +10,8 @@ import {
   type FeishuDirectoryPeer,
 } from "./directory.static.js";
 
+const MAX_FEISHU_DIRECTORY_PAGES = 100;
+
 export async function listFeishuDirectoryPeersLive(params: {
   cfg: ClawdbotConfig;
   query?: string;
@@ -73,6 +75,7 @@ export async function listFeishuDirectoryGroupsLive(params: {
   limit?: number;
   accountId?: string;
   fallbackToStatic?: boolean;
+  filter?: (group: FeishuDirectoryGroup) => boolean;
 }): Promise<FeishuDirectoryGroup[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {
@@ -83,36 +86,52 @@ export async function listFeishuDirectoryGroupsLive(params: {
     const client = createFeishuClient(account);
     const groups: FeishuDirectoryGroup[] = [];
     const limit = params.limit ?? 50;
-
-    const response = await client.im.chat.list({
-      params: {
-        page_size: Math.min(limit, 100),
-      },
-    });
-
-    if (response.code !== 0) {
-      throw new Error(response.msg || `code ${response.code}`);
-    }
-
     const q = normalizeLowercaseStringOrEmpty(params.query);
-    for (const chat of response.data?.items ?? []) {
-      if (chat.chat_id) {
-        const name = chat.name || "";
-        if (
-          !q ||
-          normalizeLowercaseStringOrEmpty(chat.chat_id).includes(q) ||
-          normalizeLowercaseStringOrEmpty(name).includes(q)
-        ) {
-          groups.push({
+    let pageToken: string | undefined;
+    let pages = 0;
+    const seenPageTokens = new Set<string>();
+    do {
+      const response = await client.im.chat.list({
+        params: {
+          page_size: Math.min(limit, 100),
+          page_token: pageToken,
+        },
+      });
+      if (response.code !== 0) {
+        throw new Error(response.msg || `code ${response.code}`);
+      }
+      for (const chat of response.data?.items ?? []) {
+        if (chat.chat_id) {
+          const name = chat.name || "";
+          const group = {
             kind: "group",
             id: chat.chat_id,
             name: name || undefined,
-          });
+          } satisfies FeishuDirectoryGroup;
+          const matchesQuery =
+            !q ||
+            normalizeLowercaseStringOrEmpty(chat.chat_id).includes(q) ||
+            normalizeLowercaseStringOrEmpty(name).includes(q);
+          if (matchesQuery && (!params.filter || params.filter(group))) {
+            groups.push(group);
+          }
+        }
+        if (groups.length >= limit) {
+          break;
         }
       }
-      if (groups.length >= limit) {
-        break;
+      pages += 1;
+      const nextPageToken = response.data?.has_more ? response.data.page_token : undefined;
+      if (nextPageToken && seenPageTokens.has(nextPageToken)) {
+        throw new Error("Feishu live group directory returned a repeated page token");
       }
+      if (nextPageToken) {
+        seenPageTokens.add(nextPageToken);
+      }
+      pageToken = nextPageToken;
+    } while (pageToken && groups.length < limit && pages < MAX_FEISHU_DIRECTORY_PAGES);
+    if (pageToken && pages >= MAX_FEISHU_DIRECTORY_PAGES) {
+      throw new Error("Feishu live group directory pagination limit exceeded");
     }
 
     return groups;

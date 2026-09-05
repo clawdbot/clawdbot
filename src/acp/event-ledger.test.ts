@@ -1,14 +1,14 @@
-/** Tests ACP event ledger recording, replay, retention, and SQLite migration. */
-import fs from "node:fs/promises";
+/** Tests ACP event ledger recording, replay, retention, and SQLite persistence. */
 import path from "node:path";
+import { constants } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
-  createInMemoryAcpEventLedger,
-  createSqliteAcpEventLedger,
-  migrateFileAcpEventLedgerToSqlite,
-} from "./event-ledger.js";
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import { createInMemoryAcpEventLedger, createSqliteAcpEventLedger } from "./event-ledger.js";
 
 describe("ACP event ledger", () => {
   afterEach(() => {
@@ -116,8 +116,8 @@ describe("ACP event ledger", () => {
     });
   });
 
-  it("persists SQLite-backed replay state across ledger instances", async () => {
-    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+  it("persists replay without reading old payloads during session writes or rejected replays", async () => {
+    await withTestDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
       const databasePath = path.join(dir, "openclaw.sqlite");
       const first = createSqliteAcpEventLedger({ path: databasePath, now: () => 1000 });
       await first.startSession({
@@ -135,87 +135,72 @@ describe("ACP event ledger", () => {
           content: { type: "text", text: "Thinking" },
         },
       });
+      await expect(
+        first.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
+      ).resolves.toMatchObject({ complete: true });
+
+      const session = {
+        sessionId: "session-1",
+        sessionKey: "agent:main:canonical-work",
+        cwd: "/new-work",
+        complete: false,
+      };
+      const { db } = openOpenClawStateDatabase({ path: databasePath });
+      // Payload access is unnecessary for append/metadata work and rejected
+      // replay; making it fail exposes accidental full-history hydration.
+      db.setAuthorizer((action, table, column) =>
+        action === constants.SQLITE_READ &&
+        table === "acp_replay_events" &&
+        column === "update_json"
+          ? constants.SQLITE_DENY
+          : constants.SQLITE_OK,
+      );
+      try {
+        await first.recordUpdate({
+          ...session,
+          runId: "run-1",
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Answer" },
+          },
+        });
+        await first.startSession(session);
+        await expect(
+          first.readReplay({ ...session, sessionKey: "agent:main:work" }),
+        ).resolves.toEqual({ complete: false, events: [] });
+        await first.markIncomplete(session);
+        await expect(first.readReplay(session)).resolves.toEqual({ complete: false, events: [] });
+        await expect(first.readReplayBySessionId(session)).resolves.toEqual({
+          complete: false,
+          events: [],
+        });
+        await first.startSession({ ...session, complete: true });
+      } finally {
+        db.setAuthorizer(null);
+      }
 
       closeOpenClawStateDatabaseForTest();
       const second = createSqliteAcpEventLedger({ path: databasePath });
-      const replay = await second.readReplay({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-      });
+      const replay = await second.readReplay(session);
 
       expect(replay.complete).toBe(true);
-      expect(replay.events).toHaveLength(1);
+      expect(replay.events.map((event) => [event.seq, event.sessionKey])).toEqual([
+        [1, "agent:main:work"],
+        [2, "agent:main:canonical-work"],
+      ]);
       expect(replay.events[0]?.update).toEqual({
         sessionUpdate: "agent_thought_chunk",
         content: { type: "text", text: "Thinking" },
       });
-    });
-  });
-
-  it("imports legacy file-backed replay state into SQLite", async () => {
-    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const filePath = path.join(dir, "acp", "event-ledger.json");
-      const databasePath = path.join(dir, "openclaw.sqlite");
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(
-        filePath,
-        JSON.stringify({
-          version: 1,
-          sessions: {
-            "session-1": {
-              sessionId: "session-1",
-              sessionKey: "agent:main:work",
-              cwd: "/work",
-              complete: true,
-              createdAt: 1000,
-              updatedAt: 1000,
-              nextSeq: 2,
-              events: [
-                {
-                  seq: 1,
-                  at: 1000,
-                  sessionId: "session-1",
-                  sessionKey: "agent:main:work",
-                  runId: "run-1",
-                  update: {
-                    sessionUpdate: "agent_message_chunk",
-                    content: { type: "text", text: "Answer" },
-                  },
-                },
-              ],
-            },
-          },
-        }),
-        "utf8",
-      );
-
-      const migrated = await migrateFileAcpEventLedgerToSqlite({
-        filePath,
-        path: databasePath,
-        archiveSource: true,
-      });
-      const sqlite = createSqliteAcpEventLedger({ path: databasePath });
-      const replay = await sqlite.readReplay({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-      });
-
-      expect(migrated).toEqual({
-        importedSessions: 1,
-        importedEvents: 1,
-        archived: true,
-      });
-      expect(replay.complete).toBe(true);
-      expect(replay.events[0]?.update).toEqual({
+      expect(replay.events[1]?.update).toEqual({
         sessionUpdate: "agent_message_chunk",
         content: { type: "text", text: "Answer" },
       });
-      await expect(fs.stat(`${filePath}.migrated`)).resolves.toBeTruthy();
     });
   });
 
   it("marks SQLite-backed replay incomplete when event retention truncates history", async () => {
-    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
       const ledger = createSqliteAcpEventLedger({
         path: path.join(dir, "openclaw.sqlite"),
         maxEventsPerSession: 1,
@@ -246,6 +231,65 @@ describe("ACP event ledger", () => {
       await expect(
         ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
       ).resolves.toEqual({ complete: false, events: [] });
+    });
+  });
+
+  it("keeps footprint aggregates consistent while the byte budget evicts", async () => {
+    await withTestDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      const databasePath = path.join(dir, "openclaw.sqlite");
+      const ledger = createSqliteAcpEventLedger({
+        path: databasePath,
+        // Small enough that appends force byte-budget eviction repeatedly.
+        maxSerializedBytes: 4_096,
+      });
+      for (let session = 0; session < 3; session += 1) {
+        await ledger.startSession({
+          sessionId: `session-${session}`,
+          sessionKey: `agent:main:budget-${session}`,
+          cwd: "/work",
+          complete: true,
+        });
+        for (let index = 0; index < 40; index += 1) {
+          // Halfway through, the provisional key becomes a longer canonical
+          // key: the row-overhead component of the aggregate must follow.
+          const sessionKey =
+            index < 20
+              ? `agent:main:budget-${session}`
+              : `agent:main:budget-${session}:canonical-rebound`;
+          await ledger.recordUpdate({
+            sessionId: `session-${session}`,
+            sessionKey,
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: `payload-${session}-${index}-${"x".repeat(64)}` },
+            },
+          });
+        }
+      }
+
+      const { DatabaseSync } = requireNodeSqlite();
+      const db = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        // The maintained aggregate must equal ground truth recomputed from
+        // stored rows: drift here would silently unbound the ledger again.
+        const aggregate = db
+          .prepare("SELECT COALESCE(SUM(estimated_bytes), 0) AS total FROM acp_replay_sessions")
+          .get() as { total: number | bigint };
+        const groundTruth = db
+          .prepare(
+            `SELECT
+               (SELECT COALESCE(SUM(length(session_id) + length(session_key) + length(cwd) + 32), 0)
+                  FROM acp_replay_sessions)
+             + (SELECT COALESCE(SUM(length(session_id) + length(session_key) + length(update_json)
+                   + COALESCE(length(run_id), 0) + 32), 0)
+                  FROM acp_replay_events) AS total`,
+          )
+          .get() as { total: number | bigint };
+        expect(Number(aggregate.total)).toBe(Number(groundTruth.total));
+        expect(Number(aggregate.total)).toBeLessThanOrEqual(4_096);
+      } finally {
+        db.close();
+      }
     });
   });
 
@@ -427,5 +471,4 @@ describe("ACP event ledger", () => {
       ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
     ).resolves.toEqual({ complete: false, events: [] });
   });
-
 });

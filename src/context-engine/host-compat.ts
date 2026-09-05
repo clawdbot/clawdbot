@@ -13,7 +13,15 @@ export type ContextEngineHostSupport = {
   capabilities: readonly ContextEngineHostCapability[];
 };
 
-export const GENERIC_CLI_CONTEXT_ENGINE_HOST_CAPABILITIES = [
+/** Return whether an engine implements the durable method matching its declared contract. */
+export function supportsContextEngineDurableTurnAdvancement(engine: ContextEngine): boolean {
+  return (
+    engine.info.transcriptSemantics?.turnAdvancementIdempotency === "atomic-idempotent-v1" &&
+    typeof engine.commitTurn === "function"
+  );
+}
+
+const GENERIC_CLI_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "bootstrap",
   "after-turn",
   "maintain",
@@ -46,7 +54,7 @@ export const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST = {
   ],
 } as const satisfies ContextEngineHostSupport;
 
-export type ContextEngineHostSupportEvaluation =
+type ContextEngineHostSupportEvaluation =
   | {
       ok: true;
       requirements?: ContextEngineHostRequirements;

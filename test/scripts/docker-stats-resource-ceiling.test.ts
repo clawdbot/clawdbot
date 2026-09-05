@@ -1,4 +1,3 @@
-// Docker Stats Resource Ceiling tests cover docker stats resource ceiling script behavior.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = "scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs";
+const MAX_STATS_SAMPLE_LINE_BYTES = 1024 * 1024;
 const tempRoots: string[] = [];
 
 function writeStats(contents: string): string {
@@ -24,6 +24,14 @@ function runAssert(statsFile: string, maxMemoryMiB = "512", maxCpuPercent = "100
       encoding: "utf8",
     },
   );
+}
+
+function validStatsLineWithBytes(byteLength: number): string {
+  const prefix = '{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%","padding":"';
+  const suffix = '"}';
+  const paddingLength = byteLength - Buffer.byteLength(prefix + suffix, "utf8");
+  expect(paddingLength).toBeGreaterThan(0);
+  return `${prefix}${"x".repeat(paddingLength)}${suffix}`;
 }
 
 afterEach(() => {
@@ -84,44 +92,48 @@ describe("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs", () => {
     expect(looseCpu.stderr).toContain("had invalid CPUPerc");
   });
 
-  it("reports and enforces parsed Docker resource peaks", () => {
+  it("parses mixed stats lines, enforces peaks, and ignores terminal samples", () => {
+    const cappedLine = validStatsLineWithBytes(MAX_STATS_SAMPLE_LINE_BYTES);
+    const paddedLine = validStatsLineWithBytes(1024);
     const result = runAssert(
-      writeStats('{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\n'),
+      writeStats(
+        [
+          '{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\n',
+          `${paddedLine}\n`,
+          `${cappedLine}\r\n`,
+          '{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\r',
+          '{"MemUsage":"64MiB / 2GiB","CPUPerc":"15.0%"}\r',
+          '{"MemUsage":"512B / 2GiB","CPUPerc":"0.5%"}\n',
+          '{"MemUsage":"0B / 0B","CPUPerc":"0.0%"}\n',
+        ].join(""),
+      ),
       "256.5",
       "50.5",
     );
 
-    expect(result.status).toBe(0);
+    expect(Buffer.byteLength(cappedLine, "utf8")).toBe(MAX_STATS_SAMPLE_LINE_BYTES);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("memory=128.0MiB");
     expect(result.stdout).toContain("cpu=25.0%");
-    expect(result.stdout).toContain("samples=1");
+    expect(result.stdout).toContain("samples=6");
   });
 
   it("streams stats logs instead of slurping them into memory", () => {
     const source = readFileSync(SCRIPT_PATH, "utf8");
 
     expect(source).toContain("createReadStream");
+    expect(source).toContain("MAX_STATS_SAMPLE_LINE_BYTES");
+    expect(source).not.toContain("createInterface");
     expect(source).not.toContain("readFileSync(statsFile");
     expect(source).not.toContain("split(/\\r?\\n/u)");
   });
 
-  it("accepts byte-unit Docker memory samples", () => {
-    const result = runAssert(writeStats('{"MemUsage":"512B / 2GiB","CPUPerc":"0.5%"}\n'));
+  it("rejects oversized stats sample lines before parsing JSON", () => {
+    const result = runAssert(writeStats(`{"padding":"${"x".repeat(1024 * 1024)}"}\n`));
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("samples=1");
-  });
-
-  it("ignores terminal zero-capacity Docker stats samples", () => {
-    const result = runAssert(
-      writeStats(
-        '{"MemUsage":"128MiB / 2GiB","CPUPerc":"25.0%"}\n{"MemUsage":"0B / 0B","CPUPerc":"0.0%"}\n',
-      ),
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("memory=128.0MiB");
-    expect(result.stdout).toContain("samples=1");
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("exceeded 1048576 bytes");
+    expect(result.stderr).not.toContain("was not valid JSON");
   });
 
   it("still fails when only terminal zero-capacity samples were captured", () => {

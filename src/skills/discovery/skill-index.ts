@@ -19,7 +19,6 @@ export type SkillIndexEntry = {
 };
 
 type BuildSkillIndexOptions = {
-  bundledNames?: ReadonlySet<string>;
   agentSkillFilter?: readonly string[];
 };
 
@@ -34,7 +33,7 @@ export function normalizeSkillIndexName(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-export function isSkillRuntimeVisible(entry: SkillEntry): boolean {
+function isSkillRuntimeVisible(entry: SkillEntry): boolean {
   return entry.exposure?.includeInRuntimeRegistry ?? true;
 }
 
@@ -48,7 +47,7 @@ export function isSkillPromptVisible(entry: SkillEntry): boolean {
   return !entry.skill.disableModelInvocation;
 }
 
-export function isSkillUserInvocable(entry: SkillEntry): boolean {
+function isSkillUserInvocable(entry: SkillEntry): boolean {
   if (entry.exposure) {
     return entry.exposure.userInvocable ?? true;
   }
@@ -72,12 +71,11 @@ export function buildSkillIndexEntries(
 ): SkillIndexEntry[] {
   const agentSkillSet =
     opts?.agentSkillFilter === undefined ? undefined : new Set(opts.agentSkillFilter);
-  return entries.map((entry) => createSkillIndexEntry(entry, opts, agentSkillSet));
+  return entries.map((entry) => createSkillIndexEntry(entry, agentSkillSet));
 }
 
 function createSkillIndexEntry(
   entry: SkillEntry,
-  opts: BuildSkillIndexOptions | undefined,
   agentSkillSet: ReadonlySet<string> | undefined,
 ): SkillIndexEntry {
   const name = entry.skill.name;
@@ -90,9 +88,8 @@ function createSkillIndexEntry(
     skillKey,
     normalizedSkillKey: normalizeSkillIndexName(skillKey),
     source,
-    bundled:
-      source === "openclaw-bundled" ||
-      (source === "unknown" && opts?.bundledNames?.has(name) === true),
+    // Loader provenance owns bundled status; a matching name cannot establish source.
+    bundled: source === "openclaw-bundled" || source === "openclaw-custodian",
     agentAllowed: agentSkillSet === undefined || agentSkillSet.has(name),
     runtimeVisible: isSkillRuntimeVisible(entry),
     promptVisible: isSkillPromptVisible(entry),

@@ -1,0 +1,27 @@
+title: Gateway event and protocol authorization evidence
+
+scenario:
+  id: gateway-event-protocol-authz
+  surface: gateway
+  coverage:
+    primary:
+      - gateway.event-scoping
+      - gateway.fail-closed-protocol-handling
+  objective: Prove Gateway event authorization and fail-closed pre-auth protocol handling at the production broadcaster and real WebSocket boundaries.
+  successCriteria:
+    - Core events reach only operator scopes authorized by the production broadcaster, while node and pairing clients remain excluded.
+    - Unknown core events are dropped, default plugin events require write access, and explicit plugin read and write scopes select the correct recipients.
+    - Invalid, reserved, and unsupported plugin event declarations are rejected before broadcast.
+    - A real Gateway closes malformed request frames and non-connect first requests with policy code 1008.
+    - A real Gateway closes oversized pre-auth frames with code 1009 and emits bounded diagnostics without retaining payload content.
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/gateway/security/index.md
+  codeRefs:
+    - src/gateway/server-broadcast.ts
+    - src/gateway/server/ws-connection/message-handler.ts
+    - test/e2e/qa-lab/runtime/gateway-event-protocol-authz.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/gateway-event-protocol-authz.e2e.test.ts
+    summary: Run production broadcaster authorization and real Gateway pre-auth fail-closed assertions.

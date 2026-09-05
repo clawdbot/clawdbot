@@ -122,9 +122,14 @@ body:
   - type: textarea
     id: logs
     attributes:
-      label: Logs, screenshots, and evidence
-      description: Include the redacted logs, screenshots, recordings, docs, or version comparisons that support the grounded answers above.
+      label: Logs
+      description: Include the redacted logs or version comparisons that support the grounded answers above.
       render: shell
+  - type: textarea
+    id: screenshots_evidence
+    attributes:
+      label: Screenshots, recordings, and evidence
+      description: Include screenshots, recordings, docs, or other evidence that support the grounded answers above.
   - type: textarea
     id: impact
     attributes:

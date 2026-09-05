@@ -1,9 +1,10 @@
 // Active-session shutdown tracker tests protect the in-memory drain list used
 // when gateway shutdown, restart, or lifecycle cleanup must emit one session_end.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  clearActiveSessionsForShutdownTracker,
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
   noteActiveSessionForShutdown,
@@ -18,7 +19,9 @@ import {
 const cfg: OpenClawConfig = {};
 
 afterEach(() => {
-  clearActiveSessionsForShutdownTracker();
+  for (const entry of listActiveSessionsForShutdown()) {
+    forgetActiveSessionForShutdown(entry.sessionId);
+  }
 });
 
 describe("active-sessions-shutdown-tracker", () => {
@@ -46,8 +49,10 @@ describe("active-sessions-shutdown-tracker", () => {
 
     const entries = listActiveSessionsForShutdown();
     expect(entries).toHaveLength(1);
-    expect(entries[0].sessionId).toBe("session-A");
-    expect(entries[0].sessionFile).toBe("/tmp/new.jsonl");
+    expect(expectDefined(entries[0], "entries[0] test invariant").sessionId).toBe("session-A");
+    expect(expectDefined(entries[0], "entries[0] test invariant").sessionFile).toBe(
+      "/tmp/new.jsonl",
+    );
   });
 
   it("ignores empty sessionId notes", () => {
@@ -56,6 +61,7 @@ describe("active-sessions-shutdown-tracker", () => {
       sessionKey: "agent:main:main",
       sessionId: "",
       storePath: "/tmp/store.json",
+      agentId: "main",
     });
 
     expect(listActiveSessionsForShutdown()).toEqual([]);
@@ -67,12 +73,14 @@ describe("active-sessions-shutdown-tracker", () => {
       sessionKey: "agent:main:main",
       sessionId: "session-A",
       storePath: "/tmp/store.json",
+      agentId: "main",
     });
     noteActiveSessionForShutdown({
       cfg,
       sessionKey: "agent:main:other",
       sessionId: "session-B",
       storePath: "/tmp/store.json",
+      agentId: "main",
     });
 
     forgetActiveSessionForShutdown("session-A");
@@ -87,6 +95,7 @@ describe("active-sessions-shutdown-tracker", () => {
       sessionKey: "agent:main:main",
       sessionId: "session-A",
       storePath: "/tmp/store.json",
+      agentId: "main",
     });
 
     forgetActiveSessionForShutdown("does-not-exist");
@@ -101,30 +110,12 @@ describe("active-sessions-shutdown-tracker", () => {
       sessionKey: "agent:main:main",
       sessionId: "session-A",
       storePath: "/tmp/store.json",
+      agentId: "main",
     });
 
     const snapshot = listActiveSessionsForShutdown();
     snapshot.length = 0;
 
     expect(listActiveSessionsForShutdown()).toHaveLength(1);
-  });
-
-  it("clears the entire tracker for test isolation", () => {
-    noteActiveSessionForShutdown({
-      cfg,
-      sessionKey: "agent:main:a",
-      sessionId: "session-A",
-      storePath: "/tmp/store.json",
-    });
-    noteActiveSessionForShutdown({
-      cfg,
-      sessionKey: "agent:main:b",
-      sessionId: "session-B",
-      storePath: "/tmp/store.json",
-    });
-
-    clearActiveSessionsForShutdownTracker();
-
-    expect(listActiveSessionsForShutdown()).toEqual([]);
   });
 });

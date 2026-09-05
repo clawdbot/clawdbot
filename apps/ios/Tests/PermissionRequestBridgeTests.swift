@@ -1,3 +1,4 @@
+import Photos
 import Testing
 @testable import OpenClaw
 
@@ -22,5 +23,17 @@ import Testing
         }
 
         #expect(granted == true)
+    }
+}
+
+struct PhotoLibraryAccessTests {
+    @Test(arguments: [PHAuthorizationStatus.authorized, .limited])
+    func `read access includes full and limited authorization`(_ status: PHAuthorizationStatus) {
+        #expect(PhotoLibraryAccess.canRead(status))
+    }
+
+    @Test(arguments: [PHAuthorizationStatus.notDetermined, .denied, .restricted])
+    func `read access excludes unavailable authorization`(_ status: PHAuthorizationStatus) {
+        #expect(!PhotoLibraryAccess.canRead(status))
     }
 }

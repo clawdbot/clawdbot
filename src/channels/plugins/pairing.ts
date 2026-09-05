@@ -21,7 +21,7 @@ export function getPairingAdapter(channelId: ChannelId): ChannelPairingAdapter |
   return plugin?.pairing ?? null;
 }
 
-export function requirePairingAdapter(channelId: ChannelId): ChannelPairingAdapter {
+function requirePairingAdapter(channelId: ChannelId): ChannelPairingAdapter {
   const adapter = getPairingAdapter(channelId);
   if (!adapter) {
     throw new Error(`Channel ${channelId} does not support pairing`);
@@ -34,6 +34,7 @@ export async function notifyPairingApproved(params: {
   id: string;
   cfg: OpenClawConfig;
   accountId?: string;
+  meta?: Record<string, string>;
   runtime?: RuntimeEnv;
   /** Extension channels can pass their adapter directly to bypass registry lookup. */
   pairingAdapter?: ChannelPairingAdapter;
@@ -47,6 +48,7 @@ export async function notifyPairingApproved(params: {
     cfg: params.cfg,
     id: params.id,
     ...(params.accountId ? { accountId: params.accountId } : {}),
+    ...(params.meta ? { meta: params.meta } : {}),
     runtime: params.runtime,
   });
 }

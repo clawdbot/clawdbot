@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
+import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mts";
 
 async function withTempDir(run: (dir: string) => Promise<void>) {
   const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-stage-runtime-"));
@@ -28,7 +28,7 @@ describe("stageBundledPluginRuntime", () => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const symlinkSpy = vi
         .spyOn(fs, "symlinkSync")
-        .mockImplementation((target, targetPath, type) => {
+        .mockImplementation((_target, targetPath, type) => {
           if (
             String(targetPath).includes(`${path.sep}dist-runtime${path.sep}`) &&
             type !== "junction"
@@ -53,6 +53,28 @@ describe("stageBundledPluginRuntime", () => {
       expect(await fs.promises.readFile(runtimeFile, "utf8")).toBe("asset-body\n");
       expect(fs.lstatSync(runtimeFile).isSymbolicLink()).toBe(false);
       expect(symlinkSpy).toHaveBeenCalled();
+    });
+  });
+
+  it("refuses to stage through a symlinked dist root", async () => {
+    await withTempDir(async (repoRoot) => {
+      const targetDir = path.join(repoRoot, "gateway-dist");
+      const pluginFile = path.join(targetDir, "extensions", "acpx", "index.js");
+      await fs.promises.mkdir(path.dirname(pluginFile), { recursive: true });
+      await fs.promises.writeFile(pluginFile, "export {};\n", "utf8");
+      const distLink = path.join(repoRoot, "dist");
+      await fs.promises.symlink(targetDir, distLink, "dir");
+
+      expect(() => stageBundledPluginRuntime({ repoRoot })).toThrow(/symbolic link/u);
+
+      expect(await fs.promises.readlink(distLink)).toBe(targetDir);
+      expect(await fs.promises.readFile(pluginFile, "utf8")).toBe("export {};\n");
+      await expect(fs.promises.stat(path.join(repoRoot, "dist-runtime"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      await expect(
+        fs.promises.stat(path.join(targetDir, "extensions", "node_modules")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 });

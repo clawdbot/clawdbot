@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { ExecApprovalDecision } from "openclaw/plugin-sdk/approval-runtime";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GoogleChatActionParameter, GoogleChatEvent } from "./types.js";
 
@@ -10,11 +12,11 @@ const GOOGLECHAT_APPROVAL_ACTION_VALUE = "approval";
 const MANUAL_EXEC_APPROVAL_COMMAND_RE =
   /(?:^|[\s`])\/approve[ \t]+([^ \t\r\n`|]+)[ \t]+(allow-once|allow-always|deny)(?=$|[\s`|.,;:!?])/giu;
 
-export type GoogleChatApprovalCardBinding = {
+type GoogleChatApprovalCardBinding = {
   token: string;
   accountId: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   decision: ExecApprovalDecision;
   allowedDecisions: readonly ExecApprovalDecision[];
   spaceName: string;
@@ -25,6 +27,8 @@ export type GoogleChatApprovalCardBinding = {
 
 const approvalCardBindings = new Map<string, GoogleChatApprovalCardBinding>();
 const approvalCardResolvingTokens = new Set<string>();
+const GOOGLECHAT_APPROVAL_CARD_BINDING_MAX_ENTRIES = 1024;
+const GOOGLECHAT_MANUAL_APPROVAL_SUPPRESSION_MAX_ENTRIES = 1024;
 
 type GoogleChatManualApprovalSuppressionPayload = {
   text?: string;
@@ -40,12 +44,12 @@ type GoogleChatManualApprovalSuppressionPayload = {
 
 type GoogleChatManualApprovalFollowupSuppression = {
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalDecision[];
   expiresAtMs: number;
 };
 
-export type GoogleChatApprovalCardClaim =
+type GoogleChatApprovalCardClaim =
   | { kind: "claimed"; binding: GoogleChatApprovalCardBinding }
   | { kind: "missing" }
   | { kind: "in-flight" };
@@ -113,7 +117,11 @@ export function registerGoogleChatApprovalCardBinding(
   if (binding.expiresAtMs <= Date.now()) {
     return false;
   }
+  if (approvalCardBindings.has(binding.token)) {
+    approvalCardBindings.delete(binding.token);
+  }
   approvalCardBindings.set(binding.token, binding);
+  pruneMapToMaxSize(approvalCardBindings, GOOGLECHAT_APPROVAL_CARD_BINDING_MAX_ENTRIES);
   registerGoogleChatManualApprovalFollowupSuppression({
     approvalId: binding.approvalId,
     approvalKind: binding.approvalKind,
@@ -156,7 +164,14 @@ export function registerGoogleChatManualApprovalFollowupSuppression(
   if (!key) {
     return false;
   }
+  if (manualApprovalFollowupSuppressions.has(key)) {
+    manualApprovalFollowupSuppressions.delete(key);
+  }
   manualApprovalFollowupSuppressions.set(key, suppression);
+  pruneMapToMaxSize(
+    manualApprovalFollowupSuppressions,
+    GOOGLECHAT_MANUAL_APPROVAL_SUPPRESSION_MAX_ENTRIES,
+  );
   return true;
 }
 
@@ -298,10 +313,4 @@ export function unregisterGoogleChatApprovalCardBindings(tokens: readonly string
       unregisterGoogleChatManualApprovalFollowupSuppression(binding.approvalId);
     }
   }
-}
-
-export function clearGoogleChatApprovalCardBindingsForTest(): void {
-  approvalCardBindings.clear();
-  approvalCardResolvingTokens.clear();
-  manualApprovalFollowupSuppressions.clear();
 }

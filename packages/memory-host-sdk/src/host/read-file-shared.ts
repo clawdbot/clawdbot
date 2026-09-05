@@ -1,4 +1,6 @@
 // Memory Host SDK module implements read file shared behavior.
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { MemoryReadResult } from "./types.js";
 
 // Shared memory-file read result shaping and truncation notices.
@@ -8,7 +10,7 @@ export const DEFAULT_MEMORY_READ_LINES = 120;
 /** Default max character budget for memory read helper output. */
 export const DEFAULT_MEMORY_READ_MAX_CHARS = 12_000;
 
-export type { MemoryReadResult } from "./types.js";
+export type { LegacyMemoryReadResult, MemoryReadResult } from "./types.js";
 
 /** Build the continuation notice appended to truncated memory excerpts. */
 function buildContinuationNotice(params: {
@@ -48,17 +50,10 @@ function fitLinesToCharBudget(params: { lines: string[]; maxChars: number }): {
   }
 
   return {
-    text: text.slice(0, maxChars),
+    text: truncateUtf16Safe(text, maxChars),
     includedLines: 1,
     hardTruncatedSingleLine: true,
   };
-}
-
-/** Normalize optional numeric config to a positive integer fallback. */
-function normalizePositiveInteger(value: number | undefined, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.max(1, Math.floor(value))
-    : fallback;
 }
 
 /** Build a memory read result from an already-selected line slice. */
@@ -70,10 +65,10 @@ export function buildMemoryReadResultFromSlice(params: {
   maxChars?: number;
   suggestReadFallback?: boolean;
 }): MemoryReadResult {
-  const start = normalizePositiveInteger(params.startLine, 1);
+  const start = resolveIntegerOption(params.startLine, 1, { min: 1 });
   const fitted = fitLinesToCharBudget({
     lines: params.selectedLines,
-    maxChars: normalizePositiveInteger(params.maxChars, DEFAULT_MEMORY_READ_MAX_CHARS),
+    maxChars: resolveIntegerOption(params.maxChars, DEFAULT_MEMORY_READ_MAX_CHARS, { min: 1 }),
   });
   const moreSourceLinesRemain = params.moreSourceLinesRemain ?? false;
   const charCapTruncated =
@@ -85,13 +80,14 @@ export function buildMemoryReadResultFromSlice(params: {
       : undefined;
   const truncated = charCapTruncated || moreSourceLinesRemain;
   const text =
-    truncated && fitted.text
+    truncated && (fitted.text || fitted.hardTruncatedSingleLine)
       ? `${fitted.text}${buildContinuationNotice({
           nextFrom,
           suggestReadFallback: fitted.hardTruncatedSingleLine && params.suggestReadFallback,
         })}`
       : fitted.text;
   return {
+    status: "ok",
     text,
     path: params.relPath,
     from: start,
@@ -112,10 +108,16 @@ export function buildMemoryReadResult(params: {
   suggestReadFallback?: boolean;
 }): MemoryReadResult {
   const fileLines = params.content.split("\n");
-  const start = normalizePositiveInteger(params.from, 1);
-  const requestedCount = normalizePositiveInteger(
+  // A terminal newline closes the preceding line; its split sentinel is not a
+  // readable blank line or a reason to offer another memory page.
+  if (fileLines.at(-1) === "") {
+    fileLines.pop();
+  }
+  const start = resolveIntegerOption(params.from, 1, { min: 1 });
+  const requestedCount = resolveIntegerOption(
     params.lines ?? params.defaultLines,
     DEFAULT_MEMORY_READ_LINES,
+    { min: 1 },
   );
   const selectedLines = fileLines.slice(start - 1, start - 1 + requestedCount);
   const moreSourceLinesRemain = start - 1 + selectedLines.length < fileLines.length;

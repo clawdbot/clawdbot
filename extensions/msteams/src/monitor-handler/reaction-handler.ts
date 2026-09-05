@@ -1,27 +1,10 @@
 // Msteams plugin module implements reaction handler behavior.
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
+import { resolveMSTeamsReactionEmoji } from "../reaction-types.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { resolveMSTeamsSenderAccess } from "./access.js";
-
-/** Teams reaction type names → Unicode emoji. */
-const TEAMS_REACTION_EMOJI: Record<string, string> = {
-  like: "👍",
-  heart: "❤️",
-  laugh: "😆",
-  surprised: "😮",
-  sad: "😢",
-  angry: "😡",
-};
-
-/**
- * Map a Teams reaction type string to a Unicode emoji.
- * Falls back to the raw type if not recognized.
- */
-function mapReactionEmoji(reactionType: string): string {
-  return TEAMS_REACTION_EMOJI[reactionType] ?? reactionType;
-}
 
 type ReactionDirection = "added" | "removed";
 
@@ -41,12 +24,9 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
     const activity = context.activity;
 
     // Reactions are carried in reactionsAdded / reactionsRemoved on the activity.
-    const reactions: Array<{ type?: string }> =
-      direction === "added"
-        ? ((activity as unknown as { reactionsAdded?: Array<{ type?: string }> }).reactionsAdded ??
-          [])
-        : ((activity as unknown as { reactionsRemoved?: Array<{ type?: string }> })
-            .reactionsRemoved ?? []);
+    const rawReactions =
+      direction === "added" ? activity.reactionsAdded : activity.reactionsRemoved;
+    const reactions: Array<{ type?: string }> = Array.isArray(rawReactions) ? rawReactions : [];
 
     if (reactions.length === 0) {
       log.debug?.("reaction activity has no reactions; skipping");
@@ -82,9 +62,7 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
 
     // Resolve the agent route for this conversation/sender.
     // Extract teamId for team-scoped routing bindings (channel/group reactions).
-    const teamId = isDirectMessage
-      ? undefined
-      : (activity as unknown as { channelData?: { team?: { id?: string } } }).channelData?.team?.id;
+    const teamId = isDirectMessage ? undefined : activity.channelData?.team?.id;
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "msteams",
@@ -96,11 +74,11 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
     });
 
     // The replyToId points to the message that was reacted to.
-    const targetMessageId = (activity as unknown as { replyToId?: string }).replyToId ?? "unknown";
+    const targetMessageId = activity.replyToId ?? "unknown";
 
     for (const reaction of reactions) {
       const reactionType = reaction.type ?? "unknown";
-      const emoji = mapReactionEmoji(reactionType);
+      const emoji = resolveMSTeamsReactionEmoji(reactionType);
       const label =
         direction === "added"
           ? `Teams reaction ${emoji} added by ${senderName} on message ${targetMessageId}`

@@ -1,12 +1,11 @@
 // Covers compaction sanitization for toolResult details and runtime context.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, ToolResultMessage } from "openclaw/plugin-sdk/llm";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 const agentSessionMocks = vi.hoisted(() => ({
   generateSummary: vi.fn(async () => "summary"),
-  estimateTokens: vi.fn((_message: unknown) => 1),
 }));
 
 vi.mock("./sessions/index.js", async () => {
@@ -14,19 +13,11 @@ vi.mock("./sessions/index.js", async () => {
   return {
     ...actual,
     generateSummary: agentSessionMocks.generateSummary,
-    estimateTokens: agentSessionMocks.estimateTokens,
   };
 });
 
-let isOversizedForSummary: typeof import("./compaction.js").isOversizedForSummary;
-let summarizeWithFallback: typeof import("./compaction.js").summarizeWithFallback;
-
-async function loadFreshCompactionModuleForTest() {
-  // Reset modules so each test observes the mocked token/summary helpers from a
-  // fresh compaction import.
-  vi.resetModules();
-  ({ isOversizedForSummary, summarizeWithFallback } = await import("./compaction.js"));
-}
+let estimateMessagesTokens: typeof import("./compaction.js").estimateMessagesTokens;
+let summarizeWithFallback: typeof import("./compaction.test-support.js").summarizeWithFallback;
 
 function makeAssistantToolCall(timestamp: number): AssistantMessage {
   return makeAgentAssistantMessage({
@@ -52,12 +43,14 @@ function makeToolResultWithDetails(timestamp: number): ToolResultMessage<{ raw: 
 }
 
 describe("compaction toolResult details stripping", () => {
-  beforeEach(async () => {
-    await loadFreshCompactionModuleForTest();
+  beforeAll(async () => {
+    ({ estimateMessagesTokens } = await import("./compaction.js"));
+    ({ summarizeWithFallback } = await import("./compaction.test-support.js"));
+  });
+
+  beforeEach(() => {
     agentSessionMocks.generateSummary.mockReset();
     agentSessionMocks.generateSummary.mockResolvedValue("summary");
-    agentSessionMocks.estimateTokens.mockReset();
-    agentSessionMocks.estimateTokens.mockImplementation((_message: unknown) => 1);
   });
 
   it("does not pass toolResult.details into generateSummary", async () => {
@@ -124,7 +117,11 @@ describe("compaction toolResult details stripping", () => {
   });
 
   it("does not pass runtime-context custom messages into generateSummary", async () => {
-    const messages = [
+    const assistant = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "visible answer" }],
+      timestamp: 3,
+    });
+    const messages: AgentMessage[] = [
       { role: "user", content: "visible ask", timestamp: 1 },
       {
         role: "custom",
@@ -133,8 +130,8 @@ describe("compaction toolResult details stripping", () => {
         display: false,
         timestamp: 2,
       },
-      { role: "assistant", content: "visible answer", timestamp: 3 },
-    ] as unknown as AgentMessage[];
+      assistant,
+    ];
 
     await summarizeWithFallback({
       messages,
@@ -152,7 +149,7 @@ describe("compaction toolResult details stripping", () => {
     )[0]?.[0];
     expect(chunk).toStrictEqual([
       { role: "user", content: "visible ask", timestamp: 1 },
-      { role: "assistant", content: "visible answer", timestamp: 3 },
+      assistant,
     ]);
     const serialized = JSON.stringify(chunk);
     expect(serialized).toContain("visible ask");
@@ -160,12 +157,7 @@ describe("compaction toolResult details stripping", () => {
     expect(serialized).not.toContain("secret runtime context");
   });
 
-  it("ignores toolResult.details when evaluating oversized messages", () => {
-    agentSessionMocks.estimateTokens.mockImplementation((message: unknown) => {
-      const record = message as { details?: unknown };
-      return record.details ? 10_000 : 10;
-    });
-
+  it("ignores toolResult.details when estimating compaction tokens", () => {
     const toolResult: ToolResultMessage<{ raw: string }> = {
       role: "toolResult",
       toolCallId: "call_1",
@@ -176,6 +168,8 @@ describe("compaction toolResult details stripping", () => {
       timestamp: 2,
     };
 
-    expect(isOversizedForSummary(toolResult, 1_000)).toBe(false);
+    // Sanitization strips details before estimation; the raw payload must
+    // never inflate compaction token pressure.
+    expect(estimateMessagesTokens([toolResult])).toBeLessThan(1_000);
   });
 });

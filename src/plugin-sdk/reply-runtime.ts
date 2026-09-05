@@ -23,7 +23,7 @@ export {
 export {
   HEARTBEAT_PROMPT,
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  resolveHeartbeatPrompt,
+  resolveHeartbeatPromptCore,
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 export { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
@@ -32,20 +32,21 @@ export { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-
 export { isAbortRequestText } from "../auto-reply/reply/abort.js";
 export { isBtwRequestText } from "../auto-reply/reply/btw-command.js";
 export { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
-export { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+export { finalizeInboundContextForSdk as finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 export {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
 export {
-  dispatchReplyWithBufferedBlockDispatcher,
-  dispatchReplyWithDispatcher,
+  dispatchReplyWithBufferedBlockDispatcherCore as dispatchReplyWithBufferedBlockDispatcher,
+  dispatchReplyWithDispatcherCore as dispatchReplyWithDispatcher,
 } from "../auto-reply/reply/provider-dispatcher.js";
 export {
   createReplyDispatcher,
   createReplyDispatcherWithTyping,
 } from "../auto-reply/reply/reply-dispatcher.js";
 export type {
+  ReplyDispatchBeforeDeliverOptions,
   ReplyDispatchKind,
   ReplyDispatcher,
   ReplyFollowupAdmissionBarrierTimeoutPolicy,
@@ -61,7 +62,12 @@ export type {
   SourceReplyDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
 export type { ReplyPayload } from "./reply-payload.js";
-export type { FinalizedMsgContext, MsgContext } from "../auto-reply/templating.js";
+export type {
+  ChannelStructuredContextEntry,
+  FinalizedMsgContext,
+  MsgContext,
+  UntrustedStructuredContextEntry,
+} from "../auto-reply/templating.js";
 export type { CommandTurnContext } from "../auto-reply/command-turn-context.js";
 export { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
 export type { ConversationLabelParams } from "../auto-reply/reply/conversation-label-generator.js";

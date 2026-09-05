@@ -4,9 +4,18 @@
  * Installs targeted Vitest module mocks for tests that do not need live plugin/runtime boot.
  */
 import { vi } from "vitest";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
+import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
+import type {
+  PreparedModelRuntimeInput,
+  PreparedModelRuntimeSnapshot,
+} from "../prepared-model-runtime.types.js";
 
 type EmbeddedRunnerFastRunMockOptions = {
-  runEmbeddedAttempt: (params: unknown) => unknown;
+  runEmbeddedAttempt: (params: EmbeddedRunAttemptParams) => unknown;
   prepareProviderRuntimeAuth?: (params: {
     provider: string;
     context: { apiKey: string };
@@ -21,9 +30,83 @@ type EmbeddedRunnerBackoffMockOptions = {
   sleepWithAbort: (ms: number, abortSignal?: AbortSignal) => unknown;
 };
 
+export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): PluginMetadataSnapshot {
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "",
+    generatedAtMs: 1,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
+  return {
+    policyHash: "",
+    ...(workspaceDir !== undefined ? { workspaceDir } : {}),
+    index,
+    registryIndex: index,
+    registryDiagnostics: [],
+    manifestRegistry: { plugins: [], diagnostics: [] },
+    plugins: [],
+    diagnostics: [],
+    byPluginId: new Map(),
+    normalizePluginId: (pluginId) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: 0,
+    },
+  };
+}
+
+function createEmptyPreparedModelRuntimeSnapshot(
+  input: PreparedModelRuntimeInput,
+  pluginRegistry?: PreparedModelRuntimeSnapshot["pluginRegistry"],
+): PreparedModelRuntimeSnapshot {
+  return {
+    catalogOwner: undefined,
+    ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
+    agentDir: input.agentDir,
+    ...(input.inheritedAuthDir !== undefined ? { inheritedAuthDir: input.inheritedAuthDir } : {}),
+    ...(input.workspaceDir !== undefined ? { workspaceDir: input.workspaceDir } : {}),
+    activeProjectKeys: [],
+    config: input.config,
+    observationConfig: input.config,
+    isCurrent: () => true,
+    authModes: {},
+    metadataSnapshot: createEmptyPluginMetadataSnapshot(input.workspaceDir),
+    pluginRegistry: pluginRegistry ?? createEmptyPluginRegistry(),
+    allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,
+    modelCatalog: { entries: [], routeVariants: [] },
+    configuredRuntimeModels: [],
+    inlineProviderModels: [],
+    createStores: () => ({
+      authStorage: { setRuntimeApiKey: vi.fn() } as never,
+      modelRegistry: {} as never,
+    }),
+  };
+}
+
 /** Installs baseline mocks for hook runner, context engine, and runtime plugin loading. */
 export function installEmbeddedRunnerBaseE2eMocks(options?: {
   hookRunner?: "minimal" | "full";
+  pluginRegistry?: PreparedModelRuntimeSnapshot["pluginRegistry"];
 }): void {
   vi.doMock("../../plugins/hook-runner-global.js", () =>
     options?.hookRunner === "full"
@@ -47,9 +130,63 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
       dispose: async () => undefined,
     })),
     resolveContextEngineOwnerPluginId: vi.fn(() => undefined),
+    resolveLogicalTurnContextEngines: vi.fn(async () => {
+      const engine = {
+        info: { id: "legacy", name: "Legacy Context Engine" },
+        async ingest() {
+          return { ingested: false };
+        },
+        async assemble({ messages }: { messages: unknown[] }) {
+          return { messages, estimatedTokens: 0 };
+        },
+        async compact() {
+          return { ok: true, compacted: false };
+        },
+        async dispose() {},
+      };
+      const ref = { engine, registeredId: "legacy" };
+      return { configured: ref, configuredId: "legacy", fallback: ref };
+    }),
   }));
   vi.doMock("../runtime-plugins.js", () => ({
-    ensureRuntimePluginsLoaded: vi.fn(),
+    loadAgentRuntimePluginRegistryHandle: vi.fn(
+      () => options?.pluginRegistry ?? createEmptyPluginRegistry(),
+    ),
+  }));
+  vi.doMock("../prepared-model-runtime.js", () => {
+    const acquire = async (input: PreparedModelRuntimeInput) => {
+      if (!input.readOnly) {
+        const { ensureOpenClawModelsJson } = await import("../models-config.js");
+        await ensureOpenClawModelsJson(
+          input.config,
+          input.agentDir,
+          input.workspaceDir !== undefined ? { workspaceDir: input.workspaceDir } : {},
+        );
+      }
+      return {
+        snapshot: createEmptyPreparedModelRuntimeSnapshot(input, options?.pluginRegistry),
+        release: vi.fn(),
+      };
+    };
+    return {
+      acquireAgentRunPreparedModelRuntime: vi.fn(acquire),
+      acquireReadOnlyPreparedModelRuntime: vi.fn(acquire),
+      prepareModelRuntimeSnapshot: vi.fn(async (input: PreparedModelRuntimeInput) =>
+        createEmptyPreparedModelRuntimeSnapshot(input, options?.pluginRegistry),
+      ),
+    };
+  });
+  vi.doMock("../../plugins/provider-hook-runtime.js", () => ({
+    attachModelProviderRuntimePluginHandle: (model: unknown) => model,
+    prepareProviderExtraParams: vi.fn(() => undefined),
+    resolveLoadedProviderPluginsForHooks: vi.fn(() => undefined),
+    resolveLoadedProviderRuntimePlugin: vi.fn(() => undefined),
+    resolveProviderExtraParamsForTransport: vi.fn(() => undefined),
+    resolveProviderHookPlugin: vi.fn(() => undefined),
+    resolveProviderPluginsForHooks: vi.fn(() => []),
+    resolveProviderRuntimePlugin: vi.fn(() => undefined),
+    resolveProviderRuntimePluginHandle: vi.fn((params: object) => params),
+    wrapProviderStreamFn: vi.fn(() => undefined),
   }));
   vi.doMock("../harness/runtime-plugin.js", () => ({
     ensureSelectedAgentHarnessPlugin: vi.fn(async () => {}),
@@ -60,21 +197,29 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
 export function installEmbeddedRunnerFastRunE2eMocks(
   options: EmbeddedRunnerFastRunMockOptions,
 ): void {
+  const createMockAgentHarness = (params: {
+    provider?: string;
+    agentHarnessId?: string;
+    agentHarnessRuntimeOverride?: string;
+  }) => {
+    const id = resolveMockHarnessId(params);
+    return {
+      id,
+      label: "Mock agent harness",
+      ...(id === "codex" ? { authBootstrap: "harness" as const } : {}),
+      supports: vi.fn(() => ({ supported: false })),
+      runAttempt: vi.fn(),
+    };
+  };
   vi.doMock("../harness/selection.js", () => ({
-    selectAgentHarness: vi.fn(
-      (params: {
-        provider?: string;
-        agentHarnessId?: string;
-        agentHarnessRuntimeOverride?: string;
-      }) => ({
-        id: resolveMockHarnessId(params),
-        label: "Mock agent harness",
-        supports: vi.fn(() => ({ supported: false })),
-        runAttempt: vi.fn(),
-      }),
+    agentHarnessBuildsOpenClawTools: vi.fn(
+      (harnessId: string) => harnessId === "codex" || harnessId === "copilot",
     ),
+    selectAgentHarness: vi.fn(createMockAgentHarness),
+    selectAgentHarnessForPreparedModelProviders: vi.fn(createMockAgentHarness),
     resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "openclaw" })),
-    runAgentHarnessAttempt: (params: unknown) => options.runEmbeddedAttempt(params),
+    runAgentHarnessAttempt: (params: EmbeddedRunAttemptParams) =>
+      options.runEmbeddedAttempt(params),
   }));
   vi.doMock("../runtime-plan/build.js", () => ({
     buildAgentRuntimePlan: vi.fn(
@@ -113,7 +258,6 @@ export function installEmbeddedRunnerFastRunE2eMocks(
             preserveNativeAnthropicToolUseIds: false,
             repairToolUseResultPairing: true,
             preserveSignatures: false,
-            sanitizeThinkingSignatures: true,
             dropThinkingBlocks: false,
             applyGoogleTurnOrdering: false,
             validateGeminiTurns: false,
@@ -144,11 +288,96 @@ export function installEmbeddedRunnerFastRunE2eMocks(
       }),
     ),
   }));
+  vi.doMock("../runtime-plan/prepare-auth.js", async () => {
+    const actual = await vi.importActual<typeof import("../runtime-plan/prepare-auth.js")>(
+      "../runtime-plan/prepare-auth.js",
+    );
+    return {
+      ...actual,
+      prepareAgentRuntimeAuth: vi.fn(
+        (params: {
+          provider: string;
+          modelId: string;
+          config?: Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
+          authProfileStore?: AuthProfileStore;
+          sessionAuthProfileId?: string;
+          sessionAuthProfileSource?: "auto" | "user";
+          harnessId?: string;
+          harnessRuntime?: string;
+        }) => {
+          const store: AuthProfileStore = params.authProfileStore ?? { version: 1, profiles: {} };
+          const authProvider =
+            params.harnessId === "codex" || params.harnessRuntime === "codex"
+              ? "openai"
+              : params.provider;
+          const requestedProfileId = params.sessionAuthProfileId?.trim() || undefined;
+          const requestedCredential = requestedProfileId
+            ? store.profiles[requestedProfileId]
+            : undefined;
+          const matchingRequestedProfileId =
+            requestedCredential?.provider === authProvider ? requestedProfileId : undefined;
+          const userPinnedProfileId =
+            params.sessionAuthProfileSource === "user" ? matchingRequestedProfileId : undefined;
+          const resolvedProfileIds = resolveAuthProfileOrder({
+            cfg: params.config,
+            store,
+            provider: authProvider,
+            preferredProfile: matchingRequestedProfileId,
+            forModel: params.modelId,
+          });
+          const orderedProfileIds = userPinnedProfileId
+            ? [
+                userPinnedProfileId,
+                ...resolvedProfileIds.filter((profileId) => profileId !== userPinnedProfileId),
+              ]
+            : resolvedProfileIds;
+          const profileIds = orderedProfileIds.length > 0 ? orderedProfileIds : [undefined];
+          const attempts = profileIds.map((profileId, index) => {
+            const credential = profileId ? store.profiles[profileId] : undefined;
+            const canForwardProfile = credential?.provider === authProvider;
+            const plan = {
+              providerForAuth: params.provider,
+              modelId: params.modelId,
+              authProfileProviderForAuth: credential?.provider ?? params.provider,
+              ...(canForwardProfile && profileId
+                ? {
+                    forwardedAuthProfileId: profileId,
+                    forwardedAuthProfileSource:
+                      userPinnedProfileId === profileId ? ("user" as const) : ("auto" as const),
+                    forwardedAuthProfileCandidateIds: profileIds
+                      .slice(index)
+                      .filter((candidate): candidate is string => Boolean(candidate)),
+                    ...(credential?.type ? { selectedAuthMode: credential.type } : {}),
+                  }
+                : {}),
+            };
+            return profileId
+              ? { kind: "profile" as const, profileId, plan }
+              : { kind: "implicit" as const, plan };
+          });
+          const firstAttempt = attempts[0];
+          if (!firstAttempt) {
+            throw new Error("fast embedded runner auth mock produced no attempts");
+          }
+          return { plan: firstAttempt.plan, attempts };
+        },
+      ),
+    };
+  });
+  vi.doMock("../runtime-plan/materialize-model.js", () => ({
+    materializePreparedRuntimeModel: vi.fn(
+      async <Model>(params: { model?: Model }): Promise<Model | undefined> => params.model,
+    ),
+  }));
   vi.doMock("../embedded-agent-runner/run/attempt.js", () => ({
-    runEmbeddedAttempt: (params: unknown) => options.runEmbeddedAttempt(params),
+    runEmbeddedAttempt: (params: EmbeddedRunAttemptParams) => options.runEmbeddedAttempt(params),
+  }));
+  vi.doMock("../../plugins/provider-external-auth.js", () => ({
+    resolveExternalAuthProfilesWithPlugins: vi.fn(() => []),
   }));
   vi.doMock("../../plugins/provider-runtime.js", () => ({
     applyProviderResolvedTransportWithPlugin: vi.fn(() => undefined),
+    augmentModelCatalogWithProviderPlugins: vi.fn(async () => []),
     buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
     buildProviderUnknownModelHintWithPlugin: vi.fn(() => undefined),
     normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
@@ -157,7 +386,8 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     prepareProviderRuntimeAuth: options.prepareProviderRuntimeAuth ?? vi.fn(async () => undefined),
     resolveProviderAuthProfileId: vi.fn(() => undefined),
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
-    resolveExternalAuthProfilesWithPlugins: vi.fn(() => []),
+    resolveProviderDeprecatedAuthProfileIds: vi.fn(() => []),
+    resolveProviderReasoningOutputModeWithPlugin: vi.fn(() => undefined),
     resolveProviderSyntheticAuthWithPlugin: vi.fn(() => undefined),
     runProviderDynamicModel: vi.fn(() => undefined),
     shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),

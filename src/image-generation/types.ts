@@ -4,7 +4,7 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 
-/** Binary image asset returned by an image-generation provider. */
+/** Non-empty binary image asset returned by an image-generation provider. */
 export type GeneratedImageAsset = {
   buffer: Buffer;
   mimeType: string;
@@ -98,6 +98,8 @@ type ImageGenerationModeCapabilities = {
 type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
   enabled: boolean;
   maxInputImages?: number;
+  maxInputImagesByModel?: Readonly<Record<string, number>>;
+  maxInputImagesByModelPrefix?: Readonly<Record<string, number>>;
 };
 
 type ImageGenerationGeometryCapabilities = {

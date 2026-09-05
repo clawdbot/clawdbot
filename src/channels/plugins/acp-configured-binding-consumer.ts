@@ -3,10 +3,7 @@
  *
  * Converts channel configured-binding rules into persistent ACP binding records.
  */
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   buildConfiguredAcpSessionKey,
   normalizeBindingConfig,
@@ -18,16 +15,17 @@ import {
 } from "../../acp/persistent-bindings.types.js";
 import {
   resolveAgentConfig,
+  resolveAgentExplicitModelPrimary,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
+import { parseModelRef } from "../../agents/model-selection-normalize.js";
+import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   ConfiguredBindingRuleConfig,
   ConfiguredBindingTargetFactory,
 } from "./binding-types.js";
 import type { ConfiguredBindingConsumer } from "./configured-binding-consumers.js";
-import type { ChannelConfiguredBindingConversationRef } from "./types.adapters.js";
 
 function resolveAgentRuntimeAcpDefaults(params: { cfg: OpenClawConfig; ownerAgentId: string }): {
   acpAgentId?: string;
@@ -37,9 +35,7 @@ function resolveAgentRuntimeAcpDefaults(params: { cfg: OpenClawConfig; ownerAgen
 } {
   // ACP bindings inherit runtime defaults from the owning agent when that agent already runs ACP.
   const ownerAgentId = normalizeLowercaseStringOrEmpty(params.ownerAgentId);
-  const agent = params.cfg.agents?.list?.find(
-    (entry) => normalizeOptionalLowercaseString(entry.id) === ownerAgentId,
-  );
+  const agent = resolveAgentConfig(params.cfg, ownerAgentId);
   if (!agent || agent.runtime?.type !== "acp") {
     return {};
   }
@@ -63,38 +59,10 @@ function resolveConfiguredBindingWorkspaceCwd(params: {
   if (explicitAgentWorkspace) {
     return resolveAgentWorkspaceDir(params.cfg, params.agentId);
   }
-  if (params.agentId === resolveDefaultAgentId(params.cfg)) {
-    const defaultWorkspace = normalizeText(params.cfg.agents?.defaults?.workspace);
-    if (defaultWorkspace) {
-      return resolveAgentWorkspaceDir(params.cfg, params.agentId);
-    }
+  if (normalizeText(params.cfg.agents?.defaults?.workspace)) {
+    return resolveAgentWorkspaceDir(params.cfg, params.agentId);
   }
   return undefined;
-}
-
-function buildConfiguredAcpSpec(params: {
-  channel: string;
-  accountId: string;
-  conversation: ChannelConfiguredBindingConversationRef;
-  agentId: string;
-  acpAgentId?: string;
-  mode: "persistent" | "oneshot";
-  cwd?: string;
-  backend?: string;
-  label?: string;
-}): ConfiguredAcpBindingSpec {
-  return {
-    channel: params.channel as ConfiguredAcpBindingSpec["channel"],
-    accountId: params.accountId,
-    conversationId: params.conversation.conversationId,
-    parentConversationId: params.conversation.parentConversationId,
-    agentId: params.agentId,
-    acpAgentId: params.acpAgentId,
-    mode: params.mode,
-    cwd: params.cwd,
-    backend: params.backend,
-    label: params.label,
-  };
 }
 
 function buildAcpTargetFactory(params: {
@@ -114,6 +82,15 @@ function buildAcpTargetFactory(params: {
   });
   const bindingOverrides = normalizeBindingConfig(params.binding.acp);
   const mode = normalizeMode(bindingOverrides.mode ?? runtimeDefaults.mode);
+  // Every ACP binding uses its owner's explicit model, regardless of the owner's runtime type.
+  const model = resolveAgentExplicitModelPrimary(params.cfg, params.agentId);
+  const modelRef = model ? parseModelRef(model, "") : null;
+  // Forward configured policy only; an external harness owns its unconfigured defaults.
+  const thinking =
+    resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault ??
+    (modelRef
+      ? resolveConfiguredThinkingDefault({ cfg: params.cfg, ...modelRef })
+      : params.cfg.agents?.defaults?.thinkingDefault);
   const cwd =
     bindingOverrides.cwd ??
     runtimeDefaults.cwd ??
@@ -130,17 +107,20 @@ function buildAcpTargetFactory(params: {
     materialize: ({ accountId, conversation }) => {
       // Materialization is account/conversation-specific because wildcard bindings resolve to
       // stable ACP session keys only after the matched conversation is known.
-      const spec = buildConfiguredAcpSpec({
-        channel: params.channel,
+      const spec: ConfiguredAcpBindingSpec = {
+        channel: params.channel as ConfiguredAcpBindingSpec["channel"],
         accountId,
-        conversation,
+        conversationId: conversation.conversationId,
+        parentConversationId: conversation.parentConversationId,
         agentId: params.agentId,
         acpAgentId,
         mode,
+        model,
+        thinking,
         cwd,
         backend,
         label,
-      });
+      };
       const record = toConfiguredAcpBindingRecord(spec);
       return {
         record,

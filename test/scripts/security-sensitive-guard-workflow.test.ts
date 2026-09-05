@@ -8,8 +8,6 @@ const CODEOWNERS = ".github/CODEOWNERS";
 
 type WorkflowStep = {
   env?: Record<string, string>;
-  id?: string;
-  if?: string;
   name?: string;
   run?: string;
   uses?: string;
@@ -24,7 +22,6 @@ type WorkflowJob = {
 };
 
 type Workflow = {
-  env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
   name?: string;
   permissions?: Record<string, string>;
@@ -79,41 +76,17 @@ describe("security-sensitive guard workflow", () => {
       const steps = jobs[jobName]?.steps ?? [];
       const checkout = steps.find((step) => step.uses?.startsWith("actions/checkout@"));
 
-      expect(checkout?.uses).toBe("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd");
-      expect(checkout?.if).toBe("steps.rollout.outputs.ready == 'true'");
+      expect(checkout?.uses).toBe("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1");
       expect(checkout?.with?.ref).toBe("${{ github.workflow_sha }}");
       expect(checkout?.with?.ref).not.toBe("${{ github.event.pull_request.base.sha }}");
       expect(checkout?.with?.["persist-credentials"]).toBe(false);
       expect(steps.at(-1)?.run).toBe("node scripts/github/security-sensitive-guard.mjs");
-      expect(steps.at(-1)?.if).toBe("steps.rollout.outputs.ready == 'true'");
     }
-  });
 
-  it("temporarily skips PR bases that predate the guard rollout commit", () => {
-    const parsed = readWorkflow();
-
-    expect(parsed.env?.OPENCLAW_SECURITY_SENSITIVE_GUARD_ROLLOUT_SHA).toBe(
-      "5d9c010628ea4de3492a12e32f9be5b8c5dfa9ed",
-    );
-
-    const jobs = parsed.jobs ?? {};
-    for (const jobName of ["security-sensitive-guard-detect", "security-sensitive-guard"]) {
-      const steps = jobs[jobName]?.steps ?? [];
-      const rollout = steps.find(
-        (step) => step.name === "Check security-sensitive guard rollout eligibility",
-      );
-
-      expect(rollout?.id).toBe("rollout");
-      expect(rollout?.env?.GH_TOKEN).toBe("${{ github.token }}");
-      expect(rollout?.env?.PR_BASE_SHA).toBe("${{ github.event.pull_request.base.sha }}");
-      expect(rollout?.run).toContain(
-        "compare/${OPENCLAW_SECURITY_SENSITIVE_GUARD_ROLLOUT_SHA}...${PR_BASE_SHA}",
-      );
-      expect(rollout?.run).toContain("ahead|identical)");
-      expect(rollout?.run).toContain("behind|diverged)");
-      expect(rollout?.run).toContain("ready=false");
-      expect(rollout?.run).toContain("predates rollout commit");
-    }
+    expect(workflow).not.toContain("OPENCLAW_SECURITY_SENSITIVE_GUARD_ROLLOUT_SHA");
+    expect(workflow).not.toContain("Check security-sensitive guard rollout eligibility");
+    expect(workflow).not.toContain("steps.rollout.outputs.ready");
+    expect(workflow).not.toContain("/compare/");
   });
 
   it("keeps detection separate from the final required check", () => {
@@ -164,6 +137,7 @@ describe("security-sensitive guard workflow", () => {
     expect(codeowners).toContain(
       "/scripts/github/security-sensitive-guard.mjs @openclaw/openclaw-secops",
     );
+    expect(codeowners).toContain("/scripts/github/guard-shared.mjs @openclaw/openclaw-secops");
     expect(codeowners).toContain("/.gitignore @openclaw/openclaw-secops");
   });
 });

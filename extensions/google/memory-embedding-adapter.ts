@@ -11,15 +11,8 @@ import {
   buildGeminiEmbeddingRequest,
   createGeminiEmbeddingProvider,
   DEFAULT_GEMINI_EMBEDDING_MODEL,
+  isGeminiEmbedding2Model,
 } from "./embedding-provider.js";
-
-function supportsGeminiMultimodalEmbeddings(model: string): boolean {
-  const normalized = model
-    .trim()
-    .replace(/^models\//, "")
-    .replace(/^(gemini|google)\//, "");
-  return normalized === "gemini-embedding-2-preview";
-}
 
 export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
   id: "gemini",
@@ -28,7 +21,7 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
   authProviderId: "google",
   autoSelectPriority: 30,
   allowExplicitWhenConfiguredAuto: true,
-  supportsMultimodalEmbeddings: ({ model }) => supportsGeminiMultimodalEmbeddings(model),
+  supportsMultimodalEmbeddings: ({ model }) => isGeminiEmbedding2Model(model),
   shouldContinueAutoSelection: isMissingEmbeddingApiKeyError,
   create: async (options) => {
     const { provider, client } = await createGeminiEmbeddingProvider({
@@ -45,9 +38,13 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
           baseUrl: client.baseUrl,
           model: client.model,
           outputDimensionality: client.outputDimensionality,
+          // x-goog-api-client is generated partner attribution (openclaw/<version>).
+          // Keep it on outbound requests, but exclude it from durable memory identity so
+          // OpenClaw version bumps do not pause otherwise-compatible Gemini indexes.
           headers: sanitizeEmbeddingCacheHeaders(client.headers, [
             "authorization",
             "x-goog-api-key",
+            "x-goog-api-client",
           ]),
         },
         batchEmbed: async (batch) => {
@@ -61,6 +58,8 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
               custom_id: String(index),
               request: buildGeminiEmbeddingRequest({
                 input: chunk.embeddingInput ?? { text: chunk.text },
+                model: client.model,
+                role: "document",
                 taskType: "RETRIEVAL_DOCUMENT",
                 modelPath: client.modelPath,
                 outputDimensionality: client.outputDimensionality,

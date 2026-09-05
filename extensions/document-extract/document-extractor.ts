@@ -26,12 +26,9 @@ async function loadPdfEngine(): Promise<PdfEngine> {
   return pdfEnginePromise;
 }
 
-function toDocumentImage(image: PdfImage): DocumentExtractedImage {
-  return {
-    type: "image",
-    data: Buffer.from(image.bytes).toString("base64"),
-    mimeType: image.mimeType,
-  };
+function toDocumentImage({ bytes, mimeType }: PdfImage): DocumentExtractedImage {
+  const data = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64");
+  return { type: "image", data, mimeType };
 }
 
 function isPdfPasswordError(err: unknown): boolean {
@@ -61,7 +58,7 @@ async function extractPdfContent(
   const engine = await loadPdfEngine();
   const pdf = await openPdfDocument({
     engine,
-    input: new Uint8Array(request.buffer),
+    input: request.buffer,
     ...(request.password ? { password: request.password } : {}),
   });
   try {
@@ -70,6 +67,9 @@ async function extractPdfContent(
           .filter((p) => Number.isInteger(p) && p >= 1 && p <= pdf.pageCount)
           .slice(0, request.maxPages)
       : undefined;
+    if (request.pageNumbers?.length && pages?.length === 0) {
+      throw new Error(`No requested PDF pages exist in this ${pdf.pageCount}-page document.`);
+    }
     const pageSelection = pages ? { pages } : { maxPages: request.maxPages };
 
     const textResult = await pdf.extract({
@@ -83,19 +83,42 @@ async function extractPdfContent(
       return { text, images: [] };
     }
 
+    // clawpdf's image render budget (maxPixels) is shared across every page in one
+    // extract() call: the first page consumes it and later pages collapse to 1x1
+    // PNGs that vision models reject. Render each page separately, allocating the
+    // remaining aggregate budget across pages that still need rendering.
+    const imagePages =
+      pages ?? Array.from({ length: Math.min(pdf.pageCount, request.maxPages) }, (_, i) => i + 1);
+
     try {
-      const imageResult = await pdf.extract({
-        mode: "images",
-        ...pageSelection,
-        image: {
-          maxDimension: MAX_RENDER_DIMENSION,
-          maxPixels: request.maxPixels,
-          forms: true,
-        },
-      });
-      return { text, images: imageResult.images.map(toDocumentImage) };
+      const images: DocumentExtractedImage[] = [];
+      let remainingPixels = request.maxPixels;
+      for (const [index, pageNumber] of imagePages.entries()) {
+        if (remainingPixels <= 0) {
+          break;
+        }
+        const pagesRemaining = imagePages.length - index;
+        const maxPixelsPerPage = Math.max(1, Math.ceil(remainingPixels / pagesRemaining));
+        const imageResult = await pdf.extract({
+          mode: "images",
+          pages: [pageNumber],
+          image: {
+            maxDimension: MAX_RENDER_DIMENSION,
+            maxPixels: maxPixelsPerPage,
+            forms: true,
+          },
+        });
+        for (const image of imageResult.images) {
+          images.push(toDocumentImage(image));
+          remainingPixels -= image.width * image.height;
+        }
+      }
+      return { text, images };
     } catch (err) {
       request.onImageExtractionError?.(err);
+      if (!text.trim()) {
+        throw new Error("PDF image extraction failed with no extractable text.", { cause: err });
+      }
       return { text, images: [] };
     }
   } finally {

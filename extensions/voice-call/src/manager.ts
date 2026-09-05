@@ -1,12 +1,10 @@
 // Voice Call plugin module implements manager behavior.
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { VoiceCallConfig } from "./config.js";
-import type { CallManagerContext, StreamSessionIssuer } from "./manager/context.js";
-import { processEvent as processManagerEvent } from "./manager/events.js";
+import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "./config.js";
+import type { CallEndResult, CallManagerContext, StreamSessionIssuer } from "./manager/context.js";
+import { processEvent as processManagerEvent, type ProcessEventResult } from "./manager/events.js";
 import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./manager/lookup.js";
 import {
   continueCall as continueCallWithContext,
@@ -15,8 +13,10 @@ import {
   sendDtmf as sendDtmfWithContext,
   speak as speakWithContext,
   speakInitialMessage as speakInitialMessageWithContext,
+  type SpeakOptions,
 } from "./manager/outbound.js";
 import {
+  findCallInStore,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
   persistCallRecord,
@@ -24,10 +24,12 @@ import {
 import { resolveVoiceCallSecondsTimerDelayMs } from "./manager/timer-delays.js";
 import { startMaxDurationTimer } from "./manager/timers.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { resolveDefaultVoiceCallStoreDir } from "./store-path.js";
 import {
   TerminalStates,
   type CallId,
   type CallRecord,
+  type EndReason,
   type NormalizedEvent,
   type OutboundCallOptions,
 } from "./types.js";
@@ -59,17 +61,7 @@ function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): s
   if (rawOverride) {
     return resolveUserPath(rawOverride);
   }
-  const preferred = path.join(os.homedir(), ".openclaw", "voice-calls");
-  const candidates = [preferred].map((dir) => resolveUserPath(dir));
-  const existing =
-    candidates.find((dir) => {
-      try {
-        return fs.existsSync(path.join(dir, "calls.jsonl")) || fs.existsSync(dir);
-      } catch {
-        return false;
-      }
-    }) ?? resolveUserPath(preferred);
-  return existing;
+  return resolveDefaultVoiceCallStoreDir();
 }
 
 /**
@@ -79,12 +71,14 @@ export class CallManager {
   private activeCalls = new Map<CallId, CallRecord>();
   private providerCallIdMap = new Map<string, CallId>();
   private processedEventIds = new Set<string>();
-  private rejectedProviderCallIds = new Set<string>();
+  private rejectedProviderCallIds = new Map<string, symbol>();
   private provider: VoiceCallProvider | null = null;
   private config: VoiceCallConfig;
+  private coreSession: VoiceCallCoreSessionConfig | undefined;
   private storePath: string;
   private webhookUrl: string | null = null;
   private activeTurnCalls = new Set<CallId>();
+  private endCallOperations = new Map<CallId, Promise<CallEndResult>>();
   private transcriptWaiters = new Map<
     CallId,
     {
@@ -95,6 +89,7 @@ export class CallManager {
   >();
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
   private initialMessageInFlight = new Set<CallId>();
+  private autoResponseOwners = new WeakMap<CallRecord, symbol>();
 
   /**
    * Carrier-side stream session issuer. Wired by the runtime when realtime is
@@ -103,8 +98,13 @@ export class CallManager {
    */
   streamSessionIssuer: StreamSessionIssuer | undefined;
 
-  constructor(config: VoiceCallConfig, storePath?: string) {
+  constructor(
+    config: VoiceCallConfig,
+    storePath?: string,
+    coreSession?: VoiceCallCoreSessionConfig,
+  ) {
     this.config = config;
+    this.coreSession = coreSession;
     this.storePath = resolveDefaultStoreBase(config, storePath);
   }
 
@@ -120,7 +120,7 @@ export class CallManager {
 
     const persisted = loadActiveCallsFromStore(this.storePath);
     this.processedEventIds = persisted.processedEventIds;
-    this.rejectedProviderCallIds = persisted.rejectedProviderCallIds;
+    this.rejectedProviderCallIds = new Map();
 
     const verified = await this.verifyRestoredCalls(provider, persisted.activeCalls);
     this.activeCalls = verified;
@@ -159,9 +159,7 @@ export class CallManager {
           ctx: this.getContext(),
           callId,
           timeoutMs: maxDurationMs - elapsed,
-          onTimeout: async (id) => {
-            await endCallWithContext(this.getContext(), id, { reason: "timeout" });
-          },
+          onTimeout: (id) => this.endCall(id, { reason: "timeout" }),
         });
         console.log(`[voice-call] Restarted max-duration timer for restored call ${callId}`);
       }
@@ -310,8 +308,12 @@ export class CallManager {
   /**
    * Speak to user in an active call.
    */
-  async speak(callId: CallId, text: string): Promise<{ success: boolean; error?: string }> {
-    return speakWithContext(this.getContext(), callId, text);
+  async speak(
+    callId: CallId,
+    text: string,
+    options?: SpeakOptions,
+  ): Promise<{ success: boolean; error?: string }> {
+    return speakWithContext(this.getContext(), callId, text, options);
   }
 
   /**
@@ -341,8 +343,8 @@ export class CallManager {
   /**
    * End an active call.
    */
-  async endCall(callId: CallId): Promise<{ success: boolean; error?: string }> {
-    return endCallWithContext(this.getContext(), callId);
+  endCall(callId: CallId, options?: { reason?: EndReason }): Promise<CallEndResult> {
+    return endCallWithContext(this.getContext(), callId, options);
   }
 
   private getContext(): CallManagerContext {
@@ -353,12 +355,15 @@ export class CallManager {
       rejectedProviderCallIds: this.rejectedProviderCallIds,
       provider: this.provider,
       config: this.config,
+      coreSession: this.coreSession,
       storePath: this.storePath,
       webhookUrl: this.webhookUrl,
       activeTurnCalls: this.activeTurnCalls,
+      endCallOperations: this.endCallOperations,
       transcriptWaiters: this.transcriptWaiters,
       maxDurationTimers: this.maxDurationTimers,
       initialMessageInFlight: this.initialMessageInFlight,
+      onCallerSpeech: (call) => this.invalidateAutoResponse(call),
       onCallAnswered: (call) => {
         this.maybeSpeakInitialMessageOnAnswered(call);
       },
@@ -369,8 +374,30 @@ export class CallManager {
   /**
    * Process a webhook event.
    */
-  processEvent(event: NormalizedEvent): void {
-    processManagerEvent(this.getContext(), event);
+  processEvent(event: NormalizedEvent): ProcessEventResult {
+    return processManagerEvent(this.getContext(), event);
+  }
+
+  createAutoResponseGuard(call: CallRecord): { isCurrent: () => boolean; release: () => void } {
+    // Call identity fences restored/replaced records; generation identity fences
+    // newer speech without cancelling agent work that was already accepted.
+    const owner = Symbol("automatic response");
+    this.autoResponseOwners.set(call, owner);
+    return {
+      isCurrent: () =>
+        this.activeCalls.get(call.callId) === call &&
+        !TerminalStates.has(call.state) &&
+        this.autoResponseOwners.get(call) === owner,
+      release: () => {
+        if (this.autoResponseOwners.get(call) === owner) {
+          this.autoResponseOwners.delete(call);
+        }
+      },
+    };
+  }
+
+  invalidateAutoResponse(call: CallRecord): void {
+    this.autoResponseOwners.delete(call);
   }
 
   private shouldDeferConversationInitialMessageUntilStreamConnect(): boolean {
@@ -446,6 +473,15 @@ export class CallManager {
    */
   getActiveCalls(): CallRecord[] {
     return Array.from(this.activeCalls.values());
+  }
+
+  /** Resolve a status record from active state or the retained event store. */
+  async getCallFromMemoryOrStore(callId: CallId): Promise<CallRecord | undefined> {
+    const active = this.getCall(callId) ?? this.getCallByProviderCallId(callId);
+    if (active) {
+      return active;
+    }
+    return findCallInStore(this.storePath, callId);
   }
 
   /**

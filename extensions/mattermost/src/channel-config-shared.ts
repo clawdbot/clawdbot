@@ -8,6 +8,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMattermostGatewayAuthBypassPaths } from "./gateway-auth-bypass.js";
 import {
+  isMattermostConfigured,
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
@@ -64,16 +65,13 @@ export const mattermostConfigAdapter = createScopedChannelConfigAdapter<Resolved
     }),
 });
 
-export function isMattermostConfigured(account: ResolvedMattermostAccount): boolean {
-  return Boolean(account.botToken && account.baseUrl);
-}
-
 export function describeMattermostAccount(account: ResolvedMattermostAccount) {
   return describeAccountSnapshot({
     account,
     configured: isMattermostConfigured(account),
     extra: {
       botTokenSource: account.botTokenSource,
+      botTokenStatus: account.botTokenStatus,
       baseUrl: account.baseUrl,
     },
   });

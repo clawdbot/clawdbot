@@ -5,9 +5,9 @@ scenario:
   surface: model-provider
   coverage:
     primary:
-      - models.provider-capabilities
+      - anthropic.claude-cli-compatibility-provider-capabilities
     secondary:
-      - models.claude-cli
+      - anthropic.claude-cli-compatibility
   objective: Verify the Claude CLI model-provider lane can use the Anthropic API key path to talk, read an attached image, use bundled MCP tools, and apply workspace skills.
   successCriteria:
     - A live-frontier run fails fast unless the selected primary provider is claude-cli.
@@ -31,6 +31,7 @@ scenario:
     summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --cli-auth-mode api-key --model claude-cli/claude-sonnet-4-6 --alt-model claude-cli/claude-sonnet-4-6 --scenario claude-cli-provider-capabilities`.
     config:
       authMode: api-key
+      requiredProviderMode: live-frontier
       requiredProvider: claude-cli
       chatPrompt: "Claude CLI provider marker check. Reply exactly: CLAUDE-CLI-CHAT-OK"
       chatExpected: CLAUDE-CLI-CHAT-OK

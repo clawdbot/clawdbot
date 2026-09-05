@@ -1,25 +1,35 @@
 // Discord plugin module implements send.message request behavior.
-import { MessageFlags, type APIEmbed } from "discord-api-types/v10";
+import { randomBytes } from "node:crypto";
+import { MessageFlags, type APIAllowedMentions, type APIEmbed } from "discord-api-types/v10";
 import {
   Embed,
+  hasDiscordV2Components,
   serializePayload,
   type MessagePayloadFile,
   type MessagePayloadObject,
   type TopLevelComponents,
 } from "./internal/discord.js";
 
-export const SUPPRESS_EMBEDS_FLAG = MessageFlags.SuppressEmbeds;
+export { stripUndefinedFields } from "./internal/undefined-fields.js";
+
+const SUPPRESS_EMBEDS_FLAG = MessageFlags.SuppressEmbeds;
 export const SUPPRESS_NOTIFICATIONS_FLAG = MessageFlags.SuppressNotifications;
 
-export type DiscordSendComponentFactory = (text: string) => TopLevelComponents[];
+type DiscordMessageComponents = NonNullable<MessagePayloadObject["components"]>;
+type DiscordSendComponentFactory = (text: string) => TopLevelComponents[];
 export type DiscordSendComponents = TopLevelComponents[] | DiscordSendComponentFactory;
 export type DiscordSendEmbeds = Array<APIEmbed | Embed>;
+export type DiscordAllowedMentions = APIAllowedMentions;
+
+export function createDiscordMessageNonce(): string {
+  return randomBytes(12).toString("hex");
+}
 
 export function resolveDiscordSendComponents(params: {
-  components?: DiscordSendComponents;
+  components?: DiscordSendComponents | DiscordMessageComponents;
   text: string;
   isFirst: boolean;
-}): TopLevelComponents[] | undefined {
+}): DiscordMessageComponents | undefined {
   if (!params.components || !params.isFirst) {
     return undefined;
   }
@@ -45,15 +55,16 @@ export function resolveDiscordSendEmbeds(params: {
   return normalizeDiscordEmbeds(params.embeds);
 }
 
-export function buildDiscordMessagePayload(params: {
+function buildDiscordMessagePayload(params: {
   text: string;
-  components?: TopLevelComponents[];
+  components?: DiscordMessageComponents;
   embeds?: Embed[];
+  allowedMentions?: DiscordAllowedMentions;
   flags?: number;
   files?: MessagePayloadFile[];
 }): MessagePayloadObject {
   const payload: MessagePayloadObject = {};
-  const hasV2 = hasV2Components(params.components);
+  const hasV2 = hasDiscordV2Components(params.components);
   const trimmed = params.text.trim();
   if (!hasV2 && trimmed) {
     payload.content = params.text;
@@ -63,6 +74,9 @@ export function buildDiscordMessagePayload(params: {
   }
   if (!hasV2 && params.embeds?.length) {
     payload.embeds = params.embeds;
+  }
+  if (params.allowedMentions) {
+    payload.allowed_mentions = params.allowedMentions;
   }
   if (params.flags !== undefined) {
     payload.flags = params.flags;
@@ -87,27 +101,35 @@ export function resolveDiscordMessageFlags(params: {
   return flags || undefined;
 }
 
-export function buildDiscordMessageRequest(params: {
+export function resolveDiscordSuppressEmbeds(params: {
+  configured?: boolean;
+  override?: boolean;
+}): boolean {
+  return params.override ?? params.configured ?? true;
+}
+
+type DiscordMessageRequestParams = {
   text: string;
-  components?: TopLevelComponents[];
+  components?: DiscordMessageComponents;
   embeds?: Embed[];
+  allowedMentions?: DiscordAllowedMentions;
   files?: MessagePayloadFile[];
   flags?: number;
   replyTo?: string;
-}) {
+} & ({ endpoint: "create-message"; nonce?: string } | { endpoint: "forum-thread"; nonce?: never });
+
+export function buildDiscordMessageRequest(params: DiscordMessageRequestParams) {
   const payload = buildDiscordMessagePayload(params);
-  return stripUndefinedFields({
+  const nonce =
+    params.endpoint === "create-message"
+      ? (params.nonce ?? createDiscordMessageNonce())
+      : undefined;
+  return {
     ...serializePayload(payload),
     ...(params.replyTo
       ? { message_reference: { message_id: params.replyTo, fail_if_not_exists: false } }
       : {}),
-  });
-}
-
-export function stripUndefinedFields<T extends object>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
-}
-
-function hasV2Components(components?: TopLevelComponents[]): boolean {
-  return Boolean(components?.some((component) => "isV2" in component && component.isV2));
+    ...(nonce !== undefined ? { nonce } : {}),
+    ...(nonce ? { enforce_nonce: true } : {}),
+  };
 }

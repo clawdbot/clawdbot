@@ -25,6 +25,7 @@ describe("resolveGlobalLane", () => {
       ["main", CommandLane.Main],
       ["subagent", CommandLane.Subagent],
       ["cron-nested", CommandLane.CronNested],
+      ["background:core:review", "background:core:review"],
       ["nested", CommandLane.Nested],
       ["custom-lane", "custom-lane"],
       [" custom ", "custom"],

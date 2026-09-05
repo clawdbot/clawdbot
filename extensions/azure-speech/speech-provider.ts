@@ -9,7 +9,12 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
-import { asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
+import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-provider";
+import {
+  asFiniteNumber,
+  asOptionalRecord,
+  normalizeOptionalString as trimToUndefined,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   azureSpeechTTS,
   DEFAULT_AZURE_SPEECH_AUDIO_FORMAT,
@@ -22,8 +27,6 @@ import {
   listAzureSpeechVoices,
   normalizeAzureSpeechBaseUrl,
 } from "./tts.js";
-
-const DEFAULT_GENERATED_AUDIO_MAX_BYTES = 16 * 1024 * 1024;
 
 type AzureSpeechProviderConfig = {
   apiKey?: string;
@@ -64,12 +67,12 @@ function readAzureSpeechEnvEndpoint(): string | undefined {
 function resolveAzureSpeechConfigRecord(
   rawConfig: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const providers = asObject(rawConfig.providers);
+  const providers = asOptionalRecord(rawConfig.providers);
   return (
-    asObject(providers?.["azure-speech"]) ??
-    asObject(providers?.azure) ??
-    asObject(rawConfig["azure-speech"]) ??
-    asObject(rawConfig.azure)
+    asOptionalRecord(providers?.["azure-speech"]) ??
+    asOptionalRecord(providers?.azure) ??
+    asOptionalRecord(rawConfig["azure-speech"]) ??
+    asOptionalRecord(rawConfig.azure)
   );
 }
 
@@ -87,7 +90,7 @@ function normalizeAzureSpeechProviderConfig(
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.azure-speech.apiKey",
+      path: "tts.providers.azure-speech.apiKey",
     }),
     region,
     endpoint,
@@ -175,22 +178,12 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
   }
 }
 
-function resolveApiKey(config: AzureSpeechProviderConfig): string | undefined {
-  return config.apiKey ?? readAzureSpeechEnvApiKey();
+function resolveApiKey(...candidates: Array<string | undefined>): string | undefined {
+  return resolveSpeechProviderApiKey(...candidates, readAzureSpeechEnvApiKey());
 }
 
 function resolveTimeoutMs(config: AzureSpeechProviderConfig, timeoutMs: number): number {
   return config.timeoutMs ?? timeoutMs;
-}
-
-function resolveGeneratedAudioMaxBytes(req: {
-  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
-}): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_AUDIO_MAX_BYTES;
 }
 
 /** Build the Azure Speech provider descriptor for the speech-core runtime. */
@@ -250,7 +243,9 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
       const config = req.providerConfig
         ? readAzureSpeechProviderConfig(req.providerConfig)
         : undefined;
-      const apiKey = req.apiKey ?? (config ? resolveApiKey(config) : readAzureSpeechEnvApiKey());
+      const requestValue = req.apiKey;
+      const configValue = config?.apiKey;
+      const apiKey = resolveApiKey(requestValue, configValue);
       if (!apiKey) {
         throw new Error("Azure Speech API key missing");
       }
@@ -259,23 +254,27 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         baseUrl: req.baseUrl ?? config?.baseUrl,
         endpoint: config?.endpoint,
         region: config?.region ?? readAzureSpeechEnvRegion(),
-        timeoutMs: config?.timeoutMs,
+        timeoutMs: config?.timeoutMs ?? req.timeoutMs,
       });
     },
     isConfigured: ({ providerConfig }) => {
       const config = readAzureSpeechProviderConfig(providerConfig);
-      return Boolean(resolveApiKey(config) && (config.baseUrl || config.region || config.endpoint));
+      return Boolean(
+        resolveApiKey(config.apiKey) && (config.baseUrl || config.region || config.endpoint),
+      );
     },
     synthesize: async (req) => {
       const config = readAzureSpeechProviderConfig(req.providerConfig);
       const overrides = readAzureSpeechOverrides(req.providerOverrides);
-      const apiKey = resolveApiKey(config);
+      const apiKey = resolveApiKey(config.apiKey);
       if (!apiKey) {
         throw new Error("Azure Speech API key missing");
       }
       const outputFormat =
         overrides.outputFormat ??
         (req.target === "voice-note" ? config.voiceNoteOutputFormat : config.outputFormat);
+      const { resolveGeneratedMediaMaxBytes } =
+        await import("openclaw/plugin-sdk/media-generation-runtime");
       const audioBuffer = await azureSpeechTTS({
         text: req.text,
         apiKey,
@@ -286,7 +285,7 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         lang: overrides.lang ?? config.lang,
         outputFormat,
         timeoutMs: resolveTimeoutMs(config, req.timeoutMs),
-        maxBytes: resolveGeneratedAudioMaxBytes(req),
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
       });
       return {
         audioBuffer,
@@ -298,11 +297,13 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
     synthesizeTelephony: async (req) => {
       const config = readAzureSpeechProviderConfig(req.providerConfig);
       const overrides = readAzureSpeechOverrides(req.providerOverrides);
-      const apiKey = resolveApiKey(config);
+      const apiKey = resolveApiKey(config.apiKey);
       if (!apiKey) {
         throw new Error("Azure Speech API key missing");
       }
       const sampleRate = 8_000;
+      const { resolveGeneratedMediaMaxBytes } =
+        await import("openclaw/plugin-sdk/media-generation-runtime");
       const audioBuffer = await azureSpeechTTS({
         text: req.text,
         apiKey,
@@ -313,7 +314,7 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         lang: overrides.lang ?? config.lang,
         outputFormat: DEFAULT_AZURE_SPEECH_TELEPHONY_FORMAT,
         timeoutMs: resolveTimeoutMs(config, req.timeoutMs),
-        maxBytes: resolveGeneratedAudioMaxBytes(req),
+        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
       });
       return {
         audioBuffer,

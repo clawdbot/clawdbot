@@ -2,8 +2,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
-import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
+import { canResolveEnvSecretRefInReadOnlyPath } from "../plugin-sdk/secret-ref-readonly.internal.js";
+import { isBuiltInDefaultSecretProviderRef } from "../secrets/ref-contract.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type {
   PluginManifestCapabilityProviderAuthSignal,
@@ -11,8 +12,8 @@ import type {
 } from "./manifest.js";
 
 type ToolMetadata = NonNullable<PluginManifestRecord["toolMetadata"]>[string];
-export type ManifestConfigAvailabilitySignal = PluginManifestCapabilityProviderConfigSignal;
-export type ManifestAuthAvailabilitySignal = PluginManifestCapabilityProviderAuthSignal;
+type ManifestConfigAvailabilitySignal = PluginManifestCapabilityProviderConfigSignal;
+type ManifestAuthAvailabilitySignal = PluginManifestCapabilityProviderAuthSignal;
 
 function readPath(root: unknown, path: string | undefined): unknown {
   if (!path?.trim()) {
@@ -62,39 +63,26 @@ function readEffectiveConfigs(params: {
   return [baseConfig];
 }
 
-function hasConfiguredSecretRefInConfigPath(params: {
-  config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  ref: SecretRef;
-}): boolean {
-  const providerConfig = params.config?.secrets?.providers?.[params.ref.provider];
-  if (params.ref.source !== "env") {
-    return Boolean(providerConfig && providerConfig.source === params.ref.source);
-  }
-  if (!providerConfig) {
-    return params.ref.provider === resolveDefaultSecretProviderAlias(params.config ?? {}, "env");
-  }
-  if (providerConfig.source !== "env") {
-    return false;
-  }
-  const allowlist = providerConfig.allowlist;
-  return !allowlist || allowlist.includes(params.ref.id);
-}
-
 function hasConfiguredValue(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   value: unknown;
 }): boolean {
   const secretRef = coerceSecretRef(params.value, params.config?.secrets?.defaults);
-  if (secretRef) {
+  if (secretRef?.source === "env") {
     return (
-      hasConfiguredSecretRefInConfigPath({
-        config: params.config,
-        env: params.env,
-        ref: secretRef,
-      }) &&
-      (secretRef.source !== "env" || Boolean(params.env[secretRef.id]?.trim()))
+      canResolveEnvSecretRefInReadOnlyPath({
+        cfg: params.config,
+        provider: secretRef.provider,
+        id: secretRef.id,
+      }) && Boolean(params.env[secretRef.id]?.trim())
+    );
+  }
+  if (secretRef) {
+    const providerConfig = params.config?.secrets?.providers?.[secretRef.provider];
+    return (
+      providerConfig?.source === secretRef.source ||
+      isBuiltInDefaultSecretProviderRef(params.config ?? {}, secretRef)
     );
   }
   if (typeof params.value === "string") {
@@ -210,11 +198,7 @@ export function manifestPluginSetupProviderEnvVars(
   plugin: PluginManifestRecord,
   providerId: string,
 ): readonly string[] {
-  const direct = plugin.setup?.providers?.find((provider) => provider.id === providerId)?.envVars;
-  if (direct && direct.length > 0) {
-    return direct;
-  }
-  return plugin.providerAuthEnvVars?.[providerId] ?? [];
+  return plugin.setup?.providers?.find((provider) => provider.id === providerId)?.envVars ?? [];
 }
 
 export function hasNonEmptyManifestEnvCandidate(

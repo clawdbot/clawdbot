@@ -7,6 +7,7 @@ import type { ProcessSession } from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 import { encodeKeySequence, hasCursorModeSensitiveKeys } from "./pty-keys.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { textResult } from "./tools/tool-results.js";
 
 /** Writable stdin surface shared by child-process and PTY session records. */
 export type WritableStdin = {
@@ -19,18 +20,10 @@ export type WritableStdin = {
 };
 
 function failText(text: string): AgentToolResult<unknown> {
-  return {
-    content: [
-      {
-        type: "text",
-        text,
-      },
-    ],
-    details: { status: "failed" },
-  };
+  return textResult(text, { status: "failed" });
 }
 
-async function writeToStdin(stdin: WritableStdin, data: string) {
+export async function writeProcessStdin(stdin: WritableStdin, data: string) {
   await new Promise<void>((resolve, reject) => {
     stdin.write(data, (err) => {
       if (err) {
@@ -69,20 +62,13 @@ export async function handleProcessSendKeys(params: {
   if (!data) {
     return failText("No key data provided.");
   }
-  await writeToStdin(params.stdin, data);
-  return {
-    content: [
-      {
-        type: "text",
-        text:
-          `Sent ${data.length} bytes to session ${params.sessionId}.` +
-          (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : ""),
-      },
-    ],
-    details: {
-      status: "running",
-      sessionId: params.sessionId,
-      name: deriveSessionName(params.session.command),
-    },
-  };
+  await writeProcessStdin(params.stdin, data);
+  const text =
+    `Sent ${Buffer.byteLength(data, "utf8")} bytes to session ${params.sessionId}.` +
+    (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : "");
+  return textResult(text, {
+    status: "running",
+    sessionId: params.sessionId,
+    name: deriveSessionName(params.session.command),
+  });
 }

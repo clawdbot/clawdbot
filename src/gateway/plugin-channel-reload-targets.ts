@@ -1,9 +1,11 @@
+// Kept for v2026.9.1 Gateways that import this entry after an in-place update.
+// The current Gateway reload owner no longer calls it.
 // Gateway channel plugin reload targeting.
 // Maps channel/plugin ids and aliases to config path prefixes for hot reload.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/index.js";
 
-export type ChannelPluginReloadTarget = {
+type ChannelPluginReloadTarget = {
   channelId: ChannelId;
   pluginId?: string | null;
   aliases?: readonly string[] | null;

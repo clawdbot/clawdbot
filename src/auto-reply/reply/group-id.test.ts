@@ -55,51 +55,43 @@ describe("extractSimpleExplicitGroupId", () => {
 });
 
 describe("extractExplicitGroupId", () => {
-  it("strips Telegram numeric topic shorthand after target normalization", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "telegram",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "telegram",
-              capabilities: { chatTypes: ["group"] },
-            }),
-            messaging: {
-              normalizeTarget: () => "telegram:-100200300:77",
-              inferTargetChatType: () => "group",
+  it.each([
+    {
+      name: "declared inferred shorthand",
+      channel: "telegram",
+      declaresNumericShorthand: true,
+      expected: "-100200300",
+    },
+    {
+      name: "undeclared inferred shorthand",
+      channel: "plainchat",
+      declaresNumericShorthand: false,
+      expected: "-100200300:77",
+    },
+  ])(
+    "uses $name metadata after target normalization",
+    ({ channel, declaresNumericShorthand, expected }) => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: channel,
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({
+                id: channel,
+                capabilities: { chatTypes: ["group"] },
+              }),
+              messaging: {
+                ...(declaresNumericShorthand ? { numericTopicShorthand: true as const } : {}),
+                normalizeTarget: () => `${channel}:-100200300:77`,
+                inferTargetChatType: () => "group" as const,
+              },
             },
           },
-        },
-      ]),
-    );
+        ]),
+      );
 
-    expect(extractExplicitGroupId("telegram:-100200300:77")).toBe("-100200300");
-  });
-
-  it("keeps legacy parser-only group target extraction quarantined", () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "legacygroup",
-          source: "test",
-          plugin: {
-            ...createChannelTestPluginBase({
-              id: "legacygroup",
-              capabilities: { chatTypes: ["group"] },
-            }),
-            messaging: {
-              parseExplicitTarget: ({ raw }: { raw: string }) =>
-                raw.startsWith("legacygroup:")
-                  ? { to: "group:room-a:topic:77", chatType: "group" as const }
-                  : null,
-            },
-          },
-        },
-      ]),
-    );
-
-    expect(extractExplicitGroupId("legacygroup:room-a:topic:77")).toBe("room-a");
-  });
+      expect(extractExplicitGroupId(`${channel}:-100200300:77`)).toBe(expected);
+    },
+  );
 });

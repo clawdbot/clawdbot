@@ -5,6 +5,7 @@ import {
   parseDiscordModalCustomId,
 } from "../component-custom-id.js";
 import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
+import { decodeCustomIdComponent } from "../custom-id-codec.js";
 import type { ComponentData, ModalInteraction } from "../internal/discord.js";
 import type { AgentComponentInteraction } from "./agent-components.types.js";
 import { formatDiscordUserTag } from "./format.js";
@@ -42,21 +43,12 @@ function mapOptionLabels(
 
 export function parseAgentComponentData(data: ComponentData): { componentId: string } | null {
   const raw = readParsedComponentId(data);
-  const decodeSafe = (value: string): string => {
-    if (!value.includes("%")) {
-      return value;
-    }
-    if (!/%[0-9A-Fa-f]{2}/.test(value)) {
-      return value;
-    }
-    try {
-      return decodeURIComponent(value);
-    } catch {
-      return value;
-    }
-  };
   const componentId =
-    typeof raw === "string" ? decodeSafe(raw) : typeof raw === "number" ? String(raw) : null;
+    typeof raw === "string"
+      ? decodeCustomIdComponent(raw)
+      : typeof raw === "number"
+        ? String(raw)
+        : null;
   if (!componentId) {
     return null;
   }
@@ -208,18 +200,4 @@ export function formatModalSubmissionText(
     lines.push("- (no values)");
   }
   return lines.join("\n");
-}
-
-export function resolveDiscordInteractionId(interaction: AgentComponentInteraction): string {
-  const rawId =
-    interaction.rawData && typeof interaction.rawData === "object" && "id" in interaction.rawData
-      ? (interaction.rawData as { id?: unknown }).id
-      : undefined;
-  if (typeof rawId === "string" && rawId.trim()) {
-    return rawId.trim();
-  }
-  if (typeof rawId === "number" && Number.isFinite(rawId)) {
-    return String(rawId);
-  }
-  return `discord-interaction:${Date.now()}`;
 }

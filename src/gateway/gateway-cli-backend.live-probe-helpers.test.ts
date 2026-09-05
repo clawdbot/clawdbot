@@ -55,8 +55,6 @@ function writeJson(response: ServerResponse, status: number, body: unknown): voi
 function preflightParams(env: NodeJS.ProcessEnv = {}) {
   return {
     sessionKey: "session-key",
-    port: 12345,
-    token: "gateway-token",
     env,
   };
 }
@@ -68,43 +66,69 @@ describe("gateway CLI backend live probe helpers", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
     clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
   });
 
-  it("reads loopback JSON-RPC responses without invoking cron verification when cron is absent", async () => {
-    const methods: string[] = [];
-    const server = createHttpServer((request, response) => {
-      void (async () => {
-        const body = JSON.parse(await readRequestBody(request)) as {
-          id?: unknown;
-          method?: string;
-        };
-        if (body.method) {
-          methods.push(body.method);
+  it.each([false, true])(
+    "checks read-only loopback discovery with automations present=%s",
+    async (present) => {
+      const methods: string[] = [];
+      const server = createHttpServer((request, response) => {
+        void (async () => {
+          const body = JSON.parse(await readRequestBody(request)) as {
+            id?: unknown;
+            method?: string;
+          };
+          if (body.method) {
+            methods.push(body.method);
+          }
+          if (body.method === "notifications/initialized") {
+            response.writeHead(202);
+            response.end();
+            return;
+          }
+          writeJson(response, 200, {
+            jsonrpc: "2.0",
+            id: body.id ?? null,
+            result:
+              body.method === "tools/list"
+                ? {
+                    tools: present
+                      ? [{ name: "automations", inputSchema: { type: "object", properties: {} } }]
+                      : [],
+                  }
+                : body.method === "tools/call"
+                  ? {
+                      isError: true,
+                      content: [
+                        {
+                          type: "text",
+                          text: "trusted operational run instance required for this gateway call",
+                        },
+                      ],
+                    }
+                  : {},
+          });
+        })();
+      });
+      const port = await listen(server);
+      activateLoopbackRuntime(port);
+      try {
+        const preflight = verifyCliCronMcpLoopbackPreflight(preflightParams());
+        if (present) {
+          await expect(preflight).resolves.toBeUndefined();
+        } else {
+          await expect(preflight).rejects.toThrow(
+            "mcp loopback tools/list did not expose automations",
+          );
         }
-        if (body.method === "notifications/initialized") {
-          response.writeHead(202);
-          response.end();
-          return;
-        }
-        writeJson(response, 200, {
-          jsonrpc: "2.0",
-          id: body.id ?? null,
-          result: body.method === "tools/list" ? { tools: [] } : {},
-        });
-      })();
-    });
-    const port = await listen(server);
-    activateLoopbackRuntime(port);
-    try {
-      await expect(verifyCliCronMcpLoopbackPreflight(preflightParams())).rejects.toThrow(
-        "mcp loopback tools/list did not expose cron",
-      );
-      expect(methods).toEqual(["initialize", "notifications/initialized", "tools/list"]);
-    } finally {
-      server.close();
-    }
-  });
+        expect(methods).toEqual(["initialize", "notifications/initialized", "tools/list"]);
+      } finally {
+        server.close();
+      }
+    },
+  );
 
   it("bounds loopback JSON-RPC calls when the server accepts connections but never responds", async () => {
     const sockets = new Set<Socket>();
@@ -147,5 +171,62 @@ describe("gateway CLI backend live probe helpers", () => {
     } finally {
       server.close();
     }
+  });
+
+  it("preserves the byte-limit diagnostic when body cancellation rejects", async () => {
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    const cancel = vi.fn(() => {
+      throw new Error("loopback body cancellation failed");
+    });
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(65));
+      },
+      cancel,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body)),
+    );
+    activateLoopbackRuntime(12345);
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      await expect(
+        verifyCliCronMcpLoopbackPreflight(
+          preflightParams({ OPENCLAW_MCP_LOOPBACK_PROBE_MAX_BODY_BYTES: "64" }),
+        ),
+      ).rejects.toThrow("mcp loopback response body exceeded 64 bytes");
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(body.locked).toBe(false);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandledRejections).toStrictEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+      expect(process.listeners("unhandledRejection")).not.toContain(onUnhandledRejection);
+    }
+  });
+
+  it("still propagates loopback response read errors and releases the reader lock", async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error("loopback response read failed"));
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body)),
+    );
+    activateLoopbackRuntime(12345);
+
+    await expect(verifyCliCronMcpLoopbackPreflight(preflightParams())).rejects.toThrow(
+      "loopback response read failed",
+    );
+    expect(body.locked).toBe(false);
   });
 });

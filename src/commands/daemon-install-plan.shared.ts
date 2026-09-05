@@ -1,7 +1,7 @@
 // Shared daemon install runtime/path helpers for service plan generation.
 import fs from "node:fs";
 import path from "node:path";
-import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
+import { resolvePreferredBunPath, resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import {
   emitNodeRuntimeWarning,
   type DaemonInstallWarnFn,
@@ -9,27 +9,34 @@ import {
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 /** Detect source-checkout dev mode from the current CLI entrypoint. */
-export function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
+function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
   const entry = argv[1];
   const normalizedEntry = entry?.replaceAll("\\", "/");
-  return normalizedEntry?.includes("/src/") && normalizedEntry.endsWith(".ts");
+  return (
+    normalizedEntry !== undefined &&
+    normalizedEntry.includes("/src/") &&
+    normalizedEntry.endsWith(".ts")
+  );
 }
 
-/** Resolve dev-mode and Node path inputs for daemon service install planning. */
+/** Resolve dev-mode and executable inputs for daemon service install planning. */
 export async function resolveDaemonInstallRuntimeInputs(params: {
   env: Record<string, string | undefined>;
   runtime: GatewayDaemonRuntime;
   devMode?: boolean;
-  nodePath?: string;
-}): Promise<{ devMode: boolean; nodePath?: string }> {
+  runtimePath?: string;
+  wrapperPath?: string;
+}): Promise<{ devMode: boolean; runtimePath?: string }> {
   const devMode = params.devMode ?? resolveGatewayDevMode();
-  const nodePath =
-    params.nodePath ??
-    (await resolvePreferredNodePath({
-      env: params.env,
-      runtime: params.runtime,
-    }));
-  return { devMode, nodePath };
+  if (params.wrapperPath?.trim()) {
+    return { devMode, runtimePath: params.runtimePath };
+  }
+  const runtimePath =
+    params.runtimePath ??
+    (params.runtime === "bun"
+      ? await resolvePreferredBunPath({ env: params.env, runtime: params.runtime })
+      : await resolvePreferredNodePath({ env: params.env, runtime: params.runtime }));
+  return { devMode, runtimePath };
 }
 
 /** Emit runtime warnings for daemon install command arguments. */
@@ -49,9 +56,9 @@ export async function emitDaemonInstallRuntimeWarning(params: {
   });
 }
 
-/** Return the Node binary directory that should be added to daemon PATH. */
-export function resolveDaemonNodeBinDir(nodePath?: string): string[] | undefined {
-  const trimmed = nodePath?.trim();
+/** Return the runtime binary directory that should be added to daemon PATH. */
+export function resolveDaemonRuntimeBinDir(runtimePath?: string): string[] | undefined {
+  const trimmed = runtimePath?.trim();
   if (!trimmed || !path.isAbsolute(trimmed)) {
     return undefined;
   }
@@ -92,7 +99,7 @@ function addUniquePathDir(dirs: string[], dir: string | undefined): void {
 }
 
 /** Resolve the OpenClaw CLI binary directory from argv/PATH for daemon PATH. */
-export function resolveDaemonOpenClawBinDir(
+function resolveDaemonOpenClawBinDir(
   params: {
     argv?: string[];
     env?: Record<string, string | undefined>;
@@ -139,15 +146,15 @@ export function resolveDaemonOpenClawBinDir(
   return dirs.length > 0 ? dirs : undefined;
 }
 
-/** Merge Node and OpenClaw binary directories for the daemon service PATH. */
+/** Merge runtime and OpenClaw binary directories for the daemon service PATH. */
 export function resolveDaemonServicePathDirs(params: {
-  nodePath?: string;
+  runtimePath?: string;
   argv?: string[];
   env?: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
 }): string[] | undefined {
   const dirs: string[] = [];
-  for (const dir of resolveDaemonNodeBinDir(params.nodePath) ?? []) {
+  for (const dir of resolveDaemonRuntimeBinDir(params.runtimePath) ?? []) {
     addUniquePathDir(dirs, dir);
   }
   for (const dir of resolveDaemonOpenClawBinDir(params) ?? []) {

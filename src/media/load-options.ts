@@ -10,7 +10,7 @@ export type OutboundMediaAccess = {
 };
 
 /** Legacy and current knobs accepted by outbound media loaders before normalization. */
-export type OutboundMediaLoadParams = {
+type OutboundMediaLoadParams = {
   maxBytes?: number;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[] | "any";
@@ -25,7 +25,7 @@ export type OutboundMediaLoadParams = {
 };
 
 /** Normalized outbound media loader options consumed by fetch/local media helpers. */
-export type OutboundMediaLoadOptions = {
+type OutboundMediaLoadOptions = {
   maxBytes?: number;
   localRoots?: readonly string[] | "any";
   readFile?: (filePath: string) => Promise<Buffer>;
@@ -86,31 +86,16 @@ export function buildOutboundMediaLoadOptions(
   const workspaceDir = mediaAccess?.workspaceDir ?? params.workspaceDir;
   const readFile = mediaAccess?.readFile ?? params.mediaReadFile;
   const localRoots = mediaAccess?.localRoots ?? explicitLocalRoots;
-  if (readFile) {
-    // Host reads must declare a root boundary so local file access cannot silently widen.
-    if (!localRoots) {
-      throw new Error(
-        'Host media read requires explicit localRoots. Pass mediaAccess.localRoots or opt in with localRoots: "any".',
-      );
-    }
-    return {
-      ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
-      localRoots,
-      readFile,
-      ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
-      ...(params.proxyUrl ? { proxyUrl: params.proxyUrl } : {}),
-      ...(params.requestInit ? { requestInit: params.requestInit } : {}),
-      ...(params.trustExplicitProxyDns !== undefined
-        ? { trustExplicitProxyDns: params.trustExplicitProxyDns }
-        : {}),
-      hostReadCapability: true,
-      ...(params.optimizeImages !== undefined ? { optimizeImages: params.optimizeImages } : {}),
-      ...(workspaceDir ? { workspaceDir } : {}),
-    };
+  // Host reads must declare a root boundary so local file access cannot silently widen.
+  if (readFile && !localRoots) {
+    throw new Error(
+      'Host media read requires explicit localRoots. Pass mediaAccess.localRoots or opt in with localRoots: "any".',
+    );
   }
   return {
     ...(params.maxBytes !== undefined ? { maxBytes: params.maxBytes } : {}),
     ...(localRoots ? { localRoots } : {}),
+    ...(readFile ? { readFile, hostReadCapability: true } : {}),
     ...(params.proxyUrl ? { proxyUrl: params.proxyUrl } : {}),
     ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
     ...(params.requestInit ? { requestInit: params.requestInit } : {}),

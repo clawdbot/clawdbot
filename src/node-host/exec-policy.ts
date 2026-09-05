@@ -1,5 +1,31 @@
 /** Evaluates node-host exec policy from security, approval, and allowlist context. */
-import { requiresExecApproval, type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  requiresExecApproval,
+  resolveExecModePolicy,
+  type ExecAsk,
+  type ExecSecurity,
+} from "../infra/exec-approvals.js";
+import { applyExecPolicyLayer } from "../infra/exec-policy.js";
+
+/** One config owner for system.run and plugin-hosted execution. */
+export function resolveNodeExecConfigPolicy(params: {
+  cfg: OpenClawConfig;
+  agentId: string | undefined;
+  defaultSecurity: ExecSecurity;
+  defaultAsk: ExecAsk;
+}) {
+  const agentExec = params.agentId
+    ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.exec
+    : undefined;
+  const globalExec = params.cfg.tools?.exec;
+  const layered = applyExecPolicyLayer(
+    applyExecPolicyLayer({ security: params.defaultSecurity, ask: params.defaultAsk }, globalExec),
+    agentExec,
+  );
+  return { agentExec, globalExec, ...resolveExecModePolicy(layered) };
+}
 
 type ExecApprovalDecision = "allow-once" | "allow-always" | null;
 
@@ -30,21 +56,13 @@ export function resolveExecApprovalDecision(value: unknown): ExecApprovalDecisio
   return null;
 }
 
-export function formatSystemRunAllowlistMissMessage(params?: {
-  shellWrapperBlocked?: boolean;
+function formatSystemRunAllowlistMissMessage(params?: {
   windowsShellWrapperBlocked?: boolean;
 }): string {
   if (params?.windowsShellWrapperBlocked) {
     return (
       "SYSTEM_RUN_DENIED: allowlist miss " +
       "(Windows shell wrappers like cmd.exe /c require approval; " +
-      "approve once/always or run with --ask on-miss|always)"
-    );
-  }
-  if (params?.shellWrapperBlocked) {
-    return (
-      "SYSTEM_RUN_DENIED: allowlist miss " +
-      "(shell wrappers like sh/bash/zsh -c require approval; " +
       "approve once/always or run with --ask on-miss|always)"
     );
   }
@@ -132,7 +150,6 @@ export function evaluateSystemRunPolicy(params: {
       allowed: false,
       eventReason: "allowlist-miss",
       errorMessage: formatSystemRunAllowlistMissMessage({
-        shellWrapperBlocked,
         windowsShellWrapperBlocked,
       }),
       analysisOk,

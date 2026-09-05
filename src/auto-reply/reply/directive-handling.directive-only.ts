@@ -27,6 +27,10 @@ export function isDirectiveOnly(params: {
   ) {
     return false;
   }
+  // Command-owned arguments stay out of the agent prompt even when parsing leaves invalid prose.
+  if (directives.command) {
+    return true;
+  }
   const stripped = stripStructuralPrefixes(cleanedBody ?? "");
   // Group mentions are routing syntax, not meaningful agent body text.
   const noMentions = isGroup ? stripMentions(stripped, ctx, cfg, agentId) : stripped;

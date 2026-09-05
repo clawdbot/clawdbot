@@ -1,9 +1,11 @@
 /**
- * Doctor contract hooks for Codex plugin config migrations and session-route
- * ownership warnings.
+ * Doctor contract hooks for Codex plugin config and state migrations.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { DoctorSessionRouteStateOwner } from "openclaw/plugin-sdk/runtime-doctor";
+import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { codexOrphanedSessionBindingMigration } from "./src/migration/session-binding-orphans.js";
+import { stateMigrations as legacyStateMigrations } from "./src/migration/session-binding-sidecars.js";
 
 type LegacyConfigRule = {
   path: string[];
@@ -11,27 +13,41 @@ type LegacyConfigRule = {
   match: (value: unknown) => boolean;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function hasRetiredDynamicToolsProfile(value: unknown): boolean {
-  return Object.hasOwn(asRecord(value) ?? {}, "codexDynamicToolsProfile");
+  return Object.hasOwn(asNullableRecord(value) ?? {}, "codexDynamicToolsProfile");
 }
 
 function hasLegacyPluginDestructivePolicy(value: unknown): boolean {
-  const codexPlugins = asRecord(value);
+  const codexPlugins = asNullableRecord(value);
   if (!codexPlugins) {
     return false;
   }
   if (codexPlugins.allow_destructive_actions === "on-request") {
     return true;
   }
-  const plugins = asRecord(codexPlugins.plugins);
+  const plugins = asNullableRecord(codexPlugins.plugins);
   return Object.values(plugins ?? {}).some(
-    (plugin) => asRecord(plugin)?.allow_destructive_actions === "on-request",
+    (plugin) => asNullableRecord(plugin)?.allow_destructive_actions === "on-request",
+  );
+}
+
+function hasRetiredApprovalPolicy(value: unknown): boolean {
+  const approvalPolicy = asNullableRecord(value)?.approvalPolicy;
+  return approvalPolicy === "on-failure" || approvalPolicy === "untrusted";
+}
+
+// These keys shipped in v2026.8.1; only Doctor consumes them after retirement.
+const RETIRED_TURN_IDLE_TIMEOUT_KEYS = [
+  "turnCompletionIdleTimeoutMs",
+  "turnAssistantCompletionIdleTimeoutMs",
+  "postToolRawAssistantCompletionIdleTimeoutMs",
+] as const;
+
+function hasRetiredTurnIdleTimeout(value: unknown): boolean {
+  const appServer = asNullableRecord(value);
+  return (
+    appServer !== null &&
+    RETIRED_TURN_IDLE_TIMEOUT_KEYS.some((key) => Object.hasOwn(appServer, key))
   );
 }
 
@@ -49,6 +65,18 @@ export const legacyConfigRules: LegacyConfigRule[] = [
       'plugins.entries.codex.config.codexPlugins.allow_destructive_actions="on-request" was renamed to "auto". Run "openclaw doctor --fix".',
     match: hasLegacyPluginDestructivePolicy,
   },
+  {
+    path: ["plugins", "entries", "codex", "config", "appServer"],
+    message:
+      'plugins.entries.codex.config.appServer.approvalPolicy values "on-failure" and "untrusted" are retired; use "on-request". Run "openclaw doctor --fix".',
+    match: hasRetiredApprovalPolicy,
+  },
+  {
+    path: ["plugins", "entries", "codex", "config", "appServer"],
+    message:
+      'Codex app-server turn idle timeouts are retired; native Codex owns provider liveness and turn completion. The existing agents.defaults.timeoutSeconds run limit remains unchanged. Run "openclaw doctor --fix" to remove the old settings.',
+    match: hasRetiredTurnIdleTimeout,
+  },
 ];
 
 /**
@@ -58,23 +86,32 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   config: OpenClawConfig;
   changes: string[];
 } {
-  const rawEntry = asRecord(cfg.plugins?.entries?.codex);
-  const rawPluginConfig = asRecord(rawEntry?.config);
-  const rawCodexPlugins = asRecord(rawPluginConfig?.codexPlugins);
+  const rawEntry = asNullableRecord(cfg.plugins?.entries?.codex);
+  const rawPluginConfig = asNullableRecord(rawEntry?.config);
+  const rawCodexPlugins = asNullableRecord(rawPluginConfig?.codexPlugins);
+  const rawAppServer = asNullableRecord(rawPluginConfig?.appServer);
   const shouldRemoveDynamicToolsProfile =
     rawPluginConfig !== null && hasRetiredDynamicToolsProfile(rawPluginConfig);
   const shouldRewriteDestructivePolicy = hasLegacyPluginDestructivePolicy(rawCodexPlugins);
-  if (!rawPluginConfig || (!shouldRemoveDynamicToolsProfile && !shouldRewriteDestructivePolicy)) {
+  const shouldRewriteApprovalPolicy = hasRetiredApprovalPolicy(rawAppServer);
+  const shouldRemoveTurnIdleTimeouts = hasRetiredTurnIdleTimeout(rawAppServer);
+  if (
+    !rawPluginConfig ||
+    (!shouldRemoveDynamicToolsProfile &&
+      !shouldRewriteDestructivePolicy &&
+      !shouldRewriteApprovalPolicy &&
+      !shouldRemoveTurnIdleTimeouts)
+  ) {
     return { config: cfg, changes: [] };
   }
 
   const nextConfig = structuredClone(cfg) as OpenClawConfig & {
     plugins?: Record<string, unknown>;
   };
-  const nextPlugins = asRecord(nextConfig.plugins);
-  const nextEntries = asRecord(nextPlugins?.entries);
-  const nextEntry = asRecord(nextEntries?.codex);
-  const nextPluginConfig = asRecord(nextEntry?.config);
+  const nextPlugins = asNullableRecord(nextConfig.plugins);
+  const nextEntries = asNullableRecord(nextPlugins?.entries);
+  const nextEntry = asNullableRecord(nextEntries?.codex);
+  const nextPluginConfig = asNullableRecord(nextEntry?.config);
   if (!nextPluginConfig) {
     return { config: cfg, changes: [] };
   }
@@ -88,13 +125,13 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   }
 
   if (shouldRewriteDestructivePolicy) {
-    const nextCodexPlugins = asRecord(nextPluginConfig.codexPlugins);
+    const nextCodexPlugins = asNullableRecord(nextPluginConfig.codexPlugins);
     if (nextCodexPlugins?.allow_destructive_actions === "on-request") {
       nextCodexPlugins.allow_destructive_actions = "auto";
     }
-    const nextPluginPolicies = asRecord(nextCodexPlugins?.plugins);
+    const nextPluginPolicies = asNullableRecord(nextCodexPlugins?.plugins);
     for (const plugin of Object.values(nextPluginPolicies ?? {})) {
-      const nextPlugin = asRecord(plugin);
+      const nextPlugin = asNullableRecord(plugin);
       if (nextPlugin?.allow_destructive_actions === "on-request") {
         nextPlugin.allow_destructive_actions = "auto";
       }
@@ -104,20 +141,37 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     );
   }
 
+  const nextAppServer = asNullableRecord(nextPluginConfig.appServer);
+  if (nextAppServer && shouldRemoveTurnIdleTimeouts) {
+    for (const key of RETIRED_TURN_IDLE_TIMEOUT_KEYS) {
+      if (Object.hasOwn(nextAppServer, key)) {
+        delete nextAppServer[key];
+        changes.push(
+          `Removed retired plugins.entries.codex.config.appServer.${key}; native Codex owns provider liveness and turn completion. agents.defaults.timeoutSeconds was not changed.`,
+        );
+      }
+    }
+  }
+
+  if (shouldRewriteApprovalPolicy) {
+    if (
+      nextAppServer?.approvalPolicy === "on-failure" ||
+      nextAppServer?.approvalPolicy === "untrusted"
+    ) {
+      nextAppServer.approvalPolicy = "on-request";
+    }
+    changes.push(
+      'Renamed retired plugins.entries.codex.config.appServer.approvalPolicy to "on-request".',
+    );
+  }
+
   return {
     config: nextConfig,
     changes,
   };
 }
 
-/** Session/auth ownership metadata used by doctor route-state checks. */
-export const sessionRouteStateOwners: DoctorSessionRouteStateOwner[] = [
-  {
-    id: "codex",
-    label: "Codex",
-    providerIds: ["codex", "codex-cli", "openai-codex"],
-    runtimeIds: ["codex", "codex-cli"],
-    cliSessionKeys: ["codex-cli"],
-    authProfilePrefixes: ["codex:", "codex-cli:", "openai-codex:"],
-  },
+export const stateMigrations: PluginDoctorStateMigration[] = [
+  ...legacyStateMigrations,
+  codexOrphanedSessionBindingMigration,
 ];

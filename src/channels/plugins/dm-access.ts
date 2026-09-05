@@ -3,6 +3,7 @@
  *
  * Reads, writes, migrates, and normalizes direct-message policy and allowFrom fields.
  */
+import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
 /**
@@ -52,12 +53,6 @@ export function normalizeChannelDmPolicy(value: string | undefined): ChannelDmPo
     : undefined;
 }
 
-function asObjectRecord(value: unknown): DmAccessRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as DmAccessRecord)
-    : null;
-}
-
 function cloneDm(entry: DmAccessRecord): DmAccessRecord | null {
   const dm = asObjectRecord(entry.dm);
   return dm ? { ...dm } : null;
@@ -93,34 +88,49 @@ function readPath(entry: DmAccessRecord | null | undefined, path: readonly strin
 }
 
 function deletePath(entry: DmAccessRecord, path: readonly string[]): boolean {
-  if (path.length === 1) {
-    if (entry[path[0]] === undefined) {
-      return false;
-    }
-    delete entry[path[0]];
-    return true;
-  }
-  const parent = asObjectRecord(entry[path[0]]);
-  if (!parent || parent[path[1]] === undefined) {
+  const [head, tail] = path;
+  if (head === undefined) {
     return false;
   }
-  delete parent[path[1]];
+  if (path.length === 1) {
+    if (entry[head] === undefined) {
+      return false;
+    }
+    delete entry[head];
+    return true;
+  }
+  if (tail === undefined) {
+    return false;
+  }
+  const parent = asObjectRecord(entry[head]);
+  if (!parent || parent[tail] === undefined) {
+    return false;
+  }
+  delete parent[tail];
   if (Object.keys(parent).length === 0) {
-    delete entry[path[0]];
+    delete entry[head];
   } else {
-    entry[path[0]] = parent;
+    entry[head] = parent;
   }
   return true;
 }
 
 function writePath(entry: DmAccessRecord, path: readonly string[], value: unknown): void {
-  if (path.length === 1) {
-    entry[path[0]] = value;
+  const [head, tail] = path;
+  if (head === undefined) {
     return;
   }
-  const parent = asObjectRecord(entry[path[0]]) ? { ...(entry[path[0]] as DmAccessRecord) } : {};
-  parent[path[1]] = value;
-  entry[path[0]] = parent;
+  if (path.length === 1) {
+    entry[head] = value;
+    return;
+  }
+  if (tail === undefined) {
+    return;
+  }
+  const existingParent = asObjectRecord(entry[head]);
+  const parent = existingParent ? { ...existingParent } : {};
+  parent[tail] = value;
+  entry[head] = parent;
 }
 
 function allowFromListsMatch(left: unknown, right: unknown): boolean {

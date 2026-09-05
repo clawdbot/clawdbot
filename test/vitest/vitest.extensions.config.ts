@@ -24,19 +24,37 @@ import { telegramExtensionTestRoots } from "./vitest.extension-telegram-paths.mj
 import { voiceCallExtensionTestRoots } from "./vitest.extension-voice-call-paths.mjs";
 import { whatsAppExtensionTestRoots } from "./vitest.extension-whatsapp-paths.mjs";
 import { zaloExtensionTestRoots } from "./vitest.extension-zalo-paths.mjs";
-import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
+import { pluginControlUiPathGlob } from "./vitest.ui-paths.mjs";
 
-export function loadIncludePatternsFromEnv(
-  env: Record<string, string | undefined> = process.env,
-): string[] | null {
-  return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
-}
+export const extensionCatchAllExcludedTestRoots = [
+  activeMemoryExtensionTestRoots,
+  acpxExtensionTestRoots,
+  browserExtensionTestRoots,
+  codexExtensionTestRoots,
+  diffsExtensionTestRoots,
+  feishuExtensionTestRoots,
+  ircExtensionTestRoots,
+  matrixExtensionTestRoots,
+  mattermostExtensionTestRoots,
+  mediaExtensionTestRoots,
+  memoryExtensionTestRoots,
+  messagingExtensionTestRoots,
+  miscExtensionTestRoots,
+  msTeamsExtensionTestRoots,
+  providerOpenAiExtensionTestRoots,
+  providerExtensionTestRoots,
+  qaExtensionTestRoots,
+  telegramExtensionTestRoots,
+  voiceCallExtensionTestRoots,
+  whatsAppExtensionTestRoots,
+  zaloExtensionTestRoots,
+].flat();
 
 export function createExtensionsVitestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
-  return createScopedVitestConfig(loadIncludePatternsFromEnv(env) ?? [BUNDLED_PLUGIN_TEST_GLOB], {
+  return createScopedVitestConfig([BUNDLED_PLUGIN_TEST_GLOB], {
     dir: "extensions",
     env,
     name: "extensions",
@@ -45,28 +63,11 @@ export function createExtensionsVitestConfig(
     // Some bundled plugins still run on the channel surface; keep those roots
     // out of the shared extensions lane.
     exclude: [
+      pluginControlUiPathGlob,
       ...extensionExcludedChannelTestGlobs,
-      ...activeMemoryExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...acpxExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...browserExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...codexExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...diffsExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...feishuExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...ircExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...matrixExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...mattermostExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...mediaExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...memoryExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...messagingExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...miscExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...msTeamsExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...providerOpenAiExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...providerExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...qaExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...telegramExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...voiceCallExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...whatsAppExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
-      ...zaloExtensionTestRoots.map((root) => `${root.replace(/^extensions\//u, "")}/**`),
+      ...extensionCatchAllExcludedTestRoots.map(
+        (root) => `${root.replace(/^extensions\//u, "")}/**`,
+      ),
     ],
   });
 }

@@ -1,10 +1,12 @@
 // Gateway operator-approvals client helper.
 // Connects a backend Gateway client scoped to operator approval events.
 import {
+  GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
@@ -53,9 +55,11 @@ export async function createOperatorApprovalsGatewayClient(
       ? { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }
       : {}),
     preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
+    tlsFingerprint: bootstrap.tlsFingerprint,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: params.clientDisplayName,
     mode: GATEWAY_CLIENT_MODES.BACKEND,
+    caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
     scopes: ["operator.approvals"],
     deviceIdentity: shouldOmitApprovalRuntimeDeviceIdentity({
       sendsApprovalRuntimeToken,
@@ -79,46 +83,26 @@ export async function withOperatorApprovalsGatewayClient<T>(
   },
   run: (client: GatewayClient) => Promise<T>,
 ): Promise<T> {
-  let readySettled = false;
-  let resolveReady!: () => void;
-  let rejectReady!: (err: unknown) => void;
-  const ready = new Promise<void>((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
-  });
-  const markReady = () => {
-    if (readySettled) {
-      return;
-    }
-    readySettled = true;
-    resolveReady();
-  };
-  const failReady = (err: unknown) => {
-    if (readySettled) {
-      return;
-    }
-    readySettled = true;
-    rejectReady(err);
-  };
+  const ready = createDeferredCore();
 
   const gatewayClient = await createOperatorApprovalsGatewayClient({
     config: params.config,
     gatewayUrl: params.gatewayUrl,
     clientDisplayName: params.clientDisplayName,
     onHelloOk: () => {
-      markReady();
+      ready.resolve();
     },
     onConnectError: (err) => {
-      failReady(err);
+      ready.reject(err);
     },
     onClose: (code, reason) => {
-      failReady(new Error(`gateway closed (${code}): ${reason}`));
+      ready.reject(new Error(`gateway closed (${code}): ${reason}`));
     },
   });
 
   try {
     const readiness = await startGatewayClientWhenEventLoopReady(gatewayClient, {
-      clientOptions: { preauthHandshakeTimeoutMs: params.config.gateway?.handshakeTimeoutMs },
+      clientOptions: {},
     });
     if (!readiness.ready) {
       throw new Error(
@@ -127,7 +111,7 @@ export async function withOperatorApprovalsGatewayClient<T>(
           : "gateway readiness unavailable before approval client start",
       );
     }
-    await ready;
+    await ready.promise;
     return await run(gatewayClient);
   } finally {
     await gatewayClient.stopAndWait().catch(() => {

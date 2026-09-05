@@ -7,29 +7,28 @@ read_when:
 title: "Parallel search"
 ---
 
-The Parallel plugin provides two [Parallel](https://parallel.ai/) `web_search` providers:
+The Parallel plugin provides two [Parallel](https://parallel.ai/) `web_search`
+providers, both returning ranked, LLM-optimized excerpts from a web index
+built for AI agents:
 
-- **Parallel Search (Free)** (`parallel-free`) -- Parallel's free
-  [Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp). Requires no
-  account or API key. Select it explicitly when you want Parallel's hosted
-  key-free search path.
-- **Parallel Search** (`parallel`) -- Parallel's paid Search API. Requires a
-  `PARALLEL_API_KEY` and offers higher rate limits and objective tuning.
+| Provider               | id              | Auth                                                                                       |
+| ---------------------- | --------------- | ------------------------------------------------------------------------------------------ |
+| Parallel Search (Free) | `parallel-free` | None -- Parallel's free [Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) |
+| Parallel Search        | `parallel`      | `PARALLEL_API_KEY` -- paid Search API, higher rate limits and objective tuning             |
 
-Both return ranked, LLM-optimized excerpts from a web index built for AI agents.
-Set `tools.web.search.provider` to `parallel-free` or `parallel` to choose one
-explicitly.
+Set `tools.web.search.provider` to `parallel-free` or `parallel` to select
+one explicitly; neither is auto-detected.
 
 <Note>
-  OpenAI Responses models use OpenAI's native web search when
-  `tools.web.search.provider` is unset, so they bypass the Parallel providers.
-  Set `tools.web.search.provider` to `parallel-free` or `parallel` to route them
-  through Parallel.
+  Direct OpenAI Responses models (`api: "openai-responses"`, provider
+  `openai`, official API base URL) use OpenAI's hosted native web search
+  automatically when `tools.web.search.provider` is unset, empty, `"auto"`,
+  or `"openai"` -- so they bypass Parallel by default. Set
+  `tools.web.search.provider` to `parallel-free` or `parallel` to route them
+  through Parallel instead. See [Web Search overview](/tools/web).
 </Note>
 
 ## Install plugin
-
-Install the official plugin, then restart Gateway:
 
 ```bash
 openclaw plugins install @openclaw/parallel-plugin
@@ -38,8 +37,8 @@ openclaw gateway restart
 
 ## API key (paid provider)
 
-`parallel-free` requires no API key, but it still must be selected as the
-managed provider. The paid `parallel` provider needs an API key:
+`parallel-free` needs no key but still must be selected explicitly. The paid
+`parallel` provider needs an API key:
 
 <Steps>
   <Step title="Create an account">
@@ -75,8 +74,8 @@ managed provider. The paid `parallel` provider needs an API key:
   tools: {
     web: {
       search: {
-        // Use "parallel-free" for the free Search MCP, or "parallel" for
-        // the paid API-backed provider shown here.
+        // "parallel-free" for the free Search MCP, or "parallel" for the
+        // paid API-backed provider shown here.
         provider: "parallel",
       },
     },
@@ -84,25 +83,25 @@ managed provider. The paid `parallel` provider needs an API key:
 }
 ```
 
-**Environment alternative:** set `PARALLEL_API_KEY` in the Gateway environment.
-For a gateway install, put it in `~/.openclaw/.env`.
+**Environment alternative:** set `PARALLEL_API_KEY` in the Gateway
+environment. For a gateway install, put it in `~/.openclaw/.env`.
 
 ## Base URL override
 
-The base URL override applies to the paid `parallel` provider only. The free
-`parallel-free` provider always uses `https://search.parallel.ai/mcp`.
+Applies to the paid `parallel` provider only; `parallel-free` always uses
+`https://search.parallel.ai/mcp` and ignores this setting.
 
-Set `plugins.entries.parallel.config.webSearch.baseUrl` when Parallel requests
-should go through a compatible proxy or alternate Parallel endpoint (for
-example, the Cloudflare AI Gateway). OpenClaw normalizes bare hosts by
-prepending `https://` and appends `/v1/search` unless the path already ends
-there. The resolved endpoint is included in the search cache key, so results
-from different Parallel endpoints are not shared.
+Set `plugins.entries.parallel.config.webSearch.baseUrl` to route paid
+requests through a compatible proxy or alternate endpoint (for example, the
+Cloudflare AI Gateway). OpenClaw normalizes bare hosts by prepending
+`https://` and appends `/v1/search` unless the path already ends there. The
+resolved endpoint is part of the search cache key, so results from different
+endpoints are never shared.
 
 ## Tool parameters
 
-OpenClaw exposes Parallel's native search shape so the model can fill in both
-the natural-language goal and a few short keyword queries — the pairing
+Both providers expose Parallel's native search shape so the model fills in a
+natural-language goal plus a few short keyword queries -- the pairing
 Parallel [recommends](https://docs.parallel.ai/search/best-practices) for
 best results.
 
@@ -121,42 +120,44 @@ Results to return (1-40).
 </ParamField>
 
 <ParamField path="session_id" type="string">
-Optional Parallel session id (max 1000 chars on `parallel`; the free
-`parallel-free` Search MCP caps it at 100). Pass the `sessionId` from a previous
-Parallel result on follow-up searches that are part of the same task so Parallel
-can group related calls and improve subsequent results. An id past the limit is
-dropped and a fresh one is generated.
+Optional Parallel session id from a previous result's `sessionId`. Pass it on
+follow-up searches in the same task so Parallel groups related calls and
+improves subsequent results. Max 1000 chars on `parallel`; the free
+`parallel-free` Search MCP caps it at 100. An id past the limit is dropped
+(paid) or a fresh one is minted (free).
 </ParamField>
 
 <ParamField path="client_model" type="string">
 Optional identifier of the model making the call (e.g. `claude-opus-4-7`,
-`gpt-5.5`). Lets Parallel tailor default settings for your model's
-capabilities. Pass the exact active model slug; do not shorten to a family
-alias.
+`gpt-5.6-sol`), max 100 chars. Lets Parallel tailor default settings for your
+model's capabilities. Pass the exact active model slug; do not shorten to a
+family alias.
 </ParamField>
 
 ## Notes
 
-- Parallel ranks and compresses results based on LLM reasoning utility, not
-  human click-through; expect dense excerpts in each result rather than
-  full-page content
+- Parallel ranks and compresses results for LLM reasoning utility, not human
+  click-through; expect dense excerpts per result rather than full-page
+  content.
 - Result excerpts come back as the `excerpts` array and are also joined into
-  the `description` field for compatibility with the generic `web_search`
-  contract
-- Parallel returns a `session_id` on every response; OpenClaw surfaces it as
-  `sessionId` in the tool payload so callers can group follow-up searches
+  `description` for compatibility with the generic `web_search` contract.
+- Both providers return a `session_id`; OpenClaw surfaces it as `sessionId` in
+  the tool payload so callers can group follow-up searches. A
+  Parallel-generated session id (one the caller did not supply) is excluded
+  from the cache entry, since unrelated tasks with identical queries should
+  not inherit it.
 - `searchId`, `warnings`, and `usage` from Parallel are passed through when
-  present
+  present.
 - OpenClaw always forwards a resolved result count to Parallel as
-  `advanced_settings.max_results`. The caller's `count` arg wins, then the
-  top-level `tools.web.search.maxResults` setting, otherwise OpenClaw's
-  generic `web_search` default (5). This keeps result volume consistent
-  when switching between providers; Parallel on its own defaults to 10
-- Results are cached for 15 minutes by default (configurable via
-  `cacheTtlMinutes`)
-- The free `parallel-free` provider accepts the same parameters. It applies
-  `count` client-side and generates a `session_id` per call when one is not
-  supplied.
+  `advanced_settings.max_results` (`parallel`) or applies `count`
+  client-side after Parallel's fixed-size response (`parallel-free`). The
+  caller's `count` arg wins, then `tools.web.search.maxResults`, otherwise
+  OpenClaw's generic `web_search` default (5) -- Parallel's own API defaults
+  to 10.
+- Results are cached for 15 minutes by default (`cacheTtlMinutes`).
+- `parallel-free` mints a fresh `session_id` per call via its MCP handshake
+  when the caller does not supply one; `parallel` leaves it unset in that
+  case.
 
 ## Related
 

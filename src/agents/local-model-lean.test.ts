@@ -4,13 +4,14 @@
  */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import {
-  applyLocalModelLeanToolSearchDefaults,
   filterLocalModelLeanTools,
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
 } from "./local-model-lean.js";
+import { resolveAgentToolSearchRuntimeConfig } from "./tool-search-runtime-config.js";
 
 function tools(names: string[]): AnyAgentTool[] {
   return names.map((name) => ({ name })) as AnyAgentTool[];
@@ -34,7 +35,18 @@ describe("local model lean tool filtering", () => {
     expect(isLocalModelLeanEnabled({ config: cfg, agentId: "gemma" })).toBe(true);
     expect(
       filterLocalModelLeanTools({
-        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        tools: tools([
+          "read",
+          "browser",
+          "cron",
+          "message",
+          "image_generate",
+          "music_generate",
+          "pdf",
+          "tts",
+          "video_generate",
+          "exec",
+        ]),
         config: cfg,
         agentId: "gemma",
       }).map((tool) => tool.name),
@@ -44,6 +56,7 @@ describe("local model lean tool filtering", () => {
   it("keeps explicitly preserved tools when lean mode is enabled", () => {
     const cfg: OpenClawConfig = {
       agents: {
+        entries: { main: { default: true } },
         defaults: {
           experimental: {
             localModelLean: true,
@@ -54,11 +67,53 @@ describe("local model lean tool filtering", () => {
 
     expect(
       filterLocalModelLeanTools({
-        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        tools: tools([
+          "read",
+          "browser",
+          "cron",
+          "message",
+          "image_generate",
+          "music_generate",
+          "pdf",
+          "tts",
+          "video_generate",
+          "exec",
+        ]),
         config: cfg,
-        preserveToolNames: ["browser", "cron", "group:messaging"],
+        preserveToolNames: ["browser", "cron", "group:messaging", "group:media", "pdf"],
       }).map((tool) => tool.name),
-    ).toEqual(["read", "browser", "cron", "message", "exec"]);
+    ).toEqual([
+      "read",
+      "browser",
+      "cron",
+      "message",
+      "image_generate",
+      "music_generate",
+      "pdf",
+      "tts",
+      "video_generate",
+      "exec",
+    ]);
+  });
+
+  it("keeps image understanding while trimming optional media production tools", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: { main: { default: true } },
+        defaults: {
+          experimental: {
+            localModelLean: true,
+          },
+        },
+      },
+    };
+
+    expect(
+      filterLocalModelLeanTools({
+        tools: tools(["read", "view_image", "image_generate", "music_generate", "video_generate"]),
+        config: cfg,
+      }).map((tool) => tool.name),
+    ).toEqual(["read", "view_image"]);
   });
 
   it("adds reply-required message tools to lean preservation", () => {
@@ -83,6 +138,7 @@ describe("local model lean tool filtering", () => {
   it("does not treat wildcard preservation as disabling lean mode", () => {
     const cfg: OpenClawConfig = {
       agents: {
+        entries: { main: { default: true } },
         defaults: {
           experimental: {
             localModelLean: true,
@@ -98,6 +154,22 @@ describe("local model lean tool filtering", () => {
         preserveToolNames: ["*"],
       }).map((tool) => tool.name),
     ).toEqual(["read", "exec"]);
+  });
+
+  it("matches wildcard preservation without treating a bare wildcard as an override", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { experimental: { localModelLean: true } },
+        entries: { main: { default: true } },
+      },
+    };
+    expect(
+      filterLocalModelLeanTools({
+        tools: tools(["read", "image_generate", "video_generate", "browser"]),
+        config: cfg,
+        preserveToolNames: ["image_*", "*"],
+      }).map((tool) => tool.name),
+    ).toEqual(["read", "image_generate"]);
   });
 
   it("lets an agent opt out of an inherited global lean setting", () => {
@@ -201,6 +273,23 @@ describe("local model lean tool filtering", () => {
     ).toEqual(["read", "exec"]);
   });
 
+  it("uses the retained legacy owner when no session scope is provided", () => {
+    const cfg = retainLegacyDefaultAgentId(
+      {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            ops: { experimental: { localModelLean: false } },
+            gemma: { experimental: { localModelLean: true } },
+          },
+        },
+      },
+      "gemma",
+    );
+
+    expect(isLocalModelLeanEnabled({ config: cfg })).toBe(true);
+  });
+
   it("uses the agent from an agent session key", () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -231,6 +320,25 @@ describe("local model lean tool filtering", () => {
     ).toEqual(["read", "exec"]);
   });
 
+  it("uses the configured fixed-store owner for an unscoped session key", () => {
+    const cfg: OpenClawConfig = {
+      session: { store: "/stores/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "gemma" } },
+        entries: {
+          ops: { experimental: { localModelLean: false } },
+          gemma: { experimental: { localModelLean: true } },
+        },
+      },
+    };
+
+    expect(isLocalModelLeanEnabled({ config: cfg, sessionKey: "global" })).toBe(true);
+    expect(() =>
+      isLocalModelLeanEnabled({ config: cfg, agentId: "ops", sessionKey: "global" }),
+    ).toThrow(/belongs to "gemma"/);
+  });
+
   it("defaults lean runs to structured Tool Search controls", () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -242,7 +350,7 @@ describe("local model lean tool filtering", () => {
       },
     };
 
-    const resolved = applyLocalModelLeanToolSearchDefaults({ config: cfg, agentId: "main" });
+    const resolved = resolveAgentToolSearchRuntimeConfig({ config: cfg, agentId: "main" });
 
     expect(resolved).not.toBe(cfg);
     expect(resolved?.tools?.toolSearch).toEqual({
@@ -268,6 +376,6 @@ describe("local model lean tool filtering", () => {
       },
     };
 
-    expect(applyLocalModelLeanToolSearchDefaults({ config: cfg, agentId: "main" })).toBe(cfg);
+    expect(resolveAgentToolSearchRuntimeConfig({ config: cfg, agentId: "main" })).toBe(cfg);
   });
 });

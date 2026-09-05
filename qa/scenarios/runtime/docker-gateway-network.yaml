@@ -1,0 +1,33 @@
+title: Docker gateway network access
+
+scenario:
+  id: docker-gateway-network
+  surface: containers
+  category: containers.container-operations
+  coverage:
+    primary:
+      - containers.docker-compose-network-access
+  objective: Verify container-network access and the packaged Gateway suspension lifecycle, including loopback admin control and same-container restart recovery.
+  successCriteria:
+    - The gateway container starts on an isolated Docker network with token auth.
+    - A separate client container connects over `ws://<gateway-container>:<port>`.
+    - The client completes the Gateway protocol connect request with the current protocol version.
+    - The health RPC returns a structured Gateway health summary.
+    - Authenticated loopback admin HTTP prepares an idle Gateway and keeps suspension status reachable.
+    - While prepared, liveness stays healthy while readiness, ordinary work, and new WebSockets reject.
+    - Mismatched, matching, and repeated resume calls preserve lease safety and idempotency.
+    - Stopping and starting the same container invalidates the old process-local lease without losing persisted config.
+    - A fresh suspension lease works after restart and each lifecycle phase emits machine-readable timing JSON.
+  docsRefs:
+    - docs/install/docker.md
+    - docs/help/testing.md
+  codeRefs:
+    - scripts/e2e/gateway-network-docker.sh
+    - scripts/e2e/lib/gateway-network/client.mts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the gateway-network Docker E2E lane for container-network access and packaged host-lifecycle coverage.
+    args:
+      - --lane
+      - gateway-network

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Channel login/logout command helpers for local config and gateway reconciliation.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
@@ -8,19 +9,23 @@ import {
   normalizeChannelId,
 } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
-import { getRuntimeConfig, readConfigFileSnapshot, type OpenClawConfig } from "../config/config.js";
+import { assertAccountSelectorForMutation } from "../commands/channels/account-selector.js";
+import { requireValidConfigFileSnapshot } from "../commands/config-validation.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { callGateway } from "../gateway/call.js";
+import type { ChannelAccountStartOutcome } from "../gateway/server-channel-runtime.types.js";
 import { setVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatUnsupportedChannelActionMessage } from "./error-format.js";
-import { commitConfigWithPendingPluginInstalls } from "./plugins-install-record-commit.js";
 
 type ChannelAuthOptions = {
+  agent?: string;
   channel?: string;
   account?: string;
   verbose?: boolean;
@@ -67,14 +72,16 @@ function isConfiguredAuthPlugin(plugin: ChannelPlugin, cfg: OpenClawConfig): boo
   return false;
 }
 
-function resolveConfiguredAuthChannelInput(cfg: OpenClawConfig, mode: ChannelAuthMode): string {
+function resolveConfiguredAuthChannelInput(mode: ChannelAuthMode): string {
+  // Account callbacks need runtime values; this auto-enabled view is never persisted.
+  const cfg = applyPluginAutoEnable({ config: getRuntimeConfig(), env: process.env }).config;
   const configured = listChannelPlugins()
     .filter((plugin): plugin is ChannelPlugin => supportsChannelAuthMode(plugin, mode))
     .filter((plugin) => isConfiguredAuthPlugin(plugin, cfg))
     .map((plugin) => plugin.id);
 
   if (configured.length === 1) {
-    return configured[0];
+    return expectDefined(configured[0], "configured entry at 0");
   }
   if (configured.length === 0) {
     throw new Error(
@@ -90,22 +97,29 @@ function resolveConfiguredAuthChannelInput(cfg: OpenClawConfig, mode: ChannelAut
 async function resolveChannelPluginForMode(
   opts: ChannelAuthOptions,
   mode: ChannelAuthMode,
-  cfg: OpenClawConfig,
   runtime: RuntimeEnv,
 ): Promise<{
   cfg: OpenClawConfig;
-  configChanged: boolean;
   channelInput: string;
   channelId: string;
   plugin: ChannelPlugin;
-}> {
+} | null> {
+  assertAccountSelectorForMutation(opts.account);
+  const snapshot = await requireValidConfigFileSnapshot(runtime);
+  if (!snapshot) {
+    return null;
+  }
+  // Runtime defaults are not authored plugin enablement intent.
+  const autoEnabled = applyPluginAutoEnable({ config: snapshot.sourceConfig, env: process.env });
+  const cfg = autoEnabled.config;
   const explicitChannel = opts.channel?.trim();
-  const channelInput = explicitChannel || resolveConfiguredAuthChannelInput(cfg, mode);
+  const channelInput = explicitChannel || resolveConfiguredAuthChannelInput(mode);
   const normalizedChannelId = normalizeChannelId(channelInput);
 
   const resolved = await resolveInstallableChannelPlugin({
     cfg,
     runtime,
+    agentId: opts.agent,
     rawChannel: channelInput,
     ...(normalizedChannelId ? { channelId: normalizedChannelId } : {}),
     allowInstall: true,
@@ -127,9 +141,15 @@ async function resolveChannelPluginForMode(
       }),
     );
   }
+  if (autoEnabled.changes.length > 0 || resolved.configChanged) {
+    await commitConfigWithPendingPluginInstalls({
+      nextConfig: resolved.cfg,
+      baseHash: snapshot.hash,
+    });
+  }
   return {
-    cfg: resolved.cfg,
-    configChanged: resolved.configChanged,
+    // Execution needs resolved runtime values; successful writes refresh this snapshot.
+    cfg: getRuntimeConfig(),
     channelInput,
     channelId,
     plugin,
@@ -144,6 +164,16 @@ function resolveAccountContext(
   const accountId =
     normalizeOptionalString(opts.account) || resolveChannelDefaultAccountId({ plugin, cfg });
   return { accountId };
+}
+
+function isChannelMissingFromGatewayRegistry(error: unknown): error is Error {
+  const requestError = error as (Error & { gatewayCode?: unknown }) | undefined;
+  return (
+    requestError instanceof Error &&
+    requestError.name === "GatewayClientRequestError" &&
+    requestError.gatewayCode === "INVALID_REQUEST" &&
+    requestError.message === "invalid channels.start channel"
+  );
 }
 
 async function reconcileGatewayRuntimeAfterLocalLogin(params: {
@@ -164,7 +194,7 @@ async function reconcileGatewayRuntimeAfterLocalLogin(params: {
     return;
   }
   try {
-    await callGateway({
+    const result = await callGateway<{ outcome?: ChannelAccountStartOutcome }>({
       config: params.cfg,
       method: "channels.start",
       params: {
@@ -175,7 +205,33 @@ async function reconcileGatewayRuntimeAfterLocalLogin(params: {
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       deviceIdentity: null,
     });
+    // Older Gateways return only the runtime snapshot, without a start decision.
+    if (result.outcome && result.outcome.status !== "handed-off") {
+      params.runtime.log(
+        `Local login saved auth for ${params.channelId}/${params.accountId}. Gateway start: ${result.outcome.reason}. Check ${formatCliCommand(`openclaw channels status --channel ${params.channelId} --probe`)}.`,
+      );
+    }
   } catch (error) {
+    // A plugin installed or enabled after Gateway startup is absent from its
+    // process-stable registry. Restart only for that exact RPC rejection.
+    if (isChannelMissingFromGatewayRegistry(error)) {
+      try {
+        await callGateway({
+          config: params.cfg,
+          method: "gateway.restart.request",
+          params: { reason: `channel login: load ${params.channelId}` },
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          deviceIdentity: null,
+        });
+        params.runtime.log(
+          `Gateway restart requested to load ${params.channelId}; the channel will start after restart.`,
+        );
+        return;
+      } catch {
+        // Fall through to the generic warning if the restart request also fails.
+      }
+    }
     params.runtime.log(
       `Local login saved auth for ${params.channelId}/${params.accountId}, but the running gateway did not restart it: ${formatErrorMessage(error)}`,
     );
@@ -187,9 +243,9 @@ async function logoutViaGatewayRuntime(params: {
   channelId: string;
   accountId: string;
   runtime: RuntimeEnv;
-}): Promise<boolean> {
+}) {
   try {
-    await callGateway({
+    return await callGateway<{ cleared: boolean; loggedOut?: boolean }>({
       config: params.cfg,
       method: "channels.logout",
       params: {
@@ -200,7 +256,6 @@ async function logoutViaGatewayRuntime(params: {
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       deviceIdentity: null,
     });
-    return true;
   } catch (error) {
     if (params.cfg.gateway?.mode === "remote") {
       throw error;
@@ -208,7 +263,7 @@ async function logoutViaGatewayRuntime(params: {
     params.runtime.log(
       `Local logout will clear auth for ${params.channelId}/${params.accountId}, but the running gateway did not stop it: ${formatErrorMessage(error)}`,
     );
-    return false;
+    return null;
   }
 }
 
@@ -216,22 +271,11 @@ export async function runChannelLogin(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
-  const autoEnabled = applyPluginAutoEnable({
-    config: getRuntimeConfig(),
-    env: process.env,
-  });
-  const loadedCfg = autoEnabled.config;
-  const resolvedChannel = await resolveChannelPluginForMode(opts, "login", loadedCfg, runtime);
-  let cfg = resolvedChannel.cfg;
-  const { configChanged, channelInput, plugin } = resolvedChannel;
-  if (autoEnabled.changes.length > 0 || configChanged) {
-    const committed = await commitConfigWithPendingPluginInstalls({
-      nextConfig: cfg,
-      baseHash: (await sourceSnapshotPromise)?.hash,
-    });
-    cfg = committed.config;
+  const resolvedChannel = await resolveChannelPluginForMode(opts, "login", runtime);
+  if (!resolvedChannel) {
+    return;
   }
+  const { cfg, channelInput, plugin } = resolvedChannel;
   const login = plugin.auth?.login;
   if (!login) {
     throw new Error(
@@ -265,22 +309,11 @@ export async function runChannelLogout(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
-  const autoEnabled = applyPluginAutoEnable({
-    config: getRuntimeConfig(),
-    env: process.env,
-  });
-  const loadedCfg = autoEnabled.config;
-  const resolvedChannel = await resolveChannelPluginForMode(opts, "logout", loadedCfg, runtime);
-  let cfg = resolvedChannel.cfg;
-  const { configChanged, channelInput, plugin } = resolvedChannel;
-  if (autoEnabled.changes.length > 0 || configChanged) {
-    const committed = await commitConfigWithPendingPluginInstalls({
-      nextConfig: cfg,
-      baseHash: (await sourceSnapshotPromise)?.hash,
-    });
-    cfg = committed.config;
+  const resolvedChannel = await resolveChannelPluginForMode(opts, "logout", runtime);
+  if (!resolvedChannel) {
+    return;
   }
+  const { cfg, channelInput, plugin } = resolvedChannel;
   const logoutAccount = plugin.gateway?.logoutAccount;
   if (!logoutAccount) {
     throw new Error(
@@ -293,21 +326,25 @@ export async function runChannelLogout(
   }
   // Prefer the live gateway so logout also stops any active channel runtime.
   const { accountId } = resolveAccountContext(plugin, opts, cfg);
-  if (
-    await logoutViaGatewayRuntime({
-      cfg,
-      channelId: plugin.id,
-      accountId,
-      runtime,
-    })
-  ) {
-    return;
-  }
-  const account = plugin.config.resolveAccount(cfg, accountId);
-  await logoutAccount({
+  let result = await logoutViaGatewayRuntime({
     cfg,
+    channelId: plugin.id,
     accountId,
-    account,
     runtime,
   });
+  if (!result) {
+    const account = plugin.config.resolveAccount(cfg, accountId);
+    result = await logoutAccount({
+      cfg,
+      accountId,
+      account,
+      runtime,
+    });
+  }
+  const scope = sanitizeForLog(`${plugin.id}/${accountId}`);
+  runtime.log(
+    `${result.cleared ? "Cleared saved auth" : "No saved auth was cleared"} for ${scope}.${
+      result.loggedOut === false ? " Other credentials may still be active." : ""
+    }`,
+  );
 }

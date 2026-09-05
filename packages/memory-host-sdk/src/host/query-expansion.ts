@@ -1,12 +1,12 @@
 // Memory Host SDK module implements query expansion behavior.
-import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /**
- * Query expansion for FTS-only search mode.
+ * Query expansion for lexical FTS search.
  *
- * When no embedding provider is available, we fall back to FTS (full-text search).
  * FTS works best with specific keywords, but users often ask conversational queries
- * like "that thing we discussed yesterday" or "之前讨论的那个方案".
+ * like "that thing we discussed yesterday" or "之前讨论的那个方案". This helps both
+ * hybrid retrieval and FTS-only fallback mode find those keywords.
  *
  * This module extracts meaningful keywords from such queries to improve FTS results.
  */
@@ -693,7 +693,7 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
           tokens.push(part);
           if (!useTrigram) {
             for (let i = 0; i < part.length - 1; i++) {
-              tokens.push(part[i] + part[i + 1]);
+              tokens.push(part.slice(i, i + 2));
             }
           }
         } else {
@@ -715,7 +715,7 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
         // Default mode: unigrams + bigrams for phrase matching
         tokens.push(...chars);
         for (let i = 0; i < chars.length - 1; i++) {
-          tokens.push(chars[i] + chars[i + 1]);
+          tokens.push(chars.slice(i, i + 2).join(""));
         }
       }
     } else if (/[\uac00-\ud7af\u3131-\u3163]/.test(segment)) {

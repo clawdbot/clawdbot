@@ -1,4 +1,5 @@
 // Channel setup status tests cover status text and docs link rendering.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
@@ -14,6 +15,7 @@ type FormatChannelPrimerLine = typeof import("../channels/registry.js").formatCh
 type FormatChannelSelectionLine =
   typeof import("../channels/registry.js").formatChannelSelectionLine;
 type IsChannelConfigured = typeof import("../config/channel-configured.js").isChannelConfigured;
+type ChannelSetupPlugin = import("../channels/plugins/setup-wizard-types.js").ChannelSetupPlugin;
 type NoteChannelPrimerChannels = Parameters<
   typeof import("./channel-setup.status.js").noteChannelPrimer
 >[1];
@@ -53,8 +55,8 @@ vi.mock("../channels/registry.js", () => ({
 vi.mock("../commands/channel-setup/discovery.js", () => ({
   resolveChannelSetupEntries: (params: Parameters<ResolveChannelSetupEntries>[0]) =>
     resolveChannelSetupEntries(params),
-  shouldShowChannelInSetup: (meta: { exposure?: { setup?: boolean }; showInSetup?: boolean }) =>
-    meta.showInSetup !== false && meta.exposure?.setup !== false,
+  shouldShowChannelInSetup: (meta: { exposure?: { setup?: boolean } }) =>
+    meta.exposure?.setup !== false,
 }));
 
 vi.mock("../config/channel-configured.js", () => ({
@@ -83,17 +85,6 @@ import {
   resolveChannelSetupSelectionContributions,
 } from "./channel-setup.status.js";
 
-function requireFirstMockCall<const Calls extends readonly unknown[][]>(
-  calls: Calls,
-  label: string,
-): Calls[number] {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call as Calls[number];
-}
-
 describe("resolveChannelSetupSelectionContributions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -107,6 +98,54 @@ describe("resolveChannelSetupSelectionContributions", () => {
     );
     formatChannelSelectionLine.mockImplementation((meta) => `${meta.label} — ${meta.blurb}`);
     isChannelConfigured.mockReturnValue(false);
+  });
+
+  it("uses the caller-selected workspace for explicit-fleet status and selection notes", async () => {
+    const params = {
+      cfg: { agents: { ownership: "explicit" as const, entries: { alpha: {}, beta: {} } } },
+      workspaceDir: "/tmp/beta-workspace",
+      accountOverrides: {},
+      installedPlugins: [],
+      selection: [],
+    };
+
+    await collectChannelStatus(params);
+    resolveChannelSelectionNoteLines(params);
+
+    expect(resolveChannelSetupEntries).toHaveBeenCalledTimes(2);
+    for (const [request] of resolveChannelSetupEntries.mock.calls) {
+      expect(request.workspaceDir).toBe(params.workspaceDir);
+    }
+  });
+
+  it("uses the configured system agent workspace for explicit multi-agent setup", async () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: { workspace: "/tmp/openclaw-main-workspace" },
+          helper: { workspace: "/tmp/openclaw-helper-workspace" },
+          third: { workspace: "/tmp/openclaw-third-workspace" },
+        },
+      },
+    } as const;
+
+    await collectChannelStatus({
+      cfg,
+      accountOverrides: {},
+      installedPlugins: [],
+    });
+    resolveChannelSelectionNoteLines({ cfg, installedPlugins: [], selection: [] });
+
+    expect(resolveChannelSetupEntries).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-main-workspace" }),
+    );
+    expect(resolveChannelSetupEntries).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-main-workspace" }),
+    );
   });
 
   it("sorts channels alphabetically by picker label", () => {
@@ -260,6 +299,111 @@ describe("resolveChannelSetupSelectionContributions", () => {
     ]);
   });
 
+  it.each(["rejected status check", "synchronous status check", "adapter resolution"] as const)(
+    "keeps healthy channels selectable after a %s failure",
+    async (failurePoint) => {
+      const installedPlugins = [
+        {
+          id: "matrix",
+          meta: makeMeta("matrix", "Matrix"),
+          capabilities: { chatTypes: [] },
+          config: {} as ChannelSetupPlugin["config"],
+        },
+        {
+          id: "telegram",
+          meta: makeMeta("telegram", "Telegram"),
+          capabilities: { chatTypes: [] },
+          config: {} as ChannelSetupPlugin["config"],
+        },
+      ] satisfies ChannelSetupPlugin[];
+      listChatChannels.mockReturnValue([
+        makeMeta("matrix", "Matrix"),
+        makeMeta("telegram", "Telegram"),
+      ]);
+      isChannelConfigured.mockImplementation((_, channelId) => channelId === "matrix");
+
+      const failure = new Error("lazy Matrix setup module unavailable");
+      const summary = await collectChannelStatus({
+        cfg: {} as never,
+        accountOverrides: {},
+        installedPlugins,
+        resolveAdapter: (channel) => {
+          if (channel === "matrix" && failurePoint === "adapter resolution") {
+            throw failure;
+          }
+          return {
+            channel,
+            getStatus:
+              channel === "matrix"
+                ? failurePoint === "synchronous status check"
+                  ? () => {
+                      throw failure;
+                    }
+                  : async () => {
+                      throw failure;
+                    }
+                : async () => ({
+                    channel: "telegram",
+                    configured: true,
+                    statusLines: ["Telegram: configured"],
+                    selectionHint: "configured",
+                    quickstartScore: 5,
+                  }),
+          } as never;
+        },
+      });
+
+      expect(summary.statusByChannel.get("matrix")).toEqual({
+        channel: "matrix",
+        configured: true,
+        statusLines: ["Matrix: status unavailable (lazy Matrix setup module unavailable)"],
+        selectionHint: "status unavailable",
+      });
+      expect(summary.statusByChannel.get("telegram")).toEqual({
+        channel: "telegram",
+        configured: true,
+        statusLines: ["Telegram: configured"],
+        selectionHint: "configured",
+        quickstartScore: 5,
+      });
+      expect(summary.statusLines).toEqual([
+        "Matrix: status unavailable (lazy Matrix setup module unavailable)",
+        "Telegram: configured",
+      ]);
+    },
+  );
+
+  it("redacts credentials and terminal controls in failed channel status checks", async () => {
+    const token = "sk-abcdefghijklmnopqrstuv";
+    const summary = await collectChannelStatus({
+      cfg: {} as never,
+      accountOverrides: {},
+      installedPlugins: [
+        {
+          id: "matrix",
+          meta: makeMeta("matrix", "Matrix"),
+          capabilities: { chatTypes: [] },
+          config: {} as ChannelSetupPlugin["config"],
+        },
+      ],
+      resolveAdapter: (channel) =>
+        ({
+          channel,
+          getStatus: async () => {
+            throw new Error(`\u001B[31mloader failed\nAuthorization: Bearer ${token}`);
+          },
+        }) as never,
+    });
+
+    const statusLine = summary.statusLines[0];
+    expect(statusLine).toContain(
+      "Matrix: status unavailable (loader failed\\nAuthorization: Bearer",
+    );
+    expect(statusLine).not.toContain(token);
+    expect(statusLine).not.toContain("\u001B");
+    expect(statusLine).not.toContain("\n");
+  });
+
   it("localizes channel status note labels", async () => {
     listChatChannels.mockReturnValue([
       makeMeta("discord", "Discord"),
@@ -320,7 +464,10 @@ describe("resolveChannelSetupSelectionContributions", () => {
     );
 
     expect(formatChannelPrimerLine).toHaveBeenCalledOnce();
-    const [primerMeta] = requireFirstMockCall(formatChannelPrimerLine.mock.calls, "primer line");
+    const [primerMeta] = expectDefined(
+      formatChannelPrimerLine.mock.calls.at(0),
+      "primer line call",
+    );
     expect(primerMeta?.id).toBe("bad\\nid");
     expect(primerMeta?.label).toBe("bad\\nid");
     expect(primerMeta?.selectionLabel).toBe("bad\\nid");
@@ -395,9 +542,9 @@ describe("resolveChannelSetupSelectionContributions", () => {
     });
 
     expect(formatChannelSelectionLine).toHaveBeenCalledOnce();
-    const [selectionMeta, docsLink] = requireFirstMockCall(
-      formatChannelSelectionLine.mock.calls,
-      "selection line",
+    const [selectionMeta, docsLink] = expectDefined(
+      formatChannelSelectionLine.mock.calls.at(0),
+      "selection line call",
     );
     expect(selectionMeta?.label).toBe("Zalo\\nBot");
     expect(selectionMeta?.blurb).toBe("Setup\\nhelp");
@@ -409,6 +556,42 @@ describe("resolveChannelSetupSelectionContributions", () => {
     }
     expect(docsLink("/channels/zalo", "Docs")).toBe("https://docs.openclaw.ai/channels/zalo");
     expect(lines).toEqual(["Zalo\\nBot — Setup\\nhelp"]);
+  });
+
+  it.each([
+    ["empty", "", ""],
+    ["whitespace", " \t ", "Docs:"],
+    ["control-only", "\u001B[2K\u0007", "Docs:"],
+  ] as const)("normalizes %s selection docs prefixes", (_label, prefix, expected) => {
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [
+          {
+            id: "custom-chat",
+            meta: {
+              id: "custom-chat",
+              label: "Custom Chat",
+              selectionLabel: "Custom Chat",
+              docsPath: "/channels/custom-chat",
+              blurb: "External channel.",
+              selectionDocsPrefix: prefix,
+            },
+          },
+        ],
+      }),
+    );
+
+    resolveChannelSelectionNoteLines({
+      cfg: {} as never,
+      installedPlugins: [],
+      selection: ["custom-chat"],
+    });
+
+    const [selectionMeta] = expectDefined(
+      formatChannelSelectionLine.mock.calls.at(0),
+      "selection line call",
+    );
+    expect(selectionMeta?.selectionDocsPrefix).toBe(expected);
   });
 
   it("localizes built-in channel blurbs before selection notes", () => {

@@ -17,21 +17,22 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Standard inset panel for grouped Android app content.
+ *
+ * Structure comes from a hairline border on a flat surface, not from shadow. Nested
+ * panels would otherwise stack elevation and turn a dense screen into a card pile.
  */
 @Composable
 internal fun ClawPanel(
   modifier: Modifier = Modifier,
-  contentPadding: PaddingValues = PaddingValues(12.dp),
+  contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
   content: @Composable () -> Unit,
 ) {
   Surface(
     modifier = modifier.fillMaxWidth(),
     shape = RoundedCornerShape(ClawTheme.radii.panel),
-    color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.82f),
+    color = ClawTheme.colors.surface,
     contentColor = ClawTheme.colors.text,
-    border = null,
-    tonalElevation = 2.dp,
-    shadowElevation = 4.dp,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Column(modifier = Modifier.padding(contentPadding)) {
       content()
@@ -51,9 +52,9 @@ internal fun ClawEmptyState(
 ) {
   ClawPanel(modifier = modifier) {
     Column(
-      modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+      modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(8.dp),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
       Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
       Text(text = body, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
@@ -72,32 +73,12 @@ internal fun ClawLoadingState(
 ) {
   ClawPanel(modifier = modifier) {
     Column(
-      modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
+      modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(10.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       CircularProgressIndicator(color = ClawTheme.colors.primary, strokeWidth = 2.dp)
       Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-    }
-  }
-}
-
-/**
- * Shared recoverable error block with the app's attention styling.
- */
-@Composable
-internal fun ClawErrorState(
-  title: String,
-  body: String,
-  modifier: Modifier = Modifier,
-  action: (@Composable () -> Unit)? = null,
-) {
-  ClawPanel(modifier = modifier) {
-    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      ClawStatusPill(text = "Needs attention", status = ClawStatus.Danger)
-      Text(text = title, style = ClawTheme.type.section, color = ClawTheme.colors.text)
-      Text(text = body, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-      action?.invoke()
     }
   }
 }

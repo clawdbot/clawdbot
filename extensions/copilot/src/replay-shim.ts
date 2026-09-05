@@ -20,7 +20,9 @@
 //   - `src/agents/pi-embedded-runner/run/types.ts` —
 //     `AgentHarnessAttemptResult.replayMetadata` field requirement.
 
-export type ReplayDecision =
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+type ReplayDecision =
   | {
       readonly action: "resume";
       readonly sdkSessionId: string;
@@ -32,17 +34,13 @@ export type ReplayDecision =
       readonly downgradeReason: "no-replay-state" | "no-sdk-session-id" | "replay-invalid";
     };
 
-export interface ReplayShimInput {
+interface ReplayShimInput {
   readonly sdkSessionId?: string;
   readonly replayInvalid?: boolean;
 }
 
 function normalizeSdkSessionId(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  return normalizeOptionalString(value);
 }
 
 /**
@@ -86,9 +84,9 @@ export function decideReplayAction(input?: ReplayShimInput): ReplayDecision {
   };
 }
 
-export type ResumeFailureKind = "missing" | "unknown";
+type ResumeFailureKind = "missing" | "unknown";
 
-export interface ResumeFailureClassification {
+interface ResumeFailureClassification {
   readonly recoverable: boolean;
   readonly kind: ResumeFailureKind;
 }
@@ -167,7 +165,7 @@ export function classifyResumeFailure(error: unknown): ResumeFailureClassificati
   return { recoverable: false, kind: "unknown" };
 }
 
-export interface ReplayMetadataComputeInput {
+interface ReplayMetadataComputeInput {
   readonly priorReplayInvalid?: boolean;
   readonly priorHadPotentialSideEffects?: boolean;
   readonly thisAttemptTimedOut?: boolean;
@@ -176,7 +174,7 @@ export interface ReplayMetadataComputeInput {
   readonly thisAttemptResumeFailureRecovered?: boolean;
 }
 
-export interface ComputedReplayMetadata {
+interface ComputedReplayMetadata {
   readonly hadPotentialSideEffects: boolean;
   readonly replaySafe: boolean;
 }

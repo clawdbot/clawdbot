@@ -9,7 +9,8 @@ import { readServiceStatusSummary } from "./status.service-summary.js";
 type DaemonStatusSummary = {
   label: string;
   installed: boolean | null;
-  loaded: boolean;
+  loaded: boolean | null;
+  loadState: Awaited<ReturnType<typeof readServiceStatusSummary>>["loadState"];
   managedByOpenClaw: boolean;
   externallyManaged: boolean;
   loadedText: string;
@@ -21,30 +22,37 @@ type DaemonStatusSummary = {
 
 async function buildDaemonStatusSummary(
   serviceLabel: "gateway" | "node",
+  timeoutMs?: number,
 ): Promise<DaemonStatusSummary> {
   const service = serviceLabel === "gateway" ? resolveGatewayService() : resolveNodeService();
   const fallbackLabel = serviceLabel === "gateway" ? "Daemon" : "Node";
-  const summary = await readServiceStatusSummary(service, fallbackLabel);
+  const summary = await readServiceStatusSummary(service, fallbackLabel, timeoutMs);
+  const runtime = summary.runtime?.inspectionFailure
+    ? { ...summary.runtime, detail: `${summary.runtime.detail}; retry with openclaw status --deep` }
+    : summary.runtime;
+  const loaded =
+    summary.loadState.status === "unknown" ? null : summary.loadState.status === "loaded";
   return {
     label: summary.label,
     installed: summary.installed,
-    loaded: summary.loaded,
+    loaded,
+    loadState: summary.loadState,
     managedByOpenClaw: summary.managedByOpenClaw,
     externallyManaged: summary.externallyManaged,
     loadedText: summary.loadedText,
-    runtime: summary.runtime,
-    runtimeShort: formatDaemonRuntimeShort(summary.runtime),
+    runtime,
+    runtimeShort: formatDaemonRuntimeShort(runtime),
     layout: summary.layout,
     wrapperPath: summary.wrapperPath,
   };
 }
 
 /** Returns the gateway daemon status summary. */
-export async function getDaemonStatusSummary(): Promise<DaemonStatusSummary> {
-  return await buildDaemonStatusSummary("gateway");
+export async function getDaemonStatusSummary(timeoutMs?: number): Promise<DaemonStatusSummary> {
+  return await buildDaemonStatusSummary("gateway", timeoutMs);
 }
 
 /** Returns the node service status summary. */
-export async function getNodeDaemonStatusSummary(): Promise<DaemonStatusSummary> {
-  return await buildDaemonStatusSummary("node");
+export async function getNodeDaemonStatusSummary(timeoutMs?: number): Promise<DaemonStatusSummary> {
+  return await buildDaemonStatusSummary("node", timeoutMs);
 }

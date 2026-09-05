@@ -1,11 +1,13 @@
 // Tests OpenClaw execution environment construction.
 import { describe, expect, it } from "vitest";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
   ensureOpenClawExecMarkerOnProcess,
   markOpenClawExecEnv,
-  OPENCLAW_CLI_ENV_VALUE,
   OPENCLAW_CLI_ENV_VAR,
 } from "./openclaw-exec-env.js";
+
+const OPENCLAW_CLI_ENV_VALUE = "1";
 
 describe("markOpenClawExecEnv", () => {
   it("returns a cloned env object with the exec marker set", () => {
@@ -38,16 +40,16 @@ describe("ensureOpenClawExecMarkerOnProcess", () => {
 
   it("defaults to mutating process.env when no env object is provided", () => {
     const previous = process.env[OPENCLAW_CLI_ENV_VAR];
-    delete process.env[OPENCLAW_CLI_ENV_VAR];
+    deleteTestEnvValue(OPENCLAW_CLI_ENV_VAR);
 
     try {
       expect(ensureOpenClawExecMarkerOnProcess()).toBe(process.env);
       expect(process.env[OPENCLAW_CLI_ENV_VAR]).toBe(OPENCLAW_CLI_ENV_VALUE);
     } finally {
       if (previous === undefined) {
-        delete process.env[OPENCLAW_CLI_ENV_VAR];
+        deleteTestEnvValue(OPENCLAW_CLI_ENV_VAR);
       } else {
-        process.env[OPENCLAW_CLI_ENV_VAR] = previous;
+        setTestEnvValue(OPENCLAW_CLI_ENV_VAR, previous);
       }
     }
   });

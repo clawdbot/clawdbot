@@ -1,131 +1,70 @@
 // Node pairing auto-approve tests cover LAN self-connect detection, token auth,
 // node identity persistence, and auto-approved pairing state.
-import net from "node:net";
-import { describe, expect, test } from "vitest";
-import { WebSocket } from "ws";
+import { expect, test, vi } from "vitest";
 import { writeConfigFile } from "../config/config.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import * as pairingApprovals from "../infra/device-pairing-approval.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { loadDeviceIdentity } from "./device-authz.test-helpers.js";
-import { pickPrimaryLanIPv4 } from "./net.js";
-import {
-  connectReq,
-  installGatewayTestHooks,
-  startServer,
-  trackConnectChallengeNonce,
-} from "./test-helpers.js";
+import { installGatewayTestHooks } from "./test-helpers.js";
+import { describeWithLanNodePairingServer } from "./test-helpers.lan-pairing.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-const TOKEN = "secret";
-const NODE_CLIENT = {
-  id: GATEWAY_CLIENT_NAMES.NODE_HOST,
-  version: "1.0.0",
-  platform: "ios",
-  mode: GATEWAY_CLIENT_MODES.NODE,
-};
-
-async function openLanGatewayWs(params: { host: string; port: number }): Promise<WebSocket> {
-  const ws = new WebSocket(`ws://${params.host}:${params.port}`, {
-    localAddress: params.host,
-  });
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
-    const cleanup = () => {
-      clearTimeout(timer);
-      ws.off("open", onOpen);
-      ws.off("error", onError);
-    };
-    const onOpen = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    ws.once("open", onOpen);
-    ws.once("error", onError);
-  });
-  return ws;
-}
-
-async function canUseLanSelfConnect(host: string): Promise<boolean> {
-  return await new Promise<boolean>((resolve) => {
-    let settled = false;
-    let client: net.Socket | undefined;
-    const server = net.createServer((socket) => {
-      socket.on("error", () => {});
-      socket.end("ok");
-    });
-    const done = (ok: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timer);
-      client?.destroy();
-      server.close(() => resolve(ok));
-    };
-    const timer = setTimeout(() => done(false), 1_000);
-    server.once("error", () => done(false));
-    server.listen(0, "0.0.0.0", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        done(false);
-        return;
-      }
-      let sawData = false;
-      client = net.connect({ host, port: address.port, localAddress: host });
-      client.on("data", () => {
-        sawData = true;
-      });
-      client.once("error", () => done(false));
-      client.once("close", () => done(sawData));
+describeWithLanNodePairingServer("gateway trusted CIDR node pairing auto-approve", (attempt) => {
+  test("keeps a pending request when its CIDR permission is removed before approval", async () => {
+    await attempt({
+      identityName: "trusted-cidr-revoked-before-approval",
+      configure: async (lanIp) => {
+        await writeConfigFile({
+          gateway: { nodes: { pairing: { autoApproveCidrs: [`${lanIp}/32`], sshVerify: false } } },
+        });
+      },
+      run: async ({ loaded, connectNode }) => {
+        const approve = pairingApprovals.approveDevicePairing;
+        const approval = vi
+          .spyOn(pairingApprovals, "approveDevicePairing")
+          .mockImplementation((requestId, options, baseDir) => {
+            const current = getRuntimeConfigSnapshot();
+            if (!current) {
+              throw new Error("expected active Gateway config");
+            }
+            setRuntimeConfigSnapshot({
+              ...current,
+              gateway: {
+                ...current.gateway,
+                nodes: { ...current.gateway?.nodes, pairing: { sshVerify: false } },
+              },
+            });
+            return approve(requestId, options, baseDir);
+          });
+        try {
+          const response = await connectNode();
+          expect(approval).toHaveBeenCalledOnce();
+          expect(response.ok).toBe(false);
+          expect(response.error?.code).toBe("NOT_PAIRED");
+          expect((await getPairedDevice(loaded.identity.deviceId)) === null).toBe(true);
+          expect((await listDevicePairing()).pending.map((entry) => entry.deviceId)).toContain(
+            loaded.identity.deviceId,
+          );
+        } finally {
+          approval.mockRestore();
+        }
+      },
     });
   });
-}
 
-async function withLanNodePairingAttempt(
-  identityName: string,
-  beforeStart: (lanIp: string) => Promise<void>,
-  run: (params: {
-    res: Awaited<ReturnType<typeof connectReq>>;
-    loaded: ReturnType<typeof loadDeviceIdentity>;
-  }) => Promise<void>,
-): Promise<void> {
-  const lanIp = pickPrimaryLanIPv4();
-  if (!lanIp || !(await canUseLanSelfConnect(lanIp))) {
-    return;
-  }
-  await beforeStart(lanIp);
-  const started = await startServer(TOKEN, { bind: "lan", controlUiEnabled: false });
-  let ws: WebSocket | undefined;
-  try {
-    const loaded = loadDeviceIdentity(identityName);
-    ws = await openLanGatewayWs({ host: lanIp, port: started.port });
-    const res = await connectReq(ws, {
-      token: TOKEN,
-      role: "node",
-      scopes: [],
-      client: NODE_CLIENT,
-      deviceIdentityPath: loaded.identityPath,
-    });
-    await run({ res, loaded });
-  } finally {
-    ws?.close();
-    await started.server.close();
-    started.envSnapshot.restore();
-  }
-}
-
-describe("gateway trusted CIDR node pairing auto-approve", () => {
   test("stays disabled by default for a direct non-loopback node", async () => {
-    await withLanNodePairingAttempt(
-      "trusted-cidr-default-off",
-      async () => {},
-      async ({ res, loaded }) => {
+    await attempt({
+      identityName: "trusted-cidr-default-off",
+      configure: async () => {
+        // Pin SSH verification off so this case exercises the CIDR default
+        // without spawning a real ssh probe to the runner's own LAN IP.
+        await writeConfigFile({
+          gateway: { nodes: { pairing: { sshVerify: false } } },
+        });
+      },
+      run: async ({ loaded, connectNode }) => {
+        const res = await connectNode();
         expect(res.ok).toBe(false);
         expect(res.error?.message ?? "").toContain("pairing required");
         const pending = (await listDevicePairing()).pending.filter(
@@ -135,13 +74,13 @@ describe("gateway trusted CIDR node pairing auto-approve", () => {
         expect(pending[0]?.silent).toBe(false);
         expect(await getPairedDevice(loaded.identity.deviceId)).toBeNull();
       },
-    );
+    });
   });
 
   test("auto-approves first-time node pairing from a matching direct non-loopback CIDR", async () => {
-    await withLanNodePairingAttempt(
-      "trusted-cidr-direct-lan-auto-approve",
-      async (lanIp) => {
+    await attempt({
+      identityName: "trusted-cidr-direct-lan-auto-approve",
+      configure: async (lanIp) => {
         await writeConfigFile({
           gateway: {
             nodes: {
@@ -152,7 +91,8 @@ describe("gateway trusted CIDR node pairing auto-approve", () => {
           },
         });
       },
-      async ({ res, loaded }) => {
+      run: async ({ loaded, connectNode }) => {
+        const res = await connectNode();
         expect(res.ok).toBe(true);
         expect((res.payload as { type?: unknown } | undefined)?.type).toBe("hello-ok");
         const pending = (await listDevicePairing()).pending.filter(
@@ -162,7 +102,12 @@ describe("gateway trusted CIDR node pairing auto-approve", () => {
         const paired = await getPairedDevice(loaded.identity.deviceId);
         expect(paired?.role).toBe("node");
         expect(paired?.approvedScopes ?? []).toStrictEqual([]);
+        expect(paired?.approvedVia).toBe("trusted-cidr");
+        // Network origin approves the device only: the capability surface must
+        // stay on the manual operator prompt (#128446 documents the flow).
+        expect(paired?.nodeSurface).toBeUndefined();
+        expect(paired?.pendingNodeSurface).toBeDefined();
       },
-    );
+    });
   });
 });

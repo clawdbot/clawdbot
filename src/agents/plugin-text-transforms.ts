@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * Plugin-defined text replacement transforms for stream boundaries.
  *
@@ -41,10 +42,6 @@ export function applyPluginTextReplacements(
   return next;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function transformContentText(content: unknown, replacements?: PluginTextReplacement[]): unknown {
   if (typeof content === "string") {
     return applyPluginTextReplacements(content, replacements);
@@ -62,6 +59,9 @@ function transformContentText(content: unknown, replacements?: PluginTextReplace
   if (Object.hasOwn(next, "content")) {
     next.content = transformContentText(next.content, replacements);
   }
+  if (next.type === "toolCall" && Object.hasOwn(next, "arguments")) {
+    next.arguments = transformToolCallArgumentText(next.arguments, replacements);
+  }
   return next;
 }
 
@@ -77,6 +77,27 @@ function transformMessageText(message: unknown, replacements?: PluginTextReplace
     next.errorMessage = applyPluginTextReplacements(next.errorMessage, replacements);
   }
   return next;
+}
+
+function transformToolCallArgumentText(
+  value: unknown,
+  replacements?: PluginTextReplacement[],
+): unknown {
+  if (typeof value === "string") {
+    return applyPluginTextReplacements(value, replacements);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => transformToolCallArgumentText(entry, replacements));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      transformToolCallArgumentText(entry, replacements),
+    ]),
+  );
 }
 
 /** Apply input text replacements to a stream context. */
@@ -113,6 +134,17 @@ function transformAssistantEventText(
   }
   if (next.type === "text_end" && typeof next.content === "string") {
     next.content = applyPluginTextReplacements(next.content, replacements);
+  }
+  if (
+    next.type === "toolcall_end" &&
+    isRecord(next.toolCall) &&
+    Object.hasOwn(next.toolCall, "arguments")
+  ) {
+    // Tool names are routing identifiers; only argument values are text.
+    next.toolCall = {
+      ...next.toolCall,
+      arguments: transformToolCallArgumentText(next.toolCall.arguments, replacements),
+    };
   }
   if (Object.hasOwn(next, "partial")) {
     next.partial = transformMessageText(next.partial, replacements);

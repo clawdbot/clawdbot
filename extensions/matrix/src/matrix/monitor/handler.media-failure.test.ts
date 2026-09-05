@@ -42,7 +42,6 @@ function createMediaFailureHarness() {
       matchedBy: "binding.account",
     }),
     resolveStorePath: () => "/tmp/openclaw-test-session.json",
-    readSessionUpdatedAt: () => 123,
     getRoomInfo: async () => ({
       name: "Media Room",
       canonicalAlias: "#media:example.org",
@@ -51,7 +50,6 @@ function createMediaFailureHarness() {
     getMemberDisplayName: async () => "Gum",
     startupMs: Date.now() - 120_000,
     startupGraceMs: 60_000,
-    textLimit: 4000,
     mediaMaxBytes: 5 * 1024 * 1024,
     replyToMode: "first",
   });
@@ -154,6 +152,48 @@ describe("createMatrixRoomMessageHandler media failures", () => {
       "Screenshot 2026-03-27.png",
     );
   });
+
+  it.each(["", " \t "])(
+    "downloads encrypted image attachments when the top-level URL is blank (%j)",
+    async (url) => {
+      downloadMatrixMediaMock.mockResolvedValue({
+        path: "/tmp/inbound/encrypted-image.png",
+        contentType: "image/png",
+        placeholder: "[matrix image attachment]",
+      });
+      const { handler, recordInboundSession } = createMediaFailureHarness();
+      const file = {
+        url: "mxc://example/encrypted-image",
+        key: { kty: "oct", key_ops: ["encrypt"], alg: "A256CTR", k: "secret", ext: true },
+        iv: "iv",
+        hashes: { sha256: "hash" },
+        v: "v2",
+      };
+
+      await handler(
+        "!room:example.org",
+        createImageEvent({
+          msgtype: "m.image",
+          body: " \t ",
+          filename: " encrypted-image.png ",
+          url,
+          file,
+          info: { mimetype: "image/png", size: 123 },
+        }),
+      );
+
+      expect(downloadMatrixMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mxcUrl: "mxc://example/encrypted-image",
+          file,
+          originalFilename: "encrypted-image.png",
+        }),
+      );
+      expect(firstInboundContext(recordInboundSession).MediaPath).toBe(
+        "/tmp/inbound/encrypted-image.png",
+      );
+    },
+  );
 
   it("replaces bare image filenames with an unavailable marker when unencrypted download fails", async () => {
     downloadMatrixMediaMock.mockRejectedValue(new Error("download failed"));

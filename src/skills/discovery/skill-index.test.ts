@@ -5,9 +5,6 @@ import {
   buildSkillIndexEntries,
   filterPromptVisibleSkillEntries,
   filterUserInvocableSkillEntries,
-  isSkillPromptVisible,
-  isSkillRuntimeVisible,
-  isSkillUserInvocable,
   normalizeSkillIndexName,
 } from "./skill-index.js";
 
@@ -77,21 +74,17 @@ describe("skill index", () => {
       promptHidden,
       legacyPromptHidden,
     ]);
-    expect(isSkillRuntimeVisible(runtimeHidden)).toBe(false);
-    expect(isSkillPromptVisible(legacyPromptHidden)).toBe(false);
-    expect(isSkillUserInvocable(commandHidden)).toBe(false);
   });
 
   it("records source, bundled state, skill key, and agent filter state", () => {
     const bundled = createFixtureSkillEntry("bundle", { source: "openclaw-bundled" });
-    const unknownBundled = createFixtureSkillEntry("unknown-bundle", { source: "unknown" });
+    const custodian = createFixtureSkillEntry("custodian", { source: "openclaw-custodian" });
     const workspace = createFixtureSkillEntry("workspace", {
       source: "openclaw-workspace",
       skillKey: "workspace-key",
     });
 
-    const indexEntries = buildSkillIndexEntries([bundled, unknownBundled, workspace], {
-      bundledNames: new Set(["unknown-bundle"]),
+    const indexEntries = buildSkillIndexEntries([bundled, custodian, workspace], {
       agentSkillFilter: ["workspace"],
     });
 
@@ -100,8 +93,8 @@ describe("skill index", () => {
       bundled: true,
       agentAllowed: false,
     });
-    expect(indexEntries.find((entry) => entry.name === "unknown-bundle")).toMatchObject({
-      source: "unknown",
+    expect(indexEntries.find((entry) => entry.name === "custodian")).toMatchObject({
+      source: "openclaw-custodian",
       bundled: true,
       agentAllowed: false,
     });
@@ -112,8 +105,7 @@ describe("skill index", () => {
       agentAllowed: true,
     });
     expect(
-      buildSkillIndexEntries([bundled, unknownBundled, workspace], {
-        bundledNames: new Set(["unknown-bundle"]),
+      buildSkillIndexEntries([bundled, custodian, workspace], {
         agentSkillFilter: ["workspace"],
       }).map(({ name, bundled: bundledLocal, agentAllowed }) => ({
         name,
@@ -122,7 +114,7 @@ describe("skill index", () => {
       })),
     ).toEqual([
       { name: "bundle", bundled: true, agentAllowed: false },
-      { name: "unknown-bundle", bundled: true, agentAllowed: false },
+      { name: "custodian", bundled: true, agentAllowed: false },
       { name: "workspace", bundled: false, agentAllowed: true },
     ]);
   });

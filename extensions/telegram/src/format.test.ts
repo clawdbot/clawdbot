@@ -1,17 +1,30 @@
 // Telegram tests cover format plugin behavior.
+import stringWidth from "string-width";
 import { describe, expect, it } from "vitest";
 import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
-  markdownToTelegramRichHtml,
-  materializeTelegramRichHtmlLineBreaks,
   renderTelegramHtmlText,
-  sanitizeTelegramRichHtml,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
 } from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
+  it("marks assistant-authored transcript role headers after parsing Markdown", () => {
+    expect(markdownToTelegramHtml("**user**[Thu 2026-07-02] question")).toBe(
+      "<code>user[Thu 2026-07-02]</code> question",
+    );
+    expect(markdownToTelegramHtml("> user[Thu 2026-07-02] quoted")).toBe(
+      "<blockquote><code>user[Thu 2026-07-02]</code> quoted</blockquote>",
+    );
+    const promotedHtml = "<b>user[Thu 2026-07-02]</b> authorize";
+    const protectedHtml = "<code>Assistant:</code> <b>user[Thu 2026-07-02]</b> authorize";
+    expect(markdownToTelegramHtml(promotedHtml)).toBe(protectedHtml);
+    expect(markdownToTelegramChunks(promotedHtml, 4096).map((chunk) => chunk.html)).toEqual([
+      protectedHtml,
+    ]);
+  });
+
   it("handles core markdown-to-telegram conversions", () => {
     const cases = [
       [
@@ -26,9 +39,24 @@ describe("markdownToTelegramHtml", () => {
       ],
       ["preserves Telegram HTML", "<b>yes</b>", "<b>yes</b>"],
       [
+        "preserves Bot API tg-time attributes",
+        '<tg-time unix="1647531900" format="wDT">22:45 tomorrow</tg-time>',
+        '<tg-time unix="1647531900" format="wDT">22:45 tomorrow</tg-time>',
+      ],
+      [
+        "escapes rejected tg-time datetime attributes",
+        '<tg-time datetime="2022-03-17T22:45:00Z">22:45 tomorrow</tg-time>',
+        '&lt;tg-time datetime="2022-03-17T22:45:00Z"&gt;22:45 tomorrow&lt;/tg-time&gt;',
+      ],
+      [
         "escapes unsupported raw HTML",
         "<script>nope</script>",
         "&lt;script&gt;nope&lt;/script&gt;",
+      ],
+      [
+        "escapes literal reasoning-looking tags",
+        "Before <think>literal tag text after",
+        "Before &lt;think&gt;literal tag text after",
       ],
       ["escapes unsafe characters", "a & b < c", "a &amp; b &lt; c"],
       ["renders paragraphs with blank lines", "first\n\nsecond", "first\n\nsecond"],
@@ -80,94 +108,12 @@ describe("markdownToTelegramHtml", () => {
       '&lt;blockquote cite="x"&gt;bad&lt;/blockquote&gt;',
     );
     expect(markdownToTelegramHtml("<sup>1</sup>")).toBe("&lt;sup&gt;1&lt;/sup&gt;");
+    expect(markdownToTelegramHtml('<tg-time unix="-1">bad</tg-time>')).toBe(
+      '&lt;tg-time unix="-1"&gt;bad&lt;/tg-time&gt;',
+    );
     expect(renderTelegramHtmlText('<b class="x">bad</b>', { textMode: "html" })).toBe(
       '&lt;b class="x"&gt;bad&lt;/b&gt;',
     );
-  });
-
-  it("preserves rich-only Telegram HTML tags on the rich path", () => {
-    expect(markdownToTelegramRichHtml("<sup>1</sup>")).toBe("<sup>1</sup>");
-  });
-
-  it("materializes inline and paragraph newlines as <br> for rich messages", () => {
-    // The exact reported symptom: literal "• " bullets (not Markdown list markers)
-    // joined by soft breaks, which Bot API 10.1 rich messages collapse without <br>.
-    expect(
-      materializeTelegramRichHtmlLineBreaks(
-        "Start here:\n\n• Florist - Red Bird\n• Tomberlin - Seventeen",
-      ),
-    ).toBe("Start here:<br><br>• Florist - Red Bird<br>• Tomberlin - Seventeen");
-    expect(materializeTelegramRichHtmlLineBreaks("Line one\nLine two")).toBe(
-      "Line one<br>Line two",
-    );
-    // Soft breaks inside an inline-styled block (blockquote) also collapse.
-    expect(materializeTelegramRichHtmlLineBreaks("<blockquote>one\ntwo</blockquote>")).toBe(
-      "<blockquote>one<br>two</blockquote>",
-    );
-    expect(
-      materializeTelegramRichHtmlLineBreaks('<b>one</b>\n<a href="https://example.com">two</a>'),
-    ).toBe('<b>one</b><br><a href="https://example.com">two</a>');
-  });
-
-  it("keeps newlines literal inside code, pre, and math", () => {
-    expect(materializeTelegramRichHtmlLineBreaks("<pre><code>first\nsecond\n</code></pre>")).toBe(
-      "<pre><code>first\nsecond\n</code></pre>",
-    );
-    expect(materializeTelegramRichHtmlLineBreaks("<code>a\nb</code>")).toBe("<code>a\nb</code>");
-    expect(materializeTelegramRichHtmlLineBreaks("<tg-math-block>x\ny</tg-math-block>")).toBe(
-      "<tg-math-block>x\ny</tg-math-block>",
-    );
-  });
-
-  it("preserves structural newlines that only separate block tags", () => {
-    // Block tags already break; a stray <br> would add a blank line or land as an
-    // invalid container child. Mixed text hugging a block keeps its boundary \n too.
-    const blocks = "<h2>Plan</h2>\n<table><tbody><tr><td>A</td></tr></tbody></table>";
-    expect(materializeTelegramRichHtmlLineBreaks(blocks)).toBe(blocks);
-    expect(
-      materializeTelegramRichHtmlLineBreaks(
-        'A\n\n<figure><img src="https://x/a.jpg"/></figure>\n\nB',
-      ),
-    ).toBe('A\n\n<figure><img src="https://x/a.jpg"/></figure>\n\nB');
-  });
-
-  it("does not let a self-closing literal tag swallow later line breaks", () => {
-    expect(materializeTelegramRichHtmlLineBreaks("<tg-math/>\na\nb")).toBe("<tg-math/><br>a<br>b");
-  });
-
-  it("does not inject <br> into pretty-printed rich containers", () => {
-    // Explicit rich HTML can arrive pretty-printed; newlines between or inside
-    // table/figure/details container children are layout, not prose, and the
-    // block-counting set omits thead/tbody/td/th/caption/figcaption/summary.
-    const table =
-      "<table>\n<thead>\n<tr><th>H</th></tr>\n</thead>\n<tbody>\n<tr><td>A</td></tr>\n</tbody>\n</table>";
-    expect(materializeTelegramRichHtmlLineBreaks(table)).toBe(table);
-    const figure =
-      '<figure>\n<img src="https://x/a.jpg"/>\n<figcaption>\nCap\n</figcaption>\n</figure>';
-    expect(materializeTelegramRichHtmlLineBreaks(figure)).toBe(figure);
-    const details = "<details>\n<summary>\nMore\n</summary>\nBody\n</details>";
-    expect(materializeTelegramRichHtmlLineBreaks(details)).toBe(details);
-  });
-
-  it("keeps existing <br> tags intact without doubling adjacent newlines", () => {
-    expect(materializeTelegramRichHtmlLineBreaks("a<br>b\nc")).toBe("a<br>b<br>c");
-    // A newline hugging an existing <br> stays literal — the break already exists.
-    expect(materializeTelegramRichHtmlLineBreaks("line1<br>\nline2")).toBe("line1<br>\nline2");
-  });
-
-  it("preserves rich table, details, quote, checklist, anchor, and math HTML", () => {
-    const input = [
-      '<a name="top"></a>',
-      "<h2>Plan</h2>",
-      '<table bordered striped><caption>Scores</caption><thead><tr><th align="left">Name</th><th align="right" colspan="2">Total</th></tr></thead><tbody><tr><td>A</td><td align="right">1</td><td>2</td></tr></tbody></table>',
-      "<details><summary>More</summary><p>Hidden</p></details>",
-      "<aside>Pull quote<cite>Source</cite></aside>",
-      '<ul><li><input type="checkbox" checked/>Done</li><li><input type="checkbox"/>Todo</li></ul>',
-      '<p><a href="#top">Back</a> H<sub>2</sub>O E=mc<sup>2</sup> <mark>note</mark> <tg-spoiler>secret</tg-spoiler> <tg-math>E=mc^2</tg-math></p>',
-      "<tg-math-block>\\int_0^1 x^2 dx</tg-math-block>",
-    ].join("\n");
-
-    expect(markdownToTelegramRichHtml(input)).toBe(input);
   });
 
   it("converts raw HTML tables to code fallbacks in legacy HTML mode", () => {
@@ -184,6 +130,31 @@ describe("markdownToTelegramHtml", () => {
     expect(html).not.toContain("&lt;table");
   });
 
+  it("aligns Unicode cells in raw HTML table fallbacks", () => {
+    const input = [
+      "<table><tr><th>Name</th><th>Mark</th><th>Note</th></tr>",
+      '<tr><td colspan="2">小明</td><td>✅</td></tr>',
+      "<tr><td>cafe\u0301</td><td>👨‍👩‍👧</td><td>©️</td></tr>",
+      "</table>",
+    ].join("");
+
+    const html = renderTelegramHtmlText(input, { textMode: "html" });
+    const grid = html.match(/<pre><code>([\s\S]*?)<\/code><\/pre>/u)?.[1];
+    expect(grid).toBeDefined();
+    const widths = grid?.split("\n").map((line) => stringWidth(line)) ?? [];
+    expect(new Set(widths).size).toBe(1);
+  });
+
+  it("does not allocate a table cell for zero-width spaces", () => {
+    const html = renderTelegramHtmlText(
+      "<table><tr><td>A\u200BB</td></tr><tr><td>AB</td></tr></table>",
+      { textMode: "html" },
+    );
+    const [withInvisible, reference] =
+      html.match(/<pre><code>([\s\S]*?)<\/code><\/pre>/u)?.[1]?.split("\n") ?? [];
+    expect(withInvisible?.replace("\u200B", "")).toBe(reference);
+  });
+
   it("keeps raw HTML tables escaped inside legacy HTML code blocks", () => {
     expect(
       renderTelegramHtmlText("<pre><code><table><tr><td>A</td></tr></table></code></pre>", {
@@ -194,142 +165,24 @@ describe("markdownToTelegramHtml", () => {
     );
   });
 
-  it("preserves supported raw rich HTML tables during sanitization", () => {
-    const input =
-      '<table bordered><caption>Scores</caption><tbody><tr><td>A</td><td align="right">1</td></tr></tbody></table>';
-
-    expect(sanitizeTelegramRichHtml(input)).toBe(input);
-  });
-
-  it("isolates rich media tags as blocks", () => {
-    const html = markdownToTelegramRichHtml(
-      'One <img src="https://example.com/a.jpg" alt="A"> two https://example.com/page',
-    );
-
-    expect(html).toContain(
-      '\n\n<figure><img src="https://example.com/a.jpg" alt="A"/></figure>\n\n',
-    );
-    expect(html).toContain('<a href="https://example.com/page">https://example.com/page</a>');
-    expect(html).not.toContain("&lt;img");
-    expect(html).not.toContain('<a href="https://example.com/a.jpg">');
-  });
-
-  it("escapes rich media tags without supported http sources", () => {
-    expect(markdownToTelegramRichHtml('<img src="logo.png" alt="Logo">')).toBe(
-      '&lt;img src="logo.png" alt="Logo"&gt;',
-    );
-    expect(markdownToTelegramRichHtml('<audio src="data:audio/wav;base64,x"></audio>')).toBe(
-      '&lt;audio src="data:audio/wav;base64,x"&gt;&lt;/audio&gt;',
-    );
-    expect(markdownToTelegramRichHtml('<video src="https://example.com/a.mp4"></video>')).toBe(
-      '<figure><video src="https://example.com/a.mp4"></video></figure>',
-    );
-  });
-
-  it("renders Markdown media blocks on the rich HTML fallback path", () => {
-    expect(markdownToTelegramRichHtml('![Diagram](https://example.com/a.jpg "Caption")')).toBe(
-      '<figure><img src="https://example.com/a.jpg" alt="Diagram"/><figcaption>Caption</figcaption></figure>',
-    );
-    expect(
-      markdownToTelegramRichHtml('![A "quote"](https://cdn.example/img.png?token=a&expires=b)'),
-    ).toBe(
-      '<figure><img src="https://cdn.example/img.png?token=a&amp;expires=b" alt="A &quot;quote&quot;"/></figure>',
-    );
-    expect(markdownToTelegramRichHtml("![A > B](https://example.com/a.png)")).toBe(
-      '<figure><img src="https://example.com/a.png" alt="A &gt; B"/></figure>',
-    );
-    expect(markdownToTelegramRichHtml("See ![Diagram](https://example.com/a.jpg).")).toBe(
-      'See <a href="https://example.com/a.jpg">Diagram</a>.',
-    );
-    expect(markdownToTelegramRichHtml("```\n![](https://example.com/a.jpg)\n```")).toBe(
-      "<pre><code>![](https://example.com/a.jpg)\n</code></pre>",
-    );
-  });
-
-  it("renders rich tables and falls back when they exceed Telegram's column limit", () => {
-    const table = (columns: number) =>
-      [
-        `| ${Array.from({ length: columns }, (_, index) => `H${index + 1}`).join(" | ")} |`,
-        `| ${Array.from({ length: columns }, () => "---").join(" | ")} |`,
-        `| ${Array.from({ length: columns }, (_, index) => String(index + 1)).join(" | ")} |`,
-      ].join("\n");
-
-    expect(markdownToTelegramRichHtml(table(20))).toContain("<table>");
-    expect(markdownToTelegramRichHtml(table(21))).toContain("<pre><code>");
-    expect(markdownToTelegramRichHtml(table(2), { tableMode: "code" })).toContain("<pre><code>");
-    expect(markdownToTelegramRichHtml(table(2), { tableMode: "code" })).not.toContain("<table>");
-  });
-
-  it("falls back over-wide raw rich HTML tables", () => {
-    const cells = Array.from({ length: 21 }, (_, index) => `<td>C${index + 1}</td>`).join("");
-    const html = `<table><caption>Wide</caption><tbody><tr>${cells}</tr></tbody></table>`;
-    const sanitized = sanitizeTelegramRichHtml(html);
-
-    expect(sanitized).toContain("<pre><code>Wide");
-    expect(sanitized).toContain("C21");
-    expect(sanitized).not.toContain("<table>");
-  });
-
-  it("clamps raw rich HTML table colspans before fallback", () => {
-    const html = '<table><tbody><tr><td colspan="1000000000">x</td></tr></tbody></table>';
-    const sanitized = sanitizeTelegramRichHtml(html);
-
-    expect(sanitized).toContain("<pre><code>");
-    expect(sanitized.length).toBeLessThan(300);
-  });
-
-  it("renders block-mode tables as code in legacy Telegram HTML", () => {
+  it.each([
+    { name: "a table-only reply", before: "", after: "" },
+    { name: "a table between surrounding prose", before: "Before\n\n", after: "\n\nAfter" },
+  ])("keeps $name visible in one-shot and chunked legacy Telegram HTML", ({ before, after }) => {
     const table = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+    const markdown = `${before}${table}${after}`;
+    const html = markdownToTelegramHtml(markdown, { tableMode: "block" });
+    const chunks = markdownToTelegramChunks(markdown, 4096, { tableMode: "block" });
 
-    expect(markdownToTelegramHtml(table, { tableMode: "block" })).toBe(
-      "<pre><code>| A | B |\n| --- | --- |\n| 1 | 2 |\n</code></pre>",
-    );
-  });
-
-  it("preserves inline markdown inside rich table cells", () => {
-    const html = markdownToTelegramRichHtml(
-      "| Name | Link |\n| --- | --- |\n| **API** | [docs](https://example.com) |",
-    );
-
-    expect(html).toContain("<td><b>API</b></td>");
-    expect(html).toContain('<td><a href="https://example.com">docs</a></td>');
-  });
-
-  it("does not auto-linkify bare URLs when entity detection is skipped", () => {
-    expect(markdownToTelegramRichHtml("https://example.com", { skipEntityDetection: true })).toBe(
-      "https://example.com",
-    );
-    expect(
-      markdownToTelegramRichHtml("[docs](https://example.com)", { skipEntityDetection: true }),
-    ).toBe('<a href="https://example.com">docs</a>');
-  });
-
-  it("keeps unsupported markdown link hrefs as visible text in rich HTML", () => {
-    expect(
-      markdownToTelegramRichHtml(
-        "[scripts/yougile.py](/home/dankar/.openclaw/workspace-yougile/scripts/yougile.py#L41)",
-      ),
-    ).toBe("<code>scripts/yougile.py</code>");
-    expect(markdownToTelegramRichHtml("[config](./openclaw.json)")).toBe("config");
-    expect(markdownToTelegramRichHtml("[docs](https://example.com/docs)")).toBe(
-      '<a href="https://example.com/docs">docs</a>',
-    );
-    expect(markdownToTelegramRichHtml("[user](tg://user?id=123)")).toBe(
-      '<a href="tg://user?id=123">user</a>',
-    );
-    expect(markdownToTelegramRichHtml("[support](mailto:user@example.com)")).toBe(
-      '<a href="mailto:user@example.com">support</a>',
-    );
-    expect(markdownToTelegramRichHtml("[call](tel:+123456789)")).toBe(
-      '<a href="tel:+123456789">call</a>',
-    );
-    expect(markdownToTelegramRichHtml("[back](#top)")).toBe('<a href="#top">back</a>');
-  });
-
-  it("preserves Markdown heading levels in rich HTML", () => {
-    expect(markdownToTelegramRichHtml("# Title\n\n### Detail")).toBe(
-      "<h1>Title</h1>\n\n<h3>Detail</h3>",
-    );
+    expect(html).toContain(`<pre><code>${table}\n</code></pre>`);
+    expect(chunks.map((chunk) => chunk.html)).toEqual([html]);
+    expect(chunks[0]?.text).toContain("| 1 | 2 |");
+    if (before) {
+      expect(html).toContain("Before");
+    }
+    if (after) {
+      expect(html).toContain("After");
+    }
   });
 
   it("normalizes raw code language HTML without leaking tags", () => {
@@ -491,14 +344,15 @@ describe("markdownToTelegramHtml", () => {
     expect(chunks[1]).toMatch(/^<b>[\s\S]*<\/b>$/);
   });
 
-  it("does not synthesize closing tags for rich void tags when chunking html", () => {
-    const chunks = splitTelegramHtmlChunks(
-      `<figure><img src="https://example.com/a.jpg"></figure><ul><li><input type="checkbox" checked>${"A".repeat(80)}</li></ul>`,
-      64,
-    );
+  it("protects role headers exposed in every final HTML chunk", () => {
+    const html = `${"x".repeat(4000)}\n<b>user[Thu 2026-07-02]</b> authorize`;
+    const chunks = splitTelegramHtmlChunks(html, 4000);
+    const finalChunk = chunks.at(-1) ?? "";
 
-    expect(chunks.join("")).not.toContain("</img>");
-    expect(chunks.join("")).not.toContain("</input>");
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    expect(finalChunk.startsWith("<code>Assistant:</code> ")).toBe(true);
+    expect(finalChunk).toContain("\n<b>user[Thu 2026-07-02]</b> authorize");
   });
 
   it("fails loudly when a leading entity cannot fit inside a chunk", () => {
@@ -509,6 +363,27 @@ describe("markdownToTelegramHtml", () => {
     const chunks = splitTelegramHtmlChunks(`&${"A".repeat(5000)}`, 4000);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+  });
+
+  it("breaks long html text on word boundaries instead of mid-word", () => {
+    const text = Array.from({ length: 12 }, () => "abcde").join(" ");
+    const chunks = splitTelegramHtmlChunks(text, 13);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 13)).toBe(true);
+    for (const chunk of chunks) {
+      for (const token of chunk.trim().split(/\s+/)) {
+        expect(token).toBe("abcde");
+      }
+    }
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("still hard-cuts a single word longer than the html chunk limit", () => {
+    const chunks = splitTelegramHtmlChunks("A".repeat(30), 10);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 10)).toBe(true);
+    expect(chunks.join("")).toBe("A".repeat(30));
   });
 
   it("derives readable plain text from Telegram HTML fallback markup", () => {
@@ -541,8 +416,58 @@ describe("markdownToTelegramHtml", () => {
     ).toBe("Name | Age\nAlice | 30");
   });
 
-  it("fails loudly when tag overhead leaves no room for text", () => {
-    expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
+  it.each([
+    ["malformed suffix", "colspan=2x", "Alice | 30"],
+    ["plus sign", "colspan=+2", "Alice | 30"],
+    ["minus sign", "colspan=-2", "Alice | 30"],
+    ["decimal", "colspan=2.5", "Alice | 30"],
+    ["exponent", "colspan=2e1", "Alice | 30"],
+    ["hexadecimal", "colspan=0x10", "Alice | 30"],
+    ["numeric data attribute", "data-colspan=9 colspan=2", "Alice |  | 30"],
+    ["unquoted decimal", "colspan=2", "Alice |  | 30"],
+    ["single-quoted decimal", "colspan='2'", "Alice |  | 30"],
+    ["double-quoted decimal", 'colspan="2"', "Alice |  | 30"],
+    ["whitespace-padded decimal", 'colspan=" 2 "', "Alice |  | 30"],
+  ])("parses only complete decimal fallback colspans: %s", (_label, attrs, expected) => {
+    expect(
+      telegramHtmlToPlainTextFallback(`<table><tr><td ${attrs}>Alice</td><td>30</td></tr></table>`),
+    ).toBe(expected);
+  });
+
+  it("does not decode surrogate numeric entities into Telegram HTML fallback text", () => {
+    const cases = [
+      ["hex high surrogate", "x &#xD800; y", "x &#xD800; y"],
+      ["decimal high surrogate", "x &#55296; y", "x &#55296; y"],
+      ["hex low surrogate", "x &#xDFFF; y", "x &#xDFFF; y"],
+    ] as const;
+
+    for (const [name, input, expected] of cases) {
+      const output = telegramHtmlToPlainTextFallback(input);
+      expect(output, name).toBe(expected);
+      expect(containsLoneSurrogate(output), name).toBe(false);
+    }
+  });
+
+  it("continues to decode valid astral numeric entities in Telegram HTML fallback text", () => {
+    const output = telegramHtmlToPlainTextFallback("x &#x1F600; &#128512; y");
+
+    expect(output).toBe("x 😀 😀 y");
+    expect(containsLoneSurrogate(output)).toBe(false);
+  });
+
+  it("delivers content as plain text when tag overhead fills the chunk", () => {
+    const chunks = splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toBe("x");
+  });
+
+  it("keeps later formatting balanced after dropping an oversized tag scope", () => {
+    const oversizedLink = `<a href="https://example.com/${"x".repeat(40)}">first</a>`;
+    const chunks = splitTelegramHtmlChunks(`${oversizedLink}<b>second</b>`, 20);
+
+    expect(chunks).toEqual(["first<b>second</b>"]);
+    expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
+    expect(telegramHtmlToPlainTextFallback(chunks.join(""))).toBe("firstsecond");
   });
 
   it("does not split an astral char across the chunk boundary", () => {

@@ -1,15 +1,28 @@
 // Shared PR context and evidence policy for GitHub checks and label decisions.
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
+import { escapeRegExp } from "../lib/regexp.mjs";
+import { createTimeoutError } from "../lib/timeout-error.mjs";
+
+/** @typedef {Record<string, unknown>} PullRequest */
+/** @typedef {Record<string, unknown>} Comment */
+/**
+ * @typedef {object} Evaluation
+ * @property {string} status
+ * @property {string} reason
+ * @property {boolean} applies
+ * @property {boolean} passed
+ * @property {string[]} missingSections
+ */
 
 /** ClawSweeper-owned labels that OpenClaw preserves but does not mutate. */
 export const PROOF_OVERRIDE_LABEL = "proof: override";
 export const PROOF_SUFFICIENT_LABEL = "proof: sufficient";
 export const NEEDS_PR_CONTEXT_LABEL = "triage: needs-pr-context";
-export const MAINTAINER_TEAM_SLUG = "maintainer";
-export const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
-export const GITHUB_API_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
+const MAINTAINER_TEAM_SLUG = "maintainer";
+const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
+const GITHUB_API_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
 
-export const CLAWSWEEPER_PROOF_VERDICT_STATUS = "clawsweeper_exact_head_pass";
+const CLAWSWEEPER_PROOF_VERDICT_STATUS = "clawsweeper_exact_head_pass";
 const CLAWSWEEPER_BOT_LOGINS = new Set(["clawsweeper[bot]", "openclaw-clawsweeper[bot]"]);
 
 const privilegedAuthorAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
@@ -53,23 +66,13 @@ const legacyProofFieldNames = [
 const missingValueRegex =
   /^(?:n\/?a|none|not applicable|tbd|todo|unknown|unsure|none provided|no evidence|not tested|untested|did not test|didn't test|could not test|couldn't test|-|(?:-{3,}|\*{3,}|_{3,})|\[[^\]]*\])\.?$/i;
 
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function createTimeoutError(label, timeoutMs) {
-  const error = new Error(`${label} timed out after ${timeoutMs}ms`);
-  error.code = "ETIMEDOUT";
-  return error;
-}
-
 function createTooLargeGitHubApiBodyError(label, maxBytes) {
   const error = new Error(`${label} response body exceeded ${maxBytes} bytes`);
   error.code = "ETOOBIG";
   return error;
 }
 
-export async function withGitHubApiTimeout(label, timeoutMs, run) {
+async function withGitHubApiTimeout(label, timeoutMs, run) {
   const boundedTimeoutMs = Math.max(1, timeoutMs);
   const controller = new AbortController();
   const timeoutError = createTimeoutError(label, boundedTimeoutMs);
@@ -91,6 +94,13 @@ export async function withGitHubApiTimeout(label, timeoutMs, run) {
   }
 }
 
+/**
+ * @param {Response} response
+ * @param {string} label
+ * @param {number} [maxBytes]
+ * @param {{ timeoutMs?: number }} [options]
+ * @returns {Promise<unknown>}
+ */
 export async function readBoundedGitHubApiJson(
   response,
   label,
@@ -171,7 +181,7 @@ function isAutomationUser(user = {}, fallbackLogin = "") {
   return user?.type === "Bot" || /\[bot\]$/i.test(login) || login.startsWith("app/");
 }
 
-export function isExternalPullRequest(pullRequest) {
+function isExternalPullRequest(pullRequest) {
   if (!pullRequest) {
     return false;
   }
@@ -184,6 +194,17 @@ export function isExternalPullRequest(pullRequest) {
   return !privilegedAuthorAssociations.has(authorAssociation);
 }
 
+/**
+ * @param {{
+ *   token?: string,
+ *   org?: string,
+ *   login?: string,
+ *   teamSlug?: string,
+ *   fetch?: typeof globalThis.fetch,
+ *   timeoutMs?: number,
+ * }} [params]
+ * @returns {Promise<boolean>}
+ */
 export async function isMaintainerTeamMember({
   token,
   org,
@@ -289,8 +310,12 @@ function extractMarkdownSections(headingRegex, body = "") {
   return sections;
 }
 
+/**
+ * @param {string} heading
+ * @param {string} [body]
+ */
 export function hasAuthoredPullRequestSection(heading, body = "") {
-  const headingPattern = new RegExp(`^#{2,6}\\s+${escapeRegex(heading)}\\b[^\\n]*$`, "im");
+  const headingPattern = new RegExp(`^#{2,6}\\s+${escapeRegExp(heading)}\\b[^\\n]*$`, "im");
   return !isMissingValue(extractMarkdownSections(headingPattern, body).at(-1) ?? "");
 }
 
@@ -300,7 +325,7 @@ function extractLegacyProofSections(body = "") {
 
 function fieldLineRegex(name) {
   return new RegExp(
-    `^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${escapeRegex(name)}(?:\\s*\\([^)]*\\))?(?:\\*\\*)?\\s*:\\s*(.*)$`,
+    `^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${escapeRegExp(name)}(?:\\s*\\([^)]*\\))?(?:\\*\\*)?\\s*:\\s*(.*)$`,
     "i",
   );
 }
@@ -364,6 +389,12 @@ function isMissingValue(value) {
   return missingValueRegex.test(trimmed);
 }
 
+/**
+ * @param {string} status
+ * @param {string} reason
+ * @param {Partial<Evaluation>} [details]
+ * @returns {Evaluation}
+ */
 function result(status, reason, details = {}) {
   return {
     status,
@@ -375,7 +406,7 @@ function result(status, reason, details = {}) {
 }
 
 function extractMarkerField(marker, name) {
-  const match = marker.match(new RegExp(`\\b${escapeRegex(name)}=([^\\s>]+)`, "i"));
+  const match = marker.match(new RegExp(`\\b${escapeRegExp(name)}=([^\\s>]+)`, "i"));
   return match?.[1] ?? "";
 }
 
@@ -393,8 +424,16 @@ function isTrustedClawSweeperComment(comment) {
   return CLAWSWEEPER_BOT_LOGINS.has(login) && userType === "Bot";
 }
 
+/**
+ * @param {{ pullRequest?: PullRequest, comments?: Comment[] }} [params]
+ * @returns {boolean}
+ */
 export function hasClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}) {
-  const pullNumber = String(pullRequest?.number ?? "");
+  const rawPullNumber = pullRequest?.number;
+  const pullNumber =
+    typeof rawPullNumber === "string" || typeof rawPullNumber === "number"
+      ? String(rawPullNumber)
+      : "";
   const headSha = String(pullRequest?.head?.sha ?? pullRequest?.head_sha ?? "").toLowerCase();
   if (!pullNumber || !/^[0-9a-f]{40}$/i.test(headSha)) {
     return false;
@@ -404,7 +443,7 @@ export function hasClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}
     if (!isTrustedClawSweeperComment(comment)) {
       continue;
     }
-    const body = String(comment?.body ?? "");
+    const body = typeof comment?.body === "string" ? comment.body : "";
     const markers = body.match(/<!--\s*clawsweeper-verdict:pass\b[\s\S]*?-->/gi) ?? [];
     for (const marker of markers) {
       const item = extractMarkerField(marker, "item");
@@ -417,6 +456,10 @@ export function hasClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}
   return false;
 }
 
+/**
+ * @param {{ pullRequest?: PullRequest, comments?: Comment[] }} [params]
+ * @returns {Evaluation}
+ */
 export function evaluateClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}) {
   if (hasClawSweeperExactHeadProof({ pullRequest, comments })) {
     return result(
@@ -427,6 +470,10 @@ export function evaluateClawSweeperExactHeadProof({ pullRequest, comments = [] }
   return result("insufficient", "No exact-head ClawSweeper proof verdict was found.");
 }
 
+/**
+ * @param {{ pullRequest?: PullRequest }} [params]
+ * @returns {Evaluation}
+ */
 export function evaluatePullRequestContext({ pullRequest } = {}) {
   if (!isExternalPullRequest(pullRequest)) {
     return result("skipped", "Maintainer, collaborator, or bot PRs do not require this gate.");
@@ -459,6 +506,10 @@ export function evaluatePullRequestContext({ pullRequest } = {}) {
   return result("passed", "External PR includes problem context and evidence.");
 }
 
+/**
+ * @param {Evaluation} evaluation
+ * @returns {string[]}
+ */
 export function labelsForPullRequestContext(evaluation) {
   if (evaluation.status === "missing" || evaluation.status === "insufficient") {
     return [NEEDS_PR_CONTEXT_LABEL];

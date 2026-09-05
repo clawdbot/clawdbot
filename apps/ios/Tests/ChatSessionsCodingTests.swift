@@ -1,0 +1,66 @@
+import Foundation
+import OpenClawChatUI
+import Testing
+
+struct ChatSessionsCodingTests {
+    @Test func `decodes gateway model selection target from session defaults`() throws {
+        let data = Data(#"""
+        {
+            "defaults": {
+                "modelProvider": "openai",
+                "model": "gpt-5.6-sol",
+                "contextTokens": 200000,
+                "modelSelectionTarget": "agent"
+            },
+            "sessions": []
+        }
+        """#.utf8)
+
+        let response = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+
+        #expect(response.defaults?.modelSelectionTarget == "agent")
+    }
+
+    @Test func `older gateway session defaults remain decodable without a target`() throws {
+        let data = Data(#"""
+        {
+            "defaults": {
+                "model": "gpt-5.6-sol",
+                "contextTokens": 200000
+            },
+            "sessions": []
+        }
+        """#.utf8)
+
+        let response = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+
+        #expect(response.defaults?.modelSelectionTarget == nil)
+    }
+
+    @Test func `decodes session organization and read state fields`() throws {
+        let data = Data(#"""
+        {
+            "key":"agent:main:telegram:group:1",
+            "label":"Release room",
+            "category":"Operations",
+            "pinned":true,
+            "archived":false,
+            "unread":true,
+            "lastReadAt":1720000000000,
+            "markedUnreadAt":1720000002500,
+            "lastActivityAt":1720000005000
+        }
+        """#.utf8)
+
+        let entry = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: data)
+
+        #expect(entry.label == "Release room")
+        #expect(entry.category == "Operations")
+        #expect(entry.pinned == true)
+        #expect(entry.archived == false)
+        #expect(entry.unread == true)
+        #expect(entry.lastReadAt == 1_720_000_000_000)
+        #expect(entry.markedUnreadAt == 1_720_000_002_500)
+        #expect(entry.lastActivityAt == 1_720_000_005_000)
+    }
+}

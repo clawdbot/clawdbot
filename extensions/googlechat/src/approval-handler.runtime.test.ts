@@ -3,11 +3,12 @@ import type {
   ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
-  clearGoogleChatApprovalCardBindingsForTest,
   shouldSuppressGoogleChatManualExecApprovalFollowupText,
+  unregisterGoogleChatManualApprovalFollowupSuppression,
 } from "./approval-card-actions.js";
 
 const sendGoogleChatMessage = vi.hoisted(() => vi.fn());
@@ -26,7 +27,7 @@ const { googleChatApprovalNativeRuntime } = await import("./approval-handler.run
 
 beforeEach(() => {
   vi.clearAllMocks();
-  clearGoogleChatApprovalCardBindingsForTest();
+  unregisterGoogleChatManualApprovalFollowupSuppression("approval-1");
 });
 
 const account = {
@@ -52,7 +53,7 @@ const cfg: OpenClawConfig = {
       audienceType: "app-url",
       audience: "https://chat-app.example.test/googlechat",
       appPrincipal: "123456789012345678901",
-      dm: { allowFrom: ["users/123"] },
+      allowFrom: ["users/123"],
     },
   },
 };
@@ -69,7 +70,7 @@ function createPendingView(): ExecApprovalPendingView {
     agentId: "main",
     warningText: null,
     commandAnalysis: null,
-    commandText: "echo hi",
+    commandText: `<tag> & &amp; "double" 'single'`,
     commandPreview: null,
     cwd: "/tmp",
     envKeys: [],
@@ -83,6 +84,12 @@ function createPendingView(): ExecApprovalPendingView {
         label: "Allow Once",
         style: "success",
         command: "/approve approval-1 allow-once",
+        action: {
+          type: "approval",
+          approvalId: "approval-1",
+          approvalKind: "exec",
+          decision: "allow-once",
+        },
       },
       {
         kind: "decision",
@@ -90,24 +97,55 @@ function createPendingView(): ExecApprovalPendingView {
         label: "Deny",
         style: "danger",
         command: "/approve approval-1 deny",
+        action: {
+          type: "approval",
+          approvalId: "approval-1",
+          approvalKind: "exec",
+          decision: "deny",
+        },
       },
     ],
     expiresAtMs: Date.now() + 60_000,
   };
 }
 
-function createDeferred<T>(): {
-  promise: Promise<T>;
-  reject: (reason?: unknown) => void;
-  resolve: (value: T) => void;
-} {
-  let resolve: (value: T) => void = () => {};
-  let reject: (reason?: unknown) => void = () => {};
-  const promise = new Promise<T>((innerResolve, innerReject) => {
-    resolve = innerResolve;
-    reject = innerReject;
-  });
-  return { promise, reject, resolve };
+type CardPayloadWithTextWidgets = {
+  cardsV2: Array<{
+    card: {
+      sections?: Array<{
+        header?: string;
+        widgets?: Array<{ textParagraph?: { text: string } }>;
+      }>;
+    };
+  }>;
+};
+
+function getTextParagraphText(payload: unknown, header: string): string {
+  const text = (payload as CardPayloadWithTextWidgets).cardsV2[0]?.card.sections?.find(
+    (section) => section.header === header,
+  )?.widgets?.[0]?.textParagraph?.text;
+  if (typeof text !== "string") {
+    throw new Error(`Expected ${header} text paragraph`);
+  }
+  return text;
+}
+
+function isUtf16WellFormed(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const nextCodeUnit = index + 1 < value.length ? value.charCodeAt(index + 1) : -1;
+      if (nextCodeUnit < 0xdc00 || nextCodeUnit > 0xdfff) {
+        return false;
+      }
+      index += 1;
+      continue;
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
 }
 
 describe("googleChatApprovalNativeRuntime", () => {
@@ -149,6 +187,31 @@ describe("googleChatApprovalNativeRuntime", () => {
     return { pendingPayload, plannedTarget, prepared, request, view };
   }
 
+  it("keeps truncated pending command card text UTF-16 well formed", async () => {
+    const view = createPendingView();
+    view.commandText = `${"a".repeat(1796)}😀${"b".repeat(100)}`;
+
+    const { pendingPayload } = await preparePendingDelivery(view);
+    const commandText = getTextParagraphText(pendingPayload, "Command");
+
+    expect(commandText.length).toBeLessThanOrEqual(1800);
+    expect(commandText.endsWith("...")).toBe(true);
+    expect(isUtf16WellFormed(commandText)).toBe(true);
+    expect(JSON.stringify(pendingPayload.cardsV2)).not.toContain("\\ud83d");
+  });
+
+  it("preserves a complete astral character when it fits before the truncation suffix", async () => {
+    const view = createPendingView();
+    view.commandText = `${"a".repeat(1795)}😀${"b".repeat(100)}`;
+
+    const { pendingPayload } = await preparePendingDelivery(view);
+    const commandText = getTextParagraphText(pendingPayload, "Command");
+
+    expect(commandText).toBe(`${"a".repeat(1795)}😀...`);
+    expect(commandText.length).toBe(1800);
+    expect(isUtf16WellFormed(commandText)).toBe(true);
+  });
+
   it("sends pending cards and updates the delivered message without buttons", async () => {
     sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/msg-1" });
     updateGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/msg-1" });
@@ -170,6 +233,8 @@ describe("googleChatApprovalNativeRuntime", () => {
     });
 
     expect(JSON.stringify(pendingPayload)).toContain("cardsV2");
+    const commandText = getTextParagraphText(pendingPayload, "Command");
+    expect(commandText).toBe(`&lt;tag&gt; &amp; &amp;amp; "double" 'single'`);
     expect(JSON.stringify(pendingPayload.cardsV2)).toContain(
       "https://chat-app.example.test/googlechat",
     );
@@ -272,6 +337,13 @@ describe("googleChatApprovalNativeRuntime", () => {
       accountId: "default",
       context: { account },
       entry,
+      request: {
+        id: "approval-1",
+        request: { command: "echo hi" },
+        createdAtMs: 0,
+        expiresAtMs: view.expiresAtMs,
+      },
+      approvalKind: "exec",
       payload: final.payload,
       phase: "resolved",
     });
@@ -355,7 +427,7 @@ describe("googleChatApprovalNativeRuntime", () => {
             },
             audienceType: "app-url",
             audience: "https://chat-app.example.test/googlechat",
-            dm: { allowFrom: ["users/123"] },
+            allowFrom: ["users/123"],
           },
         },
       },

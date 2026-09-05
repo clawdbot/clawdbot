@@ -16,12 +16,29 @@ import { createDiffsHttpHandler } from "./http.js";
 import { DIFFS_AGENT_GUIDANCE } from "./prompt-guidance.js";
 import { DiffArtifactStore } from "./store.js";
 import { createDiffsTool } from "./tool.js";
+import type { DiffArtifactBlobMetadata } from "./types.js";
 
 const DIFFS_LANGUAGE_PACK_PLUGIN_ID = "diffs-language-pack";
+const DIFF_ARTIFACT_NAMESPACE = "diff-artifacts";
+const DIFF_ARTIFACT_MAX_ENTRIES = 2_048;
+const DIFF_ARTIFACT_MAX_BYTES_PER_ENTRY = 32 * 1024 * 1024;
+const DIFF_ARTIFACT_MAX_BYTES_PER_NAMESPACE = 256 * 1024 * 1024;
 
 export function registerDiffsPlugin(api: OpenClawPluginApi): void {
+  // CLI metadata has no runtime state, and this plugin exposes no CLI commands.
+  if (api.registrationMode === "cli-metadata") {
+    return;
+  }
+
   const store = new DiffArtifactStore({
     rootDir: path.join(resolvePreferredOpenClawTmpDir(), "openclaw-diffs"),
+    blobStore: api.runtime.state.openBlobStore<DiffArtifactBlobMetadata>({
+      namespace: DIFF_ARTIFACT_NAMESPACE,
+      maxEntries: DIFF_ARTIFACT_MAX_ENTRIES,
+      maxBytesPerEntry: DIFF_ARTIFACT_MAX_BYTES_PER_ENTRY,
+      maxBytesPerNamespace: DIFF_ARTIFACT_MAX_BYTES_PER_NAMESPACE,
+      overflowPolicy: "reject-new",
+    }),
     logger: api.logger,
   });
   const resolveCurrentPluginConfig = () =>
@@ -47,7 +64,11 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
     (ctx) => {
       const pluginConfig = resolveCurrentPluginConfig();
       return createDiffsTool({
-        api,
+        getConfig: () =>
+          (ctx.getRuntimeConfig?.() ??
+            ctx.runtimeConfig ??
+            ctx.config ??
+            api.runtime.config.current()) as OpenClawConfig, // SAFETY: The tool only reads this immutable runtime snapshot.
         store,
         defaults: resolveDiffsPluginDefaults(pluginConfig),
         viewerBaseUrl: resolveDiffsPluginViewerBaseUrl(pluginConfig),
@@ -77,7 +98,7 @@ export function registerDiffsPlugin(api: OpenClawPluginApi): void {
   }));
 }
 
-export function resolveDiffsLanguagePackAvailability(api: OpenClawPluginApi): boolean {
+function resolveDiffsLanguagePackAvailability(api: OpenClawPluginApi): boolean {
   const currentConfig = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
   const plugins = currentConfig.plugins;
   if (plugins?.enabled === false) {

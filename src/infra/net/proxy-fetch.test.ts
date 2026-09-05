@@ -1,11 +1,6 @@
 // Proxy fetch tests cover explicit/env proxy dispatchers, managed proxy TLS,
 // FormData conversion, metadata markers, and proxy env recovery.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resetActiveManagedProxyStateForTests,
-  registerActiveManagedProxyUrl,
-  stopActiveManagedProxyRegistration,
-} from "./proxy/active-proxy-state.js";
 
 const PROXY_ENV_KEYS = [
   "HTTPS_PROXY",
@@ -27,6 +22,8 @@ const {
   proxyAgentSpy,
   envAgentSpy,
   getLastAgent,
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
   loadUndiciRuntimeDeps,
 } = vi.hoisted(() => {
   const undiciFetchLocal = vi.fn();
@@ -66,6 +63,12 @@ const {
     FormData: MockUndiciFormDataLocal,
     fetch: undiciFetchLocal,
   }));
+  const createHttp1ProxyAgentLocal = vi.fn(
+    (options: { uri?: string; proxyTls?: unknown } | string) => new ProxyAgent(options),
+  );
+  const createHttp1EnvHttpProxyAgentLocal = vi.fn(
+    (options?: Record<string, unknown>) => new EnvHttpProxyAgentLocal(options),
+  );
 
   return {
     ProxyAgent,
@@ -74,6 +77,8 @@ const {
     undiciFetch: undiciFetchLocal,
     proxyAgentSpy: proxyAgentSpyLocal,
     envAgentSpy: envAgentSpyLocal,
+    createHttp1EnvHttpProxyAgent: createHttp1EnvHttpProxyAgentLocal,
+    createHttp1ProxyAgent: createHttp1ProxyAgentLocal,
     getLastAgent: () => ProxyAgent.lastCreated,
     loadUndiciRuntimeDeps: loadUndiciRuntimeDepsLocal,
   };
@@ -82,6 +87,8 @@ const {
 const mockedModuleIds = ["./undici-runtime.js"] as const;
 
 vi.mock("./undici-runtime.js", () => ({
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
   loadUndiciRuntimeDeps,
 }));
 
@@ -149,12 +156,9 @@ describe("makeProxyFetch", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    resetActiveManagedProxyStateForTests();
   });
 
-  afterEach(() => {
-    resetActiveManagedProxyStateForTests();
-  });
+  afterEach(() => {});
 
   it("uses undici fetch with ProxyAgent dispatcher", async () => {
     const proxyUrl = "http://proxy.test:8080";
@@ -164,32 +168,12 @@ describe("makeProxyFetch", () => {
     expect(proxyAgentSpy).not.toHaveBeenCalled();
     await proxyFetch("https://api.example.com/v1/audio");
 
-    expect(proxyAgentSpy).toHaveBeenCalledWith({ uri: proxyUrl });
+    expect(proxyAgentSpy).toHaveBeenCalledWith(expect.objectContaining({ uri: proxyUrl }));
     expect(undiciFetch).toHaveBeenCalledOnce();
     const [input] = requireUndiciFetchCall();
     const init = requireUndiciFetchInit();
     expect(input).toBe("https://api.example.com/v1/audio");
     expect(init.dispatcher).toBe(getLastAgent());
-  });
-
-  it("adds active managed proxy CA trust to explicit proxy fetch dispatchers", async () => {
-    const registration = registerActiveManagedProxyUrl(new URL("https://proxy.test:8443"), {
-      proxyTls: { ca: "explicit-proxy-fetch-ca" },
-    });
-    undiciFetch.mockResolvedValue({ ok: true });
-
-    try {
-      const proxyFetch = makeProxyFetch("https://proxy.test:8443");
-
-      await proxyFetch("https://api.example.com/v1/audio");
-
-      expect(proxyAgentSpy).toHaveBeenCalledWith({
-        uri: "https://proxy.test:8443",
-        proxyTls: { ca: "explicit-proxy-fetch-ca" },
-      });
-    } finally {
-      stopActiveManagedProxyRegistration(registration);
-    }
   });
 
   it("reuses the same ProxyAgent across calls", async () => {
@@ -338,12 +322,10 @@ describe("resolveProxyFetchFromEnv", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
-    resetActiveManagedProxyStateForTests();
     clearProxyEnv();
   });
   afterEach(() => {
     vi.unstubAllEnvs();
-    resetActiveManagedProxyStateForTests();
     restoreProxyEnv();
   });
 
@@ -361,7 +343,9 @@ describe("resolveProxyFetchFromEnv", () => {
         HTTPS_PROXY: "http://proxy.test:8080",
       }),
     );
-    expect(envAgentSpy).toHaveBeenCalledWith({ httpsProxy: "http://proxy.test:8080" });
+    expect(envAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ httpsProxy: "http://proxy.test:8080" }),
+    );
 
     await fetchFn("https://api.example.com");
     expect(undiciFetch).toHaveBeenCalledOnce();
@@ -371,27 +355,22 @@ describe("resolveProxyFetchFromEnv", () => {
     expect(init.dispatcher).toBe(EnvHttpProxyAgent.lastCreated);
   });
 
-  it("adds active managed proxy CA trust to env proxy fetch dispatchers", () => {
-    const registration = registerActiveManagedProxyUrl(new URL("https://proxy.test:8443"), {
-      proxyTls: { ca: "proxy-fetch-ca" },
-    });
-
-    try {
-      const fetchFn = requireProxyFetch(
-        resolveProxyFetchFromEnv({
-          HTTP_PROXY: "",
-          HTTPS_PROXY: "https://proxy.test:8443",
-        }),
-      );
-
-      expect(fetchFn).toBeTypeOf("function");
-      expect(envAgentSpy).toHaveBeenCalledWith({
-        httpsProxy: "https://proxy.test:8443",
-        proxyTls: { ca: "proxy-fetch-ca" },
-      });
-    } finally {
-      stopActiveManagedProxyRegistration(registration);
-    }
+  it("forwards supplied managed trust context without attaching shared TLS to mixed proxy options", () => {
+    const env = {
+      HTTP_PROXY: "socks5://proxy.test:1080",
+      HTTPS_PROXY: "https://proxy.test:8443",
+      OPENCLAW_PROXY_ACTIVE: "1",
+      OPENCLAW_PROXY_CA_FILE: "/supplied/proxy-ca.pem",
+    };
+    expect(requireProxyFetch(resolveProxyFetchFromEnv(env))).toBeTypeOf("function");
+    expect(createHttp1EnvHttpProxyAgent).toHaveBeenCalledWith(
+      {
+        httpProxy: env.HTTP_PROXY,
+        httpsProxy: env.HTTPS_PROXY,
+      },
+      undefined,
+      env,
+    );
   });
 
   it("converts global FormData bodies when using proxy env fetch", async () => {
@@ -429,10 +408,12 @@ describe("resolveProxyFetchFromEnv", () => {
       }),
     );
     expect(fetchFn).toBeTypeOf("function");
-    expect(envAgentSpy).toHaveBeenCalledWith({
-      httpProxy: "http://fallback.test:3128",
-      httpsProxy: "http://fallback.test:3128",
-    });
+    expect(envAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpProxy: "http://fallback.test:3128",
+        httpsProxy: "http://fallback.test:3128",
+      }),
+    );
   });
 
   it("returns proxy fetch when lowercase https_proxy is set", () => {
@@ -445,7 +426,9 @@ describe("resolveProxyFetchFromEnv", () => {
       }),
     );
     expect(fetchFn).toBeTypeOf("function");
-    expect(envAgentSpy).toHaveBeenCalledWith({ httpsProxy: "http://lower.test:1080" });
+    expect(envAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ httpsProxy: "http://lower.test:1080" }),
+    );
   });
 
   it("returns proxy fetch when lowercase http_proxy is set", () => {
@@ -458,10 +441,12 @@ describe("resolveProxyFetchFromEnv", () => {
       }),
     );
     expect(fetchFn).toBeTypeOf("function");
-    expect(envAgentSpy).toHaveBeenCalledWith({
-      httpProxy: "http://lower-http.test:1080",
-      httpsProxy: "http://lower-http.test:1080",
-    });
+    expect(envAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpProxy: "http://lower-http.test:1080",
+        httpsProxy: "http://lower-http.test:1080",
+      }),
+    );
   });
 
   it("returns proxy fetch when ALL_PROXY is set", () => {
@@ -475,10 +460,12 @@ describe("resolveProxyFetchFromEnv", () => {
       }),
     );
     expect(fetchFn).toBeTypeOf("function");
-    expect(envAgentSpy).toHaveBeenCalledWith({
-      httpProxy: "socks5://all-proxy.test:1080",
-      httpsProxy: "socks5://all-proxy.test:1080",
-    });
+    expect(envAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        httpProxy: "socks5://all-proxy.test:1080",
+        httpsProxy: "socks5://all-proxy.test:1080",
+      }),
+    );
   });
 
   it("returns undefined when EnvHttpProxyAgent constructor throws", () => {

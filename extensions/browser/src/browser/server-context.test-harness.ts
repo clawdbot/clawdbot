@@ -39,6 +39,10 @@ export function makeBrowserServerState(params?: {
     cdpIsLoopback: profile.cdpIsLoopback,
     cdpPortRangeStart: 18800,
     cdpPortRangeEnd: 18810,
+    extensionRelayDefaultPort: 18808,
+    extensionRelayPorts: {},
+    extensionRelay: { allowLegacyAuth: true },
+    extensionRelayInternalTokens: {},
     evaluateEnabled: false,
     remoteCdpTimeoutMs: 1500,
     remoteCdpHandshakeTimeoutMs: 3000,
@@ -63,7 +67,7 @@ export function makeBrowserServerState(params?: {
     },
   };
   return {
-    server: null as any,
+    server: null as unknown as BrowserServerState["server"],
     port: 0,
     resolved: {
       ...resolvedBase,
@@ -80,12 +84,14 @@ export function mockLaunchedChrome(
   pid: number,
 ) {
   const proc = new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
-  launchOpenClawChrome.mockResolvedValue({
+  const running: RunningChrome = {
     pid,
     exe: { kind: "chromium", path: "/usr/bin/chromium" },
     userDataDir: "/tmp/openclaw-test",
     cdpPort: 18800,
     startedAt: Date.now(),
     proc,
-  });
+  };
+  launchOpenClawChrome.mockResolvedValue(running);
+  return running;
 }

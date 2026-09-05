@@ -5,30 +5,28 @@ import type {
   ContextEngine,
   ContextEngineRuntimeContext,
   ContextEngineRuntimeSettings,
+  ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
-import { shouldPreemptivelyCompactBeforePrompt } from "./run/preemptive-compaction.js";
 import {
-  CHARS_PER_TOKEN_ESTIMATE,
+  shouldPreemptivelyCompactBeforePrompt,
+  type CompactionReplayPressureContext,
+} from "./run/preemptive-compaction.js";
+import {
+  TOOL_IMAGE_CHARS,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
   createMessageCharEstimateCache,
-  estimateContextChars,
   estimateMessageCharsCached,
   getToolResultText,
-  invalidateMessageCharsCacheEntry,
   isToolResultMessage,
 } from "./tool-result-char-estimator.js";
+import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
 
-const SINGLE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
-const PREEMPTIVE_OVERFLOW_RATIO = 0.9;
-
-export const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
-  "Context overflow: estimated context size exceeds safe threshold during tool loop.";
-const TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO = 4 / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
 const TRANSCRIPT_PROMPT_TEXT_KEY = "__openclawTranscriptPromptText";
 
 type GuardableTransformContext = (
@@ -43,6 +41,7 @@ type GuardableAgentRecord = {
 };
 
 type MidTurnPrecheckOptions = {
+  getReplay?: () => CompactionReplayPressureContext;
   enabled?: boolean;
   contextTokenBudget: number;
   reserveTokens: () => number;
@@ -51,11 +50,6 @@ type MidTurnPrecheckOptions = {
   getPrePromptMessageCount?: () => number;
   onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
 };
-
-export {
-  CONTEXT_LIMIT_TRUNCATION_NOTICE,
-  formatContextLimitTruncationNotice,
-} from "./context-truncation-notice.js";
 
 export function markTranscriptPromptText(message: AgentMessage, text: string): void {
   Object.defineProperty(message, TRANSCRIPT_PROMPT_TEXT_KEY, {
@@ -66,7 +60,7 @@ export function markTranscriptPromptText(message: AgentMessage, text: string): v
 }
 
 function getTranscriptPromptText(message: AgentMessage): string | undefined {
-  const value = (message as unknown as Record<string, unknown>)[TRANSCRIPT_PROMPT_TEXT_KEY];
+  const value = Reflect.get(message, TRANSCRIPT_PROMPT_TEXT_KEY);
   return typeof value === "string" ? value : undefined;
 }
 
@@ -83,11 +77,11 @@ function restoreTranscriptPromptText(
     return cached;
   }
   const content = (message as { content?: unknown }).content;
-  const { [TRANSCRIPT_PROMPT_TEXT_KEY]: _transcriptPromptText, ...messageRest } =
-    message as unknown as Record<string, unknown>;
+  const messageRest = { ...message };
+  Reflect.deleteProperty(messageRest, TRANSCRIPT_PROMPT_TEXT_KEY);
   let restoredMessage: AgentMessage = message;
   if (typeof content === "string") {
-    restoredMessage = { ...messageRest, content: transcriptText } as unknown as AgentMessage;
+    restoredMessage = Object.assign(messageRest, { content: transcriptText });
   } else if (Array.isArray(content)) {
     let restored = false;
     const nextContent = content.map((block) => {
@@ -102,7 +96,7 @@ function restoreTranscriptPromptText(
       return Object.assign({}, block, { text: transcriptText });
     });
     if (restored) {
-      restoredMessage = { ...messageRest, content: nextContent } as unknown as AgentMessage;
+      restoredMessage = Object.assign(messageRest, { content: nextContent });
     }
   }
   cache.set(message, restoredMessage);
@@ -113,9 +107,9 @@ function stripTranscriptPromptMarker(message: AgentMessage): AgentMessage {
   if (getTranscriptPromptText(message) === undefined) {
     return message;
   }
-  const { [TRANSCRIPT_PROMPT_TEXT_KEY]: _transcriptPromptText, ...messageRest } =
-    message as unknown as Record<string, unknown>;
-  return messageRest as unknown as AgentMessage;
+  const messageRest = { ...message };
+  Reflect.deleteProperty(messageRest, TRANSCRIPT_PROMPT_TEXT_KEY);
+  return messageRest;
 }
 
 function projectTranscriptPromptMessages(
@@ -141,48 +135,24 @@ function stripTranscriptPromptMarkers(messages: AgentMessage[]): AgentMessage[] 
   return changed ? stripped : messages;
 }
 
-function truncateTextToBudget(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-
-  if (maxChars <= 0) {
-    return formatContextLimitTruncationNotice(text.length);
-  }
-
-  let bodyBudget = maxChars;
-  for (let i = 0; i < 4; i += 1) {
-    const estimatedSuffix = formatContextLimitTruncationNotice(
-      Math.max(1, text.length - bodyBudget),
-    );
-    bodyBudget = Math.max(0, maxChars - estimatedSuffix.length);
-  }
-
-  let cutPoint = bodyBudget;
-  const newline = text.lastIndexOf("\n", cutPoint);
-  if (newline > bodyBudget * 0.7) {
-    cutPoint = newline;
-  }
-
-  const omittedChars = text.length - cutPoint;
-  return text.slice(0, cutPoint) + formatContextLimitTruncationNotice(omittedChars);
-}
-
-function replaceToolResultText(msg: AgentMessage, text: string): AgentMessage {
+function replaceToolResultContent(
+  msg: AgentMessage,
+  replacement: string | unknown[],
+): AgentMessage {
   const content = (msg as { content?: unknown }).content;
-  const replacementContent =
-    typeof content === "string" || content === undefined ? text : [{ type: "text", text }];
-
-  const sourceRecord = msg as unknown as Record<string, unknown>;
-  const { details: _details, ...rest } = sourceRecord;
+  const rest = { ...msg };
+  Reflect.deleteProperty(rest, "details");
   return {
     ...rest,
-    content: replacementContent,
+    content:
+      typeof replacement === "string" && !(typeof content === "string" || content === undefined)
+        ? [{ type: "text", text: replacement }]
+        : replacement,
   } as AgentMessage;
 }
 
-function estimateBudgetToTextBudget(maxChars: number): number {
-  return Math.max(0, Math.floor(maxChars / TOOL_RESULT_ESTIMATE_TO_TEXT_RATIO));
+function estimateBudgetToRawChars(maxChars: number): number {
+  return Math.max(0, Math.floor(maxChars / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE));
 }
 
 function truncateToolResultToChars(
@@ -198,96 +168,106 @@ function truncateToolResultToChars(
   if (estimatedChars <= maxChars) {
     return msg;
   }
+  const content = (msg as { content?: unknown }).content;
+  if (Array.isArray(content)) {
+    const isImage = (block: unknown) =>
+      Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "image";
+    const isText = (block: unknown): block is { type: "text"; text: string } =>
+      Boolean(block) &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string";
+    const imageCount = content.filter(isImage).length;
+    const omissionNotice = (retainedImages: number) => {
+      const omittedImages = imageCount - retainedImages;
+      return (
+        `[${omittedImages} image${omittedImages === 1 ? "" : "s"} omitted from context` +
+        `${retainedImages === 0 ? "; no images fit the context limit" : ""}; rerun with fewer images]`
+      );
+    };
+    const projectContent = (retainedContent: unknown[], noticeText?: string) => {
+      const notice = noticeText ? [{ type: "text", text: noticeText }] : [];
+      const reservedChars = estimateMessageCharsCached(
+        replaceToolResultContent(msg, [
+          ...retainedContent.filter((block) => !isText(block)),
+          ...notice,
+        ]),
+        cache,
+      );
+      const bounded = truncateToolResultMessage(
+        replaceToolResultContent(msg, retainedContent),
+        Math.max(0, maxChars - reservedChars),
+        { minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE },
+      );
+      return replaceToolResultContent(msg, [
+        // SAFETY: Array input is preserved or mapped to another array by truncateToolResultMessage.
+        ...(bounded as { content: unknown[] }).content,
+        ...notice,
+      ]);
+    };
 
-  const rawText = getToolResultText(msg);
-  if (!rawText) {
-    const omittedChars = Math.max(
-      1,
-      estimateBudgetToTextBudget(Math.max(estimatedChars - maxChars, 1)),
+    // Image cost alone rules out larger prefixes. The allocator still reserves
+    // other non-text content and preserves diagnostic tails and short text blocks.
+    const maxRetainedImages = Math.min(imageCount, Math.floor(maxChars / TOOL_IMAGE_CHARS));
+    for (let retainedImages = maxRetainedImages; retainedImages >= 0; retainedImages -= 1) {
+      let seenImages = 0;
+      const retainedContent = content.filter(
+        (block) => !isImage(block) || ++seenImages <= retainedImages,
+      );
+      const projected = projectContent(
+        retainedContent,
+        retainedImages < imageCount ? omissionNotice(retainedImages) : undefined,
+      );
+      const projectedContent = (projected as { content: unknown[] }).content;
+      if (
+        retainedContent.some((block, index) => {
+          const projectedBlock = projectedContent[index];
+          return isText(block) && block.text && (!isText(projectedBlock) || !projectedBlock.text);
+        })
+      ) {
+        continue;
+      }
+      if (estimateMessageCharsCached(projected, cache) <= maxChars) {
+        return projected;
+      }
+    }
+    // Dropping unfit non-text content must not flatten away surviving semantic
+    // blocks. Reserve a visible notice even when only omission markers can fit.
+    const omittedChars = estimateMessageCharsCached(
+      replaceToolResultContent(
+        msg,
+        content.filter((block) => !isText(block)),
+      ),
+      cache,
     );
-    return replaceToolResultText(msg, formatContextLimitTruncationNotice(omittedChars));
+    return projectContent(
+      content.filter(isText),
+      imageCount > 0
+        ? omissionNotice(0)
+        : formatContextLimitTruncationNotice(Math.max(1, estimateBudgetToRawChars(omittedChars))),
+    );
   }
 
-  const textBudget = estimateBudgetToTextBudget(maxChars);
-  if (textBudget <= 0) {
-    return replaceToolResultText(msg, formatContextLimitTruncationNotice(rawText.length));
-  }
-
-  if (rawText.length <= textBudget) {
-    return replaceToolResultText(msg, rawText);
-  }
-
-  const truncatedText = truncateTextToBudget(rawText, textBudget);
-  return replaceToolResultText(msg, truncatedText);
+  const truncatedText = truncateToolResultText(getToolResultText(msg), maxChars, {
+    minKeepChars: 0,
+    minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
+  });
+  return replaceToolResultContent(msg, truncatedText);
 }
 
-function cloneMessagesForGuard(messages: AgentMessage[]): AgentMessage[] {
-  return messages.map(
-    (msg) => ({ ...(msg as unknown as Record<string, unknown>) }) as unknown as AgentMessage,
-  );
-}
-
-function toolResultsNeedTruncation(params: {
+function enforceToolResultLimit(params: {
   messages: AgentMessage[];
   maxSingleToolResultChars: number;
-}): boolean {
+}): AgentMessage[] {
   const { messages, maxSingleToolResultChars } = params;
   const estimateCache = createMessageCharEstimateCache();
-  for (const message of messages) {
-    if (!isToolResultMessage(message)) {
-      continue;
-    }
-    if (estimateMessageCharsCached(message, estimateCache) > maxSingleToolResultChars) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function exceedsPreemptiveOverflowThreshold(params: {
-  messages: AgentMessage[];
-  maxContextChars: number;
-}): boolean {
-  const estimateCache = createMessageCharEstimateCache();
-  return estimateContextChars(params.messages, estimateCache) > params.maxContextChars;
-}
-
-function applyMessageMutationInPlace(
-  target: AgentMessage,
-  source: AgentMessage,
-  cache?: MessageCharEstimateCache,
-): void {
-  if (target === source) {
-    return;
-  }
-
-  const targetRecord = target as unknown as Record<string, unknown>;
-  const sourceRecord = source as unknown as Record<string, unknown>;
-  for (const key of Object.keys(targetRecord)) {
-    if (!(key in sourceRecord)) {
-      delete targetRecord[key];
-    }
-  }
-  Object.assign(targetRecord, sourceRecord);
-  if (cache) {
-    invalidateMessageCharsCacheEntry(cache, target);
-  }
-}
-
-function enforceToolResultLimitInPlace(params: {
-  messages: AgentMessage[];
-  maxSingleToolResultChars: number;
-}): void {
-  const { messages, maxSingleToolResultChars } = params;
-  const estimateCache = createMessageCharEstimateCache();
-
-  for (const message of messages) {
-    if (!isToolResultMessage(message)) {
-      continue;
-    }
-    const truncated = truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache);
-    applyMessageMutationInPlace(message, truncated, estimateCache);
-  }
+  let changed = false;
+  const guarded = messages.map((message) => {
+    const next = truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache);
+    changed ||= next !== message;
+    return next;
+  });
+  return changed ? guarded : messages;
 }
 
 function hasNewToolResultAfterFence(params: {
@@ -328,6 +308,7 @@ export function installContextEngineLoopHook(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   tokenBudget?: number;
   modelId: string;
@@ -351,9 +332,11 @@ export function installContextEngineLoopHook(params: {
   const transcriptProjectionCache = new WeakMap<AgentMessage, AgentMessage>();
 
   mutableAgent.transformContext = (async (messages: AgentMessage[], signal: AbortSignal) => {
+    signal?.throwIfAborted();
     const transformed = originalTransformContext
       ? await originalTransformContext.call(mutableAgent, messages, signal)
       : messages;
+    signal?.throwIfAborted();
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
     const transcriptMessages = projectTranscriptPromptMessages(
       sourceMessages,
@@ -397,6 +380,7 @@ export function installContextEngineLoopHook(params: {
         await contextEngine.afterTurn({
           sessionId,
           sessionKey,
+          sessionTarget: params.sessionTarget,
           sessionFile,
           messages: transcriptMessages,
           prePromptMessageCount,
@@ -426,21 +410,24 @@ export function installContextEngineLoopHook(params: {
                 message,
                 isHeartbeat: params.isHeartbeat,
               });
+              signal?.throwIfAborted();
             }
           }
         }
       }
+      signal?.throwIfAborted();
       lastSeenLength = transcriptMessages.length;
       params.onAfterTurnCheckpoint?.(lastSeenLength);
       lastSourceMessages = transcriptMessages;
       const assembled = await contextEngine.assemble({
         sessionId,
         sessionKey,
-        messages: providerMessages,
+        messages: providerMessages.slice(),
         tokenBudget,
         model: modelId,
         runtimeSettings: params.runtimeSettings,
       });
+      signal?.throwIfAborted();
       if (assembled && Array.isArray(assembled.messages)) {
         const repairedMessages =
           params.repairAssembledMessages?.(assembled.messages) ?? assembled.messages;
@@ -451,6 +438,7 @@ export function installContextEngineLoopHook(params: {
       }
       lastAssembledView = null;
     } catch {
+      signal?.throwIfAborted();
       // Best-effort: any engine failure falls through to the raw source
       // messages so the tool loop still makes forward progress.
       lastSeenLength = prePromptMessageCount;
@@ -471,17 +459,7 @@ export function installToolResultContextGuard(params: {
   contextWindowTokens: number;
   midTurnPrecheck?: MidTurnPrecheckOptions;
 }): () => void {
-  const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
-  const maxContextChars = Math.max(
-    1_024,
-    Math.floor(contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * PREEMPTIVE_OVERFLOW_RATIO),
-  );
-  const maxSingleToolResultChars = Math.max(
-    1_024,
-    Math.floor(
-      contextWindowTokens * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE * SINGLE_TOOL_RESULT_CONTEXT_SHARE,
-    ),
-  );
+  const maxSingleToolResultChars = resolveToolResultContextMaxChars(params.contextWindowTokens);
 
   // Agent.transformContext is private in session runtime, so access it via a
   // narrow runtime view to keep callsites type-safe while preserving behavior.
@@ -495,18 +473,10 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    const contextMessages = toolResultsNeedTruncation({
+    const contextMessages = enforceToolResultLimit({
       messages: sourceMessages,
       maxSingleToolResultChars,
-    })
-      ? cloneMessagesForGuard(sourceMessages)
-      : sourceMessages;
-    if (contextMessages !== sourceMessages) {
-      enforceToolResultLimitInPlace({
-        messages: contextMessages,
-        maxSingleToolResultChars,
-      });
-    }
+    });
     if (params.midTurnPrecheck?.enabled) {
       const prePromptMessageCount = Math.max(
         0,
@@ -528,6 +498,7 @@ export function installToolResultContextGuard(params: {
         // Recovery re-applies truncation to the persisted session manager, so
         // this precheck is only a routing signal, not the source of truth.
         const precheck = shouldPreemptivelyCompactBeforePrompt({
+          replay: params.midTurnPrecheck.getReplay?.(),
           messages: contextMessages,
           systemPrompt: params.midTurnPrecheck.getSystemPrompt?.(),
           // During a tool loop, the active user prompt is already part of messages.
@@ -551,15 +522,6 @@ export function installToolResultContextGuard(params: {
       }
       lastSeenLength = contextMessages.length;
     }
-    if (
-      exceedsPreemptiveOverflowThreshold({
-        messages: contextMessages,
-        maxContextChars,
-      })
-    ) {
-      throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
-    }
-
     return contextMessages;
   }) as GuardableTransformContext;
 

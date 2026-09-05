@@ -4,10 +4,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
+import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mts";
 import { withMockedWindowsPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -104,7 +104,7 @@ describe("stageBundledPluginRuntime", () => {
       recursive: true,
     });
     setupRepoFiles(repoRoot, {
-      "dist/plugin-sdk/index.js": "export const sdk = true;\n",
+      "dist/plugin-sdk/core.js": "export const sdk = true;\n",
       "dist/plugin-sdk/channel-entry-contract.js":
         "export { contract } from '../channel-entry-contract-abc.js';\n",
       "dist/plugin-sdk/ssrf-runtime-internal.js": "export const internal = true;\n",
@@ -144,7 +144,7 @@ describe("stageBundledPluginRuntime", () => {
         ),
       ).exports,
     ).toMatchObject({
-      "./plugin-sdk": "./plugin-sdk/index.js",
+      "./plugin-sdk/core": "./plugin-sdk/core.js",
       "./plugin-sdk/channel-entry-contract": "./plugin-sdk/channel-entry-contract.js",
     });
     expect(
@@ -192,14 +192,14 @@ describe("stageBundledPluginRuntime", () => {
           name: "openclaw",
           type: "module",
           exports: {
-            "./plugin-sdk": "./dist/plugin-sdk/index.js",
+            "./plugin-sdk/core": "./dist/plugin-sdk/core.js",
             "./plugin-sdk/channel-entry-contract": "./dist/plugin-sdk/channel-entry-contract.js",
           },
         },
         null,
         2,
       ),
-      "dist/plugin-sdk/index.js": "export const sdk = true;\n",
+      "dist/plugin-sdk/core.js": "export const sdk = true;\n",
       "dist/plugin-sdk/channel-entry-contract.js": "export const contract = true;\n",
       "dist/plugin-sdk/source-only.js": "export const sourceOnly = true;\n",
       "dist/plugin-sdk/ssrf-runtime-internal.js": "export const internal = true;\n",
@@ -213,10 +213,10 @@ describe("stageBundledPluginRuntime", () => {
       fs.readFileSync(path.join(aliasRoot, "package.json"), "utf8"),
     ) as { exports: Record<string, string> };
     expect(packageJson.exports).toEqual({
-      "./plugin-sdk": "./plugin-sdk/index.js",
+      "./plugin-sdk/core": "./plugin-sdk/core.js",
       "./plugin-sdk/channel-entry-contract": "./plugin-sdk/channel-entry-contract.js",
     });
-    expect(fs.existsSync(path.join(aliasRoot, "plugin-sdk", "index.js"))).toBe(true);
+    expect(fs.existsSync(path.join(aliasRoot, "plugin-sdk", "core.js"))).toBe(true);
     expect(fs.existsSync(path.join(aliasRoot, "plugin-sdk", "channel-entry-contract.js"))).toBe(
       true,
     );
@@ -448,6 +448,35 @@ describe("stageBundledPluginRuntime", () => {
     expect(fs.readFileSync(runtimePackagePath, "utf8")).toContain('"extensions": [');
   });
 
+  it("copies unpacked Chrome extension payloads without wrapping their JavaScript", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-chrome-extension-");
+    createDistPluginDir(repoRoot, "browser");
+    const background = "chrome.runtime.onInstalled.addListener(() => {});\n";
+    const popup = "document.body.dataset.ready = 'true';\n";
+    setupRepoFiles(repoRoot, {
+      [bundledDistPluginFile("browser", "chrome-extension/background.js")]: background,
+      [bundledDistPluginFile("browser", "chrome-extension/popup.js")]: popup,
+      [bundledDistPluginFile("browser", "chrome-extension/manifest.json")]: "{}\n",
+    });
+
+    stageBundledPluginRuntime({ repoRoot });
+
+    const runtimeExtensionDir = path.join(
+      repoRoot,
+      "dist-runtime",
+      "extensions",
+      "browser",
+      "chrome-extension",
+    );
+    expect(fs.readFileSync(path.join(runtimeExtensionDir, "background.js"), "utf8")).toBe(
+      background,
+    );
+    expect(fs.readFileSync(path.join(runtimeExtensionDir, "popup.js"), "utf8")).toBe(popup);
+    expect(fs.lstatSync(path.join(runtimeExtensionDir, "background.js")).isSymbolicLink()).toBe(
+      false,
+    );
+  });
+
   it("copies bundled plugin skill trees into the runtime overlay", () => {
     const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-skills-");
     createDistPluginDir(repoRoot, "feishu");
@@ -488,9 +517,6 @@ describe("stageBundledPluginRuntime", () => {
           openclaw: {
             extensions: ["./main.js"],
             setupEntry: "./setup.js",
-            startup: {
-              deferConfiguredChannelFullLoadUntilAfterListen: true,
-            },
           },
         },
         null,
@@ -519,7 +545,7 @@ describe("stageBundledPluginRuntime", () => {
     const discovery = discoverOpenClawPlugins({
       env,
     });
-    const manifestRegistry = loadPluginManifestRegistry({
+    const manifestRegistry = loadPluginManifestRegistryCore({
       env,
       candidates: discovery.candidates,
       diagnostics: discovery.diagnostics,
@@ -538,9 +564,6 @@ describe("stageBundledPluginRuntime", () => {
     );
     expect(fs.realpathSync(manifestRegistry.plugins[0]?.setupSource ?? "")).toBe(
       expectedRuntimeSetupPath,
-    );
-    expect(manifestRegistry.plugins[0]?.startupDeferConfiguredChannelFullLoadUntilAfterListen).toBe(
-      true,
     );
   });
 

@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import {
-  pruneStaleCommandPolls,
+  pruneStaleCommandPollsCore,
   recordCommandPoll,
   resetCommandPollCount,
 } from "./command-poll-backoff.js";
@@ -110,7 +110,7 @@ describe("command-poll-backoff", () => {
         ]),
       };
 
-      pruneStaleCommandPolls(state, 3600000);
+      pruneStaleCommandPollsCore(state, 3600000);
 
       expect(state.commandPollCounts?.has("cmd-old")).toBe(false);
       expect(state.commandPollCounts?.has("cmd-new")).toBe(true);
@@ -123,7 +123,7 @@ describe("command-poll-backoff", () => {
         queueDepth: 0,
       };
 
-      pruneStaleCommandPolls(state);
+      pruneStaleCommandPollsCore(state);
       expect(state.commandPollCounts).toBeUndefined();
     });
   });

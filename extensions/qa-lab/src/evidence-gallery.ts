@@ -2,8 +2,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  asNullableRecord as readRecord,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   QaEvidenceArtifactView,
   QaEvidenceGalleryEntryView,
@@ -19,15 +26,6 @@ import {
   type QaEvidenceStatus,
   type QaEvidenceSummaryEntry,
 } from "./evidence-summary.js";
-
-export type {
-  QaEvidenceArtifactView,
-  QaEvidenceGalleryEntryView,
-  QaEvidenceGalleryModel,
-  QaEvidenceMatrixCellView,
-  QaEvidenceProducerContext,
-  QaEvidenceProducerContextFile,
-} from "../shared/evidence-gallery-types.js";
 
 const TEXT_PREVIEW_BYTES = 12 * 1024;
 const ARTIFACT_VIEW_CONCURRENCY = 8;
@@ -58,11 +56,6 @@ export class QaEvidenceGalleryError extends Error {
 
 function evidenceError(message: string, statusCode: number): QaEvidenceGalleryError {
   return new QaEvidenceGalleryError(message, statusCode);
-}
-
-function isInside(root: string, candidate: string) {
-  const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function sanitizeGalleryText(
@@ -97,7 +90,7 @@ function displayGalleryPath(
     const absolute = path.resolve(value);
     for (const root of [params.repoRoot, ...(params.extraRoots ?? [])]) {
       const resolvedRoot = path.resolve(root);
-      if (isInside(resolvedRoot, absolute)) {
+      if (isPathInside(resolvedRoot, absolute)) {
         return sanitizeGalleryText(toRepoPath(path.relative(resolvedRoot, absolute)), params);
       }
     }
@@ -141,14 +134,14 @@ async function resolveContainedFileIfExists(
   if (!realFile) {
     return null;
   }
-  if (!allowedRoots.some((root) => isInside(root, realFile))) {
+  if (!allowedRoots.some((root) => isPathInside(root, realFile))) {
     return null;
   }
   const stats = await fs.stat(realFile).catch(() => null);
   return stats?.isFile() ? realFile : null;
 }
 
-export async function resolveQaEvidenceFile(params: {
+async function resolveQaEvidenceFile(params: {
   inputPath: string;
   repoRoot: string;
 }): Promise<string> {
@@ -162,7 +155,7 @@ export async function resolveQaEvidenceFile(params: {
   if (!realCandidate) {
     throw evidenceError("Evidence path not found.", 404);
   }
-  if (!isInside(repoRoot, realCandidate)) {
+  if (!isPathInside(repoRoot, realCandidate)) {
     throw evidenceError("Evidence path must stay inside the repo root.", 403);
   }
   const stats = await fs.stat(realCandidate);
@@ -173,7 +166,7 @@ export async function resolveQaEvidenceFile(params: {
   if (!realEvidencePath) {
     throw evidenceError("qa-evidence.json not found.", 404);
   }
-  if (!isInside(repoRoot, realEvidencePath)) {
+  if (!isPathInside(repoRoot, realEvidencePath)) {
     throw evidenceError("qa-evidence.json must stay inside the repo root.", 403);
   }
   return realEvidencePath;
@@ -316,7 +309,10 @@ async function resolveArtifactFileWithinRoots(params: {
     if (!realCandidate) {
       continue;
     }
-    if (!isInside(params.repoRoot, realCandidate) && !isInside(params.evidenceDir, realCandidate)) {
+    if (
+      !isPathInside(params.repoRoot, realCandidate) &&
+      !isPathInside(params.evidenceDir, realCandidate)
+    ) {
       continue;
     }
     const stats = await fs.stat(realCandidate).catch(() => null);
@@ -404,9 +400,22 @@ async function readPreview(filePath: string, mediaKind: QaEvidenceArtifactView["
   }
   const handle = await fs.open(filePath, "r");
   try {
-    const buffer = Buffer.alloc(TEXT_PREVIEW_BYTES);
-    const { bytesRead } = await handle.read(buffer, 0, TEXT_PREVIEW_BYTES, 0);
-    const text = buffer.subarray(0, bytesRead).toString("utf8");
+    const buffer = Buffer.alloc(TEXT_PREVIEW_BYTES + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const result = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (result.bytesRead === 0) {
+        break;
+      }
+      bytesRead += result.bytesRead;
+    }
+    const decoder = new StringDecoder("utf8");
+    let text = decoder.write(buffer.subarray(0, Math.min(bytesRead, TEXT_PREVIEW_BYTES)));
+    // The sentinel distinguishes a capped preview from real EOF. Only real EOF should
+    // flush an incomplete final sequence as a replacement character.
+    if (bytesRead <= TEXT_PREVIEW_BYTES) {
+      text += decoder.end();
+    }
     if (mediaKind !== "json") {
       return text;
     }
@@ -430,9 +439,7 @@ async function readJsonIfExists(
   }
   try {
     const value = JSON.parse(await fs.readFile(realFile, "utf8")) as unknown;
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
+    return readRecord(value);
   } catch {
     return null;
   }
@@ -508,7 +515,7 @@ async function buildArtifactView(params: {
     repoRoot: params.repoRoot,
   }).catch(() => null);
   const realFileRepoPath =
-    realFile && isInside(params.repoRoot, realFile)
+    realFile && isPathInside(params.repoRoot, realFile)
       ? toRepoRelativePath(params.repoRoot, realFile)
       : null;
   const displayPath =
@@ -558,16 +565,6 @@ async function buildArtifactView(params: {
   };
 }
 
-function readString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function readCountRecord(value: unknown): Record<string, number> {
   const record = readRecord(value);
   if (!record) {
@@ -604,7 +601,7 @@ function readMatrixDimensionIds(params: {
       if (typeof entry === "string") {
         return entry;
       }
-      return readString(readRecord(entry)?.id);
+      return readStringValue(readRecord(entry)?.id) ?? null;
     }),
     params,
   );
@@ -621,13 +618,17 @@ function uxMatrixEntryKey(
   entry: QaEvidenceSummaryEntry,
 ): { stage: string; surface: string } | null {
   const idMatch = /^ux-matrix\.([a-z0-9-]+)\.([a-z0-9-]+)$/u.exec(entry.test.id);
-  if (idMatch) {
-    return { surface: idMatch[1], stage: idMatch[2] };
+  const idSurface = idMatch?.[1];
+  const idStage = idMatch?.[2];
+  if (idSurface && idStage) {
+    return { surface: idSurface, stage: idStage };
   }
   for (const artifact of entry.execution?.artifacts ?? []) {
     const sourceMatch = /^ux-matrix:([a-z0-9-]+):([a-z0-9-]+)$/u.exec(artifact.source);
-    if (sourceMatch) {
-      return { surface: sourceMatch[1], stage: sourceMatch[2] };
+    const sourceSurface = sourceMatch?.[1];
+    const sourceStage = sourceMatch?.[2];
+    if (sourceSurface && sourceStage) {
+      return { surface: sourceSurface, stage: sourceStage };
     }
   }
   return null;
@@ -657,9 +658,9 @@ function readMatrixCells(params: {
     : [];
   const entriesByCell = buildUxMatrixEvidenceEntryIndex(params.summaryEntries);
   return rawCells.flatMap((cell): QaEvidenceMatrixCellView[] => {
-    const rawSurface = readString(cell.surface);
-    const rawStage = readString(cell.stage);
-    const rawStatus = readString(cell.status) ?? "proof-gap";
+    const rawSurface = readStringValue(cell.surface) ?? null;
+    const rawStage = readStringValue(cell.stage) ?? null;
+    const rawStatus = readStringValue(cell.status) ?? "proof-gap";
     if (!rawSurface || !rawStage) {
       return [];
     }
@@ -673,7 +674,7 @@ function readMatrixCells(params: {
         repoRoot: params.repoRoot,
       });
     const readRunnerString = (value: unknown) => {
-      const text = readString(value);
+      const text = readStringValue(value);
       return text ? sanitizeCellString(text) : null;
     };
     return [
@@ -729,7 +730,7 @@ async function candidateProducerRoots(params: {
         continue;
       }
       let current = path.dirname(artifactPath);
-      while (isInside(repoRoot, current)) {
+      while (isPathInside(repoRoot, current)) {
         roots.add(current);
         const parent = path.dirname(current);
         if (parent === current) {
@@ -785,8 +786,8 @@ async function buildProducerContext(params: {
   const matrix = await readJsonIfExists(matrixPath, allowedRoots);
   const releaseLedger = await readJsonIfExists(releaseLedgerPath, allowedRoots);
   const run = readRecord(manifest?.run);
-  const runId = readString(run?.runId);
-  const runStatus = readString(run?.status);
+  const runId = readStringValue(run?.runId) ?? null;
+  const runStatus = readStringValue(run?.status) ?? null;
   const producerFiles = Object.fromEntries(
     await Promise.all(
       UX_MATRIX_PRODUCER_FILES.map(async (file) => [
@@ -858,25 +859,6 @@ async function buildProducerContext(params: {
   };
 }
 
-function createConcurrencyLimit(limit: number) {
-  let active = 0;
-  const queue: Array<() => void> = [];
-  return async function runLimited<T>(task: () => Promise<T>): Promise<T> {
-    if (active >= limit) {
-      await new Promise<void>((resolve) => {
-        queue.push(resolve);
-      });
-    }
-    active += 1;
-    try {
-      return await task();
-    } finally {
-      active -= 1;
-      queue.shift()?.();
-    }
-  };
-}
-
 export async function buildQaEvidenceGalleryModel(params: {
   evidencePath: string;
   repoRoot: string;
@@ -905,52 +887,59 @@ export async function buildQaEvidenceGalleryModel(params: {
     repoRoot,
     summaryEntries: summary.entries,
   });
-  const limitArtifactView = createConcurrencyLimit(ARTIFACT_VIEW_CONCURRENCY);
-  const entries = await Promise.all(
-    summary.entries.map(async (entry, entryIndex): Promise<QaEvidenceGalleryEntryView> => {
-      counts[entry.result.status] += 1;
-      const sanitizeEntryText = (value: string) =>
-        sanitizeGalleryText(value, {
+  const artifactTasks = summary.entries.flatMap((entry, entryIndex) =>
+    (entry.execution?.artifacts ?? []).map(
+      (artifact, artifactIndex) => () =>
+        buildArtifactView({
+          allowedArtifactFiles,
+          artifact,
+          artifactIndex,
+          evidenceDir,
+          entryIndex,
           extraRoots: [requestedRepoRoot],
+          hrefEvidencePath,
           repoRoot,
-        });
-      return {
-        artifacts: await Promise.all(
-          (entry.execution?.artifacts ?? []).map((artifact, artifactIndex) =>
-            limitArtifactView(() =>
-              buildArtifactView({
-                allowedArtifactFiles,
-                artifact,
-                artifactIndex,
-                evidenceDir,
-                entryIndex,
-                extraRoots: [requestedRepoRoot],
-                hrefEvidencePath,
-                repoRoot,
-              }),
-            ),
-          ),
-        ),
-        coverage: entry.coverage.map((coverage) => ({
-          id: sanitizeEntryText(coverage.id),
-          role: sanitizeEntryText(coverage.role),
-        })),
-        failureReason: entry.result.failure?.reason
-          ? sanitizeEntryText(entry.result.failure.reason)
-          : null,
-        id: sanitizeEntryText(entry.test.id),
-        kind: sanitizeEntryText(entry.test.kind),
-        sourcePath: entry.test.source?.path
-          ? displayGalleryPath(entry.test.source.path, {
-              extraRoots: [requestedRepoRoot],
-              repoRoot,
-            })
-          : null,
-        status: entry.result.status,
-        title: sanitizeEntryText(entry.test.title),
-      };
-    }),
+        }),
+    ),
   );
+  const { results: artifactViews } = await runTasksWithConcurrency({
+    tasks: artifactTasks,
+    limit: ARTIFACT_VIEW_CONCURRENCY,
+    errorMode: "continue",
+    throwOnError: true,
+  });
+  let artifactOffset = 0;
+  const entries = summary.entries.map((entry): QaEvidenceGalleryEntryView => {
+    counts[entry.result.status] += 1;
+    const artifactCount = entry.execution?.artifacts?.length ?? 0;
+    const artifacts = artifactViews.slice(artifactOffset, artifactOffset + artifactCount);
+    artifactOffset += artifactCount;
+    const sanitizeEntryText = (value: string) =>
+      sanitizeGalleryText(value, {
+        extraRoots: [requestedRepoRoot],
+        repoRoot,
+      });
+    return {
+      artifacts,
+      coverage: entry.coverage.map((coverage) => ({
+        id: sanitizeEntryText(coverage.id),
+        role: sanitizeEntryText(coverage.role),
+      })),
+      failureReason: entry.result.failure?.reason
+        ? sanitizeEntryText(entry.result.failure.reason)
+        : null,
+      id: sanitizeEntryText(entry.test.id),
+      kind: sanitizeEntryText(entry.test.kind),
+      sourcePath: entry.test.source?.path
+        ? displayGalleryPath(entry.test.source.path, {
+            extraRoots: [requestedRepoRoot],
+            repoRoot,
+          })
+        : null,
+      status: entry.result.status,
+      title: sanitizeEntryText(entry.test.title),
+    };
+  });
   return {
     counts,
     entries,
@@ -970,3 +959,4 @@ export async function buildQaEvidenceGalleryModel(params: {
     schemaVersion: summary.schemaVersion,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

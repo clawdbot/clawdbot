@@ -1,20 +1,59 @@
 // Covers small-model risk audit findings.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectSmallModelRiskFindings } from "./audit-extra.summary.js";
-
-function requireFirstSmallModelFinding(
-  findings: ReturnType<typeof collectSmallModelRiskFindings>,
-  label: string,
-) {
-  const [finding] = findings;
-  if (!finding) {
-    throw new Error(`Expected small-model risk finding for ${label}`);
-  }
-  return finding;
-}
+import { collectAuditModelRefs } from "./audit-model-refs.js";
 
 describe("security audit small-model risk findings", () => {
+  it("reports canonical paths for agent model references", () => {
+    expect(
+      collectAuditModelRefs({
+        agents: {
+          entries: {
+            simple: { model: "ollama/mistral-8b" },
+            structured: {
+              model: {
+                primary: "ollama/gemma-4b",
+                fallbacks: ["ollama/phi-3b"],
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig),
+    ).toEqual([
+      { id: "ollama/mistral-8b", source: "agents.entries.simple.model" },
+      { id: "ollama/gemma-4b", source: "agents.entries.structured.model.primary" },
+      { id: "ollama/phi-3b", source: "agents.entries.structured.model.fallbacks" },
+    ]);
+  });
+
+  it("preserves agent policy context for canonical model source paths", () => {
+    const finding = expectDefined(
+      collectSmallModelRiskFindings({
+        cfg: {
+          agents: {
+            entries: {
+              ops: {
+                default: true,
+                model: { primary: "ollama/mistral-8b" },
+                tools: { deny: ["web_search", "web_fetch", "browser"] },
+              },
+            },
+          },
+          tools: { web: { search: { enabled: true }, fetch: { enabled: true } } },
+          browser: { enabled: true },
+        } satisfies OpenClawConfig,
+        env: {},
+      }).at(0),
+      "small-model risk finding for agent policy context",
+    );
+
+    expect(finding.severity).toBe("info");
+    expect(finding.detail).toContain("@ agents.entries.ops.model.primary");
+    expect(finding.detail).toContain("web=[off]");
+  });
+
   it("scores small-model risk by tool/sandbox exposure", () => {
     const cases: Array<{
       name: string;
@@ -47,12 +86,12 @@ describe("security audit small-model risk findings", () => {
     ];
 
     for (const testCase of cases) {
-      const finding = requireFirstSmallModelFinding(
+      const finding = expectDefined(
         collectSmallModelRiskFindings({
           cfg: testCase.cfg,
           env: process.env,
-        }),
-        testCase.name,
+        }).at(0),
+        `small-model risk finding for ${testCase.name}`,
       );
       expect(finding.severity, testCase.name).toBe(testCase.expectedSeverity);
       for (const snippet of testCase.detailIncludes) {
@@ -62,7 +101,7 @@ describe("security audit small-model risk findings", () => {
   });
 
   it("resolves configured aliases before parameter-size classification", () => {
-    const finding = requireFirstSmallModelFinding(
+    const finding = expectDefined(
       collectSmallModelRiskFindings({
         cfg: {
           agents: {
@@ -77,8 +116,8 @@ describe("security audit small-model risk findings", () => {
           browser: { enabled: true },
         } satisfies OpenClawConfig,
         env: {},
-      }),
-      "configured alias",
+      }).at(0),
+      "small-model risk finding for configured alias",
     );
 
     expect(finding.checkId).toBe("models.small_params");
@@ -88,7 +127,7 @@ describe("security audit small-model risk findings", () => {
   });
 
   it("honors provider/model tool deny policy before reporting web exposure", () => {
-    const finding = requireFirstSmallModelFinding(
+    const finding = expectDefined(
       collectSmallModelRiskFindings({
         cfg: {
           agents: {
@@ -109,8 +148,8 @@ describe("security audit small-model risk findings", () => {
           browser: { enabled: true },
         } satisfies OpenClawConfig,
         env: {},
-      }),
-      "provider/model deny",
+      }).at(0),
+      "small-model risk finding for provider/model deny",
     );
 
     expect(finding.checkId).toBe("models.small_params");

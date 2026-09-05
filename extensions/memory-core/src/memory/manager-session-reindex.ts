@@ -5,7 +5,6 @@ export function shouldSyncSessionsForReindex(params: {
   hasSessionSource: boolean;
   sessionsDirty: boolean;
   sessionsFullRetryDirty?: boolean;
-  dirtySessionFileCount: number;
   sync?: MemorySyncParams;
   needsFullReindex?: boolean;
 }): boolean {
@@ -15,7 +14,7 @@ export function shouldSyncSessionsForReindex(params: {
   if (params.sync?.sessions?.some((session) => session.sessionId.trim().length > 0)) {
     return true;
   }
-  if (params.sync?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
+  if (params.sync?.archiveFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
     return true;
   }
   if (params.sync?.force) {
@@ -31,5 +30,5 @@ export function shouldSyncSessionsForReindex(params: {
   if (reason === "session-start" || reason === "watch") {
     return false;
   }
-  return params.sessionsDirty && params.dirtySessionFileCount > 0;
+  return params.sessionsDirty;
 }

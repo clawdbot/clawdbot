@@ -5,9 +5,9 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import {
-  filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
   type RuntimeToolSchemaDiagnostic,
 } from "./tool-schema-projection.js";
@@ -42,18 +42,25 @@ function buildMcpToolInventoryEntries(
 ): EffectiveToolInventoryEntry[] {
   return disambiguateEffectiveToolLabels(
     tools
-      .map(
-        (tool) =>
-          ({
-            id: tool.name,
-            label: resolveEffectiveToolLabel(tool),
-            description: summarizeEffectiveToolDescription(tool),
-            rawDescription:
-              resolveEffectiveToolRawDescription(tool) || summarizeEffectiveToolDescription(tool),
-            source: "mcp",
-            pluginId: BUNDLE_MCP_PLUGIN_ID,
-          }) satisfies EffectiveToolInventoryEntry,
-      )
+      .map((tool) => {
+        const mcp = getPluginToolMeta(tool)?.mcp;
+        return {
+          id: tool.name,
+          label: resolveEffectiveToolLabel(tool),
+          description: summarizeEffectiveToolDescription(tool),
+          rawDescription:
+            resolveEffectiveToolRawDescription(tool) || summarizeEffectiveToolDescription(tool),
+          source: "mcp",
+          pluginId: BUNDLE_MCP_PLUGIN_ID,
+          ...(mcp
+            ? {
+                mcpServer: mcp.serverName,
+                mcpToolName: mcp.toolName,
+                ...(mcp.deniedBySession ? { deniedBySession: true } : {}),
+              }
+            : {}),
+        } satisfies EffectiveToolInventoryEntry;
+      })
       .toSorted((a, b) => a.label.localeCompare(b.label)),
     (entry) => entry.pluginId ?? entry.id,
   );
@@ -72,12 +79,9 @@ export function buildRuntimeCompatibleMcpToolInventory(params: {
   entries: EffectiveToolInventoryEntry[];
   notices: EffectiveToolInventoryNotice[];
 } {
-  const preNormalizationProjection = filterProviderNormalizableTools(params.tools);
-  const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [
-    ...preNormalizationProjection.diagnostics,
-  ];
+  const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
   const normalizedTools = normalizeAgentRuntimeTools({
-    tools: [...preNormalizationProjection.tools],
+    tools: params.tools,
     provider: params.modelProvider ?? "",
     config: params.cfg,
     workspaceDir: params.workspaceDir,

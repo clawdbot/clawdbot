@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { explainShellCommand } from "./command-explainer/extract.js";
 import type {
   CommandExplanation,
@@ -23,15 +24,15 @@ import {
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
 } from "./shell-inline-command.js";
-import { POSIX_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
+import { POSIX_PARSEABLE_SHELL_WRAPPERS } from "./shell-wrapper-resolution.js";
 
-const POSIX_SHELL_NAMES: ReadonlySet<string> = new Set(POSIX_SHELL_WRAPPERS);
+const POSIX_SHELL_NAMES: ReadonlySet<string> = new Set(POSIX_PARSEABLE_SHELL_WRAPPERS);
 
-export type ExecAuthorizationDialect = "argv" | "posix-shell" | "windows-cmd" | "powershell";
+type ExecAuthorizationDialect = "argv" | "posix-shell" | "windows-cmd" | "powershell";
 
 type ExecAuthorizationRelationship = "simple" | "pipeline";
 
-export type ExecAuthorizationTransport =
+type ExecAuthorizationTransport =
   | { kind: "direct" }
   | {
       kind: "shell-wrapper";
@@ -41,7 +42,7 @@ export type ExecAuthorizationTransport =
       inlineCommand: string;
     };
 
-export type ExecAuthorizationTrustMode = "executable" | "exact-command" | "prompt-only";
+type ExecAuthorizationTrustMode = "executable" | "exact-command" | "prompt-only";
 
 export type ExecAuthorizationCandidate = {
   sourceSegment: ExecCommandSegment;
@@ -53,7 +54,7 @@ export type ExecAuthorizationCandidate = {
   reasons: string[];
 };
 
-export type ExecAuthorizationGroup = {
+type ExecAuthorizationGroup = {
   opToNext?: ShellChainOperator | null;
   candidates: ExecAuthorizationCandidate[];
 };
@@ -109,7 +110,7 @@ const UNANALYZABLE_RISKS = new Set<CommandRisk["kind"]>([
 
 const POWERSHELL_NAMES = new Set(["powershell", "pwsh"]);
 const WINDOWS_CMD_NAMES = new Set(["cmd", "cmd.exe"]);
-export const POSITIONAL_CARRIER_BLOCKED_EXECUTABLES = new Set(["find", "xargs"]);
+const POSITIONAL_CARRIER_BLOCKED_EXECUTABLES = new Set(["find", "xargs"]);
 const SHELL_WRAPPER_PRELUDE_REASON = "shell-env-assignment";
 const UNSUPPORTED_DIRECT_SHELL_TOPOLOGY_SHAPES = new Set<CommandExplanation["shapes"][number]>([
   "background",
@@ -204,7 +205,7 @@ function stepReasons(step: CommandStep, risks: readonly CommandRisk[]): string[]
       reasons.push(risk.kind);
     }
   }
-  return [...new Set(reasons)];
+  return uniqueStrings(reasons);
 }
 
 function nonReusableStepReasons(step: CommandStep, risks: readonly CommandRisk[]): string[] {
@@ -214,7 +215,7 @@ function nonReusableStepReasons(step: CommandStep, risks: readonly CommandRisk[]
       reasons.push(risk.kind);
     }
   }
-  return [...new Set(reasons)];
+  return uniqueStrings(reasons);
 }
 
 function isShellExpansionDynamicArgument(risk: CommandRisk): boolean {
@@ -266,7 +267,7 @@ function shellWrapperPreludeReasons(params: {
       (risk) => UNANALYZABLE_RISKS.has(risk.kind) && riskBeforeStepExecutable(risk, params.step),
     )
     .map((risk) => risk.kind);
-  return [...new Set(reasons)];
+  return uniqueStrings(reasons);
 }
 
 function isPathScopedExecutableToken(token: string): boolean {
@@ -417,9 +418,11 @@ function createCandidate(params: {
   if (hasCommandPrelude(params.step) && preludeReasons.length === 0) {
     preludeReasons.push(SHELL_WRAPPER_PRELUDE_REASON);
   }
-  const reasons = [
-    ...new Set([...stepPromptReasons, ...stepNonReusableReasons, ...preludeReasons]),
-  ];
+  const reasons = uniqueStrings([
+    ...stepPromptReasons,
+    ...stepNonReusableReasons,
+    ...preludeReasons,
+  ]);
   const trustMode: ExecAuthorizationTrustMode =
     params.segment.resolution?.policyBlocked === true
       ? "prompt-only"
@@ -915,3 +918,4 @@ export async function planExecAuthorization(params: {
     operators: [],
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

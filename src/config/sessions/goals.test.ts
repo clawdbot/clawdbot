@@ -6,10 +6,36 @@ import {
   formatSessionGoalStatus,
   getSessionGoal,
   resolveSessionGoalDisplayState,
+  updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "./goals.js";
-import { getSessionEntry, upsertSessionEntry } from "./store.js";
+import {
+  loadSessionEntry,
+  upsertSessionEntryCore as upsertAccessorSessionEntry,
+} from "./session-accessor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import type { SessionEntry } from "./types.js";
+
+// The goal APIs read/write session entries through the SQLite-backed accessor,
+// so fixtures must seed and assert through the same accessor rather than the
+// file-backed store helpers.
+function getSessionEntry(params: {
+  storePath: string;
+  sessionKey: string;
+}): SessionEntry | undefined {
+  return loadSessionEntry(params);
+}
+
+async function upsertSessionEntry(params: {
+  storePath: string;
+  sessionKey: string;
+  entry: SessionEntry;
+}): Promise<void> {
+  await upsertAccessorSessionEntry(
+    { sessionKey: params.sessionKey, storePath: params.storePath },
+    params.entry,
+  );
+}
 
 describe("session goals", () => {
   const fixture = useTempSessionsFixture("openclaw-session-goals-");
@@ -24,6 +50,7 @@ describe("session goals", () => {
         updatedAt: 1,
         totalTokens,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     });
   }
@@ -35,13 +62,15 @@ describe("session goals", () => {
       entry: {
         ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
         totalTokens: 100,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     });
 
     const goal = await createSessionGoal({
       storePath: fixture.storePath(),
       sessionKey,
-      objective: "land the PR",
+      objective: "  land the PR \n",
       tokenBudget: 50,
       now: 10,
     });
@@ -64,6 +93,7 @@ describe("session goals", () => {
         updatedAt: 1,
         totalTokens: 10,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       now: 10,
     });
@@ -193,6 +223,7 @@ describe("session goals", () => {
         ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
         totalTokens: 125,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     });
 
@@ -204,7 +235,7 @@ describe("session goals", () => {
     expect(snapshot.goal?.status).toBe("active");
   });
 
-  it("treats token snapshots as fresh unless explicitly stale", async () => {
+  it("accounts token snapshots with current context provenance", async () => {
     await upsertSessionEntry({
       storePath: fixture.storePath(),
       sessionKey,
@@ -212,6 +243,8 @@ describe("session goals", () => {
         sessionId: "sess-1",
         updatedAt: 1,
         totalTokens: 100,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     });
     await createSessionGoal({
@@ -226,6 +259,8 @@ describe("session goals", () => {
       entry: {
         ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
         totalTokens: 125,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
     });
 
@@ -345,7 +380,68 @@ describe("session goals", () => {
 
     expect(text).toContain("Goal\nStatus: blocked\nObjective: land the PR");
     expect(text).toContain("Token budget: 12k/30k");
-    expect(text).toContain("Commands: /goal resume, /goal clear");
+    expect(text).toContain("Commands: /goal resume, /goal edit <objective>, /goal clear");
+  });
+
+  it("rewords the objective without touching status or token accounting", async () => {
+    await writeSession(100);
+    await createSessionGoal({
+      storePath: fixture.storePath(),
+      sessionKey,
+      objective: "ship the fix",
+      tokenBudget: 50,
+      now: 10,
+    });
+
+    const updated = await updateSessionGoalObjective({
+      storePath: fixture.storePath(),
+      sessionKey,
+      objective: "\tship the fix and update docs \n",
+      now: 20,
+    });
+
+    expect(updated.objective).toBe("ship the fix and update docs");
+    expect(updated.status).toBe("active");
+    expect(updated.tokenStart).toBe(100);
+    expect(updated.tokenBudget).toBe(50);
+    expect(updated.updatedAt).toBe(20);
+    expect(getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal?.objective).toBe(
+      "ship the fix and update docs",
+    );
+  });
+
+  it("rejects rewording terminal or missing goals", async () => {
+    await writeSession(0);
+    await expect(
+      updateSessionGoalObjective({
+        storePath: fixture.storePath(),
+        sessionKey,
+        objective: "anything",
+        now: 10,
+      }),
+    ).rejects.toThrow(/goal not found/);
+
+    await createSessionGoal({
+      storePath: fixture.storePath(),
+      sessionKey,
+      objective: "ship",
+      now: 10,
+    });
+    await updateSessionGoalStatus({
+      storePath: fixture.storePath(),
+      sessionKey,
+      status: "complete",
+      now: 20,
+    });
+
+    await expect(
+      updateSessionGoalObjective({
+        storePath: fixture.storePath(),
+        sessionKey,
+        objective: "new target",
+        now: 30,
+      }),
+    ).rejects.toThrow(/already complete/);
   });
 
   it("projects display state from fresh session tokens", () => {
@@ -353,6 +449,7 @@ describe("session goals", () => {
       {
         totalTokens: 140,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         goal: {
           schemaVersion: 1,
           id: "goal-1",
@@ -378,6 +475,7 @@ describe("session goals", () => {
       {
         totalTokens: 140,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         goal: {
           schemaVersion: 1,
           id: "goal-1",

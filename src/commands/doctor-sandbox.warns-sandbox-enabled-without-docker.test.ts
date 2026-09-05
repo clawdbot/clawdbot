@@ -9,6 +9,7 @@ const runExec = vi.fn();
 const note = vi.fn();
 const inspectLegacySandboxRegistryFiles = vi.fn();
 const migrateLegacySandboxRegistryFiles = vi.fn();
+const validateSandboxContainerEngineTarget = vi.fn();
 
 vi.mock("../process/exec.js", () => ({
   runExec,
@@ -22,7 +23,21 @@ vi.mock("../agents/sandbox.js", () => ({
   resolveSandboxScope: vi.fn(() => "shared"),
 }));
 
-vi.mock("../agents/sandbox/registry.js", () => ({
+vi.mock("../agents/sandbox/docker.js", () => ({
+  DOCKER_SANDBOX_ENGINE: {
+    id: "docker",
+    command: "docker",
+    displayName: "Docker",
+  },
+  PODMAN_SANDBOX_ENGINE: {
+    id: "podman",
+    command: "podman",
+    displayName: "Podman",
+  },
+  validateSandboxContainerEngineTarget,
+}));
+
+vi.mock("./doctor-sandbox-legacy-registry.js", () => ({
   inspectLegacySandboxRegistryFiles,
   migrateLegacySandboxRegistryFiles,
 }));
@@ -58,6 +73,7 @@ describe("maybeRepairSandboxImages", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    validateSandboxContainerEngineTarget.mockResolvedValue(undefined);
     inspectLegacySandboxRegistryFiles.mockResolvedValue([]);
     migrateLegacySandboxRegistryFiles.mockResolvedValue([]);
   });
@@ -112,15 +128,19 @@ describe("maybeRepairSandboxImages", () => {
   it("warns when sandbox mode is enabled but Docker is not available", async () => {
     await runSandboxRepair({ mode: "non-main", dockerAvailable: false });
 
-    // The warning should clearly indicate sandbox is enabled but won't work
-    expect(note).toHaveBeenCalled();
     const noteCall = firstNoteCall();
-    const message = noteCall[0] as string;
-
-    // The message should warn that sandbox mode won't function, not just "skipping checks"
-    expect(message).toMatch(/sandbox.*mode.*enabled|sandbox.*won.*work|docker.*required/i);
-    // Should NOT just say "skipping sandbox image checks" - that's too mild
-    expect(message).not.toBe("Docker not available; skipping sandbox image checks.");
+    expect(noteCall).toEqual([
+      [
+        'Sandbox mode is enabled (mode: "non-main") but Docker is not available.',
+        "Docker is required for sandbox mode to function.",
+        "Isolated sessions (automations, sub-agents) will fail without Docker.",
+        "",
+        "Options:",
+        "- Install Docker and restart the gateway",
+        "- Disable sandbox mode: openclaw config set agents.defaults.sandbox.mode off",
+      ].join("\n"),
+      "Sandbox",
+    ]);
   });
 
   it("warns when sandbox mode is 'all' but Docker is not available", async () => {
@@ -150,6 +170,28 @@ describe("maybeRepairSandboxImages", () => {
         typeof call[0] === "string" && call[0].toLowerCase().includes("docker not available"),
     );
     expect(dockerUnavailableWarning).toBeUndefined();
+  });
+
+  it("validates the explicit Podman target before checking images", async () => {
+    const cfg = createSandboxConfig("all");
+    cfg.agents!.defaults!.sandbox!.backend = "podman";
+    runExec.mockResolvedValue({ stdout: "", stderr: "" });
+    validateSandboxContainerEngineTarget.mockRejectedValue(
+      Object.assign(new Error("unsupported remote Podman connection"), {
+        code: "INVALID_CONFIG",
+      }),
+    );
+
+    await expect(maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter)).rejects.toThrow(
+      "unsupported remote Podman connection",
+    );
+
+    expect(runExec).toHaveBeenCalledWith("podman", ["info"], { timeoutMs: 5_000 });
+    expect(validateSandboxContainerEngineTarget).toHaveBeenCalledWith({
+      id: "podman",
+      command: "podman",
+      displayName: "Podman",
+    });
   });
 
   it("warns when Codex bwrap namespaces are blocked on a sandboxed Linux host", async () => {
@@ -260,8 +302,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     inspectLegacySandboxRegistryFiles.mockResolvedValue([
       {
         kind: "containers",
-        registryPath: "/tmp/openclaw/sandbox/containers.json",
-        shardedDir: "/tmp/openclaw/sandbox/containers",
+        path: "/tmp/openclaw/sandbox/containers.json",
         source: "monolithic",
         exists: true,
         valid: true,
@@ -286,8 +327,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     inspectLegacySandboxRegistryFiles.mockResolvedValue([
       {
         kind: "containers",
-        registryPath: "/tmp/openclaw/sandbox/containers.json",
-        shardedDir: "/tmp/openclaw/sandbox/containers",
+        path: "/tmp/openclaw/sandbox/containers.json",
         source: "monolithic",
         exists: true,
         valid: true,
@@ -297,8 +337,6 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     migrateLegacySandboxRegistryFiles.mockResolvedValue([
       {
         kind: "containers",
-        registryPath: "/tmp/openclaw/sandbox/containers.json",
-        shardedDir: "/tmp/openclaw/sandbox/containers",
         status: "migrated",
         entries: 2,
       },
@@ -319,8 +357,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
   it("maps legacy registry files to structured findings and dry-run effects", () => {
     const monolithicFile = {
       kind: "containers",
-      registryPath: "/tmp/openclaw/sandbox/containers.json",
-      shardedDir: "/tmp/openclaw/sandbox/containers",
+      path: "/tmp/openclaw/sandbox/containers.json",
       source: "monolithic",
       exists: true,
       valid: true,
@@ -328,6 +365,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     } as const;
     const shardedFile = {
       ...monolithicFile,
+      path: "/tmp/openclaw/sandbox/containers",
       source: "sharded",
     } as const;
 
@@ -364,8 +402,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     expect(
       legacySandboxRegistryInspectionToRepairEffect({
         kind: "browsers",
-        registryPath: "/tmp/openclaw/sandbox/browsers.json",
-        shardedDir: "/tmp/openclaw/sandbox/browsers",
+        path: "/tmp/openclaw/sandbox/browsers.json",
         source: "monolithic",
         exists: true,
         valid: false,
@@ -383,8 +420,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
     expect(
       legacySandboxRegistryInspectionToRepairEffect({
         kind: "containers",
-        registryPath: "/tmp/openclaw/sandbox/containers.json",
-        shardedDir: "/tmp/openclaw/sandbox/containers",
+        path: "/tmp/openclaw/sandbox/containers.json",
         source: "monolithic",
         exists: true,
         valid: true,

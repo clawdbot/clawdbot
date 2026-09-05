@@ -25,7 +25,7 @@ function resolveConfiguredProviderConfig(
 }
 
 /** Reads a configured provider's backing API id when runtime lookup should follow an alias. */
-export function readConfiguredProviderApiId(params: {
+function readConfiguredProviderApiId(params: {
   providerId: string;
   cfg?: OpenClawConfig;
   resolveApiProviderId?: (normalizedApiId: string) => string | undefined;

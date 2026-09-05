@@ -6,7 +6,7 @@ import type { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessi
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
-import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
+import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
 
 const MEMORY_RELATIVE_PATH = "memory/2026-03-24.md";
 
@@ -93,10 +93,7 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
       expect(result.content).toEqual([
         { type: "text", text: `Appended content to ${MEMORY_RELATIVE_PATH}.` },
       ]);
-      expect(result.details).toEqual({
-        path: MEMORY_RELATIVE_PATH,
-        appendOnly: true,
-      });
+      expect(result.details).toEqual({ changed: true });
       await expect(fs.readFile(memoryFile, "utf-8")).resolves.toBe("seed\nnew durable note");
       await expect(
         wrapped.execute("call-memory-flush-deny", {

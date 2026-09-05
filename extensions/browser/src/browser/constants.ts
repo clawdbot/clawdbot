@@ -16,6 +16,8 @@ export const DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME = "openclaw";
 export const DEFAULT_BROWSER_DEFAULT_PROFILE_NAME = "openclaw";
 /** Default timeout for browser action execution. */
 export const DEFAULT_BROWSER_ACTION_TIMEOUT_MS = 60_000;
+/** Default timeout for browser download capture. */
+export const DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS = 120_000;
 /** Default launch readiness window for managed local Chrome. */
 export const DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS = 15_000;
 /** Default CDP readiness window after managed Chrome launch. */
@@ -30,6 +32,13 @@ export const DEFAULT_BROWSER_TAB_CLEANUP_IDLE_MINUTES = 120;
 export const DEFAULT_BROWSER_TAB_CLEANUP_MAX_TABS_PER_SESSION = 8;
 /** Default interval for tab cleanup sweeps. */
 export const DEFAULT_BROWSER_TAB_CLEANUP_SWEEP_MINUTES = 5;
+/**
+ * Age after which a tracked tab whose browser stays unreachable is retired
+ * instead of retried forever. Rows only reach this branch when cleanup already
+ * failed to prove ownership, and a browser that returns after this long almost
+ * always carries a fresh instance fingerprint, which retires the row anyway.
+ */
+export const BROWSER_TAB_UNREACHABLE_RETIRE_MS = 24 * 60 * 60 * 1_000;
 /** Default maximum AI snapshot text size. */
 export const DEFAULT_AI_SNAPSHOT_MAX_CHARS = 40_000;
 /** Default maximum AI snapshot text size in efficient mode. */

@@ -60,23 +60,24 @@ describe("prompt composition invariants", () => {
     }
   });
 
-  it("keeps bootstrap warnings out of the system prompt and preserves the original user prompt prefix", () => {
+  it("keeps the bootstrap truncation notice in the system prompt and body prompts untouched", () => {
     const scenario = getScenario(fixture, "bootstrap-warning");
     const first = getTurn(scenario, "t1");
-    const deduped = getTurn(scenario, "t2");
-    const always = getTurn(scenario, "t3");
+    const second = getTurn(scenario, "t2");
+    const third = getTurn(scenario, "t3");
 
-    expect(first.systemPrompt).not.toContain("[Bootstrap truncation warning]");
+    expect(first.systemPrompt).toContain("## Bootstrap Context Notice");
+    expect(first.systemPrompt).toContain("[Bootstrap truncation warning]");
     expect(first.systemPrompt).toContain("[...truncated, read AGENTS.md for full content...]");
-    expect(first.bodyPrompt.startsWith("hello")).toBe(true);
-    expect(first.bodyPrompt).toContain("[Bootstrap truncation warning]");
-
-    expect(deduped.bodyPrompt).toBe("hello again");
-    expect(always.bodyPrompt.startsWith("one more turn")).toBe(true);
-    expect(always.bodyPrompt).toContain("[Bootstrap truncation warning]");
+    for (const turn of [first, second, third]) {
+      expect(turn.bodyPrompt).not.toContain("[Bootstrap truncation warning]");
+    }
+    expect(first.bodyPrompt).toBe("hello");
+    expect(second.bodyPrompt).toBe("hello again");
+    expect(third.bodyPrompt).toBe("one more turn");
   });
 
-  it("keeps the group auto-reply prompt dynamic only across the first-turn intro boundary", () => {
+  it("keeps the group auto-reply prompt stable across the first-turn intro boundary", () => {
     const groupScenario = getScenario(fixture, "auto-reply-group");
     const first = getTurn(groupScenario, "t1");
     const steady = getTurn(groupScenario, "t2");
@@ -89,10 +90,10 @@ describe("prompt composition invariants", () => {
     expect(first.systemPrompt).not.toContain("## Silent Replies");
     expect(steady.systemPrompt).toContain("You are in a Slack group chat.");
     expect(steady.systemPrompt).toContain("prefer delegating bounded side investigations early");
+    expect(steady.systemPrompt).toContain("Activation: trigger-only");
     expect(steady.systemPrompt).toContain('reply with exactly "NO_REPLY"');
     expect(steady.systemPrompt).not.toContain("## Silent Replies");
-    expect(steady.systemPrompt).not.toContain("Activation: trigger-only");
-    expect(first.systemPrompt).not.toBe(steady.systemPrompt);
+    expect(first.systemPrompt).toBe(steady.systemPrompt);
     expect(steady.systemPrompt).toBe(eventTurn.systemPrompt);
   });
 
@@ -120,8 +121,8 @@ describe("prompt composition invariants", () => {
     const turn = getTurn(scenario, "t1");
     const inboundBody = "Please summarize the deploy log.";
 
-    expect(turn.bodyPrompt).toContain("Discord channel metadata (untrusted metadata):");
-    expect(turn.bodyPrompt).toContain('"topic": "Deploy coordination"');
+    expect(turn.bodyPrompt).toContain("Discord channel metadata: ⟦openclaw:ctx⟧");
+    expect(turn.bodyPrompt).toContain('"topic":"Deploy coordination"');
     expect(turn.bodyPrompt).not.toContain("EXTERNAL_UNTRUSTED_CONTENT");
     expect(countOccurrences(turn.bodyPrompt, inboundBody)).toBe(1);
     expect(turn.systemPrompt).not.toContain(inboundBody);

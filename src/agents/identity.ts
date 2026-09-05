@@ -5,7 +5,8 @@
  */
 import type { HumanDelayConfig, IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveAgentEntry } from "./agent-scope-config.js";
 
 const DEFAULT_ACK_REACTION = "👀";
 
@@ -14,7 +15,8 @@ export function resolveAgentIdentity(
   cfg: OpenClawConfig,
   agentId: string,
 ): IdentityConfig | undefined {
-  return resolveAgentConfig(cfg, agentId)?.identity;
+  // Keep merged-config request normalization for raw Plugin SDK agent ids.
+  return resolveAgentEntry(cfg, normalizeAgentId(agentId))?.identity;
 }
 
 /** Resolve the acknowledgement reaction using account, channel, global, then identity fallback. */
@@ -66,12 +68,12 @@ export function resolveIdentityNamePrefix(
 }
 
 /** Resolve the outbound message prefix, preserving explicit empty prefixes. */
-export function resolveMessagePrefix(
+function resolveMessagePrefix(
   cfg: OpenClawConfig,
   agentId: string,
   opts?: { configured?: string; hasAllowFrom?: boolean; fallback?: string },
 ): string {
-  const configured = opts?.configured ?? cfg.messages?.messagePrefix;
+  const configured = opts?.configured;
   if (configured !== undefined) {
     return configured;
   }
@@ -127,7 +129,7 @@ export function resolveResponsePrefix(
     }
   }
 
-  // L4: Global level
+  // L3: Retained fallback for implicit and custom channels that have no block to migrate.
   const configured = cfg.messages?.responsePrefix;
   if (configured !== undefined) {
     if (configured === "auto") {
@@ -135,6 +137,7 @@ export function resolveResponsePrefix(
     }
     return configured;
   }
+
   return undefined;
 }
 
@@ -167,7 +170,7 @@ export function resolveHumanDelayConfig(
   agentId: string,
 ): HumanDelayConfig | undefined {
   const defaults = cfg.agents?.defaults?.humanDelay;
-  const overrides = resolveAgentConfig(cfg, agentId)?.humanDelay;
+  const overrides = resolveAgentEntry(cfg, normalizeAgentId(agentId))?.humanDelay;
   if (!defaults && !overrides) {
     return undefined;
   }

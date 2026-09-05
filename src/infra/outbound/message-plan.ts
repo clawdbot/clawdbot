@@ -16,12 +16,16 @@ export type OutboundMessageSendOverrides = ReplyToOverride & {
   audioAsVoice?: boolean;
   forceDocument?: boolean;
   formatting?: OutboundDeliveryFormattingOptions;
+  /** Stable zero-based platform-send index within one durable payload. */
+  deliveryPartIndex?: number;
+  /** Exact platform-send count for this payload. */
+  deliveryPartCount?: number;
 };
 
 /**
  * Planned outbound delivery unit after text chunking or media expansion.
  */
-export type OutboundMessageUnit =
+type OutboundMessageUnit =
   | {
       kind: "text";
       text: string;
@@ -37,13 +41,39 @@ export type OutboundMessageUnit =
 /**
  * Splits outbound text with optional formatting-aware context.
  */
-export type OutboundMessageChunker = (
+type OutboundMessageChunker = (
   text: string,
   limit: number,
   ctx?: { formatting?: OutboundDeliveryFormattingOptions },
 ) => string[];
 
 type PlanReplyToConsumption = <T extends OutboundMessageSendOverrides>(overrides: T) => T;
+
+type DurableMediaFanoutContext = {
+  channel: string;
+  requiredUnknownSendReconciliation?: boolean;
+  renderedBatchPlan?: { items: Array<{ mediaUrls: readonly string[] }> };
+};
+
+type MediaFanoutSummary = { mediaUrls: readonly unknown[] };
+
+export function assertStableMediaFanout(
+  params: DurableMediaFanoutContext,
+  payloadIndex: number,
+  originalMediaCount: number,
+  effective: MediaFanoutSummary,
+): void {
+  if (!params.requiredUnknownSendReconciliation) {
+    return;
+  }
+  const plannedMediaCount =
+    params.renderedBatchPlan?.items[payloadIndex]?.mediaUrls.length ?? originalMediaCount;
+  if (plannedMediaCount !== effective.mediaUrls.length) {
+    throw new Error(
+      `Required durable message send changed platform fan-out after outbound transforms for ${params.channel}`,
+    );
+  }
+}
 
 function withPlannedReplyTo(
   overrides: OutboundMessageSendOverrides,
@@ -53,24 +83,16 @@ function withPlannedReplyTo(
   return consumeReplyTo ? consumeReplyTo({ ...overrides }) : { ...overrides };
 }
 
-function withChunkedTextFormatting(
-  overrides: OutboundMessageSendOverrides,
-  formatting?: OutboundDeliveryFormattingOptions,
-): OutboundMessageSendOverrides {
-  return formatting
-    ? { ...overrides, formatting: { ...overrides.formatting, ...formatting } }
-    : overrides;
-}
-
 function chunkTextForPlan(params: {
   text: string;
   limit: number;
   chunker: OutboundMessageChunker;
   formatting?: OutboundDeliveryFormattingOptions;
 }): string[] {
-  return params.formatting
+  const chunks = params.formatting
     ? params.chunker(params.text, params.limit, { formatting: params.formatting })
     : params.chunker(params.text, params.limit);
+  return chunks.length === 0 && params.text ? [params.text] : chunks;
 }
 
 /**
@@ -87,21 +109,36 @@ export function planOutboundTextMessageUnits(params: {
   formatting?: OutboundDeliveryFormattingOptions;
   consumeReplyTo?: PlanReplyToConsumption;
 }): OutboundMessageUnit[] {
-  const planTextUnit = (text: string): OutboundMessageUnit => ({
-    kind: "text",
-    text,
-    overrides: withPlannedReplyTo(params.overrides, params.consumeReplyTo),
-  });
-  const planChunkedTextUnit = (text: string): OutboundMessageUnit => {
-    const unit = planTextUnit(text);
+  const planTextUnit = (
+    text: string,
+    deliveryPartIndex: number,
+    chunkedTextFormatting?: OutboundDeliveryFormattingOptions,
+  ): OutboundMessageUnit => {
+    const overrides = {
+      ...withPlannedReplyTo(params.overrides, params.consumeReplyTo),
+      deliveryPartIndex,
+    };
     return {
-      ...unit,
-      overrides: withChunkedTextFormatting(unit.overrides, params.chunkedTextFormatting),
+      kind: "text",
+      text,
+      overrides: chunkedTextFormatting
+        ? { ...overrides, formatting: { ...overrides.formatting, ...chunkedTextFormatting } }
+        : overrides,
     };
   };
 
+  const withDeliveryTopology = (units: OutboundMessageUnit[]): OutboundMessageUnit[] => {
+    const deliveryPartCount = units.length;
+    // These units are planner-owned until return; finalize them in place rather
+    // than cloning every chunk solely to attach the shared fan-out count.
+    for (const unit of units) {
+      unit.overrides.deliveryPartCount = deliveryPartCount;
+    }
+    return units;
+  };
+
   if (!params.chunker || params.textLimit === undefined) {
-    return [planTextUnit(params.text)];
+    return withDeliveryTopology([planTextUnit(params.text, 0)]);
   }
 
   if (params.chunkMode === "newline") {
@@ -122,22 +159,21 @@ export function planOutboundTextMessageUnits(params: {
         chunker: params.chunker,
         formatting: params.formatting,
       });
-      if (!chunks.length && blockChunk) {
-        chunks.push(blockChunk);
-      }
       for (const chunk of chunks) {
-        units.push(planChunkedTextUnit(chunk));
+        units.push(planTextUnit(chunk, units.length, params.chunkedTextFormatting));
       }
     }
-    return units;
+    return withDeliveryTopology(units);
   }
 
-  return chunkTextForPlan({
-    text: params.text,
-    limit: params.textLimit,
-    chunker: params.chunker,
-    formatting: params.formatting,
-  }).map(planChunkedTextUnit);
+  return withDeliveryTopology(
+    chunkTextForPlan({
+      text: params.text,
+      limit: params.textLimit,
+      chunker: params.chunker,
+      formatting: params.formatting,
+    }).map((chunk, index) => planTextUnit(chunk, index, params.chunkedTextFormatting)),
+  );
 }
 
 /**
@@ -149,10 +185,15 @@ export function planOutboundMediaMessageUnits(params: {
   overrides: OutboundMessageSendOverrides;
   consumeReplyTo?: PlanReplyToConsumption;
 }): OutboundMessageUnit[] {
+  const deliveryPartCount = params.mediaUrls.length;
   return params.mediaUrls.map((mediaUrl, index) => ({
     kind: "media" as const,
     mediaUrl,
     ...(index === 0 ? { caption: params.caption } : {}),
-    overrides: withPlannedReplyTo(params.overrides, params.consumeReplyTo),
+    overrides: {
+      ...withPlannedReplyTo(params.overrides, params.consumeReplyTo),
+      deliveryPartIndex: index,
+      deliveryPartCount,
+    },
   }));
 }

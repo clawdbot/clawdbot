@@ -21,6 +21,7 @@
     systemPrompt,
     tools,
     renderedTools,
+    warning,
   } = data;
 
   // ============================================================
@@ -332,6 +333,12 @@
   let filterMode = "default";
   let searchQuery = "";
 
+  function isHiddenEntry(entry) {
+    return entry.type === "message"
+      ? entry.message.display === false
+      : entry.type === "custom_message" && !entry.display;
+  }
+
   function hasTextContent(content) {
     if (typeof content === "string") {
       return content.trim().length > 0;
@@ -421,6 +428,11 @@
       const label = flatNode.node.label;
       const isCurrentLeaf = entry.id === currentLeafId;
 
+      // All is the raw archive index; hidden input never becomes a conversation card.
+      if (isHiddenEntry(entry) && filterMode !== "all") {
+        return false;
+      }
+
       // Always show current leaf
       if (isCurrentLeaf) {
         return true;
@@ -509,7 +521,8 @@
         if (visibleIds.has(currentId)) {
           return currentId;
         }
-        currentId = entryMap.get(currentId)?.node.entry.parentId;
+        const parentId = entryMap.get(currentId)?.node.entry.parentId;
+        currentId = parentId === currentId ? null : parentId;
       }
       return null;
     }
@@ -639,6 +652,25 @@
     return p;
   }
 
+  function truncateUtf16Safe(s, maxLen) {
+    const limit = Math.max(0, Math.floor(maxLen));
+    if (s.length <= limit) {
+      return s;
+    }
+
+    let end = limit;
+    if (end > 0) {
+      const lastCodeUnit = s.charCodeAt(end - 1);
+      const nextCodeUnit = s.charCodeAt(end);
+      const endsWithHighSurrogate = lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff;
+      const continuesWithLowSurrogate = nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff;
+      if (endsWithHighSurrogate && continuesWithLowSurrogate) {
+        end -= 1;
+      }
+    }
+    return s.slice(0, end);
+  }
+
   function formatToolCall(name, args) {
     switch (name) {
       case "read": {
@@ -659,11 +691,8 @@
         return `[edit: ${shortenPath(String(args.path || args.file_path || ""))}]`;
       case "bash": {
         const rawCmd = String(args.command || "");
-        const cmd = rawCmd
-          .replace(/[\n\t]/g, " ")
-          .trim()
-          .slice(0, 50);
-        return `[bash: ${cmd}${rawCmd.length > 50 ? "..." : ""}]`;
+        const cmd = rawCmd.replace(/[\n\t]/g, " ").trim();
+        return `[bash: ${truncateUtf16Safe(cmd, 50)}${rawCmd.length > 50 ? "..." : ""}]`;
       }
       case "grep":
         return `[grep: /${args.pattern || ""}/ in ${shortenPath(String(args.path || "."))}]`;
@@ -672,8 +701,9 @@
       case "ls":
         return `[ls: ${shortenPath(String(args.path || "."))}]`;
       default: {
-        const argsStr = JSON.stringify(args).slice(0, 40);
-        return `[${name}: ${argsStr}${JSON.stringify(args).length > 40 ? "..." : ""}]`;
+        const argsJson = JSON.stringify(args);
+        const argsStr = truncateUtf16Safe(argsJson, 40);
+        return `[${name}: ${argsStr}${argsJson.length > 40 ? "..." : ""}]`;
       }
     }
   }
@@ -699,11 +729,11 @@
     return "application/octet-stream";
   }
 
-  function sanitizeImageBase64(data) {
-    if (typeof data !== "string") {
+  function sanitizeImageBase64(base64Data) {
+    if (typeof base64Data !== "string") {
       return "";
     }
-    const cleaned = data.replace(/\s+/g, "");
+    const cleaned = base64Data.replace(/\s+/g, "");
     if (!cleaned || cleaned.length % 4 !== 0 || !SAFE_BASE64_RE.test(cleaned)) {
       return "";
     }
@@ -712,11 +742,11 @@
 
   function renderDataUrlImage(img, className) {
     const mimeType = sanitizeImageMimeType(img?.mimeType);
-    const base64 = sanitizeImageBase64(img?.data);
-    if (!base64) {
+    const imgBase64 = sanitizeImageBase64(img?.data);
+    if (!imgBase64) {
       return "";
     }
-    return `<img src="data:${mimeType};base64,${base64}" class="${className}" />`;
+    return `<img src="data:${mimeType};base64,${imgBase64}" class="${className}" />`;
   }
   /**
    * Truncate string to maxLen chars, append "..." if truncated.
@@ -725,7 +755,7 @@
     if (s.length <= maxLen) {
       return s;
     }
-    return s.slice(0, maxLen) + "...";
+    return truncateUtf16Safe(s, maxLen) + "...";
   }
 
   /**
@@ -733,7 +763,9 @@
    */
   function getTreeNodeDisplayHtml(entry, label) {
     const normalize = (s) => s.replace(/[\n\t]/g, " ").trim();
-    const labelHtml = label ? `<span class="tree-label">[${escapeHtml(label)}]</span> ` : "";
+    const labelHtml =
+      (isHiddenEntry(entry) ? '<span class="tree-muted">[hidden]</span> ' : "") +
+      (label ? `<span class="tree-label">[${escapeHtml(label)}]</span> ` : "");
 
     switch (entry.type) {
       case "message": {
@@ -864,8 +896,8 @@
         div.appendChild(content);
         // Navigate to the newest leaf through this node, but scroll to the clicked node
         div.addEventListener("click", () => {
-          const leafId = findNewestLeaf(entry.id);
-          navigateTo(leafId, "target", entry.id);
+          const targetLeafId = findNewestLeaf(entry.id);
+          navigateTo(targetLeafId, "target", entry.id);
         });
 
         container.appendChild(div);
@@ -897,7 +929,7 @@
     setTimeout(() => {
       const activeNode = container.querySelector(".tree-node.active");
       if (activeNode) {
-        activeNode.scrollIntoView({ block: "nearest" });
+        activeNode.scrollIntoView?.({ block: "nearest" });
       }
     }, 0);
   }
@@ -1337,6 +1369,9 @@
   }
 
   function renderEntry(entry) {
+    if (isHiddenEntry(entry)) {
+      return "";
+    }
     const ts = formatTimestamp(entry.timestamp);
     const tsHtml = ts ? `<div class="message-timestamp">${ts}</div>` : "";
     const entryId = `entry-${escapeHtmlAttr(entry.id)}`;
@@ -1447,7 +1482,7 @@
           </div>`;
     }
 
-    if (entry.type === "custom_message" && entry.display) {
+    if (entry.type === "custom_message") {
       return `<div class="hook-message" id="${entryId}">${tsHtml}
             <div class="hook-type">[${escapeHtml(entry.customType)}]</div>
             <div class="markdown-content">${safeMarkedParse(typeof entry.content === "string" ? entry.content : JSON.stringify(entry.content))}</div>
@@ -1567,7 +1602,11 @@
       msgParts.push(`${globalStats.branchSummaries} branch summaries`);
     }
 
-    let html = `
+    let html = "";
+    if (warning) {
+      html += `<div class="export-warning">${escapeHtml(warning)}</div>`;
+    }
+    html += `
           <div class="header">
             <h1>Session: ${escapeHtml(header?.id || "unknown")}</h1>
             <div class="help-bar">
@@ -1718,7 +1757,7 @@
         const scrollTargetId = scrollToEntryId || targetId;
         const targetEl = document.getElementById(`entry-${scrollTargetId}`);
         if (targetEl) {
-          targetEl.scrollIntoView({ block: "center" });
+          targetEl.scrollIntoView?.({ block: "center" });
           // Briefly highlight the target message
           if (scrollToEntryId) {
             targetEl.classList.add("highlight");

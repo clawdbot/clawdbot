@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Exa provider module implements model/runtime integration.
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 import { createExaWebSearchProviderBase } from "./exa-web-search-provider.shared.js";
@@ -6,14 +7,9 @@ const EXA_SEARCH_TYPES = ["auto", "neural", "fast", "deep", "deep-reasoning", "i
 const EXA_FRESHNESS_VALUES = ["day", "week", "month", "year"] as const;
 const EXA_MAX_SEARCH_COUNT = 100;
 
-type ExaWebSearchRuntime = typeof import("./exa-web-search-provider.runtime.js");
-
-let exaWebSearchRuntimePromise: Promise<ExaWebSearchRuntime> | undefined;
-
-function loadExaWebSearchRuntime(): Promise<ExaWebSearchRuntime> {
-  exaWebSearchRuntimePromise ??= import("./exa-web-search-provider.runtime.js");
-  return exaWebSearchRuntimePromise;
-}
+const loadExaWebSearchRuntime = createLazyRuntimeModule(
+  () => import("./exa-web-search-provider.runtime.js"),
+);
 
 const ExaSearchSchema = {
   type: "object",
@@ -71,9 +67,10 @@ export function createExaWebSearchProvider(): WebSearchProviderPlugin {
       description:
         "Search the web using Exa AI. Supports neural or keyword search, publication date filters, and optional highlights or text extraction.",
       parameters: ExaSearchSchema,
-      execute: async (args) => {
+      execute: async (args, context) => {
+        context?.signal?.throwIfAborted();
         const { executeExaWebSearchProviderTool } = await loadExaWebSearchRuntime();
-        return await executeExaWebSearchProviderTool(ctx, args);
+        return await executeExaWebSearchProviderTool(ctx, args, context?.signal);
       },
     }),
   };

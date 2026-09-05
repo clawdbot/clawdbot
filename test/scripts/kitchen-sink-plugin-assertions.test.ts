@@ -16,11 +16,13 @@ import { describe, expect, it } from "vitest";
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs";
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 const SWEEP_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/sweep.sh";
+// The shim waits for an explicit log-ready marker; this only bounds a broken fixture process.
+const FIXTURE_READY_WAIT_ATTEMPTS = process.env.CI ? 2_000 : 1_000;
 const REQUIRED_FULL_DIAGNOSTIC_CANARIES = [
   "agent tool result middleware must be a function",
   "trusted tool policy registration requires id, description, and evaluate()",
   "plugin must declare contracts.tools for: kitchen-sink-tool",
-  'channel "kitchen-sink-channel-probe" registration missing required config helpers',
+  'channel "kitchen-sink-channel-probe" registration missing or invalid required capabilities.chatTypes',
   'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
   "session scheduler job registration requires unique id, sessionKey, and kind",
 ];
@@ -69,11 +71,13 @@ function runAssertInstalled({
   diagnostics = [],
   env = {},
   inspectPayload,
+  surfaceMode = "full",
 }: {
   allInspectPayload?: unknown;
   diagnostics?: Array<{ level: string; message: string }>;
   env?: NodeJS.ProcessEnv;
   inspectPayload?: ReturnType<typeof fullSurfaceInspectPayload>;
+  surfaceMode?: string;
 } = {}) {
   const label = `diagnostics-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const pluginId = "openclaw-kitchen-sink-fixture";
@@ -119,7 +123,7 @@ function runAssertInstalled({
         KITCHEN_SINK_LABEL: label,
         KITCHEN_SINK_SOURCE: "npm",
         KITCHEN_SINK_SPEC: "npm:@openclaw/kitchen-sink@latest",
-        KITCHEN_SINK_SURFACE_MODE: "full",
+        KITCHEN_SINK_SURFACE_MODE: surfaceMode,
         KITCHEN_SINK_TMP_DIR: scratchRoot,
       },
     });
@@ -258,8 +262,12 @@ function toGitBashPath(value: string) {
   if (!match) {
     return value;
   }
-
-  return `/${match[1].toLowerCase()}/${match[2].replaceAll("\\", "/")}`;
+  const drive = match[1];
+  const suffix = match[2];
+  if (drive === undefined || suffix === undefined) {
+    return value;
+  }
+  return `/${drive.toLowerCase()}/${suffix.replaceAll("\\", "/")}`;
 }
 
 describe("kitchen-sink plugin assertions", () => {
@@ -305,6 +313,44 @@ describe("kitchen-sink plugin assertions", () => {
     });
 
     expect(result.status).toBe(0);
+  });
+
+  it("rejects diagnostics in conformance mode", () => {
+    const result = runAssertInstalled({
+      diagnostics: diagnosticErrors(["plugin must declare contracts.tools for: kitchen-sink-tool"]),
+      surfaceMode: "conformance",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "unexpected kitchen-sink diagnostic errors: plugin must declare contracts.tools for: kitchen-sink-tool",
+    );
+  });
+
+  it("persists the scenario personality in plugin config", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-config-"));
+    try {
+      const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "configure-runtime"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: home,
+          KITCHEN_SINK_ID: "openclaw-kitchen-sink-fixture",
+          KITCHEN_SINK_PERSONALITY: "conformance",
+        },
+      });
+
+      expect(result.status).toBe(0);
+      const config = JSON.parse(
+        readFileSync(path.join(home, ".openclaw", "openclaw.json"), "utf8"),
+      );
+      expect(config.plugins.entries["openclaw-kitchen-sink-fixture"]).toMatchObject({
+        config: { personality: "conformance" },
+        hooks: { allowConversationAccess: true },
+      });
+    } finally {
+      rmSync(home, { force: true, recursive: true });
+    }
   });
 
   it("requires kitchen-sink plugins to appear in inspect-all output", () => {
@@ -552,7 +598,7 @@ describe("kitchen-sink plugin assertions", () => {
   it("rejects kitchen-sink log scans without an isolated scratch root", () => {
     const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
     try {
-      const spawnEnv = { ...process.env, HOME: parent };
+      const spawnEnv: NodeJS.ProcessEnv = { ...process.env, HOME: parent };
       delete spawnEnv.KITCHEN_SINK_TMP_DIR;
       const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "scan-logs"], {
         encoding: "utf8",
@@ -842,6 +888,8 @@ exit "$status"
     const scratchRoot = path.join(parent, "scratch");
     const fixtureDir = path.join(scratchRoot, "clawhub-fixture");
     const nodeShim = path.join(fakeBin, "node");
+    const sleepShim = path.join(fakeBin, "sleep");
+    const fixtureReadyPath = path.join(parent, "fixture-log-ready");
     try {
       mkdirSync(fakeBin, { recursive: true });
       mkdirSync(fixtureDir, { recursive: true });
@@ -852,11 +900,25 @@ exit "$status"
           "printf 'DO_NOT_DUMP_CLAWHUB_PREFIX\\n'",
           "head -c 2048 /dev/zero | tr '\\0' x",
           "printf '\\nFIXTURE_TAIL_MARKER\\n'",
-          "sleep 30",
+          ': >"$FIXTURE_READY_PATH"',
+          "/bin/sleep 30",
           "",
         ].join("\n"),
       );
       chmodSync(nodeShim, 0o755);
+      writeFileSync(
+        sleepShim,
+        [
+          "#!/usr/bin/env bash",
+          'for _ in $(seq 1 "$FIXTURE_READY_WAIT_ATTEMPTS"); do',
+          '  [[ -f "$FIXTURE_READY_PATH" ]] && exit 0',
+          "  /bin/sleep 0.01",
+          "done",
+          "exit 1",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(sleepShim, 0o755);
 
       const result = runSweepShell(
         `
@@ -864,7 +926,7 @@ set -euo pipefail
 export PATH="$FAKE_BIN:$PATH"
 export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
 export KITCHEN_SINK_TMP_DIR="$SCRATCH_ROOT"
-export OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS=25
+export OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS=1
 export OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES=64
 source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
 set +e
@@ -877,6 +939,8 @@ exit "$status"
         {
           FAKE_BIN: fakeBin,
           FIXTURE_DIR: fixtureDir,
+          FIXTURE_READY_PATH: fixtureReadyPath,
+          FIXTURE_READY_WAIT_ATTEMPTS: String(FIXTURE_READY_WAIT_ATTEMPTS),
           SCRATCH_ROOT: scratchRoot,
         },
       );

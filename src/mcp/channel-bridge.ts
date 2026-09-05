@@ -1,6 +1,7 @@
 // Channel MCP bridge translates MCP tool calls into channel runtime operations.
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -8,14 +9,17 @@ import {
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { VERSION } from "../version.js";
 import type {
   ApprovalDecision,
-  ApprovalKind,
   ChatHistoryResult,
   ClaudeChannelMode,
   ConversationDescriptor,
+  EventCursorGap,
+  EventPollResult,
+  EventWaitResult,
   PendingApproval,
   QueueEvent,
   SessionDescribeResult,
@@ -23,7 +27,13 @@ import type {
   SessionMessagePayload,
   WaitFilter,
 } from "./channel-shared.js";
-import { matchEventFilter, normalizeApprovalId, toConversation, toText } from "./channel-shared.js";
+import {
+  matchEventFilter,
+  normalizeApprovalId,
+  resolveMessageId,
+  toConversation,
+  toText,
+} from "./channel-shared.js";
 
 /**
  * Runtime bridge between MCP tools and the OpenClaw Gateway channel APIs.
@@ -33,8 +43,7 @@ import { matchEventFilter, normalizeApprovalId, toConversation, toText } from ".
  */
 type PendingWaiter = {
   filter: WaitFilter;
-  resolve: (value: QueueEvent | null) => void;
-  timeout: NodeJS.Timeout | null;
+  settle: (event: QueueEvent | null) => void;
 };
 
 type PendingApprovalEntry = {
@@ -47,6 +56,8 @@ type ServerNotification = {
   params?: Record<string, unknown>;
 };
 
+type NotificationDeliveryOutcome = "delivered" | "unavailable" | "failed";
+
 const CLAUDE_PERMISSION_REPLY_RE = /^(yes|no)\s+([a-km-z]{5})$/i;
 const QUEUE_LIMIT = 1_000;
 const CONVERSATIONS_LIST_LIMIT = 500;
@@ -56,13 +67,6 @@ const EVENTS_WAIT_TIMEOUT_LIMIT_MS = 300_000;
 const PENDING_CLAUDE_PERMISSION_TTL_MS = 60 * 60 * 1_000;
 const PENDING_APPROVAL_DEFAULT_TTL_MS = 30 * 60 * 1_000;
 const PENDING_SWEEP_INTERVAL_MS = 5 * 60 * 1_000;
-
-function clampPositiveInteger(value: number | undefined, fallback: number, max: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.min(max, Math.max(1, Math.floor(value)));
-}
 
 /** Connects the MCP server surface to a Gateway client and queues channel events for polling. */
 export class OpenClawChannelBridge {
@@ -80,6 +84,7 @@ export class OpenClawChannelBridge {
   private ready = false;
   private started = false;
   private retryingInitialConnect = false;
+  private supportsExactMessageLookup = false;
   private readonly readyPromise: Promise<void>;
   private resolveReady!: () => void;
   private rejectReady!: (error: Error) => void;
@@ -120,7 +125,7 @@ export class OpenClawChannelBridge {
       { GatewayClient: GatewayClientCtor },
       { startGatewayClientWhenEventLoopReady },
       { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE },
-      { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES },
+      { GATEWAY_CLIENT_CAPS, GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES },
     ] = await Promise.all([
       import("../gateway/client-bootstrap.js"),
       import("../gateway/client.js"),
@@ -147,16 +152,19 @@ export class OpenClawChannelBridge {
       token: bootstrap.auth.token,
       password: bootstrap.auth.password,
       preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
+      tlsFingerprint: bootstrap.tlsFingerprint,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: "OpenClaw MCP",
       clientVersion: VERSION,
       mode: GATEWAY_CLIENT_MODES.CLI,
+      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
       scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
       requestTimeoutMs: 180_000,
       onEvent: (event) => {
-        void this.handleGatewayEvent(event);
+        void this.dispatchGatewayEvent(event);
       },
-      onHelloOk: () => {
+      onHelloOk: (hello) => {
+        this.supportsExactMessageLookup = hello.features.methods.includes("chat.message.get");
         this.retryingInitialConnect = false;
         void this.handleHelloOk();
       },
@@ -203,15 +211,11 @@ export class OpenClawChannelBridge {
     this.pendingClaudePermissions.clear();
     this.pendingApprovals.clear();
     for (const waiter of this.pendingWaiters) {
-      if (waiter.timeout) {
-        clearTimeout(waiter.timeout);
-      }
-      waiter.resolve(null);
+      waiter.settle(null);
     }
-    this.pendingWaiters.clear();
     const gateway = this.gateway;
     this.gateway = null;
-    await gateway?.stopAndWait().catch(() => undefined);
+    await gateway?.stopAndWait();
   }
 
   /** List Gateway sessions that have enough routing metadata to be channel conversations. */
@@ -223,7 +227,10 @@ export class OpenClawChannelBridge {
     includeLastMessage?: boolean;
   }): Promise<ConversationDescriptor[]> {
     await this.waitUntilReady();
-    const limit = clampPositiveInteger(params?.limit, 50, CONVERSATIONS_LIST_LIMIT);
+    const limit = resolveIntegerOption(params?.limit, 50, {
+      min: 1,
+      max: CONVERSATIONS_LIST_LIMIT,
+    });
     const response: SessionListResult = await this.requestGateway("sessions.list", {
       limit,
       search: params?.search,
@@ -262,12 +269,27 @@ export class OpenClawChannelBridge {
     limit = 20,
   ): Promise<NonNullable<ChatHistoryResult["messages"]>> {
     await this.waitUntilReady();
-    const requestLimit = clampPositiveInteger(limit, 20, MESSAGES_READ_LIMIT);
+    const requestLimit = resolveIntegerOption(limit, 20, { min: 1, max: MESSAGES_READ_LIMIT });
     const response: ChatHistoryResult = await this.requestGateway("sessions.get", {
       key: sessionKey,
       limit: requestLimit,
     });
     return response.messages ?? [];
+  }
+
+  async readMessage(sessionKey: string, messageId: string, legacyLimit = 100) {
+    await this.waitUntilReady();
+    if (!this.supportsExactMessageLookup) {
+      // v2026.5.28 shares protocol v4 but predates chat.message.get. Remove this
+      // bounded fallback when the remote compatibility floor excludes that release.
+      const messages = await this.readMessages(sessionKey, legacyLimit);
+      return messages.find((entry) => resolveMessageId(entry) === messageId) ?? null;
+    }
+    const result = await this.requestGateway("chat.message.get", {
+      sessionKey,
+      messageId,
+    });
+    return result.ok === true ? (result.message ?? null) : null;
   }
 
   /** Send a reply using the same channel route stored on the conversation. */
@@ -302,7 +324,7 @@ export class OpenClawChannelBridge {
 
   /** Forward an MCP approval decision to the matching Gateway approval resolver. */
   async respondToApproval(params: {
-    kind: ApprovalKind;
+    kind: ChannelApprovalKind;
     id: string;
     decision: ApprovalDecision;
   }): Promise<Record<string, unknown>> {
@@ -319,35 +341,58 @@ export class OpenClawChannelBridge {
   }
 
   /** Poll queued events after a cursor without consuming them. */
-  pollEvents(filter: WaitFilter, limit = 20): { events: QueueEvent[]; nextCursor: number } {
-    const eventLimit = clampPositiveInteger(limit, 20, EVENTS_POLL_LIMIT);
+  pollEvents(filter: WaitFilter, limit = 20): EventPollResult {
+    const eventLimit = resolveIntegerOption(limit, 20, { min: 1, max: EVENTS_POLL_LIMIT });
     const events = this.queue
       .filter((event) => matchEventFilter(event, filter))
       .slice(0, eventLimit);
-    const nextCursor = events.at(-1)?.cursor ?? filter.afterCursor;
-    return { events, nextCursor };
+    const gap = this.resolveCursorGap(filter.afterCursor);
+    const nextCursor =
+      events.at(-1)?.cursor ?? (gap ? gap.oldest_available_cursor - 1 : filter.afterCursor);
+    return { events, nextCursor, ...(gap ? { gap } : {}) };
   }
 
-  /** Wait for the next matching event, resolving null on timeout or bridge close. */
-  async waitForEvent(filter: WaitFilter, timeoutMs = 30_000): Promise<QueueEvent | null> {
+  /** Wait for the next matching event, returning a closed outcome on every settle path. */
+  async waitForEvent(
+    filter: WaitFilter,
+    timeoutMs = 30_000,
+    signal?: AbortSignal,
+  ): Promise<EventWaitResult> {
+    signal?.throwIfAborted();
     const existing = this.queue.find((event) => matchEventFilter(event, filter));
-    if (existing) {
-      return existing;
+    const gap = this.resolveCursorGap(filter.afterCursor);
+    if (existing || gap) {
+      return { event: existing ?? null, ...(gap ? { gap } : {}) };
     }
-    const waitTimeoutMs = clampPositiveInteger(timeoutMs, 30_000, EVENTS_WAIT_TIMEOUT_LIMIT_MS);
-    return await new Promise<QueueEvent | null>((resolve) => {
+    const waitTimeoutMs = resolveIntegerOption(timeoutMs, 30_000, {
+      min: 1,
+      max: EVENTS_WAIT_TIMEOUT_LIMIT_MS,
+    });
+    return await new Promise<EventWaitResult>((resolve) => {
+      let settled = false;
+      const onAbort = () => waiter.settle(null);
       const waiter: PendingWaiter = {
         filter,
-        resolve: (value) => {
+        settle: (event) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
           this.pendingWaiters.delete(waiter);
-          resolve(value);
+          clearTimeout(timeout);
+          signal?.removeEventListener("abort", onAbort);
+          const currentGap = this.resolveCursorGap(filter.afterCursor);
+          resolve({ event, ...(currentGap ? { gap: currentGap } : {}) });
         },
-        timeout: null,
       };
-      waiter.timeout = setTimeout(() => {
-        waiter.resolve(null);
+      const timeout = setTimeout(() => {
+        waiter.settle(null);
       }, waitTimeoutMs);
+      signal?.addEventListener("abort", onAbort, { once: true });
       this.pendingWaiters.add(waiter);
+      if (signal?.aborted) {
+        waiter.settle(null);
+      }
     });
   }
 
@@ -386,15 +431,18 @@ export class OpenClawChannelBridge {
     return await this.gateway.request<T>(method, params);
   }
 
-  private async sendNotification(notification: ServerNotification): Promise<void> {
+  private async sendNotification(
+    notification: ServerNotification,
+  ): Promise<NotificationDeliveryOutcome> {
     if (!this.server || this.closed) {
-      return;
+      return "unavailable";
     }
     try {
       await this.server.server.notification(notification);
+      return "delivered";
     } catch (error) {
       if (this.closed) {
-        return;
+        return "unavailable";
       }
       // Always surface a single low-noise record so swallowed delivery failures
       // remain observable; the spammy error detail stays behind --verbose.
@@ -404,6 +452,7 @@ export class OpenClawChannelBridge {
           `openclaw mcp: notification ${notification.method} error: ${String(error)}\n`,
         );
       }
+      return "failed";
     }
   }
 
@@ -438,6 +487,16 @@ export class OpenClawChannelBridge {
     return this.cursor;
   }
 
+  private resolveCursorGap(afterCursor: number): EventCursorGap | undefined {
+    const oldestAvailableCursor = this.queue[0]?.cursor;
+    return oldestAvailableCursor !== undefined && afterCursor < oldestAvailableCursor - 1
+      ? {
+          requested_after_cursor: afterCursor,
+          oldest_available_cursor: oldestAvailableCursor,
+        }
+      : undefined;
+  }
+
   private enqueue(event: QueueEvent): void {
     this.queue.push(event);
     // Retain enough history for cursor polling without letting a long MCP session grow unbounded.
@@ -445,17 +504,14 @@ export class OpenClawChannelBridge {
       this.queue.shift();
     }
     for (const waiter of this.pendingWaiters) {
-      if (!matchEventFilter(event, waiter.filter)) {
-        continue;
+      const matches = matchEventFilter(event, waiter.filter);
+      if (matches || this.resolveCursorGap(waiter.filter.afterCursor)) {
+        waiter.settle(matches ? event : null);
       }
-      if (waiter.timeout) {
-        clearTimeout(waiter.timeout);
-      }
-      waiter.resolve(event);
     }
   }
 
-  private trackApproval(kind: ApprovalKind, payload: Record<string, unknown>): void {
+  private trackApproval(kind: ChannelApprovalKind, payload: Record<string, unknown>): void {
     if (this.closed) {
       return;
     }
@@ -518,6 +574,21 @@ export class OpenClawChannelBridge {
     const id = normalizeApprovalId(payload.id);
     if (id) {
       this.pendingApprovals.delete(id);
+    }
+  }
+
+  private async dispatchGatewayEvent(event: EventFrame): Promise<void> {
+    try {
+      await this.handleGatewayEvent(event);
+    } catch (error) {
+      // Always surface a single low-noise record so swallowed gateway event
+      // failures remain observable; the spammy error detail stays behind --verbose.
+      process.stderr.write(`openclaw mcp: gateway event ${event.event} failed\n`);
+      if (this.verbose) {
+        process.stderr.write(
+          `openclaw mcp: gateway event ${event.event} error: ${String(error)}\n`,
+        );
+      }
     }
   }
 
@@ -584,11 +655,12 @@ export class OpenClawChannelBridge {
     const role = toText(payload.message?.role);
     const text = extractFirstTextBlock(payload.message);
     const permissionMatch = text ? CLAUDE_PERMISSION_REPLY_RE.exec(text) : null;
-    if (permissionMatch) {
+    // Ownership is decided at authenticated channel ingress and carried on the
+    // live transcript event. Missing metadata fails closed for approvals.
+    if (role === "user" && payload.senderIsOwner === true && permissionMatch) {
       const requestId = normalizeOptionalLowercaseString(permissionMatch[2]);
       if (requestId && this.pendingClaudePermissions.has(requestId)) {
-        this.pendingClaudePermissions.delete(requestId);
-        await this.sendNotification({
+        const delivery = await this.sendNotification({
           method: "notifications/claude/channel/permission",
           params: {
             request_id: requestId,
@@ -597,6 +669,9 @@ export class OpenClawChannelBridge {
               : "deny",
           },
         });
+        if (delivery === "delivered") {
+          this.pendingClaudePermissions.delete(requestId);
+        }
         return;
       }
     }
@@ -646,8 +721,7 @@ export class OpenClawChannelBridge {
   }
 }
 
-/** Decide whether startup should wait for a retryable Gateway connect failure to recover. */
-export function shouldRetryInitialMcpGatewayConnect(error: Error): boolean {
+function shouldRetryInitialMcpGatewayConnect(error: Error): boolean {
   if (
     error.name === "GatewayClientRequestError" &&
     "retryable" in error &&

@@ -3,16 +3,33 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { tryReadJsonSync } from "../infra/json-files.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveOpenClawDevSourceRoot } from "./dev-source-root.js";
-import { PluginLruCache } from "./plugin-cache-primitives.js";
+import { PLUGIN_SOURCE_MODULE_EXTENSIONS } from "./native-module-require.js";
+import {
+  parsePluginCacheJson,
+  pluginCacheExistsSync,
+  pluginCacheRealpathSync,
+  pluginCacheStatSync,
+  readPluginCacheDirectory,
+  readPluginCacheFile,
+} from "./plugin-cache-files.js";
+import {
+  getPluginSdkHostFacts,
+  type PluginRuntimeModuleResolution,
+  type PluginSdkPackageJson,
+  type WorkspacePackageAliasEntry,
+} from "./plugin-cache-sdk.js";
+import { getPluginCache, withPluginCache } from "./plugin-cache.js";
 
 type PluginSdkAliasCandidateKind = "dist" | "src";
 export type PluginSdkResolutionPreference = "auto" | "dist" | "src";
 
-export type LoaderModuleResolveParams = {
+type LoaderModuleResolveParams = {
   modulePath?: string;
   argv1?: string;
   cwd?: string;
@@ -21,48 +38,54 @@ export type LoaderModuleResolveParams = {
   pluginSdkResolution?: PluginSdkResolutionPreference;
 };
 
-export type PluginRuntimeModuleResolution = {
-  modulePath?: string;
-  packageRoot: string | null;
-  candidates: string[];
-  resolvedPath: string | null;
-  error?: string;
-};
-
-type PluginSdkPackageJson = {
-  exports?: Record<string, unknown>;
-  bin?: string | Record<string, unknown>;
-  version?: string;
-};
-
-type WorkspacePackageAliasEntry = {
-  packageName: string;
-  packageDir: string;
-  subpath: string;
-  srcFile: string;
-  distFile: string;
-};
+export type { PluginRuntimeModuleResolution } from "./plugin-cache-sdk.js";
 
 const STARTUP_ARGV1 = process.argv[1];
-const pluginSdkPackageJsonByRoot = new Map<string, PluginSdkPackageJson | null>();
+
+function sdkHost(packageRoot: string) {
+  return getPluginSdkHostFacts(getPluginCache().sdk, path.resolve(packageRoot));
+}
+
+function sdkAliasFacts(aliasMap: Record<string, string>) {
+  const cache = getPluginCache().sdk.aliasFacts;
+  let facts = cache.get(aliasMap);
+  if (!facts) {
+    facts = {};
+    cache.set(aliasMap, facts);
+  }
+  return facts;
+}
+
+function readSdkJsonFile(filePath: string): unknown {
+  const file = readPluginCacheFile({
+    rootDir: path.dirname(filePath),
+    relativePath: path.basename(filePath),
+    rejectHardlinks: false,
+  });
+  const parsed = file.ok ? parsePluginCacheJson(file) : undefined;
+  return parsed?.ok ? parsed.value : null;
+}
 
 function sanitizeJitiCachePathSegment(value: string): string {
   const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return normalized.length > 0 ? normalized : "unknown";
 }
 
-function resolveJitiFsCacheTmpDir(): string {
-  let tmpDir = os.tmpdir();
-  if (process.env.TMPDIR && tmpDir === process.cwd() && !process.env.JITI_RESPECT_TMPDIR_ENV) {
-    const originalTmpDir = process.env.TMPDIR;
-    delete process.env.TMPDIR;
-    try {
-      tmpDir = os.tmpdir();
-    } finally {
-      process.env.TMPDIR = originalTmpDir;
-    }
+function resolveJitiFsCacheRoot(): string {
+  const xdgCacheHome = process.env.XDG_CACHE_HOME?.trim();
+  if (xdgCacheHome && path.isAbsolute(xdgCacheHome)) {
+    return xdgCacheHome;
   }
-  return tmpDir;
+  const homeDir = resolveRequiredHomeDir(process.env, os.homedir);
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA?.trim();
+    return localAppData && path.isAbsolute(localAppData)
+      ? localAppData
+      : path.join(homeDir, "AppData", "Local");
+  }
+  return process.platform === "darwin"
+    ? path.join(homeDir, "Library", "Caches")
+    : path.join(homeDir, ".cache");
 }
 
 function readJitiBooleanEnv(name: string, defaultValue: boolean): boolean {
@@ -80,7 +103,19 @@ function shouldUseJitiFsCache(): boolean {
   return readJitiBooleanEnv("JITI_FS_CACHE", readJitiBooleanEnv("JITI_CACHE", true));
 }
 
-export function normalizeJitiAliasTargetPath(targetPath: string): string {
+function resolvePluginLoaderJitiNativeModules(): string[] {
+  try {
+    const configured: unknown = JSON.parse(process.env.JITI_NATIVE_MODULES ?? "[]");
+    const nativeModules = Array.isArray(configured)
+      ? configured.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    return [...new Set([...nativeModules, "openclaw"])];
+  } catch {
+    return ["openclaw"];
+  }
+}
+
+function normalizeJitiAliasTargetPath(targetPath: string): string {
   return process.platform === "win32" ? targetPath.replace(/\\/g, "/") : targetPath;
 }
 
@@ -89,17 +124,20 @@ function resolveLoaderModulePath(params: LoaderModuleResolveParams = {}): string
 }
 
 function readPluginSdkPackageJson(packageRoot: string): PluginSdkPackageJson | null {
-  const cacheKey = path.resolve(packageRoot);
-  if (pluginSdkPackageJsonByRoot.has(cacheKey)) {
-    return pluginSdkPackageJsonByRoot.get(cacheKey) ?? null;
+  const facts = sdkHost(packageRoot);
+  if (facts.packageJson !== undefined) {
+    return facts.packageJson;
   }
-  const parsed = tryReadJsonSync<PluginSdkPackageJson>(path.join(packageRoot, "package.json"));
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    pluginSdkPackageJsonByRoot.set(cacheKey, null);
-    return null;
-  }
-  pluginSdkPackageJsonByRoot.set(cacheKey, parsed);
-  return parsed;
+  const parsed = readSdkJsonFile(path.join(packageRoot, "package.json"));
+  facts.packageJson = isRecord(parsed)
+    ? {
+        ...(typeof parsed.name === "string" ? { name: parsed.name } : {}),
+        ...(isRecord(parsed.exports) ? { exports: parsed.exports } : {}),
+        ...(typeof parsed.bin === "string" || isRecord(parsed.bin) ? { bin: parsed.bin } : {}),
+        ...(typeof parsed.version === "string" ? { version: parsed.version } : {}),
+      }
+    : null;
+  return facts.packageJson;
 }
 
 function resolveJitiCacheModulePath(params: LoaderModuleResolveParams = {}): string {
@@ -113,7 +151,7 @@ function resolveJitiCacheModulePath(params: LoaderModuleResolveParams = {}): str
   return resolveLoaderModulePath(params);
 }
 
-export function resolvePluginLoaderJitiFsCacheDir(params: LoaderModuleResolveParams = {}): string {
+function resolvePluginLoaderJitiFsCacheDir(params: LoaderModuleResolveParams = {}): string {
   const modulePath = resolveJitiCacheModulePath(params);
   const packageRoot =
     resolveLoaderPackageRoot({ ...params, modulePath }) ?? path.dirname(modulePath);
@@ -122,22 +160,20 @@ export function resolvePluginLoaderJitiFsCacheDir(params: LoaderModuleResolvePar
     readPluginSdkPackageJson(packageRoot)?.version ?? "unknown",
   );
   let installMarker = "no-package-json";
-  try {
-    const stat = fs.statSync(packageJsonPath);
+  const stat = pluginCacheStatSync(packageJsonPath);
+  if (stat) {
     installMarker = `${Math.trunc(stat.mtimeMs)}-${stat.size}`;
-  } catch {
-    // Package installs should have package.json; keep cache setup best-effort.
   }
   return path.join(
-    resolveJitiFsCacheTmpDir(),
-    "jiti",
+    resolveJitiFsCacheRoot(),
     "openclaw",
+    "jiti",
     version,
     sanitizeJitiCachePathSegment(installMarker),
   );
 }
 
-export function resolvePluginLoaderJitiFsCacheOption(
+function resolvePluginLoaderJitiFsCacheOption(
   params: LoaderModuleResolveParams = {},
 ): false | string {
   return shouldUseJitiFsCache() ? resolvePluginLoaderJitiFsCacheDir(params) : false;
@@ -159,10 +195,16 @@ function hasTrustedOpenClawRootIndicator(params: {
   packageRoot: string;
   packageJson: PluginSdkPackageJson;
 }): boolean {
+  const facts = sdkHost(params.packageRoot);
+  if (facts.trustedRoot !== undefined) {
+    return facts.trustedRoot;
+  }
   const packageExports = params.packageJson.exports ?? {};
-  const hasPluginSdkRootExport = Object.hasOwn(packageExports, "./plugin-sdk");
-  if (!hasPluginSdkRootExport) {
-    return false;
+  const hasPluginSdkSubpathExport = Object.keys(packageExports).some((key) =>
+    key.startsWith("./plugin-sdk/"),
+  );
+  if (!hasPluginSdkSubpathExport) {
+    return (facts.trustedRoot = false);
   }
   const hasCliEntryExport = Object.hasOwn(packageExports, "./cli-entry");
   const hasOpenClawBin =
@@ -171,20 +213,26 @@ function hasTrustedOpenClawRootIndicator(params: {
     (typeof params.packageJson.bin === "object" &&
       params.packageJson.bin !== null &&
       typeof params.packageJson.bin.openclaw === "string");
-  const hasOpenClawEntrypoint = fs.existsSync(path.join(params.packageRoot, "openclaw.mjs"));
-  return hasCliEntryExport || hasOpenClawBin || hasOpenClawEntrypoint;
+  return (facts.trustedRoot =
+    hasCliEntryExport ||
+    hasOpenClawBin ||
+    pluginCacheExistsSync(path.join(params.packageRoot, "openclaw.mjs")));
 }
 
 function readPluginSdkSubpathsFromPackageRoot(packageRoot: string): string[] | null {
+  const facts = sdkHost(packageRoot);
+  if (facts.exportedSubpaths !== undefined) {
+    return facts.exportedSubpaths;
+  }
   const pkg = readPluginSdkPackageJson(packageRoot);
   if (!pkg) {
-    return null;
+    return (facts.exportedSubpaths = null);
   }
   if (!hasTrustedOpenClawRootIndicator({ packageRoot, packageJson: pkg })) {
-    return null;
+    return (facts.exportedSubpaths = null);
   }
   const subpaths = listPluginSdkSubpathsFromPackageJson(pkg);
-  return subpaths.length > 0 ? subpaths : null;
+  return (facts.exportedSubpaths = subpaths.length > 0 ? subpaths : null);
 }
 
 function resolveTrustedOpenClawRootFromArgvHint(params: {
@@ -325,8 +373,8 @@ function listArgvRuntimeFallbackStartDirs(argv1: string | undefined): string[] {
     starts.push(path.join(nodeModulesDir, binName));
   }
   try {
-    const resolved = fs.realpathSync(normalized);
-    if (resolved !== normalized) {
+    const resolved = pluginCacheRealpathSync(normalized);
+    if (resolved && resolved !== normalized) {
       starts.push(path.dirname(resolved));
     }
   } catch {
@@ -334,10 +382,6 @@ function listArgvRuntimeFallbackStartDirs(argv1: string | undefined): string[] {
   }
   starts.push(path.dirname(normalized));
   return dedupeResolvedPaths(starts);
-}
-
-function formatResolutionError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function resolveDevSourceRootParam(params: { devSourceRoot?: string | null }): string | null {
@@ -372,7 +416,7 @@ function resolveLoaderPluginSdkPackageRoot(
   );
 }
 
-export function resolvePluginSdkAliasCandidateOrder(params: {
+function resolvePluginSdkAliasCandidateOrder(params: {
   modulePath: string;
   isProduction: boolean;
   pluginSdkResolution?: PluginSdkResolutionPreference;
@@ -384,98 +428,41 @@ export function resolvePluginSdkAliasCandidateOrder(params: {
     return ["src", "dist"];
   }
   const normalizedModulePath = params.modulePath.replace(/\\/g, "/");
-  const isDistRuntime = normalizedModulePath.includes("/dist/");
+  const isDistRuntime = /\/dist(?:-runtime)?\//.test(normalizedModulePath);
   return isDistRuntime || params.isProduction ? ["dist", "src"] : ["src", "dist"];
 }
 
-export function listPluginSdkAliasCandidates(params: {
-  srcFile: string;
-  distFile: string;
-  modulePath: string;
-  argv1?: string;
-  cwd?: string;
-  moduleUrl?: string;
-  devSourceRoot?: string | null;
-  pluginSdkResolution?: PluginSdkResolutionPreference;
-}) {
-  const orderedKinds = resolvePluginSdkAliasCandidateOrder({
-    modulePath: params.modulePath,
-    isProduction: process.env.NODE_ENV === "production",
-    pluginSdkResolution: params.pluginSdkResolution,
-  });
-  const packageRoot = resolveLoaderPluginSdkPackageRoot(params);
-  if (packageRoot) {
-    const candidateMap = {
-      src: path.join(packageRoot, "src", "plugin-sdk", params.srcFile),
-      dist: path.join(packageRoot, "dist", "plugin-sdk", params.distFile),
-    } as const;
-    return orderedKinds.map((kind) => candidateMap[kind]);
-  }
-  let cursor = path.dirname(params.modulePath);
-  const candidates: string[] = [];
-  for (let i = 0; i < 6; i += 1) {
-    const candidateMap = {
-      src: path.join(cursor, "src", "plugin-sdk", params.srcFile),
-      dist: path.join(cursor, "dist", "plugin-sdk", params.distFile),
-    } as const;
-    for (const kind of orderedKinds) {
-      candidates.push(candidateMap[kind]);
-    }
-    const parent = path.dirname(cursor);
-    if (parent === cursor) {
-      break;
-    }
-    cursor = parent;
-  }
-  return candidates;
-}
-
-export function resolvePluginSdkAliasFile(params: {
-  srcFile: string;
-  distFile: string;
-  modulePath?: string;
-  argv1?: string;
-  cwd?: string;
-  moduleUrl?: string;
-  devSourceRoot?: string | null;
-  pluginSdkResolution?: PluginSdkResolutionPreference;
-}): string | null {
-  try {
-    const modulePath = resolveLoaderModulePath(params);
-    for (const candidate of listPluginSdkAliasCandidates({
-      srcFile: params.srcFile,
-      distFile: params.distFile,
-      modulePath,
-      argv1: params.argv1,
-      cwd: params.cwd,
-      moduleUrl: params.moduleUrl,
-      devSourceRoot: params.devSourceRoot,
-      pluginSdkResolution: params.pluginSdkResolution,
-    })) {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
-const MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES = 512;
-const cachedPluginSdkExportedSubpaths = new PluginLruCache<string[]>(
-  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
-);
-const cachedPluginSdkScopedAliasMaps = new PluginLruCache<Record<string, string>>(
-  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
-);
-const cachedBundledPluginPublicSurfaceAliasMaps = new PluginLruCache<Record<string, string>>(
-  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
-);
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
-const CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH = "codex-native-task-runtime";
 const CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH = "codex-mcp-projection";
-const OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
+const CODEX_SESSION_TRANSCRIPT_PLUGIN_SDK_SUBPATH = "codex-session-transcript-runtime";
+const NATIVE_HOOK_RELAY_RUNTIME_PLUGIN_SDK_SUBPATH = "native-hook-relay-runtime";
+const CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
+const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
+  "agent-runtime-test-contracts",
+  "channel-contract-testing",
+  "channel-ingress-test-runtime",
+  "channel-target-testing",
+  "channel-test-helpers",
+  "plugin-test-api",
+  "plugin-test-contracts",
+  "plugin-state-test-runtime",
+  "plugin-test-runtime",
+  "provider-http-test-mocks",
+  "provider-test-contracts",
+  "qa-channel",
+  "qa-channel-protocol",
+  "qa-lab",
+  "qa-runtime",
+  "reply-payload-testing",
+  "sqlite-runtime-testing",
+  "test-env",
+  "test-fixtures",
+  "test-live",
+  "test-live-auth",
+  "test-media-generation",
+  "test-media-understanding",
+  "test-node-mocks",
+]);
 type PrivatePluginSdkSubpathOwner = {
   bundledPluginId: string;
   officialInstalledPackageName?: string;
@@ -488,19 +475,26 @@ const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[]
     officialInstalledPackageName: "@openclaw/codex",
     allowPrivateQaCli: true,
     subpaths: [
-      CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
+      CODEX_SESSION_TRANSCRIPT_PLUGIN_SDK_SUBPATH,
+      NATIVE_HOOK_RELAY_RUNTIME_PLUGIN_SDK_SUBPATH,
     ],
   },
   {
     bundledPluginId: "ollama",
     allowPrivateQaCli: false,
-    subpaths: [OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
+    subpaths: [CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
   },
   {
     bundledPluginId: "browser",
     allowPrivateQaCli: false,
-    subpaths: [OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
+    subpaths: [CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
+  },
+  {
+    bundledPluginId: "llama-cpp",
+    officialInstalledPackageName: "@openclaw/llama-cpp-provider",
+    allowPrivateQaCli: false,
+    subpaths: [CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
   },
 ];
 const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
@@ -517,502 +511,99 @@ const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
 // Jiti-loaded plugin code runs outside the Vitest/tsgo resolver, so every
 // workspace package import reachable from plugin SDK barrels needs an explicit
 // source/dist alias here to keep source checkouts and packaged builds aligned.
-const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
-  {
-    packageName: "@openclaw/gateway-client",
-    packageDir: "gateway-client",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-client",
-    packageDir: "gateway-client",
-    subpath: "readiness",
-    srcFile: "readiness.ts",
-    distFile: "readiness.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-client",
-    packageDir: "gateway-client",
-    subpath: "timeouts",
-    srcFile: "timeouts.ts",
-    distFile: "timeouts.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "client-info",
-    srcFile: "client-info.ts",
-    distFile: "client-info.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "connect-error-details",
-    srcFile: "connect-error-details.ts",
-    distFile: "connect-error-details.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "schema",
-    srcFile: "schema.ts",
-    distFile: "schema.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "startup-unavailable",
-    srcFile: "startup-unavailable.ts",
-    distFile: "startup-unavailable.mjs",
-  },
-  {
-    packageName: "@openclaw/gateway-protocol",
-    packageDir: "gateway-protocol",
-    subpath: "version",
-    srcFile: "version.ts",
-    distFile: "version.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "code-spans",
-    srcFile: "code-spans.ts",
-    distFile: "code-spans.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "fences",
-    srcFile: "fences.ts",
-    distFile: "fences.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "frontmatter",
-    srcFile: "frontmatter.ts",
-    distFile: "frontmatter.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "ir",
-    srcFile: "ir.ts",
-    distFile: "ir.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "render",
-    srcFile: "render.ts",
-    distFile: "render.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "render-aware-chunking",
-    srcFile: "render-aware-chunking.ts",
-    distFile: "render-aware-chunking.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "tables",
-    srcFile: "tables.ts",
-    distFile: "tables.mjs",
-  },
-  {
-    packageName: "@openclaw/markdown-core",
-    packageDir: "markdown-core",
-    subpath: "types",
-    srcFile: "types.ts",
-    distFile: "types.mjs",
-  },
-  {
-    packageName: "@openclaw/media-generation-core",
-    packageDir: "media-generation-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/media-generation-core",
-    packageDir: "media-generation-core",
-    subpath: "capability-model-ref",
-    srcFile: "capability-model-ref.ts",
-    distFile: "capability-model-ref.mjs",
-  },
-  {
-    packageName: "@openclaw/media-generation-core",
-    packageDir: "media-generation-core",
-    subpath: "catalog",
-    srcFile: "catalog.ts",
-    distFile: "catalog.mjs",
-  },
-  {
-    packageName: "@openclaw/media-generation-core",
-    packageDir: "media-generation-core",
-    subpath: "model-ref",
-    srcFile: "model-ref.ts",
-    distFile: "model-ref.mjs",
-  },
-  {
-    packageName: "@openclaw/media-generation-core",
-    packageDir: "media-generation-core",
-    subpath: "normalization",
-    srcFile: "normalization.ts",
-    distFile: "normalization.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "base64",
-    srcFile: "base64.ts",
-    distFile: "base64.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "constants",
-    srcFile: "constants.ts",
-    distFile: "constants.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "content-length",
-    srcFile: "content-length.ts",
-    distFile: "content-length.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "file-name",
-    srcFile: "file-name.ts",
-    distFile: "file-name.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "inbound-path-policy",
-    srcFile: "inbound-path-policy.ts",
-    distFile: "inbound-path-policy.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "inline-image-data-url",
-    srcFile: "inline-image-data-url.ts",
-    distFile: "inline-image-data-url.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "media-source-url",
-    srcFile: "media-source-url.ts",
-    distFile: "media-source-url.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "mime",
-    srcFile: "mime.ts",
-    distFile: "mime.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "read-byte-stream-with-limit",
-    srcFile: "read-byte-stream-with-limit.ts",
-    distFile: "read-byte-stream-with-limit.mjs",
-  },
-  {
-    packageName: "@openclaw/media-core",
-    packageDir: "media-core",
-    subpath: "read-response-with-limit",
-    srcFile: "read-response-with-limit.ts",
-    distFile: "read-response-with-limit.mjs",
-  },
-  {
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
-    subpath: "number-coercion",
-    srcFile: "number-coercion.ts",
-    distFile: "number-coercion.mjs",
-  },
-  {
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
-    subpath: "record-coerce",
-    srcFile: "record-coerce.ts",
-    distFile: "record-coerce.mjs",
-  },
-  {
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
-    subpath: "string-coerce",
-    srcFile: "string-coerce.ts",
-    distFile: "string-coerce.mjs",
-  },
-  {
-    packageName: "@openclaw/normalization-core",
-    packageDir: "normalization-core",
-    subpath: "string-normalization",
-    srcFile: "string-normalization.ts",
-    distFile: "string-normalization.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "ansi",
-    srcFile: "ansi.ts",
-    distFile: "ansi.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "decorative-emoji",
-    srcFile: "decorative-emoji.ts",
-    distFile: "decorative-emoji.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "health-style",
-    srcFile: "health-style.ts",
-    distFile: "health-style.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "links",
-    srcFile: "links.ts",
-    distFile: "links.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "note",
-    srcFile: "note.ts",
-    distFile: "note.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "osc-progress",
-    srcFile: "osc-progress.ts",
-    distFile: "osc-progress.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "palette",
-    srcFile: "palette.ts",
-    distFile: "palette.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "progress-line",
-    srcFile: "progress-line.ts",
-    distFile: "progress-line.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "prompt-select-styled",
-    srcFile: "prompt-select-styled.ts",
-    distFile: "prompt-select-styled.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "prompt-select-styled-params",
-    srcFile: "prompt-select-styled-params.ts",
-    distFile: "prompt-select-styled-params.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "prompt-style",
-    srcFile: "prompt-style.ts",
-    distFile: "prompt-style.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "restore",
-    srcFile: "restore.ts",
-    distFile: "restore.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "safe-text",
-    srcFile: "safe-text.ts",
-    distFile: "safe-text.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "stream-writer",
-    srcFile: "stream-writer.ts",
-    distFile: "stream-writer.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "table",
-    srcFile: "table.ts",
-    distFile: "table.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "terminal-link",
-    srcFile: "terminal-link.ts",
-    distFile: "terminal-link.mjs",
-  },
-  {
-    packageName: "@openclaw/terminal-core",
-    packageDir: "terminal-core",
-    subpath: "theme",
-    srcFile: "theme.ts",
-    distFile: "theme.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "ip",
-    srcFile: "ip.ts",
-    distFile: "ip.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "ipv4",
-    srcFile: "ipv4.ts",
-    distFile: "ipv4.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "redact-sensitive-url",
-    srcFile: "redact-sensitive-url.ts",
-    distFile: "redact-sensitive-url.mjs",
-  },
-  {
-    packageName: "@openclaw/net-policy",
-    packageDir: "net-policy",
-    subpath: "url-userinfo",
-    srcFile: "url-userinfo.ts",
-    distFile: "url-userinfo.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "",
-    srcFile: "index.ts",
-    distFile: "index.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "configured-model-refs",
-    srcFile: "configured-model-refs.ts",
-    distFile: "configured-model-refs.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "model-catalog-refs",
-    srcFile: "model-catalog-refs.ts",
-    distFile: "model-catalog-refs.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "model-catalog-normalize",
-    srcFile: "model-catalog-normalize.ts",
-    distFile: "model-catalog-normalize.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "model-catalog-types",
-    srcFile: "model-catalog-types.ts",
-    distFile: "model-catalog-types.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "provider-id",
-    srcFile: "provider-id.ts",
-    distFile: "provider-id.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "provider-model-id-normalization",
-    srcFile: "provider-model-id-normalization.ts",
-    distFile: "provider-model-id-normalization.mjs",
-  },
-  {
-    packageName: "@openclaw/model-catalog-core",
-    packageDir: "model-catalog-core",
-    subpath: "provider-model-id-normalize",
-    srcFile: "provider-model-id-normalize.ts",
-    distFile: "provider-model-id-normalize.mjs",
-  },
+// Packaged installs omit workspace manifests; preserve the exact curated subpaths
+// instead of expanding aliases from package exports.
+const WORKSPACE_PACKAGE_ALIAS_SUBPATHS = [
+  ["gateway-client", ["", "readiness", "timeouts", "websocket-data"]],
+  [
+    "gateway-protocol",
+    [
+      "",
+      "client-info",
+      "connect-error-details",
+      "frame-guards",
+      "schema",
+      "startup-unavailable",
+      "version",
+    ],
+  ],
+  [
+    "markdown-core",
+    [
+      "",
+      "code-spans",
+      "fences",
+      "frontmatter",
+      "ir",
+      "render",
+      "render-aware-chunking",
+      "tables",
+      "types",
+    ],
+  ],
+  ["media-generation-core", ["", "capability-model-ref", "catalog", "model-ref", "normalization"]],
+  ["retry", [""]],
+  [
+    "terminal-core",
+    [
+      "",
+      "ansi",
+      "decorative-emoji",
+      "health-style",
+      "links",
+      "note",
+      "osc-progress",
+      "palette",
+      "progress-line",
+      "prompt-select-styled",
+      "prompt-select-styled-params",
+      "prompt-style",
+      "restore",
+      "safe-text",
+      "stream-writer",
+      "table",
+      "terminal-link",
+      "theme",
+    ],
+  ],
+  ["net-policy", ["", "ip", "ipv4", "redact-sensitive-url", "url-protocol", "url-userinfo"]],
+  [
+    "model-catalog-core",
+    [
+      "",
+      "configured-model-refs",
+      "model-catalog-refs",
+      "model-catalog-normalize",
+      "model-catalog-pricing",
+      "model-catalog-types",
+      "provider-id",
+      "provider-model-id-normalization",
+      "provider-model-id-normalize",
+    ],
+  ],
 ] as const;
+
+const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] =
+  WORKSPACE_PACKAGE_ALIAS_SUBPATHS.flatMap(([packageDir, subpaths]) =>
+    subpaths.map((subpath): WorkspacePackageAliasEntry => ({
+      packageName: `@openclaw/${packageDir}`,
+      packageDir,
+      subpath,
+      srcFile: `${subpath || "index"}.ts`,
+      distFile: `${subpath || "index"}.mjs`,
+    })),
+  );
+const WORKSPACE_PACKAGE_ALIAS_NAMES = new Set([
+  ...WORKSPACE_PACKAGE_ALIAS_SUBPATHS.map(([name]) => `@openclaw/${name}`),
+  "@openclaw/media-core",
+  "@openclaw/normalization-core",
+  "@openclaw/acp-core",
+]);
 const ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS = new Set([
   "acp-core",
   "media-core",
   "normalization-core",
+  "retry",
   "terminal-core",
 ]);
 
@@ -1048,12 +639,12 @@ function listRootPackagedWorkspacePackageAliasEntries(params: {
   packageDir: string;
 }): WorkspacePackageAliasEntry[] {
   const distRoot = path.join(params.packageRoot, "dist", params.packageDir);
-  if (!fs.existsSync(distRoot)) {
+  if (!pluginCacheExistsSync(distRoot)) {
     return [];
   }
   const entries: WorkspacePackageAliasEntry[] = [];
   const visit = (dir: string, prefix = "") => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    for (const entry of readPluginCacheDirectory(dir)) {
       const relativePath = prefix ? path.join(prefix, entry.name) : entry.name;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
@@ -1087,23 +678,24 @@ export function listWorkspacePackageExportAliasEntries(params: {
   packageName: string;
   packageDir: string;
 }): WorkspacePackageAliasEntry[] {
+  const cache = sdkHost(params.packageRoot).workspaceExports;
+  const key = `${params.packageName}\0${params.packageDir}`;
+  const cached = cache.get(key);
+  if (cached) {
+    return cached;
+  }
   const packageJsonPath = path.join(
     params.packageRoot,
     "packages",
     params.packageDir,
     "package.json",
   );
-  const fallbackPackageRoot = resolveOpenClawPackageRootSync({ cwd: process.cwd() });
-  const packageJson =
-    tryReadJsonSync<PluginSdkPackageJson>(packageJsonPath) ??
-    (fallbackPackageRoot
-      ? tryReadJsonSync<PluginSdkPackageJson>(
-          path.join(fallbackPackageRoot, "packages", params.packageDir, "package.json"),
-        )
-      : null);
+  const packageJson = readPluginSdkPackageJson(path.dirname(packageJsonPath));
   const exports = packageJson?.exports;
   if (!exports || typeof exports !== "object" || Array.isArray(exports)) {
-    return listRootPackagedWorkspacePackageAliasEntries(params);
+    const entries = listRootPackagedWorkspacePackageAliasEntries(params);
+    cache.set(key, entries);
+    return entries;
   }
   const entries: WorkspacePackageAliasEntry[] = [];
   for (const [exportKey, value] of Object.entries(exports)) {
@@ -1122,13 +714,27 @@ export function listWorkspacePackageExportAliasEntries(params: {
       distFile,
     });
   }
-  return entries.length > 0
-    ? entries.toSorted((a, b) => a.subpath.localeCompare(b.subpath))
-    : listRootPackagedWorkspacePackageAliasEntries(params);
+  const result =
+    entries.length > 0
+      ? entries.toSorted((a, b) => a.subpath.localeCompare(b.subpath))
+      : listRootPackagedWorkspacePackageAliasEntries(params);
+  cache.set(key, result);
+  return result;
 }
 
 function isUsableDistPluginSdkArtifact(candidate: string): boolean {
-  if (!fs.existsSync(candidate)) {
+  const cache = getPluginCache().sdk.usableDistArtifacts;
+  const cached = cache.get(candidate);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const usable = checkDistPluginSdkArtifact(candidate);
+  cache.set(candidate, usable);
+  return usable;
+}
+
+function checkDistPluginSdkArtifact(candidate: string): boolean {
+  if (!pluginCacheExistsSync(candidate)) {
     return false;
   }
   switch (normalizeLowercaseStringOrEmpty(path.extname(candidate))) {
@@ -1143,7 +749,7 @@ function isUsableDistPluginSdkArtifact(candidate: string): boolean {
     const source = fs.readFileSync(candidate, "utf-8");
     for (const match of source.matchAll(JS_STATIC_RELATIVE_DEPENDENCY_PATTERN)) {
       const specifier = match[1];
-      if (!specifier || fs.existsSync(path.resolve(path.dirname(candidate), specifier))) {
+      if (!specifier || pluginCacheExistsSync(path.resolve(path.dirname(candidate), specifier))) {
         continue;
       }
       return false;
@@ -1155,23 +761,30 @@ function isUsableDistPluginSdkArtifact(candidate: string): boolean {
 }
 
 function readPrivateLocalOnlyPluginSdkSubpaths(packageRoot: string): string[] {
-  const parsed = tryReadJsonSync(
+  const facts = sdkHost(packageRoot);
+  if (facts.privateSubpaths) {
+    return facts.privateSubpaths;
+  }
+  const parsed = readSdkJsonFile(
     path.join(packageRoot, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
   );
-  return [
+  return (facts.privateSubpaths = [
     ...new Set([
-      CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH,
       CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH,
-      OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH,
+      NATIVE_HOOK_RELAY_RUNTIME_PLUGIN_SDK_SUBPATH,
+      CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH,
       ...(Array.isArray(parsed)
-        ? parsed.filter((subpath): subpath is string => isSafePluginSdkSubpathSegment(subpath))
+        ? parsed.filter(
+            (subpath): subpath is string =>
+              typeof subpath === "string" && isSafePluginSdkSubpathSegment(subpath),
+          )
         : []),
     ]),
-  ];
+  ]);
 }
 
 function readBundledPluginPackageName(packageJsonPath: string): string | null {
-  const parsed = tryReadJsonSync<{ name?: unknown }>(packageJsonPath);
+  const parsed = readPluginSdkPackageJson(path.dirname(packageJsonPath));
   const name = typeof parsed?.name === "string" ? parsed.name.trim() : "";
   return name.startsWith("@openclaw/") ? name : null;
 }
@@ -1191,8 +804,7 @@ function listBundledPluginPublicSurfaceSourceBasenames(params: {
   includePrivateQa: boolean;
 }): string[] {
   try {
-    return fs
-      .readdirSync(params.extensionSourceRoot, { withFileTypes: true })
+    return readPluginCacheDirectory(params.extensionSourceRoot)
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
       .flatMap((fileName) => {
@@ -1231,7 +843,7 @@ function resolveBundledPluginPublicSurfaceAliasTarget(params: {
         params.dirName,
         `${params.basename}.js`,
       );
-      if (fs.existsSync(candidate)) {
+      if (pluginCacheExistsSync(candidate)) {
         return candidate;
       }
       continue;
@@ -1243,7 +855,7 @@ function resolveBundledPluginPublicSurfaceAliasTarget(params: {
         params.dirName,
         `${params.basename}${ext}`,
       );
-      if (fs.existsSync(candidate)) {
+      if (pluginCacheExistsSync(candidate)) {
         return candidate;
       }
     }
@@ -1251,23 +863,22 @@ function resolveBundledPluginPublicSurfaceAliasTarget(params: {
   return null;
 }
 
-function resolveBundledPluginPackagePublicSurfaceAliasMap(params: {
-  modulePath: string;
-  argv1?: string;
-  moduleUrl?: string;
-  pluginSdkResolution: PluginSdkResolutionPreference;
-  devSourceRoot?: string | null;
-}): Record<string, string> {
-  const packageRoot = resolveLoaderPluginSdkPackageRoot(params);
+type PluginLoaderAliasContext = {
+  packageRoot: string | null;
+  orderedKinds: PluginSdkAliasCandidateKind[];
+  includePrivateQa: boolean;
+  trustedPrivateOwners: string[];
+  bundledPlugin: boolean;
+};
+
+function resolveBundledPluginPackagePublicSurfaceAliasMap(
+  context: PluginLoaderAliasContext,
+): Record<string, string> {
+  const { packageRoot, orderedKinds, includePrivateQa } = context;
   if (!packageRoot) {
     return {};
   }
-  const orderedKinds = resolvePluginSdkAliasCandidateOrder({
-    modulePath: params.modulePath,
-    isProduction: process.env.NODE_ENV === "production",
-    pluginSdkResolution: params.pluginSdkResolution,
-  });
-  const includePrivateQa = shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
+  const cachedBundledPluginPublicSurfaceAliasMaps = sdkHost(packageRoot).bundledAliasesByMode;
   const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${includePrivateQa ? "1" : "0"}`;
   const cached = cachedBundledPluginPublicSurfaceAliasMaps.get(cacheKey);
   if (cached) {
@@ -1276,7 +887,7 @@ function resolveBundledPluginPackagePublicSurfaceAliasMap(params: {
   const extensionsRoot = path.join(packageRoot, "extensions");
   let extensionDirs: fs.Dirent[];
   try {
-    extensionDirs = fs.readdirSync(extensionsRoot, { withFileTypes: true });
+    extensionDirs = readPluginCacheDirectory(extensionsRoot);
   } catch {
     cachedBundledPluginPublicSurfaceAliasMaps.set(cacheKey, {});
     return {};
@@ -1313,30 +924,31 @@ function resolveBundledPluginPackagePublicSurfaceAliasMap(params: {
   return aliasMap;
 }
 
-function resolveWorkspacePackageAliasMap(params: {
-  modulePath: string;
-  argv1?: string;
-  moduleUrl?: string;
-  pluginSdkResolution: PluginSdkResolutionPreference;
-  devSourceRoot?: string | null;
-}): Record<string, string> {
-  const packageRoot = resolveLoaderPluginSdkPackageRoot(params);
+function resolveWorkspacePackageAliasMap(
+  context: PluginLoaderAliasContext,
+): Record<string, string> {
+  const { packageRoot, orderedKinds } = context;
   if (!packageRoot) {
     return {};
   }
-  const orderedKinds = resolvePluginSdkAliasCandidateOrder({
-    modulePath: params.modulePath,
-    isProduction: process.env.NODE_ENV === "production",
-    pluginSdkResolution: params.pluginSdkResolution,
-  });
+  // Raw modes with the same effective preference order resolve identical targets.
+  // Key the process-stable cache by that target-affecting order, not the caller spelling.
+  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}`;
+  const cachedWorkspacePackageAliasMaps = sdkHost(packageRoot).workspaceAliasesByMode;
+  const cached = cachedWorkspacePackageAliasMaps.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   const aliasMap: Record<string, string> = {};
   const workspacePackageAliasEntries = [
     ...WORKSPACE_PACKAGE_ALIAS_ENTRIES,
-    ...listWorkspacePackageExportAliasEntries({
-      packageRoot,
-      packageName: "@openclaw/acp-core",
-      packageDir: "acp-core",
-    }),
+    ...["media-core", "normalization-core", "acp-core"].flatMap((packageDir) =>
+      listWorkspacePackageExportAliasEntries({
+        packageRoot,
+        packageName: `@openclaw/${packageDir}`,
+        packageDir,
+      }),
+    ),
   ];
   for (const entry of workspacePackageAliasEntries) {
     const alias = entry.subpath ? `${entry.packageName}/${entry.subpath}` : entry.packageName;
@@ -1357,13 +969,14 @@ function resolveWorkspacePackageAliasMap(params: {
               path.join(packageRoot, "packages", entry.packageDir, "dist", entry.distFile),
             ]
           : [path.join(packageRoot, "packages", entry.packageDir, "src", entry.srcFile)];
-      const candidate = candidates.find((candidatePath) => fs.existsSync(candidatePath));
+      const candidate = candidates.find((candidatePath) => pluginCacheExistsSync(candidatePath));
       if (candidate) {
         aliasMap[alias] = normalizeJitiAliasTargetPath(candidate);
         break;
       }
     }
   }
+  cachedWorkspacePackageAliasMaps.set(cacheKey, aliasMap);
   return aliasMap;
 }
 
@@ -1388,6 +1001,13 @@ function isBundledPluginModulePath(params: {
   );
 }
 
+function isAnyBundledPluginModulePath(params: { packageRoot: string; modulePath: string }) {
+  const normalizedModulePath = path.resolve(params.modulePath);
+  return ["extensions", path.join("dist", "extensions"), path.join("dist-runtime", "extensions")]
+    .map((segment) => path.join(params.packageRoot, segment))
+    .some((root) => normalizedModulePath.startsWith(`${root}${path.sep}`));
+}
+
 function isOfficialInstalledPluginPackageRoot(params: {
   packageRoot: string;
   packageName: string;
@@ -1406,7 +1026,7 @@ function isOfficialInstalledPluginPackageRoot(params: {
 function isOfficialInstalledPluginModulePath(params: { modulePath: string; packageName: string }) {
   let cursor = path.dirname(path.resolve(params.modulePath));
   for (let depth = 0; depth < 12; depth += 1) {
-    const packageJson = tryReadJsonSync<{ name?: unknown }>(path.join(cursor, "package.json"));
+    const packageJson = readPluginSdkPackageJson(cursor);
     if (packageJson) {
       return (
         packageJson.name === params.packageName &&
@@ -1477,19 +1097,23 @@ function resolvePrivatePluginSdkOwnerPackageRoot(params: {
   );
 }
 
-function shouldIncludePrivateLocalOnlyPluginSdkSubpath(params: {
-  packageRoot: string;
-  modulePath: string;
-  subpath: string;
-}) {
-  const owners = findPrivatePluginSdkSubpathOwners(params.subpath);
+function shouldIncludePrivateLocalOnlyPluginSdkSubpath(
+  context: PluginLoaderAliasContext,
+  subpath: string,
+) {
+  if (PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS.has(subpath)) {
+    return context.includePrivateQa;
+  }
+  const owners = findPrivatePluginSdkSubpathOwners(subpath);
   if (owners.length === 0) {
-    return shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
+    // Demoted public helpers remain available to bundled plugins; sensitive
+    // helpers retain their explicitly captured owner grants.
+    return context.bundledPlugin || context.includePrivateQa;
   }
   return owners.some(
     (owner) =>
-      isTrustedPrivatePluginSdkOwnerPath({ ...params, owner }) ||
-      (owner.allowPrivateQaCli && shouldIncludePrivateLocalOnlyPluginSdkSubpaths()),
+      context.trustedPrivateOwners.includes(owner.bundledPluginId) ||
+      (owner.allowPrivateQaCli && context.includePrivateQa),
   );
 }
 
@@ -1499,7 +1123,7 @@ function hasPluginSdkSubpathArtifact(packageRoot: string, subpath: string) {
     return true;
   }
   return PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS.some((ext) =>
-    fs.existsSync(path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`)),
+    pluginCacheExistsSync(path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`)),
   );
 }
 
@@ -1507,8 +1131,7 @@ function listDistPluginSdkArtifactSubpaths(packageRoot: string): Set<string> {
   try {
     const distPluginSdkDir = path.join(packageRoot, "dist", "plugin-sdk");
     return new Set(
-      fs
-        .readdirSync(distPluginSdkDir, { withFileTypes: true })
+      readPluginCacheDirectory(distPluginSdkDir)
         .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
         .map((entry) => entry.name.slice(0, -".js".length))
         .filter((subpath) => isSafePluginSdkSubpathSegment(subpath)),
@@ -1518,51 +1141,17 @@ function listDistPluginSdkArtifactSubpaths(packageRoot: string): Set<string> {
   }
 }
 
-function listPrivateLocalOnlyPluginSdkSubpaths(params: {
-  packageRoot: string;
-  ownerPackageRoot: string;
-  modulePath: string;
-}): string[] {
-  return readPrivateLocalOnlyPluginSdkSubpaths(params.packageRoot).filter(
-    (subpath) =>
-      shouldIncludePrivateLocalOnlyPluginSdkSubpath({
-        packageRoot: params.ownerPackageRoot,
-        modulePath: params.modulePath,
-        subpath,
-      }) && hasPluginSdkSubpathArtifact(params.packageRoot, subpath),
-  );
+function pluginSdkAuthorityCacheKey(context: PluginLoaderAliasContext): string {
+  return `${context.packageRoot}::privateQa=${context.includePrivateQa ? "1" : "0"}::privateOwners=${context.trustedPrivateOwners.join(",")}::bundled=${context.bundledPlugin ? "1" : "0"}`;
 }
 
-export function listPluginSdkExportedSubpaths(
-  params: {
-    modulePath?: string;
-    argv1?: string;
-    moduleUrl?: string;
-    devSourceRoot?: string | null;
-    pluginSdkResolution?: PluginSdkResolutionPreference;
-  } = {},
-): string[] {
-  const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-  const packageRoot = resolveLoaderPluginSdkPackageRoot({
-    modulePath,
-    argv1: params.argv1,
-    moduleUrl: params.moduleUrl,
-    devSourceRoot: params.devSourceRoot,
-  });
+function listPluginSdkExportedSubpaths(context: PluginLoaderAliasContext): string[] {
+  const { packageRoot } = context;
   if (!packageRoot) {
     return [];
   }
-  const ownerPackageRoot = resolvePrivatePluginSdkOwnerPackageRoot({
-    modulePath,
-    argv1: params.argv1,
-    moduleUrl: params.moduleUrl,
-    aliasPackageRoot: packageRoot,
-  });
-  const trustedPrivateOwners = listTrustedPrivatePluginSdkOwnerKeys({
-    packageRoot: ownerPackageRoot,
-    modulePath,
-  });
-  const cacheKey = `${packageRoot}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::privateOwners=${trustedPrivateOwners.join(",")}`;
+  const cacheKey = pluginSdkAuthorityCacheKey(context);
+  const cachedPluginSdkExportedSubpaths = sdkHost(packageRoot).subpathsByOwner;
   const cached = cachedPluginSdkExportedSubpaths.get(cacheKey);
   if (cached) {
     return cached;
@@ -1570,48 +1159,24 @@ export function listPluginSdkExportedSubpaths(
   const subpaths = [
     ...new Set([
       ...(readPluginSdkSubpathsFromPackageRoot(packageRoot) ?? []),
-      ...listPrivateLocalOnlyPluginSdkSubpaths({ packageRoot, ownerPackageRoot, modulePath }),
+      ...readPrivateLocalOnlyPluginSdkSubpaths(packageRoot).filter(
+        (subpath) =>
+          shouldIncludePrivateLocalOnlyPluginSdkSubpath(context, subpath) &&
+          hasPluginSdkSubpathArtifact(packageRoot, subpath),
+      ),
     ]),
   ].toSorted();
   cachedPluginSdkExportedSubpaths.set(cacheKey, subpaths);
   return subpaths;
 }
 
-export function resolvePluginSdkScopedAliasMap(
-  params: {
-    modulePath?: string;
-    argv1?: string;
-    moduleUrl?: string;
-    devSourceRoot?: string | null;
-    pluginSdkResolution?: PluginSdkResolutionPreference;
-  } = {},
-): Record<string, string> {
-  const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-  const packageRoot = resolveLoaderPluginSdkPackageRoot({
-    modulePath,
-    argv1: params.argv1,
-    moduleUrl: params.moduleUrl,
-    devSourceRoot: params.devSourceRoot,
-  });
+function resolvePluginSdkScopedAliasMap(context: PluginLoaderAliasContext): Record<string, string> {
+  const { packageRoot, orderedKinds } = context;
   if (!packageRoot) {
     return {};
   }
-  const ownerPackageRoot = resolvePrivatePluginSdkOwnerPackageRoot({
-    modulePath,
-    argv1: params.argv1,
-    moduleUrl: params.moduleUrl,
-    aliasPackageRoot: packageRoot,
-  });
-  const orderedKinds = resolvePluginSdkAliasCandidateOrder({
-    modulePath,
-    isProduction: process.env.NODE_ENV === "production",
-    pluginSdkResolution: params.pluginSdkResolution,
-  });
-  const trustedPrivateOwners = listTrustedPrivatePluginSdkOwnerKeys({
-    packageRoot: ownerPackageRoot,
-    modulePath,
-  });
-  const cacheKey = `${packageRoot}::${orderedKinds.join(",")}::privateQa=${shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "1" : "0"}::privateOwners=${trustedPrivateOwners.join(",")}`;
+  const cacheKey = `${pluginSdkAuthorityCacheKey(context)}::${orderedKinds.join(",")}`;
+  const cachedPluginSdkScopedAliasMaps = sdkHost(packageRoot).aliasesByOwner;
   const cached = cachedPluginSdkScopedAliasMaps.get(cacheKey);
   if (cached) {
     return cached;
@@ -1620,13 +1185,7 @@ export function resolvePluginSdkScopedAliasMap(
   const distPluginSdkArtifacts = orderedKinds.includes("dist")
     ? listDistPluginSdkArtifactSubpaths(packageRoot)
     : new Set<string>();
-  for (const subpath of listPluginSdkExportedSubpaths({
-    modulePath,
-    argv1: params.argv1,
-    moduleUrl: params.moduleUrl,
-    devSourceRoot: params.devSourceRoot,
-    pluginSdkResolution: params.pluginSdkResolution,
-  })) {
+  for (const subpath of listPluginSdkExportedSubpaths(context)) {
     for (const kind of orderedKinds) {
       if (kind === "dist") {
         if (!distPluginSdkArtifacts.has(subpath)) {
@@ -1643,7 +1202,7 @@ export function resolvePluginSdkScopedAliasMap(
       }
       for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
         const candidate = path.join(packageRoot, "src", "plugin-sdk", `${subpath}${ext}`);
-        if (!fs.existsSync(candidate)) {
+        if (!pluginCacheExistsSync(candidate)) {
           continue;
         }
         for (const packageName of PLUGIN_SDK_PACKAGE_NAMES) {
@@ -1660,62 +1219,50 @@ export function resolvePluginSdkScopedAliasMap(
   return aliasMap;
 }
 
-export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {}): string | null {
-  try {
-    const modulePath = resolveLoaderModulePath(params);
-    const packageRoot =
-      resolveDevSourceRootParam(params) ?? resolveLoaderPackageRoot({ ...params, modulePath });
-    if (!packageRoot) {
-      return null;
-    }
-
-    const orderedKinds = resolvePluginSdkAliasCandidateOrder({
-      modulePath,
-      isProduction: process.env.NODE_ENV === "production",
-      pluginSdkResolution: params.pluginSdkResolution,
-    });
-    for (const kind of orderedKinds) {
-      if (kind === "dist") {
-        const candidate = path.join(packageRoot, "dist", "extensionAPI.js");
-        if (fs.existsSync(candidate)) {
-          return candidate;
-        }
-        continue;
-      }
-      for (const ext of PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS) {
-        const candidate = path.join(packageRoot, "src", `extensionAPI${ext}`);
-        if (fs.existsSync(candidate)) {
-          return candidate;
-        }
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
 const JITI_NORMALIZED_ALIAS_SYMBOL = Symbol.for("pathe:normalizedAlias");
 const JITI_ALIAS_ROOT_SENTINELS = new Set<string | undefined>(["/", "\\", undefined]);
 const JITI_CONCRETE_ALIAS_TARGET_PATTERN = /^(?:[A-Za-z]:[/\\]|[/\\])/;
 
-// Memoize loader alias/config by effective resolution context so repeated
-// loader setup avoids rebuilding the same filesystem-derived map and cache key.
-// Include cwd/env inputs because the fallback root and private QA alias
-// surfaces depend on them.
-const aliasMapCache = new PluginLruCache<Record<string, string>>(
-  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
-);
-const normalizedJitiAliasMapCache = new PluginLruCache<Record<string, string>>(
-  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
-);
-const normalizedJitiAliasMapByInput = new WeakMap<Record<string, string>, Record<string, string>>();
-const pluginLoaderModuleCacheKeyByAliasMap = new WeakMap<Record<string, string>, string>();
-const pluginLoaderModuleConfigCache = new PluginLruCache<{
-  tryNative: boolean;
-  aliasMap: Record<string, string>;
-  cacheKey: string;
-}>(MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES);
+function normalizeAliasTargets(aliasMap: Record<string, string>): Record<string, string> {
+  if (process.platform !== "win32") {
+    return aliasMap;
+  }
+  const facts = sdkAliasFacts(aliasMap);
+  const cached = facts.normalizedTargets;
+  if (cached) {
+    return cached;
+  }
+  const normalized = Object.fromEntries(
+    Object.entries(aliasMap).map(([key, value]) => [key, normalizeJitiAliasTargetPath(value)]),
+  );
+  facts.normalizedTargets = normalized;
+  return normalized;
+}
+
+function mergeAliasMaps(
+  bundled: Record<string, string>,
+  workspace: Record<string, string>,
+  pluginSdk: Record<string, string>,
+): Record<string, string> {
+  const mergedAliasMapsByComponent = getPluginCache().sdk.mergedAliases;
+  let byWorkspace = mergedAliasMapsByComponent.get(bundled);
+  if (!byWorkspace) {
+    byWorkspace = new WeakMap();
+    mergedAliasMapsByComponent.set(bundled, byWorkspace);
+  }
+  let byPluginSdk = byWorkspace.get(workspace);
+  if (!byPluginSdk) {
+    byPluginSdk = new WeakMap();
+    byWorkspace.set(workspace, byPluginSdk);
+  }
+  const cached = byPluginSdk.get(pluginSdk);
+  if (cached) {
+    return cached;
+  }
+  const merged = { ...bundled, ...workspace, ...pluginSdk };
+  byPluginSdk.set(pluginSdk, merged);
+  return merged;
+}
 
 function hasJitiNormalizedAliasMarker(aliasMap: Record<string, string>) {
   return Boolean((aliasMap as Record<symbol, unknown>)[JITI_NORMALIZED_ALIAS_SYMBOL]);
@@ -1773,14 +1320,16 @@ function normalizePluginLoaderAliasMapForJiti(
   if (hasJitiNormalizedAliasMarker(aliasMap)) {
     return aliasMap;
   }
-  const cachedByInput = normalizedJitiAliasMapByInput.get(aliasMap);
+  const facts = sdkAliasFacts(aliasMap);
+  const cachedByInput = facts.normalizedJiti;
   if (cachedByInput) {
     return cachedByInput;
   }
   const cacheKey = createJitiAliasContentCacheKey(aliasMap);
+  const normalizedJitiAliasMapCache = getPluginCache().sdk.normalizedJitiAliases;
   const cached = normalizedJitiAliasMapCache.get(cacheKey);
   if (cached) {
-    normalizedJitiAliasMapByInput.set(aliasMap, cached);
+    facts.normalizedJiti = cached;
     return cached;
   }
   const aliasDepth = new Map<string, number>();
@@ -1814,48 +1363,81 @@ function normalizePluginLoaderAliasMapForJiti(
     enumerable: false,
   });
   normalizedJitiAliasMapCache.set(cacheKey, normalizedAliasMap);
-  normalizedJitiAliasMapByInput.set(aliasMap, normalizedAliasMap);
+  facts.normalizedJiti = normalizedAliasMap;
   return normalizedAliasMap;
 }
 
-function buildPluginLoaderAliasMapCacheKey(params: {
-  modulePath: string;
-  argv1?: string;
-  moduleUrl?: string;
-  pluginSdkResolution: PluginSdkResolutionPreference;
-  devSourceRoot?: string | null;
-}) {
-  const devSourceRoot = resolveDevSourceRootParam(params);
-  return [
-    params.modulePath,
-    params.argv1 ?? "",
-    params.moduleUrl ?? "",
-    params.pluginSdkResolution,
-    process.cwd(),
-    devSourceRoot ?? "",
-    process.env.NODE_ENV === "production" ? "production" : "non-production",
-    shouldIncludePrivateLocalOnlyPluginSdkSubpaths() ? "private-qa" : "public",
-  ].join("\0");
+/** Captures host and private authority now; only complete artifact preparation is deferred. */
+export function preparePluginLoaderAliases(
+  params: LoaderModuleResolveParams & { modulePath: string },
+) {
+  const modulePath = path.resolve(params.modulePath);
+  const captured = { ...params, modulePath, devSourceRoot: resolveDevSourceRootParam(params) };
+  const packageRoot = resolveLoaderPluginSdkPackageRoot(captured);
+  const ownerPackageRoot = packageRoot
+    ? resolvePrivatePluginSdkOwnerPackageRoot({ ...captured, aliasPackageRoot: packageRoot })
+    : null;
+  const context: PluginLoaderAliasContext = {
+    packageRoot,
+    orderedKinds: resolvePluginSdkAliasCandidateOrder({
+      modulePath,
+      isProduction: process.env.NODE_ENV === "production",
+      pluginSdkResolution: params.pluginSdkResolution,
+    }),
+    includePrivateQa: shouldIncludePrivateLocalOnlyPluginSdkSubpaths(),
+    trustedPrivateOwners: ownerPackageRoot
+      ? listTrustedPrivatePluginSdkOwnerKeys({ packageRoot: ownerPackageRoot, modulePath })
+      : [],
+    bundledPlugin: ownerPackageRoot
+      ? isAnyBundledPluginModulePath({ packageRoot: ownerPackageRoot, modulePath })
+      : false,
+  };
+  const cache = getPluginCache();
+  const cacheKey = JSON.stringify(context);
+  const cached = cache.sdk.contexts.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  let aliasMap: Record<string, string> | undefined;
+  const getAliasMap = () =>
+    withPluginCache(
+      cache,
+      () =>
+        (aliasMap ??= mergeAliasMaps(
+          resolveBundledPluginPackagePublicSurfaceAliasMap(context),
+          resolveWorkspacePackageAliasMap(context),
+          normalizeAliasTargets(resolvePluginSdkScopedAliasMap(context)),
+        )),
+    );
+  const prepared = {
+    // These are all inputs to the three map builders; installed artifacts stay
+    // stable for the loader lifecycle. Key the captured authority, not raw hints.
+    cacheKey,
+    getAliasMap,
+    resolveAlias: (specifier: string): string | undefined =>
+      isPluginLoaderAliasSpecifier(specifier) ? getAliasMap()[specifier] : undefined,
+  };
+  cache.sdk.contexts.set(cacheKey, prepared);
+  return prepared;
 }
 
-function buildPluginLoaderModuleConfigCacheKey(params: {
-  modulePath: string;
-  argv1?: string;
-  moduleUrl: string;
-  devSourceRoot?: string | null;
-  preferBuiltDist?: boolean;
-  pluginSdkResolution?: PluginSdkResolutionPreference;
-}) {
-  return [
-    buildPluginLoaderAliasMapCacheKey({
-      modulePath: params.modulePath,
-      argv1: params.argv1,
-      moduleUrl: params.moduleUrl,
-      pluginSdkResolution: params.pluginSdkResolution ?? "auto",
-      devSourceRoot: params.devSourceRoot,
-    }),
-    params.preferBuiltDist === true ? "prefer-built-dist" : "default-dist",
-  ].join("\0");
+// SDK and workspace namespaces are canonical above. Bundled package names are
+// manifest-owned, but their alias surface is restricted to these API basenames.
+function isPluginLoaderAliasSpecifier(specifier: string): boolean {
+  const packageName = specifier.split("/", 2).join("/");
+  const basename = specifier.slice(packageName.length + 1);
+  return (
+    isPluginSdkAliasSpecifier(specifier) ||
+    WORKSPACE_PACKAGE_ALIAS_NAMES.has(packageName) ||
+    (packageName.startsWith("@openclaw/") &&
+      !basename.includes("/") &&
+      basename.endsWith(".js") &&
+      BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN.test(basename.slice(0, -3)))
+  );
+}
+
+export function isPluginSdkAliasSpecifier(specifier: string): boolean {
+  return PLUGIN_SDK_PACKAGE_NAMES.some((prefix) => specifier.startsWith(`${prefix}/`));
 }
 
 export function buildPluginLoaderAliasMap(
@@ -1865,82 +1447,40 @@ export function buildPluginLoaderAliasMap(
   pluginSdkResolution: PluginSdkResolutionPreference = "auto",
   devSourceRoot?: string | null,
 ): Record<string, string> {
-  const cacheKey = buildPluginLoaderAliasMapCacheKey({
+  return preparePluginLoaderAliases({
     modulePath,
     argv1,
     moduleUrl,
     pluginSdkResolution,
     devSourceRoot,
-  });
-  const cached = aliasMapCache.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-
-  const pluginSdkAlias = resolvePluginSdkAliasFile({
-    srcFile: "root-alias.cjs",
-    distFile: "root-alias.cjs",
-    modulePath,
-    argv1,
-    moduleUrl,
-    pluginSdkResolution,
-    devSourceRoot,
-  });
-  const extensionApiAlias = resolveExtensionApiAlias({
-    modulePath,
-    pluginSdkResolution,
-    devSourceRoot,
-  });
-  const result: Record<string, string> = {
-    ...(extensionApiAlias
-      ? { "openclaw/extension-api": normalizeJitiAliasTargetPath(extensionApiAlias) }
-      : {}),
-    ...resolveBundledPluginPackagePublicSurfaceAliasMap({
-      modulePath,
-      argv1,
-      moduleUrl,
-      pluginSdkResolution,
-      devSourceRoot,
-    }),
-    ...resolveWorkspacePackageAliasMap({
-      modulePath,
-      argv1,
-      moduleUrl,
-      pluginSdkResolution,
-      devSourceRoot,
-    }),
-    ...(pluginSdkAlias
-      ? Object.fromEntries(
-          PLUGIN_SDK_PACKAGE_NAMES.map((packageName) => [
-            packageName,
-            normalizeJitiAliasTargetPath(pluginSdkAlias),
-          ]),
-        )
-      : {}),
-    ...Object.fromEntries(
-      Object.entries(
-        resolvePluginSdkScopedAliasMap({
-          modulePath,
-          argv1,
-          moduleUrl,
-          pluginSdkResolution,
-          devSourceRoot,
-        }),
-      ).map(([key, value]) => [key, normalizeJitiAliasTargetPath(value)]),
-    ),
-  };
-  aliasMapCache.set(cacheKey, result);
-  return result;
-}
-
-export function resolvePluginRuntimeModulePath(
-  params: LoaderModuleResolveParams = {},
-): string | null {
-  return resolvePluginRuntimeModulePathWithDiagnostics(params).resolvedPath;
+  }).getAliasMap();
 }
 
 export function resolvePluginRuntimeModulePathWithDiagnostics(
   params: LoaderModuleResolveParams = {},
+): PluginRuntimeModuleResolution {
+  const cache = getPluginCache().sdk.runtimeModules;
+  const key = JSON.stringify([
+    params.modulePath,
+    params.argv1 ?? process.argv[1],
+    params.cwd,
+    params.moduleUrl,
+    resolveDevSourceRootParam(params),
+    params.pluginSdkResolution,
+    process.cwd(),
+    process.env.NODE_ENV,
+  ]);
+  const cached = cache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const result = resolvePluginRuntimeModuleCandidates(params);
+  cache.set(key, result);
+  return result;
+}
+
+function resolvePluginRuntimeModuleCandidates(
+  params: LoaderModuleResolveParams,
 ): PluginRuntimeModuleResolution {
   let modulePath: string | undefined;
   let packageRoot: string | null = null;
@@ -1972,7 +1512,7 @@ export function resolvePluginRuntimeModulePathWithDiagnostics(
     }
     const dedupedCandidates = dedupeResolvedPaths(candidates);
     for (const candidate of dedupedCandidates) {
-      if (fs.existsSync(candidate)) {
+      if (pluginCacheExistsSync(candidate)) {
         return {
           modulePath,
           packageRoot,
@@ -1987,7 +1527,7 @@ export function resolvePluginRuntimeModulePathWithDiagnostics(
       packageRoot,
       candidates: dedupeResolvedPaths(candidates),
       resolvedPath: null,
-      error: formatResolutionError(error),
+      error: formatErrorMessage(error),
     };
   }
   return {
@@ -2010,7 +1550,10 @@ export function buildPluginLoaderJitiOptions(
     // Prefer Node's native sync ESM loader for built dist/*.js modules so
     // bundled plugins and plugin-sdk subpaths stay on the canonical module graph.
     tryNative: true,
-    extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
+    // When jiti must transform a plugin entry, keep OpenClaw's own package
+    // chunks on the native module graph instead of re-evaluating them in jiti.
+    nativeModules: resolvePluginLoaderJitiNativeModules(),
+    extensions: [...PLUGIN_SOURCE_MODULE_EXTENSIONS, ".js", ".mjs", ".cjs", ".json"],
     ...(hasAliases
       ? {
           alias: jitiAliasMap,
@@ -2028,7 +1571,7 @@ function isBundledPluginDistModulePath(modulePath: string): boolean {
   return modulePath.replace(/\\/g, "/").includes("/dist/extensions/");
 }
 
-export function shouldPreferNativeModuleLoad(modulePath: string): boolean {
+function shouldPreferNativeModuleLoad(modulePath: string): boolean {
   if (!supportsNativeModuleRuntime()) {
     return false;
   }
@@ -2064,68 +1607,9 @@ export function createPluginLoaderModuleCacheKey(params: {
   tryNative: boolean;
   aliasMap: Record<string, string>;
 }): string {
-  const aliasMapKey =
-    pluginLoaderModuleCacheKeyByAliasMap.get(params.aliasMap) ??
-    createJitiAliasContentCacheKey(params.aliasMap);
-  pluginLoaderModuleCacheKeyByAliasMap.set(params.aliasMap, aliasMapKey);
+  const facts = sdkAliasFacts(params.aliasMap);
+  const aliasMapKey = (facts.moduleKey ??= createJitiAliasContentCacheKey(params.aliasMap));
   return `${params.tryNative ? "native" : "transform"}\0${aliasMapKey}`;
 }
 
-export function resolvePluginLoaderModuleConfig(params: {
-  modulePath: string;
-  argv1?: string;
-  moduleUrl: string;
-  devSourceRoot?: string | null;
-  preferBuiltDist?: boolean;
-  pluginSdkResolution?: PluginSdkResolutionPreference;
-}): {
-  tryNative: boolean;
-  aliasMap: Record<string, string>;
-  cacheKey: string;
-} {
-  const configCacheKey = buildPluginLoaderModuleConfigCacheKey(params);
-  const cached = pluginLoaderModuleConfigCache.get(configCacheKey);
-  if (cached) {
-    return cached;
-  }
-
-  const tryNative = resolvePluginLoaderTryNative(
-    params.modulePath,
-    params.preferBuiltDist ? { preferBuiltDist: true } : {},
-  );
-  const aliasMap = buildPluginLoaderAliasMap(
-    params.modulePath,
-    params.argv1,
-    params.moduleUrl,
-    params.pluginSdkResolution,
-    params.devSourceRoot,
-  );
-  const result = {
-    tryNative,
-    aliasMap,
-    cacheKey: createPluginLoaderModuleCacheKey({
-      tryNative,
-      aliasMap,
-    }),
-  };
-  pluginLoaderModuleConfigCache.set(configCacheKey, result);
-  return result;
-}
-
-export function isBundledPluginExtensionPath(params: {
-  modulePath: string;
-  openClawPackageRoot: string;
-  bundledPluginsDir?: string;
-}): boolean {
-  const normalizedModulePath = path.resolve(params.modulePath);
-  const roots = [
-    params.bundledPluginsDir ? path.resolve(params.bundledPluginsDir) : null,
-    path.join(params.openClawPackageRoot, "extensions"),
-    path.join(params.openClawPackageRoot, "dist", "extensions"),
-    path.join(params.openClawPackageRoot, "dist-runtime", "extensions"),
-  ].filter((root): root is string => typeof root === "string");
-  return roots.some(
-    (root) =>
-      normalizedModulePath === root || normalizedModulePath.startsWith(`${root}${path.sep}`),
-  );
-}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

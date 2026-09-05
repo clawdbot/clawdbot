@@ -4,15 +4,20 @@
  * Materializes temporary SSH config, validates remote shell snippets, runs commands, and uploads workspace trees.
  */
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { resolveRootPath } from "../../infra/boundary-path.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { normalizeEnvVarKey } from "../../infra/host-env-security.js";
 import { parseSshTarget } from "../../infra/ssh-tunnel.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
+import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 export type SshSandboxSettings = {
@@ -115,7 +120,7 @@ function assertValidExecRemoteCommand(command: string): void {
     if (!frame) {
       throw new Error("Malformed SSH/OpenShell exec command: parser state underflow.");
     }
-    const char = command[index];
+    const char = command.charAt(index);
 
     if (frame.escaping) {
       frame.escaping = false;
@@ -250,12 +255,15 @@ function assertValidExecRemoteCommand(command: string): void {
     throw new Error("Malformed SSH/OpenShell exec command: trailing backslash escape.");
   }
   if (pendingHeredocs.length > 0) {
+    const pending = pendingHeredocs.at(0);
+    if (!pending) {
+      throw new Error("Malformed SSH/OpenShell exec command: parser state underflow.");
+    }
     throw new Error(
-      `Malformed SSH/OpenShell exec command: unterminated here-doc ${pendingHeredocs[0].delimiter}.`,
+      `Malformed SSH/OpenShell exec command: unterminated here-doc ${pending.delimiter}.`,
     );
   }
-  for (let index = frames.length - 1; index >= 0; index -= 1) {
-    const frame = frames[index];
+  for (const frame of frames.toReversed()) {
     if (frame.quote === "single") {
       throw new Error("Malformed SSH/OpenShell exec command: unclosed single quote.");
     }
@@ -282,20 +290,15 @@ export function buildExecRemoteCommand(params: {
   workdir?: string;
   env: Record<string, string>;
 }): string {
+  if (Object.keys(params.env).length > 0) {
+    throw new Error(
+      "SSH sandbox environment requires secure script staging; use prepareSshSandboxExec.",
+    );
+  }
   const body = params.workdir
     ? `cd ${shellEscape(params.workdir)} && ${params.command}`
     : params.command;
-  const argv =
-    Object.keys(params.env).length > 0
-      ? [
-          "env",
-          ...Object.entries(params.env).map(([key, value]) => `${key}=${value}`),
-          "/bin/sh",
-          "-c",
-          body,
-        ]
-      : ["/bin/sh", "-c", body];
-  return buildRemoteCommand(argv);
+  return buildRemoteCommand(["/bin/sh", "-c", body]);
 }
 
 /** Validate and build a remote exec command for untrusted model input. */
@@ -306,6 +309,139 @@ export function buildValidatedExecRemoteCommand(params: {
 }): string {
   assertValidExecRemoteCommand(params.command);
   return buildExecRemoteCommand(params);
+}
+
+function createSshSandboxExecCleanup(session: SshSandboxSession, remoteDir: string) {
+  return async (): Promise<void> => {
+    await runSshSandboxCommand({
+      session,
+      remoteCommand: buildRemoteCommand([
+        "/bin/sh",
+        "-c",
+        'rm -rf -- "$1"',
+        "openclaw-sandbox-exec-cleanup",
+        remoteDir,
+      ]),
+      allowFailure: true,
+    });
+  };
+}
+
+/** Stage exec environment through private SSH stdin, never local or remote argv. */
+export async function prepareSshSandboxExec(params: {
+  session: SshSandboxSession;
+  remoteCommand: string;
+  env: Record<string, string>;
+  tty?: boolean;
+}): Promise<{
+  argv: string[];
+  cleanup: () => Promise<void>;
+}> {
+  const env =
+    params.tty && params.env.TERM === undefined
+      ? { TERM: "xterm-256color", ...params.env }
+      : params.env;
+  for (const [key, value] of Object.entries(env)) {
+    if (normalizeEnvVarKey(key, { portable: true }) !== key) {
+      throw new Error(
+        `Invalid SSH sandbox environment variable name ${JSON.stringify(key)}; use a POSIX variable name.`,
+      );
+    }
+    if (value.includes("\0")) {
+      throw new Error(
+        `Invalid SSH sandbox environment variable ${JSON.stringify(key)}; values must not contain NUL bytes.`,
+      );
+    }
+  }
+  const remoteDir = `/tmp/openclaw-sandbox-exec-${randomUUID()}`;
+  const remoteScript = `${remoteDir}/exec.sh`;
+  const script = [
+    "#!/bin/sh",
+    "set -e",
+    `rm -rf -- ${shellEscape(remoteDir)}`,
+    ...Object.entries(env).map(([key, value]) => `export ${key}=${shellEscape(value)}`),
+    `exec ${params.remoteCommand}`,
+    "",
+  ].join("\n");
+  const cleanup = createSshSandboxExecCleanup(params.session, remoteDir);
+  try {
+    await runSshSandboxCommand({
+      session: params.session,
+      remoteCommand: buildRemoteCommand([
+        "/bin/sh",
+        "-c",
+        'umask 077 && mkdir -- "$1" && cat > "$1/exec.sh" && chmod 700 "$1/exec.sh"',
+        "openclaw-sandbox-exec-stage",
+        remoteDir,
+      ]),
+      stdin: script,
+    });
+  } catch (error) {
+    await cleanup().catch(() => undefined);
+    throw error;
+  }
+  return {
+    argv: buildSshSandboxArgv({
+      session: params.session,
+      remoteCommand: buildRemoteCommand(["/bin/sh", remoteScript]),
+      tty: params.tty,
+    }),
+    cleanup,
+  };
+}
+
+const VALIDATE_REMOTE_WORKDIR_SCRIPT = [
+  "set -e",
+  'target="$1"',
+  'root="$2"',
+  'case "$target" in /*) ;; *) echo "remote directory must be absolute: $target" >&2; exit 1 ;; esac',
+  'case "$root" in /*) ;; *) echo "remote root must be absolute: $root" >&2; exit 1 ;; esac',
+  'target="${target%/}"',
+  'root="${root%/}"',
+  '[ -n "$target" ] || target="/"',
+  '[ -n "$root" ] || root="/"',
+  'if [ "$root" != "/" ]; then',
+  '  case "$target/" in "$root"/*|"$root/") ;; *) echo "remote directory must stay under root: $target" >&2; exit 1 ;; esac',
+  "fi",
+  'for path_to_check in "$target" "$root"; do',
+  '  relative="${path_to_check#/}"',
+  '  while [ -n "$relative" ]; do',
+  '    part="${relative%%/*}"',
+  '    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
+  '    [ -n "$part" ] || continue',
+  '    case "$part" in "."|"..") echo "unsafe remote directory component: $part" >&2; exit 1 ;; esac',
+  "  done",
+  "done",
+  'if [ -L "$root" ]; then echo "unsafe remote root symlink: $root" >&2; exit 1; fi',
+  'if [ ! -d "$root" ]; then echo "remote root not found: $root" >&2; exit 1; fi',
+  'canonical_root="$(cd "$root" && pwd -P)"',
+  'relative="${target#"$root"}"',
+  'relative="${relative#/}"',
+  'current="$canonical_root"',
+  'while [ -n "$relative" ]; do',
+  '  part="${relative%%/*}"',
+  '  if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
+  '  [ -n "$part" ] || continue',
+  '  if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi',
+  '  if [ -L "$next" ]; then echo "unsafe remote directory symlink: $next" >&2; exit 1; fi',
+  '  if [ ! -d "$next" ]; then echo "remote directory not found: $next" >&2; exit 1; fi',
+  '  current="$next"',
+  "done",
+  'printf "%s\\n" "$current"',
+].join("\n");
+
+export function buildRemoteWorkdirValidationCommand(params: {
+  workdir: string;
+  root: string;
+}): string {
+  return buildRemoteCommand([
+    "/bin/sh",
+    "-c",
+    VALIDATE_REMOTE_WORKDIR_SCRIPT,
+    "openclaw-validate-workdir",
+    params.workdir,
+    params.root,
+  ]);
 }
 
 function createExecCommandFrame(kind: ExecCommandFrame["kind"], parenDepth = 0): ExecCommandFrame {
@@ -335,10 +471,11 @@ function readPlaceholderToken(command: string, index: number): string | null {
 
 function hasRedirectionTargetAfter(command: string, index: number): boolean {
   let cursor = index;
-  while (command[cursor] === " " || command[cursor] === "\t") {
+  while (command.charAt(cursor) === " " || command.charAt(cursor) === "\t") {
     cursor += 1;
   }
-  return command[cursor] !== undefined && !/[;&|()<>\r\n]/.test(command[cursor]);
+  const next = command.charAt(cursor);
+  return next !== "" && !/[;&|()<>\r\n]/.test(next);
 }
 
 function isLikelyGeneratedWorkflowPlaceholder(command: string, index: number): boolean {
@@ -502,9 +639,7 @@ export function buildSshSandboxArgv(params: {
     params.session.command,
     "-F",
     params.session.configPath,
-    ...(params.tty
-      ? ["-tt", "-o", "RequestTTY=force", "-o", "SetEnv=TERM=xterm-256color"]
-      : ["-T", "-o", "RequestTTY=no"]),
+    ...(params.tty ? ["-tt", "-o", "RequestTTY=force"] : ["-T", "-o", "RequestTTY=no"]),
     params.session.host,
     params.remoteCommand,
   ];
@@ -520,15 +655,11 @@ export async function createSshSandboxSessionFromConfigText(params: {
   if (!host) {
     throw new Error("Failed to parse SSH config output.");
   }
-  const configDir = await fs.mkdtemp(path.join(resolveSshTmpRoot(), "openclaw-sandbox-ssh-"));
-  const configPath = path.join(configDir, "config");
-  await fs.writeFile(configPath, params.configText, { encoding: "utf8", mode: 0o600 });
-  await fs.chmod(configPath, 0o600);
-  return {
-    command: params.command?.trim() || "ssh",
-    configPath,
+  return await createSshSandboxSession(
+    params.command?.trim() || "ssh",
     host,
-  };
+    () => params.configText,
+  );
 }
 
 /** Create a temporary SSH session from structured sandbox SSH settings. */
@@ -540,68 +671,60 @@ export async function createSshSandboxSessionFromSettings(
     throw new Error(`Invalid sandbox SSH target: ${settings.target}`);
   }
 
-  const configDir = await fs.mkdtemp(path.join(resolveSshTmpRoot(), "openclaw-sandbox-ssh-"));
-  try {
-    // Inline secret material is written into the temp config dir with strict
-    // permissions so ssh can consume it without exposing values in argv/env.
-    const materializedIdentity = settings.identityData
-      ? await writeSecretMaterial(configDir, "identity", settings.identityData)
-      : undefined;
-    const materializedCertificate = settings.certificateData
-      ? await writeSecretMaterial(configDir, "certificate.pub", settings.certificateData)
-      : undefined;
-    const materializedKnownHosts = settings.knownHostsData
-      ? await writeSecretMaterial(configDir, "known_hosts", settings.knownHostsData)
-      : undefined;
-    const identityFile = materializedIdentity ?? resolveOptionalLocalPath(settings.identityFile);
-    const certificateFile =
-      materializedCertificate ?? resolveOptionalLocalPath(settings.certificateFile);
-    const knownHostsFile =
-      materializedKnownHosts ?? resolveOptionalLocalPath(settings.knownHostsFile);
-    const hostAlias = "openclaw-sandbox";
-    const configPath = path.join(configDir, "config");
-    const lines = [
-      `Host ${hostAlias}`,
-      `  HostName ${parsed.host}`,
-      `  Port ${parsed.port}`,
-      "  BatchMode yes",
-      "  ConnectTimeout 5",
-      "  ServerAliveInterval 15",
-      "  ServerAliveCountMax 3",
-      `  StrictHostKeyChecking ${settings.strictHostKeyChecking ? "yes" : "no"}`,
-      `  UpdateHostKeys ${settings.updateHostKeys ? "yes" : "no"}`,
-    ];
-    if (parsed.user) {
-      lines.push(`  User ${parsed.user}`);
-    }
-    if (knownHostsFile) {
-      lines.push(`  UserKnownHostsFile ${knownHostsFile}`);
-    } else if (!settings.strictHostKeyChecking) {
-      lines.push("  UserKnownHostsFile /dev/null");
-    }
-    if (identityFile) {
-      lines.push(`  IdentityFile ${identityFile}`);
-    }
-    if (certificateFile) {
-      lines.push(`  CertificateFile ${certificateFile}`);
-    }
-    if (identityFile || certificateFile) {
-      lines.push("  IdentitiesOnly yes");
-    }
-    await fs.writeFile(configPath, `${lines.join("\n")}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-    });
-    await fs.chmod(configPath, 0o600);
-    return {
-      command: settings.command.trim() || "ssh",
-      configPath,
-      host: hostAlias,
-    };
-  } catch (error) {
-    await fs.rm(configDir, { recursive: true, force: true });
-    throw error;
-  }
+  return await createSshSandboxSession(
+    settings.command.trim() || "ssh",
+    "openclaw-sandbox",
+    async (configDir) => {
+      // Inline secret material is written into the temp config dir with strict
+      // permissions so ssh can consume it without exposing values in argv/env.
+      const materializedIdentity = settings.identityData
+        ? await writeSecretMaterial(configDir, "identity", settings.identityData)
+        : undefined;
+      const materializedCertificate = settings.certificateData
+        ? await writeSecretMaterial(configDir, "certificate.pub", settings.certificateData)
+        : undefined;
+      const materializedKnownHosts = settings.knownHostsData
+        ? await writeSecretMaterial(configDir, "known_hosts", settings.knownHostsData)
+        : undefined;
+      const identityFile = materializedIdentity ?? resolveOptionalLocalPath(settings.identityFile);
+      const certificateFile =
+        materializedCertificate ?? resolveOptionalLocalPath(settings.certificateFile);
+      const knownHostsFile =
+        materializedKnownHosts ?? resolveOptionalLocalPath(settings.knownHostsFile);
+      assertSshConfigLineValue(identityFile, "identityFile");
+      assertSshConfigLineValue(certificateFile, "certificateFile");
+      assertSshConfigLineValue(knownHostsFile, "knownHostsFile");
+      const lines = [
+        "Host openclaw-sandbox",
+        `  HostName ${parsed.host}`,
+        `  Port ${parsed.port}`,
+        "  BatchMode yes",
+        "  ConnectTimeout 5",
+        "  ServerAliveInterval 15",
+        "  ServerAliveCountMax 3",
+        `  StrictHostKeyChecking ${settings.strictHostKeyChecking ? "yes" : "no"}`,
+        `  UpdateHostKeys ${settings.updateHostKeys ? "yes" : "no"}`,
+      ];
+      if (parsed.user) {
+        lines.push(`  User ${parsed.user}`);
+      }
+      if (knownHostsFile) {
+        lines.push(`  UserKnownHostsFile ${quoteSshConfigPath(knownHostsFile)}`);
+      } else if (!settings.strictHostKeyChecking) {
+        lines.push("  UserKnownHostsFile /dev/null");
+      }
+      if (identityFile) {
+        lines.push(`  IdentityFile ${quoteSshConfigPath(identityFile)}`);
+      }
+      if (certificateFile) {
+        lines.push(`  CertificateFile ${quoteSshConfigPath(certificateFile)}`);
+      }
+      if (identityFile || certificateFile) {
+        lines.push("  IdentitiesOnly yes");
+      }
+      return `${lines.join("\n")}\n`;
+    },
+  );
 }
 
 /** Remove temporary SSH config and materialized secret files. */
@@ -618,42 +741,37 @@ export async function runSshSandboxCommand(
     remoteCommand: params.remoteCommand,
     tty: params.tty,
   });
+  const [executable, ...args] = argv;
+  if (!executable) {
+    throw new Error("SSH command argv is empty");
+  }
   const sshEnv = sanitizeEnvVars(process.env).allowed;
-  return await new Promise<SandboxBackendCommandResult>((resolve, reject) => {
-    const child = spawn(argv[0], argv.slice(1), {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: sshEnv,
-      signal: params.signal,
-    });
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-
-    child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
-    child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      const stdout = Buffer.concat(stdoutChunks);
-      const stderr = Buffer.concat(stderrChunks);
-      const exitCode = code ?? 0;
-      if (exitCode !== 0 && !params.allowFailure) {
-        reject(
-          Object.assign(new Error(buildSshFailureMessage(stderr.toString("utf8"), exitCode)), {
-            code: exitCode,
-            stdout,
-            stderr,
-          }),
-        );
-        return;
-      }
-      resolve({ stdout, stderr, code: exitCode });
-    });
-
-    if (params.stdin !== undefined) {
-      child.stdin.end(params.stdin);
-      return;
-    }
-    child.stdin.end();
+  const result = await spawnCommand([executable, ...args], {
+    baseEnv: sshEnv,
+    cancelSignal: params.signal,
+    encoding: "buffer",
+    input: params.stdin ?? Buffer.alloc(0),
+    maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
+    reject: false,
+    stripFinalNewline: false,
   });
+  if (params.signal?.aborted || result.isCanceled) {
+    throw createAbortError("Aborted");
+  }
+  if (result.failed && !isPlainCommandExitFailure(result)) {
+    throw toErrorObject(result, "SSH command execution failed");
+  }
+  const stdout = Buffer.from(result.stdout);
+  const stderr = Buffer.from(result.stderr);
+  const exitCode = result.exitCode ?? (result.failed ? 1 : 0);
+  if (exitCode !== 0 && !params.allowFailure) {
+    throw Object.assign(new Error(buildSshFailureMessage(stderr.toString("utf8"), exitCode)), {
+      code: exitCode,
+      stdout,
+      stderr,
+    });
+  }
+  return { stdout, stderr, code: exitCode };
 }
 
 export const ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT = [
@@ -718,13 +836,17 @@ export async function uploadDirectoryToSshTarget(params: {
     session: params.session,
     remoteCommand,
   });
+  const [sshExecutable, ...sshArgs] = sshArgv;
+  if (!sshExecutable) {
+    throw new Error("SSH command argv is empty");
+  }
   const sshEnv = sanitizeEnvVars(process.env).allowed;
   await new Promise<void>((resolve, reject) => {
     const tar = spawn("tar", ["-C", params.localDir, "-cf", "-", "."], {
       stdio: ["ignore", "pipe", "pipe"],
       signal: params.signal,
     });
-    const ssh = spawn(sshArgv[0], sshArgv.slice(1), {
+    const ssh = spawn(sshExecutable, sshArgs, {
       stdio: ["pipe", "pipe", "pipe"],
       env: sshEnv,
       signal: params.signal,
@@ -736,20 +858,34 @@ export async function uploadDirectoryToSshTarget(params: {
     let sshClosed = false;
     let tarCode = 0;
     let sshCode = 0;
-
-    tar.stderr.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
-    ssh.stdout.on("data", (chunk) => sshStdout.push(Buffer.from(chunk)));
-    ssh.stderr.on("data", (chunk) => sshStderr.push(Buffer.from(chunk)));
+    let settled = false;
 
     const fail = (error: unknown) => {
-      tar.kill("SIGKILL");
-      ssh.kill("SIGKILL");
+      if (settled) {
+        return;
+      }
+      settled = true;
+      for (const child of [tar, ssh]) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Preserve the pipeline error while still terminating the peer.
+        }
+      }
       reject(toErrorObject(error, "Non-Error rejection"));
     };
 
+    tar.stderr.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
+    tar.stderr.on("error", fail);
+    tar.stdout.on("error", fail);
+    ssh.stdout.on("data", (chunk) => sshStdout.push(Buffer.from(chunk)));
+    ssh.stdout.on("error", fail);
+    ssh.stderr.on("data", (chunk) => sshStderr.push(Buffer.from(chunk)));
+    ssh.stderr.on("error", fail);
+    ssh.stdin?.on("error", fail);
+
     tar.on("error", fail);
     ssh.on("error", fail);
-    tar.stdout.pipe(ssh.stdin);
 
     tar.on("close", (code) => {
       tarClosed = true;
@@ -763,9 +899,10 @@ export async function uploadDirectoryToSshTarget(params: {
     });
 
     function maybeResolve() {
-      if (!tarClosed || !sshClosed) {
+      if (settled || !tarClosed || !sshClosed) {
         return;
       }
+      settled = true;
       if (tarCode !== 0) {
         reject(
           new Error(
@@ -783,6 +920,13 @@ export async function uploadDirectoryToSshTarget(params: {
         return;
       }
       resolve();
+    }
+
+    try {
+      // Readable pipe errors do not close the writable peer automatically.
+      tar.stdout.pipe(ssh.stdin);
+    } catch (error) {
+      fail(error);
     }
   });
 }
@@ -829,6 +973,35 @@ function resolveSshTmpRoot(): string {
   return path.resolve(resolvePreferredOpenClawTmpDir() ?? os.tmpdir());
 }
 
+async function createSshSandboxSession(
+  command: string,
+  host: string,
+  buildConfigText: (configDir: string) => string | Promise<string>,
+): Promise<SshSandboxSession> {
+  const configDir = await fs.mkdtemp(path.join(resolveSshTmpRoot(), "openclaw-sandbox-ssh-"));
+  const configPath = path.join(configDir, "config");
+  try {
+    await writePrivateFile(configPath, await buildConfigText(configDir));
+    return { command, configPath, host };
+  } catch (error) {
+    // Best-effort rollback must not replace the initialization failure.
+    await fs.rm(configDir, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+function assertSshConfigLineValue(value: string | undefined, field: string): void {
+  if (value && /[\r\n"]/.test(value)) {
+    throw new Error(`SSH sandbox ${field} must not contain line breaks or double quotes.`);
+  }
+}
+
+// ssh_config tokenizes unquoted arguments on whitespace; default macOS key
+// locations ("Application Support") would otherwise parse as extra arguments.
+function quoteSshConfigPath(value: string): string {
+  return /\s/.test(value) ? `"${value}"` : value;
+}
+
 function resolveOptionalLocalPath(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? resolveUserPath(trimmed) : undefined;
@@ -840,10 +1013,12 @@ async function writeSecretMaterial(
   contents: string,
 ): Promise<string> {
   const pathname = path.join(dir, filename);
-  await fs.writeFile(pathname, normalizeInlineSshMaterial(contents, filename), {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  await fs.chmod(pathname, 0o600);
+  await writePrivateFile(pathname, normalizeInlineSshMaterial(contents, filename));
   return pathname;
 }
+
+async function writePrivateFile(pathname: string, contents: string): Promise<void> {
+  await fs.writeFile(pathname, contents, { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(pathname, 0o600);
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,20 +1,30 @@
 # Docs Guide
 
-This directory owns docs authoring, Mintlify link rules, and docs i18n policy.
+This directory owns docs authoring, published link rules, and docs i18n policy.
 
-## Mintlify Rules
+## Source Ownership
 
-- Docs are hosted on Mintlify (`https://docs.openclaw.ai`).
+- `/clawhub/**` pages are authored in [openclaw/clawhub](https://github.com/openclaw/clawhub/tree/main/docs). `scripts/docs-sync-publish.mjs` replaces the entire publish `docs/clawhub/` tree from that source; do not keep authored copies here.
+- Keep OpenClaw-specific skill and plugin installation, update, verification, removal, and release-trust guidance in the owning OpenClaw docs, such as `docs/cli/skills.md` and `docs/cli/plugins.md`. Standalone ClawHub CLI and publishing reference belongs upstream.
+- For links into `/clawhub/**`, run `pnpm docs:check-links:anchors` with `OPENCLAW_DOCS_SYNC_CLAWHUB_REPO` pointing to the actual ClawHub source checkout. Local-only pages cannot prove published ClawHub routes or anchors.
+
+## Published Link Rules
+
+- Docs are published to `https://docs.openclaw.ai` from the `openclaw/docs` mirror.
 - Internal doc links in `docs/**/*.md` must stay root-relative with no `.md` or `.mdx` suffix (example: `[Config](/gateway/configuration)`).
 - Section cross-references should use anchors on root-relative paths (example: `[Hooks](/gateway/configuration-reference#hooks)`).
-- Doc headings should avoid em dashes and apostrophes because Mintlify anchor generation is brittle there.
-- README and other GitHub-rendered docs should keep absolute docs URLs so links work outside Mintlify.
+- Anchor IDs come from the shared publishing parser in `scripts/lib/docs-markdown.mjs`; verify them with `pnpm docs:check-links:anchors`, not Mintlify's independent checker. Published heading IDs stay stable; compatibility aliases never replace an existing target.
+- Use an explicit `<a id="stable-section-name" />` for a durable section link when heading wording may change. Keep existing named anchors when reorganizing content.
+- README and other GitHub-rendered docs should keep absolute docs URLs so links work outside the docs site.
 - Docs content must stay generic: no personal device names, hostnames, or local paths; use placeholders like `user@gateway-host`.
 
 ## Docs Content Rules
 
 - For docs, UI copy, and picker lists, order services/providers alphabetically unless the section is explicitly describing runtime order or auto-detection order.
 - Keep bundled plugin naming consistent with the repo-wide plugin terminology rules in the root `AGENTS.md`.
+- JSON5/JSON config fences that look like whole `openclaw.json` documents are schema-validated in CI with `pnpm docs:check-config-examples`; deliberately partial or legacy snippets opt out with `validate=false` in the fence info string.
+- Generated docs, never hand-edit: `docs/plugins/reference/**`, `docs/plugins/reference.md`, and `docs/plugins/plugin-inventory.md` come from `pnpm plugins:inventory:gen`; `docs/maturity/**` from `pnpm maturity:render`.
+- The public and packaged docs map is generated from `pnpm docs:list --headings` during publishing and packaging. Keep only the small source stub at `docs/docs_map.md`; never commit the expanded heading mirror.
 
 ## Internal Docs
 
@@ -24,11 +34,19 @@ This directory owns docs authoring, Mintlify link rules, and docs i18n policy.
 - `scripts/docs-sync-publish.mjs` excludes and prunes `docs/internal/**` from the public `openclaw/docs` publish repo if a page is force-added later.
 - Internal docs may mention repo paths, private app names, 1Password item names, and runbooks, but never include secret values.
 
+## Maturity Scorecard Editing
+
+`taxonomy.yaml` and `qa/maturity-scores.yaml` are the source inputs; generated maturity docs under `docs/maturity/` are projections and should not be hand-edited for score, LTS, taxonomy, QA profile, or evidence tables.
+`scripts/qa/render-maturity-docs.ts` owns generation; use `pnpm maturity:render` to refresh committed docs and `pnpm maturity:check` to verify them.
+`.github/workflows/maturity-scorecard.yml` renders artifact previews and can open generated-doc PRs; `.github/workflows/openclaw-release-checks.yml` dispatches it for release QA.
+Keep deterministic `qa-evidence.json.scorecard` data in GitHub Actions artifacts unless a maintainer explicitly asks for a sanitized committed projection.
+Human overrides must change source state in a PR and explain the reason plus public or redacted evidence.
+
 ## Docs i18n
 
 - Foreign-language docs are not maintained in this repo. The generated publish output lives in the separate `openclaw/docs` repo (often cloned locally as `../openclaw-docs`).
 - Do not add or edit localized docs under `docs/<locale>/**` here.
-- Treat English docs in this repo plus glossary files as the source of truth.
+- Treat OpenClaw-owned English docs in this repo plus glossary files as the source of truth; ClawHub English sources follow Source Ownership above.
 - Pipeline: update English docs here, update `docs/.i18n/glossary.<locale>.json` as needed, then let the publish-repo sync and `scripts/docs-i18n` run in `openclaw/docs`.
 - Before rerunning `scripts/docs-i18n`, add glossary entries for any new technical terms, page titles, or short nav labels that must stay in English or use a fixed translation.
 - `pnpm docs:check-i18n-glossary` is the guard for changed English doc titles and short internal doc labels.

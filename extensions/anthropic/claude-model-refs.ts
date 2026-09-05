@@ -3,16 +3,10 @@
  * ids to current Anthropic runtime refs while preserving auth-profile suffixes.
  */
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_MODEL_ALIASES } from "./cli-constants.js";
-
-const DEFAULT_CLAUDE_MODEL_BY_FAMILY: Record<string, string> = {
-  opus: "claude-opus-4-8",
-  sonnet: "claude-sonnet-4-6",
-  haiku: "claude-haiku-4-5",
-};
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_MODEL_ID_ALIASES } from "./cli-constants.js";
 
 /** Normalized Claude CLI selection plus runtime refs used by setup migrations. */
-export type ClaudeCliAnthropicModelRefs = {
+type ClaudeCliAnthropicModelRefs = {
   selectedRef: string;
   runtimeRefs: string[];
   rewriteRef?: string;
@@ -59,9 +53,16 @@ function hasAnyRetiredVersionPrefix(normalized: string, prefixes: readonly strin
   return prefixes.some((prefix) => hasRetiredVersionPrefix(normalized, prefix));
 }
 
-function parseProviderModelRef(
+export function normalizeAnthropicProviderId(provider: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(provider);
+  if (normalized === "bedrock" || normalized === "aws-bedrock") {
+    return "amazon-bedrock";
+  }
+  return normalized;
+}
+
+export function parseAnthropicModelRef(
   raw: string,
-  defaultProvider: string,
 ): { provider: string; model: string; explicitProvider: boolean } | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -69,7 +70,7 @@ function parseProviderModelRef(
   }
   const slashIndex = trimmed.indexOf("/");
   if (slashIndex <= 0) {
-    return { provider: defaultProvider, model: trimmed, explicitProvider: false };
+    return { provider: "anthropic", model: trimmed, explicitProvider: false };
   }
   const provider = trimmed.slice(0, slashIndex).trim();
   const model = trimmed.slice(slashIndex + 1).trim();
@@ -77,7 +78,7 @@ function parseProviderModelRef(
     return null;
   }
   return {
-    provider: normalizeLowercaseStringOrEmpty(provider),
+    provider: normalizeAnthropicProviderId(provider),
     model,
     explicitProvider: true,
   };
@@ -97,38 +98,32 @@ function canonicalizeKnownClaudeCliModelId(modelId: string): string | null {
   if (normalized.startsWith("claude-")) {
     return attachModelAuthProfile(trimmed, split.profile);
   }
-  const defaultModel = DEFAULT_CLAUDE_MODEL_BY_FAMILY[normalized];
-  if (defaultModel) {
-    return attachModelAuthProfile(defaultModel, split.profile);
-  }
-  const aliasedModel = CLAUDE_CLI_MODEL_ALIASES[normalized];
-  return aliasedModel?.startsWith("claude-")
-    ? attachModelAuthProfile(aliasedModel, split.profile)
-    : null;
+  const aliasedModel = CLAUDE_MODEL_ID_ALIASES.get(normalized);
+  return aliasedModel ? attachModelAuthProfile(aliasedModel, split.profile) : null;
 }
 
 function upgradeOldClaudeModelId(normalized: string): string | null {
-  if (normalized.startsWith("claude-opus-4-8") || normalized.startsWith("claude-opus-4.8")) {
-    return null;
-  }
-  if (normalized.startsWith("claude-opus-4-7") || normalized.startsWith("claude-opus-4.7")) {
-    return null;
-  }
-  if (normalized.startsWith("claude-opus-4-6") || normalized.startsWith("claude-opus-4.6")) {
-    return null;
-  }
-  if (normalized.startsWith("claude-sonnet-4-6") || normalized.startsWith("claude-sonnet-4.6")) {
-    return null;
-  }
-  // claude-haiku-4-5 is a current production model and must not be migrated.
-  if (normalized.startsWith("claude-haiku-4-5") || normalized.startsWith("claude-haiku-4.5")) {
+  // Current Claude families, including Haiku, must never be migrated.
+  if (
+    hasRetiredVersionPrefix(normalized, "claude-opus-5") ||
+    [
+      "claude-opus-4-8",
+      "claude-opus-4.8",
+      "claude-opus-4-7",
+      "claude-opus-4.7",
+      "claude-opus-4-6",
+      "claude-opus-4.6",
+      "claude-sonnet-4-6",
+      "claude-sonnet-4.6",
+      "claude-haiku-4-5",
+      "claude-haiku-4.5",
+    ].some((prefix) => normalized.startsWith(prefix))
+  ) {
     return null;
   }
   if (
     normalized === "claude-opus-4" ||
     hasAnyRetiredVersionPrefix(normalized, [
-      "claude-opus-4-7",
-      "claude-opus-4.7",
       "claude-opus-4-5",
       "claude-opus-4.5",
       "claude-opus-4-1",
@@ -138,7 +133,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     ]) ||
     /^claude-opus-4-20\d{6}/.test(normalized)
   ) {
-    return "claude-opus-4-8";
+    return "claude-opus-5";
   }
   if (
     normalized === "claude-sonnet-4" ||
@@ -155,7 +150,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
     return "claude-sonnet-4-6";
   }
   if (normalized.startsWith("claude-3") && normalized.includes("opus")) {
-    return "claude-opus-4-8";
+    return "claude-opus-5";
   }
   if (
     normalized.startsWith("claude-3") &&
@@ -163,24 +158,21 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
   ) {
     return "claude-sonnet-4-6";
   }
-  if (
-    normalized === "opus-4.5" ||
-    normalized === "opus-4.1" ||
-    normalized === "opus-4" ||
-    normalized === "opus-3"
-  ) {
-    return "claude-opus-4-8";
+  if (["opus-4.5", "opus-4.1", "opus-4", "opus-3"].includes(normalized)) {
+    return "claude-opus-5";
   }
   if (
-    normalized === "sonnet-4.5" ||
-    normalized === "sonnet-4.1" ||
-    normalized === "sonnet-4.0" ||
-    normalized === "sonnet-4" ||
-    normalized === "sonnet-3.7" ||
-    normalized === "sonnet-3.5" ||
-    normalized === "sonnet-3" ||
-    normalized === "haiku-3.5" ||
-    normalized === "haiku-3"
+    [
+      "sonnet-4.5",
+      "sonnet-4.1",
+      "sonnet-4.0",
+      "sonnet-4",
+      "sonnet-3.7",
+      "sonnet-3.5",
+      "sonnet-3",
+      "haiku-3.5",
+      "haiku-3",
+    ].includes(normalized)
   ) {
     return "claude-sonnet-4-6";
   }
@@ -191,7 +183,7 @@ function upgradeOldClaudeModelId(normalized: string): string | null {
 export function resolveClaudeCliAnthropicModelRefs(
   raw: string,
 ): ClaudeCliAnthropicModelRefs | null {
-  const parsed = parseProviderModelRef(raw, "anthropic");
+  const parsed = parseAnthropicModelRef(raw);
   if (!parsed) {
     return null;
   }

@@ -164,6 +164,18 @@ describe("matchesNoProxy", () => {
       expected: false,
     },
     {
+      name: "lets blank lower-case no_proxy shadow upper-case NO_PROXY",
+      url: "https://api.openai.com",
+      env: { no_proxy: "", NO_PROXY: "*" } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
+      name: "does not treat a whitespace-wrapped wildcard as global bypass",
+      url: "https://api.openai.com",
+      env: { NO_PROXY: " * " } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
       name: "matches wildcard",
       url: "https://api.openai.com/v1/chat",
       env: { NO_PROXY: "*" } as NodeJS.ProcessEnv,
@@ -343,6 +355,23 @@ describe("matchesNoProxy", () => {
 });
 
 describe("shouldUseEnvHttpProxyForUrl", () => {
+  it.each([
+    ["https://api.example./v1", "example", false],
+    ["https://api.example/v1", "example.", false],
+    ["https://api.example.:8443/v1", "*.example.:8443", false],
+    ["https://api.example.:8443/v1", "*.example.:443", true],
+    ["https://notexample./v1", "example.", true],
+    ["https://api.example../v1", "example", true],
+    ["https://api.example./v1", ".", true],
+  ])("keeps NO_PROXY DNS-dot routing aligned for %s and %s", (url, noProxy, expected) => {
+    expect(
+      shouldUseEnvHttpProxyForUrl(url, {
+        HTTPS_PROXY: "http://proxy.test:8080",
+        NO_PROXY: noProxy,
+      }),
+    ).toBe(expected);
+  });
+
   it.each([
     {
       name: "uses HTTPS_PROXY for https URLs",

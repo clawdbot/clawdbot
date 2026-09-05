@@ -1,6 +1,9 @@
 // Converts streaming reply directives into payload delivery decisions.
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import { parseInlineDirectives } from "../../utils/directive-tags.js";
+import {
+  parseInlineDirectives,
+  stripInlineDirectiveTagsForDelivery,
+} from "../../utils/directive-tags.js";
 import {
   isSilentReplyPrefixText,
   isSilentReplyText,
@@ -10,31 +13,16 @@ import {
 } from "../tokens.js";
 import type { ReplyDirectiveParseResult } from "./reply-directives.js";
 
-type PendingReplyState = {
-  explicitId?: string;
-  sawCurrent: boolean;
-  hasTag: boolean;
-};
-
-type ParsedChunk = ReplyDirectiveParseResult & {
-  replyToExplicitId?: string;
-};
-
 type ConsumeOptions = {
   final?: boolean;
   silentToken?: string;
 };
 
-type SplitTrailingDirectiveOptions = {
-  final?: boolean;
-};
-
-// Holds back incomplete inline directive tails so parseChunk only ever sees
-// complete reply/audio tags.
-export const splitTrailingDirective = (
-  text: string,
-  options: SplitTrailingDirectiveOptions = {},
-): { text: string; tail: string } => {
+// TRANSITIONAL(marker-retirement): streaming tail-buffering exists only because
+// live drafts still carry inline markers mid-run. Delete alongside the marker
+// parser when the visibleReplies default flips to "message_tool".
+// Hold incomplete tails until the inline parser can read complete reply/audio tags.
+export const splitTrailingDirective = (text: string): { text: string; tail: string } => {
   let bufferStart = text.length;
   let trimTextBeforeTail = false;
 
@@ -51,17 +39,6 @@ export const splitTrailingDirective = (
     trimTextBeforeTail = true;
   }
 
-  if (options.final) {
-    if (bufferStart >= text.length) {
-      return { text, tail: "" };
-    }
-
-    return {
-      text: text.slice(0, bufferStart),
-      tail: text.slice(bufferStart),
-    };
-  }
-
   // Keep a possible final-reply MEDIA directive out of partial streaming
   // payloads. The final message parser still owns legacy MEDIA delivery.
   const lastNewline = text.lastIndexOf("\n");
@@ -73,11 +50,11 @@ export const splitTrailingDirective = (
     }
   }
 
-  const prefixMatch = text.match(/(?:^|\n)(MEDIA|MEDI|MED|ME|M)$/i);
+  const prefixMatch = lastLine.match(/^[\t ]*(MEDIA|MEDI|MED|ME|M)$/i);
   if (prefixMatch) {
-    const prefixStart = text.length - prefixMatch[1].length;
-    if (prefixStart < bufferStart) {
-      bufferStart = prefixStart;
+    const mediaLineStart = lastNewline < 0 ? 0 : lastNewline + 1;
+    if (mediaLineStart < bufferStart) {
+      bufferStart = mediaLineStart;
     }
   }
 
@@ -91,58 +68,40 @@ export const splitTrailingDirective = (
   };
 };
 
-const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChunk => {
-  let text = raw ?? "";
-
-  const replyParsed = parseInlineDirectives(text, {
-    stripAudioTag: true,
-    stripReplyTags: true,
-  });
-
-  if (replyParsed.hasReplyTag || replyParsed.hasAudioTag) {
-    text = replyParsed.text;
-  }
-
-  const silentToken = options?.silentToken ?? SILENT_REPLY_TOKEN;
-  const isSilent =
-    isSilentReplyText(text, silentToken) || isSilentReplyPrefixText(text, silentToken);
-  if (isSilent) {
-    text = "";
-  } else if (startsWithSilentToken(text, silentToken)) {
-    text = stripLeadingSilentToken(text, silentToken);
-  }
-
-  return {
-    text,
-    replyToId: replyParsed.replyToId,
-    replyToExplicitId: replyParsed.replyToExplicitId,
-    replyToCurrent: replyParsed.replyToCurrent,
-    replyToTag: replyParsed.hasReplyTag,
-    audioAsVoice: replyParsed.audioAsVoice,
-    isSilent,
-  };
-};
-
-const hasRenderableContent = (parsed: ReplyDirectiveParseResult): boolean =>
-  hasOutboundReplyContent(parsed) || Boolean(parsed.audioAsVoice);
-
 export function createStreamingDirectiveAccumulator() {
   let pendingTail = "";
-  let pendingReply: PendingReplyState = { sawCurrent: false, hasTag: false };
-  let activeReply: PendingReplyState = { sawCurrent: false, hasTag: false };
+  let pendingSeparator = "";
+  let replyToId: string | undefined;
+  let replyToCurrent = false;
+  let replyToTag = false;
+  let hasReturnedText = false;
 
   const reset = () => {
     pendingTail = "";
-    pendingReply = { sawCurrent: false, hasTag: false };
-    activeReply = { sawCurrent: false, hasTag: false };
+    pendingSeparator = "";
+    replyToId = undefined;
+    replyToCurrent = false;
+    replyToTag = false;
+    hasReturnedText = false;
   };
 
-  const consume = (raw: string, options: ConsumeOptions = {}): ReplyDirectiveParseResult | null => {
+  const consume = (raw: string, options?: ConsumeOptions): ReplyDirectiveParseResult | null => {
+    const hadPendingTail = pendingTail.length > 0;
+    const heldSeparator = pendingSeparator;
     let combined = `${pendingTail}${raw ?? ""}`;
     pendingTail = "";
+    pendingSeparator = "";
 
-    if (!options.final) {
+    if (!options?.final) {
       const split = splitTrailingDirective(combined);
+      if (split.tail) {
+        const tailStart = combined.length - split.tail.length;
+        const separator = combined.slice(split.text.length, tailStart);
+        // The separator is not part of a possible directive. Hold it separately
+        // so valid completions keep existing streaming behavior while a final
+        // malformed tail can be restored verbatim.
+        pendingSeparator = split.text ? separator : `${heldSeparator}${separator}`;
+      }
       combined = split.text;
       pendingTail = split.tail;
     }
@@ -151,39 +110,44 @@ export function createStreamingDirectiveAccumulator() {
       return null;
     }
 
-    const parsed = parseChunk(combined, { silentToken: options.silentToken });
-    const hasTag = activeReply.hasTag || pendingReply.hasTag || parsed.replyToTag;
-    const sawCurrent =
-      activeReply.sawCurrent || pendingReply.sawCurrent || parsed.replyToCurrent === true;
-    const explicitId =
-      parsed.replyToExplicitId ?? pendingReply.explicitId ?? activeReply.explicitId;
+    const parsed = combined.includes("[[") ? parseInlineDirectives(combined) : undefined;
+    let text = parsed && (parsed.hasReplyTag || parsed.hasAudioTag) ? parsed.text : combined;
+    const silentToken = options?.silentToken ?? SILENT_REPLY_TOKEN;
+    const isSilent =
+      isSilentReplyText(text, silentToken) || isSilentReplyPrefixText(text, silentToken);
+    if (isSilent) {
+      text = "";
+    } else if (startsWithSilentToken(text, silentToken)) {
+      text = stripLeadingSilentToken(text, silentToken);
+    }
+    if (hadPendingTail && heldSeparator && text.startsWith("[")) {
+      text = heldSeparator + text;
+    }
+    // Only a message-leading malformed marker is delivery control. Once text has
+    // streamed, a later marker is literal content whose Markdown opener may be gone.
+    if (options?.final && !hasReturnedText) {
+      text = stripInlineDirectiveTagsForDelivery(text).text;
+    }
+    // Reply context survives directive-only and visible chunks until the assistant message resets.
+    replyToId = parsed?.replyToExplicitId ?? replyToId;
+    replyToCurrent ||= parsed?.replyToCurrent === true;
+    replyToTag ||= parsed?.hasReplyTag === true;
 
-    const combinedResult: ReplyDirectiveParseResult = {
-      ...parsed,
-      replyToId: explicitId,
-      replyToCurrent: sawCurrent,
-      replyToTag: hasTag,
+    const combinedResult = {
+      text,
+      replyToId,
+      replyToExplicitId: parsed?.replyToExplicitId,
+      replyToCurrent,
+      replyToTag,
+      audioAsVoice: parsed?.audioAsVoice ?? false,
+      isSilent,
     };
 
-    if (!hasRenderableContent(combinedResult)) {
-      if (hasTag) {
-        pendingReply = {
-          explicitId,
-          sawCurrent,
-          hasTag,
-        };
-      }
+    if (!hasOutboundReplyContent(combinedResult) && !combinedResult.audioAsVoice) {
       return null;
     }
 
-    // Keep reply context sticky for the full assistant message so split/newline chunks
-    // stay on the same native reply target until reset() is called for the next message.
-    activeReply = {
-      explicitId,
-      sawCurrent,
-      hasTag,
-    };
-    pendingReply = { sawCurrent: false, hasTag: false };
+    hasReturnedText ||= Boolean(combinedResult.text);
     return combinedResult;
   };
 

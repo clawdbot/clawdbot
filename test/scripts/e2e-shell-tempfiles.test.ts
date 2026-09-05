@@ -3,7 +3,10 @@ import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function listShellScripts(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -91,6 +94,40 @@ run_wizard_cmd failing-wizard fake-state "node fake-wizard" send_noop false
     } finally {
       await rm(tempRoot, { force: true, recursive: true });
     }
+  });
+
+  it("does not wait for a skills prompt after the ready state renders", async () => {
+    const tempRoot = tempDirs.make("openclaw-onboard-skills-ready-");
+    const fixturePath = path.join(tempRoot, "skills-ready.sh");
+    const sentPath = path.join(tempRoot, "sent.txt");
+    const wizardLogPath = path.join(tempRoot, "skills.log");
+    await writeFile(
+      fixturePath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+
+export OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY=1
+export OPENCLAW_ONBOARD_E2E_TMPDIR=${JSON.stringify(tempRoot)}
+OPENCLAW_ENTRY=node
+source scripts/e2e/lib/onboard/scenario.sh
+
+sleep() { :; }
+WIZARD_LOG_PATH=${JSON.stringify(wizardLogPath)}
+printf 'Skills status\\nAll skills ready\\n' >"$WIZARD_LOG_PATH"
+exec 3>${JSON.stringify(sentPath)}
+send_skills_flow
+exec 3>&-
+test ! -s ${JSON.stringify(sentPath)}
+`,
+    );
+
+    const result = spawnSync("bash", [fixturePath], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain("Timeout waiting");
   });
 
   it("checks local onboarding logs for systemd noise", async () => {

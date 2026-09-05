@@ -5,11 +5,17 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { callGateway } from "../gateway/call.js";
+import { normalizeOperatorScopeList } from "../gateway/operator-scopes.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
+// Help builds plugin CLI registrations but never calls runtime.nodes. Keep the
+// live Gateway/TLS graph behind the first node RPC so one-shot help stays inert.
+const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
+
 /** Adds Gateway timer grace for plugin CLI node invoke calls. */
-export function resolvePluginCliNodeInvokeGatewayTimeoutMs(
+function resolvePluginCliNodeInvokeGatewayTimeoutMs(
   timeoutMs: number | undefined,
 ): number | undefined {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
@@ -17,10 +23,24 @@ export function resolvePluginCliNodeInvokeGatewayTimeoutMs(
     : undefined;
 }
 
+function canPluginCliRuntimeRequestScopes(): boolean {
+  const scope = getPluginRuntimeGatewayRequestScope();
+  return Boolean(
+    scope?.pluginId &&
+    (scope.pluginOrigin === "bundled" || scope.pluginTrustedOfficialInstall === true),
+  );
+}
+
+function resolvePluginCliRuntimeNodeInvokeScopes(scopes: string[] | undefined) {
+  const normalizedScopes = normalizeOperatorScopeList(scopes);
+  return normalizedScopes && canPluginCliRuntimeRequestScopes() ? normalizedScopes : undefined;
+}
+
 /** Creates the `runtime.nodes` implementation exposed to CLI plugin code. */
 export function createPluginCliGatewayNodesRuntime(): PluginRuntime["nodes"] {
   return {
     async list(params) {
+      const { callGateway } = await gatewayCallModuleLoader.load();
       const payload = await callGateway({
         method: "node.list",
         params: {},
@@ -42,6 +62,8 @@ export function createPluginCliGatewayNodesRuntime(): PluginRuntime["nodes"] {
       };
     },
     async invoke(params) {
+      const { callGateway } = await gatewayCallModuleLoader.load();
+      const scopes = resolvePluginCliRuntimeNodeInvokeScopes(params.scopes);
       return await callGateway({
         method: "node.invoke",
         params: {
@@ -50,11 +72,17 @@ export function createPluginCliGatewayNodesRuntime(): PluginRuntime["nodes"] {
           ...(params.params !== undefined && { params: params.params }),
           timeoutMs: params.timeoutMs,
           idempotencyKey: params.idempotencyKey || randomUUID(),
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
         },
         timeoutMs: resolvePluginCliNodeInvokeGatewayTimeoutMs(params.timeoutMs),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
+        ...(scopes ? { scopes } : {}),
+        ...(params.signal ? { signal: params.signal } : {}),
       });
+    },
+    async openDuplex() {
+      throw new Error("Node duplex is unavailable in the CLI; run this plugin inside the Gateway.");
     },
   };
 }

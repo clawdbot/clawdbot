@@ -4,9 +4,8 @@ export const AGENT_SELECT_KEY = "agentsel";
 
 export {
   ackComponentInteraction,
+  replyUnavailableComponentInteraction,
   resolveAgentComponentRoute,
-  resolveComponentInteractionContext,
-  resolveDiscordChannelContext,
 } from "./agent-components-context.js";
 export {
   ensureAgentComponentInteractionAllowed,
@@ -21,7 +20,6 @@ export {
   parseAgentComponentData,
   parseDiscordComponentData,
   parseDiscordModalId,
-  resolveDiscordInteractionId,
   resolveInteractionCustomId,
   resolveModalFieldValues,
 } from "./agent-components-data.js";

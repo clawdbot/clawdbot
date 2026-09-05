@@ -8,8 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { formatErrorMessage } from "../../src/infra/errors.ts";
-import { createPluginStateKeyedStore } from "../../src/plugin-state/plugin-state-store.ts";
-import { readBoundedResponseText } from "../lib/bounded-response.ts";
+import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 import {
   maskIdentifier,
   parseStrictIntegerOption,
@@ -17,6 +16,7 @@ import {
   redactForDevToolLog,
   redactHomePath,
 } from "../lib/dev-tooling-safety.ts";
+import { sleep } from "../lib/sleep.mjs";
 
 function writeStdoutLine(message: string): void {
   process.stdout.write(`${message}\n`);
@@ -157,12 +157,6 @@ class CliArgumentError extends Error {
   override name = "CliArgumentError";
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function remainingTimeoutMs(deadlineMs: number, nowMs = Date.now()): number {
   const remaining = Math.floor(deadlineMs - nowMs);
   if (!Number.isFinite(deadlineMs) || remaining <= 0) {
@@ -288,7 +282,7 @@ function validateCliArgs(argv: string[]): void {
       continue;
     }
     if (arg.startsWith("--") && arg.includes("=")) {
-      const [flag] = arg.split("=", 1);
+      const flag = arg.slice(0, arg.indexOf("="));
       if (VALUE_OPTIONS.has(flag)) {
         continue;
       }
@@ -651,18 +645,6 @@ async function requestDiscordJson<T>(params: {
   );
 }
 
-async function readThreadBindings(stateDir: string): Promise<ThreadBindingRecord[]> {
-  const store = createPluginStateKeyedStore<ThreadBindingRecord>("discord", {
-    namespace: THREAD_BINDINGS_NAMESPACE,
-    maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
-  const entries = await store.entries();
-  return entries
-    .map((entry) => entry.value)
-    .filter((entry) => Boolean(entry?.threadId && entry?.targetSessionKey));
-}
-
 function normalizeBoundAt(record: ThreadBindingRecord): number {
   if (typeof record.boundAt === "number" && Number.isFinite(record.boundAt)) {
     return record.boundAt;
@@ -807,6 +789,14 @@ async function run(argv = process.argv.slice(2)): Promise<SuccessResult | Failur
     };
   }
 
+  // Argument-only invocations need no state runtime; initialize before any live send.
+  const { createPluginStateKeyedStore } =
+    await import("../../src/plugin-state/plugin-state-store.ts");
+  const bindingsStore = createPluginStateKeyedStore<ThreadBindingRecord>("discord", {
+    namespace: THREAD_BINDINGS_NAMESPACE,
+    maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
+    env: { ...process.env, OPENCLAW_STATE_DIR: args.stateDir },
+  });
   const smokeId = `acp-smoke-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const startedAt = Date.now();
   const deadline = startedAt + args.timeoutMs;
@@ -953,7 +943,9 @@ async function run(argv = process.argv.slice(2)): Promise<SuccessResult | Failur
   try {
     while (Date.now() < deadline && !winningBinding) {
       try {
-        const entries = await readThreadBindings(args.stateDir);
+        const entries = (await bindingsStore.entries())
+          .map((entry) => entry.value)
+          .filter((entry) => Boolean(entry?.threadId && entry?.targetSessionKey));
         latestCandidates = resolveCandidateBindings({
           entries,
           minBoundAt: minBindingBoundAt,
@@ -1101,14 +1093,12 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
     writeStdoutLine(usage());
     return 0;
   }
-  const result = await run(argv).catch(
-    (err: unknown): FailureResult => ({
-      ok: false,
-      stage: "unexpected",
-      smokeId: "n/a",
-      error: safeErrorMessage(err),
-    }),
-  );
+  const result = await run(argv).catch((err: unknown): FailureResult => ({
+    ok: false,
+    stage: "unexpected",
+    smokeId: "n/a",
+    error: safeErrorMessage(err),
+  }));
   printOutput({
     json: hasFlag("--json", argv),
     payload: result,
@@ -1119,14 +1109,9 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
 export const testing = {
   parseDriverMode,
   parseArgs,
-  parseNumber,
-  DISCORD_RESPONSE_BODY_MAX_BYTES,
   redactDiscordApiPath,
-  readDiscordResponseText,
   remainingTimeoutMs,
   requestDiscordJson,
-  resolveStateDir,
-  safeErrorMessage,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

@@ -1,5 +1,6 @@
 // Pixverse provider module implements model/runtime integration.
 import { randomUUID } from "node:crypto";
+import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -9,6 +10,7 @@ import {
   pollProviderOperationJson,
   postJsonRequest,
   postMultipartRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
@@ -183,13 +185,13 @@ function readPixVerseSuccess<T>(payload: PixVerseEnvelope<T>, label: string): T 
   return payload.Resp;
 }
 
-async function readPixVerseJson<T>(response: Pick<Response, "json">, label: string): Promise<T> {
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
-  }
+// Reads a PixVerse JSON response through the shared provider JSON reader so a
+// provider that streams an unbounded body cannot force the runtime to buffer the
+// whole payload before parsing it on the success path. The shared helper applies
+// the established 16 MiB provider JSON cap and the standard malformed-JSON
+// wrapping; PixVerse envelope validation stays local via readPixVerseSuccess.
+async function readPixVerseJson<T>(response: Response, label: string): Promise<T> {
+  const payload = await readProviderJsonResponse(response, label);
   return readPixVerseSuccess(payload as PixVerseEnvelope<T>, label);
 }
 
@@ -230,9 +232,8 @@ function buildUploadImageForm(asset: VideoGenerationSourceAsset): FormData {
   const mimeType = normalizeOptionalString(asset.mimeType) ?? "image/png";
   const extension = extensionForMime(mimeType)?.slice(1) ?? "png";
   const fileName = normalizeOptionalString(asset.fileName) ?? `image.${extension}`;
-  const bytes = new Uint8Array(asset.buffer.byteLength);
-  bytes.set(asset.buffer);
-  form.set("image", new File([bytes], fileName, { type: mimeType }));
+  const file = new File([bufferToBlobPart(asset.buffer)], fileName, { type: mimeType });
+  form.set("image", file);
   return form;
 }
 
@@ -347,11 +348,7 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
     defaultModel: DEFAULT_PIXVERSE_MODEL_ID,
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     models: [...PIXVERSE_VIDEO_MODELS],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: PIXVERSE_PROVIDER_ID,
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: PIXVERSE_PROVIDER_ID, ...ctx }),
     capabilities: {
       generate: {
         maxVideos: 1,

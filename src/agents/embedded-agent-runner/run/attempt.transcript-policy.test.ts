@@ -2,12 +2,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
-import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
+import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
 
 const resolveProviderRuntimePluginMock = vi.hoisted(() => vi.fn());
 
+// Explicit factory (no importOriginal): loading the real module would pull the
+// provider registry/loader graph into this focused test. Export every binding
+// the attempt-history import graph links, stubbing the ones this test never calls.
 vi.mock("../../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: resolveProviderRuntimePluginMock,
+  resolveProviderRuntimePluginHandle: vi.fn(),
+  clearProviderRuntimePluginCacheForTest: vi.fn(),
 }));
 
 describe("resolveAttemptTranscriptPolicy", () => {
@@ -26,7 +31,6 @@ describe("resolveAttemptTranscriptPolicy", () => {
       preserveNativeAnthropicToolUseIds: false,
       repairToolUseResultPairing: true,
       preserveSignatures: true,
-      sanitizeThinkingSignatures: false,
       dropThinkingBlocks: true,
       applyGoogleTurnOrdering: false,
       validateGeminiTurns: false,

@@ -7,7 +7,6 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withRealpathSymlinkRebindRace } from "../test-utils/symlink-rebind-race.js";
 import { createZipCentralDirectoryArchive } from "../test-utils/zip-central-directory-fixture.js";
-import type { ArchiveSecurityError } from "./archive.js";
 import { extractArchive, resolvePackedRootDir } from "./archive.js";
 
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-archive-" });
@@ -57,7 +56,7 @@ async function expectRejectedCode(promise: Promise<unknown>, expected: string | 
   try {
     await promise;
   } catch (error) {
-    const code = (error as Partial<ArchiveSecurityError>).code;
+    const code = (error as { code?: unknown }).code;
     if (typeof expected === "string") {
       expect(code).toBe(expected);
       return;
@@ -150,21 +149,25 @@ describe("archive utils", () => {
     },
   );
 
-  it("rejects zip path traversal (zip slip)", async () => {
-    await withArchiveCase("zip", async ({ archivePath, extractDir }) => {
-      const zip = new JSZip();
-      zip.file("../b/evil.txt", "pwnd");
-      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+  it.each([{ createFolders: true }, { createFolders: false }])(
+    "rejects zip path traversal (zip slip, createFolders=$createFolders)",
+    async ({ createFolders }) => {
+      await withArchiveCase("zip", async ({ archivePath, extractDir }) => {
+        const zip = new JSZip();
+        zip.file("../b/evil.txt", "pwnd", { createFolders });
+        await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
 
-      await expect(
-        extractArchive({
-          archivePath,
-          destDir: extractDir,
-          timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
-        }),
-      ).rejects.toThrow(/(escapes destination|absolute)/i);
-    });
-  });
+        await expect(
+          extractArchive({
+            archivePath,
+            destDir: extractDir,
+            timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
+          }),
+        ).rejects.toThrow(/(escapes destination|absolute)/i);
+        await expectPathMissing(path.join(extractDir, "b", "evil.txt"));
+      });
+    },
+  );
 
   it("rejects zip entries that traverse pre-existing destination symlinks", async () => {
     await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
@@ -194,7 +197,7 @@ describe("archive utils", () => {
     });
   });
 
-  it("does not clobber out-of-destination file when parent dir is symlink-rebound during zip extract", async () => {
+  it("does not clobber an out-of-destination file during a zip symlink-rebind race", async () => {
     await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
       const outsideDir = path.join(workDir, "outside");
       await fs.mkdir(outsideDir, { recursive: true });
@@ -225,7 +228,7 @@ describe("archive utils", () => {
         });
       } catch (error) {
         rejected = true;
-        const code = (error as Partial<ArchiveSecurityError>).code;
+        const code = (error as { code?: unknown }).code;
         expect(String(code)).toMatch(/destination-symlink-traversal|not-file/);
       }
 
@@ -277,8 +280,13 @@ describe("archive utils", () => {
           lstatSpy.mockRestore();
         }
 
-        await expect(fs.readFile(outsideAlias, "utf8")).resolves.toBe("");
-        await expectPathMissing(extractedPath);
+        // The raced alias points at attacker-supplied archive bytes. The rejected
+        // extraction preserves the published destination rather than unlinking an
+        // entry it can no longer prove it owns; truncating the inode would instead
+        // mutate a path outside that boundary.
+        await expect(fs.readFile(outsideAlias, "utf8")).resolves.toBe("owned");
+        await expect(fs.readFile(extractedPath, "utf8")).resolves.toBe("owned");
+        expect((await fs.stat(extractedPath)).nlink).toBe(2);
       });
     },
   );
@@ -375,7 +383,6 @@ describe("archive utils", () => {
       const archiveBytes = createZipCentralDirectoryArchive({
         actualEntryCount: 2,
         declaredEntryCount: 1,
-        declaredCentralDirectorySize: 0,
       });
       await fs.writeFile(archivePath, archiveBytes);
 
@@ -387,6 +394,7 @@ describe("archive utils", () => {
           limits: { maxEntries: 1 },
         }),
       ).rejects.toThrow("archive entry count exceeds limit");
+      expect(await fs.readdir(extractDir)).toEqual([]);
     });
   });
 

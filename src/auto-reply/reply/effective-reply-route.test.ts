@@ -1,14 +1,27 @@
 // Tests effective reply route selection from context, session, and fallback state.
 import { describe, expect, it } from "vitest";
-import {
-  isSystemEventProvider,
-  resolveEffectiveReplyRoute,
-  type EffectiveReplyRouteContext,
-  type EffectiveReplyRouteEntry,
-} from "./effective-reply-route.js";
+import type { SessionEntry, SessionOrigin } from "../../config/sessions/types.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
+
+type EffectiveReplyRouteParams = Parameters<typeof resolveEffectiveReplyRoute>[0];
+type EffectiveReplyRouteContext = EffectiveReplyRouteParams["ctx"];
+type EffectiveReplyRouteEntry = NonNullable<EffectiveReplyRouteParams["entry"]>;
+type LegacyDeliveryFixture = Partial<SessionEntry> & {
+  route?: ChannelRouteRef;
+  deliveryContext?: DeliveryContext;
+  origin?: SessionOrigin;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+};
 
 const ctx = (params: EffectiveReplyRouteContext): EffectiveReplyRouteContext => params;
-const entry = (params: EffectiveReplyRouteEntry): EffectiveReplyRouteEntry => params;
+const entry = (params: LegacyDeliveryFixture): EffectiveReplyRouteEntry =>
+  normalizeLegacySessionEntryDelivery(params as SessionEntry);
 
 describe("resolveEffectiveReplyRoute", () => {
   it("uses live origin context for normal providers", () => {
@@ -40,10 +53,14 @@ describe("resolveEffectiveReplyRoute", () => {
     });
   });
 
-  it("does not use persisted fallbacks for normal providers", () => {
+  it.each<EffectiveReplyRouteContext>([
+    { Provider: "slack" },
+    { InputProvenance: { kind: "internal_system", sourceTool: "restart-sentinel" } },
+    { InputProvenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" } },
+  ])("does not inherit a route without an internal wake source (%j)", (context) => {
     expect(
       resolveEffectiveReplyRoute({
-        ctx: ctx({ Provider: "slack" }),
+        ctx: context,
         entry: entry({
           deliveryContext: {
             channel: "telegram",
@@ -287,9 +304,10 @@ describe("resolveEffectiveReplyRoute", () => {
     expect(
       resolveEffectiveReplyRoute({
         ctx: ctx({
-          Provider: "exec-event",
+          InternalTurnSource: "exec",
           OriginatingChannel: "telegram",
           OriginatingTo: "chat:live",
+          MessageThreadId: 43,
           AccountId: "live-account",
         }),
         entry: entry({
@@ -307,35 +325,38 @@ describe("resolveEffectiveReplyRoute", () => {
       channel: "telegram",
       to: "chat:live",
       accountId: "live-account",
+      threadId: 43,
     });
   });
 
-  it("falls back to deliveryContext for exec-event replies", () => {
-    expect(
-      resolveEffectiveReplyRoute({
-        ctx: ctx({ Provider: "exec-event" }),
-        entry: entry({
-          deliveryContext: {
-            channel: "telegram",
-            to: "chat:persisted",
-            accountId: "persisted-account",
+  it.each(["heartbeat", "cron", "exec"] as const)(
+    "inherits session delivery for %s replies",
+    (source) => {
+      expect(
+        resolveEffectiveReplyRoute({
+          ctx: ctx({ InternalTurnSource: source }),
+          entry: {
+            delivery: normalizeSessionDeliveryState({
+              context: {
+                channel: "telegram",
+                to: "chat:persisted",
+                accountId: "persisted-account",
+              },
+            }),
           },
-          lastChannel: "slack",
-          lastTo: "last-to",
-          lastAccountId: "last-account",
         }),
-      }),
-    ).toEqual({
-      channel: "telegram",
-      to: "chat:persisted",
-      accountId: "persisted-account",
-    });
-  });
+      ).toEqual({
+        channel: "telegram",
+        to: "chat:persisted",
+        accountId: "persisted-account",
+      });
+    },
+  );
 
   it("falls back to legacy last route fields for exec-event replies", () => {
     expect(
       resolveEffectiveReplyRoute({
-        ctx: ctx({ Provider: "exec-event" }),
+        ctx: ctx({ InternalTurnSource: "exec" }),
         entry: entry({
           lastChannel: "slack",
           lastTo: "last-to",
@@ -353,7 +374,7 @@ describe("resolveEffectiveReplyRoute", () => {
     expect(
       resolveEffectiveReplyRoute({
         ctx: ctx({
-          Provider: "exec-event",
+          InternalTurnSource: "exec",
           OriginatingChannel: "telegram",
           OriginatingTo: "chat:live",
         }),
@@ -376,7 +397,7 @@ describe("resolveEffectiveReplyRoute", () => {
     expect(
       resolveEffectiveReplyRoute({
         ctx: ctx({
-          Provider: "exec-event",
+          InternalTurnSource: "exec",
           OriginatingChannel: "telegram",
           OriginatingTo: "chat:live",
         }),
@@ -395,15 +416,5 @@ describe("resolveEffectiveReplyRoute", () => {
       accountId: "persisted-account",
       chatType: "direct",
     });
-  });
-});
-
-describe("isSystemEventProvider", () => {
-  it("recognizes persisted-delivery event providers", () => {
-    expect(isSystemEventProvider("heartbeat")).toBe(true);
-    expect(isSystemEventProvider("cron-event")).toBe(true);
-    expect(isSystemEventProvider("exec-event")).toBe(true);
-    expect(isSystemEventProvider("slack")).toBe(false);
-    expect(isSystemEventProvider(undefined)).toBe(false);
   });
 });

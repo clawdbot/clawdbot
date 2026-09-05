@@ -1,6 +1,6 @@
 /** Cursor and pagination helpers for ACP session/list requests. */
 import path from "node:path";
-import { readNumber } from "@openclaw/acp-core/meta";
+import { readMetadataNumber } from "@openclaw/acp-core/meta";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const ACP_LIST_SESSIONS_DEFAULT_PAGE_SIZE = 100;
@@ -24,12 +24,16 @@ export function encodeListSessionsCursor(cursor: ListSessionsCursor): string {
 
 /** Decodes and validates an ACP session-list cursor, defaulting to the first page. */
 export function decodeListSessionsCursor(value: string | null | undefined): ListSessionsCursor {
-  if (!value) {
+  if (value === null || value === undefined) {
     return { offset: 0 };
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+    const bytes = Buffer.from(value, "base64url");
+    if (bytes.toString("base64url") !== value) {
+      throw new Error("non-canonical base64url");
+    }
+    parsed = JSON.parse(bytes.toString("utf8"));
   } catch {
     throw new Error("Invalid ACP session list cursor.");
   }
@@ -42,17 +46,21 @@ export function decodeListSessionsCursor(value: string | null | undefined): List
   }
   if (
     typeof record.offset !== "number" ||
-    !Number.isInteger(record.offset) ||
+    !Number.isSafeInteger(record.offset) ||
     record.offset < 0 ||
     record.offset > ACP_LIST_SESSIONS_MAX_CURSOR_OFFSET
   ) {
     throw new Error("Invalid ACP session list cursor offset.");
   }
   const cwd = normalizeOptionalString(record.cwd);
-  return {
+  const cursor = {
     offset: record.offset,
     ...(cwd ? { cwd } : {}),
   };
+  if (encodeListSessionsCursor(cursor) !== value) {
+    throw new Error("Invalid ACP session list cursor.");
+  }
+  return cursor;
 }
 
 /** Throws when an ACP method receives a relative cwd filter/path. */
@@ -66,7 +74,7 @@ export function assertAbsoluteCwd(cwd: string, method: string): void {
 export function resolveListSessionsPageSize(
   meta: Record<string, unknown> | null | undefined,
 ): number {
-  const requested = readNumber(meta, ["limit", "pageSize"]);
+  const requested = readMetadataNumber(meta, ["limit", "pageSize"]);
   if (requested === undefined) {
     return ACP_LIST_SESSIONS_DEFAULT_PAGE_SIZE;
   }

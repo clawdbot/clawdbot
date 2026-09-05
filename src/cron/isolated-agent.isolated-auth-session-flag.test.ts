@@ -6,7 +6,7 @@ import {
   makeCronSession,
   resolveConfiguredModelRefMock,
   resolveCronSessionMock,
-  resolveSessionAuthProfileOverrideMock,
+  resolveSessionAuthSelectionMock,
   resetRunCronIsolatedAgentTurnHarness,
   restoreFastTestEnv,
 } from "./isolated-agent/run.test-harness.js";
@@ -51,7 +51,7 @@ function makeParams(
   };
 }
 
-describe("isolated cron resolveSessionAuthProfileOverride isNewSession (#62783)", () => {
+describe("isolated cron auth selection isNewSession (#62783)", () => {
   let previousFastTestEnv: string | undefined;
 
   beforeEach(() => {
@@ -72,7 +72,11 @@ describe("isolated cron resolveSessionAuthProfileOverride isNewSession (#62783)"
         },
       }),
     );
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openrouter:default");
+    resolveSessionAuthSelectionMock.mockResolvedValue({
+      profileId: "openrouter:default",
+      source: "auto",
+      routeRequirement: "api-key",
+    });
   });
 
   afterEach(() => {
@@ -82,11 +86,11 @@ describe("isolated cron resolveSessionAuthProfileOverride isNewSession (#62783)"
   it("passes isNewSession=false when sessionTarget is isolated", async () => {
     await runCronIsolatedAgentTurn(makeParams());
 
-    const openRouterCall = resolveSessionAuthProfileOverrideMock.mock.calls.find(
+    const openRouterCall = resolveSessionAuthSelectionMock.mock.calls.find(
       (call) => call[0]?.provider === "openrouter",
     );
     if (!openRouterCall) {
-      throw new Error("resolveSessionAuthProfileOverride was not called with provider openrouter");
+      throw new Error("resolveSessionAuthSelection was not called with provider openrouter");
     }
     expect(openRouterCall[0]?.isNewSession).toBe(false);
   });

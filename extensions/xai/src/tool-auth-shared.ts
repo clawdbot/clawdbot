@@ -1,6 +1,5 @@
 // Xai plugin module implements tool auth shared behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
 import {
   coerceSecretRef,
   resolveNonEnvSecretRefApiKeyMarker,
@@ -9,10 +8,11 @@ import {
   readProviderEnvValue,
   resolveProviderWebSearchPluginConfig,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
-  normalizeSecretInputString,
-  resolveSecretInputString,
-} from "openclaw/plugin-sdk/secret-input";
+  resolveReadOnlyEnvSecretRef,
+  type ReadOnlyEnvSecretRefResolution,
+} from "openclaw/plugin-sdk/secret-ref-readonly";
 
 type XaiFallbackAuth = {
   apiKey: string;
@@ -26,11 +26,6 @@ export type XaiToolAuthContext = {
   resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
 };
 
-type ConfiguredRuntimeApiKeyResolution =
-  | { status: "available"; value: string }
-  | { status: "missing" }
-  | { status: "blocked" };
-
 function readConfiguredOrManagedApiKey(value: unknown): string | undefined {
   const literal = normalizeSecretInputString(value);
   if (literal) {
@@ -40,71 +35,21 @@ function readConfiguredOrManagedApiKey(value: unknown): string | undefined {
   return ref ? resolveNonEnvSecretRefApiKeyMarker(ref.source) : undefined;
 }
 
-function readLegacyGrokFallbackAuth(cfg?: OpenClawConfig): XaiFallbackAuth | undefined {
-  const search = cfg?.tools?.web?.search;
-  if (!search || typeof search !== "object") {
-    return undefined;
-  }
-  const grok = (search as Record<string, unknown>).grok;
-  const apiKey = readConfiguredOrManagedApiKey(
-    grok && typeof grok === "object" ? (grok as Record<string, unknown>).apiKey : undefined,
-  );
-  return apiKey ? { apiKey, source: "tools.web.search.grok.apiKey" } : undefined;
-}
-
 function readConfiguredRuntimeApiKey(
   value: unknown,
   path: string,
   cfg?: OpenClawConfig,
-): ConfiguredRuntimeApiKeyResolution {
-  const resolved = resolveSecretInputString({
+): ReadOnlyEnvSecretRefResolution {
+  return resolveReadOnlyEnvSecretRef({
     value,
     path,
-    defaults: cfg?.secrets?.defaults,
-    mode: "inspect",
-  });
-  if (resolved.status === "available") {
-    return { status: "available", value: resolved.value };
-  }
-  if (resolved.status === "missing") {
-    return { status: "missing" };
-  }
-  if (resolved.ref.source !== "env") {
-    return { status: "blocked" };
-  }
-  const envVarName = resolved.ref.id.trim();
-  if (envVarName !== XAI_API_KEY_ENV_VAR) {
-    return { status: "blocked" };
-  }
-  if (
-    !canResolveEnvSecretRefInReadOnlyPath({
-      cfg,
-      provider: resolved.ref.provider,
-      id: envVarName,
-    })
-  ) {
-    return { status: "blocked" };
-  }
-  const envValue = normalizeSecretInputString(process.env[envVarName]);
-  return envValue ? { status: "available", value: envValue } : { status: "missing" };
-}
-
-function readLegacyGrokApiKeyResult(cfg?: OpenClawConfig): ConfiguredRuntimeApiKeyResolution {
-  const search = cfg?.tools?.web?.search;
-  if (!search || typeof search !== "object") {
-    return { status: "missing" };
-  }
-  const grok = (search as Record<string, unknown>).grok;
-  return readConfiguredRuntimeApiKey(
-    grok && typeof grok === "object" ? (grok as Record<string, unknown>).apiKey : undefined,
-    "tools.web.search.grok.apiKey",
     cfg,
-  );
+    expectedEnvId: XAI_API_KEY_ENV_VAR,
+    normalizeValue: normalizeSecretInputString,
+  });
 }
 
-function readPluginXaiWebSearchApiKeyResult(
-  cfg?: OpenClawConfig,
-): ConfiguredRuntimeApiKeyResolution {
+function readPluginXaiWebSearchApiKeyResult(cfg?: OpenClawConfig): ReadOnlyEnvSecretRefResolution {
   return readConfiguredRuntimeApiKey(
     resolveProviderWebSearchPluginConfig(cfg as Record<string, unknown> | undefined, "xai")?.apiKey,
     "plugins.entries.xai.config.webSearch.apiKey",
@@ -115,22 +60,14 @@ function readPluginXaiWebSearchApiKeyResult(
 function resolveConfiguredXaiToolApiKeyResult(params: {
   runtimeConfig?: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
-}): ConfiguredRuntimeApiKeyResolution {
+}): ReadOnlyEnvSecretRefResolution {
   const runtimePlugin = readPluginXaiWebSearchApiKeyResult(params.runtimeConfig);
   if (runtimePlugin.status === "available" || runtimePlugin.status === "blocked") {
     return runtimePlugin;
   }
-  const runtimeLegacy = readLegacyGrokApiKeyResult(params.runtimeConfig);
-  if (runtimeLegacy.status === "available" || runtimeLegacy.status === "blocked") {
-    return runtimeLegacy;
-  }
   const sourcePlugin = readPluginXaiWebSearchApiKeyResult(params.sourceConfig);
   if (sourcePlugin.status === "available" || sourcePlugin.status === "blocked") {
     return sourcePlugin;
-  }
-  const sourceLegacy = readLegacyGrokApiKeyResult(params.sourceConfig);
-  if (sourceLegacy.status === "available" || sourceLegacy.status === "blocked") {
-    return sourceLegacy;
   }
   return { status: "missing" };
 }
@@ -154,7 +91,7 @@ export function resolveFallbackXaiAuth(cfg?: OpenClawConfig): XaiFallbackAuth | 
       source: "plugins.entries.xai.config.webSearch.apiKey",
     };
   }
-  return readLegacyGrokFallbackAuth(cfg);
+  return undefined;
 }
 
 export async function resolveXaiToolApiKeyWithAuth(params: {

@@ -414,6 +414,62 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
     );
   });
 
+  it.each([
+    [automaticGroupReplyConfig, "automatic"],
+    [globalToolOnlyReplyConfig, "message_tool_only"],
+  ] as const)(
+    "keeps room-event effective delivery tool-only while session-stable mode follows config",
+    (cfg, expectedStableMode) => {
+      expectPolicyFields(
+        resolveSourceReplyVisibilityPolicy({
+          cfg,
+          ctx: { ChatType: "group", InboundEventKind: "room_event" },
+          sendPolicy: "allow",
+        }),
+        {
+          sourceReplyDeliveryMode: "message_tool_only",
+          sessionStableSourceReplyDeliveryMode: expectedStableMode,
+          suppressAutomaticSourceDelivery: true,
+          suppressDelivery: true,
+        },
+      );
+    },
+  );
+
+  it("keeps the stable mode tool-only under a sender-scoped message denial", () => {
+    // A sender-scoped denial downgrades the sender's effective delivery, but
+    // the session-stable mode feeds CLI binding facts shared by sender-less
+    // synthetic turns; downgrading it too splits the policy hash and resets
+    // the CLI session on chat<->heartbeat transitions.
+    expectPolicyFields(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: globalToolOnlyReplyConfig,
+        ctx: { ChatType: "direct" },
+        sendPolicy: "allow",
+        messageToolAvailable: false,
+        sessionStableMessageToolAvailable: true,
+      }),
+      {
+        sourceReplyDeliveryMode: "automatic",
+        sessionStableSourceReplyDeliveryMode: "message_tool_only",
+      },
+    );
+    // Without a sender-independent verdict, the stable mode still follows the
+    // turn's availability (session-wide denials downgrade both).
+    expectPolicyFields(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: globalToolOnlyReplyConfig,
+        ctx: { ChatType: "direct" },
+        sendPolicy: "allow",
+        messageToolAvailable: false,
+      }),
+      {
+        sourceReplyDeliveryMode: "automatic",
+        sessionStableSourceReplyDeliveryMode: "automatic",
+      },
+    );
+  });
+
   it("suppresses automatic source delivery for opted-in message-tool group turns without suppressing typing", () => {
     expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
@@ -446,12 +502,13 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
     ] as const) {
       expectPolicyFields(
         resolveSourceReplyVisibilityPolicy({
-          cfg: emptyConfig,
+          cfg: globalToolOnlyReplyConfig,
           ctx,
           sendPolicy: "allow",
         }),
         {
           sourceReplyDeliveryMode: "automatic",
+          sessionStableSourceReplyDeliveryMode: "automatic",
           suppressAutomaticSourceDelivery: false,
           suppressDelivery: false,
           suppressHookReplyLifecycle: false,
@@ -470,6 +527,7 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
       }),
       {
         sourceReplyDeliveryMode: "automatic",
+        sessionStableSourceReplyDeliveryMode: "automatic",
         suppressAutomaticSourceDelivery: false,
         suppressDelivery: false,
         suppressHookReplyLifecycle: false,
@@ -488,11 +546,50 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
       }),
       {
         sourceReplyDeliveryMode: "message_tool_only",
+        sessionStableSourceReplyDeliveryMode: "message_tool_only",
         suppressAutomaticSourceDelivery: true,
         suppressDelivery: true,
         suppressHookReplyLifecycle: false,
         suppressTyping: false,
         deliverySuppressionReason: "sourceReplyDeliveryMode: message_tool_only",
+      },
+    );
+  });
+
+  it.each([
+    {
+      name: "inter-session handoff",
+      ctx: {
+        ChatType: "direct",
+        InputProvenance: { kind: "inter_session" as const, sourceTool: "sessions_send" },
+      },
+    },
+    {
+      name: "internal lifecycle handoff",
+      ctx: {
+        ChatType: "direct",
+        InputProvenance: { kind: "internal_system" as const, sourceTool: "restart-sentinel" },
+      },
+    },
+    {
+      name: "heartbeat handoff",
+      ctx: { ChatType: "direct" },
+      isHeartbeat: true,
+    },
+  ])("keeps $name overrides out of session-stable policy", ({ ctx, isHeartbeat }) => {
+    expectPolicyFields(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: emptyConfig,
+        ctx,
+        requested: "message_tool_only",
+        isHeartbeat,
+        sendPolicy: "allow",
+      }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        sessionStableSourceReplyDeliveryMode: "automatic",
+        suppressAutomaticSourceDelivery: true,
+        suppressDelivery: true,
       },
     );
   });

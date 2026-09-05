@@ -3,9 +3,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./preflight-audio.runtime.js", () => ({
-  transcribeFirstAudio: transcribeFirstAudioMock,
-}));
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/media-understanding-runtime")>();
+  return {
+    ...actual,
+    createChannelPreflightAudio: (
+      params: Parameters<typeof actual.createChannelPreflightAudio>[0],
+    ) =>
+      actual.createChannelPreflightAudio({
+        ...params,
+        transcribeFirstAudio: transcribeFirstAudioMock,
+      }),
+  };
+});
 
 import { resolveDiscordPreflightAudioMentionContext } from "./preflight-audio.js";
 
@@ -37,8 +48,12 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
       ctx: {
-        MediaUrls: ["https://cdn.discordapp.com/attachments/voice.ogg"],
-        MediaTypes: ["audio/ogg"],
+        media: [
+          {
+            url: "https://cdn.discordapp.com/attachments/voice.ogg",
+            contentType: "audio/ogg",
+          },
+        ],
       },
       cfg,
       agentDir: undefined,
@@ -70,8 +85,12 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
       ctx: {
-        MediaUrls: ["https://cdn.discordapp.com/attachments/voice.opus"],
-        MediaTypes: ["audio/opus"],
+        media: [
+          {
+            url: "https://cdn.discordapp.com/attachments/voice.opus",
+            contentType: "audio/opus",
+          },
+        ],
       },
       cfg,
       agentDir: undefined,
@@ -100,8 +119,12 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
       ctx: {
-        MediaUrls: ["https://cdn.discordapp.com/attachments/voice"],
-        MediaTypes: ["audio/ogg"],
+        media: [
+          {
+            url: "https://cdn.discordapp.com/attachments/voice",
+            contentType: "audio/ogg",
+          },
+        ],
       },
       cfg,
       agentDir: undefined,

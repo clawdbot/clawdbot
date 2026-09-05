@@ -20,6 +20,8 @@ vi.mock("./client.js", () => ({
 }));
 
 let registerFeishuBitableTools: typeof import("./bitable.js").registerFeishuBitableTools;
+let registerFeishuChatTools: typeof import("./chat.js").registerFeishuChatTools;
+let registerFeishuDocTools: typeof import("./docx.js").registerFeishuDocTools;
 let registerFeishuDriveTools: typeof import("./drive.js").registerFeishuDriveTools;
 let registerFeishuPermTools: typeof import("./perm.js").registerFeishuPermTools;
 let registerFeishuWikiTools: typeof import("./wiki.js").registerFeishuWikiTools;
@@ -30,23 +32,21 @@ function createConfig(params: {
     drive?: boolean;
     perm?: boolean;
     bitable?: boolean;
-    base?: boolean;
   };
   toolsA?: {
     wiki?: boolean;
     drive?: boolean;
     perm?: boolean;
     bitable?: boolean;
-    base?: boolean;
   };
   toolsB?: {
     wiki?: boolean;
     drive?: boolean;
     perm?: boolean;
     bitable?: boolean;
-    base?: boolean;
   };
   defaultAccount?: string;
+  enabledA?: boolean;
 }): OpenClawPluginApi["config"] {
   return {
     channels: {
@@ -56,6 +56,7 @@ function createConfig(params: {
         tools: params.topTools,
         accounts: {
           a: {
+            enabled: params.enabledA,
             appId: "app-a",
             appSecret: "sec-a", // pragma: allowlist secret
             tools: params.toolsA,
@@ -93,6 +94,8 @@ describe("feishu tool account routing", () => {
         }),
       ));
     ({ registerFeishuWikiTools } = await import("./wiki.js"));
+    ({ registerFeishuChatTools } = await import("./chat.js"));
+    ({ registerFeishuDocTools } = await import("./docx.js"));
   });
 
   afterAll(() => {
@@ -102,6 +105,41 @@ describe("feishu tool account routing", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  test.each([
+    ["missing channel", {}],
+    ["unconfigured account", { channels: { feishu: { accounts: { a: { enabled: true } } } } }],
+    [
+      "disabled channel",
+      { channels: { feishu: { ...createConfig({}).channels?.feishu, enabled: false } } },
+    ],
+    [
+      "disabled accounts",
+      {
+        channels: {
+          feishu: {
+            accounts: {
+              a: { enabled: false, appId: "app-a", appSecret: "sec-a" }, // pragma: allowlist secret
+            },
+          },
+        },
+      },
+    ],
+  ])("does not register workplace tools for %s", (_label, config) => {
+    const { api, registered } = createToolFactoryHarness(config);
+    for (const register of [
+      registerFeishuDocTools,
+      registerFeishuChatTools,
+      registerFeishuWikiTools,
+      registerFeishuDriveTools,
+      registerFeishuPermTools,
+      registerFeishuBitableTools,
+    ]) {
+      register(api);
+    }
+    expect(registered).toEqual([]);
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
   });
 
   test("wiki tool registers when first account disables it and routes to agentAccountId", async () => {
@@ -148,6 +186,23 @@ describe("feishu tool account routing", () => {
     await tool.execute("call", { action: "search" });
 
     expect(lastClientAppId()).toBe("app-a");
+  });
+
+  test("wiki tool skips a disabled configured defaultAccount", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        defaultAccount: "a",
+        enabledA: false,
+        toolsA: { wiki: true },
+        toolsB: { wiki: true },
+      }),
+    );
+    registerFeishuWikiTools(api);
+
+    const tool = resolveTool("feishu_wiki");
+    await tool.execute("call", { action: "search" });
+
+    expect(lastClientAppId()).toBe("app-b");
   });
 
   test("wiki tool rejects number-typed space IDs before Lark receives precision-corrupted values", async () => {
@@ -283,6 +338,23 @@ describe("feishu tool account routing", () => {
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
   });
 
+  test("bitable tool skips a disabled configured defaultAccount", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        defaultAccount: "a",
+        enabledA: false,
+        toolsA: { bitable: true },
+        toolsB: { bitable: true },
+      }),
+    );
+    registerFeishuBitableTools(api);
+
+    const tool = resolveTool("feishu_bitable_get_meta");
+    await tool.execute("call", { url: "invalid-url" });
+
+    expect(lastClientAppId()).toBe("app-b");
+  });
+
   test("bitable tool rejects a disabled contextual account when another account enables it", async () => {
     const { api, resolveTool } = createToolFactoryHarness(
       createConfig({
@@ -357,53 +429,6 @@ describe("feishu tool account routing", () => {
     expect(() => resolveTool("feishu_bitable_get_meta")).toThrow("Tool not registered");
   });
 
-  test("top-level base alias disable wins over account-level bitable enable", async () => {
-    const { api, registered } = createToolFactoryHarness(
-      createConfig({
-        topTools: { base: false },
-        toolsA: { bitable: true },
-        toolsB: { bitable: true },
-      }),
-    );
-    registerFeishuBitableTools(api);
-
-    expect(
-      registered.filter((entry) => entry.opts?.name?.startsWith("feishu_bitable_")).length,
-    ).toBe(0);
-  });
-
-  test("explicit top-level bitable enable wins over disabled base alias in account merge", async () => {
-    const { api, resolveTool } = createToolFactoryHarness(
-      createConfig({
-        topTools: { bitable: true, base: false },
-        toolsA: { bitable: true },
-      }),
-    );
-    registerFeishuBitableTools(api);
-
-    const tool = resolveTool("feishu_bitable_get_meta", { agentAccountId: "a" });
-    await tool.execute("call", { url: "invalid-url" });
-
-    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
-  });
-
-  test("account base alias disable wins over inherited top-level bitable enable", async () => {
-    const { api, resolveTool } = createToolFactoryHarness(
-      createConfig({
-        topTools: { bitable: true },
-        toolsA: { base: false },
-        toolsB: { bitable: true },
-      }),
-    );
-    registerFeishuBitableTools(api);
-
-    const tool = resolveTool("feishu_bitable_get_meta", { agentAccountId: "a" });
-    const result = await tool.execute("call", { url: "invalid-url" });
-
-    expect(createFeishuClientMock).not.toHaveBeenCalled();
-    expect(result.details.error).toBe('Feishu Bitable tools are disabled for account "a"');
-  });
-
   test("bitable tools are not registered when account bitable configs disable them", async () => {
     const { api, registered, resolveTool } = createToolFactoryHarness(
       createConfig({
@@ -417,21 +442,6 @@ describe("feishu tool account routing", () => {
       registered.filter((entry) => entry.opts?.name?.startsWith("feishu_bitable_")).length,
     ).toBe(0);
     expect(() => resolveTool("feishu_bitable_get_meta")).toThrow("Tool not registered");
-  });
-
-  test("base alias disables bitable tool registration", async () => {
-    const { api, registered } = createToolFactoryHarness(
-      createConfig({
-        topTools: { base: false },
-        toolsA: { base: false },
-        toolsB: { base: false },
-      }),
-    );
-    registerFeishuBitableTools(api);
-
-    expect(
-      registered.filter((entry) => entry.opts?.name?.startsWith("feishu_bitable_")).length,
-    ).toBe(0);
   });
 
   test("falls back to the configured Feishu default selection when agentAccountId is not a real account", async () => {

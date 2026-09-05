@@ -12,3 +12,4 @@ export {
   resolveClickClackAccount,
   setClickClackRuntime,
 } from "./api.js";
+export { registerClickClackDiscussions } from "./src/discussions/register.js";

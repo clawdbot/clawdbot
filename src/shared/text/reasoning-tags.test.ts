@@ -1,33 +1,7 @@
-// Reasoning tag tests cover parsing and stripping reasoning tag blocks.
 import { describe, expect, it } from "vitest";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 
 describe("stripReasoningTagsFromText", () => {
-  function expectStrippedCase(params: {
-    input: string | null;
-    expected: string | null;
-    opts?: Parameters<typeof stripReasoningTagsFromText>[1];
-  }) {
-    expect(stripReasoningTagsFromText(params.input as unknown as string, params.opts)).toBe(
-      params.expected,
-    );
-  }
-
-  function expectPreservedReasoningTagCodeExample(input: string) {
-    expect(stripReasoningTagsFromText(input)).toBe(input);
-  }
-
-  function expectReasoningCodeCase(params: { input: string; expected?: string }) {
-    if (params.expected === undefined) {
-      expectPreservedReasoningTagCodeExample(params.input);
-      return;
-    }
-    expectStrippedCase({
-      input: params.input,
-      expected: params.expected,
-    });
-  }
-
   describe("basic functionality", () => {
     it.each([
       {
@@ -44,6 +18,11 @@ describe("stripReasoningTagsFromText", () => {
         name: "strips thinking tags",
         input: "Before <thinking>some thought</thinking> after",
         expected: "Before  after",
+      },
+      {
+        name: "strips tags separated by Unicode whitespace",
+        input: "<think\u00a0>hidden</think>After",
+        expected: "After",
       },
       { name: "strips thought tags", input: "A <thought>hmm</thought> B", expected: "A  B" },
       {
@@ -76,8 +55,18 @@ describe("stripReasoningTagsFromText", () => {
         input: "<think>first</think>A<think>second</think>B",
         expected: "AB",
       },
-    ] as const)("$name", (testCase) => {
-      expectStrippedCase(testCase);
+      {
+        name: "strips internal reflection blocks",
+        input: "<internal>private reflection</internal>Visible answer.",
+        expected: "Visible answer.",
+      },
+      {
+        name: "never recovers nested unclosed internal reflection as visible text",
+        input: "<thinking>outer<internal>private reflection",
+        expected: "",
+      },
+    ] as const)("$name", ({ input, expected }) => {
+      expect(stripReasoningTagsFromText(input)).toBe(expected);
     });
   });
 
@@ -90,6 +79,10 @@ describe("stripReasoningTagsFromText", () => {
       {
         name: "preserves inline literal think tag documentation",
         input: "The `<think>` tag is used for reasoning. Don't forget the closing `</think>` tag.",
+      },
+      {
+        name: "preserves literal internal tag documentation",
+        input: "Use `<internal>private</internal>` literally.",
       },
       {
         name: "preserves xml fenced examples",
@@ -105,7 +98,7 @@ describe("stripReasoningTagsFromText", () => {
       },
       {
         name: "preserves final tags inside code examples",
-        input: "Use `<final>` for final answers in code: ```\n<final>42</final>\n```",
+        input: "Use `<final>` for final answers in code:\n```\n<final>42</final>\n```",
       },
       {
         name: "preserves mixed literal think tags and code blocks",
@@ -122,7 +115,7 @@ describe("stripReasoningTagsFromText", () => {
         expected: "```\n<think>code</think>\n```\nvisible",
       },
     ] as const)("$name", ({ input, expected }) => {
-      expectReasoningCodeCase({ input, expected });
+      expect(stripReasoningTagsFromText(input)).toBe(expected ?? input);
     });
   });
 
@@ -141,6 +134,10 @@ describe("stripReasoningTagsFromText", () => {
         expected: "final answer",
       },
       {
+        input: "<reasoning>outer<think>secret</think>",
+        expected: "",
+      },
+      {
         input: "Use `<think>` to open and `</think>` to close. Final sentence.",
         expected: "Use `<think>` to open and `</think>` to close. Final sentence.",
       },
@@ -156,8 +153,8 @@ describe("stripReasoningTagsFromText", () => {
         input: null as unknown as string,
         expected: null,
       },
-    ] as const)("handles malformed/null-ish input %j", (testCase) => {
-      expectStrippedCase(testCase);
+    ] as const)("handles malformed/null-ish input %j", ({ input, expected }) => {
+      expect(stripReasoningTagsFromText(input)).toBe(expected);
     });
 
     it.each([
@@ -185,8 +182,8 @@ describe("stripReasoningTagsFromText", () => {
         input: "Start `unclosed <think>hidden</think> end",
         expected: "Start `unclosed  end",
       },
-    ] as const)("handles fenced/inline code edge behavior: %j", (testCase) => {
-      expectStrippedCase(testCase);
+    ] as const)("handles fenced/inline code edge behavior: %j", ({ input, expected }) => {
+      expect(stripReasoningTagsFromText(input)).toBe(expected);
     });
 
     it.each([
@@ -238,8 +235,8 @@ describe("stripReasoningTagsFromText", () => {
         input: `A <final ${" ".repeat(10_000)}= > B`,
         expected: `A <final ${" ".repeat(10_000)}= > B`,
       },
-    ] as const)("handles nested/final tag behavior: %j", (testCase) => {
-      expectStrippedCase(testCase);
+    ] as const)("handles nested/final tag behavior: %j", ({ input, expected }) => {
+      expect(stripReasoningTagsFromText(input)).toBe(expected);
     });
 
     it.each([
@@ -259,8 +256,8 @@ describe("stripReasoningTagsFromText", () => {
         input: "A <ANTML:THINKING hidden='1'>secret</ANTML:THINKING> B",
         expected: "A  B",
       },
-    ] as const)("handles unicode/attributes/case-insensitive names: %j", (testCase) => {
-      expectStrippedCase(testCase);
+    ] as const)("handles unicode/attributes/case-insensitive names: %j", ({ input, expected }) => {
+      expect(stripReasoningTagsFromText(input)).toBe(expected);
     });
 
     it("handles long content and pathological backtick patterns efficiently", () => {
@@ -272,6 +269,60 @@ describe("stripReasoningTagsFromText", () => {
       stripReasoningTagsFromText(pathological);
       const elapsed = Date.now() - start;
       expect(elapsed).toBeLessThan(1000);
+    });
+
+    it("recovers malformed quoted tags iteratively at large input sizes", () => {
+      const input = `<think data-x="${"x".repeat(110_000)}<think>hidden</think>After`;
+
+      const output = stripReasoningTagsFromText(input, { trim: "none" });
+
+      expect(output).not.toContain("hidden");
+      expect(output.endsWith("After")).toBe(true);
+    });
+  });
+
+  describe("shared Markdown reasoning contract", () => {
+    it.each([
+      {
+        name: "keeps visible text after a self-closing tag",
+        input: "Before<thinking/>After",
+        expected: "BeforeAfter",
+      },
+      {
+        name: "treats quoted greater-than delimiters as attribute content",
+        input: 'Before <think data-x=">">hidden</think> After',
+        expected: "Before  After",
+      },
+      {
+        name: "strips tags between unequal backtick runs",
+        input: "before ```<think>private</think>`` after",
+        expected: "before ````` after",
+      },
+      {
+        name: "ends inline-code ownership at a paragraph-to-list transition",
+        input: "Paragraph `literal\n- <think>private</think> `visible",
+        expected: "Paragraph `literal\n-  `visible",
+      },
+      {
+        name: "keeps inline code across a soft line break in one paragraph",
+        input: "Paragraph `literal\ncontinued <think>example</think>` after",
+        expected: "Paragraph `literal\ncontinued <think>example</think>` after",
+      },
+    ] as const)("$name", ({ input, expected }) => {
+      expect(stripReasoningTagsFromText(input, { trim: "none" })).toBe(expected);
+    });
+
+    it("does not mistake a close tag after an unmatched backtick for code", () => {
+      expect(
+        stripReasoningTagsFromText("Visible <think>secret ` </think> after", {
+          scope: "leading",
+          trim: "none",
+        }),
+      ).toBe("Visible  after");
+    });
+
+    it("preserves valid output before an adjacent orphan close", () => {
+      expect(stripReasoningTagsFromText("Before<think>x</think></think>After")).toBe("BeforeAfter");
     });
   });
 
@@ -307,8 +358,14 @@ describe("stripReasoningTagsFromText", () => {
         expected: "A  B",
         opts: { mode: "preserve" as const },
       },
-    ] as const)("$name", (testCase) => {
-      expectStrippedCase(testCase);
+      {
+        name: "does not recover internal reflection in preserve mode",
+        input: "<internal>private reflection",
+        expected: "",
+        opts: { mode: "preserve" as const },
+      },
+    ] as const)("$name", ({ input, expected, opts }) => {
+      expect(stripReasoningTagsFromText(input, opts)).toBe(expected);
     });
   });
 
@@ -332,8 +389,8 @@ describe("stripReasoningTagsFromText", () => {
         expected: "result  ",
         opts: { trim: "start" as const },
       },
-    ] as const)("$name", (testCase) => {
-      expectStrippedCase(testCase);
+    ] as const)("$name", ({ input, expected, opts }) => {
+      expect(stripReasoningTagsFromText(input, opts)).toBe(expected);
     });
   });
 
@@ -341,7 +398,7 @@ describe("stripReasoningTagsFromText", () => {
     { input: "A <final>1</final> B", expected: "A 1 B" },
     { input: "C <final>2</final> D", expected: "C 2 D" },
     { input: "E <think>x</think> F", expected: "E  F" },
-  ] as const)("does not leak regex state across repeated calls: %j", (testCase) => {
-    expectStrippedCase(testCase);
+  ] as const)("does not leak regex state across repeated calls: %j", ({ input, expected }) => {
+    expect(stripReasoningTagsFromText(input)).toBe(expected);
   });
 });

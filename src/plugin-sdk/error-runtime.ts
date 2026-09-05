@@ -22,5 +22,12 @@ export {
   formatErrorMessage,
   formatUncaughtError,
   readErrorName,
+  toErrorObject,
 } from "../infra/errors.js";
+export { attachErrorDiagnostic, formatErrorMessageForDisplay } from "../infra/error-diagnostics.js";
+export {
+  coerceErrorMessage,
+  toStringifiedError,
+} from "../../packages/normalization-core/src/error-coercion.js";
+export { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 export { isApprovalNotFoundError } from "../infra/approval-errors.ts";

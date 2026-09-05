@@ -1,6 +1,8 @@
 // Feishu plugin module implements post behavior.
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isRecord } from "./comment-shared.js";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 
 const FALLBACK_POST_TEXT = "[Rich text message]";
@@ -8,8 +10,9 @@ const MARKDOWN_SPECIAL_CHARS = /([\\`*_{}[\]()#+\-!|>~])/g;
 
 type PostParseResult = {
   textContent: string;
-  imageKeys: string[];
-  mediaKeys: Array<{ fileKey: string; fileName?: string }>;
+  attachments: Array<
+    { kind: "image"; key: string } | { kind: "file"; key: string; fileName?: string }
+  >;
   mentionedOpenIds: string[];
 };
 
@@ -127,9 +130,9 @@ function renderCodeBlockElement(element: Record<string, unknown>): string {
 
 function renderElement(
   element: unknown,
-  imageKeys: string[],
-  mediaKeys: Array<{ fileKey: string; fileName?: string }>,
+  attachments: PostParseResult["attachments"],
   mentionedOpenIds: string[],
+  renderMediaPlaceholders: boolean,
 ): string {
   if (!isRecord(element)) {
     return escapeMarkdownText(toStringOrEmpty(element));
@@ -153,17 +156,17 @@ function renderElement(
     case "img": {
       const imageKey = normalizeFeishuExternalKey(toStringOrEmpty(element.image_key));
       if (imageKey) {
-        imageKeys.push(imageKey);
+        attachments.push({ kind: "image", key: imageKey });
       }
-      return "![image]";
+      return renderMediaPlaceholders ? "![image]" : "";
     }
     case "media": {
       const fileKey = normalizeFeishuExternalKey(toStringOrEmpty(element.file_key));
       if (fileKey) {
         const fileName = toStringOrEmpty(element.file_name) || undefined;
-        mediaKeys.push({ fileKey, fileName });
+        attachments.push({ kind: "file", key: fileKey, ...(fileName ? { fileName } : {}) });
       }
-      return "[media]";
+      return renderMediaPlaceholders ? "[media]" : "";
     }
     case "emotion":
       return renderEmotionElement(element);
@@ -231,21 +234,22 @@ function resolvePostPayload(parsed: unknown): PostPayload | null {
   return resolveLocalePayload(parsed);
 }
 
-export function parsePostContent(content: string): PostParseResult {
+export function parsePostContent(
+  content: string,
+  options: { renderMediaPlaceholders?: boolean; emptyTextFallback?: string } = {},
+): PostParseResult {
   try {
     const parsed = JSON.parse(content);
     const payload = resolvePostPayload(parsed);
     if (!payload) {
       return {
         textContent: FALLBACK_POST_TEXT,
-        imageKeys: [],
-        mediaKeys: [],
+        attachments: [],
         mentionedOpenIds: [],
       };
     }
 
-    const imageKeys: string[] = [];
-    const mediaKeys: Array<{ fileKey: string; fileName?: string }> = [];
+    const attachments: PostParseResult["attachments"] = [];
     const mentionedOpenIds: string[] = [];
     const paragraphs: string[] = [];
 
@@ -255,7 +259,12 @@ export function parsePostContent(content: string): PostParseResult {
       }
       let renderedParagraph = "";
       for (const element of paragraph) {
-        renderedParagraph += renderElement(element, imageKeys, mediaKeys, mentionedOpenIds);
+        renderedParagraph += renderElement(
+          element,
+          attachments,
+          mentionedOpenIds,
+          options.renderMediaPlaceholders !== false,
+        );
       }
       paragraphs.push(renderedParagraph);
     }
@@ -265,12 +274,11 @@ export function parsePostContent(content: string): PostParseResult {
     const textContent = [title, body].filter(Boolean).join("\n\n").trim();
 
     return {
-      textContent: textContent || FALLBACK_POST_TEXT,
-      imageKeys,
-      mediaKeys,
+      textContent: textContent || (options.emptyTextFallback ?? FALLBACK_POST_TEXT),
+      attachments,
       mentionedOpenIds,
     };
   } catch {
-    return { textContent: FALLBACK_POST_TEXT, imageKeys: [], mediaKeys: [], mentionedOpenIds: [] };
+    return { textContent: FALLBACK_POST_TEXT, attachments: [], mentionedOpenIds: [] };
   }
 }

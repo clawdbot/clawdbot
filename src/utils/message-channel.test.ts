@@ -1,14 +1,17 @@
 // Message channel tests cover channel id normalization and routing helpers.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
-  NATIVE_APPROVAL_CHANNELS,
+  isBrowserCopilotClient,
+  isBrowserOperatorUiClient,
+  isDeliverableMessageChannel,
+  isEphemeralGatewayClient,
   isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,
-  isNativeApprovalChannel,
+  isOperatorUiClient,
   resolveGatewayMessageChannel,
 } from "./message-channel.js";
 
@@ -58,8 +61,32 @@ describe("message-channel", () => {
   it("normalizes gateway message channels and rejects unknown values", () => {
     expect(resolveGatewayMessageChannel("discord")).toBe("discord");
     expect(resolveGatewayMessageChannel(" imsg ")).toBe("imessage");
+    expect(resolveGatewayMessageChannel("webchat")).toBe("webchat");
     expect(resolveGatewayMessageChannel("web")).toBeUndefined();
     expect(resolveGatewayMessageChannel("nope")).toBeUndefined();
+    expect(isDeliverableMessageChannel("discord")).toBe(true);
+    expect(isDeliverableMessageChannel("imsg")).toBe(false);
+    expect(isDeliverableMessageChannel("webchat")).toBe(false);
+    expect(isDeliverableMessageChannel("nope")).toBe(false);
+  });
+
+  it("classifies ephemeral Gateway client modes", () => {
+    for (const mode of ["cli", "backend", "probe", " CLI "]) {
+      expect(isEphemeralGatewayClient({ mode })).toBe(true);
+    }
+    // "test" stays tracked: suites use test-mode clients as real-client stand-ins.
+    for (const mode of ["ui", "webchat", "node", "test", "unknown", undefined]) {
+      expect(isEphemeralGatewayClient({ mode })).toBe(false);
+    }
+  });
+
+  it("classifies the browser copilot as a dedicated browser operator UI", () => {
+    const client = { id: "openclaw-browser-copilot", mode: "ui" };
+    expect(isBrowserCopilotClient(client)).toBe(true);
+    expect(isBrowserOperatorUiClient(client)).toBe(true);
+    expect(isOperatorUiClient(client)).toBe(true);
+    expect(isBrowserCopilotClient({ id: "webchat", mode: "webchat" })).toBe(false);
+    expect(isBrowserCopilotClient({ id: "openclaw-browser-copilot", mode: "webchat" })).toBe(true);
   });
 
   it("normalizes plugin aliases when registered", () => {
@@ -69,6 +96,8 @@ describe("message-channel", () => {
       ]),
     );
     expect(resolveGatewayMessageChannel("workspace-chat")).toBe("demo-alias-channel");
+    expect(isDeliverableMessageChannel("demo-alias-channel")).toBe(true);
+    expect(isDeliverableMessageChannel("workspace-chat")).toBe(false);
   });
 
   it("recognises internal non-delivery channel sources", () => {
@@ -79,19 +108,8 @@ describe("message-channel", () => {
     expect(isInternalNonDeliveryChannel("webchat")).toBe(false);
     expect(isInternalNonDeliveryChannel("")).toBe(false);
     expect(isInternalNonDeliveryChannel("HEARTBEAT")).toBe(false);
-  });
-
-  it("lists native chat exec approval channels", () => {
-    for (const channel of NATIVE_APPROVAL_CHANNELS) {
-      expect(isNativeApprovalChannel(channel)).toBe(true);
-    }
-    // Channels without a bundled approval-handler.runtime must not claim native approval.
-    expect(isNativeApprovalChannel("feishu")).toBe(false);
-    expect(isNativeApprovalChannel("msteams")).toBe(false);
-    expect(isNativeApprovalChannel("line")).toBe(false);
-    expect(isNativeApprovalChannel("heartbeat")).toBe(false);
-    expect(isNativeApprovalChannel("")).toBe(false);
-    expect(isNativeApprovalChannel("TELEGRAM")).toBe(false);
+    expect(isInternalNonDeliveryChannel("cron-event")).toBe(false);
+    expect(isInternalNonDeliveryChannel("exec-event")).toBe(false);
   });
 
   it("reads markdown capability from channel metadata", () => {

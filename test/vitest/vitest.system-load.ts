@@ -2,7 +2,7 @@
 
 type EnvMap = Record<string, string | undefined>;
 
-export type VitestProcessStats = {
+type VitestProcessStats = {
   otherVitestRootCount: number;
   otherVitestWorkerCount: number;
   otherVitestCpuPercent: number;
@@ -18,7 +18,7 @@ function isVitestRootArgs(args: string): boolean {
   return (
     args.includes("node_modules/.bin/vitest") ||
     /\bvitest(?:\.(?:m?js|cmd|exe))?\b/u.test(args) ||
-    args.includes("scripts/test-projects.mjs") ||
+    args.includes("scripts/test-projects.mts") ||
     args.includes("scripts/run-vitest.mjs")
   );
 }
@@ -50,6 +50,9 @@ export function parseVitestProcessStats(
     }
 
     const [, rawPid, rawCpu, args] = match;
+    if (!rawPid || !rawCpu || args === undefined) {
+      continue;
+    }
     const pid = Number.parseInt(rawPid, 10);
     if (!Number.isFinite(pid) || pid === selfPid) {
       continue;

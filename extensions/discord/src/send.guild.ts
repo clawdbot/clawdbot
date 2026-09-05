@@ -21,6 +21,7 @@ import {
   getGuild,
   getGuildMember,
   getGuildVoiceState,
+  isUnknownDiscordVoiceStateError,
   listGuildChannels,
   listGuildRoles,
   listGuildScheduledEvents,
@@ -37,6 +38,14 @@ import type {
   DiscordTimeoutTarget,
 } from "./send.types.js";
 import { DISCORD_MAX_EVENT_COVER_BYTES } from "./send.types.js";
+
+type DiscordAbsentVoiceState = Pick<APIVoiceState, "guild_id" | "user_id" | "channel_id"> & {
+  connected: false;
+  absent: true;
+  reason: "unknown_voice_state";
+};
+
+type DiscordVoiceStatus = APIVoiceState | DiscordAbsentVoiceState;
 
 export async function fetchMemberInfoDiscord(
   guildId: string,
@@ -95,9 +104,23 @@ export async function fetchVoiceStatusDiscord(
   guildId: string,
   userId: string,
   opts: DiscordReactOpts,
-): Promise<APIVoiceState> {
+): Promise<DiscordVoiceStatus> {
   const rest = resolveDiscordRest(opts);
-  return await getGuildVoiceState(rest, guildId, userId);
+  try {
+    return await getGuildVoiceState(rest, guildId, userId);
+  } catch (err) {
+    if (!isUnknownDiscordVoiceStateError(err)) {
+      throw err;
+    }
+    return {
+      guild_id: guildId,
+      user_id: userId,
+      channel_id: null,
+      connected: false,
+      absent: true,
+      reason: "unknown_voice_state",
+    };
+  }
 }
 
 export async function listScheduledEventsDiscord(

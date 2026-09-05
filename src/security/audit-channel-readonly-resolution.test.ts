@@ -1,8 +1,8 @@
 // Verifies readonly channel audit resolution behavior.
 import { describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { collectChannelSecurityFindings } from "./audit-channel.js";
+import { collectChannelSecurityFindingsCore } from "./audit-channel.js";
 
 function stubChannelPlugin(params: {
   id: "zalouser";
@@ -33,7 +33,7 @@ function stubChannelPlugin(params: {
 }
 
 function requireReadOnlyResolutionFinding(
-  findings: Awaited<ReturnType<typeof collectChannelSecurityFindings>>,
+  findings: Awaited<ReturnType<typeof collectChannelSecurityFindingsCore>>,
 ) {
   const finding = findings.find(
     (entry) => entry.checkId === "channels.zalouser.account.read_only_resolution",
@@ -62,7 +62,7 @@ describe("security audit channel read-only resolution", () => {
       },
     };
 
-    const findings = await collectChannelSecurityFindings({
+    const findings = await collectChannelSecurityFindingsCore({
       cfg,
       plugins: [plugin],
     });

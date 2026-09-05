@@ -1,20 +1,86 @@
 // Tests setup code generation and environment-derived defaults.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecretInput } from "../config/types.secrets.js";
+import {
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+} from "../shared/device-bootstrap-profile.js";
 import { captureEnv } from "../test-utils/env.js";
 
 vi.mock("../infra/device-bootstrap.js", () => ({
-  issueDeviceBootstrapToken: vi.fn(async () => ({
+  issueDevicePairSetupBootstrapToken: vi.fn(async () => ({
     token: "bootstrap-123",
     expiresAtMs: 123,
+    setupId: "setup-123",
   })),
 }));
 
-const { encodePairingSetupCode, resolvePairingSetupFromConfig } = await import("./setup-code.js");
-const { issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock } =
+const {
+  decodePairingSetupCode,
+  encodePairingSetupCode,
+  resolveConfiguredPairingPublicUrl,
+  resolvePairingSetupFromConfig,
+} = await import("./setup-code.js");
+const { issueDevicePairSetupBootstrapToken: issueDevicePairSetupBootstrapTokenMock } =
   await import("../infra/device-bootstrap.js");
 
+const TLS_FINGERPRINT = "ab".repeat(32);
+const COLON_TLS_FINGERPRINT = (TLS_FINGERPRINT.match(/.{2}/gu)?.join(":") ?? "").toUpperCase();
+
 describe("pairing setup code", () => {
+  it("reads the configured public pairing URL from its owning plugin entry", () => {
+    expect(
+      resolveConfiguredPairingPublicUrl({
+        plugins: {
+          entries: { "device-pair": { config: { publicUrl: " wss://public.example " } } },
+        },
+      }),
+    ).toBe("wss://public.example");
+    expect(resolveConfiguredPairingPublicUrl({})).toBeUndefined();
+  });
+
+  it("round-trips setup codes while canonicalizing their TLS fingerprint", () => {
+    const payload = {
+      url: "wss://gateway.example:8443/openclaw-gw",
+      bootstrapToken: "Bootstrap-AbC123",
+      tlsFingerprint: `SHA256:${COLON_TLS_FINGERPRINT}`,
+      expiresAtMs: 20_000,
+    };
+    const setupCode = encodePairingSetupCode(payload);
+    expect(setupCode).toMatch(/[A-Z]/u);
+
+    const expected = { ...payload, tlsFingerprint: TLS_FINGERPRINT };
+    expect(decodePairingSetupCode(setupCode, { nowMs: 10_000 })).toEqual(expected);
+    expect(decodePairingSetupCode(`oc-pair://${setupCode}`, { nowMs: 10_000 })).toEqual(expected);
+  });
+
+  it.each(["abc123", "sha256:abc123", "g".repeat(64)])(
+    "rejects invalid TLS fingerprint %s in a setup code",
+    (tlsFingerprint) => {
+      const setupCode = encodePairingSetupCode({
+        url: "wss://gateway.example",
+        bootstrapToken: "bootstrap-123",
+        tlsFingerprint,
+      });
+      expect(() => decodePairingSetupCode(setupCode)).toThrow("Invalid pairing setup payload");
+    },
+  );
+
+  it("rejects garbage and expired shipped payload shapes", () => {
+    expect(() => decodePairingSetupCode("not-json")).toThrow("Invalid pairing setup");
+    const expired = encodePairingSetupCode({
+      url: "wss://gateway.example",
+      bootstrapToken: "bootstrap-123",
+      expiresAtMs: 10_000,
+    });
+    expect(() => decodePairingSetupCode(expired, { nowMs: 10_000 })).toThrow("expired");
+  });
+
+  it("accepts older payloads without a TLS fingerprint or expiry", () => {
+    const payload = { url: "wss://gateway.example", bootstrapToken: "bootstrap-123" };
+    expect(decodePairingSetupCode(encodePairingSetupCode(payload))).toEqual(payload);
+  });
+
   type ResolvedSetup = Awaited<ReturnType<typeof resolvePairingSetupFromConfig>>;
   type ResolveSetupConfig = Parameters<typeof resolvePairingSetupFromConfig>[0];
   type ResolveSetupOptions = Parameters<typeof resolvePairingSetupFromConfig>[1];
@@ -26,6 +92,11 @@ describe("pairing setup code", () => {
       },
     },
   } as const;
+  const limitedPlaintextAccess = {
+    bootstrapProfile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    access: "limited" as const,
+    accessDowngraded: true,
+  };
   const gatewayPasswordSecretRef: SecretInput = {
     source: "env",
     provider: "default",
@@ -59,10 +130,24 @@ describe("pairing setup code", () => {
     }));
   }
 
-  function createTailnetIpRunner() {
+  function createNoRouteRunner() {
+    return vi.fn(async () => ({
+      code: 1,
+      stdout: "",
+      stderr: "",
+    }));
+  }
+
+  function createDefaultRouteRunner(interfaceName: string) {
+    const stdout =
+      process.platform === "win32"
+        ? JSON.stringify({ InterfaceAlias: interfaceName })
+        : process.platform === "linux"
+          ? `default via 10.211.55.1 dev ${interfaceName} proto dhcp metric 100\n`
+          : `   route to: default\ninterface: ${interfaceName}\n`;
     return vi.fn(async () => ({
       code: 0,
-      stdout: '{"Self":{"TailscaleIPs":["100.64.0.9"]}}',
+      stdout,
       stderr: "",
     }));
   }
@@ -89,7 +174,11 @@ describe("pairing setup code", () => {
     params: {
       authLabel: string;
       url?: string;
+      urls?: string[];
       urlSource?: string;
+      bootstrapProfile?: { roles: string[]; scopes: string[]; purpose?: string };
+      access?: "full" | "limited" | "node";
+      accessDowngraded?: boolean;
     },
   ) {
     expect(resolved.ok).toBe(true);
@@ -98,19 +187,36 @@ describe("pairing setup code", () => {
     }
     expect(resolved.authLabel).toBe(params.authLabel);
     expect(resolved.payload.bootstrapToken).toBe("bootstrap-123");
-    expect(issueDeviceBootstrapTokenMock).toHaveBeenCalledWith({
+    expect(resolved.setupId).toBe("setup-123");
+    expect(resolved.expiresAtMs).toBe(123);
+    expect(issueDevicePairSetupBootstrapTokenMock).toHaveBeenCalledWith({
       baseDir: undefined,
-      profile: {
+      profile: params.bootstrapProfile ?? {
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.questions",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
+        purpose: "mobile-full",
       },
     });
+    expect(resolved.payload).not.toHaveProperty("setupId");
+    expect(resolved.payload).toHaveProperty("expiresAtMs", 123);
     if (params.url) {
       expect(resolved.payload.url).toBe(params.url);
+    }
+    if (params.urls) {
+      expect(resolved.payload.urls).toEqual(params.urls);
     }
     if (params.urlSource) {
       expect(resolved.urlSource).toBe(params.urlSource);
     }
+    expect(resolved.access).toBe(params.access ?? "full");
+    expect(resolved.accessDowngraded).toBe(params.accessDowngraded ?? false);
   }
 
   function expectResolvedSetupError(resolved: ResolvedSetup, snippet: string) {
@@ -127,7 +233,11 @@ describe("pairing setup code", () => {
     expected: {
       authLabel: string;
       url: string;
+      urls?: string[];
       urlSource: string;
+      bootstrapProfile?: { roles: string[]; scopes: string[]; purpose?: string };
+      access?: "full" | "limited" | "node";
+      accessDowngraded?: boolean;
     };
     runCommandWithTimeout?: ReturnType<typeof vi.fn>;
     expectedRunCommandCalls?: number;
@@ -197,7 +307,7 @@ describe("pairing setup code", () => {
   });
 
   beforeEach(() => {
-    vi.mocked(issueDeviceBootstrapTokenMock).mockClear();
+    vi.mocked(issueDevicePairSetupBootstrapTokenMock).mockClear();
   });
 
   afterEach(() => {
@@ -234,6 +344,56 @@ describe("pairing setup code", () => {
     });
   });
 
+  it("preserves context paths in fully qualified setup urls", async () => {
+    await expectResolvedSetupSuccessCase({
+      config: createCustomGatewayConfig({ mode: "token", token: "tok_123" }),
+      options: {
+        publicUrl: "wss://gateway.example.test:18789/openclaw-gw",
+      },
+      expected: {
+        authLabel: "token",
+        url: "wss://gateway.example.test:18789/openclaw-gw",
+        urlSource: "plugins.entries.device-pair.config.publicUrl",
+      },
+    });
+  });
+
+  it("issues a node-only bootstrap profile for companion setup", async () => {
+    await expectResolvedSetupSuccessCase({
+      config: createCustomGatewayConfig({ mode: "token", token: "tok_123" }),
+      options: {
+        forceSecure: true,
+        publicUrl: "gateway.example.test:18789/setup",
+        bootstrapProfile: { roles: ["node"], scopes: [] },
+      },
+      expected: {
+        authLabel: "token",
+        url: "wss://gateway.example.test:18789",
+        urlSource: "plugins.entries.device-pair.config.publicUrl",
+        bootstrapProfile: { roles: ["node"], scopes: [] },
+        access: "node",
+      },
+    });
+  });
+
+  it("issues a least-privilege voice-node bootstrap profile", async () => {
+    await expectResolvedSetupSuccessCase({
+      config: createCustomGatewayConfig({ mode: "token", token: "tok_123" }),
+      options: {
+        forceSecure: true,
+        publicUrl: "gateway.example.test:18789/setup",
+        bootstrapProfile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      },
+      expected: {
+        authLabel: "token",
+        url: "wss://gateway.example.test:18789",
+        urlSource: "plugins.entries.device-pair.config.publicUrl",
+        bootstrapProfile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        access: "limited",
+      },
+    });
+  });
+
   it("rejects invalid gateway.remote.url before falling back to bind-derived setup urls", async () => {
     await expectResolvedSetupFailureCase({
       config: {
@@ -249,7 +409,7 @@ describe("pairing setup code", () => {
       },
       expectedError: "Configured gateway.remote.url is invalid.",
     });
-    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
+    expect(issueDevicePairSetupBootstrapTokenMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -270,7 +430,7 @@ describe("pairing setup code", () => {
       },
       expectedError: "Configured publicUrl is invalid.",
     });
-    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
+    expect(issueDevicePairSetupBootstrapTokenMock).not.toHaveBeenCalled();
   });
 
   async function resolveCustomGatewaySetup(params: {
@@ -295,17 +455,6 @@ describe("pairing setup code", () => {
       } as const,
       env: {
         GW_PASSWORD: "resolved-password", // pragma: allowlist secret
-      },
-      expectedAuthLabel: "password",
-    },
-    {
-      name: "uses OPENCLAW_GATEWAY_PASSWORD without resolving configured password SecretRef",
-      auth: {
-        mode: "password",
-        password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
-      } as const,
-      env: {
-        OPENCLAW_GATEWAY_PASSWORD: "password-from-env", // pragma: allowlist secret
       },
       expectedAuthLabel: "password",
     },
@@ -351,6 +500,20 @@ describe("pairing setup code", () => {
       ),
       options: { env: {} },
       expectedError: "MISSING_GW_TOKEN",
+    },
+    {
+      name: "does not let OPENCLAW_GATEWAY_PASSWORD mask a configured password SecretRef",
+      config: createCustomGatewayConfig(
+        {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
+        },
+        defaultEnvSecretProviderConfig,
+      ),
+      options: {
+        env: { OPENCLAW_GATEWAY_PASSWORD: "password-from-env" },
+      },
+      expectedError: "MISSING_GW_PASSWORD",
     },
   ] as const)("$name", async ({ config, options, expectedError }) => {
     await expectResolvedSetupFailureCase({ config, options, expectedError });
@@ -477,6 +640,7 @@ describe("pairing setup code", () => {
         authLabel: "token",
         url: "ws://10.0.2.2:18789",
         urlSource: "gateway.bind=custom",
+        ...limitedPlaintextAccess,
       },
     },
     {
@@ -492,6 +656,7 @@ describe("pairing setup code", () => {
         authLabel: "token",
         url: "ws://gateway.local:18789",
         urlSource: "gateway.bind=custom",
+        ...limitedPlaintextAccess,
       },
     },
     {
@@ -507,6 +672,7 @@ describe("pairing setup code", () => {
         authLabel: "token",
         url: "ws://192.168.1.20:18789",
         urlSource: "gateway.bind=custom",
+        ...limitedPlaintextAccess,
       },
     },
   ] as const)("$name", async ({ config, options, expected }) => {
@@ -551,6 +717,7 @@ describe("pairing setup code", () => {
   });
 
   it("allows lan bind cleartext setup urls for mobile pairing", async () => {
+    const runCommandWithTimeout = createNoRouteRunner();
     await expectResolvedSetupSuccessCase({
       config: {
         gateway: {
@@ -560,12 +727,118 @@ describe("pairing setup code", () => {
       } satisfies ResolveSetupConfig,
       options: {
         networkInterfaces: () => createIpv4NetworkInterfaces("192.168.1.20"),
+        runCommandWithTimeout,
       } satisfies ResolveSetupOptions,
       expected: {
         authLabel: "password",
         url: "ws://192.168.1.20:18789",
         urlSource: "gateway.bind=lan",
+        ...limitedPlaintextAccess,
       },
+      runCommandWithTimeout,
+      expectedRunCommandCalls: 1,
+    });
+  });
+
+  it("advertises the routed LAN interface instead of the first private interface", async () => {
+    const runCommandWithTimeout = createDefaultRouteRunner("en1");
+    await expectResolvedSetupSuccessCase({
+      config: {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "password", password: "secret" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: {
+        networkInterfaces: () =>
+          ({
+            bridge100: [
+              {
+                address: "10.37.129.4",
+                family: "IPv4",
+                internal: false,
+                netmask: "255.255.255.0",
+                mac: "00:00:00:00:00:00",
+                cidr: "10.37.129.4/24",
+              },
+            ],
+            en1: [
+              {
+                address: "10.211.55.3",
+                family: "IPv4",
+                internal: false,
+                netmask: "255.255.255.0",
+                mac: "00:00:00:00:00:00",
+                cidr: "10.211.55.3/24",
+              },
+            ],
+          }) as ReturnType<NonNullable<NonNullable<ResolveSetupOptions>["networkInterfaces"]>>,
+        runCommandWithTimeout,
+      } satisfies ResolveSetupOptions,
+      expected: {
+        authLabel: "password",
+        url: "ws://10.211.55.3:18789",
+        urlSource: "gateway.bind=lan",
+        ...limitedPlaintextAccess,
+      },
+      runCommandWithTimeout,
+      expectedRunCommandCalls: 1,
+    });
+  });
+
+  it("does not advertise a legacy Serve route targeting ordinary LAN ingress", async () => {
+    const defaultRoute = createDefaultRouteRunner("en0");
+    const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
+      if (argv.includes("serve")) {
+        throw new Error("legacy Serve discovery must not run for a LAN bind");
+      }
+      return defaultRoute();
+    });
+
+    await expectResolvedSetupSuccessCase({
+      config: {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: {
+        networkInterfaces: () => createIpv4NetworkInterfaces("192.168.139.3"),
+        runCommandWithTimeout,
+      } satisfies ResolveSetupOptions,
+      expected: {
+        authLabel: "token",
+        url: "ws://192.168.139.3:18789",
+        urlSource: "gateway.bind=lan",
+        ...limitedPlaintextAccess,
+      },
+      runCommandWithTimeout,
+      expectedRunCommandCalls: 1,
+    });
+  });
+
+  it("does not advertise a loopback Serve route for a custom bind", async () => {
+    const runCommandWithTimeout = vi.fn(async () => {
+      throw new Error("Tailscale Serve discovery must not run for a custom bind");
+    });
+
+    await expectResolvedSetupSuccessCase({
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "192.168.139.3",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: { runCommandWithTimeout } satisfies ResolveSetupOptions,
+      expected: {
+        authLabel: "token",
+        url: "ws://192.168.139.3:18789",
+        urlSource: "gateway.bind=custom",
+        ...limitedPlaintextAccess,
+      },
+      runCommandWithTimeout,
+      expectedRunCommandCalls: 0,
     });
   });
 
@@ -651,30 +924,6 @@ describe("pairing setup code", () => {
       },
     },
     {
-      name: "uses configured Tailscale Service DNS when available",
-      createOptions: () => {
-        const runCommandWithTimeout = createTailnetDnsRunner();
-        return {
-          options: {
-            runCommandWithTimeout,
-          } satisfies ResolveSetupOptions,
-          runCommandWithTimeout,
-          expectedRunCommandCalls: 1,
-        };
-      },
-      config: {
-        gateway: {
-          tailscale: { mode: "serve", serviceName: "svc:openclaw" },
-          auth: { mode: "password", password: "secret" },
-        },
-      } satisfies ResolveSetupConfig,
-      expected: {
-        authLabel: "password",
-        url: "wss://openclaw.tailnet.ts.net",
-        urlSource: "gateway.tailscale.mode=serve",
-      },
-    },
-    {
       name: "prefers gateway.remote.url over tailscale when requested",
       createOptions: () => {
         const runCommandWithTimeout = createTailnetDnsRunner();
@@ -711,18 +960,46 @@ describe("pairing setup code", () => {
     });
   });
 
-  it("does not advertise a node-IP URL for named Tailscale Services", async () => {
-    await expectResolvedSetupFailureCase({
-      config: {
-        gateway: {
-          tailscale: { mode: "serve", serviceName: "svc:openclaw" },
-          auth: { mode: "password", password: "secret" },
-        },
-      } satisfies ResolveSetupConfig,
-      options: {
-        runCommandWithTimeout: createTailnetIpRunner(),
-      } satisfies ResolveSetupOptions,
-      expectedError: "Service MagicDNS could not be derived",
+  it("pins the prepared leaf only for a direct TLS gateway URL", async () => {
+    const config = createCustomGatewayConfig({ mode: "token", token: "tok_123" });
+    config.gateway = { ...config.gateway, tls: { enabled: true } };
+    const direct = await resolvePairingSetupFromConfig(config, {
+      localTlsFingerprint: `sha256:${COLON_TLS_FINGERPRINT}`,
     });
+    const proxied = await resolvePairingSetupFromConfig(config, {
+      publicUrl: "wss://proxy.example",
+      localTlsFingerprint: `sha256:${COLON_TLS_FINGERPRINT}`,
+    });
+
+    expect(direct.ok && direct.payload.tlsFingerprint).toBe(TLS_FINGERPRINT);
+    expect(proxied.ok && proxied.payload.tlsFingerprint).toBeUndefined();
+  });
+
+  it("rejects an invalid direct TLS fingerprint before issuing a setup token", async () => {
+    const config = createCustomGatewayConfig({ mode: "token", token: "tok_123" });
+    config.gateway = { ...config.gateway, tls: { enabled: true } };
+
+    const resolved = await resolvePairingSetupFromConfig(config, {
+      localTlsFingerprint: "sha256:abc123",
+    });
+
+    expectResolvedSetupError(resolved, "TLS fingerprint is invalid");
+    expect(issueDevicePairSetupBootstrapTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("omits a configured remote TLS pin from a cleartext setup URL", async () => {
+    const config = createCustomGatewayConfig({ mode: "token", token: "tok_123" });
+    config.gateway = {
+      ...config.gateway,
+      remote: {
+        url: "ws://127.0.0.1:18789",
+        tlsFingerprint: `sha256:${TLS_FINGERPRINT}`,
+      },
+    };
+
+    const resolved = await resolvePairingSetupFromConfig(config, { preferRemoteUrl: true });
+
+    expect(resolved.ok).toBe(true);
+    expect(resolved.ok && resolved.payload.tlsFingerprint).toBeUndefined();
   });
 });

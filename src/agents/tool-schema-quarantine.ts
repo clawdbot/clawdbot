@@ -6,7 +6,7 @@
  */
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { RuntimeToolSchemaDiagnostic } from "./tool-schema-projection.js";
 import {
   clearRecoveredPersistedRuntimeToolSchemaQuarantines,
@@ -78,6 +78,7 @@ export function logRuntimeToolSchemaQuarantine(params: {
   diagnostics: readonly RuntimeToolSchemaDiagnostic[];
   tools: readonly AnyAgentTool[];
   runId: string;
+  agentId: string;
   sessionKey?: string;
   sessionId?: string;
 }): void {
@@ -96,6 +97,7 @@ export function logRuntimeToolSchemaQuarantine(params: {
       emitTrustedDiagnosticEvent({
         type: "tool.execution.blocked",
         runId: params.runId,
+        agentId: params.agentId,
         ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),
         toolName: diagnostic.toolName,

@@ -2,9 +2,13 @@
  * Security module: token validation, rate limiting, input sanitization, user allowlist.
  */
 
-import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  resolveStableChannelMessageIngress,
+  type ChannelIngressContextBinding,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createFixedWindowRateLimiter,
   type FixedWindowRateLimiter,
@@ -26,6 +30,7 @@ export async function authorizeUserForDmWithIngress(params: {
   userId: string;
   dmPolicy: "open" | "allowlist" | "disabled";
   allowedUserIds: string[];
+  contextBinding?: ChannelIngressContextBinding;
 }) {
   return await resolveStableChannelMessageIngress({
     channelId: "synology-chat",
@@ -37,8 +42,9 @@ export async function authorizeUserForDmWithIngress(params: {
     subject: { stableId: params.userId },
     conversation: {
       kind: "direct",
-      id: "direct",
+      id: params.userId,
     },
+    contextBinding: params.contextBinding,
     event: { mayPair: false },
     dmPolicy: params.dmPolicy,
     allowFrom: params.allowedUserIds,
@@ -64,7 +70,7 @@ export function sanitizeInput(text: string): string {
 
   const maxLength = 4000;
   if (sanitized.length > maxLength) {
-    sanitized = sanitized.slice(0, maxLength) + "... [truncated]";
+    sanitized = truncateUtf16Safe(sanitized, maxLength) + "... [truncated]";
   }
 
   return sanitized;

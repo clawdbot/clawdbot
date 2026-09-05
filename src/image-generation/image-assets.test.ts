@@ -6,9 +6,12 @@ import {
   imageSourceUploadFileName,
   parseImageDataUrl,
   parseOpenAiCompatibleImageResponse,
+  resolveInlineImageJsonResponseMaxBytes,
   sniffImageMimeType,
   toImageDataUrl,
 } from "./image-assets.js";
+
+const DEFAULT_TEST_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 
 describe("image asset helpers", () => {
   it("converts buffers to image data URLs and parses them back", () => {
@@ -44,6 +47,16 @@ describe("image asset helpers", () => {
     expect(imageFileExtensionForMimeType("image/webp")).toBe("webp");
     expect(imageFileExtensionForMimeType("image/svg+xml")).toBe("svg");
     expect(imageFileExtensionForMimeType(undefined, "jpg")).toBe("jpg");
+  });
+
+  it("sizes inline image JSON caps from decoded image payload limits", () => {
+    expect(resolveInlineImageJsonResponseMaxBytes(4, DEFAULT_TEST_IMAGE_MAX_BYTES)).toBe(
+      34_603_008,
+    );
+    expect(resolveInlineImageJsonResponseMaxBytes(Number.NaN, DEFAULT_TEST_IMAGE_MAX_BYTES)).toBe(
+      9_437_184,
+    );
+    expect(resolveInlineImageJsonResponseMaxBytes(2, 8 * 1024 * 1024)).toBe(23_418_198);
   });
 
   it("sniffs common generated image types", () => {

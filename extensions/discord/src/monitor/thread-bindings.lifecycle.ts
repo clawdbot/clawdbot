@@ -1,6 +1,7 @@
-// Discord plugin module implements thread bindings.lifecycle behavior.
 import { readAcpSessionEntry, type AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Discord plugin module implements thread bindings.lifecycle behavior.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -14,21 +15,21 @@ import {
   resolveThreadBindingThreadName,
 } from "./thread-bindings.messages.js";
 import { resolveBindingIdsForTargetSession } from "./thread-bindings.session-shared.js";
-export {
-  setThreadBindingIdleTimeoutBySessionKey,
-  setThreadBindingMaxAgeBySessionKey,
-} from "./thread-bindings.session-updates.js";
 import {
   BINDINGS_BY_THREAD_ID,
   MANAGERS_BY_ACCOUNT_ID,
   getThreadBindingToken,
   normalizeThreadId,
-  rememberRecentUnboundWebhookEcho,
+  refreshUnboundThreadWebhookIdentity,
   removeBindingRecord,
   saveBindingsToDisk,
   shouldPersistBindingMutations,
 } from "./thread-bindings.state.js";
 import type { ThreadBindingRecord, ThreadBindingTargetKind } from "./thread-bindings.types.js";
+export {
+  setThreadBindingIdleTimeoutBySessionKey,
+  setThreadBindingMaxAgeBySessionKey,
+} from "./thread-bindings.session-updates.js";
 
 export type AcpThreadBindingReconciliationResult = {
   checked: number;
@@ -36,9 +37,9 @@ export type AcpThreadBindingReconciliationResult = {
   staleSessionKeys: string[];
 };
 
-export type AcpThreadBindingHealthStatus = "healthy" | "stale" | "uncertain";
+type AcpThreadBindingHealthStatus = "healthy" | "stale" | "uncertain";
 
-export type AcpThreadBindingHealthProbe = (params: {
+type AcpThreadBindingHealthProbe = (params: {
   cfg: OpenClawConfig;
   accountId: string;
   sessionKey: string;
@@ -51,34 +52,6 @@ export type AcpThreadBindingHealthProbe = (params: {
 
 // Cap startup fan-out so large binding sets do not create unbounded ACP probe spikes.
 const ACP_STARTUP_HEALTH_PROBE_CONCURRENCY_LIMIT = 8;
-
-async function mapWithConcurrency<TItem, TResult>(params: {
-  items: TItem[];
-  limit: number;
-  worker: (item: TItem, index: number) => Promise<TResult>;
-}): Promise<TResult[]> {
-  if (params.items.length === 0) {
-    return [];
-  }
-  const limit = Math.max(1, Math.floor(params.limit));
-  const resultsByIndex = new Map<number, TResult>();
-  let nextIndex = 0;
-
-  const runWorker = async () => {
-    for (;;) {
-      const index = nextIndex;
-      nextIndex += 1;
-      if (index >= params.items.length) {
-        return;
-      }
-      resultsByIndex.set(index, await params.worker(params.items[index], index));
-    }
-  };
-
-  const workers = Array.from({ length: Math.min(limit, params.items.length) }, () => runWorker());
-  await Promise.all(workers);
-  return params.items.map((_item, index) => resultsByIndex.get(index)!);
-}
 
 export function listThreadBindingsForAccount(accountId?: string): ThreadBindingRecord[] {
   const manager = getThreadBindingManager(accountId);
@@ -214,7 +187,7 @@ export function unbindThreadBindingsBySessionKey(params: {
     }
     const unbound = removeBindingRecord(bindingKey);
     if (unbound) {
-      rememberRecentUnboundWebhookEcho(unbound);
+      refreshUnboundThreadWebhookIdentity(unbound);
       removed.push(unbound);
     }
   }
@@ -271,6 +244,7 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
     const session = readAcpSessionEntry({
       cfg: params.cfg,
       sessionKey,
+      agentId: binding.agentId,
     });
     if (!session) {
       staleBindings.push(binding);
@@ -293,10 +267,8 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
   }
 
   if (params.healthProbe && probeTargets.length > 0) {
-    const probeResults = await mapWithConcurrency({
-      items: probeTargets,
-      limit: ACP_STARTUP_HEALTH_PROBE_CONCURRENCY_LIMIT,
-      worker: async ({ binding, sessionKey, session }) => {
+    const { results: probeResults } = await runTasksWithConcurrency({
+      tasks: probeTargets.map(({ binding, sessionKey, session }) => async () => {
         try {
           const result = await params.healthProbe?.({
             cfg: params.cfg,
@@ -316,7 +288,10 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
             status: "uncertain" satisfies AcpThreadBindingHealthStatus,
           };
         }
-      },
+      }),
+      limit: ACP_STARTUP_HEALTH_PROBE_CONCURRENCY_LIMIT,
+      errorMode: "stop",
+      throwOnError: true,
     });
 
     for (const probeResult of probeResults) {

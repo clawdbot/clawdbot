@@ -1,13 +1,11 @@
 // Openrouter tests cover media understanding provider plugin behavior.
-import {
-  describeImageWithModel,
-  describeImagesWithModel,
-} from "openclaw/plugin-sdk/media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  openrouterMediaUnderstandingProvider,
-  transcribeOpenRouterAudio,
-} from "./media-understanding-provider.js";
+import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
+
+const transcribeOpenRouterAudio = openrouterMediaUnderstandingProvider.transcribeAudio;
+if (!transcribeOpenRouterAudio) {
+  throw new Error("expected OpenRouter audio transcription provider");
+}
 
 const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
   vi.hoisted(() => ({
@@ -24,6 +22,8 @@ const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRe
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
+  // Pass-through: bounded-reader enforcement is tested via bounded-reader unit tests.
+  readProviderJsonResponse: async (response: { json(): Promise<unknown> }) => response.json(),
   requireTranscriptionText: (value: string | undefined, message: string) => {
     const text = value?.trim();
     if (!text) {
@@ -58,8 +58,6 @@ describe("openrouter media understanding provider", () => {
         audio: "openai/whisper-large-v3-turbo",
       },
       autoPriority: { audio: 35 },
-      describeImage: describeImageWithModel,
-      describeImages: describeImagesWithModel,
       transcribeAudio: transcribeOpenRouterAudio,
     });
   });

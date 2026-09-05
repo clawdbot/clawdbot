@@ -7,12 +7,15 @@ import type {
 type DiagnosticSessionRecoverySkipReason =
   | "active_embedded_run"
   | "active_reply_work"
+  | "human_input_wait"
+  | "runtime_owned_wait"
+  | "deferred_maintenance_wait"
+  | "terminal_outcome_committed"
+  | "global_lane_wait"
   | "active_lane_task"
   | "already_in_flight"
   | "missing_session_ref"
   | "stale_session_state";
-
-type DiagnosticSessionRecoveryNoopReason = "no_active_work";
 
 export type StuckSessionRecoveryRequest = {
   sessionId?: string;
@@ -24,11 +27,16 @@ export type StuckSessionRecoveryRequest = {
   expectedState?: DiagnosticSessionState;
   stateGeneration?: number;
   /**
-   * Resolved no-forward-progress age (from `diagnostics.stuckSessionAbortMs`) after
+   * Built-in no-forward-progress age after
    * which an "active" run with queued work is treated as a leaked/dead handle and
    * reclaimed. Honors an operator-raised threshold; falls back to a safe floor.
    */
   staleActiveProgressAbortMs?: number;
+  /**
+   * Resolved compaction safety timeout. Ownerless lane recovery waits at least
+   * this long plus settle grace so queued compaction cannot be double-run.
+   */
+  compactionSafetyTimeoutMs?: number;
 };
 
 export function resolveStuckSessionRecoveryRef(
@@ -60,7 +68,9 @@ export type StuckSessionRecoveryOutcome =
   | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "released";
       action: "release_lane";
+      reason?: "no_active_work" | "stale_lane_task";
       released: number;
+      queuedCount?: number;
     })
   | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "skipped";
@@ -70,42 +80,25 @@ export type StuckSessionRecoveryOutcome =
       queuedCount?: number;
     })
   | (DiagnosticSessionRecoveryBaseOutcome & {
-      status: "noop";
-      action: "none";
-      reason: DiagnosticSessionRecoveryNoopReason;
-    })
-  | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "failed";
       action: "none";
       reason: "exception";
       error: string;
+    })
+  | (DiagnosticSessionRecoveryBaseOutcome & {
+      status: "failed";
+      action: "fail_worker_turn";
+      reason: "terminal_worker";
+      error: string;
     });
-
-export function recoveryOutcomeMutatesSessionState(
-  outcome: StuckSessionRecoveryOutcome | undefined,
-): boolean {
-  if (!outcome) {
-    return false;
-  }
-  return (
-    outcome.status === "aborted" ||
-    outcome.status === "released" ||
-    (outcome.status === "noop" && outcome.reason === "no_active_work")
-  );
-}
 
 export function recoveryOutcomeClearsQueuedSessionState(
   outcome: StuckSessionRecoveryOutcome,
 ): boolean {
   return (
-    outcome.status === "released" ||
-    (outcome.status === "aborted" && outcome.released > 0 && (outcome.queuedCount ?? 0) === 0) ||
-    (outcome.status === "noop" && outcome.reason === "no_active_work")
+    (outcome.status === "released" || (outcome.status === "aborted" && outcome.released > 0)) &&
+    (outcome.queuedCount ?? 0) === 0
   );
-}
-
-export function recoveryOutcomeReleasedCount(outcome: StuckSessionRecoveryOutcome): number {
-  return "released" in outcome ? outcome.released : 0;
 }
 
 export function formatRecoveryOutcome(outcome: StuckSessionRecoveryOutcome): string {
@@ -137,7 +130,10 @@ export function formatRecoveryOutcome(outcome: StuckSessionRecoveryOutcome): str
   if ("released" in outcome) {
     fields.push(`released=${outcome.released}`);
   }
-  if (outcome.status === "aborted" && outcome.queuedCount !== undefined) {
+  if (
+    (outcome.status === "aborted" || outcome.status === "released") &&
+    outcome.queuedCount !== undefined
+  ) {
     fields.push(`queuedCount=${outcome.queuedCount}`);
   }
   if ("activeCount" in outcome && outcome.activeCount !== undefined) {

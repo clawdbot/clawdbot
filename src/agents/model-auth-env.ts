@@ -1,13 +1,11 @@
 /**
  * Resolves model provider API keys from explicit environment variables.
  */
-import fs from "node:fs";
-import os from "node:os";
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeOptionalString as normalizeOptionalPathInput } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
-import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
+import { resolvePluginSetupProviderCore } from "../plugins/setup-registry.js";
+import { resolveLocalProviderAuthEvidence } from "../secrets/provider-auth-evidence.js";
 import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
@@ -20,75 +18,124 @@ export type EnvApiKeyResult = {
   source: string;
 };
 
+type ProviderEnvAuthEvidence = {
+  mode: "api-key" | "aws-sdk" | "oauth";
+  source: string;
+};
+
+/** Secret-free direct-auth fact retained for runtime credential resolution. */
+type ProviderDirectAuthPlanningEvidence =
+  | ({ kind: "environment" } & ProviderEnvAuthEvidence)
+  | {
+      kind: "setup-provider";
+      mode: "api-key";
+      source: "setup provider";
+    };
+
 export type EnvApiKeyLookupOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   aliasMap?: Readonly<Record<string, string>>;
   candidateMap?: Readonly<Record<string, readonly string[]>>;
   authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
+  setupProviderFallbackRefs?: readonly string[];
   skipSetupProviderFallback?: boolean;
 };
-
-function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string | undefined {
-  const trimmed = rawPath.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const homeDir = normalizeOptionalPathInput(env.HOME) ?? os.homedir();
-  const appDataDir = normalizeOptionalPathInput(env.APPDATA);
-  if (trimmed.includes("${APPDATA}") && !appDataDir) {
-    return undefined;
-  }
-  return trimmed.replaceAll("${HOME}", homeDir).replaceAll("${APPDATA}", appDataDir ?? "");
-}
-
-function hasRequiredAuthEvidenceEnv(
-  evidence: ProviderAuthEvidence,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  const hasEnv = (key: string) => Boolean(normalizeOptionalSecretInput(env[key]));
-  if (evidence.requiresAnyEnv?.length && !evidence.requiresAnyEnv.some(hasEnv)) {
-    return false;
-  }
-  if (evidence.requiresAllEnv?.length && !evidence.requiresAllEnv.every(hasEnv)) {
-    return false;
-  }
-  return true;
-}
-
-function hasLocalFileAuthEvidence(evidence: ProviderAuthEvidence, env: NodeJS.ProcessEnv): boolean {
-  if (evidence.fileEnvVar) {
-    const explicitPath = normalizeOptionalPathInput(env[evidence.fileEnvVar]);
-    if (explicitPath) {
-      return fs.existsSync(explicitPath);
-    }
-  }
-  for (const rawPath of evidence.fallbackPaths ?? []) {
-    const expandedPath = expandAuthEvidencePath(rawPath, env);
-    if (expandedPath && fs.existsSync(expandedPath)) {
-      return true;
-    }
-  }
-  return false;
-}
 
 function resolveAuthEvidence(
   evidence: readonly ProviderAuthEvidence[] | undefined,
   env: NodeJS.ProcessEnv,
 ): EnvApiKeyResult | null {
-  for (const entry of evidence ?? []) {
-    if (entry.type !== "local-file-with-env") {
+  const resolved = resolveLocalProviderAuthEvidence(evidence, env);
+  return resolved ? { apiKey: resolved.credentialMarker, source: resolved.source } : null;
+}
+
+/** Reports env/local auth presence without returning or resolving credential material. */
+export function resolveProviderEnvAuthEvidence(
+  provider: string,
+  env: NodeJS.ProcessEnv = process.env,
+  options: EnvApiKeyLookupOptions = {},
+): ProviderEnvAuthEvidence | null {
+  const providerId = normalizeProviderIdForAuth(provider);
+  const lookupMaps =
+    !options.aliasMap || !options.candidateMap || !options.authEvidenceMap
+      ? resolveProviderEnvAuthLookupMaps({
+          config: options.config,
+          workspaceDir: options.workspaceDir,
+          env,
+        })
+      : undefined;
+  const aliasMap = options.aliasMap ?? lookupMaps?.aliasMap ?? {};
+  const normalized = aliasMap[providerId] ?? providerId;
+  const candidateMap = options.candidateMap ?? lookupMaps?.envCandidateMap ?? {};
+  const authEvidenceMap = options.authEvidenceMap ?? lookupMaps?.authEvidenceMap ?? {};
+  const applied = new Set(getShellEnvAppliedKeys());
+
+  for (const envVar of candidateMap[normalized] ?? []) {
+    if (!normalizeOptionalSecretInput(env[envVar])) {
       continue;
     }
-    if (!hasRequiredAuthEvidenceEnv(entry, env) || !hasLocalFileAuthEvidence(entry, env)) {
-      continue;
-    }
+    const mode =
+      normalized === "amazon-bedrock" && envVar.startsWith("AWS_")
+        ? "aws-sdk"
+        : envVar.includes("OAUTH_TOKEN")
+          ? "oauth"
+          : "api-key";
     return {
-      apiKey: entry.credentialMarker,
-      source: entry.source ?? "local auth evidence",
+      mode,
+      source: applied.has(envVar) ? `shell env: ${envVar}` : `env: ${envVar}`,
+    };
+  }
+
+  const localEvidence = resolveLocalProviderAuthEvidence(authEvidenceMap[normalized], env);
+  if (localEvidence) {
+    return {
+      mode: normalized === "amazon-bedrock" ? "aws-sdk" : "api-key",
+      source: localEvidence.source,
     };
   }
   return null;
+}
+
+/**
+ * Plans direct auth without loading a provider runtime or resolving credential material.
+ * Setup-provider refs are deferred evidence only; runtime lookup still decides availability.
+ */
+export function resolveProviderDirectAuthPlanningEvidence(
+  provider: string,
+  env: NodeJS.ProcessEnv = process.env,
+  options: EnvApiKeyLookupOptions = {},
+): ProviderDirectAuthPlanningEvidence | null {
+  const lookupMaps =
+    !options.aliasMap ||
+    !options.candidateMap ||
+    !options.authEvidenceMap ||
+    !options.setupProviderFallbackRefs
+      ? resolveProviderEnvAuthLookupMaps({
+          config: options.config,
+          workspaceDir: options.workspaceDir,
+          env,
+        })
+      : undefined;
+  const aliasMap = options.aliasMap ?? lookupMaps?.aliasMap ?? {};
+  const candidateMap = options.candidateMap ?? lookupMaps?.envCandidateMap ?? {};
+  const authEvidenceMap = options.authEvidenceMap ?? lookupMaps?.authEvidenceMap ?? {};
+  const concrete = resolveProviderEnvAuthEvidence(provider, env, {
+    aliasMap,
+    candidateMap,
+    authEvidenceMap,
+  });
+  if (concrete) {
+    return { kind: "environment", ...concrete };
+  }
+
+  const providerId = normalizeProviderIdForAuth(provider);
+  const normalized = aliasMap[providerId] ?? providerId;
+  const setupProviderFallbackRefs =
+    options.setupProviderFallbackRefs ?? lookupMaps?.setupProviderFallbackRefs ?? [];
+  return setupProviderFallbackRefs.some((ref) => normalizeProviderIdForAuth(ref) === normalized)
+    ? { kind: "setup-provider", mode: "api-key", source: "setup provider" }
+    : null;
 }
 
 /** Resolve an API key or auth-evidence marker for a provider from environment state. */
@@ -146,7 +193,7 @@ export function resolveEnvApiKey(
     return null;
   }
 
-  const setupProvider = resolvePluginSetupProvider({
+  const setupProvider = resolvePluginSetupProviderCore({
     provider: normalized,
     config: options.config,
     workspaceDir: options.workspaceDir,

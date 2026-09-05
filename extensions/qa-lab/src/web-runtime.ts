@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 
 type QaWebSession = {
@@ -69,7 +70,7 @@ const SYSTEM_CHROMIUM_EXECUTABLE_CANDIDATES = [
 function appendDiagnostic(diagnostics: QaWebDiagnosticEntry[], entry: QaWebDiagnosticEntry): void {
   diagnostics.push({
     kind: entry.kind,
-    text: entry.text.slice(0, MAX_DIAGNOSTIC_TEXT_CHARS),
+    text: truncateUtf16Safe(entry.text, MAX_DIAGNOSTIC_TEXT_CHARS),
   });
   if (diagnostics.length > MAX_DIAGNOSTIC_ENTRIES) {
     diagnostics.splice(0, diagnostics.length - MAX_DIAGNOSTIC_ENTRIES);
@@ -108,7 +109,7 @@ function resolveRunnableChromiumExecutablePath(): string | undefined {
 function ensureChromiumAvailable(repoRoot: string) {
   const result = spawnSync(
     process.execPath,
-    ["scripts/ensure-playwright-chromium.mjs", "--skip-ffmpeg"],
+    ["--import", "tsx", "scripts/ensure-playwright-chromium.mts", "--skip-ffmpeg"],
     {
       cwd: repoRoot,
       env: process.env,
@@ -141,7 +142,9 @@ function buildChromiumLaunchOptions(params: QaWebOpenPageParams) {
 
 export async function qaWebOpenPage(params: QaWebOpenPageParams) {
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
-  ensureChromiumAvailable(params.repoRoot ?? process.cwd());
+  if (!params.channel) {
+    ensureChromiumAvailable(params.repoRoot ?? process.cwd());
+  }
   const browser = await chromium.launch(buildChromiumLaunchOptions(params));
   const context = await browser.newContext({
     ignoreHTTPSErrors: true,
@@ -223,7 +226,7 @@ export async function qaWebSnapshot(params: QaWebSnapshotParams) {
   return {
     url: session.page.url(),
     title: await session.page.title().catch(() => ""),
-    text: maxChars ? text.slice(0, maxChars) : text,
+    text: maxChars ? truncateUtf16Safe(text, maxChars) : text,
     diagnostics: [...session.diagnostics],
   };
 }

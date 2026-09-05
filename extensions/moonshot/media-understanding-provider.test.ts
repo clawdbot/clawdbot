@@ -1,12 +1,23 @@
+import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 // Moonshot tests cover media understanding provider plugin behavior.
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-media-understanding";
 import { describe, expect, it } from "vitest";
-import { describeMoonshotVideo } from "./media-understanding-provider.js";
+import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
+
+async function describeVideo(
+  params: Parameters<NonNullable<typeof moonshotMediaUnderstandingProvider.describeVideo>>[0],
+) {
+  const handler = moonshotMediaUnderstandingProvider.describeVideo;
+  if (!handler) {
+    throw new Error("expected Moonshot video description support");
+  }
+  return await handler(params);
+}
 
 describe("describeMoonshotVideo", () => {
   it("builds an OpenAI-compatible video request", async () => {
@@ -14,7 +25,7 @@ describe("describeMoonshotVideo", () => {
       choices: [{ message: { content: "video ok" } }],
     });
 
-    const result = await describeMoonshotVideo({
+    const result = await describeVideo({
       buffer: Buffer.from("video-bytes"),
       fileName: "clip.mp4",
       apiKey: "moonshot-test",
@@ -79,7 +90,7 @@ describe("describeMoonshotVideo", () => {
       choices: [{ message: { content: "", reasoning_content: "reasoned answer" } }],
     });
 
-    const result = await describeMoonshotVideo({
+    const result = await describeVideo({
       buffer: Buffer.from("video"),
       fileName: "clip.mp4",
       apiKey: "moonshot-test",
@@ -89,5 +100,43 @@ describe("describeMoonshotVideo", () => {
 
     expect(result.text).toBe("reasoned answer");
     expect(result.model).toBe("kimi-k2.6");
+  });
+
+  it("bounds successful Moonshot video JSON bodies instead of buffering the whole response", async () => {
+    const streamed = oversizedJsonResponse({ chunkCount: 64, chunkSize: 1024 * 1024 });
+
+    await expect(
+      describeVideo({
+        buffer: Buffer.from("video-bytes"),
+        fileName: "clip.mp4",
+        mime: "video/mp4",
+        apiKey: "test-key",
+        timeoutMs: 1500,
+        baseUrl: "https://example.com/v1",
+        fetchFn: async () => streamed.response,
+      }),
+    ).rejects.toThrow("Moonshot video description failed: JSON response exceeds 16777216 bytes");
+
+    expect(streamed.getReadCount()).toBeLessThan(64);
+    expect(streamed.wasCanceled()).toBe(true);
+  });
+
+  it("reports malformed Moonshot video JSON with a provider-owned error", async () => {
+    const response = new Response("not-json{", {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+    await expect(
+      describeVideo({
+        buffer: Buffer.from("video-bytes"),
+        fileName: "clip.mp4",
+        mime: "video/mp4",
+        apiKey: "test-key",
+        timeoutMs: 1500,
+        baseUrl: "https://example.com/v1",
+        fetchFn: async () => response,
+      }),
+    ).rejects.toThrow("Moonshot video description failed: malformed JSON response");
   });
 });

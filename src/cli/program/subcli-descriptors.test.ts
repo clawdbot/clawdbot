@@ -1,5 +1,9 @@
 // SubCLI descriptor tests cover metadata for registered nested command groups.
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const execFileAsync = promisify(execFile);
 
 async function importSubCliDescriptors() {
   vi.resetModules();
@@ -22,13 +26,29 @@ describe("sub-cli descriptors", () => {
     vi.resetModules();
   });
 
+  it("cold-imports without an ESM initialization cycle", async () => {
+    await expect(
+      execFileAsync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "--eval",
+          "await import('./src/cli/program/subcli-descriptors.ts')",
+        ],
+        { cwd: process.cwd(), timeout: 30_000 },
+      ),
+    ).resolves.toMatchObject({ stderr: "" });
+  });
+
   it("keeps the exported descriptor list aligned with private QA visibility when disabled (#83927)", async () => {
     delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
 
-    const { SUB_CLI_DESCRIPTORS, getSubCliEntries } = await importSubCliDescriptors();
+    const { SUB_CLI_DESCRIPTORS, getSubCliEntriesCore } = await importSubCliDescriptors();
     const exportedNames = descriptorNames(SUB_CLI_DESCRIPTORS);
 
-    expect(exportedNames).toEqual(descriptorNames(getSubCliEntries()));
+    expect(exportedNames).toEqual(descriptorNames(getSubCliEntriesCore()));
     expect(exportedNames).not.toContain("qa");
   });
 
@@ -53,12 +73,12 @@ describe("sub-cli descriptors", () => {
     const {
       SUB_CLI_DESCRIPTORS,
       getSubCliCommandsWithSubcommands,
-      getSubCliEntries,
+      getSubCliEntriesCore,
       getSubCliParentDefaultHelpCommands,
     } = await importSubCliDescriptors();
     const exportedNames = descriptorNames(SUB_CLI_DESCRIPTORS);
 
-    expect(exportedNames).toEqual(descriptorNames(getSubCliEntries()));
+    expect(exportedNames).toEqual(descriptorNames(getSubCliEntriesCore()));
     expect(exportedNames).toContain("qa");
     expect(getSubCliCommandsWithSubcommands()).toContain("qa");
     expect(getSubCliParentDefaultHelpCommands()).not.toContain("qa");

@@ -11,19 +11,36 @@ const model = {
   compat: { requiresOpenAiAnthropicToolPayload: true },
 } as unknown as Model<"anthropic-messages">;
 
-function runWrapper(payload: Record<string, unknown>) {
+function runWrapper(payload: Record<string, unknown>, nextModel = model) {
   const payloads: Array<Record<string, unknown>> = [];
-  const baseStreamFn: StreamFn = (nextModel, context, options) => {
-    options?.onPayload?.(payload, nextModel);
+  const baseStreamFn: StreamFn = (streamModel, context, options) => {
+    options?.onPayload?.(payload, streamModel);
     payloads.push(structuredClone(payload));
     return createAssistantMessageEventStream();
   };
   const wrapped = createOpenAIAnthropicToolPayloadCompatibilityWrapper(baseStreamFn);
-  void wrapped(model, { messages: [] }, {});
+  void wrapped(nextModel, { messages: [] }, {});
   return payloads[0];
 }
 
 describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
+  it("disables GPT-5.6 reasoning when projecting function tools", () => {
+    const payload = runWrapper(
+      {
+        reasoning_effort: "low",
+        tools: [
+          {
+            name: "lookup",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      },
+      { ...model, id: "gpt-5.6-luna" },
+    );
+
+    expect(payload?.reasoning_effort).toBe("none");
+  });
+
   it("skips unreadable schemas while preserving a healthy pinned tool", () => {
     const payload = runWrapper({
       tools: [
@@ -259,7 +276,7 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
     });
   });
 
-  it("preserves custom tools and named custom choices", () => {
+  it("projects custom tools and named custom choices as OpenAI functions", () => {
     const payload = runWrapper({
       tools: [
         {
@@ -267,6 +284,51 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
           custom: {
             name: "shell",
             description: "Run a shell command.",
+            input_schema: {
+              type: "object",
+              properties: { command: { type: "string" } },
+              required: ["command"],
+            },
+          },
+        },
+      ],
+      tool_choice: {
+        type: "custom",
+        custom: { name: "shell" },
+      },
+    });
+
+    expect(payload).toEqual({
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "shell",
+            description: "Run a shell command.",
+            parameters: {
+              type: "object",
+              properties: { command: { type: "string" } },
+              required: ["command"],
+            },
+          },
+        },
+      ],
+      tool_choice: {
+        type: "function",
+        function: { name: "shell" },
+      },
+    });
+  });
+
+  it("preserves free-form custom tools and named custom choices", () => {
+    const payload = runWrapper({
+      tools: [
+        {
+          type: "custom",
+          custom: {
+            name: "shell",
+            description: "Run a shell command.",
+            format: { type: "text" },
           },
         },
       ],
@@ -283,6 +345,7 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
           custom: {
             name: "shell",
             description: "Run a shell command.",
+            format: { type: "text" },
           },
         },
       ],
@@ -293,7 +356,7 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
     });
   });
 
-  it("filters allowed tool choices against surviving function and custom tools", () => {
+  it("projects allowed custom tool choices against surviving functions", () => {
     const payload = runWrapper({
       tools: [
         {
@@ -306,6 +369,7 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
           type: "custom",
           custom: {
             name: "shell",
+            input_schema: { type: "object", properties: {} },
           },
         },
       ],
@@ -325,9 +389,32 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
       type: "allowed_tools",
       allowed_tools: {
         mode: "required",
-        tools: [{ type: "custom", custom: { name: "shell" } }],
+        tools: [{ type: "function", function: { name: "shell" } }],
       },
     });
+  });
+
+  it("does not match allowed tools across tool kinds", () => {
+    const payload = runWrapper({
+      tools: [
+        {
+          type: "custom",
+          custom: {
+            name: "shell",
+            input_schema: { type: "object", properties: {} },
+          },
+        },
+      ],
+      tool_choice: {
+        type: "allowed_tools",
+        allowed_tools: {
+          mode: "auto",
+          tools: [{ type: "function", function: { name: "shell" } }],
+        },
+      },
+    });
+
+    expect(payload?.tool_choice).toBe("none");
   });
 
   it("disables tool calls when no auto-allowed tools survive", () => {

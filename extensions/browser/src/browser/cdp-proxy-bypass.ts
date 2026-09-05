@@ -9,8 +9,8 @@
  */
 import http from "node:http";
 import https from "node:https";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { registerManagedProxyBrowserCdpBypass } from "openclaw/plugin-sdk/ssrf-runtime-internal";
-import { isLoopbackHost } from "../gateway/net.js";
 import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 
 /** HTTP agent that never uses a proxy — for localhost CDP connections. */
@@ -40,7 +40,7 @@ export function getDirectAgentForCdp(url: string): http.Agent | https.Agent | un
  * Returns `true` when any proxy-related env var is set that could
  * interfere with loopback connections.
  */
-export function hasProxyEnv(): boolean {
+function hasProxyEnv(): boolean {
   return hasProxyEnvConfigured();
 }
 

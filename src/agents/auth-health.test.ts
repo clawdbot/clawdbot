@@ -6,21 +6,24 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OAuthCredential } from "./auth-profiles/types.js";
+import type { ProviderAuthAliasLookupParams } from "./provider-auth-aliases.js";
 
-const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
+const { readCodexCliCredentialsCachedMock, resolveProviderIdForAuthMock } = vi.hoisted(() => ({
   readCodexCliCredentialsCachedMock: vi.fn<
     (options?: { allowKeychainPrompt?: boolean }) => OAuthCredential | null
   >(() => null),
+  resolveProviderIdForAuthMock: vi.fn<(provider: string, params?: unknown) => string>(
+    (provider: string) => (provider === "codex-cli" ? "openai" : provider),
+  ),
 }));
 
 vi.mock("./cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
 }));
 vi.mock("./provider-auth-aliases.js", () => ({
-  resolveProviderIdForAuth: (provider: string) => (provider === "codex-cli" ? "openai" : provider),
+  resolveProviderIdForAuth: resolveProviderIdForAuthMock,
 }));
 
 import {
@@ -72,6 +75,10 @@ describe("buildAuthHealthSummary", () => {
   beforeEach(() => {
     readCodexCliCredentialsCachedMock.mockReset();
     readCodexCliCredentialsCachedMock.mockReturnValue(null);
+    resolveProviderIdForAuthMock.mockReset();
+    resolveProviderIdForAuthMock.mockImplementation((provider: string) =>
+      provider === "codex-cli" ? "openai" : provider,
+    );
   });
 
   it("classifies OAuth and API key profiles", () => {
@@ -311,6 +318,29 @@ describe("buildAuthHealthSummary", () => {
     expect(statuses["google:no-refresh"]).toBe("expired");
   });
 
+  it("reports command-shaped API-key profiles as missing malformed auth", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = {
+      version: 1,
+      profiles: {
+        "zai:default": {
+          type: "api_key" as const,
+          provider: "zai",
+          key: "openclaw onboard --auth-choice zai-coding-global",
+        },
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    });
+
+    expect(profileStatuses(summary)["zai:default"]).toBe("missing");
+    expect(profileReasonCodes(summary)["zai:default"]).toBe("malformed_api_key");
+    expect(summary.providers.find((entry) => entry.provider === "zai")?.status).toBe("missing");
+  });
+
   it("uses runtime provider credentials for profile health", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const store = {
@@ -496,6 +526,34 @@ describe("buildAuthHealthSummary", () => {
     expect(provider?.expiresAt).toBeUndefined();
   });
 
+  it("keeps unavailable profiles in explicit auth order authoritative", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = {
+      version: 1,
+      profiles: {
+        "claude-cli:token": {
+          type: "token" as const,
+          provider: "claude-cli",
+          token: "fake-token",
+        },
+      },
+    };
+    const cfg = {
+      auth: {
+        order: {
+          "claude-cli": ["claude-cli:old-oauth"],
+        },
+      },
+    };
+
+    const summary = buildAuthHealthSummary({ cfg, store });
+
+    const provider = summary.providers.find((entry) => entry.provider === "claude-cli");
+    expect(provider?.status).toBe("missing");
+    expect(provider?.effectiveProfiles).toEqual([]);
+    expect(provider?.profiles.map((profile) => profile.profileId)).toEqual(["claude-cli:token"]);
+  });
+
   it("does not normalize provider aliases when filtering and grouping profile health", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const store = {
@@ -528,6 +586,50 @@ describe("buildAuthHealthSummary", () => {
         profiles: [],
       },
     ]);
+  });
+
+  it("uses caller-owned plugin metadata when resolving explicit auth order", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    resolveProviderIdForAuthMock.mockImplementation((provider: string, params?: unknown) => {
+      const metadata = (params as { metadataSnapshot?: { plugins?: unknown[] } } | undefined)
+        ?.metadataSnapshot;
+      return provider === "fixture-alias" && metadata?.plugins?.length
+        ? "fixture-provider"
+        : provider;
+    });
+    const metadataSnapshot = {
+      plugins: [
+        {
+          id: "fixture-auth-alias",
+          origin: "bundled" as const,
+          providerAuthAliases: { "fixture-alias": "fixture-provider" },
+        },
+      ],
+    } as unknown as NonNullable<ProviderAuthAliasLookupParams["metadataSnapshot"]>;
+    const summary = buildAuthHealthSummary({
+      cfg: { auth: { order: { "fixture-provider": [] } } },
+      store: {
+        version: 1,
+        profiles: {
+          "fixture-alias:token": {
+            type: "token",
+            provider: "fixture-alias",
+            token: "fake-token",
+          },
+        },
+      },
+      authAliasLookupParams: {
+        metadataSnapshot,
+      },
+    });
+
+    expect(summary.providers).toMatchObject([
+      { provider: "fixture-alias", status: "missing", effectiveProfiles: [] },
+    ]);
+    expect(resolveProviderIdForAuthMock).toHaveBeenCalledWith(
+      "fixture-alias",
+      expect.objectContaining({ metadataSnapshot }),
+    );
   });
 });
 

@@ -7,12 +7,14 @@
  * @module @openclaw/oc-path/find
  */
 
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isMap, isScalar, isSeq, type Node, type Pair } from "yaml";
 import type { MdAst } from "./ast.js";
 import type { JsoncValue } from "./jsonc/ast.js";
+import { resolveJsoncPositionalSegment } from "./jsonc/resolve-value.js";
 import type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
 import { pickJsonlLine } from "./jsonl/line.js";
-import type { OcPath } from "./oc-path.js";
+import type { OcPath, PredicateSpec } from "./oc-path.js";
 import {
   MAX_TRAVERSAL_DEPTH,
   OcPathError,
@@ -33,14 +35,13 @@ import {
   splitRespectingBrackets,
   unquoteSeg,
 } from "./oc-path.js";
-import type { PredicateSpec } from "./oc-path.js";
 import type { OcAst, OcMatch } from "./universal.js";
 import { resolveOcPath } from "./universal.js";
 
 // ---------- Public types ---------------------------------------------------
 
 /** A find result: a concrete (wildcard-free) path plus its match info. */
-export interface OcPathMatch {
+interface OcPathMatch {
   readonly path: OcPath;
   readonly match: OcMatch;
 }
@@ -190,7 +191,7 @@ function dispatchSeg<T>(
   walked: readonly SlotSub[],
   onMatch: OnMatch,
 ): void {
-  const cur = subs[i];
+  const cur = expectDefined(subs[i], "dispatch index checked by walker");
 
   if (isUnionSeg(cur.value)) {
     const alts = parseUnionSeg(cur.value);
@@ -277,8 +278,8 @@ const jsoncOps: WalkOps<JsoncValue> = {
         yield { keySub: quoteSeg(e.key), child: e.value };
       }
     } else if (node.kind === "array") {
-      for (let idx = 0; idx < node.items.length; idx++) {
-        yield { keySub: String(idx), child: node.items[idx] };
+      for (const [idx, child] of node.items.entries()) {
+        yield { keySub: String(idx), child };
       }
     }
   },
@@ -295,16 +296,23 @@ const jsoncOps: WalkOps<JsoncValue> = {
       if (idx === null) {
         return null;
       }
-      return { keySub: key, child: node.items[idx] };
+      return {
+        keySub: key,
+        child: expectDefined(node.items[idx], "parsed JSONC array index is in bounds"),
+      };
     }
     return null;
   },
   positional(node, seg) {
-    const concrete = positionalForJsoncNode(node, seg);
+    const concrete = resolveJsoncPositionalSegment(node, seg);
     if (concrete === null) {
       return null;
     }
-    return jsoncOps.lookup(node, concrete);
+    const match = jsoncOps.lookup(node, concrete);
+    if (match === null || node.kind !== "object") {
+      return match;
+    }
+    return { keySub: quoteSeg(concrete), child: match.child };
   },
   *predicate(node, pred) {
     if (node.kind === "object") {
@@ -314,26 +322,15 @@ const jsoncOps: WalkOps<JsoncValue> = {
         }
       }
     } else if (node.kind === "array") {
-      for (let idx = 0; idx < node.items.length; idx++) {
-        if (jsoncChildMatchesPredicate(node.items[idx], pred)) {
-          yield { keySub: String(idx), child: node.items[idx] };
+      for (const [idx, child] of node.items.entries()) {
+        if (jsoncChildMatchesPredicate(child, pred)) {
+          yield { keySub: String(idx), child };
         }
       }
     }
   },
   walk: walkJsonc,
 };
-
-function positionalForJsoncNode(node: JsoncValue, seg: string): string | null {
-  if (node.kind === "object") {
-    const keys = node.entries.map((e) => e.key);
-    return resolvePositionalSeg(seg, { indexable: false, size: keys.length, keys });
-  }
-  if (node.kind === "array") {
-    return resolvePositionalSeg(seg, { indexable: true, size: node.items.length });
-  }
-  return null;
-}
 
 // ---------- JSONL walker ---------------------------------------------------
 
@@ -599,7 +596,7 @@ function walkMd(
     onMatch(walked);
     return;
   }
-  const cur = subs[i];
+  const cur = expectDefined(subs[i], "Markdown walk index checked above");
 
   // Frontmatter sentinel short-circuits regular dispatch.
   if (level.kind === "root" && walked.length === 0 && cur.value === "[frontmatter]") {
@@ -701,8 +698,7 @@ const mdOps: WalkOps<MdLevel> = {
       // Disambiguate duplicate slugs via `#N` ordinal so each emitted
       // path round-trips through resolveOcPath to its own item.
       const counts = blockSlugCounts(level.block.items);
-      for (let idx = 0; idx < level.block.items.length; idx++) {
-        const item = level.block.items[idx];
+      for (const [idx, item] of level.block.items.entries()) {
         const seg = (counts.get(item.slug) ?? 0) > 1 ? `#${idx}` : item.slug;
         yield { keySub: seg, child: { kind: "item", item, ast: level.ast } };
       }
@@ -723,7 +719,14 @@ const mdOps: WalkOps<MdLevel> = {
         if (n === null || n < 0 || n >= level.block.items.length) {
           return null;
         }
-        return { keySub: key, child: { kind: "item", item: level.block.items[n], ast: level.ast } };
+        return {
+          keySub: key,
+          child: {
+            kind: "item",
+            item: expectDefined(level.block.items[n], "validated Markdown ordinal is in bounds"),
+            ast: level.ast,
+          },
+        };
       }
       const target = key.toLowerCase();
       const item = level.block.items.find((it) => it.slug === target);
@@ -746,7 +749,10 @@ const mdOps: WalkOps<MdLevel> = {
     }
     // Preserve the positional token in keySub so the resolver
     // re-evaluates positionally on round-trip.
-    const item = level.block.items[Number(concrete)];
+    const item = expectDefined(
+      level.block.items[Number(concrete)],
+      "resolved Markdown position is in bounds",
+    );
     return { keySub: seg, child: { kind: "item", item, ast: level.ast } };
   },
   *predicate(level, pred) {
@@ -760,8 +766,7 @@ const mdOps: WalkOps<MdLevel> = {
     }
     if (level.kind === "block") {
       const counts = blockSlugCounts(level.block.items);
-      for (let idx = 0; idx < level.block.items.length; idx++) {
-        const item = level.block.items[idx];
+      for (const [idx, item] of level.block.items.entries()) {
         if (mdItemMatchesPredicate(item, pred)) {
           const seg = (counts.get(item.slug) ?? 0) > 1 ? `#${idx}` : item.slug;
           yield { keySub: seg, child: { kind: "item", item, ast: level.ast } };
@@ -815,3 +820,4 @@ function jsoncChildFieldText(node: JsoncValue, key: string): string | null {
   }
   return null;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

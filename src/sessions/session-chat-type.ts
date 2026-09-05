@@ -7,17 +7,8 @@ import {
 } from "./session-chat-type-shared.js";
 import { parseAgentSessionKey } from "./session-key-utils.js";
 
-export {
-  deriveSessionChatTypeFromKey,
-  type SessionKeyChatType,
-} from "./session-chat-type-shared.js";
-
 // Session chat-type derivation first uses generic key parsing, then falls back
 // to bootstrap channel plugins for legacy platform-specific session keys.
-type LegacySessionChatTypeDeriver = NonNullable<
-  NonNullable<ReturnType<typeof getBootstrapChannelPlugin>>["messaging"]
->["deriveLegacySessionChatType"];
-
 function resolveScopedSessionKey(sessionKey: string | undefined | null): string {
   const raw = normalizeLowercaseStringOrEmpty(sessionKey);
   if (!raw) {
@@ -39,16 +30,6 @@ function collectLegacyChatTypeCandidatePluginIds(scopedSessionKey: string): stri
   return Array.from(ids);
 }
 
-function derivePluginLegacySessionChatType(
-  scopedSessionKey: string,
-  deriveLegacySessionChatType: LegacySessionChatTypeDeriver,
-): SessionKeyChatType | undefined {
-  if (!deriveLegacySessionChatType) {
-    return undefined;
-  }
-  return deriveLegacySessionChatType(scopedSessionKey);
-}
-
 export function deriveSessionChatType(sessionKey: string | undefined | null): SessionKeyChatType {
   const builtInType = deriveSessionChatTypeFromKey(sessionKey);
   if (builtInType !== "unknown") {
@@ -57,10 +38,9 @@ export function deriveSessionChatType(sessionKey: string | undefined | null): Se
 
   const scopedSessionKey = resolveScopedSessionKey(sessionKey);
   for (const pluginId of collectLegacyChatTypeCandidatePluginIds(scopedSessionKey)) {
-    const derived = derivePluginLegacySessionChatType(
-      scopedSessionKey,
-      getBootstrapChannelPlugin(pluginId)?.messaging?.deriveLegacySessionChatType,
-    );
+    const deriveLegacySessionChatType =
+      getBootstrapChannelPlugin(pluginId)?.messaging?.deriveLegacySessionChatType;
+    const derived = deriveLegacySessionChatType?.(scopedSessionKey);
     if (derived) {
       return derived;
     }

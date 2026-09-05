@@ -1,11 +1,11 @@
+import { spawnSync } from "node:child_process";
 // Proxy CA installer tests keep macOS trust changes behind explicit CLI args.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
-const SCRIPT = "scripts/proxy-install-ca.mjs";
+const SCRIPT = "scripts/proxy-install-ca.mts";
 const tempDirs = new Set<string>();
 
 afterEach(() => {
@@ -23,7 +23,7 @@ function runProxyInstallCa(args: string[], certDir: string) {
   });
 }
 
-describe("scripts/proxy-install-ca.mjs", () => {
+describe("scripts/proxy-install-ca.mts", () => {
   it("rejects unknown arguments before creating the debug proxy CA", () => {
     const root = makeTempDir(tempDirs, "openclaw-proxy-install-ca-");
     const certDir = join(root, "certs");
@@ -32,7 +32,7 @@ describe("scripts/proxy-install-ca.mjs", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Unknown proxy install CA argument: --print-onli");
     expect(result.stderr).toContain(
-      "Usage: node --import tsx scripts/proxy-install-ca.mjs [--print-only]",
+      "Usage: node --import tsx scripts/proxy-install-ca.mts [--print-only]",
     );
     expect(result.stdout).toBe("");
     expect(existsSync(certDir)).toBe(false);
@@ -45,7 +45,7 @@ describe("scripts/proxy-install-ca.mjs", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(
-      "Usage: node --import tsx scripts/proxy-install-ca.mjs [--print-only]",
+      "Usage: node --import tsx scripts/proxy-install-ca.mts [--print-only]",
     );
     expect(result.stderr).toBe("");
     expect(existsSync(certDir)).toBe(false);

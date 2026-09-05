@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { generateExportHtmlVendorAssets } from "../../../../scripts/runtime-postbuild.mts";
 
 type SessionEntry = {
   id: string;
@@ -29,17 +31,11 @@ type SessionData = {
   hasLeafControl?: boolean;
   systemPrompt: string;
   tools: unknown[];
-};
-
-type ParsedHtml = {
-  document: Document;
-  window: {
-    HTMLElement?: unknown;
-  };
+  warning?: string;
 };
 
 type LinkedomModule = {
-  parseHTML(html: string): ParsedHtml;
+  parseHTML(html: string): { document: Document };
 };
 
 const LINKEDOM_MODULE = "linkedom";
@@ -48,8 +44,12 @@ const exportHtmlDir = path.dirname(fileURLToPath(import.meta.url));
 const templateHtml = fs.readFileSync(path.join(exportHtmlDir, "template.html"), "utf8");
 const templateCss = fs.readFileSync(path.join(exportHtmlDir, "template.css"), "utf8");
 const templateJs = fs.readFileSync(path.join(exportHtmlDir, "template.js"), "utf8");
-const markedJs = fs.readFileSync(path.join(exportHtmlDir, "vendor", "marked.min.js"), "utf8");
-const highlightJs = fs.readFileSync(path.join(exportHtmlDir, "vendor", "highlight.min.js"), "utf8");
+const vendorAssets = generateExportHtmlVendorAssets();
+const markedJs = expectDefined(vendorAssets["marked.min.js"], "generated marked browser asset");
+const highlightJs = expectDefined(
+  vendorAssets["highlight.min.js"],
+  "generated highlight browser asset",
+);
 
 let parseHtmlPromise: Promise<LinkedomModule["parseHTML"]> | null = null;
 
@@ -58,34 +58,6 @@ async function loadParseHTML(): Promise<LinkedomModule["parseHTML"]> {
     (module) => module["parseHTML"],
   );
   return parseHtmlPromise;
-}
-
-function installScrollIntoViewStub(document: Document) {
-  const patchElement = <T extends Element | null>(element: T): T => {
-    if (element && !("scrollIntoView" in element)) {
-      Object.defineProperty(element, "scrollIntoView", {
-        configurable: true,
-        value: () => {},
-      });
-    }
-    return element;
-  };
-
-  for (const element of document.querySelectorAll("*")) {
-    patchElement(element);
-  }
-
-  const getElementById = document.getElementById.bind(document);
-  document.getElementById = ((id: string) =>
-    patchElement(getElementById(id))) as typeof document.getElementById;
-
-  const querySelector = document.querySelector.bind(document);
-  document.querySelector = ((selectors: string) =>
-    patchElement(querySelector(selectors))) as typeof document.querySelector;
-
-  const createElement = document.createElement.bind(document);
-  document.createElement = ((tagName: string, options?: ElementCreationOptions) =>
-    patchElement(createElement(tagName, options))) as typeof document.createElement;
 }
 
 async function renderTemplate(sessionData: SessionData) {
@@ -108,10 +80,8 @@ async function renderTemplate(sessionData: SessionData) {
   );
 
   const parseHTML = await loadParseHTML();
-  const { document, window } = parseHTML(html);
-  if (window.HTMLElement) {
-    installScrollIntoViewStub(document);
-  }
+  const { document } = parseHTML(html);
+  const downloads: Blob[] = [];
 
   const immediateTimeout = (fn: (...args: unknown[]) => void) => {
     fn();
@@ -123,6 +93,14 @@ async function renderTemplate(sessionData: SessionData) {
     clearTimeout: () => {},
     setTimeout: immediateTimeout,
     URLSearchParams,
+    Blob,
+    URL: class extends URL {
+      static override createObjectURL(blob: Blob) {
+        downloads.push(blob);
+        return "blob:session-export";
+      }
+      static override revokeObjectURL() {}
+    },
     TextDecoder,
     atob: (s: string) => Buffer.from(s, "base64").toString("binary"),
     btoa: (s: string) => Buffer.from(s, "binary").toString("base64"),
@@ -138,7 +116,13 @@ async function renderTemplate(sessionData: SessionData) {
   vm.runInContext(markedJs, runtime);
   vm.runInContext(highlightJs, runtime);
   vm.runInContext(templateJs, runtime);
-  return { document };
+  return {
+    document,
+    downloadJson: async () => {
+      vm.runInContext("downloadSessionJson()", runtime);
+      return await expectDefined(downloads.at(-1), "download missing").text();
+    },
+  };
 }
 
 function now() {
@@ -161,7 +145,7 @@ function selectorSpecificity(selector: string): [number, number, number] {
 function compareSpecificity(left: [number, number, number], right: [number, number, number]) {
   for (let index = 0; index < left.length; index += 1) {
     if (left[index] !== right[index]) {
-      return left[index] - right[index];
+      return expectDefined(left[index], "left[index] test invariant") - expectDefined(right[index], "right[index] test invariant");
     }
   }
   return 0;
@@ -212,6 +196,119 @@ describe("export html sidebar trigger affordance", () => {
 });
 
 describe("export html security hardening", () => {
+  it.each(["consult", "answer"])("honors hidden input with %s selected while preserving raw export", async (leafId) => {
+    const session: SessionData = {
+      header: { id: "session-hidden-input", timestamp: now() },
+      entries: [
+        {
+          id: "hidden-root",
+          parentId: "hidden-root",
+          timestamp: now(),
+          type: "custom_message",
+          customType: "context",
+          content: "Hidden root context",
+          display: false,
+        },
+        {
+          id: "speech",
+          parentId: "hidden-root",
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: "Explain the change. Context: Spoken style:" },
+        },
+        {
+          id: "consult",
+          parentId: "speech",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "user",
+            content: "Synthetic consultation instructions",
+            display: false,
+            provenance: { kind: "internal_system", sourceTool: "openclaw_agent_consult" },
+          },
+        },
+        {
+          id: "answer",
+          parentId: "consult",
+          timestamp: now(),
+          type: "message",
+          message: { role: "assistant", content: "The change is ready." },
+        },
+      ],
+      leafId,
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document, downloadJson } = await renderTemplate(session);
+    expect(document.querySelectorAll(".user-message")).toHaveLength(1);
+    expect(document.getElementById("entry-speech")?.textContent).toContain(
+      "Explain the change. Context: Spoken style:",
+    );
+    expect(document.getElementById("entry-consult")).toBeNull();
+    expect(document.getElementById("entry-hidden-root")).toBeNull();
+    const treeIds = () => Array.from(document.querySelectorAll(".tree-node"), (node) => node.getAttribute("data-id"));
+    expect(treeIds()).toEqual(["speech", "answer"]);
+    const selectFilter = (filter: string) => requireElement(
+      document.querySelector<HTMLButtonElement>(`[data-filter="${filter}"]`), "filter missing",
+    ).click();
+    selectFilter("all");
+    expect(treeIds()).toEqual(["hidden-root", "speech", "consult", "answer"]);
+    expect(document.querySelector('[data-id="consult"]')?.textContent).toContain("[hidden] user:");
+    requireElement(document.querySelector<HTMLElement>('[data-id="consult"]'), "hidden tree entry missing").click();
+    expect(document.getElementById("entry-answer")?.textContent).toContain("The change is ready.");
+    expect(document.getElementById("entry-consult")).toBeNull();
+    selectFilter("user-only");
+    expect(treeIds()).not.toContain("consult");
+    selectFilter("default");
+    expect(treeIds()).toEqual(["speech", "answer"]);
+    expect(document.getElementById("header-container")?.textContent).toContain("2 user, 1 assistant, 1 custom");
+    const encoded = requireElement(document.getElementById("session-data"), "session data missing");
+    expect(JSON.parse(Buffer.from(encoded.textContent ?? "", "base64").toString("utf8"))).toEqual(
+      session,
+    );
+    expect((await downloadJson()).split("\n").map((line) => JSON.parse(line))).toEqual([
+      { type: "header", ...session.header }, ...session.entries,
+    ]);
+  });
+
+  it("renders export warnings in the header without interpreting HTML", async () => {
+    const warning = 'Backend <img src=x onerror="alert(1)"> transcript is incomplete';
+    const session: SessionData = {
+      header: { id: "session-warning", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: "hello" },
+        },
+      ],
+      leafId: "1",
+      systemPrompt: "",
+      tools: [],
+      warning,
+    };
+
+    const { document } = await renderTemplate(session);
+    const header = requireElement(
+      document.getElementById("header-container"),
+      "header root missing",
+    );
+    const warningNode = requireElement(
+      header.querySelector(".export-warning"),
+      "export warning missing",
+    );
+
+    expect(warningNode.textContent).toBe(warning);
+    expect(warningNode.querySelector("img[onerror]")).toBeNull();
+    expect(warningNode.innerHTML).toContain(
+      'Backend &lt;img src=x onerror="alert(1)"&gt; transcript is incomplete',
+    );
+  });
+
   it("renders an explicitly selected empty branch without inactive messages", async () => {
     const session: SessionData = {
       header: { id: "session-empty", timestamp: now() },
@@ -280,6 +377,34 @@ describe("export html security hardening", () => {
     const messages = requireElement(document.getElementById("messages"), "messages root missing");
     expect(messages.querySelector("img[onerror]")).toBeNull();
     expect(messages.innerHTML).toContain("&lt;img src=x onerror=alert(1)&gt;");
+  });
+
+  it("renders Markdown and TypeScript highlighting without external assets", async () => {
+    const session: SessionData = {
+      header: { id: "session-render", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "**rendered**\n\n```typescript\nconst answer = true;\n```",
+          },
+        },
+      ],
+      leafId: "1",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const messages = requireElement(document.getElementById("messages"), "messages root missing");
+    expect(messages.querySelector("strong")?.textContent).toBe("rendered");
+    const code = requireElement(messages.querySelector("pre code.hljs"), "highlighted code missing");
+    expect(code.querySelector(".hljs-keyword")?.textContent).toBe("const");
+    expect(code.textContent).toContain("answer = true");
   });
 
   it("escapes tree and header metadata fields", async () => {
@@ -586,6 +711,38 @@ describe("export html security hardening", () => {
     expect(elementId.startsWith("entry-")).toBe(true);
   });
 
+  it("truncates tree node text without splitting surrogate pairs", async () => {
+    const emoji = "😀";
+    const prefix = "x".repeat(99);
+    const session: SessionData = {
+      header: { id: "session-surrogate-truncation", timestamp: now() },
+      entries: [
+        {
+          id: "surrogate-user",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: `${prefix}${emoji}tail` },
+        },
+      ],
+      leafId: "surrogate-user",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const treeText =
+      Array.from(document.querySelectorAll(".tree-content")).find((node) =>
+        node.textContent?.includes("user:"),
+      )?.textContent ?? "";
+
+    expect(treeText).toContain(`user: ${prefix}...`);
+    expect(treeText).not.toContain(emoji);
+    expect(treeText).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
   it("copy-link round-trip: dataset.entryId matches raw entry.id after browser decoding", async () => {
     // IDs with characters that need HTML escaping but should round-trip correctly
     const specialId = `msg-with"quotes&amp's`;
@@ -758,5 +915,97 @@ describe("export html security hardening", () => {
       };
       await expect(renderTemplate(session)).resolves.toBeDefined();
     }
+  });
+});
+
+describe("export html tool call previews", () => {
+  it("truncates tool previews without splitting emoji", async () => {
+    const bashPrefix = "a".repeat(49);
+    const genericPrefix = "b".repeat(29);
+    const bashExecutionPrefix = "c".repeat(99);
+    const session: SessionData = {
+      header: { id: "session-tool-preview-emoji", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: "run tools" },
+        },
+        {
+          id: "2",
+          parentId: "1",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-bash",
+                name: "bash",
+                arguments: { command: `${bashPrefix}😀tail` },
+              },
+              {
+                type: "toolCall",
+                id: "call-custom",
+                name: "custom",
+                arguments: { value: `${genericPrefix}😀tail` },
+              },
+            ],
+          },
+        },
+        {
+          id: "3",
+          parentId: "2",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-bash",
+            content: "bash output",
+          },
+        },
+        {
+          id: "4",
+          parentId: "3",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-custom",
+            content: "custom output",
+          },
+        },
+        {
+          id: "5",
+          parentId: "4",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "bashExecution",
+            command: `${bashExecutionPrefix}😀tail`,
+          },
+        },
+      ],
+      leafId: "5",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const previews = ["3", "4", "5"].map((id) =>
+      requireElement(
+        document.querySelector(`.tree-node[data-id="${id}"] .tree-content`),
+        `tool preview ${id} missing`,
+      ).textContent,
+    );
+
+    expect(previews).toEqual([
+      `[bash: ${bashPrefix}...]`,
+      `[custom: {"value":"${genericPrefix}...]`,
+      `[bash]: ${bashExecutionPrefix}...`,
+    ]);
   });
 });

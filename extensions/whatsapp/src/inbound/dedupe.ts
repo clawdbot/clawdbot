@@ -1,80 +1,20 @@
 // Whatsapp plugin module implements dedupe behavior.
-import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
+import {
+  isHostedLidUser,
+  isHostedPnUser,
+  isJidGroup,
+  jidDecode,
+  jidEncode,
+  jidNormalizedUser,
+} from "baileys";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 
-const RECENT_WEB_MESSAGE_TTL_MS = 20 * 60_000;
-const RECENT_WEB_MESSAGE_MAX = 5000;
 const RECENT_OUTBOUND_MESSAGE_TTL_MS = 20 * 60_000;
 const RECENT_OUTBOUND_MESSAGE_MAX = 5000;
-
-const claimableInboundMessages = createClaimableDedupe({
-  ttlMs: RECENT_WEB_MESSAGE_TTL_MS,
-  memoryMaxSize: RECENT_WEB_MESSAGE_MAX,
-});
-const recentOutboundMessages = createRecentMessageCache({
+const recentOutboundMessages = createDedupeCache({
   ttlMs: RECENT_OUTBOUND_MESSAGE_TTL_MS,
   maxSize: RECENT_OUTBOUND_MESSAGE_MAX,
 });
-
-function createRecentMessageCache(options: { ttlMs: number; maxSize: number }) {
-  const ttlMs = Math.max(0, options.ttlMs);
-  const maxSize = Math.max(0, Math.floor(options.maxSize));
-  const cache = new Map<string, number>();
-
-  const prune = (now: number) => {
-    if (ttlMs > 0) {
-      const cutoff = now - ttlMs;
-      for (const [key, timestamp] of cache) {
-        if (timestamp < cutoff) {
-          cache.delete(key);
-        }
-      }
-    }
-    while (cache.size > maxSize) {
-      const oldest = cache.keys().next().value;
-      if (!oldest) {
-        break;
-      }
-      cache.delete(oldest);
-    }
-  };
-
-  const peek = (key: string | null, now = Date.now()): boolean => {
-    if (!key) {
-      return false;
-    }
-    const timestamp = cache.get(key);
-    if (timestamp === undefined) {
-      return false;
-    }
-    if (ttlMs > 0 && now - timestamp >= ttlMs) {
-      cache.delete(key);
-      return false;
-    }
-    return true;
-  };
-
-  return {
-    check: (key: string | null, now = Date.now()): boolean => {
-      if (!key) {
-        return false;
-      }
-      const existed = peek(key, now);
-      cache.delete(key);
-      cache.set(key, now);
-      prune(now);
-      return existed;
-    },
-    peek,
-    clear: () => cache.clear(),
-  };
-}
-
-export class WhatsAppRetryableInboundError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "WhatsAppRetryableInboundError";
-  }
-}
 
 function buildMessageKey(params: {
   accountId: string;
@@ -82,7 +22,19 @@ function buildMessageKey(params: {
   messageId: string;
 }): string | null {
   const accountId = params.accountId.trim();
-  const remoteJid = params.remoteJid.trim();
+  const rawRemoteJid = params.remoteJid.trim();
+  const hostedPhone = isHostedPnUser(rawRemoteJid);
+  // Match Baileys cleanMessage: hosted domains collapse before device stripping.
+  let remoteJid: string;
+  if (hostedPhone || isHostedLidUser(rawRemoteJid)) {
+    const decodedJid = jidDecode(rawRemoteJid);
+    if (!decodedJid) {
+      return null;
+    }
+    remoteJid = jidEncode(decodedJid.user, hostedPhone ? "s.whatsapp.net" : "lid");
+  } else {
+    remoteJid = jidNormalizedUser(rawRemoteJid);
+  }
   const messageId = params.messageId.trim();
   if (!accountId || !remoteJid || !messageId || messageId === "unknown") {
     return null;
@@ -91,25 +43,7 @@ function buildMessageKey(params: {
 }
 
 export function resetWebInboundDedupe(): void {
-  claimableInboundMessages.clearMemory();
   recentOutboundMessages.clear();
-}
-
-export type RecentInboundMessageClaimKind = "claimed" | "duplicate" | "inflight";
-
-export async function claimRecentInboundMessageDelivery(
-  key: string,
-): Promise<RecentInboundMessageClaimKind> {
-  const claim = await claimableInboundMessages.claim(key);
-  return claim.kind;
-}
-
-export async function commitRecentInboundMessage(key: string): Promise<void> {
-  await claimableInboundMessages.commit(key);
-}
-
-export function releaseRecentInboundMessage(key: string, error?: unknown): void {
-  claimableInboundMessages.release(key, { error });
 }
 
 export function rememberRecentOutboundMessage(params: {
@@ -127,11 +61,23 @@ export function rememberRecentOutboundMessage(params: {
 export function isRecentOutboundMessage(params: {
   accountId: string;
   remoteJid: string;
+  alternateRemoteJid?: string;
   messageId: string;
 }): boolean {
   const key = buildMessageKey(params);
   if (!key) {
     return false;
   }
-  return recentOutboundMessages.peek(key);
+  if (recentOutboundMessages.peek(key)) {
+    return true;
+  }
+  // Baileys exposes phone/LID aliases for direct chats only; never cross groups.
+  if (!params.alternateRemoteJid || isJidGroup(params.remoteJid)) {
+    return false;
+  }
+  const alternateKey = buildMessageKey({
+    ...params,
+    remoteJid: params.alternateRemoteJid,
+  });
+  return alternateKey !== null && recentOutboundMessages.peek(alternateKey);
 }

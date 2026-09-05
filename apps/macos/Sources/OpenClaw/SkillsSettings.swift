@@ -1,4 +1,5 @@
 import Observation
+import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
 
@@ -6,8 +7,9 @@ struct SkillsSettings: View {
     @Bindable var state: AppState
     @State private var model = SkillsSettingsModel()
     @State private var envEditor: EnvEditorState?
+    @State private var section: SkillsSection = .installed
+    @State private var searchText = ""
     @State private var filter: SkillsFilter = .all
-    @State private var didScheduleInitialRefresh = false
 
     init(state: AppState = AppStateStore.shared, model: SkillsSettingsModel = SkillsSettingsModel()) {
         self.state = state
@@ -19,39 +21,50 @@ struct SkillsSettings: View {
             VStack(alignment: .leading, spacing: 20) {
                 SettingsPageHeader(
                     title: "Skills",
-                    subtitle: "Optional capabilities that become available when their requirements are met.")
+                    subtitle: "Manage installed capabilities or discover verified releases on ClawHub.")
 
-                self.skillsSummaryPanel
-                self.controlsCard
-                self.statusBanner
-                self.skillsList
+                self.sectionPicker
+                if self.section == .installed {
+                    self.skillsSummaryPanel
+                    self.controlsCard
+                    self.statusBanner
+                    self.skillsList
+                } else {
+                    ClawHubSkillsBrowser(gateway: self.model.gateway, installedSkills: self.model.skills) { skills in
+                        self.model.acceptInstalledSkills(skills)
+                    }
+                }
                 Spacer(minLength: 8)
             }
             .settingsDetailContent()
         }
-        .task {
-            guard !self.didScheduleInitialRefresh else { return }
-            self.didScheduleInitialRefresh = true
-            await Task.yield()
-            await self.model.refreshIfNeeded()
-        }
+        .task { await self.model.run() }
         .sheet(item: self.$envEditor) { editor in
             EnvEditorView(editor: editor) { value in
-                Task {
-                    await self.model.updateEnv(
-                        skillKey: editor.skillKey,
-                        envKey: editor.envKey,
-                        value: value,
-                        isPrimary: editor.isPrimary)
-                }
+                await self.model.updateEnv(
+                    skillKey: editor.skillKey,
+                    envKey: editor.envKey,
+                    value: value,
+                    isPrimary: editor.isPrimary,
+                    source: editor.source)
             }
         }
     }
 
+    private var sectionPicker: some View {
+        Picker("Skills section", selection: self.$section) {
+            ForEach(SkillsSection.allCases) { section in
+                Text(section.title).tag(section)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+    }
+
     private var skillsSummaryPanel: some View {
         let total = self.model.skills.count
-        let ready = self.model.skills.count(where: { !$0.disabled && $0.eligible })
-        let needsSetup = self.model.skills.count(where: { !$0.disabled && !$0.eligible })
+        let ready = self.model.skills.count(where: SkillManagementContract.ready)
+        let needsSetup = self.model.skills.count(where: SkillManagementContract.needsSetup)
 
         return HStack(alignment: .center, spacing: 14) {
             ZStack {
@@ -75,7 +88,7 @@ struct SkillsSettings: View {
             Spacer(minLength: 18)
 
             if total > 0 {
-                Text("\(total)")
+                Text(verbatim: "\(total)")
                     .font(.title3.monospacedDigit().weight(.semibold))
                     .foregroundStyle(.secondary)
             }
@@ -107,6 +120,10 @@ struct SkillsSettings: View {
                 }
                 .buttonStyle(.bordered)
                 .help("Refresh")
+
+                TextField("Search installed skills", text: self.$searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 220)
 
                 self.headerFilter
             }
@@ -141,7 +158,7 @@ struct SkillsSettings: View {
                     }
                 }
             }
-        } else {
+        } else if let catalog = self.model.catalog {
             SettingsCardGroup("Skills") {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(self.filteredSkills.enumerated()), id: \.element.id) { index, skill in
@@ -151,13 +168,20 @@ struct SkillsSettings: View {
                             connectionMode: self.state.connectionMode,
                             showsDivider: index != self.filteredSkills.count - 1,
                             onToggleEnabled: { enabled in
-                                Task { await self.model.setEnabled(skillKey: skill.skillKey, enabled: enabled) }
+                                Task {
+                                    await self.model.setEnabled(
+                                        skillKey: skill.skillKey, enabled: enabled, source: catalog.source)
+                                }
                             },
                             onInstall: { option, target in
-                                Task { await self.model.install(skill: skill, option: option, target: target) }
+                                Task {
+                                    await self.model.install(
+                                        skill: skill, source: catalog.source, option: option, target: target)
+                                }
                             },
                             onSetEnv: { envKey, isPrimary in
                                 self.envEditor = EnvEditorState(
+                                    source: catalog.source,
                                     skillKey: skill.skillKey,
                                     skillName: skill.name,
                                     envKey: envKey,
@@ -191,17 +215,39 @@ struct SkillsSettings: View {
     }
 
     private var filteredSkills: [SkillStatus] {
-        self.model.skills.filter { skill in
-            switch self.filter {
+        let query = self.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return self.model.skills.filter { skill in
+            let matchesQuery = query.isEmpty
+                || skill.name.localizedCaseInsensitiveContains(query)
+                || skill.skillKey.localizedCaseInsensitiveContains(query)
+                || skill.description.localizedCaseInsensitiveContains(query)
+            let matchesFilter = switch self.filter {
             case .all:
                 true
             case .ready:
-                !skill.disabled && skill.eligible
+                SkillManagementContract.ready(skill)
             case .needsSetup:
-                !skill.disabled && !skill.eligible
+                SkillManagementContract.needsSetup(skill)
             case .disabled:
                 skill.disabled
             }
+            return matchesQuery && matchesFilter
+        }
+    }
+}
+
+private enum SkillsSection: String, CaseIterable, Identifiable {
+    case installed
+    case browse
+
+    var id: String {
+        self.rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .installed: "Installed"
+        case .browse: "Browse"
         }
     }
 }
@@ -230,9 +276,38 @@ private enum SkillsFilter: String, CaseIterable, Identifiable {
     }
 }
 
-private enum InstallTarget: String, CaseIterable {
+enum InstallTarget: String, CaseIterable {
     case gateway
     case local
+}
+
+enum SkillRequirementPresentation {
+    static func requirementsMet(_ missing: SkillMissing) -> Bool {
+        missing.bins.isEmpty &&
+            missing.anyBins.isEmpty &&
+            missing.env.isEmpty &&
+            missing.config.isEmpty &&
+            missing.os.isEmpty
+    }
+
+    static func shouldShowSummary(_ missing: SkillMissing, showMissingBins: Bool) -> Bool {
+        showMissingBins ||
+            !missing.anyBins.isEmpty ||
+            !missing.env.isEmpty ||
+            !missing.config.isEmpty ||
+            !missing.os.isEmpty
+    }
+
+    static func installOptions(
+        missing: SkillMissing,
+        options: [SkillInstallOption]) -> [SkillInstallOption]
+    {
+        let missingBins = Set(missing.bins + missing.anyBins)
+        guard !missingBins.isEmpty else { return [] }
+        return options.filter { option in
+            option.bins.isEmpty || !missingBins.isDisjoint(with: option.bins)
+        }
+    }
 }
 
 private struct SkillRow: View {
@@ -247,6 +322,14 @@ private struct SkillRow: View {
 
     private var missingBins: [String] {
         self.skill.missing.bins
+    }
+
+    private var missingAnyBins: [String] {
+        self.skill.missing.anyBins
+    }
+
+    private var missingOS: [String] {
+        self.skill.missing.os
     }
 
     private var missingEnv: [String] {
@@ -333,14 +416,14 @@ private struct SkillRow: View {
         if self.skill.disabled {
             return "Disabled"
         }
-        return self.requirementsMet && self.skill.eligible ? "Ready" : "Needs setup"
+        return self.requirementsMet && SkillManagementContract.ready(self.skill) ? "Ready" : "Needs setup"
     }
 
     private var statusColor: Color {
         if self.skill.disabled {
             return .secondary
         }
-        return self.requirementsMet && self.skill.eligible ? .green : .orange
+        return self.requirementsMet && SkillManagementContract.ready(self.skill) ? .green : .orange
     }
 
     private var sourceLabel: String {
@@ -382,11 +465,17 @@ private struct SkillRow: View {
         if !self.missingBins.isEmpty {
             return "Missing \(self.missingBins.prefix(2).joined(separator: ", "))"
         }
+        if !self.missingAnyBins.isEmpty {
+            return "Needs \(self.missingAnyBins.prefix(2).joined(separator: " or "))"
+        }
         if !self.missingEnv.isEmpty {
             return "Needs \(self.missingEnv.prefix(2).joined(separator: ", "))"
         }
         if !self.missingConfig.isEmpty {
             return "Needs config"
+        }
+        if !self.missingOS.isEmpty {
+            return "Requires OS: \(self.missingOS.prefix(2).joined(separator: ", "))"
         }
         return "Needs setup"
     }
@@ -415,17 +504,32 @@ private struct SkillRow: View {
     private var missingSummary: some View {
         VStack(alignment: .leading, spacing: 4) {
             if self.shouldShowMissingBins {
-                Text("Missing binaries: \(self.missingBins.joined(separator: ", "))")
+                Text(String(
+                    format: String(localized: "Missing binaries: %@"), self.missingBins.joined(separator: ", ")))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if !self.missingAnyBins.isEmpty {
+                Text(String(
+                    format: String(localized: "Needs any binary: %@"), self.missingAnyBins.joined(separator: ", ")))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if !self.missingEnv.isEmpty {
-                Text("Missing env: \(self.missingEnv.joined(separator: ", "))")
+                Text(String(
+                    format: String(localized: "Missing env: %@"), self.missingEnv.joined(separator: ", ")))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if !self.missingConfig.isEmpty {
-                Text("Requires config: \(self.missingConfig.joined(separator: ", "))")
+                Text(String(
+                    format: String(localized: "Requires config: %@"), self.missingConfig.joined(separator: ", ")))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if !self.missingOS.isEmpty {
+                Text(String(
+                    format: String(localized: "Requires OS: %@"), self.missingOS.joined(separator: ", ")))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -506,16 +610,13 @@ private struct SkillRow: View {
     }
 
     private var installOptions: [SkillInstallOption] {
-        guard !self.missingBins.isEmpty else { return [] }
-        let missing = Set(self.missingBins)
-        return self.skill.install.filter { option in
-            if option.bins.isEmpty { return true }
-            return !missing.isDisjoint(with: option.bins)
-        }
+        SkillRequirementPresentation.installOptions(
+            missing: self.skill.missing,
+            options: self.skill.install)
     }
 
     private var requirementsMet: Bool {
-        self.missingBins.isEmpty && self.missingEnv.isEmpty && self.missingConfig.isEmpty
+        SkillRequirementPresentation.requirementsMet(self.skill.missing)
     }
 
     private var shouldShowMissingBins: Bool {
@@ -523,9 +624,9 @@ private struct SkillRow: View {
     }
 
     private var shouldShowMissingSummary: Bool {
-        self.shouldShowMissingBins ||
-            !self.missingEnv.isEmpty ||
-            !self.missingConfig.isEmpty
+        SkillRequirementPresentation.shouldShowSummary(
+            self.skill.missing,
+            showMissingBins: self.shouldShowMissingBins)
     }
 
     private var showGatewayInstall: Bool {
@@ -569,6 +670,7 @@ private struct SkillTag: View {
 }
 
 private struct EnvEditorState: Identifiable {
+    let source: GatewayConnection.ServerLease
     let skillKey: String
     let skillName: String
     let envKey: String
@@ -582,9 +684,11 @@ private struct EnvEditorState: Identifiable {
 
 private struct EnvEditorView: View {
     let editor: EnvEditorState
-    let onSave: (String) -> Void
+    let onSave: (String) async -> String?
     @Environment(\.dismiss) private var dismiss
     @State private var value: String = ""
+    @State private var isSaving = false
+    @State private var error: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -599,22 +703,34 @@ private struct EnvEditorView: View {
             }
             SecureField(self.editor.envKey, text: self.$value)
                 .textFieldStyle(.roundedBorder)
-            Text("Saved to openclaw.json under skills.entries.\(self.editor.skillKey)")
+                .disabled(self.isSaving)
+            Text(String(
+                format: String(localized: "Saved to openclaw.json under skills.entries.%@"), self.editor.skillKey))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
+            if let error = self.error {
+                Text(error).font(.footnote).foregroundStyle(.red)
+            }
             HStack {
                 Button("Cancel") { self.dismiss() }
                 Spacer()
                 Button("Save") {
-                    self.onSave(self.value)
-                    self.dismiss()
+                    self.isSaving = true
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(self.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(self.isSaving || self.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(20)
         .frame(width: 420)
+        .task(id: self.isSaving) {
+            guard self.isSaving else { return }
+            let error = await self.onSave(self.value)
+            guard !Task.isCancelled else { return }
+            self.error = error
+            self.isSaving = false
+            if error == nil { self.dismiss() }
+        }
     }
 
     private var homepageUrl: URL? {
@@ -641,161 +757,11 @@ private struct EnvEditorView: View {
     }
 }
 
-@MainActor
-@Observable
-final class SkillsSettingsModel {
-    var skills: [SkillStatus] = []
-    var isLoading = false
-    var error: String?
-    var statusMessage: String?
-    private var hasLoaded = false
-    private var busySkills: Set<String> = []
-
-    func isBusy(skill: SkillStatus) -> Bool {
-        self.busySkills.contains(skill.skillKey)
-    }
-
-    func refreshIfNeeded() async {
-        guard !self.hasLoaded else { return }
-        await self.refresh()
-    }
-
-    func refresh(force: Bool = false) async {
-        guard !self.isLoading else { return }
-        if self.hasLoaded, !force {
-            return
-        }
-        self.isLoading = true
-        self.error = nil
-        do {
-            let report = try await GatewayConnection.shared.skillsStatus()
-            self.skills = report.skills.sorted { $0.name < $1.name }
-            self.hasLoaded = true
-        } catch {
-            self.error = error.localizedDescription
-        }
-        self.isLoading = false
-    }
-
-    fileprivate func install(skill: SkillStatus, option: SkillInstallOption, target: InstallTarget) async {
-        await self.withBusy(skill.skillKey) {
-            do {
-                if target == .local, AppStateStore.shared.connectionMode != .local {
-                    AppStateStore.shared.connectionMode = .local
-                    self.statusMessage = "Switched to Local mode to install on this Mac"
-                }
-                let result = try await GatewayConnection.shared.skillsInstall(
-                    name: skill.name,
-                    installId: option.id,
-                    timeoutMs: 300_000)
-                self.statusMessage = result.message
-            } catch {
-                self.statusMessage = error.localizedDescription
-            }
-            await self.refresh(force: true)
-        }
-    }
-
-    func setEnabled(skillKey: String, enabled: Bool) async {
-        await self.withBusy(skillKey) {
-            do {
-                _ = try await GatewayConnection.shared.skillsUpdate(
-                    skillKey: skillKey,
-                    enabled: enabled)
-                self.statusMessage = enabled ? "Skill enabled" : "Skill disabled"
-            } catch {
-                self.statusMessage = error.localizedDescription
-            }
-            await self.refresh(force: true)
-        }
-    }
-
-    func updateEnv(skillKey: String, envKey: String, value: String, isPrimary: Bool) async {
-        await self.withBusy(skillKey) {
-            do {
-                if isPrimary {
-                    _ = try await GatewayConnection.shared.skillsUpdate(
-                        skillKey: skillKey,
-                        apiKey: value)
-                    self.statusMessage = "Saved API key — stored in openclaw.json (skills.entries.\(skillKey))"
-                } else {
-                    _ = try await GatewayConnection.shared.skillsUpdate(
-                        skillKey: skillKey,
-                        env: [envKey: value])
-                    self.statusMessage = "Saved \(envKey) — stored in openclaw.json (skills.entries.\(skillKey).env)"
-                }
-            } catch {
-                self.statusMessage = error.localizedDescription
-            }
-            await self.refresh(force: true)
-        }
-    }
-
-    private func withBusy(_ id: String, _ work: @escaping () async -> Void) async {
-        self.busySkills.insert(id)
-        defer { self.busySkills.remove(id) }
-        await work()
-    }
-}
-
 #if DEBUG
 struct SkillsSettings_Previews: PreviewProvider {
     static var previews: some View {
         SkillsSettings(state: .preview)
             .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
-    }
-}
-
-extension SkillsSettings {
-    static func exerciseForTesting() {
-        let skill = SkillStatus(
-            name: "Test Skill",
-            description: "Test description",
-            source: "openclaw-bundled",
-            filePath: "/tmp/skills/test",
-            baseDir: "/tmp/skills",
-            skillKey: "test",
-            primaryEnv: "API_KEY",
-            emoji: "🧪",
-            homepage: "https://example.com",
-            always: false,
-            disabled: false,
-            eligible: false,
-            requirements: SkillRequirements(bins: ["python3"], env: ["API_KEY"], config: ["skills.test"]),
-            missing: SkillMissing(bins: ["python3"], env: ["API_KEY"], config: ["skills.test"]),
-            configChecks: [
-                SkillStatusConfigCheck(path: "skills.test", value: AnyCodable(false), satisfied: false),
-            ],
-            install: [
-                SkillInstallOption(id: "brew", kind: "brew", label: "brew install python", bins: ["python3"]),
-            ])
-
-        let row = SkillRow(
-            skill: skill,
-            isBusy: false,
-            connectionMode: .remote,
-            showsDivider: false,
-            onToggleEnabled: { _ in },
-            onInstall: { _, _ in },
-            onSetEnv: { _, _ in })
-        _ = row.body
-
-        _ = SkillTag(text: "Bundled").body
-
-        let editor = EnvEditorView(
-            editor: EnvEditorState(
-                skillKey: "test",
-                skillName: "Test Skill",
-                envKey: "API_KEY",
-                isPrimary: true,
-                homepage: "https://example.com"),
-            onSave: { _ in })
-        _ = editor.body
-    }
-
-    mutating func setFilterForTesting(_ rawValue: String) {
-        guard let filter = SkillsFilter(rawValue: rawValue) else { return }
-        self.filter = filter
     }
 }
 #endif

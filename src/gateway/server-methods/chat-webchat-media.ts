@@ -2,7 +2,7 @@
 // blocks that the control UI can render without unsafe file exposure.
 import path from "node:path";
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
-import { isAudioFileName } from "@openclaw/media-core/mime";
+import { isAudioFileName, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { openLocalFileSafely } from "../../infra/fs-safe.js";
@@ -26,23 +26,10 @@ const ALLOWED_WEBCHAT_DATA_IMAGE_MEDIA_TYPES = new Set([
   "image/webp",
 ]);
 
-const MIME_BY_EXT: Record<string, string> = {
-  ".aac": "audio/aac",
-  ".m4a": "audio/mp4",
-  ".mp3": "audio/mpeg",
-  ".oga": "audio/ogg",
-  ".ogg": "audio/ogg",
-  ".opus": "audio/opus",
-  ".wav": "audio/wav",
-  ".webm": "audio/webm",
-};
-
 type WebchatAudioEmbeddingOptions = {
   localRoots?: readonly string[];
   onLocalAudioAccessDenied?: (err: LocalMediaAccessError) => void;
 };
-
-type WebchatAssistantMediaOptions = WebchatAudioEmbeddingOptions;
 
 type LocalAudioContentBlock = {
   path: string;
@@ -66,7 +53,7 @@ function resolveLocalMediaPathForEmbedding(raw: string): string | null {
   if (/^https?:/i.test(trimmed)) {
     return null;
   }
-  if (trimmed.startsWith("file:")) {
+  if (/^file:/iu.test(trimmed)) {
     try {
       const p = safeFileURLToPath(trimmed);
       if (!path.isAbsolute(p)) {
@@ -154,8 +141,7 @@ async function resolveReplyMediaAudioEmbedding(
 }
 
 function mimeTypeForPath(filePath: string): string {
-  const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
-  return MIME_BY_EXT[ext] ?? "audio/mpeg";
+  return mimeTypeFromFilePath(filePath) ?? "audio/mpeg";
 }
 
 function isBase64DataPayload(value: string): boolean {
@@ -225,35 +211,9 @@ function resolveReplyDirectivePrefix(payload: ReplyPayload): string {
   return "";
 }
 
-/**
- * Build Control UI / transcript `content` blocks for local TTS (or other) audio files
- * referenced by slash-command / agent replies when the webchat path only had text aggregation.
- */
-export async function buildWebchatAudioContentBlocksFromReplyPayloads(
-  payloads: ReplyPayload[],
-  options?: WebchatAudioEmbeddingOptions,
-): Promise<Array<Record<string, unknown>>> {
-  const seen = new Set<string>();
-  const blocks: Array<Record<string, unknown>> = [];
-  for (const payload of payloads) {
-    if (payload.isReasoning === true) {
-      continue;
-    }
-    const parts = resolveSendableOutboundReplyParts(payload);
-    for (const raw of parts.mediaUrls) {
-      const media = await resolveReplyMediaAudioEmbedding(payload, raw, seen, options);
-      if (!media?.audioBlock) {
-        continue;
-      }
-      blocks.push(media.audioBlock);
-    }
-  }
-  return blocks;
-}
-
 export async function buildWebchatAssistantMessageFromReplyPayloads(
   payloads: ReplyPayload[],
-  options?: WebchatAssistantMediaOptions,
+  options?: WebchatAudioEmbeddingOptions,
 ): Promise<{ content: Array<Record<string, unknown>>; transcriptText: string } | null> {
   const content: Array<Record<string, unknown>> = [];
   const transcriptTextParts: string[] = [];

@@ -7,8 +7,20 @@ type GatewayBroadcastStateVersion = {
 
 /** Options for gateway websocket broadcasts. */
 export type GatewayBroadcastOpts = {
+  /** Agent scope for agent-relative keys such as `global`. */
+  agentId?: string;
   dropIfSlow?: boolean;
+  /** Canonical subscription keys for session-scoped delivery. */
+  sessionKeys?: readonly string[];
+  /** Target recipients were selected from subscriptions at ingress. */
+  sessionSubscriptionVerified?: boolean;
   stateVersion?: GatewayBroadcastStateVersion;
+  /** Private live-text ownership; omitting coalesce flushes this group's progress. */
+  liveText?: {
+    group: AbortSignal;
+    isCurrent?: () => boolean;
+    coalesce?: { key: string; merge: (previous: unknown, next: unknown) => unknown };
+  };
 };
 
 /** Broadcast function signature for all connected clients. */
@@ -24,4 +36,16 @@ export type GatewayBroadcastToConnIdsFn = (
   payload: unknown,
   connIds: ReadonlySet<string>,
   opts?: GatewayBroadcastOpts,
+) => void;
+
+/** Current queued outbound bytes for one live gateway connection. */
+export type GatewayBufferedAmountFn = (connId: string) => number | undefined;
+
+export type GatewayPluginEventScope = "operator.read" | "operator.write" | "operator.admin";
+
+/** Broadcasts a namespaced plugin event under an explicit operator scope. */
+export type GatewayPluginEventBroadcastFn = (
+  event: string,
+  payload: unknown,
+  scope: GatewayPluginEventScope,
 ) => void;

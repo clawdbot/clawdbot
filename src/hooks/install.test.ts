@@ -5,16 +5,13 @@ import path from "node:path";
 import JSZip from "jszip";
 import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { expectSingleNpmPackIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import {
   expectInstallUsesIgnoreScripts,
   expectIntegrityDriftRejected,
   expectUnsupportedNpmSpec,
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
-import { isAddressInUseError } from "./gmail-watcher-errors.js";
 
-type InstallHooksFromArchive = typeof import("./install.js").installHooksFromArchive;
 type InstallHooksFromPath = typeof import("./install.js").installHooksFromPath;
 
 const runCommandWithTimeoutMock = vi.fn();
@@ -33,7 +30,7 @@ vi.mock("../plugins/install-security-scan.js", () => ({
 
 vi.resetModules();
 
-const { installHooksFromArchive, installHooksFromNpmSpec, installHooksFromPath } =
+const { HOOK_INSTALL_ERROR_CODE, installHooksFromNpmSpec, installHooksFromPath } =
   await import("./install.js");
 const hookInstallRuntime = await import("./install.runtime.js");
 
@@ -106,7 +103,7 @@ function writeArchiveFixture(params: { fileName: string; contents: Buffer }) {
 }
 
 function expectInstallFailureContains(
-  result: Awaited<ReturnType<InstallHooksFromArchive>>,
+  result: Awaited<ReturnType<InstallHooksFromPath>>,
   snippets: string[],
 ) {
   expect(result.ok).toBe(false);
@@ -122,6 +119,7 @@ function writeHookPackManifest(params: {
   pkgDir: string;
   hooks: string[];
   dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
   extensions?: string[];
 }) {
   fs.writeFileSync(
@@ -134,6 +132,7 @@ function writeHookPackManifest(params: {
         ...(params.extensions ? { extensions: params.extensions } : {}),
       },
       ...(params.dependencies ? { dependencies: params.dependencies } : {}),
+      ...(params.optionalDependencies ? { optionalDependencies: params.optionalDependencies } : {}),
     }),
     "utf-8",
   );
@@ -153,10 +152,14 @@ function writeHookPackFiles(params: {
   hookName: string;
   hookDescription: string;
   heading: string;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
 }) {
   writeHookPackManifest({
     pkgDir: params.pkgDir,
     hooks: [`./hooks/${params.hookName}`],
+    dependencies: params.dependencies,
+    optionalDependencies: params.optionalDependencies,
   });
   const hookDir = path.join(params.pkgDir, "hooks", params.hookName);
   fs.mkdirSync(hookDir, { recursive: true });
@@ -230,8 +233,8 @@ async function createTarGzHookPackBuffer(params: {
 
 async function installArchiveFixture(params: { fileName: string; contents: Buffer }) {
   const fixture = writeArchiveFixture(params);
-  const result = await installHooksFromArchive({
-    archivePath: fixture.archivePath,
+  const result = await installHooksFromPath({
+    path: fixture.archivePath,
     hooksDir: fixture.hooksDir,
   });
   return { fixture, result };
@@ -248,7 +251,7 @@ function expectPathInstallFailureContains(
   expect(result.error).toContain(snippet);
 }
 
-describe("installHooksFromArchive", () => {
+describe("installHooksFromPath archives", () => {
   it.each([
     {
       name: "zip",
@@ -322,45 +325,102 @@ describe("installHooksFromArchive", () => {
 });
 
 describe("installHooksFromPath", () => {
-  it("uses --ignore-scripts for dependency install", async () => {
-    const workDir = makeTempDir();
-    const stateDir = makeTempDir();
-    const pkgDir = path.join(workDir, "package");
-    fs.mkdirSync(path.join(pkgDir, "hooks", "one-hook"), { recursive: true });
-    writeHookPackManifest({
-      pkgDir,
-      hooks: ["./hooks/one-hook"],
-      dependencies: { "left-pad": "1.3.0" },
-    });
+  it.each([
+    {
+      openclaw: {},
+      error: "package.json missing openclaw.hooks",
+      code: HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS,
+    },
+    {
+      openclaw: { hooks: [] },
+      error: "package.json openclaw.hooks is empty",
+      code: HOOK_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_HOOKS,
+    },
+  ])("returns a stable code for $error", async ({ openclaw, error, code }) => {
+    const pkgDir = makeTempDir();
     fs.writeFileSync(
-      path.join(pkgDir, "hooks", "one-hook", "HOOK.md"),
-      [
-        "---",
-        "name: one-hook",
-        "description: One hook",
-        'metadata: {"openclaw":{"events":["command:new"]}}',
-        "---",
-        "",
-        "# One Hook",
-      ].join("\n"),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pkgDir, "hooks", "one-hook", "handler.ts"),
-      "export default async () => {};\n",
-      "utf-8",
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/test-hooks", openclaw }),
     );
 
-    const run = runCommandWithTimeoutMock;
-    await expectInstallUsesIgnoreScripts({
-      run,
-      install: async () =>
-        await installHooksFromPath({
-          path: pkgDir,
-          hooksDir: path.join(stateDir, "hooks"),
-        }),
-    });
+    const result = await installHooksFromPath({ path: pkgDir, hooksDir: makeTempDir() });
+
+    expect(result).toEqual({ ok: false, error, code });
   });
+
+  it.each([
+    { mode: "install", options: {}, names: ["shared-hook", "shared-hook"] },
+    { mode: "dry run", options: { dryRun: true }, names: ["shared-hook", "shared-hook"] },
+    {
+      mode: "package inspection",
+      options: { inspection: "package-kind" as const },
+      names: ["shared-hook", "shared-hook"],
+    },
+    { mode: "case-sensitive install", options: {}, names: ["shared-hook", "Shared-Hook"] },
+  ])("validates hook-name uniqueness before $mode side effects", async ({ options, names }) => {
+    const pkgDir = makeTempDir();
+    const hooksDir = path.join(makeTempDir(), "managed-hooks");
+    writeHookPackManifest({
+      pkgDir,
+      hooks: names.map((_, index) => `./hooks/${index}`),
+    });
+    for (const [index, name] of names.entries()) {
+      const hookDir = path.join(pkgDir, "hooks", String(index));
+      fs.mkdirSync(hookDir, { recursive: true });
+      fs.writeFileSync(path.join(hookDir, "HOOK.md"), `---\nname: ${name}\n---\n`);
+      fs.writeFileSync(path.join(hookDir, "handler.js"), "export default async () => {};\n");
+    }
+    const targetAvailability = vi.spyOn(hookInstallRuntime, "ensureInstallTargetAvailable");
+
+    try {
+      const result = await installHooksFromPath({ path: pkgDir, hooksDir, ...options });
+      if (names[0] !== names[1]) {
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.hooks).toEqual(names);
+        }
+        return;
+      }
+      expect(result).toEqual({
+        ok: false,
+        error: 'duplicate hook name "shared-hook" in hook package',
+      });
+      expect(targetAvailability).not.toHaveBeenCalled();
+      expect(scanPackageInstallSourceMock).not.toHaveBeenCalled();
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+      expect(fs.existsSync(hooksDir)).toBe(false);
+    } finally {
+      targetAvailability.mockRestore();
+    }
+  });
+
+  it.each(["dependencies", "optionalDependencies"] as const)(
+    "installs %s with lifecycle scripts disabled",
+    async (dependencyField) => {
+      const workDir = makeTempDir();
+      const stateDir = makeTempDir();
+      const pkgDir = path.join(workDir, "package");
+      fs.mkdirSync(pkgDir, { recursive: true });
+      writeHookPackFiles({
+        pkgDir,
+        packageName: "@openclaw/test-hooks",
+        hookName: "one-hook",
+        hookDescription: "One hook",
+        heading: "One Hook",
+        [dependencyField]: { "left-pad": "1.3.0" },
+      });
+
+      const run = runCommandWithTimeoutMock;
+      await expectInstallUsesIgnoreScripts({
+        run,
+        install: async () =>
+          await installHooksFromPath({
+            path: pkgDir,
+            hooksDir: path.join(stateDir, "hooks"),
+          }),
+      });
+    },
+  );
 
   it("installs a single hook directory", async () => {
     const stateDir = makeTempDir();
@@ -437,6 +497,34 @@ describe("installHooksFromPath", () => {
     };
     expect(scanCall.packageDir).toContain(".openclaw-install-stage-");
     expect(fs.existsSync(path.join(hooksDir, "my-hook"))).toBe(false);
+  });
+
+  it("rejects an oversized HOOK.md to prevent OOM during frontmatter parsing", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const hookDir = path.join(workDir, "my-hook");
+    fs.mkdirSync(hookDir, { recursive: true });
+    fs.writeFileSync(path.join(hookDir, "HOOK.md"), "x".repeat(1024 * 1024 + 1), "utf8");
+    fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
+
+    await expect(
+      installHooksFromPath({ path: hookDir, hooksDir: path.join(stateDir, "hooks") }),
+    ).rejects.toThrow(/File exceeds 1048576 bytes/);
+  });
+
+  it.runIf(process.platform !== "win32")("rejects a symlinked HOOK.md", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const hookDir = path.join(workDir, "my-hook");
+    const externalHookMd = path.join(workDir, "external-HOOK.md");
+    fs.mkdirSync(hookDir, { recursive: true });
+    fs.writeFileSync(externalHookMd, "---\nname: external\n---\n", "utf8");
+    fs.symlinkSync(externalHookMd, path.join(hookDir, "HOOK.md"), "file");
+    fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
+
+    await expect(
+      installHooksFromPath({ path: hookDir, hooksDir: path.join(stateDir, "hooks") }),
+    ).rejects.toThrow(/path must be a regular file/);
   });
 
   it("classifies hook packages that also declare plugin extensions", async () => {
@@ -667,8 +755,8 @@ describe("installHooksFromPath", () => {
     });
 
     const hooksDir = path.join(stateDir, "hooks");
-    const result = await installHooksFromArchive({
-      archivePath,
+    const result = await installHooksFromPath({
+      path: archivePath,
       hooksDir,
     });
 
@@ -924,10 +1012,21 @@ describe("installHooksFromNpmSpec", () => {
     expect(result.npmResolution?.integrity).toBe("sha512-hook-test");
     expect(fs.existsSync(path.join(result.targetDir, "hooks", "one-hook", "HOOK.md"))).toBe(true);
 
-    expectSingleNpmPackIgnoreScriptsCall({
-      calls: run.mock.calls as Array<[unknown, unknown]>,
-      expectedSpec: "@openclaw/test-hooks@0.0.1",
-    });
+    expect(run).toHaveBeenCalledExactlyOnceWith(
+      [
+        "npm",
+        "pack",
+        "@openclaw/test-hooks@0.0.1",
+        "--ignore-scripts",
+        "--json",
+        "--dry-run=false",
+        `--pack-destination=${packTmpDir}`,
+      ],
+      expect.objectContaining({
+        cwd: packTmpDir,
+        env: expect.objectContaining({ NPM_CONFIG_IGNORE_SCRIPTS: "true" }),
+      }),
+    );
 
     expect(packTmpDir).not.toBe("");
     expect(fs.existsSync(packTmpDir)).toBe(false);
@@ -980,15 +1079,5 @@ describe("installHooksFromNpmSpec", () => {
       expect(result.error).toContain("prerelease version 0.0.2-beta.1");
       expect(result.error).toContain('"@openclaw/test-hooks@beta"');
     }
-  });
-});
-
-describe("gmail watcher", () => {
-  it("detects address already in use errors", () => {
-    expect(isAddressInUseError("listen tcp 127.0.0.1:8788: bind: address already in use")).toBe(
-      true,
-    );
-    expect(isAddressInUseError("EADDRINUSE: address already in use")).toBe(true);
-    expect(isAddressInUseError("some other error")).toBe(false);
   });
 });

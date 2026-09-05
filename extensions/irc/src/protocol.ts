@@ -109,13 +109,28 @@ export function parseIrcPrefix(prefix?: string): ParsedIrcPrefix {
 function decodeLiteralEscapes(input: string): string {
   // Defensive: this is not a full JS string unescaper.
   // It's just enough to catch common "\r\n" / "\u0001" style payloads.
-  return input
-    .replace(/\\r/g, "\r")
-    .replace(/\\n/g, "\n")
-    .replace(/\\t/g, "\t")
-    .replace(/\\0/g, "\0")
-    .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
-    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)));
+  return (
+    input
+      .replace(/\\r/g, "\r")
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t")
+      .replace(/\\0/g, "\0")
+      .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
+      // Step 1: decode surrogate pairs — first group locked to high surrogate range
+      // (U+D800–U+DBFF: [dD][89abAB]xx), second to low surrogate range
+      // (U+DC00–U+DFFF: [dD][c-fC-F]xx). This prevents a non-surrogate \uXXXX
+      // from being greedily paired with the following high surrogate and consuming it.
+      .replace(/\\u([dD][89abAB][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})/g, (_match, h, l) =>
+        String.fromCodePoint(
+          0x10000 + ((Number.parseInt(h, 16) - 0xd800) << 10) + (Number.parseInt(l, 16) - 0xdc00),
+        ),
+      )
+      // Step 2: decode BMP codepoints; preserve lone surrogates as literals
+      .replace(/\\u([0-9a-fA-F]{4})/g, (match, hex) => {
+        const codePoint = Number.parseInt(hex, 16);
+        return codePoint >= 0xd800 && codePoint <= 0xdfff ? match : String.fromCharCode(codePoint);
+      })
+  );
 }
 
 export function sanitizeIrcOutboundText(text: string): string {

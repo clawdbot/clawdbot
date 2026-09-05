@@ -1,19 +1,28 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Transcript filter for removing heartbeat-only prompt/ack artifacts.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "./heartbeat-tool-response.js";
 import {
+  HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
   HEARTBEAT_TRANSCRIPT_PROMPT,
+  isHeartbeatAcknowledgementText,
   resolveHeartbeatPromptForResponseTool,
-  stripHeartbeatToken,
 } from "./heartbeat.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
+import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "./tokens.js";
 
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
-const HEARTBEAT_TASK_PROMPT_ACK = "After completing all due tasks, reply HEARTBEAT_OK.";
+const HEARTBEAT_TASK_PROMPT_COMPLETIONS = [
+  ...[HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN].map(
+    (token) => `After completing all due tasks, reply ${token}.`,
+  ),
+  HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
+  `After completing all due tasks, use ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+];
 const TOOL_CALL_BLOCK_TYPES = new Set([
   "toolCall",
   "functionCall",
@@ -238,7 +247,7 @@ function collectSuccessfulToolResultCallIds(message: {
   return uniqueStrings(ids);
 }
 
-function isRealNonHeartbeatUserMessage(
+export function isRealNonHeartbeatUserMessage(
   message: { role: string; content?: unknown },
   heartbeatPrompt?: string,
 ): boolean {
@@ -266,6 +275,15 @@ function resolveMessageText(content: unknown): { text: string; hasNonTextContent
   for (const block of content) {
     if (typeof block !== "object" || block === null || !("type" in block)) {
       hasNonTextContent = true;
+      continue;
+    }
+    // Provider thinking/reasoning is not user-visible output; it must not keep a
+    // no-op heartbeat acknowledgement in future model request history.
+    if (
+      block.type === "thinking" ||
+      block.type === "reasoning" ||
+      block.type === "redacted_thinking"
+    ) {
       continue;
     }
     if (block.type !== "text" && block.type !== "input_text" && block.type !== "output_text") {
@@ -321,7 +339,8 @@ export function isHeartbeatUserMessage(
     return true;
   }
   return (
-    trimmed.startsWith(HEARTBEAT_TASK_PROMPT_PREFIX) && trimmed.includes(HEARTBEAT_TASK_PROMPT_ACK)
+    trimmed.startsWith(HEARTBEAT_TASK_PROMPT_PREFIX) &&
+    HEARTBEAT_TASK_PROMPT_COMPLETIONS.some((completion) => trimmed.includes(completion))
   );
 }
 
@@ -340,7 +359,7 @@ export function isHeartbeatOkResponse(
   if (hasNonTextContent) {
     return false;
   }
-  return stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars: ackMaxChars }).shouldSkip;
+  return isHeartbeatAcknowledgementText(text, ackMaxChars);
 }
 
 function advancePastAdjacentToolResults(
@@ -348,7 +367,11 @@ function advancePastAdjacentToolResults(
   startIndex: number,
 ): number {
   let index = startIndex;
-  while (index < messages.length && isToolResultMessage(messages[index])) {
+  while (index < messages.length) {
+    const message = messages.at(index);
+    if (!message || !isToolResultMessage(message)) {
+      break;
+    }
     index++;
   }
   return index;
@@ -362,17 +385,19 @@ function hasCompletedVisibleHeartbeatResponseToolCall(
   messages: HeartbeatTranscriptMessage[],
   index: number,
 ): boolean {
-  const visibleCalls = collectVisibleHeartbeatResponseToolCalls(messages[index]);
+  const message = messages.at(index);
+  if (!message) {
+    return false;
+  }
+  const visibleCalls = collectVisibleHeartbeatResponseToolCalls(message);
   if (visibleCalls.length === 0) {
     return false;
   }
   const callIds = new Set(visibleCalls.flatMap((call) => collectToolCallIds(call)));
-  for (
-    let resultIndex = index + 1;
-    resultIndex < messages.length && isToolResultCompletionCandidate(messages[resultIndex]);
-    resultIndex++
-  ) {
-    const result = messages[resultIndex];
+  for (const result of messages.slice(index + 1)) {
+    if (!isToolResultCompletionCandidate(result)) {
+      break;
+    }
     if (!hasSuccessfulToolResultMessage(result)) {
       continue;
     }
@@ -399,7 +424,10 @@ function resolveHeartbeatArtifactSpanEnd(
   let sawNonTerminalAssistantOutput = false;
 
   while (index < messages.length) {
-    const message = messages[index];
+    const message = messages.at(index);
+    if (!message) {
+      break;
+    }
     if (isRealNonHeartbeatUserMessage(message, heartbeatPrompt)) {
       break;
     }
@@ -458,15 +486,17 @@ export function filterHeartbeatTranscriptArtifacts<T extends { role: string; con
   const result: T[] = [];
   let i = 0;
   while (i < messages.length) {
-    if (!isHeartbeatUserMessage(messages[i], heartbeatPrompt)) {
-      result.push(messages[i]);
+    if (
+      !isHeartbeatUserMessage(expectDefined(messages[i], "messages entry at i"), heartbeatPrompt)
+    ) {
+      result.push(expectDefined(messages[i], "messages entry at i"));
       i++;
       continue;
     }
 
     const next = resolveHeartbeatArtifactSpanEnd(messages, i, ackMaxChars, heartbeatPrompt);
     if (next === undefined) {
-      result.push(messages[i]);
+      result.push(expectDefined(messages[i], "messages entry at i"));
       i++;
       continue;
     }

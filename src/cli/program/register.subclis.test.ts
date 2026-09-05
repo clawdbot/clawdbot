@@ -32,10 +32,18 @@ const { loadPrivateQaCliModule } = vi.hoisted(() => ({
 
 const { inferAction, registerCapabilityCli } = vi.hoisted(() => {
   const action = vi.fn();
-  const register = vi.fn((program: Command) => {
+  const register = vi.fn((program: Command, _argv: string[]) => {
     program.command("infer").alias("capability").action(action);
   });
   return { inferAction: action, registerCapabilityCli: register };
+});
+
+const { approvalsAction, registerExecApprovalsCli } = vi.hoisted(() => {
+  const action = vi.fn();
+  const register = vi.fn((program: Command) => {
+    program.command("approvals").alias("exec-approvals").action(action);
+  });
+  return { approvalsAction: action, registerExecApprovalsCli: register };
 });
 
 const { registerPluginsCli, registerPluginCliCommandsFromValidatedConfig } = vi.hoisted(() => ({
@@ -51,6 +59,15 @@ const { registerPluginsCli, registerPluginCliCommandsFromValidatedConfig } = vi.
 const { registerChannelsCli } = vi.hoisted(() => ({
   registerChannelsCli: vi.fn(async () => undefined),
 }));
+const { registerResumeCli, resumeAction } = vi.hoisted(() => {
+  const action = vi.fn();
+  return {
+    registerResumeCli: vi.fn((program: Command) => {
+      program.command("resume").action(action);
+    }),
+    resumeAction: action,
+  };
+});
 const { addGatewayRunCommand, gatewayRunAction, registerGatewayCli } = vi.hoisted(() => {
   const runAction = vi.fn();
   return {
@@ -72,8 +89,10 @@ vi.mock("../gateway-cli.js", () => ({ registerGatewayCli }));
 vi.mock("../gateway-cli/run-command.js", () => ({ addGatewayRunCommand }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
 vi.mock("../capability-cli.js", () => ({ registerCapabilityCli }));
+vi.mock("../exec-approvals-cli.js", () => ({ registerExecApprovalsCli }));
 vi.mock("../plugins-cli.js", () => ({ registerPluginsCli }));
 vi.mock("../channels-cli.js", () => ({ registerChannelsCli }));
+vi.mock("../resume-cli.js", () => ({ registerResumeCli }));
 vi.mock("../../plugins/cli.js", () => ({ registerPluginCliCommandsFromValidatedConfig }));
 vi.mock("./private-qa-cli.js", async () => {
   const actual = await vi.importActual<typeof import("./private-qa-cli.js")>("./private-qa-cli.js");
@@ -113,9 +132,13 @@ describe("registerSubCliCommands", () => {
     loadPrivateQaCliModule.mockClear();
     registerCapabilityCli.mockClear();
     inferAction.mockClear();
+    registerExecApprovalsCli.mockClear();
+    approvalsAction.mockClear();
     registerPluginsCli.mockClear();
     registerPluginCliCommandsFromValidatedConfig.mockClear();
     registerChannelsCli.mockClear();
+    registerResumeCli.mockClear();
+    resumeAction.mockClear();
     addGatewayRunCommand.mockClear();
     gatewayRunAction.mockClear();
     registerGatewayCli.mockClear();
@@ -190,7 +213,34 @@ describe("registerSubCliCommands", () => {
     await program.parseAsync(["infer"], { from: "user" });
 
     expect(registerCapabilityCli).toHaveBeenCalledTimes(1);
+    expect(registerCapabilityCli).toHaveBeenCalledWith(expect.any(Command), [
+      "node",
+      "openclaw",
+      "infer",
+    ]);
     expect(inferAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers the resume placeholder and dispatches through its lazy registrar", async () => {
+    const program = createRegisteredProgram(["node", "openclaw", "resume"], "openclaw");
+
+    expect(program.commands.map((cmd) => cmd.name())).toEqual(["resume", "completion"]);
+
+    await program.parseAsync(["resume"], { from: "user" });
+
+    expect(registerResumeCli).toHaveBeenCalledTimes(1);
+    expect(resumeAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers the exec-approvals placeholder and dispatches through the approvals registrar", async () => {
+    const program = createRegisteredProgram(["node", "openclaw", "exec-approvals"], "openclaw");
+
+    expect(program.commands.map((cmd) => cmd.name())).toEqual(["exec-approvals", "completion"]);
+
+    await program.parseAsync(["exec-approvals"], { from: "user" });
+
+    expect(registerExecApprovalsCli).toHaveBeenCalledTimes(1);
+    expect(approvalsAction).toHaveBeenCalledTimes(1);
   });
 
   it("replaces placeholder when registering a subcommand by name", async () => {

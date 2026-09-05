@@ -1,25 +1,8 @@
-// Regression: costUsageCache (usage.ts:65) has no production delete/prune/evict
-// path. The TTL at L310 is read-only — on a miss after expiry, set() overwrites
-// the same key but never removes stale keys. parseDateRange derives cacheKey
-// from getTodayStartMs so cacheKey rolls at every UTC 00:00, and additional
-// axes (days, startDate, endDate, utcOffset) multiply cardinality.
-//
-// The same file has three sibling caches that implement MAX + FIFO eviction
-// (resolvedSessionKeyByRunId, TRANSCRIPT_SESSION_KEY_CACHE,
-// sessionTitleFieldsCache); costUsageCache alone lacked the pattern.
-//
-// Production trigger: MenuSessionsInjector polls usage.cost every ~45s with
-// no params, exercising parseDateRange's default branch on every UTC day
-// rollover. The Control UI adds more key variance via explicit startDate /
-// endDate / utcTimeZone combinations.
-//
-// CAL-003 compliance: no mock of internal branches. Growth is driven through
-// the testApi.loadCostUsageSummaryCached seam (same entry point usage.test.ts
-// already exercises) with distinct (startMs, endMs) pairs. Only the external
-// loadCostUsageSummaryFromCache dependency is stubbed.
-
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 
 const mocks = vi.hoisted(() => ({
   loadCostUsageSummaryFromCache: vi.fn(),
@@ -64,8 +47,52 @@ describe("costUsageCache bounded growth", () => {
     mocks.loadCostUsageSummaryFromCache.mockResolvedValue(createSummary());
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+    testApi.costUsageCache.clear();
+  });
+
+  it("retains a stale refresh after its cache entry is replaced", async () => {
+    const owner = new AsyncWorkScope();
+    const replacementOwner = new AsyncWorkScope();
+    const gate = createDeferredCore<ReturnType<typeof createSummary>>();
+    const params = { startMs: 1, endMs: 2, agentId: "main", config: {} };
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const first = await owner.track(() => testApi.loadCostUsageSummaryCached(params));
+    clock.mockReturnValue(31_000);
+    mocks.loadCostUsageSummaryFromCache.mockReturnValueOnce(gate.promise);
+    let refresh: Promise<unknown> | undefined;
+    let closing: Promise<void> | undefined;
+    let drained = false;
+    try {
+      const stale = await owner.track(() => testApi.loadCostUsageSummaryCached(params));
+      expect(stale).toEqual(first);
+      // Retain the original refresh for cleanup if scope tracking regresses.
+      refresh = Array.from(testApi.costUsageCache.values())[0]?.inFlight;
+      expect(refresh).toBeDefined();
+      await replacementOwner.track(() =>
+        testApi.loadCostUsageSummaryCached({ ...params, config: {} }),
+      );
+      await replacementOwner.drain();
+      expect(mocks.loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(3);
+      closing = owner.drain().then(() => {
+        drained = true;
+      });
+      await nextTurn();
+      expect(drained).toBe(false);
+    } finally {
+      gate.resolve(createSummary());
+      await refresh;
+      await closing;
+      await Promise.all([owner.drain(), replacementOwner.drain()]);
+    }
+    expect(drained).toBe(true);
+  });
+
   it("does not grow without bound when (startMs, endMs) varies across day rollover and range switches", async () => {
-    const config = {} as OpenClawConfig;
+    const config = {
+      agents: { entries: { main: { default: true } } },
+    } as OpenClawConfig;
 
     // 600 distinct (startMs, endMs) pairs — larger than the 256 caps used by
     // the smallest sibling caches (RUN_LOOKUP_CACHE_LIMIT,
@@ -86,48 +113,53 @@ describe("costUsageCache bounded growth", () => {
     // oldest-first, never the newest.
     const lastStartMs = Date.UTC(2026, 0, 1) + (ITERATIONS - 1) * DAY_MS;
     const lastEndMs = lastStartMs + ((ITERATIONS - 1) % 3 === 0 ? DAY_MS : 7 * DAY_MS) - 1;
-    const lastCacheKey = `agent:__default__:${lastStartMs}-${lastEndMs}`;
+    const lastCacheKey = `agent:main:${lastStartMs}-${lastEndMs}:gateway`;
     expect(testApi.costUsageCache.has(lastCacheKey)).toBe(true);
 
     // Tertiary: the oldest entry must have been evicted once the cap was
     // exceeded. Pre-fix all 600 entries remain and this fails too.
     const firstStartMs = Date.UTC(2026, 0, 1);
     const firstEndMs = firstStartMs + DAY_MS - 1;
-    const firstCacheKey = `agent:__default__:${firstStartMs}-${firstEndMs}`;
+    const firstCacheKey = `agent:main:${firstStartMs}-${firstEndMs}:gateway`;
     expect(testApi.costUsageCache.has(firstCacheKey)).toBe(false);
   });
 
   it("evicts settled entries before in-flight entries when possible", async () => {
-    const config = {} as OpenClawConfig;
-    const pending = new Promise<ReturnType<typeof createSummary>>(() => {});
-    mocks.loadCostUsageSummaryFromCache.mockReturnValueOnce(pending);
+    const config = {
+      agents: { entries: { main: { default: true } } },
+    } as OpenClawConfig;
+    const pending = createDeferredCore<ReturnType<typeof createSummary>>();
+    mocks.loadCostUsageSummaryFromCache.mockReturnValueOnce(pending.promise);
 
     const inFlight = testApi.loadCostUsageSummaryCached({
       startMs: 1,
       endMs: 2,
       config,
     });
-    await Promise.resolve();
+    let repeated: typeof inFlight | undefined;
+    try {
+      await Promise.resolve();
+      for (let i = 0; i < 256; i++) {
+        const startMs = Date.UTC(2026, 0, 1) + i * DAY_MS;
+        await testApi.loadCostUsageSummaryCached({
+          startMs,
+          endMs: startMs + DAY_MS - 1,
+          config,
+        });
+      }
 
-    for (let i = 0; i < 256; i++) {
-      const startMs = Date.UTC(2026, 0, 1) + i * DAY_MS;
-      await testApi.loadCostUsageSummaryCached({
-        startMs,
-        endMs: startMs + DAY_MS - 1,
+      repeated = testApi.loadCostUsageSummaryCached({
+        startMs: 1,
+        endMs: 2,
         config,
       });
+      await Promise.resolve();
+
+      expect(testApi.costUsageCache.has("agent:main:1-2:gateway")).toBe(true);
+      expect(mocks.loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(257);
+    } finally {
+      pending.resolve(createSummary());
+      await Promise.all([inFlight, repeated]);
     }
-
-    const repeated = testApi.loadCostUsageSummaryCached({
-      startMs: 1,
-      endMs: 2,
-      config,
-    });
-    await Promise.resolve();
-
-    expect(testApi.costUsageCache.has("agent:__default__:1-2")).toBe(true);
-    expect(mocks.loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(257);
-    void inFlight.catch(() => {});
-    void repeated.catch(() => {});
   });
 });

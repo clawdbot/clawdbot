@@ -1,12 +1,7 @@
 // Default CLI dependency surface with lazy outbound channel send adapters.
-import { normalizeChannelId } from "../channels/registry.js";
-import type { OutboundSendDeps } from "../infra/outbound/send-deps.js";
-import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { CliDeps } from "./deps.types.js";
-import {
-  CLI_OUTBOUND_SEND_FACTORY,
-  createOutboundSendDepsFromCliSource,
-} from "./outbound-send-mapping.js";
 
 /**
  * Lazy-loaded per-channel send functions, keyed by channel ID.
@@ -50,7 +45,7 @@ const NON_CHANNEL_DEP_KEYS = new Set([
 ]);
 
 function resolveKnownChannelId(raw: string): string | undefined {
-  return normalizeChannelId(raw) ?? undefined;
+  return normalizeChatChannelId(raw) ?? undefined;
 }
 
 // Per-channel module caches for lazy loading.
@@ -64,14 +59,13 @@ function createLazySender(
   channelId: string,
   loader: () => Promise<RuntimeSendModule>,
 ): (...args: unknown[]) => Promise<unknown> {
-  const loadRuntimeSend = createLazyRuntimeSurface(loader, ({ runtimeSend }) => runtimeSend);
   return async (...args: unknown[]) => {
-    let cached = senderCache.get(channelId);
-    if (!cached) {
-      cached = loadRuntimeSend();
-      senderCache.set(channelId, cached);
-    }
-    const runtimeSend = await cached;
+    const runtimeSend = await getOrCreatePromise(
+      senderCache,
+      channelId,
+      async () => (await loader()).runtimeSend,
+      { cacheRejections: false },
+    );
     return await runtimeSend.sendMessage(...args);
   };
 }
@@ -91,13 +85,6 @@ export function createDefaultDeps(): CliDeps {
       } satisfies RuntimeSendModule;
     });
 
-  Object.defineProperty(deps, CLI_OUTBOUND_SEND_FACTORY, {
-    configurable: false,
-    enumerable: false,
-    value: resolveSender,
-    writable: false,
-  });
-
   return new Proxy(deps, {
     get(target, property, receiver) {
       if (typeof property !== "string") {
@@ -111,13 +98,11 @@ export function createDefaultDeps(): CliDeps {
       if (!channelId) {
         return existing;
       }
-      const sender = resolveSender(channelId);
-      Reflect.set(target, property, sender, receiver);
-      return sender;
+      // Synthesized senders re-enter the full channel adapter. Keep them off the
+      // enumerable target so transport dependency mapping cannot inject them back into it.
+      return resolveSender(channelId);
     },
   });
 }
 
-export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
-  return createOutboundSendDepsFromCliSource(deps);
-}
+export { createOutboundSendDeps } from "./outbound-send-deps.js";

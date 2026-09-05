@@ -44,10 +44,12 @@ apps/shared/OpenClawKit/.build/
 apps/shared/*/.build/
 packages/*/dist/
 apps/shared/OpenClawKit/Package.resolved
+# Xcode rewrites local-package Package.resolved with the iOS app supergraph on
+# every resolve; swabble's only runtime dep is exact-pinned in Package.swift.
+apps/swabble/Package.resolved
 **/ModuleCache/
 bin/
 bin/clawdbot-mac
-bin/docs-list
 apps/macos/.build-local/
 apps/macos/.swiftpm/
 apps/shared/MoltbotKit/.swiftpm/
@@ -81,6 +83,7 @@ apps/android/fastlane/README.md
 apps/ios/fastlane/report.xml
 apps/ios/fastlane/Preview.html
 apps/ios/fastlane/screenshots/
+apps/ios/fastlane/metadata/*/release_notes.txt
 apps/ios/fastlane/test_output/
 apps/ios/fastlane/logs/
 apps/ios/fastlane/.env
@@ -105,6 +108,9 @@ docs/internal/
 tmp/
 IDENTITY.md
 USER.md
+# Keep packaged workspace templates visible to Git-aware remote syncs.
+!docs/reference/templates/IDENTITY.md
+!docs/reference/templates/USER.md
 # Exception: oc-path real-world test fixtures need to be tracked even
 # though the bare names match the local-untracked rule above.
 !extensions/oc-path/src/oc-path/tests/fixtures/real/IDENTITY.md
@@ -119,67 +125,14 @@ USER.md
 .antigravitycli/
 .serena/
 .crabbox/
+/.openclaw/trajectory-exports/
 
 # local QA evidence mirrors; CI publishes canonical Mantis files as Actions artifacts
-mantis/
+/mantis/
 
-# Local project-agent skill installs. Only repo-owned skills are visible by
-# default; promoting a new repo skill should require an intentional `git add -f`.
-.agents/skills/*
-!.agents/skills/blacksmith-testbox/
-!.agents/skills/blacksmith-testbox/**
-!.agents/skills/crabbox/
-!.agents/skills/crabbox/**
-!.agents/skills/clawdtributor/
-!.agents/skills/clawdtributor/**
-!.agents/skills/claw-score/
-!.agents/skills/claw-score/**
-!.agents/skills/control-ui-e2e/
-!.agents/skills/control-ui-e2e/**
-!.agents/skills/discord-user-post/
-!.agents/skills/discord-user-post/**
-!.agents/skills/gitcrawl/
-!.agents/skills/gitcrawl/**
-!.agents/skills/technical-documentation/
-!.agents/skills/technical-documentation/**
-!.agents/skills/openclaw-refactor-docs/
-!.agents/skills/openclaw-refactor-docs/**
-!.agents/skills/openclaw-debugging/
-!.agents/skills/openclaw-debugging/**
-!.agents/skills/openclaw-ghsa-maintainer/
-!.agents/skills/openclaw-ghsa-maintainer/**
-!.agents/skills/openclaw-landable-bug-sweep/
-!.agents/skills/openclaw-landable-bug-sweep/**
-!.agents/skills/openclaw-parallels-smoke/
-!.agents/skills/openclaw-parallels-smoke/**
-!.agents/skills/openclaw-pr-maintainer/
-!.agents/skills/openclaw-pr-maintainer/**
-!.agents/skills/openclaw-refactor-docs/
-!.agents/skills/openclaw-refactor-docs/**
-!.agents/skills/openclaw-qa-testing/
-!.agents/skills/openclaw-qa-testing/**
-!.agents/skills/openclaw-release-ci/
-!.agents/skills/openclaw-release-ci/**
-!.agents/skills/openclaw-release-maintainer/
-!.agents/skills/openclaw-release-maintainer/**
-!.agents/skills/openclaw-secret-scanning-maintainer/
-!.agents/skills/openclaw-secret-scanning-maintainer/**
-!.agents/skills/openclaw-test-heap-leaks/
-!.agents/skills/openclaw-test-heap-leaks/**
-!.agents/skills/openclaw-test-performance/
-!.agents/skills/openclaw-test-performance/**
-!.agents/skills/openclaw-testing/
-!.agents/skills/openclaw-testing/**
-!.agents/skills/optimizetests/
-!.agents/skills/optimizetests/**
-!.agents/skills/parallels-discord-roundtrip/
-!.agents/skills/parallels-discord-roundtrip/**
-!.agents/skills/security-triage/
-!.agents/skills/security-triage/**
-!.agents/skills/tag-duplicate-prs-issues/
-!.agents/skills/tag-duplicate-prs-issues/**
-!.agents/skills/autoreview/
-!.agents/skills/autoreview/**
+# Keep repository skills visible to Git-aware syncs; local-only skill ignores
+# belong in .git/info/exclude.
+.agents/skills/**/*.orig
 .agents/skills/**/__pycache__/
 .agents/skills/**/*.py[cod]
 
@@ -190,8 +143,14 @@ mantis/
 /local/
 /client_secret_*.json
 package-lock.json
+!.github/release/clawhub-cli/package-lock.json
 !src/commands/copilot-sdk-install-manifest/package-lock.json
-.claude/
+.claude/*
+# Track the shared Claude Code project config (worktree auto-install hook) and the
+# skills symlink into .agents/skills; keep everything else under .claude/
+# (worktrees, settings.local.json) ignored.
+!.claude/settings.json
+!.claude/skills
 .agent/
 skills-lock.json
 
@@ -208,6 +167,7 @@ apps/swabble/build/
 
 # Generated protocol schema (produced via pnpm protocol:gen)
 dist/protocol.schema.json
+packages/gateway-protocol/protocol.schema.json
 .ant-colony/
 
 # Eclipse
@@ -221,16 +181,18 @@ dist/protocol.schema.json
 .dev-state
 docs/superpowers
 .superpowers/
-.gitignore
 test/config-form.analyze.telegram.test.ts
 ui/src/ui/theme-variants.browser.test.ts
 ui/src/ui/__screenshots__
 ui/src/ui/views/__screenshots__
 ui/.vitest-attachments
 
-# Generated docs baseline artifacts (locally generated, only hashes tracked)
+# Generated docs baseline artifacts (locally generated, only drift detectors tracked)
 docs/.generated/*.json
+!docs/.generated/config-baseline.counts.json
 docs/.generated/*.jsonl
+!docs/.generated/plugin-sdk-api-baseline/
+!docs/.generated/plugin-sdk-api-baseline/*.json
 
 # Deprecated changelog fragment workflow
 changelog/fragments/
@@ -243,6 +205,7 @@ changelog/fragments/
 .mypy_cache/
 .vmux*
 .artifacts/
+.amp/portals/
 .openclaw-config-doc-cache/
 openclaw-path-alias-*/
 /.pi/
@@ -264,8 +227,12 @@ extensions/**/.openclaw-runtime-deps.json
 extensions/**/.openclaw-runtime-deps-stamp.json
 extensions/diffs/assets/viewer-runtime.js
 extensions/diffs-language-pack/assets/viewer-runtime.js
+extensions/discord/assets/embedded-app-sdk.mjs
 
 # Output dir for scripts/run-opengrep.sh (local opengrep scans)
 /.opengrep-out/
 /.crabbox-artifacts
 .comux*
+
+# Pinned Swift lint/format tools installed by scripts/install-swift-tools.sh
+.build/

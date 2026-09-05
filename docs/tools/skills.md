@@ -31,29 +31,40 @@ binary presence.
 
 ## Loading order
 
-OpenClaw loads from these sources, **highest precedence first**. When the same
-skill name appears in multiple places, the highest source wins.
+File-backed skills load from these sources, **highest precedence first**. When
+the same skill name appears in multiple places, the highest source wins.
+[Personal library skills](#personal-skills-on-a-shared-gateway) are selected by
+identity and revision rather than discovered by scanning every user's files.
 
-| Priority    | Source                 | Path                                    |
-| ----------- | ---------------------- | --------------------------------------- |
-| 1 — highest | Workspace skills       | `<workspace>/skills`                    |
-| 2           | Project agent skills   | `<workspace>/.agents/skills`            |
-| 3           | Personal agent skills  | `~/.agents/skills`                      |
-| 4           | Managed / local skills | `~/.openclaw/skills`                    |
-| 5           | Bundled skills         | shipped with the install                |
-| 6 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills |
+| Priority    | Source                 | Path                                                 |
+| ----------- | ---------------------- | ---------------------------------------------------- |
+| 1 — highest | Workspace skills       | `<workspace>/skills`                                 |
+| 2           | Project agent skills   | `<workspace>/.agents/skills`                         |
+| 3           | Personal agent skills  | `~/.agents/skills` (default state only)              |
+| 4           | Managed / local skills | `<state-dir>/skills`                                 |
+| 5           | Workshop skills        | `<state-dir>/agents/<agentId>/agent/workshop-skills` |
+| 6           | Bundled skills         | shipped with the install                             |
+| 6           | Custodian skills       | shipped; configured Custodian agent only             |
+| 7 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills              |
 
 Skill roots support grouped layouts. OpenClaw discovers a skill whenever
-`SKILL.md` appears anywhere under a configured root:
+`SKILL.md` appears anywhere under a configured root (up to 6 levels deep):
 
 ```text
 <workspace>/skills/research/SKILL.md          ✓ found as "research"
 <workspace>/skills/personal/research/SKILL.md ✓ also found as "research"
 ```
 
-The folder path is for organization only. The skill's name, slash command, and
-allowlist key all come from the `name` frontmatter field (or the directory name
-when `name` is missing).
+During grouped discovery, finding `SKILL.md` ends traversal below that directory.
+Invalid skill files are reported and skipped; valid siblings can still load.
+
+The folder path is for organization only. The skill's name and slash command
+come from the `name` frontmatter field (or the directory name when `name` is
+missing). Agent allowlists (below) also match on this `name`.
+
+The release-versioned [Custodian skill library](/tools/custodian-skills) shares
+the bundled precedence tier but is absent for every agent except the configured
+system/Custodian agent.
 
 <Note>
   Codex CLI's native `$CODEX_HOME/skills` directory is **not** an OpenClaw
@@ -61,18 +72,122 @@ when `name` is missing).
   `openclaw migrate codex` to copy them into your OpenClaw workspace.
 </Note>
 
+## Node-hosted skills
+
+A connected headless node can publish skills installed in its active OpenClaw
+skills directory (`~/.openclaw/skills` by default; profile environment overrides
+apply). They appear in the normal agent skill list while the node is connected
+and disappear when it disconnects. A local or Gateway skill keeps its name on
+collision; the node skill receives a deterministic node-prefixed name.
+Node-hosted v1 requires the directory name to match the skill's `name`
+frontmatter field. The published name, description, and instructions come from
+the same captured file content.
+
+The skill entry includes the node locator. Its files, relative references, and
+binaries live on the node, so load and execute it with
+`exec host=node node=<node-id>`. Restart the node host after changing its skill
+files. See [Nodes](/nodes#node-hosted-skills) for pairing and off-switches.
+
 ## Per-agent vs shared skills
 
 In multi-agent setups, each agent has its own workspace. Use the path that
 matches your desired visibility:
 
-| Scope          | Path                         | Visible to                  |
-| -------------- | ---------------------------- | --------------------------- |
-| Per-agent      | `<workspace>/skills`         | Only that agent             |
-| Project-agent  | `<workspace>/.agents/skills` | Only that workspace's agent |
-| Personal-agent | `~/.agents/skills`           | All agents on this machine  |
-| Shared managed | `~/.openclaw/skills`         | All agents on this machine  |
-| Extra dirs     | `skills.load.extraDirs`      | All agents on this machine  |
+| Scope          | Path                                                 | Visible to                     |
+| -------------- | ---------------------------------------------------- | ------------------------------ |
+| Per-agent      | `<workspace>/skills`                                 | Only that agent                |
+| Project-agent  | `<workspace>/.agents/skills`                         | Only that workspace's agent    |
+| Personal-agent | `~/.agents/skills`                                   | Agents using the default state |
+| Shared managed | `<state-dir>/skills`                                 | All agents using that state    |
+| Workshop       | `<state-dir>/agents/<agentId>/agent/workshop-skills` | Only that agent                |
+| Extra dirs     | `skills.load.extraDirs`                              | All agents using that config   |
+
+Workshop skills learned by one agent are not shared with another agent. Publish
+a skill to the managed library when it must be available to multiple agents.
+
+When `OPENCLAW_STATE_DIR` points somewhere other than the default
+`~/.openclaw`, session skill indexes exclude home-scoped personal or
+compatibility skill roots such as `~/.agents/skills`. Workspace, project,
+bundled, extra, and state-owned managed skills continue to load normally.
+
+## Personal skills on a shared Gateway
+
+On a shared Gateway, identified operators can keep a personal skill library
+without receiving permission to change everybody's workspace skills or Gateway
+configuration. Open **Plugins → Skills** to create a skill, import a `SKILL.md`
+or ZIP bundle, or add a skill from ClawHub. The editor keeps supporting scripts,
+references, and assets with the instructions.
+
+The ordinary single-admin setup stays unchanged: workspace authoring still
+uses `<workspace>/skills`, and existing file-backed skills are not moved into
+the library. A shared token does not identify a person. Personal library
+operations require an authenticated [Gateway profile](/concepts/user-model).
+The team-specific interface and agent guidance use distinct canonical Gateway
+profiles, not channel senders, contacts, accounts, agents, devices, or browser
+connections. Linked and merged login identities count as one profile.
+
+### Ownership and sharing
+
+New managed skills belong to the authenticated creator. **Share with team**
+makes a skill available to other operators without giving them edit access.
+An administrator can **transfer to team**, changing management ownership while
+retaining the original author. Sharing and transfer do not move files or change
+the skill's stable ID. Profile merges retain existing revision paths.
+
+Use the skill picker or returned command identity when invoking a managed
+skill. Different owners can use the same friendly name without one skill
+silently replacing another.
+
+<Warning>
+A shared Gateway remains [one trust domain](/start/teams#one-trust-boundary).
+Skills attached to a shared session are inputs to that session, not secret
+storage. Library ownership governs management and discovery; it does not grant
+new tools, credentials, host installation rights, or isolation from the Gateway
+operator. Keep credentials out of skill content.
+</Warning>
+
+### Revisions and session selection
+
+Saving publishes a complete immutable revision: `SKILL.md` and every supporting
+file. The revision hash includes portable file paths, exact content, sizes, and
+executable flags. Editing only a helper script still changes the revision;
+sharing, ownership changes, ZIP timestamps, and archive entry order do not.
+Identical saves are no-ops. A stale edit fails with a conflict instead of
+overwriting a newer revision.
+
+A session retains its selected skill IDs and revisions. Another person joining
+or taking ownership of the session does not replace that selection. Published
+changes are available to new sessions; explicitly attach or refresh a skill to
+use it on the next turn of an existing session. Rollback selects a retained
+revision. Removing a skill from the library excludes it from new selections
+without deleting a revision already selected by a session. Disabling a skill
+removes it from new-session defaults; explicit attachment remains available.
+
+A new session selects up to 64 enabled library skills, with personal skills
+first and stable ID ordering within each group. If the library exceeds that
+limit, the Skills page explains how to detach a selected skill and attach
+another. Enablement does not bypass agent allowlists, required binaries,
+operating-system restrictions, or other prerequisites.
+
+A managed bundle is limited to 256 files, 1 MiB per file, and 8 MiB total.
+Worker resource delivery also has an 8 MiB aggregate limit; narrow the session
+selection if its complete bundles exceed that limit. Published revisions are
+retained, including revisions still selected by older sessions.
+
+ZIP imports allow up to 16 unfinished uploads per canonical profile and 32
+across the Gateway. Linked or merged identities share the profile limit.
+Completed imports do not count toward either limit, and uploads expire one
+hour after they begin. If a profile merge or upgrade leaves more uploads than
+the limit allows, existing unexpired uploads can still be completed. Finish
+existing uploads or wait for them to expire before starting more.
+
+The Gateway stores library records and revision metadata in
+`state/openclaw.sqlite`, and immutable bundles under
+`skill-library/<skill-id>/revisions/<revision-hash>/` inside its state directory.
+Do not edit those managed directories directly. Use the editor, the
+[Skills library CLI](/cli/skills#personal-skill-library), or the agent's
+authorized authoring tool. Runtime copies are separate from project files and
+must not be committed with a project.
 
 ## Agent allowlists
 
@@ -86,11 +201,11 @@ regardless of where they are loaded from.
     defaults: {
       skills: ["github", "weather"], // shared baseline
     },
-    list: [
-      { id: "writer" }, // inherits github, weather
-      { id: "docs", skills: ["docs-search"] }, // replaces defaults entirely
-      { id: "locked-down", skills: [] }, // no skills
-    ],
+    entries: {
+      writer: { default: true }, // inherits github, weather
+      docs: { skills: ["docs-search"] }, // replaces defaults entirely
+      "locked-down": { skills: [] }, // no skills
+    },
   },
 }
 ```
@@ -98,12 +213,15 @@ regardless of where they are loaded from.
 <AccordionGroup>
   <Accordion title="Allowlist rules">
     - Omit `agents.defaults.skills` to leave all skills unrestricted by default.
-    - Omit `agents.list[].skills` to inherit `agents.defaults.skills`.
-    - Set `agents.list[].skills: []` to expose no skills for that agent.
-    - A non-empty `agents.list[].skills` list is the **final** set — it does not
+    - Omit `agents.entries.*.skills` to inherit `agents.defaults.skills`.
+    - Set `agents.entries.*.skills: []` to expose no skills for that agent.
+    - A non-empty `agents.entries.*.skills` list is the **final** set — it does not
       merge with defaults.
     - The effective allowlist applies across prompt building, slash-command
       discovery, sandbox sync, and skill snapshots.
+    - This is not a host shell authorization boundary. If the same agent can
+      use `exec`, constrain that shell separately with sandboxing, OS-user
+      isolation, exec deny/allowlists, and per-resource credentials.
   </Accordion>
 </AccordionGroup>
 
@@ -116,21 +234,59 @@ when the plugin is enabled — for example, the browser plugin ships a
 
 Plugin skill directories merge at the same low-precedence level as
 `skills.load.extraDirs`, so a same-named bundled, managed, agent, or workspace
-skill overrides them. Gate them via `metadata.openclaw.requires.config` on the
-plugin's config entry.
+skill overrides them. Gate a plugin skill's own eligibility via
+`metadata.openclaw.requires` in its frontmatter, same as any other skill.
+
+For multi-account channel plugins, gate general messaging skills on the channel
+subtree (for example, `channels.discord`), not a root token field: credentials
+may live under a named account. This is a coarse skill-visibility check. The
+plugin still owns credential resolution, account enablement, action availability,
+and authorization; an eligible skill does not grant tool access.
 
 See [Plugins](/tools/plugin) and [Tools](/tools) for the full plugin system.
+
+## Reference a skill in a prompt
+
+Type `$` in the Control UI composer to search the skills available to the
+current agent. Selecting a result inserts its stable command name, for example
+`$release_notes`, without replacing the rest of your message. A prompt can
+reference more than one skill:
+
+```text
+Use $github and $release_notes to summarize this change for the release.
+```
+
+OpenClaw resolves explicit references from authorized senders on every channel
+and on generic Gateway, CLI, and webhook agent turns. It matches the current
+agent's eligible, user-invocable skills and tells the model to read each
+referenced `SKILL.md` before acting. A single message can reference up to eight
+distinct skills; OpenClaw returns a visible error instead of ignoring extra or
+allowlist-hidden references. The `$` form is composable prompt text. On channel
+messages, `/release_notes ...` remains the standalone command form and may use
+direct tool dispatch when the skill declares `command-dispatch: tool`; generic
+agent turns expand the same leading skill command as model instructions without
+running the channel command dispatcher. Common uppercase shell variables such
+as `$HOME`, `$PATH`, and `$EDITOR` remain ordinary text; use lowercase `$home`,
+`$path`, or `$editor` to reference skills with those names. Escape a reference
+as `\$name` when it should stay literal.
+
+Skills with `disable-model-invocation: true` stay out of the `$` picker and the
+model's normal prompt, so the model cannot select them on its own. An authorized
+explicit `$skill-name` reference still invokes them; the flag only hides the
+skill from model-initiated selection.
 
 ## Skill Workshop
 
 [Skill Workshop](/tools/skill-workshop) is a proposal queue between the agent
-and your active skill files. When the agent spots reusable work, it drafts a
-proposal instead of writing directly to `SKILL.md`. You review and approve
-before anything changes.
+and its `<state-dir>/agents/<agentId>/agent/workshop-skills` directory. When the agent spots
+reusable work, it drafts a proposal instead of writing directly to `SKILL.md`.
+Operators edit skills outside that directory through their owning tools or
+files.
 
 ```bash
 openclaw skills workshop list
 openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop evaluate <proposal-id>
 openclaw skills workshop apply <proposal-id>
 ```
 
@@ -146,6 +302,7 @@ publish and sync.
 | Action                             | Command                                                |
 | ---------------------------------- | ------------------------------------------------------ |
 | Install a skill into the workspace | `openclaw skills install @owner/<slug>`                |
+| Install an external skills.sh ref  | `openclaw skills install skills-sh:owner/repo/slug`    |
 | Install from a Git repository      | `openclaw skills install git:owner/repo@ref`           |
 | Install a local skill directory    | `openclaw skills install ./path/to/skill --as my-tool` |
 | Install for all local agents       | `openclaw skills install @owner/<slug> --global`       |
@@ -162,6 +319,9 @@ publish and sync.
     directory by default. Add `--global` to install into the shared
     `~/.openclaw/skills` directory, visible to all local agents unless agent
     allowlists narrow it.
+
+    Skill Workshop does not install into either location. Generated skills live
+    in the selected agent's `<state-dir>/agents/<agentId>/agent/workshop-skills`.
 
     Git and local installs expect `SKILL.md` at the source root. The slug comes
     from `SKILL.md` frontmatter `name` when valid, then falls back to the
@@ -206,8 +366,8 @@ publish and sync.
     Workspace, project-agent, and extra-dir skill discovery only accepts skill
     roots whose resolved realpath stays inside the configured root, unless
     `skills.load.allowSymlinkTargets` explicitly trusts a target root.
-    Skill Workshop writes through those trusted targets only when
-    `skills.workshop.allowSymlinkTargetWrites` is enabled.
+    Skill Workshop rejects symlinked skills that resolve outside
+    `<state-dir>/agents/<agentId>/agent/workshop-skills`.
     Managed `~/.openclaw/skills` and personal `~/.agents/skills` may contain
     symlinked skill folders, but every `SKILL.md` realpath must still stay
     inside its resolved skill directory.
@@ -243,10 +403,12 @@ When the user asks to generate an image, use the `image_generate` tool...
 ```
 
 <Note>
-  OpenClaw follows the [AgentSkills](https://agentskills.io) spec. The
-  frontmatter parser supports **single-line keys only** — `metadata` must be a
-  single-line JSON object. Use `{baseDir}` in the body to reference the skill
-  folder path.
+  OpenClaw follows the [AgentSkills](https://agentskills.io) spec. Frontmatter
+  is parsed as YAML first; if that fails, it falls back to a single-line-only
+  parser. Nested `metadata` blocks (including multi-line YAML mappings) are
+  flattened to a JSON string and re-parsed as JSON5, so the block form shown
+  under [Gating](#gating) works. Use `{baseDir}` in the body to reference the
+  skill folder path.
 </Note>
 
 ### Optional frontmatter keys
@@ -283,9 +445,9 @@ When the user asks to generate an image, use the `image_generate` tool...
 
 ## Gating
 
-OpenClaw filters skills at load time using `metadata.openclaw` (single-line
-JSON in the frontmatter). A skill with no `metadata.openclaw` block is always
-eligible unless explicitly disabled.
+OpenClaw filters skills at load time using `metadata.openclaw` (JSON5 object
+embedded in the frontmatter, see the parsing note above). A skill with no
+`metadata.openclaw` block is always eligible unless explicitly disabled.
 
 ```markdown
 ---
@@ -303,7 +465,9 @@ metadata:
 ```
 
 <ParamField path="always" type="boolean">
-  When `true`, always include the skill and skip all other gates.
+  When `true`, include the skill whenever its `os` requirement is compatible,
+  bypassing `requires.bins`, `requires.anyBins`, `requires.env`, and
+  `requires.config`.
 </ParamField>
 
 <ParamField path="emoji" type="string">
@@ -314,8 +478,10 @@ metadata:
   Optional URL shown as "Website" in the macOS Skills UI.
 </ParamField>
 
-<ParamField path="os" type='"darwin" | "linux" | "win32"'>
-  Platform filter. When set, the skill is only eligible on the listed OSes.
+<ParamField path="os" type='("darwin" | "linux" | "win32")[]'>
+  Hard platform filter. When set, the skill is only eligible when the local
+  host or a connected remote runtime matches a listed OS. `always` does not
+  override this filter.
 </ParamField>
 
 <ParamField path="requires.bins" type="string[]">
@@ -325,6 +491,10 @@ metadata:
 <ParamField path="requires.anyBins" type="string[]">
   At least one binary must exist on `PATH`.
 </ParamField>
+
+Fresh dependency checks detect binaries installed into directories already on
+`PATH`. This does not refresh an existing session's skill snapshot; see
+[Snapshots and refresh](/tools/skills#snapshots-and-refresh).
 
 <ParamField path="requires.env" type="string[]">
   Each env var must exist in the process or be provided via config.
@@ -396,11 +566,22 @@ metadata:
       formulas into system package commands. In Linux containers without
       `brew`, brew-only installers are hidden; use a custom image or install
       the dependency manually.
-    - **Go:** if `go` is missing and `brew` is available, the gateway installs
-      Go via Homebrew first and sets `GOBIN` to Homebrew's `bin`.
-    - **Download:** `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`),
-      `extract` (default: auto when archive detected), `stripComponents`,
-      `targetDir` (default: `~/.openclaw/tools/<skillKey>`).
+    - **Go:** OpenClaw requires Go 1.21 or newer for automatic skill installs.
+      If `go` is missing and Homebrew is available, OpenClaw installs Go via
+      Homebrew first; on Linux without Homebrew it can instead use `apt-get`
+      as root or through passwordless `sudo` when the refreshed `golang-go`
+      candidate meets the minimum version. The actual `go install` for the
+      dependency always targets a dedicated OpenClaw-managed bin directory
+      (Homebrew's `bin` on a fresh install, else `~/.local/bin`) rather than
+      your configured `GOBIN` — your own `GOBIN`, `GOPATH`, and `GOTOOLCHAIN`
+      env vars are read but never overwritten.
+    - **Download:** `url` (required), `sha256` (optional 64-character hexadecimal
+      digest, verified after download and before the file is installed or extracted),
+      `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when
+      archive detected), `stripComponents`, `targetDir` (default:
+      `~/.openclaw/tools/<skillKey>`). Existing specs without `sha256` keep the
+      previous download behavior. Response bodies are capped at 256 MiB; larger
+      transfers are aborted while streaming, and partial staging data is removed.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent
@@ -464,8 +645,8 @@ Toggle and configure bundled or managed skills under `skills.entries` in
 
 <Note>
   Config keys match the **skill name** by default. If a skill defines
-  `metadata.openclaw.skillKey`, use that key under `skills.entries`. Quote
-  hyphenated names: JSON5 allows quoted keys.
+  `metadata.openclaw.skillKey`, use that key under `skills.entries` instead.
+  Quote hyphenated names: JSON5 allows quoted keys.
 </Note>
 
 ## Environment injection
@@ -497,9 +678,12 @@ When an agent run starts, OpenClaw:
   to pass secrets into sandboxed runs.
 </Warning>
 
-For the bundled `claude-cli` backend, OpenClaw also materializes the same
-eligible skill snapshot as a temporary Claude Code plugin and passes it via
-`--plugin-dir`. Other CLI backends use the prompt catalog only.
+For the bundled `claude-cli` backend, sessions without library selections
+materialize eligible skills as a temporary Claude Code plugin, passed via
+`--plugin-dir`. Sessions with library selections use OpenClaw's prompt catalog
+and pinned revision paths instead. OpenClaw omits `--plugin-dir` for those
+sessions to keep Claude's native skill aliases from conflicting with library
+command identities. Other CLI backends use the prompt catalog only.
 
 ## Snapshots and refresh
 
@@ -507,7 +691,11 @@ OpenClaw snapshots eligible skills **when a session starts** and reuses that
 list for all subsequent turns in the session. Changes to skills or config take
 effect on the next new session.
 
-Skills refresh mid-session in two cases:
+Managed library selections keep their exact revisions until an explicit
+attach or refresh. The file-watcher behavior below applies to ordinary
+file-backed skill roots, not immutable library revisions.
+
+File-backed skills refresh mid-session in two cases:
 
 - The skills watcher detects a `SKILL.md` change.
 - A new eligible remote node connects.
@@ -519,7 +707,8 @@ aligned.
 <AccordionGroup>
   <Accordion title="Skills watcher">
     By default, OpenClaw watches skill folders and bumps the snapshot when
-    `SKILL.md` files change. Configure under `skills.load`:
+    `SKILL.md` files change, including skill roots first created after startup.
+    Configure under `skills.load`:
 
     ```json5
     {
@@ -527,18 +716,17 @@ aligned.
         load: {
           extraDirs: ["~/Projects/agent-scripts/skills"],
           allowSymlinkTargets: ["~/Projects/manager/skills"],
-          watch: true,
-          watchDebounceMs: 250,
+          watch: true, // default
         },
       },
     }
     ```
 
-    Use `allowSymlinkTargets` for intentional symlinked layouts where a skill
+    Watcher events use a built-in 250 ms debounce. Use `allowSymlinkTargets`
+    for intentional symlinked layouts where a skill
     root symlink points outside the configured root, for example
     `<workspace>/skills/manager -> ~/Projects/manager/skills`.
-    Enable `skills.workshop.allowSymlinkTargetWrites` only when Skill Workshop
-    should also apply proposals through those trusted symlinked paths.
+    Skill Workshop does not use these configured symlink targets.
 
   </Accordion>
   <Accordion title="Remote macOS nodes (Linux gateway)">
@@ -556,16 +744,23 @@ aligned.
 ## Token impact
 
 When skills are eligible, OpenClaw injects a compact XML block into the system
-prompt. The cost is deterministic:
+prompt. The cost is deterministic and scales linearly per skill:
 
-```text
-total = 195 + Σ (97 + len(name) + len(description) + len(filepath))
-```
+- **Base overhead** (only when 1+ skills are eligible): a fixed block of intro
+  prose plus the `<available_skills>` wrapper.
+- **Per skill:** ~97 characters + your `name`, `description`, and `location`
+  field lengths.
+- XML escaping expands `& < > " '` into entities, adding a few characters per
+  occurrence.
+- At ~4 chars/token, 97 chars ≈ 24 tokens per skill before field lengths.
 
-- **Base overhead** (only when ≥ 1 skill): ~195 characters
-- **Per skill:** ~97 characters + your `name`, `description`, and `location` field lengths
-- XML escaping expands `& < > " '` into entities, adding a few characters per occurrence
-- At ~4 chars/token, 97 chars ≈ 24 tokens per skill before field lengths
+If the rendered block would exceed the configured prompt budget
+(`skills.limits.maxSkillsPromptChars`), OpenClaw first preserves as many skill
+identities (name and location) as the description-free compact format
+can fit. It then uses any remaining budget for shortened descriptions. If no
+description budget remains, descriptions are omitted. The prompt includes a
+note pointing at `openclaw skills check` whenever compact formatting or list
+truncation is required.
 
 Keep descriptions short and descriptive to minimize prompt overhead.
 

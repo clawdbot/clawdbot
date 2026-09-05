@@ -1,8 +1,63 @@
 # OpenClaw iOS Changelog
 
+## Unreleased
+
+- Adds richer mobile chat controls, remote desktop viewing, live subagent progress, session organization, easier agent switching, and reply notifications.
+- Improves queued-message and offline-history recovery, shared attachments, Talk playback, photo orientation, notification consent, and Gateway proxy connections.
+
+## 2026.8.11
+
+- Choose one of eight session colors from existing session menus, with matching sidebar stripes and chat title dots; select Default to clear a color.
+
+## 2026.8.10
+
+- Chat keeps the keyboard available when you tap the message composer and preserves a stable sidebar layout while typing.
+
+## 2026.7.23
+
+- Permission requests now open the native iOS authorization sheet only when you use a related feature, and Calendar and Reminders access completes without relaunching.
+- Chat preserves attachments when a route is unavailable, shared drafts avoid duplicate links, permission actions stay readable, and forced realtime Talk sessions route through your Gateway relay.
+
+## 2026.7.22
+
+- Prevented stale Watch reconnect recovery from disconnecting a newly selected Gateway, kept delivered Watch messages from reappearing after a crash, and preserved attachments when retrying uncertain offline sends.
+
+## 2026.7.21
+
+- Fixed background Gateway sessions restarting while waiting for pairing or authentication attention.
+- Prevented failed offline-data resets from reusing retired chat database handles and kept byte-distinct Gateway owners isolated.
+- Made Apple Watch message acknowledgments wait for persisted handling and preserved pending voice turns across navigation and relaunches.
+
+## 2026.7.2 - 2026-07-13
+
+- Added native Automations search, filtering, details, history, revision-safe editing, run tracking, enable/disable, and confirmed deletion.
+- Allowed iPhone nodes and Apple Watch features relayed through a paired iPhone to connect to Gateway protocol v3 or v4, while direct Watch and operator-only Apple clients remain on v4.
+- Added Installed and Browse skill management with readiness filters, enable/disable controls, exact-version ClawHub review, and Gateway-enforced risk acknowledgement. (#105741)
+- Routed iPhone and Apple Watch exec approvals through durable Gateway records, preserved safety warnings, showed the first recorded decision across surfaces, reconciled uncertain replies, and remained compatible with shipped Gateway v4 approval RPCs.
+- Improved Gateway onboarding diagnostics, permission registration refreshes, Talk session switching, agent overview refresh ordering, and Apple Watch acknowledgment, activation, and cold-start event handling.
+
+## 2026.7.1 - 2026-07-08
+
+- Added multi-gateway pairing and switching with gateway-scoped credentials, TLS trust, cached chats, push registration, and custom proxy headers.
+- Added voice-note recording, a slash-command picker, durable offline sending, and read-only offline session and transcript access.
+- Added session search, archived browsing, groups, unread state, rename/delete actions, and new-session creation in managed worktrees.
+- Improved chat rendering with syntax-highlighted code, native tables, inline and display math, expandable link previews, streaming prose animation, and Markdown export.
+- Added model favorites and recents, working model switching, and reasoning controls that adapt to model capabilities.
+- Added Listen and Stop controls for assistant messages, using configured Gateway speech with an on-device fallback.
+- Added a read-only Files browser for agent workspaces and an authenticated Gateway terminal destination.
+- Added Apple Watch voice turns and made pairing, activation, and queued replies more reliable.
+- Refreshed the native iOS design with branded typography, denser controls, an animated mascot, and a redesigned About screen.
+- Fixed permission prompts, onboarding and QR handoff, reconnect recovery, screen-recording finalization, Voice Wake startup, and contact creation.
+
+## 2026.6.11 - 2026-07-01
+
+Maintenance update for the current OpenClaw release.
+
+- Refreshed iOS 26 visual styling, Talk controls, Gateway recovery, localization, and App Store screenshots.
+
 ## 2026.6.10 - 2026-06-21
 
-Maintenance update for the current OpenClaw beta release.
+Maintenance update for the current OpenClaw release.
 
 - Improved notification cleanup, Watch app compatibility, and native file input handling.
 

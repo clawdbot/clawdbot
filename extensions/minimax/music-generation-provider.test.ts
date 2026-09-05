@@ -10,7 +10,9 @@ import {
 const {
   resolveApiKeyForProviderMock,
   postJsonRequestMock,
+  executeProviderOperationWithRetryMock,
   fetchWithTimeoutMock,
+  fetchWithTimeoutGuardedMock,
   resolveProviderHttpRequestConfigMock,
 } = getMinimaxProviderHttpMocks();
 
@@ -48,6 +50,41 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): Record<
     throw new Error(`expected mock call ${index}`);
   }
   return call[0] as Record<string, unknown>;
+}
+
+function expectMinimaxGuardedFetchCall(index: number, url: string) {
+  const call = fetchWithTimeoutGuardedMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected MiniMax guarded fetch call ${index + 1}`);
+  }
+  const [actualUrl, init, timeoutMs, fetchFn, options] = call;
+  expect(actualUrl).toBe(url);
+  expect((init as RequestInit | undefined)?.method).toBe("GET");
+  expect(Number.isInteger(timeoutMs)).toBe(true);
+  expect(timeoutMs).toBeGreaterThan(0);
+  expect(fetchFn).toBe(fetch);
+  return {
+    options: options as Record<string, unknown> | undefined,
+  };
+}
+
+function expectDownloadFetchTimeout(url: string, totalTimeoutMs: number): void {
+  const call = fetchWithTimeoutMock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected generated music download");
+  }
+  const [actualUrl, init, timeoutMs, fetchFn] = call;
+  expect(actualUrl).toBe(url);
+  expect(init).toEqual({ method: "GET" });
+  expect(timeoutMs).toBeGreaterThan(totalTimeoutMs - 1_000);
+  expect(timeoutMs).toBeLessThanOrEqual(totalTimeoutMs);
+  expect(fetchFn).toBe(fetch);
+}
+
+function expectAllowPrivateNetworkPolicy(options: Record<string, unknown> | undefined): void {
+  expect(options).toEqual({
+    ssrfPolicy: { allowPrivateNetwork: true },
+  });
 }
 
 function streamedAudioResponse(bytes: string): Response {
@@ -119,6 +156,129 @@ describe("minimax music generation provider", () => {
     expect(result.tracks[0]?.mimeType).toBe("audio/mpeg");
     expect(result.metadata?.requestedLyrics).toBe(true);
     expect(result.metadata).not.toHaveProperty("requestedDurationSeconds");
+  });
+
+  it.each([
+    { provider: "minimax", contentType: "application/json", body: '{"error":"denied"}' },
+    {
+      provider: "minimax",
+      contentType: "application/problem+json",
+      body: '{"title":"denied"}',
+    },
+    { provider: "minimax", contentType: "text/html", body: "<html>sign in</html>" },
+    { provider: "minimax", contentType: "audio/mpeg", body: "" },
+    { provider: "minimax-portal", contentType: "application/json", body: '{"error":"denied"}' },
+    {
+      provider: "minimax-portal",
+      contentType: "application/problem+json",
+      body: '{"title":"denied"}',
+    },
+    { provider: "minimax-portal", contentType: "text/html", body: "<html>sign in</html>" },
+    { provider: "minimax-portal", contentType: "audio/mpeg", body: "" },
+  ])(
+    "rejects a successful $contentType download through $provider",
+    async ({ provider: providerId, contentType, body }) => {
+      postJsonRequestMock.mockResolvedValue({
+        response: new Response(
+          JSON.stringify({
+            data: { audio_url: "https://example.com/invalid.mp3" },
+            base_resp: { status_code: 0 },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+        release: vi.fn(async () => {}),
+      });
+      fetchWithTimeoutMock.mockResolvedValueOnce(
+        new Response(body, { headers: { "content-type": contentType } }),
+      );
+      const provider =
+        providerId === "minimax-portal"
+          ? buildMinimaxPortalMusicGenerationProvider()
+          : buildMinimaxMusicGenerationProvider();
+
+      await expect(
+        provider.generateMusic({
+          provider: providerId,
+          model: "music-2.6",
+          prompt: "invalid download",
+          cfg: {},
+        }),
+      ).rejects.toThrow("MiniMax generated music download: malformed audio response");
+
+      const [guarded] = fetchWithTimeoutGuardedMock.mock.results;
+      const result = guarded ? await guarded.value : undefined;
+      expect(result?.release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("cancels invalid music responses before releasing their guarded dispatcher", async () => {
+    const cleanupOrder: string[] = [];
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          data: { audio_url: "https://example.com/invalid-open.mp3" },
+          base_resp: { status_code: 0 },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"error":"still streaming"}'));
+          },
+          cancel() {
+            cleanupOrder.push("body canceled");
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+      finalUrl: "https://example.com/invalid-open.mp3",
+      release: vi.fn(async () => {
+        cleanupOrder.push("dispatcher released");
+      }),
+    });
+
+    await expect(
+      buildMinimaxMusicGenerationProvider().generateMusic({
+        provider: "minimax",
+        model: "music-2.6",
+        prompt: "invalid download",
+        cfg: {},
+      }),
+    ).rejects.toThrow("MiniMax generated music download: malformed audio response");
+    expect(cleanupOrder).toEqual(["body canceled", "dispatcher released"]);
+  });
+
+  it.each([
+    {
+      name: "streamed",
+      contentType: "text/event-stream",
+      body: `data: ${JSON.stringify({ data: { status: 1, audio: "ZE==" }, base_resp: { status_code: 0 } })}\n\n`,
+    },
+    {
+      name: "inline",
+      contentType: "application/json",
+      body: JSON.stringify({ data: { audio: "ZE==" }, base_resp: { status_code: 0 } }),
+    },
+  ])("rejects $name audio outside MiniMax's documented hex format", async (fixture) => {
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(fixture.body, {
+        headers: { "content-type": fixture.contentType },
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      buildMinimaxMusicGenerationProvider().generateMusic({
+        provider: "minimax",
+        model: "",
+        prompt: "short track",
+        cfg: {},
+      }),
+    ).rejects.toThrow("MiniMax music generation returned malformed hex audio");
   });
 
   it("reports streaming music task failures", async () => {
@@ -245,12 +405,7 @@ describe("minimax music generation provider", () => {
       lyrics: "our city wakes",
     });
 
-    expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
-      "https://example.com/url-audio.mp3",
-      { method: "GET" },
-      120000,
-      fetch,
-    );
+    expectDownloadFetchTimeout("https://example.com/url-audio.mp3", 120_000);
     expect(result.tracks[0]?.buffer.byteLength).toBeGreaterThan(0);
     expect(result.lyrics).toEqual(["our city wakes"]);
     expect(result.metadata?.taskId).toBe("task-url");
@@ -302,12 +457,7 @@ describe("minimax music generation provider", () => {
     });
 
     expect(mockCallArg(postJsonRequestMock).timeoutMs).toBe(600000);
-    expect(fetchWithTimeoutMock).toHaveBeenCalledWith(
-      "https://example.com/long-timeout.mp3",
-      { method: "GET" },
-      600000,
-      fetch,
-    );
+    expectDownloadFetchTimeout("https://example.com/long-timeout.mp3", 600_000);
   });
 
   it("applies explicit caller timeouts while reading streaming response bodies", async () => {
@@ -400,7 +550,66 @@ describe("minimax music generation provider", () => {
     expect(body.lyrics_optimizer).toBe(true);
   });
 
+  it("retries guarded music URL downloads while preserving request policy", async () => {
+    const requestOverrides = {
+      allowPrivateNetwork: true,
+      headers: { "X-MiniMax-Music-Policy": "enabled" },
+    };
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          task_id: "task-retry",
+          audio_url: "https://example.com/retry.mp3",
+          base_resp: { status_code: 0 },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockRejectedValueOnce(new Error("temporary download failure"))
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "audio/mpeg" }),
+        arrayBuffer: async () => Buffer.from("mp3-bytes"),
+      });
+
+    const provider = buildMinimaxPortalMusicGenerationProvider();
+    const result = await provider.generateMusic({
+      provider: "minimax-portal",
+      model: "music-2.6",
+      prompt: "upbeat dance-pop",
+      cfg: {
+        models: {
+          providers: {
+            "minimax-portal": {
+              baseUrl: "https://api.minimaxi.com",
+              models: [],
+              request: requestOverrides,
+            },
+          },
+        },
+      },
+    });
+
+    expectAllowPrivateNetworkPolicy(
+      expectMinimaxGuardedFetchCall(0, "https://example.com/retry.mp3").options,
+    );
+    expectAllowPrivateNetworkPolicy(
+      expectMinimaxGuardedFetchCall(1, "https://example.com/retry.mp3").options,
+    );
+    expect(result.tracks).toHaveLength(1);
+    expect(
+      executeProviderOperationWithRetryMock.mock.calls.map(
+        ([params]) => (params as { stage: string }).stage,
+      ),
+    ).toContain("download");
+  });
+
   it("routes portal music generation through minimax-portal auth and HTTP config", async () => {
+    const requestOverrides = {
+      allowPrivateNetwork: true,
+      headers: { "X-MiniMax-Music-Policy": "enabled" },
+    };
     mockMusicGenerationResponse({
       task_id: "task-portal",
       audio_url: "https://example.com/portal.mp3",
@@ -422,6 +631,7 @@ describe("minimax music generation provider", () => {
             "minimax-portal": {
               baseUrl: "https://api.minimaxi.com/anthropic",
               models: [],
+              request: requestOverrides,
             },
           },
         },
@@ -434,8 +644,13 @@ describe("minimax music generation provider", () => {
     expect(httpConfigParams.provider).toBe("minimax-portal");
     expect(httpConfigParams.capability).toBe("audio");
     expect(httpConfigParams.transport).toBe("http");
-    expect(mockCallArg(postJsonRequestMock).url).toBe(
-      "https://api.minimaxi.com/v1/music_generation",
+    expect(httpConfigParams.request).toEqual(requestOverrides);
+    const postParams = mockCallArg(postJsonRequestMock);
+    expect(postParams.allowPrivateNetwork).toBe(true);
+    expect((postParams.headers as Headers).get("x-minimax-music-policy")).toBe("enabled");
+    expect(postParams.url).toBe("https://api.minimaxi.com/v1/music_generation");
+    expectAllowPrivateNetworkPolicy(
+      expectMinimaxGuardedFetchCall(0, "https://example.com/portal.mp3").options,
     );
   });
 });

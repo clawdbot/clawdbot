@@ -5,9 +5,31 @@
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isStrictAgenticExecutionContractActive } from "./execution-contract.js";
-import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
+import { isPrimaryBootstrapRun } from "./bootstrap-routing.js";
+import {
+  isRuntimeToolAllowed,
+  isToolAllowedByPolicies,
+  isToolAllowedByPolicyName,
+} from "./tool-policy-match.js";
+import {
+  expandShippedCoreToolPolicyNames,
+  mergeAlsoAllowPolicy,
+  resolveToolProfilePolicy,
+  type ToolPolicyLike,
+} from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
+
+function expandProgressCardPolicyNames(
+  policy: ToolPolicyLike | undefined,
+): ToolPolicyLike | undefined {
+  return policy
+    ? {
+        allow: expandShippedCoreToolPolicyNames(policy.allow),
+        deny: expandShippedCoreToolPolicyNames(policy.deny),
+      }
+    : undefined;
+}
 
 /**
  * Registration helpers for optional OpenClaw-owned tools.
@@ -22,77 +44,91 @@ export function collectPresentOpenClawTools(
   return candidates.filter((tool): tool is AnyAgentTool => tool !== null && tool !== undefined);
 }
 
-/** Resolves the default update_plan switch from explicit config or strict execution contract. */
-function isUpdatePlanToolEnabledForOpenClawTools(params: {
-  config?: OpenClawConfig;
+/** Decides whether progress_card should be included in the assembled OpenClaw tool set. */
+export function shouldIncludeProgressCardToolForOpenClawTools(params: {
+  agentId?: string;
   agentSessionKey?: string;
-  agentId?: string | null;
-  modelProvider?: string;
+  config?: OpenClawConfig;
   modelId?: string;
+  modelProvider?: string;
+  pluginToolDenylist?: string[];
+  runtimeToolAllowlist?: string[];
 }): boolean {
-  const configured = params.config?.tools?.experimental?.planTool;
-  if (configured !== undefined) {
-    return configured;
+  // `tools.updatePlan` is the shipped kill switch for the replacement progress_card tool.
+  if (params.config?.tools?.updatePlan === false) {
+    return false;
   }
-  return isStrictAgenticExecutionContractActive({
+  const deny = uniqueStrings([
+    ...(params.config?.tools?.deny ?? []),
+    ...(params.pluginToolDenylist ?? []),
+  ]);
+  if (
+    !isToolAllowedByPolicyName("progress_card", {
+      deny: expandShippedCoreToolPolicyNames(deny),
+    }) ||
+    !isRuntimeToolAllowed("progress_card", params.runtimeToolAllowlist)
+  ) {
+    return false;
+  }
+  const effective = resolveEffectiveToolPolicy({
     config: params.config,
     sessionKey: params.agentSessionKey,
     agentId: params.agentId,
-    provider: params.modelProvider,
+    modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
+  const profilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(effective.profile),
+    effective.profileAlsoAllow,
+  );
+  const providerProfilePolicy = mergeAlsoAllowPolicy(
+    resolveToolProfilePolicy(effective.providerProfile),
+    effective.providerProfileAlsoAllow,
+  );
+  return isToolAllowedByPolicies(
+    "progress_card",
+    [
+      profilePolicy,
+      providerProfilePolicy,
+      effective.globalPolicy,
+      effective.globalProviderPolicy,
+      effective.agentPolicy,
+      effective.agentProviderPolicy,
+    ].map(expandProgressCardPolicyNames),
+  );
 }
 
-function mergeOpenClawToolPolicyList(...lists: Array<string[] | undefined>): string[] | undefined {
-  const merged = lists.flatMap((list) => (Array.isArray(list) ? list : []));
-  return merged.length > 0 ? uniqueStrings(merged) : undefined;
-}
-
-function isToolExplicitlyAllowedByOpenClawToolPolicy(params: {
-  toolName: string;
-  allowlist?: string[];
-  denylist?: string[];
-}): boolean {
-  if (!params.allowlist?.some((entry) => typeof entry === "string" && entry.trim().length > 0)) {
-    return false;
-  }
-  return isToolAllowedByPolicyName(params.toolName, {
-    allow: params.allowlist,
-    deny: params.denylist,
-  });
-}
-
-/** Decides whether update_plan should be included in the assembled OpenClaw tool set. */
-export function shouldIncludeUpdatePlanToolForOpenClawTools(params: {
+type PrimarySessionToolRegistrationParams = {
   config?: OpenClawConfig;
   agentSessionKey?: string;
-  agentId?: string | null;
-  modelProvider?: string;
-  modelId?: string;
-  pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
-}): boolean {
-  const allowlist = mergeOpenClawToolPolicyList(
-    params.config?.tools?.allow,
-    params.config?.tools?.alsoAllow,
-    params.pluginToolAllowlist,
-  );
-  const denylist = mergeOpenClawToolPolicyList(
-    params.config?.tools?.deny,
-    params.pluginToolDenylist,
-  );
-  return (
-    isToolExplicitlyAllowedByOpenClawToolPolicy({
-      toolName: "update_plan",
-      allowlist,
-      denylist,
-    }) ||
-    isUpdatePlanToolEnabledForOpenClawTools({
-      config: params.config,
-      agentSessionKey: params.agentSessionKey,
-      agentId: params.agentId,
-      modelProvider: params.modelProvider,
-      modelId: params.modelId,
-    })
-  );
+};
+
+function shouldIncludePrimarySessionToolForOpenClawTools(
+  toolName: "ask_user" | "secrets",
+  params: PrimarySessionToolRegistrationParams,
+): boolean {
+  const sessionKey = params.agentSessionKey?.trim();
+  if (!sessionKey) {
+    return false;
+  }
+  const deny = uniqueStrings([
+    ...(params.config?.tools?.deny ?? []),
+    ...(params.pluginToolDenylist ?? []),
+  ]);
+  return isPrimaryBootstrapRun(sessionKey) && isToolAllowedByPolicyName(toolName, { deny });
+}
+
+/** Includes ask_user only on a primary session and when normal deny policy permits it. */
+export function shouldIncludeAskUserToolForOpenClawTools(
+  params: PrimarySessionToolRegistrationParams,
+): boolean {
+  return shouldIncludePrimarySessionToolForOpenClawTools("ask_user", params);
+}
+
+/** Keeps credential management on primary sessions allowed by the normal tool policy. */
+export function shouldIncludeSecretsToolForOpenClawTools(
+  params: PrimarySessionToolRegistrationParams,
+): boolean {
+  return shouldIncludePrimarySessionToolForOpenClawTools("secrets", params);
 }

@@ -1,0 +1,24 @@
+{"seq":1,"at":0,"dir":"out","kind":"sendReadReceipt","data":{"target":"$inbound-1"}}
+{"seq":2,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":3,"at":0,"dir":"out","kind":"setTyping","data":{"payload":{"timeoutMs":30000,"typing":true},"target":"!room:example.org"}}
+{"seq":4,"at":0,"dir":"in","kind":"partial","data":{"text":"Build check:"}}
+{"seq":5,"at":0,"dir":"out","kind":"sendMessage","data":{"payload":{"body":"Build check:","format":"org.matrix.custom.html","formatted_body":"<p>Build check:</p>","msgtype":"m.text","org.matrix.msc4357.live":{}},"result":{"event_id":"$e1"},"target":"!room:example.org"}}
+{"seq":6,"at":400,"dir":"in","kind":"partial","data":{"text":"Build check: all suites green."}}
+{"seq":7,"at":1000,"dir":"out","kind":"getEvent","data":{"result":{"found":true},"target":"$e1"}}
+{"seq":8,"at":1000,"dir":"out","kind":"sendMessage","data":{"payload":{"body":"* Build check: all suites green.","format":"org.matrix.custom.html","formatted_body":"* <p>Build check: all suites green.</p>","m.new_content":{"body":"Build check: all suites green.","format":"org.matrix.custom.html","formatted_body":"<p>Build check: all suites green.</p>","msgtype":"m.text","org.matrix.msc4357.live":{}},"m.relates_to":{"event_id":"$e1","rel_type":"m.replace"},"msgtype":"m.text","org.matrix.msc4357.live":{}},"result":{"event_id":"$e2"},"target":"!room:example.org"}}
+{"seq":9,"at":1100,"dir":"in","kind":"block-final","data":{"text":"Build check: all suites green."}}
+{"seq":10,"at":1100,"dir":"out","kind":"getEvent","data":{"result":{"found":true},"target":"$e1"}}
+{"seq":11,"at":1100,"dir":"out","kind":"sendMessage","data":{"payload":{"body":"* Build check: all suites green.","format":"org.matrix.custom.html","formatted_body":"* <p>Build check: all suites green.</p>","m.new_content":{"body":"Build check: all suites green.","format":"org.matrix.custom.html","formatted_body":"<p>Build check: all suites green.</p>","msgtype":"m.text"},"m.relates_to":{"event_id":"$e1","rel_type":"m.replace"},"msgtype":"m.text"},"result":{"event_id":"$e3"},"target":"!room:example.org"}}
+{"seq":12,"at":1100,"dir":"out","kind":"setTyping","data":{"payload":{"timeoutMs":30000,"typing":true},"target":"!room:example.org"}}
+{"seq":13,"at":1100,"dir":"in","kind":"tool-progress","data":{"name":"deploy","phase":"start"}}
+{"seq":14,"at":1100,"dir":"in","kind":"tool-progress","data":{"name":"deploy","phase":"result"}}
+{"seq":15,"at":1100,"dir":"in","kind":"partial","data":{"text":"Deploying to production now."}}
+{"seq":16,"at":1100,"dir":"out","kind":"sendMessage","data":{"payload":{"body":"Deploying to production now.","format":"org.matrix.custom.html","formatted_body":"<p>Deploying to production now.</p>","msgtype":"m.text","org.matrix.msc4357.live":{}},"result":{"event_id":"$e4"},"target":"!room:example.org"}}
+{"seq":17,"at":1500,"dir":"in","kind":"partial","data":{"text":"Deploying to production now. Watching health checks."}}
+{"seq":18,"at":2100,"dir":"out","kind":"getEvent","data":{"result":{"found":true},"target":"$e4"}}
+{"seq":19,"at":2100,"dir":"out","kind":"sendMessage","data":{"payload":{"body":"* Deploying to production now. Watching health checks.","format":"org.matrix.custom.html","formatted_body":"* <p>Deploying to production now. Watching health checks.</p>","m.new_content":{"body":"Deploying to production now. Watching health checks.","format":"org.matrix.custom.html","formatted_body":"<p>Deploying to production now. Watching health checks.</p>","msgtype":"m.text","org.matrix.msc4357.live":{}},"m.relates_to":{"event_id":"$e4","rel_type":"m.replace"},"msgtype":"m.text","org.matrix.msc4357.live":{}},"result":{"event_id":"$e5"},"target":"!room:example.org"}}
+{"seq":20,"at":2200,"dir":"in","kind":"final","data":{"text":"Deploying to production now. Health checks green."}}
+{"seq":21,"at":2200,"dir":"out","kind":"getEvent","data":{"result":{"found":true},"target":"$e4"}}
+{"seq":22,"at":2200,"dir":"out","kind":"sendMessage","data":{"payload":{"body":"* Deploying to production now. Health checks green.","format":"org.matrix.custom.html","formatted_body":"* <p>Deploying to production now. Health checks green.</p>","m.mentions":{},"m.new_content":{"body":"Deploying to production now. Health checks green.","format":"org.matrix.custom.html","formatted_body":"<p>Deploying to production now. Health checks green.</p>","m.mentions":{},"msgtype":"m.text"},"m.relates_to":{"event_id":"$e4","rel_type":"m.replace"},"msgtype":"m.text"},"result":{"event_id":"$e6"},"target":"!room:example.org"}}
+{"seq":23,"at":2200,"dir":"in","kind":"idle"}
+{"seq":24,"at":2200,"dir":"out","kind":"setTyping","data":{"payload":{"timeoutMs":30000,"typing":false},"target":"!room:example.org"}}

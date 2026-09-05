@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { getChatChannelMeta } from "../channels/chat-meta.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
-import type { PluginDiagnostic } from "./types.js";
+import type { PluginDiagnostic } from "./manifest-types.js";
 
 function collectDiagnostics() {
   const diagnostics: PluginDiagnostic[] = [];
@@ -105,6 +105,29 @@ describe("normalizeRegisteredChannelPlugin", () => {
           'channel "external-chat" registered incomplete metadata; filled missing label, selectionLabel, docsPath, blurb',
       },
     ]);
+  });
+
+  it("fills official external channel aliases omitted by the runtime plugin", () => {
+    const { diagnostics, pushDiagnostic } = collectDiagnostics();
+
+    const normalized = normalizeRegisteredChannelPlugin({
+      pluginId: "openclaw-weixin",
+      source: "/tmp/openclaw-weixin/index.ts",
+      plugin: createChannelPlugin({
+        id: "openclaw-weixin",
+        meta: {
+          id: "openclaw-weixin",
+          label: "openclaw-weixin",
+          selectionLabel: "openclaw-weixin (long-poll)",
+          docsPath: "/channels/openclaw-weixin",
+          blurb: "Weixin channel",
+        },
+      }),
+      pushDiagnostic,
+    });
+
+    expect(normalized?.meta.aliases).toEqual(["weixin", "wechat", "微信"]);
+    expect(diagnostics).toEqual([]);
   });
 
   it("warns and repairs mismatched meta ids", () => {

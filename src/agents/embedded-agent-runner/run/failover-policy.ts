@@ -1,24 +1,23 @@
 /**
  * Resolves retry, fallback, and terminal failover decisions for a run.
  */
+import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
+import { isCliTerminalStopCode } from "../../failover-error.js";
 
 /** Failover action selected for one embedded run failure decision point. */
+type ContinueNormalDecision = { action: "continue_normal" };
+type ProfileDecision = {
+  action: "rotate_profile" | "surface_error";
+  reason: FailoverReason | null;
+};
+type ModelFallbackDecision = { action: "fallback_model"; reason: FailoverReason };
+type ErrorPayloadDecision = { action: "return_error_payload" };
 type RunFailoverDecision =
-  | {
-      action: "continue_normal";
-    }
-  | {
-      action: "rotate_profile" | "surface_error";
-      reason: FailoverReason | null;
-    }
-  | {
-      action: "fallback_model";
-      reason: FailoverReason;
-    }
-  | {
-      action: "return_error_payload";
-    };
+  | ContinueNormalDecision
+  | ProfileDecision
+  | ModelFallbackDecision
+  | ErrorPayloadDecision;
 
 export type RetryLimitFailoverDecision = Extract<
   RunFailoverDecision,
@@ -47,24 +46,23 @@ type PromptDecisionParams = {
   aborted: boolean;
   externalAbort: boolean;
   fallbackConfigured: boolean;
+  failoverCode?: string;
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
   harnessOwnsTransport?: boolean;
+  promptTimeoutFallbackSafe?: boolean;
+  timedOutByRunBudget?: boolean;
   profileRotated: boolean;
 };
 
 type AssistantDecisionParams = {
   stage: "assistant";
   allowFormatRetry?: boolean;
-  aborted: boolean;
-  externalAbort: boolean;
+  terminal: AgentRunAttemptTerminal;
+  signalOwnedInterruption?: boolean;
   fallbackConfigured: boolean;
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
-  timedOut: boolean;
-  idleTimedOut: boolean;
-  timedOutDuringCompaction: boolean;
-  timedOutDuringToolExecution: boolean;
   harnessOwnsTransport?: boolean;
   profileRotated: boolean;
 };
@@ -76,11 +74,7 @@ type RunFailoverDecisionParams =
 
 function shouldEscalateRetryLimit(reason: FailoverReason | null): boolean {
   return Boolean(
-    reason &&
-    reason !== "timeout" &&
-    reason !== "model_not_found" &&
-    reason !== "format" &&
-    reason !== "session_expired",
+    reason && reason !== "timeout" && reason !== "format" && reason !== "session_expired",
   );
 }
 
@@ -95,17 +89,22 @@ function isTerminalFormatFailure(params: {
 }
 
 function shouldRotatePrompt(params: PromptDecisionParams): boolean {
+  if (params.timedOutByRunBudget) {
+    return false;
+  }
   return (
     params.failoverFailure &&
     params.failoverReason !== "timeout" &&
+    params.failoverReason !== "tls_certificate" &&
     !isTerminalFormatFailure(params)
   );
 }
 
 function isAssistantTimeoutFailure(params: AssistantDecisionParams): boolean {
   return (
-    params.idleTimedOut ||
-    (params.timedOut && !params.timedOutDuringCompaction && !params.timedOutDuringToolExecution)
+    params.terminal.kind === "timeout" &&
+    params.terminal.source !== "observation" &&
+    (params.terminal.source === "idle" || params.terminal.phase === "prompt")
   );
 }
 
@@ -119,13 +118,21 @@ function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   if (isTerminalFormatFailure(params)) {
     return false;
   }
+  if (params.terminal.kind === "timeout" && params.terminal.source === "run_budget") {
+    return false;
+  }
   const timeoutFailure = isAssistantTimeoutFailure(params);
   const harnessOwnedTimeout =
     params.harnessOwnsTransport && (timeoutFailure || params.failoverReason === "timeout");
   if (harnessOwnedTimeout && !isConcreteNonTimeoutAssistantFailure(params)) {
     return false;
   }
-  return (!params.aborted && params.failoverFailure) || timeoutFailure;
+  const aborted =
+    (params.terminal.kind === "aborted" && params.terminal.source !== "yield_cleanup") ||
+    (params.terminal.kind === "timeout" &&
+      params.terminal.source !== "observation" &&
+      params.terminal.aborted === true);
+  return (!aborted && params.failoverFailure) || timeoutFailure;
 }
 
 function assistantFallbackReason(params: AssistantDecisionParams): FailoverReason {
@@ -142,7 +149,7 @@ export function mergeRetryFailoverReason(params: {
   failoverReason: FailoverReason | null;
   timedOut?: boolean;
 }): FailoverReason | null {
-  return params.failoverReason ?? (params.timedOut ? "timeout" : null) ?? params.previous;
+  return params.failoverReason ?? params.previous ?? (params.timedOut ? "timeout" : null);
 }
 
 export function resolveRunFailoverDecision(
@@ -172,13 +179,35 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
   }
 
   if (params.stage === "prompt") {
+    if (isCliTerminalStopCode(params.failoverCode)) {
+      // Plugin-harness errors can propagate arbitrary string codes through failover-error normalization;
+      // normal CLI paths are protected in model-fallback-runner instead.
+      return {
+        action: "surface_error",
+        reason: params.failoverReason,
+      };
+    }
     if (params.externalAbort) {
       return {
         action: "surface_error",
         reason: params.failoverReason,
       };
     }
+    if (params.timedOutByRunBudget) {
+      return {
+        action: "surface_error",
+        reason: params.failoverReason,
+      };
+    }
     if (params.harnessOwnsTransport && params.failoverReason === "timeout") {
+      // Plugin harness lifecycle timeouts must stay inside the harness boundary;
+      // only prompt request timeouts proven replay-safe may enter model fallback.
+      if (params.promptTimeoutFallbackSafe === true && params.fallbackConfigured) {
+        return {
+          action: "fallback_model",
+          reason: "timeout",
+        };
+      }
       return {
         action: "surface_error",
         reason: params.failoverReason,
@@ -202,7 +231,11 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
     };
   }
 
-  if (params.externalAbort) {
+  if (
+    params.signalOwnedInterruption ||
+    ((params.terminal.kind === "aborted" || params.terminal.kind === "timeout") &&
+      params.terminal.source === "external")
+  ) {
     return {
       action: "surface_error",
       reason: params.failoverReason,
@@ -213,6 +246,17 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       action: "surface_error",
       reason: params.failoverReason,
     };
+  }
+  if (params.failoverFailure && params.failoverReason === "tls_certificate") {
+    return params.fallbackConfigured
+      ? {
+          action: "fallback_model",
+          reason: "tls_certificate",
+        }
+      : {
+          action: "surface_error",
+          reason: "tls_certificate",
+        };
   }
   const assistantShouldRotate = shouldRotateAssistant(params);
   if (!params.profileRotated && assistantShouldRotate) {

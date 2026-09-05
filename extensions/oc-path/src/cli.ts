@@ -6,10 +6,12 @@
  * / `--human` override.
  */
 
-import { promises as fs } from "node:fs";
+import { constants as fsConstants, promises as fs } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
+import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
 import {
+  MAX_JSONC_INPUT_BYTES,
   OcEmitSentinelError,
   OcPathError,
   REDACTED_SENTINEL,
@@ -32,13 +34,13 @@ import {
   type OcPath,
 } from "./oc-path/index.js";
 
-export type OutputRuntimeEnv = {
+type OutputRuntimeEnv = {
   writeStdout(value: string): void;
   error(value: string): void;
   exit(code: number): void;
 };
 
-export interface PathCommandOptions {
+interface PathCommandOptions {
   readonly json?: boolean;
   readonly human?: boolean;
   readonly valueJson?: boolean;
@@ -49,6 +51,15 @@ export interface PathCommandOptions {
 }
 
 type OutputMode = "human" | "json";
+
+// Keep every parser behind the shipped JSONC ceiling so user-selected files
+// cannot allocate an unbounded input before format-specific validation runs.
+const MAX_OC_PATH_INPUT_BYTES = MAX_JSONC_INPUT_BYTES;
+
+type LoadedOcPathFile = {
+  readonly ast: OcAst;
+  readonly raw: string;
+};
 
 const SCRUB_PLACEHOLDER = "[REDACTED]";
 
@@ -66,7 +77,7 @@ const defaultRuntime: OutputRuntimeEnv = {
 
 // Defense-in-depth: replace the redaction sentinel with `[REDACTED]`
 // before writing, even if upstream emits it.
-export function scrubSentinel(s: string): string {
+function scrubSentinel(s: string): string {
   if (!s.includes(REDACTED_SENTINEL)) {
     return s;
   }
@@ -160,19 +171,66 @@ function catchSentinel<T>(
   }
 }
 
-async function loadAst(absPath: string, fileName: string): Promise<OcAst> {
-  const raw = await fs.readFile(absPath, "utf-8");
+async function loadOcPathFile(
+  absPath: string,
+  fileName: string,
+  runtime: OutputRuntimeEnv,
+  mode: OutputMode,
+): Promise<LoadedOcPathFile | null> {
   const kind = inferKind(fileName);
+  // A blocking open can hang on a FIFO before stat can reject it. O_NONBLOCK
+  // preserves regular-file and symlink reads while making that check reachable.
+  const handle = await fs.open(absPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  let raw: string;
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      emitError(runtime, mode, `not a regular file: ${absPath}`, "OC_PATH_FILE_NOT_REGULAR");
+      runtime.exit(2);
+      return null;
+    }
+    // `end` is inclusive, so a raced growth can return at most the cap plus one byte.
+    const bytes =
+      stat.size > MAX_OC_PATH_INPUT_BYTES
+        ? null
+        : Buffer.concat(
+            await handle
+              .createReadStream({ autoClose: false, end: MAX_OC_PATH_INPUT_BYTES, start: 0 })
+              .toArray(),
+          );
+    if (bytes === null || bytes.length > MAX_OC_PATH_INPUT_BYTES) {
+      emitError(
+        runtime,
+        mode,
+        `input exceeds ${MAX_OC_PATH_INPUT_BYTES} bytes${stat.size > MAX_OC_PATH_INPUT_BYTES ? `; got ${stat.size}` : ""}`,
+        kind === "jsonc" ? "OC_JSONC_INPUT_TOO_LARGE" : "OC_PATH_INPUT_TOO_LARGE",
+      );
+      runtime.exit(2);
+      return null;
+    }
+    raw = bytes.toString("utf8");
+  } finally {
+    await handle.close();
+  }
   if (kind === "jsonc") {
-    return parseJsonc(raw).ast;
+    const result = parseJsonc(raw);
+    const sizeDiagnostic = result.diagnostics.find(
+      (diagnostic) => diagnostic.code === "OC_JSONC_INPUT_TOO_LARGE",
+    );
+    if (sizeDiagnostic) {
+      emitError(runtime, mode, sizeDiagnostic.message, sizeDiagnostic.code);
+      runtime.exit(2);
+      return null;
+    }
+    return { ast: result.ast, raw };
   }
   if (kind === "jsonl") {
-    return parseJsonl(raw).ast;
+    return { ast: parseJsonl(raw).ast, raw };
   }
   if (kind === "yaml") {
-    return parseYaml(raw).ast;
+    return { ast: parseYaml(raw).ast, raw };
   }
-  return parseMd(raw).ast;
+  return { ast: parseMd(raw).ast, raw };
 }
 
 function emitForKind(ast: OcAst, fileName?: string): string {
@@ -211,66 +269,50 @@ function formatMatchHuman(match: OcMatch): string {
   return `root @ L${match.line}`;
 }
 
-function splitDiffLines(s: string): readonly string[] {
-  return s === "" ? [] : s.split("\n");
-}
-
-export function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): string {
+function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): string {
   if (oldBytes === newBytes) {
     return "";
   }
-  const oldLines = splitDiffLines(oldBytes);
-  const newLines = splitDiffLines(newBytes);
-  let prefix = 0;
-  while (
-    prefix < oldLines.length &&
-    prefix < newLines.length &&
-    oldLines[prefix] === newLines[prefix]
-  ) {
-    prefix++;
+  const oldLines = oldBytes.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const newLines = newBytes.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  let start = 0;
+  while (start < oldLines.length && oldLines[start] === newLines[start]) {
+    start++;
   }
+  let oldEnd = oldLines.length;
+  let newEnd = newLines.length;
+  while (oldEnd > start && newEnd > start && oldLines[oldEnd - 1] === newLines[newEnd - 1]) {
+    oldEnd--;
+    newEnd--;
+  }
+  const contextStart = Math.max(0, start - 3);
+  const trailing = Math.min(3, oldLines.length - oldEnd);
 
-  let oldSuffix = oldLines.length - 1;
-  let newSuffix = newLines.length - 1;
-  while (
-    oldSuffix >= prefix &&
-    newSuffix >= prefix &&
-    oldLines[oldSuffix] === newLines[newSuffix]
-  ) {
-    oldSuffix--;
-    newSuffix--;
-  }
-
-  const context = 3;
-  const hunkStart = Math.max(0, prefix - context);
-  const hunkOldEnd = Math.min(oldLines.length - 1, oldSuffix + context);
-  const hunkNewEnd = Math.min(newLines.length - 1, newSuffix + context);
-  const oldCount = Math.max(0, hunkOldEnd - hunkStart + 1);
-  const newCount = Math.max(0, hunkNewEnd - hunkStart + 1);
-  const lines = [
-    `--- ${fsPath}`,
-    `+++ ${fsPath}`,
-    `@@ -${hunkStart + 1},${oldCount} +${hunkStart + 1},${newCount} @@`,
-  ];
-
-  for (let i = hunkStart; i < prefix; i++) {
-    lines.push(` ${oldLines[i] ?? ""}`);
-  }
-  for (let i = prefix; i <= oldSuffix; i++) {
-    lines.push(`-${oldLines[i] ?? ""}`);
-  }
-  for (let i = prefix; i <= newSuffix; i++) {
-    lines.push(`+${newLines[i] ?? ""}`);
-  }
-  for (let i = Math.max(oldSuffix + 1, prefix); i <= hunkOldEnd; i++) {
-    lines.push(` ${oldLines[i] ?? ""}`);
-  }
-  return `${lines.join("\n")}\n`;
+  // Empty-side patches preserve newline markers without a quadratic search
+  // when a Markdown edit normalizes every CRLF line in a large file.
+  const formatLines = (prefix: string, lines: string[]) =>
+    (structuredPatch("", "", "", lines.join("")).hunks[0]?.lines ?? []).map((line) =>
+      line.startsWith("+") ? `${prefix}${line.slice(1)}` : line,
+    );
+  const patch = structuredPatch(fsPath, fsPath, "", "");
+  patch.hunks.push({
+    oldStart: contextStart + 1,
+    oldLines: oldEnd - contextStart + trailing,
+    newStart: contextStart + 1,
+    newLines: newEnd - contextStart + trailing,
+    lines: [
+      ...formatLines(" ", oldLines.slice(contextStart, start)),
+      ...formatLines("-", oldLines.slice(start, oldEnd)),
+      ...formatLines("+", newLines.slice(start, newEnd)),
+      ...formatLines(" ", oldLines.slice(oldEnd, oldEnd + trailing)),
+    ],
+  });
+  return formatPatch(patch, FILE_HEADERS_ONLY);
 }
 
 // ---------- Commands -----------------------------------------------------
 
-export async function pathResolveCommand(
+async function pathResolveCommand(
   pathStr: string | undefined,
   options: PathCommandOptions,
   runtime: OutputRuntimeEnv,
@@ -283,10 +325,13 @@ export async function pathResolveCommand(
   if (ocPath === null) {
     return;
   }
-  const ast = await loadAst(resolveFsPath(ocPath, options), ocPath.file);
+  const loaded = await loadOcPathFile(resolveFsPath(ocPath, options), ocPath.file, runtime, mode);
+  if (loaded === null) {
+    return;
+  }
   let match: OcMatch | null;
   try {
-    match = resolveOcPath(ast, ocPath);
+    match = resolveOcPath(loaded.ast, ocPath);
   } catch (err) {
     if (err instanceof OcPathError) {
       // resolveOcPath throws on wildcard patterns — point at find.
@@ -304,7 +349,7 @@ export async function pathResolveCommand(
   emit(runtime, mode, { resolved: true, ocPath: pathStr, match }, () => formatMatchHuman(match));
 }
 
-export async function pathSetCommand(
+async function pathSetCommand(
   pathStr: string | undefined,
   value: string | undefined,
   options: PathCommandOptions,
@@ -332,11 +377,13 @@ export async function pathSetCommand(
     return;
   }
   const fsPath = resolveFsPath(ocPath, options);
-  const oldBytes = await fs.readFile(fsPath, "utf-8");
-  const ast = await loadAst(fsPath, ocPath.file);
+  const loaded = await loadOcPathFile(fsPath, ocPath.file, runtime, mode);
+  if (loaded === null) {
+    return;
+  }
 
   const result = catchSentinel("set", runtime, mode, () =>
-    setOcPath(ast, ocPath, value, { valueJson: options.valueJson === true }),
+    setOcPath(loaded.ast, ocPath, value, { valueJson: options.valueJson === true }),
   );
   if (result === null) {
     return;
@@ -358,8 +405,11 @@ export async function pathSetCommand(
     return;
   }
 
+  const byteLength = Buffer.byteLength(newBytes, "utf8");
+
   if (options.dryRun === true) {
-    const diff = options.diff === true ? formatUnifiedDiff(oldBytes, newBytes, fsPath) : undefined;
+    const diff =
+      options.diff === true ? formatUnifiedDiff(loaded.raw, newBytes, fsPath) : undefined;
     emit(
       runtime,
       mode,
@@ -367,7 +417,7 @@ export async function pathSetCommand(
       () =>
         diff !== undefined
           ? diff || `--dry-run: no byte changes for ${fsPath}`
-          : `--dry-run: would write ${newBytes.length} bytes to ${fsPath}\n${newBytes}`,
+          : `--dry-run: would write ${byteLength} bytes to ${fsPath}\n${newBytes}`,
     );
     return;
   }
@@ -375,12 +425,12 @@ export async function pathSetCommand(
   emit(
     runtime,
     mode,
-    { ok: true, dryRun: false, bytesWritten: newBytes.length, fsPath },
-    () => `wrote ${newBytes.length} bytes to ${fsPath}`,
+    { ok: true, dryRun: false, bytesWritten: byteLength, fsPath },
+    () => `wrote ${byteLength} bytes to ${fsPath}`,
   );
 }
 
-export async function pathFindCommand(
+async function pathFindCommand(
   patternStr: string | undefined,
   options: PathCommandOptions,
   runtime: OutputRuntimeEnv,
@@ -405,8 +455,11 @@ export async function pathFindCommand(
     runtime.exit(2);
     return;
   }
-  const ast = await loadAst(resolveFsPath(pattern, options), pattern.file);
-  const matches = findOcPaths(ast, pattern);
+  const loaded = await loadOcPathFile(resolveFsPath(pattern, options), pattern.file, runtime, mode);
+  if (loaded === null) {
+    return;
+  }
+  const matches = findOcPaths(loaded.ast, pattern);
   emit(
     runtime,
     mode,
@@ -432,7 +485,7 @@ export async function pathFindCommand(
   }
 }
 
-export function pathValidateCommand(
+function pathValidateCommand(
   pathStr: string | undefined,
   options: PathCommandOptions,
   runtime: OutputRuntimeEnv,
@@ -490,7 +543,7 @@ export function pathValidateCommand(
   }
 }
 
-export async function pathEmitCommand(
+async function pathEmitCommand(
   fileArg: string | undefined,
   options: PathCommandOptions,
   runtime: OutputRuntimeEnv,
@@ -504,13 +557,16 @@ export async function pathEmitCommand(
       ? resolvePath(options.file)
       : resolvePath(options.cwd ?? process.cwd(), fileArg);
   const fileName = fsPath.split(/[\\/]/).pop() ?? fileArg;
-  const ast = await loadAst(fsPath, fileName);
-  const bytes = catchSentinel("emit", runtime, mode, () => emitForKind(ast, fileName));
+  const loaded = await loadOcPathFile(fsPath, fileName, runtime, mode);
+  if (loaded === null) {
+    return;
+  }
+  const bytes = catchSentinel("emit", runtime, mode, () => emitForKind(loaded.ast, fileName));
   if (bytes === null) {
     return;
   }
   if (mode === "json") {
-    runtime.writeStdout(scrubSentinel(JSON.stringify({ ok: true, kind: ast.kind, bytes })));
+    runtime.writeStdout(scrubSentinel(JSON.stringify({ ok: true, kind: loaded.ast.kind, bytes })));
     return;
   }
   runtime.writeStdout(bytes);

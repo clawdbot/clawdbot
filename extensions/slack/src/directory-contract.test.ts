@@ -1,35 +1,46 @@
 // Slack tests cover directory contract plugin behavior.
-import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { expectDirectoryIds } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   listSlackDirectoryGroupsFromConfig,
   listSlackDirectoryPeersFromConfig,
 } from "../directory-contract-api.js";
 import { getSlackDirectorySelfLive } from "./directory-live.js";
-import type { SlackProbe } from "./probe.js";
-
 const slackClientMocks = vi.hoisted(() => ({
   authTest: vi.fn(),
   usersInfo: vi.fn(),
+  createSlackLookupClient: vi.fn(() => ({
+    auth: { test: slackClientMocks.authTest },
+    users: { info: slackClientMocks.usersInfo },
+  })),
 }));
 
 vi.mock("./client.js", () => ({
-  createSlackWebClient: () => ({
-    auth: { test: slackClientMocks.authTest },
-    users: { info: slackClientMocks.usersInfo },
-  }),
+  createSlackLookupClient: slackClientMocks.createSlackLookupClient,
 }));
 
 describe("Slack directory contract", () => {
   beforeEach(() => {
     slackClientMocks.authTest.mockReset();
     slackClientMocks.usersInfo.mockReset();
+    slackClientMocks.createSlackLookupClient.mockClear();
   });
 
-  it("keeps public probe aligned with base contract", () => {
-    expectTypeOf<SlackProbe>().toMatchTypeOf<BaseProbeResult>();
+  it("uses the bounded lookup client for live directory requests", async () => {
+    const fixture = "lookup-fixture";
+    slackClientMocks.authTest.mockResolvedValue({ ok: true, user_id: "U123", user: "bot" });
+    slackClientMocks.usersInfo.mockResolvedValue({
+      ok: true,
+      user: { id: "U123", name: "bot", profile: { display_name: "Bot" } },
+    });
+
+    await getSlackDirectorySelfLive({
+      cfg: { channels: { slack: { botToken: fixture } } },
+    } as Parameters<typeof getSlackDirectorySelfLive>[0]);
+
+    expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledOnce();
+    expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledWith(fixture);
   });
 
   it("lists peers/groups from config", async () => {
@@ -38,7 +49,7 @@ describe("Slack directory contract", () => {
         slack: {
           botToken: "xoxb-test",
           appToken: "xapp-test",
-          dm: { allowFrom: ["U123", "user:U999"] },
+          allowFrom: ["U123", "user:U999"],
           dms: { U234: {} },
           channels: { C111: { users: ["U777"] } },
         },
@@ -65,7 +76,7 @@ describe("Slack directory contract", () => {
         slack: {
           botToken: envSecret,
           appToken: envSecret,
-          dm: { allowFrom: ["U123"] },
+          allowFrom: ["U123"],
           channels: { C111: {} },
         },
       },
@@ -81,7 +92,7 @@ describe("Slack directory contract", () => {
         slack: {
           botToken: "xoxb-test",
           appToken: "xapp-test",
-          dm: { allowFrom: ["U100", "U200"] },
+          allowFrom: ["U100", "U200"],
           dms: { U300: {} },
         },
       },

@@ -1,7 +1,7 @@
 /**
  * Heartbeat response tool.
  *
- * Auto-reply heartbeat turns use this tool to record the agent's outcome,
+ * Auto-reply heartbeat turns use this tool to accept the agent's outcome,
  * notification decision, and next-check metadata exactly once per turn.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -12,10 +12,11 @@ import {
   HEARTBEAT_TOOL_PRIORITIES,
   normalizeHeartbeatToolResponse,
 } from "../../auto-reply/heartbeat-tool-response.js";
+import { assertCronJobScratchContent } from "../../cron/scratch-contract.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { optionalStringEnum, stringEnum } from "../schema/string-enum.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, ToolInputError } from "./common.js";
+import { textResult, ToolInputError } from "./common.js";
 
 const HeartbeatResponseToolSchema = Type.Object(
   {
@@ -26,6 +27,11 @@ const HeartbeatResponseToolSchema = Type.Object(
     reason: Type.Optional(Type.String()),
     priority: optionalStringEnum(HEARTBEAT_TOOL_PRIORITIES),
     nextCheck: Type.Optional(Type.String()),
+    scratch: Type.Optional(
+      Type.String({
+        description: "Complete replacement for heartbeat monitor prose; not a recurring schedule.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -38,21 +44,31 @@ function readRequiredBoolean(params: Record<string, unknown>, key: string): bool
   return raw;
 }
 
-/** Creates the one-shot heartbeat response recording tool for an auto-reply turn. */
+/** Creates the one-shot heartbeat response tool for an auto-reply turn. */
 export function createHeartbeatResponseTool(): AnyAgentTool {
   let recorded = false;
   return {
     label: "Heartbeat",
     name: HEARTBEAT_RESPONSE_TOOL_NAME,
-    displaySummary: "Record heartbeat outcome/notify choice.",
+    // Heartbeat prompts instruct the model to call this one-shot tool; hiding
+    // it behind tool search would break the heartbeat contract.
+    catalogMode: "direct-only",
+    displaySummary: "Accept heartbeat outcome/notify choice.",
     description:
-      "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText.",
+      "Accept heartbeat result for post-turn handling. `notify=false` no visible send. `notify=true` needs concise notificationText. Scratch is monitor prose only.",
     parameters: HeartbeatResponseToolSchema,
     execute: async (_toolCallId, args) => {
       if (!isRecord(args)) {
         throw new ToolInputError("Heartbeat response arguments required");
       }
       readRequiredBoolean(args, "notify");
+      if (typeof args.scratch === "string") {
+        try {
+          assertCronJobScratchContent(args.scratch);
+        } catch (error) {
+          throw new ToolInputError(error instanceof Error ? error.message : String(error));
+        }
+      }
       const response = normalizeHeartbeatToolResponse(args);
       if (!response) {
         throw new ToolInputError(
@@ -62,13 +78,37 @@ export function createHeartbeatResponseTool(): AnyAgentTool {
       if (recorded) {
         // One heartbeat turn should produce one decision; repeated calls can
         // otherwise overwrite the notify/no-notify choice.
-        throw new ToolInputError("heartbeat_respond already recorded for this turn");
+        throw new ToolInputError("heartbeat_respond already accepted for this turn");
       }
       recorded = true;
-      return jsonResult({
-        status: "recorded",
-        ...response,
-      });
+      const { scratch, ...publicResponse } = response;
+      const details = { status: "accepted" as const, ...publicResponse } as typeof response & {
+        status: "accepted";
+      };
+      if (scratch !== undefined) {
+        // Keep future prompt content out of model-visible tool output and logs;
+        // the runner receives it through the internal result details only.
+        Object.defineProperty(details, "scratch", { value: scratch, enumerable: false });
+      }
+      return textResult(
+        JSON.stringify(
+          {
+            status: "accepted",
+            ...publicResponse,
+            ...(scratch !== undefined
+              ? {
+                  // Persistence is a runner-side CAS after the turn; do not claim
+                  // success here. A lost race is logged and retryable next beat.
+                  scratchPending: true,
+                  scratchBytes: Buffer.byteLength(scratch, "utf8"),
+                }
+              : {}),
+          },
+          null,
+          2,
+        ),
+        details,
+      );
     },
   };
 }

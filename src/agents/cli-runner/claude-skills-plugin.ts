@@ -35,7 +35,7 @@ function sanitizeSkillDirName(name: string, used: Set<string>): string {
 }
 
 /** Returns whether a resolved skill file is readable before linking it into the Claude plugin. */
-export function isClaudeCliSkillFileAccessible(skillFilePath: string): boolean {
+function isClaudeCliSkillFileAccessible(skillFilePath: string): boolean {
   try {
     accessSync(skillFilePath);
     return true;
@@ -95,6 +95,11 @@ export async function prepareClaudeCliSkillsPlugin(params: {
   skillsSnapshot?: SkillSnapshot;
 }): Promise<{ args: string[]; cleanup: () => Promise<void>; pluginDir?: string }> {
   if (normalizeLowercaseStringOrEmpty(params.backendId) !== CLAUDE_CLI_BACKEND_ID) {
+    return { args: [], cleanup: async () => {} };
+  }
+  // Library command identities are host-owned, not frontmatter names. Keep their
+  // canonical catalog and immutable paths instead of registering colliding native aliases.
+  if (params.skillsSnapshot?.librarySelections?.length) {
     return { args: [], cleanup: async () => {} };
   }
 

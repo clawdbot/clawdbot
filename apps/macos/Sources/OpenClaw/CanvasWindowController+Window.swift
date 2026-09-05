@@ -14,6 +14,7 @@ extension CanvasWindowController {
                 defer: false)
             window.title = "OpenClaw Canvas"
             window.isReleasedWhenClosed = false
+            window.isRestorable = false
             window.contentView = contentView
             window.center()
             window.minSize = NSSize(width: 880, height: 680)
@@ -45,11 +46,12 @@ extension CanvasWindowController {
     func presentAnchoredPanel(anchorProvider: @escaping () -> NSRect?) {
         guard case .panel = self.presentation, let window else { return }
         self.repositionPanel(using: anchorProvider)
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        window.makeFirstResponder(self.webView)
+        // Agent-driven presents must not steal focus: order front without app
+        // activation or key status. becomesKeyOnlyIfNeeded gives the panel key
+        // when the user clicks into it; user entry points own app activation.
+        window.orderFrontRegardless()
         VoiceWakeOverlayController.shared.bringToFrontIfVisible()
-        self.onVisibilityChanged?(true)
+        self.setCanvasVisible(true)
     }
 
     func repositionPanel(using anchorProvider: () -> NSRect?) {
@@ -148,7 +150,7 @@ extension CanvasWindowController {
     // MARK: - NSWindowDelegate
 
     func windowWillClose(_: Notification) {
-        self.onVisibilityChanged?(false)
+        self.setCanvasVisible(false)
     }
 
     func windowDidMove(_: Notification) {

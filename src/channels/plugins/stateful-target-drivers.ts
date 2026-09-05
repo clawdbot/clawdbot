@@ -4,6 +4,7 @@
  * Stores lifecycle drivers for binding targets that carry mutable external session state.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type {
   ConfiguredBindingResolution,
   StatefulBindingTargetDescriptor,
@@ -31,6 +32,7 @@ export type StatefulBindingTargetDriver = {
   resolveTargetBySessionKey?: (params: {
     cfg: OpenClawConfig;
     sessionKey: string;
+    agentId?: string;
   }) => StatefulBindingTargetDescriptor | null;
   resetInPlace?: (params: {
     cfg: OpenClawConfig;
@@ -41,13 +43,18 @@ export type StatefulBindingTargetDriver = {
   }) => Promise<StatefulBindingTargetResetResult>;
 };
 
-const registeredStatefulBindingTargetDrivers = new Map<string, StatefulBindingTargetDriver>();
+const registeredStatefulBindingTargetDrivers = resolveGlobalMap<
+  string,
+  StatefulBindingTargetDriver
+>(Symbol.for("openclaw.statefulBindingTargetDrivers"), "plugin-registry");
 
 function listStatefulBindingTargetDrivers(): StatefulBindingTargetDriver[] {
   return [...registeredStatefulBindingTargetDrivers.values()];
 }
 
-export function registerStatefulBindingTargetDriver(driver: StatefulBindingTargetDriver): void {
+export function registerStatefulBindingTargetDriver(
+  driver: StatefulBindingTargetDriver,
+): () => void {
   const id = driver.id.trim();
   if (!id) {
     throw new Error("Stateful binding target driver id is required");
@@ -57,13 +64,15 @@ export function registerStatefulBindingTargetDriver(driver: StatefulBindingTarge
   if (existing) {
     // Builtins and tests may register through multiple load paths. First writer
     // wins so process-local sessions keep using the same driver instance.
-    return;
+    return () => {};
   }
   registeredStatefulBindingTargetDrivers.set(id, normalized);
-}
-
-export function unregisterStatefulBindingTargetDriver(id: string): void {
-  registeredStatefulBindingTargetDrivers.delete(id.trim());
+  return () => {
+    // Cleanup owns only this registration; a later replacement must survive stale disposal.
+    if (registeredStatefulBindingTargetDrivers.get(id) === normalized) {
+      registeredStatefulBindingTargetDrivers.delete(id);
+    }
+  };
 }
 
 export function getStatefulBindingTargetDriver(id: string): StatefulBindingTargetDriver | null {
@@ -77,6 +86,7 @@ export function getStatefulBindingTargetDriver(id: string): StatefulBindingTarge
 export function resolveStatefulBindingTargetBySessionKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  agentId?: string;
 }): { driver: StatefulBindingTargetDriver; bindingTarget: StatefulBindingTargetDescriptor } | null {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -88,6 +98,7 @@ export function resolveStatefulBindingTargetBySessionKey(params: {
     const bindingTarget = driver.resolveTargetBySessionKey?.({
       cfg: params.cfg,
       sessionKey,
+      agentId: params.agentId,
     });
     if (bindingTarget) {
       return {

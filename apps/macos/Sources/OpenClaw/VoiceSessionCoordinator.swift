@@ -86,7 +86,6 @@ final class VoiceSessionCoordinator {
             token: token,
             transcript: text,
             autoSendAfter: autoSendAfter,
-            sendChime: sendChime,
             attributed: attributed)
     }
 
@@ -136,8 +135,8 @@ final class VoiceSessionCoordinator {
 
     /// Overlay dismiss completion callback (manual X, empty, auto-dismiss after send).
     /// Ensures the wake-word recognizer is resumed if Voice Wake is enabled.
-    func overlayDidDismiss(token: UUID?) {
-        if let token, self.session?.token == token {
+    func overlayDidDismiss(token: UUID) {
+        if self.session?.token == token {
             self.clearSession()
         }
         Task { await VoiceWakeRuntime.shared.refresh(state: AppStateStore.shared) }

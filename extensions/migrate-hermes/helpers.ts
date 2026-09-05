@@ -2,16 +2,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { parse as parseDotenv } from "dotenv";
 import {
   markMigrationItemError,
+  markMigrationItemSkipped,
   MIGRATION_REASON_MISSING_SOURCE_OR_TARGET,
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import { appendRegularFile, pathExists } from "openclaw/plugin-sdk/security-runtime";
-import {
-  isRecord as sharedIsRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parse as parseYaml } from "yaml";
 
 const HOME_SHORTHAND_RE = /^~(?=$|[\\/])/u;
@@ -20,7 +19,7 @@ const EDGE_DASHES_RE = /^-+|-+$/g;
 
 export function resolveHomePath(input: string): string {
   const value = input.trim();
-  return value ? path.resolve(value.replace(HOME_SHORTHAND_RE, os.homedir())) : value;
+  return value ? path.resolve(value.replace(HOME_SHORTHAND_RE, () => os.homedir())) : value;
 }
 
 export async function exists(filePath: string): Promise<boolean> {
@@ -42,57 +41,26 @@ export async function readText(filePath: string | undefined): Promise<string | u
 }
 
 export function parseEnv(content: string | undefined): Record<string, string> {
-  const env: Record<string, string> = {};
-  if (!content) {
-    return env;
-  }
-  for (const line of content.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) {
-      continue;
-    }
-    const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(trimmed);
-    if (!match) {
-      continue;
-    }
-    const key = match[1];
-    let value = match[2] ?? "";
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    env[key] = value;
-  }
-  return env;
+  return content ? parseDotenv(content) : {};
 }
 
 export function parseHermesConfig(content: string | undefined): Record<string, unknown> {
   if (!content) {
     return {};
   }
-  try {
-    const parsed = parseYaml(content);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
+  const parsed = parseYaml(content);
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : {};
 }
-
-export const isRecord = sharedIsRecord;
 
 export function childRecord(
   root: Record<string, unknown> | undefined,
   key: string,
 ): Record<string, unknown> {
   const value = root?.[key];
-  return isRecord(value) ? value : {};
+  return asNonArrayRecord(value);
 }
-
-export const readString = normalizeOptionalString;
 
 export function readStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -108,10 +76,19 @@ export async function appendItem(item: MigrationItem): Promise<MigrationItem> {
   try {
     const content = await fs.readFile(item.source, "utf8");
     const header = `\n\n<!-- Imported from Hermes: ${path.basename(item.source)} -->\n\n`;
+    const body = content.trimEnd();
+    if (!body) {
+      return markMigrationItemSkipped(item, "source file is empty");
+    }
+    const importBlock = `${header}${body}\n`;
+    const existing = await fs.readFile(item.target, "utf8").catch(() => "");
+    if (existing.includes(importBlock)) {
+      return markMigrationItemSkipped(item, "already imported from Hermes");
+    }
     await fs.mkdir(path.dirname(item.target), { recursive: true });
     await appendRegularFile({
       filePath: item.target,
-      content: `${header}${content.trimEnd()}\n`,
+      content: importBlock,
       rejectSymlinkParents: true,
     });
     return { ...item, status: "migrated" };

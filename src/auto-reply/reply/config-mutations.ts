@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Config mutation helpers used by chat commands that edit OpenClaw config. */
 import { setConfigValueAtPath, unsetConfigValueAtPath } from "../../config/config-paths.js";
 import {
@@ -5,6 +6,10 @@ import {
   validateConfigObjectWithPlugins,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  resolvePluginCapabilityConsent,
+  type PluginCapabilityConsentHandler,
+} from "../../plugins/capability-consent.js";
 import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
 
 export class AutoReplyConfigMutationError extends Error {}
@@ -22,7 +27,7 @@ function assertValidConfig(
 ): { config: OpenClawConfig } {
   const validated = validateConfigObjectWithPlugins(next);
   if (!validated.ok) {
-    const issue = validated.issues[0];
+    const issue = expectDefined(validated.issues[0], "issues entry at 0");
     throw new AutoReplyConfigMutationError(
       `Config invalid after ${action} (${issue.path}: ${issue.message}).`,
     );
@@ -74,10 +79,18 @@ export async function setPluginEnabledFromCommand(params: {
   pluginId: string;
   enabled: boolean;
   action: "enable" | "disable";
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<OpenClawConfig> {
   const committed = await transformConfigFileWithRetry({
     afterWrite: { mode: "auto" },
-    transform: (currentConfig) => {
+    transform: async (currentConfig) => {
+      if (params.enabled) {
+        await resolvePluginCapabilityConsent({
+          config: currentConfig,
+          pluginId: params.pluginId,
+          onCapabilityConsent: params.onCapabilityConsent,
+        });
+      }
       const next = setPluginEnabledInConfig(
         structuredClone(currentConfig),
         params.pluginId,

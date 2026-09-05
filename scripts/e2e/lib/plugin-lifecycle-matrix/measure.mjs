@@ -50,17 +50,17 @@ function readPositiveNumberEnv(name, fallback) {
 
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
-function clampTimerTimeoutMs(valueMs) {
+function clampPluginLifecycleTimerMs(valueMs) {
   return Math.min(Math.max(Math.floor(valueMs), 1), MAX_TIMER_TIMEOUT_MS);
 }
 
-const pollMs = clampTimerTimeoutMs(
+const pollMs = clampPluginLifecycleTimerMs(
   readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_METRIC_POLL_MS", 100),
 );
-const timeoutMs = clampTimerTimeoutMs(
+const timeoutMs = clampPluginLifecycleTimerMs(
   readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS", 300000),
 );
-const timeoutKillGraceMs = clampTimerTimeoutMs(
+const timeoutKillGraceMs = clampPluginLifecycleTimerMs(
   readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS", 2000),
 );
 const maxRssKbThreshold = readPositiveIntEnv(
@@ -200,6 +200,12 @@ function finishChildClosedResultIfGroupDrained() {
   }
 }
 
+// Child readiness can become externally visible before the initial /proc scan.
+// Install handlers first so early parent termination still reaches the detached group.
+for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
+  process.once(signal, () => handleParentSignal(signal));
+}
+
 updateMetrics();
 const interval = setInterval(updateMetrics, pollMs);
 const timeoutTimer =
@@ -301,10 +307,6 @@ function handleParentSignal(signal) {
     },
     Math.min(50, timeoutKillGraceMs),
   );
-}
-
-for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
-  process.once(signal, () => handleParentSignal(signal));
 }
 
 process.once("exit", () => {

@@ -2,18 +2,18 @@ import { describe, expect, it } from "vitest";
 import {
   findSessionTranscriptReaderBoundaryViolations,
   migratedSessionTranscriptReaderFiles,
-} from "../../scripts/check-session-transcript-reader-boundary.mjs";
+} from "../../scripts/check-session-transcript-reader-boundary.mts";
 
 describe("session transcript reader boundary guard", () => {
   it("ratchets only the files migrated by the transcript reader slice", () => {
     expect(migratedSessionTranscriptReaderFiles).toEqual(
       new Set([
-        "src/agents/main-session-restart-recovery.ts",
-        "src/agents/subagent-announce-output.test.ts",
-        "src/agents/subagent-announce-output.ts",
-        "src/agents/subagent-announce.runtime.ts",
-        "src/agents/subagent-orphan-recovery.test.ts",
-        "src/agents/subagent-orphan-recovery.ts",
+        "src/agents/main-session-recovery/main-session-restart-recovery-store.ts",
+        "src/agents/subagents/announce/subagent-announce-output.test.ts",
+        "src/agents/subagents/announce/subagent-announce-output.ts",
+        "src/agents/subagents/announce/subagent-announce.runtime.ts",
+        "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
+        "src/agents/subagents/registry/subagent-registry-restart-recovery.ts",
         "src/agents/tools/embedded-gateway-stub.runtime.ts",
         "src/agents/tools/embedded-gateway-stub.test.ts",
         "src/agents/tools/embedded-gateway-stub.ts",
@@ -23,12 +23,26 @@ describe("session transcript reader boundary guard", () => {
         "src/gateway/gateway-models.profiles.live.test.ts",
         "src/gateway/managed-image-attachments.test.ts",
         "src/gateway/managed-image-attachments.ts",
+        "src/gateway/mcp-app-reconstruction.ts",
         "src/gateway/server-methods/artifacts.test.ts",
         "src/gateway/server-methods/artifacts.ts",
         "src/gateway/server-methods/chat.ts",
         "src/gateway/server-methods/sessions-files.test.ts",
         "src/gateway/server-methods/sessions-files.ts",
-        "src/gateway/server-methods/sessions.ts",
+        "src/gateway/server-methods/sessions-abort.ts",
+        "src/gateway/server-methods/sessions-compact.ts",
+        "src/gateway/server-methods/sessions-compaction-checkpoints.ts",
+        "src/gateway/server-methods/sessions-compaction-queries.ts",
+        "src/gateway/server-methods/sessions-compaction-runner.ts",
+        "src/gateway/server-methods/sessions-create.ts",
+        "src/gateway/server-methods/sessions-delete.ts",
+        "src/gateway/server-methods/sessions-dispatch.ts",
+        "src/gateway/server-methods/sessions-groups.ts",
+        "src/gateway/server-methods/sessions-messaging.ts",
+        "src/gateway/server-methods/sessions-mutations.ts",
+        "src/gateway/server-methods/sessions-read.ts",
+        "src/gateway/server-methods/sessions-shared.ts",
+        "src/gateway/server-methods/sessions-subscriptions.ts",
         "src/gateway/server-session-events.ts",
         "src/gateway/session-history-state.test.ts",
         "src/gateway/session-history-state.ts",

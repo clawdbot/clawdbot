@@ -1,3 +1,3 @@
-// Runtime facade for inbound session store updates.
-export { resolveStorePath } from "./paths.js";
-export { recordSessionMetaFromInbound, updateLastRoute } from "./store.js";
+// Runtime facade keeping inbound session persistence lazy behind the session accessor.
+export { resolveSessionStorePathCore } from "./paths.js";
+export { recordInboundSessionMeta, updateSessionLastRoute } from "./session-accessor.js";

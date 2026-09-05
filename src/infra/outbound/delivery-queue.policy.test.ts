@@ -1,91 +1,41 @@
 // Covers delivery retry policy: permanent-error classification, backoff timing,
 // and first-replay eligibility after crashes.
 import { describe, expect, it } from "vitest";
-import {
-  computeBackoffMs,
-  isEntryEligibleForRecoveryRetry,
-  isPermanentDeliveryError,
-} from "./delivery-queue.js";
+import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
+import { recordRetryAttemptErrors } from "../retry-attempt-errors.js";
+import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 
 describe("delivery-queue policy", () => {
-  describe("isPermanentDeliveryError", () => {
-    it.each([
-      "No conversation reference found for user:abc",
-      "Forum send failed: chat not found (chat_id=user:123)",
-      "403: Forbidden: bot is not a member of the channel chat",
-      "user not found",
-      "Bot was blocked by the user",
-      "Forbidden: bot was kicked from the group chat",
-      "chat_id is empty",
-      "Outbound not configured for channel: demo-channel",
-      "MatrixError: [403] User @bot:matrix.example.com not in room !mixedCase:matrix.example.com",
-    ])("returns true for permanent error: %s", (msg) => {
-      expect(isPermanentDeliveryError(msg)).toBe(true);
+  describe("isProvenDeliveryNotSentError", () => {
+    const createMarker = () =>
+      new PlatformMessageNotDispatchedError("upload stopped before finalization", {
+        cause: new Error("request timed out"),
+      });
+
+    it("accepts the channel-owned marker", () => {
+      expect(isProvenDeliveryNotSentError(createMarker())).toBe(true);
     });
 
-    it.each([
-      "network down",
-      "ETIMEDOUT",
-      "socket hang up",
-      "rate limited",
-      "500 Internal Server Error",
-    ])("returns false for transient error: %s", (msg) => {
-      expect(isPermanentDeliveryError(msg)).toBe(false);
+    it("rejects a platform error that copies only the marker code", () => {
+      const forged = Object.assign(new Error("remote platform failure"), {
+        code: createMarker().code,
+      });
+      expect(isProvenDeliveryNotSentError(forged)).toBe(false);
     });
-  });
 
-  describe("computeBackoffMs", () => {
-    it.each([
-      { retryCount: 0, expected: 0 },
-      { retryCount: 1, expected: 5_000 },
-      { retryCount: 2, expected: 25_000 },
-      { retryCount: 3, expected: 120_000 },
-      { retryCount: 4, expected: 600_000 },
-      { retryCount: 5, expected: 600_000 },
-    ] as const)(
-      "returns scheduled backoff for retryCount=$retryCount",
-      ({ retryCount, expected }) => {
-        expect(computeBackoffMs(retryCount)).toBe(expected);
+    it.each(["connection reset after write", null])(
+      "rejects a marked aggregate with an unproven %s branch",
+      (unprovenBranch) => {
+        expect(
+          isProvenDeliveryNotSentError(new AggregateError([createMarker(), unprovenBranch])),
+        ).toBe(false);
       },
     );
-  });
 
-  describe("isEntryEligibleForRecoveryRetry", () => {
-    it("allows first replay after crash for retryCount=0 without lastAttemptAt", () => {
-      const now = Date.now();
-      const result = isEntryEligibleForRecoveryRetry(
-        {
-          id: "entry-1",
-          channel: "demo-channel",
-          to: "+1",
-          payloads: [{ text: "a" }],
-          enqueuedAt: now,
-          retryCount: 0,
-        },
-        now,
-      );
-      expect(result).toEqual({ eligible: true });
-    });
-
-    it("defers retry entries until backoff window elapses", () => {
-      const now = Date.now();
-      const result = isEntryEligibleForRecoveryRetry(
-        {
-          id: "entry-2",
-          channel: "demo-channel",
-          to: "+1",
-          payloads: [{ text: "a" }],
-          enqueuedAt: now - 30_000,
-          retryCount: 3,
-          lastAttemptAt: now,
-        },
-        now,
-      );
-      expect(result.eligible).toBe(false);
-      if (result.eligible) {
-        throw new Error("Expected ineligible retry entry");
-      }
-      expect(result.remainingBackoffMs).toBe(600_000);
+    it("rejects a marker that follows an ambiguous retry attempt", () => {
+      const marker = createMarker();
+      recordRetryAttemptErrors(marker, [new Error("connection reset after write"), marker]);
+      expect(isProvenDeliveryNotSentError(marker)).toBe(false);
     });
   });
 });

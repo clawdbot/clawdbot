@@ -1,4 +1,5 @@
 import OpenClawKit
+import OpenClawProtocol
 import SwiftUI
 
 struct IPadSkillWorkshopScreen: View {
@@ -17,11 +18,17 @@ struct IPadSkillWorkshopScreen: View {
     @State private var errorText: String?
     @State private var noticeText: String?
     @State private var presentedProposalRoute: IPadSkillProposalSheetRoute?
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
+    let usesNativeNavigationChrome: Bool
     let openSettings: () -> Void
 
-    init(headerLeadingAction: OpenClawSidebarHeaderAction? = nil, openSettings: @escaping () -> Void = {}) {
-        self.headerLeadingAction = headerLeadingAction
+    init(
+        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
+        usesNativeNavigationChrome: Bool = false,
+        openSettings: @escaping () -> Void = {})
+    {
+        self.headerSidebarAction = headerSidebarAction
+        self.usesNativeNavigationChrome = usesNativeNavigationChrome
         self.openSettings = openSettings
     }
 
@@ -29,7 +36,8 @@ struct IPadSkillWorkshopScreen: View {
         IPadSidebarScreenChrome(
             title: "Skill Workshop",
             subtitle: "Review and apply proposed skills.",
-            headerLeadingAction: self.headerLeadingAction,
+            headerSidebarAction: self.headerSidebarAction,
+            usesNativeNavigationChrome: self.usesNativeNavigationChrome,
             gatewayAction: self.openSettings)
         {
             if self.isCompactWidth {
@@ -57,15 +65,18 @@ struct IPadSkillWorkshopScreen: View {
                 ScrollView {
                     self.presentedProposalDetail(proposalID: route.proposalID)
                         .padding(.horizontal, OpenClawProMetric.pagePadding)
-                        .padding(.vertical, 16)
+                        .padding(.vertical, OpenClawSpacing.space4)
                 }
                 .background(OpenClawProBackground())
                 .navigationTitle("Proposal")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") {
+                        Button {
                             self.presentedProposalRoute = nil
+                        } label: {
+                            Text("Done")
+                                .font(OpenClawType.subheadSemiBold)
                         }
                     }
                 }
@@ -98,10 +109,15 @@ struct IPadSkillWorkshopScreen: View {
             VStack(alignment: .leading, spacing: 12) {
                 self.agentScopeMenu
                 self.proposalSearchField
-                Picker("Status", selection: self.$statusFilter) {
+                Picker(selection: self.$statusFilter) {
                     ForEach(Self.proposalStatusFilters, id: \.self) { filter in
-                        Text(Self.proposalStatusFilterLabel(filter)).tag(filter)
+                        Text(Self.proposalStatusFilterLabel(filter))
+                            .font(OpenClawType.captionSemiBold)
+                            .tag(filter)
                     }
+                } label: {
+                    Text("Status")
+                        .font(OpenClawType.captionSemiBold)
                 }
                 .pickerStyle(.segmented)
                 .controlSize(.small)
@@ -111,6 +127,7 @@ struct IPadSkillWorkshopScreen: View {
                         Task { await self.loadProposals(force: true) }
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
@@ -123,12 +140,12 @@ struct IPadSkillWorkshopScreen: View {
                 }
                 if let noticeText {
                     Text(noticeText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.accent)
                 }
                 if let errorText {
                     Text(errorText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.warn)
                 }
             }
@@ -137,14 +154,17 @@ struct IPadSkillWorkshopScreen: View {
     }
 
     private var compactFiltersCard: some View {
-        ProCard(radius: OpenClawProMetric.cardRadius) {
+        let count = self.filteredProposals.count
+        let countText = String(
+            AttributedString(localized: "^[\(count) proposal](inflect: true)").characters)
+        return ProCard(radius: OpenClawProMetric.cardRadius) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("\(self.filteredProposals.count) proposals")
-                            .font(.headline)
+                        Text(verbatim: countText)
+                            .font(OpenClawType.headline)
                         Text(self.statusFilterLabel)
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 8)
@@ -154,10 +174,15 @@ struct IPadSkillWorkshopScreen: View {
                 }
 
                 self.agentScopeMenu
-                Picker("Status", selection: self.$statusFilter) {
+                Picker(selection: self.$statusFilter) {
                     ForEach(Self.proposalStatusFilters, id: \.self) { filter in
-                        Text(Self.proposalStatusFilterLabel(filter)).tag(filter)
+                        Text(Self.proposalStatusFilterLabel(filter))
+                            .font(OpenClawType.captionSemiBold)
+                            .tag(filter)
                     }
+                } label: {
+                    Text("Status")
+                        .font(OpenClawType.captionSemiBold)
                 }
                 .pickerStyle(.segmented)
                 .controlSize(.small)
@@ -170,6 +195,7 @@ struct IPadSkillWorkshopScreen: View {
                         Task { await self.loadProposals(force: true) }
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
+                            .font(OpenClawType.captionSemiBold)
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
@@ -179,12 +205,12 @@ struct IPadSkillWorkshopScreen: View {
                 }
                 if let noticeText {
                     Text(noticeText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.accent)
                 }
                 if let errorText {
                     Text(errorText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.warn)
                 }
             }
@@ -195,12 +221,12 @@ struct IPadSkillWorkshopScreen: View {
     private var proposalSearchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.secondary)
             TextField("Search proposals", text: self.$query)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .font(.subheadline)
+                .font(OpenClawType.subhead)
             if !self.query.isEmpty {
                 Button {
                     self.query = ""
@@ -216,24 +242,30 @@ struct IPadSkillWorkshopScreen: View {
     private var agentScopeMenu: some View {
         HStack(spacing: 8) {
             Text("Agent")
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.secondary)
             Menu {
-                Button("Default agent") {
+                Button {
                     self.selectedAgentScopeID = ""
+                } label: {
+                    Text("Default agent")
+                        .font(OpenClawType.subhead)
                 }
                 ForEach(self.agentScopeOptions, id: \.id) { option in
-                    Button(option.title) {
+                    Button {
                         self.selectedAgentScopeID = option.id
+                    } label: {
+                        Text(option.title)
+                            .font(OpenClawType.subhead)
                     }
                 }
             } label: {
                 HStack(spacing: 6) {
                     Text(self.agentScopeLabel)
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawType.subheadSemiBold)
                         .lineLimit(1)
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption2.weight(.bold))
+                        .font(OpenClawType.caption2Bold)
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
             }
@@ -340,42 +372,60 @@ struct IPadSkillWorkshopScreen: View {
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
-                        Button("Inspect") {
+                        Button {
                             self.selectProposal(
                                 proposal,
                                 opensSheet: true,
                                 forceInspect: true)
+                        } label: {
+                            Text("Inspect")
+                                .font(OpenClawType.subhead)
                         }
                         if proposal.status == "pending" {
-                            Button("Apply") {
+                            Button {
                                 Task { await self.run(.apply, proposal: proposal) }
+                            } label: {
+                                Text("Apply")
+                                    .font(OpenClawType.subhead)
                             }
                             .disabled(!self.canApplyProposalMutations || self.busyAction != nil)
-                            Button("Reject", role: .destructive) {
+                            Button(role: .destructive) {
                                 Task { await self.run(.reject, proposal: proposal) }
+                            } label: {
+                                Text("Reject")
+                                    .font(OpenClawType.subhead)
                             }
                             .disabled(!self.canApplyProposalMutations || self.busyAction != nil)
                         }
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         if proposal.status == "pending" {
-                            Button("Apply") {
+                            Button {
                                 Task { await self.run(.apply, proposal: proposal) }
+                            } label: {
+                                Text("Apply")
+                                    .font(OpenClawType.subhead)
                             }
                             .tint(OpenClawBrand.ok)
                             .disabled(!self.canApplyProposalMutations || self.busyAction != nil)
-                            Button("Reject", role: .destructive) {
+                            Button(role: .destructive) {
                                 Task { await self.run(.reject, proposal: proposal) }
+                            } label: {
+                                Text("Reject")
+                                    .font(OpenClawType.subhead)
                             }
                             .disabled(!self.canApplyProposalMutations || self.busyAction != nil)
                         }
                     }
                     .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                        Button("Inspect") {
+                        Button {
                             self.selectProposal(
                                 proposal,
                                 opensSheet: true,
                                 forceInspect: true)
+                        } label: {
+                            Text("Inspect")
+                                .font(OpenClawType.subhead)
                         }
                         .tint(OpenClawBrand.accent)
                     }
@@ -409,9 +459,9 @@ struct IPadSkillWorkshopScreen: View {
                     ProIconBadge(systemName: "hammer", color: proposal.statusColor)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(proposal.title)
-                            .font(.headline)
+                            .font(OpenClawType.headline)
                         Text(proposal.description)
-                            .font(.caption)
+                            .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -425,23 +475,23 @@ struct IPadSkillWorkshopScreen: View {
 
                 if let content = proposal.content, !content.isEmpty {
                     Text(content)
-                        .font(.caption.monospaced())
+                        .font(OpenClawType.monoSmall)
                         .foregroundStyle(.secondary)
                         .lineLimit(16)
                         .textSelection(.enabled)
                 } else {
                     Text("Select refresh to load the proposal body.")
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                 }
 
                 if !proposal.supportFiles.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Support files")
-                            .font(.subheadline.weight(.semibold))
+                            .font(OpenClawType.subheadSemiBold)
                         ForEach(proposal.supportFiles, id: \.path) { file in
                             Text(file.path)
-                                .font(.caption2.monospaced())
+                                .font(OpenClawType.monoCaption2)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
@@ -475,6 +525,7 @@ struct IPadSkillWorkshopScreen: View {
             Task { await self.run(.apply, proposal: proposal) }
         } label: {
             Label("Apply", systemImage: "checkmark.circle")
+                .font(OpenClawType.captionSemiBold)
                 .frame(maxWidth: self.isCompactWidth ? .infinity : nil)
         }
         .buttonStyle(.borderedProminent)
@@ -487,6 +538,7 @@ struct IPadSkillWorkshopScreen: View {
             Task { await self.run(.reject, proposal: proposal) }
         } label: {
             Label("Reject", systemImage: "xmark.circle")
+                .font(OpenClawType.captionSemiBold)
                 .frame(maxWidth: self.isCompactWidth ? .infinity : nil)
         }
         .buttonStyle(.bordered)
@@ -499,6 +551,7 @@ struct IPadSkillWorkshopScreen: View {
             Task { await self.inspect(proposalID: proposal.id, force: true) }
         } label: {
             Label("Inspect", systemImage: "doc.text.magnifyingglass")
+                .font(OpenClawType.captionSemiBold)
                 .frame(maxWidth: self.isCompactWidth ? .infinity : nil)
         }
         .buttonStyle(.bordered)
@@ -531,6 +584,7 @@ struct IPadSkillWorkshopScreen: View {
     private var agentScopeOptions: [IPadSkillWorkshopAgentScope] {
         let defaultID = Self.normalizedScopeID(self.appModel.gatewayDefaultAgentId)
         return self.appModel.gatewayAgents
+            .filter(\.isSelectableAgent)
             .filter { Self.normalizedScopeID($0.id) != defaultID }
             .map { agent in
                 let name = Self.normalizedScopeID(agent.name)
@@ -552,10 +606,10 @@ struct IPadSkillWorkshopScreen: View {
         let defaultID = Self.normalizedScopeID(self.appModel.gatewayDefaultAgentId)
         if let match = appModel.gatewayAgents.first(where: { Self.normalizedScopeID($0.id) == defaultID }) {
             let name = Self.normalizedScopeID(match.name)
-            return name.isEmpty ? "Default agent" : name
+            return name.isEmpty ? String(localized: "Default agent") : name
         }
         let activeName = Self.normalizedScopeID(self.appModel.activeAgentName)
-        return activeName.isEmpty ? "Default agent" : activeName
+        return activeName.isEmpty ? String(localized: "Default agent") : activeName
     }
 
     private var selectedAgentParam: String? {
@@ -572,7 +626,7 @@ struct IPadSkillWorkshopScreen: View {
             Image(systemName: "lock.shield")
                 .foregroundStyle(OpenClawBrand.warn)
             Text("Admin scope required.")
-                .font(.caption.weight(.semibold))
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
         }
@@ -598,18 +652,18 @@ struct IPadSkillWorkshopScreen: View {
 
     static func proposalStatusFilterLabel(_ filter: String) -> String {
         switch filter {
-        case "pending": "Pending"
-        case "held": "Held"
-        case "applied": "Applied"
-        case "rejected": "Rejected"
-        default: "All"
+        case "pending": String(localized: "Pending")
+        case "held": String(localized: "Held")
+        case "applied": String(localized: "Applied")
+        case "rejected": String(localized: "Rejected")
+        default: String(localized: "All")
         }
     }
 
     static func proposalLaneLabel(_ status: String) -> String {
         switch status {
-        case "quarantined": "Quarantined"
-        case "stale": "Stale"
+        case "quarantined": String(localized: "Quarantined")
+        case "stale": String(localized: "Stale")
         case "pending", "applied", "rejected":
             self.proposalStatusFilterLabel(status)
         default:
@@ -804,9 +858,9 @@ struct IPadSkillWorkshopScreen: View {
         do {
             let data = try await request(
                 method: "skills.proposals.inspect",
-                params: IPadSkillProposalInspectParams(
-                    agentId: selectedAgentParam,
-                    proposalId: proposalID),
+                params: SkillsProposalInspectParams(
+                    agentid: selectedAgentParam,
+                    proposalid: proposalID),
                 timeoutSeconds: 20)
             let response = try JSONDecoder().decode(IPadSkillProposalInspectResponse.self, from: data)
             self.merge(IPadSkillProposal(inspect: response, previous: self.proposals.first { $0.id == proposalID }))
@@ -817,23 +871,29 @@ struct IPadSkillWorkshopScreen: View {
 
     private func run(_ action: IPadSkillProposalAction.Kind, proposal: IPadSkillProposal) async {
         guard self.canApplyProposalMutations, self.busyAction == nil else { return }
-        self.busyAction = IPadSkillProposalAction(kind: action, proposalID: proposal.id)
+        guard let preparedAction = IPadSkillProposalAction(kind: action, proposal: proposal) else {
+            self.noticeText = nil
+            self.errorText = String(localized: "Review the proposal draft before applying or rejecting it.")
+            return
+        }
+        self.busyAction = preparedAction
         self.errorText = nil
         self.noticeText = nil
         defer { self.busyAction = nil }
 
         do {
-            let method = action == .apply ? "skills.proposals.apply" : "skills.proposals.reject"
             _ = try await self.request(
-                method: method,
-                params: IPadSkillProposalInspectParams(
-                    agentId: self.selectedAgentParam,
-                    proposalId: proposal.id),
+                method: preparedAction.method,
+                params: preparedAction.params(agentID: self.selectedAgentParam),
                 timeoutSeconds: 30)
-            self.noticeText = action == .apply ? "Proposal applied." : "Proposal rejected."
+            self.noticeText = preparedAction.kind == .apply
+                ? String(localized: "Proposal applied.")
+                : String(localized: "Proposal rejected.")
             await self.loadProposals(force: true)
         } catch {
-            self.errorText = Self.message(for: error)
+            let actionError = Self.message(for: error)
+            await self.loadProposals(force: true)
+            self.errorText = actionError
         }
     }
 
@@ -879,15 +939,19 @@ struct IPadSkillProposalKanbanColumn: View {
         ProCard(padding: 0, radius: OpenClawProMetric.cardRadius) {
             VStack(spacing: 0) {
                 ProPanelHeader(
-                    title: IPadSkillWorkshopScreen.proposalLaneLabel(self.status),
+                    title: .localized(IPadSkillWorkshopScreen.proposalLaneLabel(self.status)),
                     value: "\(self.proposals.count)",
                     actionTitle: nil,
                     action: nil)
 
                 if self.proposals.isEmpty {
+                    let lane = IPadSkillWorkshopScreen.proposalLaneLabel(self.status)
                     ProStatusRow(
                         icon: "hammer",
-                        title: "No \(IPadSkillWorkshopScreen.proposalLaneLabel(self.status).lowercased()) proposals",
+                        title: .verbatim(
+                            String(
+                                format: String(localized: "No proposals in %@"),
+                                lane)),
                         detail: "Matching proposals appear here after gateway refresh.",
                         value: "empty",
                         color: .secondary,
@@ -944,11 +1008,11 @@ private struct IPadSkillProposalKanbanCard: View {
                             color: self.proposal.statusColor)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(self.proposal.title)
-                                .font(.subheadline.weight(.semibold))
+                                .font(OpenClawType.subheadSemiBold)
                                 .foregroundStyle(self.isSelected ? OpenClawBrand.accent : .primary)
                                 .lineLimit(2)
                             Text(self.proposal.description)
-                                .font(.caption)
+                                .font(OpenClawType.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(3)
                         }
@@ -957,7 +1021,7 @@ private struct IPadSkillProposalKanbanCard: View {
                         ProValuePill(value: self.proposal.status, color: self.proposal.statusColor)
                         Spacer(minLength: 4)
                         Text(self.proposal.ageLabel)
-                            .font(.caption2.weight(.semibold))
+                            .font(OpenClawType.caption2SemiBold)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -969,6 +1033,7 @@ private struct IPadSkillProposalKanbanCard: View {
                 if self.proposal.status == "pending" {
                     Button(action: self.apply) {
                         Image(systemName: "checkmark.circle")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .accessibilityLabel("Apply Proposal")
                     .buttonStyle(.bordered)
@@ -977,6 +1042,7 @@ private struct IPadSkillProposalKanbanCard: View {
 
                     Button(role: .destructive, action: self.reject) {
                         Image(systemName: "xmark.circle")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .accessibilityLabel("Reject Proposal")
                     .buttonStyle(.bordered)
@@ -986,6 +1052,7 @@ private struct IPadSkillProposalKanbanCard: View {
 
                 Button(action: self.inspect) {
                     Image(systemName: "doc.text.magnifyingglass")
+                        .font(OpenClawType.captionSemiBold)
                 }
                 .accessibilityLabel("Inspect Proposal")
                 .buttonStyle(.bordered)
@@ -993,18 +1060,27 @@ private struct IPadSkillProposalKanbanCard: View {
                 .disabled(self.isInspecting)
             }
         }
-        .padding(12)
+        .padding(OpenClawSpacing.space3)
         .background(
             self.isSelected ? OpenClawBrand.accent.opacity(0.08) : Color.clear,
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            in: RoundedRectangle(cornerRadius: OpenClawRadius.xs, style: .continuous))
         .contentShape(Rectangle())
         .contextMenu {
-            Button("Inspect", action: self.inspect)
+            Button(action: self.inspect) {
+                Text("Inspect")
+                    .font(OpenClawType.subhead)
+            }
             if self.proposal.status == "pending" {
-                Button("Apply", action: self.apply)
-                    .disabled(!self.canApplyProposalMutations || self.isBusy)
-                Button("Reject", role: .destructive, action: self.reject)
-                    .disabled(!self.canApplyProposalMutations || self.isBusy)
+                Button(action: self.apply) {
+                    Text("Apply")
+                        .font(OpenClawType.subhead)
+                }
+                .disabled(!self.canApplyProposalMutations || self.isBusy)
+                Button(role: .destructive, action: self.reject) {
+                    Text("Reject")
+                        .font(OpenClawType.subhead)
+                }
+                .disabled(!self.canApplyProposalMutations || self.isBusy)
             }
         }
     }
@@ -1020,24 +1096,24 @@ struct IPadSkillProposalRow: View {
             ProIconBadge(systemName: self.isBusy ? "hourglass" : "hammer", color: self.proposal.statusColor)
             VStack(alignment: .leading, spacing: 4) {
                 Text(self.proposal.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .foregroundStyle(self.isSelected ? OpenClawBrand.accent : .primary)
                     .lineLimit(1)
                 Text(self.proposal.description)
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
             Spacer(minLength: 8)
             Text(self.proposal.ageLabel)
-                .font(.caption2.weight(.semibold))
+                .font(OpenClawType.caption2SemiBold)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(
             self.isSelected ? OpenClawBrand.danger.opacity(0.08) : Color.clear,
-            in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            in: RoundedRectangle(cornerRadius: OpenClawRadius.xs, style: .continuous))
     }
 }
 
@@ -1057,6 +1133,25 @@ struct IPadSkillProposalAction: Equatable {
 
     let kind: Kind
     let proposalID: String
+    let revisionHash: String
+
+    init?(kind: Kind, proposal: IPadSkillProposal) {
+        guard let revisionHash = proposal.revisionHash else { return nil }
+        self.kind = kind
+        self.proposalID = proposal.id
+        self.revisionHash = revisionHash
+    }
+
+    var method: String {
+        self.kind == .apply ? "skills.proposals.apply" : "skills.proposals.reject"
+    }
+
+    func params(agentID: String?) -> SkillsProposalDecisionParams {
+        SkillsProposalDecisionParams(
+            agentid: agentID,
+            proposalid: self.proposalID,
+            expectedrevisionhash: self.revisionHash)
+    }
 }
 
 private struct IPadSkillProposalManifest: Decodable {
@@ -1065,13 +1160,11 @@ private struct IPadSkillProposalManifest: Decodable {
 
 struct IPadSkillProposalManifestEntry: Decodable {
     let id: String
-    let kind: String
     let status: String
     let title: String
     let description: String
     let skillName: String
     let skillKey: String
-    let createdAt: String
     let updatedAt: String
     let scanState: String
 }
@@ -1085,24 +1178,18 @@ private struct IPadSkillProposalListParams: Encodable {
     let agentId: String?
 }
 
-private struct IPadSkillProposalInspectParams: Encodable {
-    let agentId: String?
-    let proposalId: String
-}
-
 struct IPadSkillProposalInspectResponse: Decodable {
     let record: IPadSkillProposalRecord
+    let revisionHash: String?
     let content: String
     let supportFiles: [IPadSkillProposalSupportFile]?
 }
 
 struct IPadSkillProposalRecord: Decodable {
     let id: String
-    let kind: String
     let status: String
     let title: String
     let description: String
-    let createdAt: String
     let updatedAt: String
     let target: IPadSkillProposalTarget
 }
@@ -1119,42 +1206,40 @@ struct IPadSkillProposalSupportFile: Decodable {
 
 struct IPadSkillProposal: Identifiable {
     let id: String
-    let kind: String
     let status: String
     let title: String
     let description: String
     let skillName: String
     let skillKey: String
-    let createdAtMs: Double
     let updatedAtMs: Double
+    let revisionHash: String?
     var content: String?
     var supportFiles: [IPadSkillProposalSupportFile]
 
     init(entry: IPadSkillProposalManifestEntry, previous: IPadSkillProposal?) {
         self.id = entry.id
-        self.kind = entry.kind
         self.status = entry.status
         self.title = entry.title.isEmpty ? entry.skillName : entry.title
         self.description = entry.description
         self.skillName = entry.skillName
         self.skillKey = entry.skillKey
-        self.createdAtMs = Self.parseDate(entry.createdAt)
         self.updatedAtMs = Self.parseDate(entry.updatedAt)
-        self.content = previous?.updatedAtMs == self.updatedAtMs ? previous?.content : nil
-        self.supportFiles = previous?.updatedAtMs == self.updatedAtMs ? previous?.supportFiles ?? [] : []
+        let isSameRevision = previous?.updatedAtMs == self.updatedAtMs
+        self.revisionHash = isSameRevision ? previous?.revisionHash : nil
+        self.content = isSameRevision ? previous?.content : nil
+        self.supportFiles = isSameRevision ? previous?.supportFiles ?? [] : []
     }
 
     init(inspect: IPadSkillProposalInspectResponse, previous: IPadSkillProposal?) {
         let record = inspect.record
         self.id = record.id
-        self.kind = record.kind
         self.status = record.status
         self.title = record.title.isEmpty ? record.target.skillName : record.title
         self.description = record.description
         self.skillName = record.target.skillName
         self.skillKey = record.target.skillKey
-        self.createdAtMs = Self.parseDate(record.createdAt)
         self.updatedAtMs = Self.parseDate(record.updatedAt)
+        self.revisionHash = inspect.revisionHash
         self.content = Self.stripFrontmatter(inspect.content)
         self.supportFiles = inspect.supportFiles ?? previous?.supportFiles ?? []
     }
@@ -1162,11 +1247,15 @@ struct IPadSkillProposal: Identifiable {
     var ageLabel: String {
         let diff = max(0, Date().timeIntervalSince1970 * 1000 - self.updatedAtMs)
         let minutes = Int(diff / 60000)
-        if minutes < 1 { return "now" }
-        if minutes < 60 { return "\(minutes)m" }
+        if minutes < 1 { return String(localized: "now") }
+        if minutes < 60 {
+            return String(format: String(localized: "%@m"), minutes.formatted())
+        }
         let hours = minutes / 60
-        if hours < 24 { return "\(hours)h" }
-        return "\(hours / 24)d"
+        if hours < 24 {
+            return String(format: String(localized: "%@h"), hours.formatted())
+        }
+        return String(format: String(localized: "%@d"), (hours / 24).formatted())
     }
 
     var statusColor: Color {

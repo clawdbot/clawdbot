@@ -7,7 +7,7 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-const mod = await import("./pw-tools-core.js");
+const mod = await import("./pw-tools-core.interactions.js");
 
 describe("pw-tools-core", () => {
   it("clamps timeoutMs for scrollIntoView", async () => {
@@ -22,7 +22,10 @@ describe("pw-tools-core", () => {
       timeoutMs: 50,
     });
 
-    expect(scrollIntoViewIfNeeded).toHaveBeenCalledWith({ timeout: 500 });
+    expect(scrollIntoViewIfNeeded).toHaveBeenCalledWith({
+      timeout: 500,
+      signal: expect.any(AbortSignal),
+    });
   });
   it.each([
     {

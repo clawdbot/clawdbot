@@ -1,7 +1,9 @@
 package ai.openclaw.app.node
 
-import android.content.Context
+import android.Manifest
+import android.app.Application
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
@@ -15,6 +17,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 
 @RunWith(RobolectricTestRunner::class)
 class DeviceHandlerTest {
@@ -157,103 +160,89 @@ class DeviceHandlerTest {
   }
 
   @Test
-  fun smsTopLevelStatusTreatsSendOnlyPartialGrantAsGranted() {
-    assertTrue(
-      DeviceHandler.hasAnySmsCapability(
+  fun handleDevicePermissions_derivesCompositeStatesFromCanonicalSnapshot() {
+    val app = appContext()
+    shadowOf(app.packageManager).setSystemFeature(PackageManager.FEATURE_TELEPHONY, true)
+    val snapshot =
+      emptyPermissionSnapshot().copy(
+        smsSend = true,
+        contactsRead = true,
+        calendarRead = true,
+        calendarWrite = true,
+      )
+    val handler =
+      DeviceHandler(
+        appContext = app,
+        appSource = FakeDeviceAppSource(emptyList()),
         smsEnabled = true,
-        telephonyAvailable = true,
-        smsSendGranted = true,
-        smsReadGranted = false,
-      ),
+        permissionSnapshot = { snapshot },
+      )
+
+    val payload = handler.handleDevicePermissions(null).payloadJson
+
+    assertEquals("granted", permissionStatus(payload, "sms"))
+    assertEquals("denied", permissionStatus(payload, "contacts"))
+    assertEquals("granted", permissionStatus(payload, "calendar"))
+    val smsCapabilities =
+      parsePayload(payload)
+        .getValue("permissions")
+        .jsonObject
+        .getValue("sms")
+        .jsonObject
+        .getValue("capabilities")
+        .jsonObject
+    assertEquals(
+      "granted",
+      smsCapabilities
+        .getValue("send")
+        .jsonObject
+        .getValue("status")
+        .jsonPrimitive.content,
+    )
+    assertEquals(
+      "denied",
+      smsCapabilities
+        .getValue("read")
+        .jsonObject
+        .getValue("status")
+        .jsonPrimitive.content,
     )
   }
 
   @Test
-  fun smsTopLevelStatusTreatsReadOnlyPartialGrantAsGranted() {
-    assertTrue(
-      DeviceHandler.hasAnySmsCapability(
-        smsEnabled = true,
-        telephonyAvailable = true,
-        smsSendGranted = false,
-        smsReadGranted = true,
-      ),
-    )
-  }
+  fun handleDevicePermissions_reportsSmsGrantsAndPromptability() {
+    val send = Manifest.permission.SEND_SMS
+    val read = Manifest.permission.READ_SMS
+    val cases =
+      listOf(
+        SmsPermissionCase(true, true, emptyList(), "denied", true),
+        SmsPermissionCase(true, true, listOf(send), "granted", true),
+        SmsPermissionCase(true, true, listOf(read), "granted", true),
+        SmsPermissionCase(true, true, listOf(send, read), "granted", false),
+        SmsPermissionCase(false, true, listOf(send, read), "denied", false),
+        SmsPermissionCase(true, false, listOf(send, read), "denied", false),
+        SmsPermissionCase(false, true, emptyList(), "denied", false),
+        SmsPermissionCase(true, false, emptyList(), "denied", false),
+      )
+    val app = appContext()
+    for (case in cases) {
+      shadowOf(app.packageManager).setSystemFeature(PackageManager.FEATURE_TELEPHONY, case.telephony)
+      shadowOf(app).denyPermissions(send, read)
+      shadowOf(app).grantPermissions(*case.permissions.toTypedArray())
+      val handler = DeviceHandler(app, smsEnabled = case.smsEnabled)
 
-  @Test
-  fun smsTopLevelStatusTreatsNoSmsGrantAsDenied() {
-    assertTrue(
-      !DeviceHandler.hasAnySmsCapability(
-        smsEnabled = true,
-        telephonyAvailable = true,
-        smsSendGranted = false,
-        smsReadGranted = false,
-      ),
-    )
-  }
+      val result = handler.handleDevicePermissions(null)
 
-  @Test
-  fun smsTopLevelStatusTreatsDisabledSmsAsDenied() {
-    assertTrue(
-      !DeviceHandler.hasAnySmsCapability(
-        smsEnabled = false,
-        telephonyAvailable = true,
-        smsSendGranted = true,
-        smsReadGranted = true,
-      ),
-    )
-  }
-
-  @Test
-  fun smsTopLevelStatusTreatsMissingTelephonyAsDenied() {
-    assertTrue(
-      !DeviceHandler.hasAnySmsCapability(
-        smsEnabled = true,
-        telephonyAvailable = false,
-        smsSendGranted = true,
-        smsReadGranted = true,
-      ),
-    )
-  }
-
-  @Test
-  fun smsTopLevelPromptableStaysTrueUntilBothSmsPermissionsAreGranted() {
-    assertTrue(
-      DeviceHandler.isSmsPromptable(
-        smsEnabled = true,
-        telephonyAvailable = true,
-        smsSendGranted = true,
-        smsReadGranted = false,
-      ),
-    )
-    assertTrue(
-      !DeviceHandler.isSmsPromptable(
-        smsEnabled = true,
-        telephonyAvailable = true,
-        smsSendGranted = true,
-        smsReadGranted = true,
-      ),
-    )
-  }
-
-  @Test
-  fun smsTopLevelPromptableIsFalseWhenSmsCannotExist() {
-    assertTrue(
-      !DeviceHandler.isSmsPromptable(
-        smsEnabled = false,
-        telephonyAvailable = true,
-        smsSendGranted = false,
-        smsReadGranted = false,
-      ),
-    )
-    assertTrue(
-      !DeviceHandler.isSmsPromptable(
-        smsEnabled = true,
-        telephonyAvailable = false,
-        smsSendGranted = false,
-        smsReadGranted = false,
-      ),
-    )
+      assertTrue(result.ok)
+      val sms =
+        parsePayload(result.payloadJson)
+          .getValue("permissions")
+          .jsonObject
+          .getValue("sms")
+          .jsonObject
+      assertEquals(case.toString(), case.expectedStatus, sms.getValue("status").jsonPrimitive.content)
+      assertEquals(case.toString(), case.expectedPromptable, sms.getValue("promptable").jsonPrimitive.boolean)
+    }
   }
 
   @Test
@@ -273,6 +262,51 @@ class DeviceHandlerTest {
     assertEquals("denied", callLog.getValue("status").jsonPrimitive.content)
     assertTrue(!callLog.getValue("promptable").jsonPrimitive.boolean)
   }
+
+  @Test
+  fun handleDevicePermissions_requiresReadAndWritePermissionPairs() {
+    val app = appContext()
+    val handler = DeviceHandler(app)
+    val permissionPairs =
+      listOf(
+        Triple("contacts", Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS),
+        Triple("calendar", Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR),
+      )
+
+    for ((key, readPermission, writePermission) in permissionPairs) {
+      shadowOf(app).denyPermissions(readPermission, writePermission)
+
+      shadowOf(app).grantPermissions(readPermission)
+      assertEquals("$key read-only", "denied", permissionStatus(handler.handleDevicePermissions(null).payloadJson, key))
+
+      shadowOf(app).denyPermissions(readPermission)
+      shadowOf(app).grantPermissions(writePermission)
+      assertEquals("$key write-only", "denied", permissionStatus(handler.handleDevicePermissions(null).payloadJson, key))
+
+      shadowOf(app).grantPermissions(readPermission)
+      assertEquals("$key read-write", "granted", permissionStatus(handler.handleDevicePermissions(null).payloadJson, key))
+    }
+  }
+
+  private fun emptyPermissionSnapshot(): AndroidPermissionSnapshot =
+    AndroidPermissionSnapshot(
+      camera = false,
+      microphone = false,
+      location = false,
+      locationPrecise = false,
+      locationBackground = false,
+      smsSend = false,
+      smsRead = false,
+      notificationListener = false,
+      notifications = false,
+      photos = false,
+      contactsRead = false,
+      contactsWrite = false,
+      calendarRead = false,
+      calendarWrite = false,
+      callLog = false,
+      motion = false,
+    )
 
   @Test
   fun handleDeviceHealth_returnsExpectedShape() {
@@ -324,7 +358,7 @@ class DeviceHandlerTest {
   @Test
   fun handleDeviceApps_filtersAndLimitsVisibleApps() {
     val handler =
-      DeviceHandler.forTesting(
+      DeviceHandler(
         appContext = appContext(),
         appSource =
           FakeDeviceAppSource(
@@ -393,7 +427,7 @@ class DeviceHandlerTest {
           ),
         ),
       )
-    val handler = DeviceHandler.forTesting(appContext = appContext(), appSource = source)
+    val handler = DeviceHandler(appContext = appContext(), appSource = source)
 
     val result = handler.handleDeviceApps("""{"includeSystem":true,"includeNonLaunchable":true}""")
 
@@ -423,12 +457,33 @@ class DeviceHandlerTest {
     assertTrue(isSystemDeviceApp(appInfo))
   }
 
-  private fun appContext(): Context = RuntimeEnvironment.getApplication()
+  private fun appContext(): Application = RuntimeEnvironment.getApplication()
+
+  private data class SmsPermissionCase(
+    val smsEnabled: Boolean,
+    val telephony: Boolean,
+    val permissions: List<String>,
+    val expectedStatus: String,
+    val expectedPromptable: Boolean,
+  )
 
   private fun parsePayload(payloadJson: String?): JsonObject {
     val jsonString = payloadJson ?: error("expected payload")
     return Json.parseToJsonElement(jsonString).jsonObject
   }
+
+  private fun permissionStatus(
+    payloadJson: String?,
+    key: String,
+  ): String =
+    parsePayload(payloadJson)
+      .getValue("permissions")
+      .jsonObject
+      .getValue(key)
+      .jsonObject
+      .getValue("status")
+      .jsonPrimitive
+      .content
 }
 
 private class FakeDeviceAppSource(

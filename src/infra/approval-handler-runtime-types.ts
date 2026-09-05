@@ -2,22 +2,25 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
 import type { PreparedChannelNativeApprovalTarget } from "./approval-native-runtime-types.js";
-import type { ChannelApprovalKind } from "./approval-types.js";
+import type { ApprovalRequestInput, ChannelApprovalKind } from "./approval-types.js";
 import type {
   ExpiredApprovalView,
   PendingApprovalView,
   ResolvedApprovalView,
 } from "./approval-view-model.types.js";
-import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
-import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
-import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
+import type { ExecApprovalResolved } from "./exec-approvals.js";
+import type { PluginApprovalResolved } from "./plugin-approvals.js";
+import type { SystemAgentApprovalResolved } from "./system-agent-approvals.js";
 
 export type { ChannelApprovalKind } from "./approval-types.js";
 
-/** Union of approval request events a native approval handler can receive. */
-export type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+/** Backward-compatible approval request accepted by public plugin callbacks. */
+export type ApprovalRequest = ApprovalRequestInput;
 /** Union of approval resolution events a native approval handler can finalize. */
-export type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
+export type ApprovalResolved =
+  | ExecApprovalResolved
+  | PluginApprovalResolved
+  | SystemAgentApprovalResolved;
 
 /** Shared context passed to channel-native approval hooks. */
 export type ChannelApprovalCapabilityHandlerContext = {
@@ -38,7 +41,11 @@ export type ChannelApprovalNativeFinalAction<TPayload> =
 export type ChannelApprovalNativeAvailabilityAdapter = {
   isConfigured: (params: ChannelApprovalCapabilityHandlerContext) => boolean;
   shouldHandle: (
-    params: ChannelApprovalCapabilityHandlerContext & { request: ApprovalRequest },
+    params: ChannelApprovalCapabilityHandlerContext & {
+      request: ApprovalRequest;
+      /** Payload-derived owner; channel adapters must not infer ownership from the id. */
+      approvalKind: ChannelApprovalKind;
+    },
   ) => boolean;
 };
 
@@ -108,6 +115,8 @@ type ChannelApprovalNativeTransportAdapterForView<
   updateEntry?: (
     params: ChannelApprovalCapabilityHandlerContext & {
       entry: TPendingEntry;
+      request: ApprovalRequest;
+      approvalKind: ChannelApprovalKind;
       payload: TFinalPayload;
       phase: "resolved" | "expired";
     },
@@ -214,6 +223,14 @@ type ChannelApprovalNativeObserveAdapterForView<
       entry: TPendingEntry;
     },
   ) => void;
+  /** Runs after every terminal entry for one approval has been finalized. */
+  onFinalized?: (
+    params: ChannelApprovalCapabilityHandlerContext & {
+      request: ApprovalRequest;
+      approvalKind: ChannelApprovalKind;
+      phase: "resolved" | "expired";
+    },
+  ) => void;
 };
 
 /** Optional observer hooks for delivery errors, duplicates, and successful deliveries. */
@@ -231,7 +248,11 @@ export type ChannelApprovalNativeRuntimeAdapter<
   TBinding = unknown,
   TFinalPayload = unknown,
 > = {
-  eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
+  eventKinds?: readonly ChannelApprovalKind[];
+  /**
+   * Trusted legacy ownership override retained for compatibility.
+   * @deprecated Omit this so core derives approval ownership from the request payload.
+   */
   resolveApprovalKind?: (request: ApprovalRequest) => ChannelApprovalKind;
   availability: ChannelApprovalNativeAvailabilityAdapter;
   presentation: ChannelApprovalNativePresentationAdapter<TPendingPayload, TFinalPayload>;
@@ -256,7 +277,11 @@ export type ChannelApprovalNativeRuntimeSpec<
   TResolvedView extends ResolvedApprovalView = ResolvedApprovalView,
   TExpiredView extends ExpiredApprovalView = ExpiredApprovalView,
 > = {
-  eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
+  eventKinds?: readonly ChannelApprovalKind[];
+  /**
+   * Trusted legacy ownership override retained for compatibility.
+   * @deprecated Omit this so core derives approval ownership from the request payload.
+   */
   resolveApprovalKind?: (request: ApprovalRequest) => ChannelApprovalKind;
   availability: ChannelApprovalNativeAvailabilityAdapter;
   presentation: {

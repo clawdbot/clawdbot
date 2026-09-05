@@ -6,6 +6,7 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
 import type { OutboundDeliveryFormattingOptions } from "../../infra/outbound/formatting.js";
 import type { OutboundIdentity } from "../../infra/outbound/identity-types.js";
@@ -40,6 +41,20 @@ export type ChannelOutboundContext = {
   deps?: OutboundSendDeps;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  /** @internal Opaque durable intent id for exact provider-side send reconciliation. */
+  deliveryQueueId?: string;
+  /** @internal Stable platform-send index within one durable payload. */
+  deliveryPartIndex?: number;
+  /** @internal Exact platform-send count within one durable payload. */
+  deliveryPartCount?: number;
+  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
+  preparedMessageId?: string;
+  /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
+  onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Synchronously fence custody after refresh and immediately before provider I/O. */
+  assertDirectAdapterHandoff?: () => void;
+  /** @internal Report each completed platform sub-send before starting another fallible step. */
+  onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
@@ -57,6 +72,10 @@ export type ChannelPresentationCapabilities = {
   context?: boolean;
   /** Whether the channel can render divider blocks natively. */
   divider?: boolean;
+  /** Whether the channel can render chart blocks natively. */
+  charts?: boolean;
+  /** Whether the channel can render table blocks natively. */
+  tables?: boolean;
   /** Per-channel limits used to adapt portable presentation blocks before rendering. */
   limits?: {
     actions?: {
@@ -120,10 +139,10 @@ export type ChannelDeliveryCapabilities = {
 export type ChannelOutboundPayloadHint =
   | {
       kind: "approval-pending";
-      approvalKind: "exec" | "plugin";
+      approvalKind: ChannelApprovalKind;
       nativeRouteActive?: boolean;
     }
-  | { kind: "approval-resolved"; approvalKind: "exec" | "plugin" };
+  | { kind: "approval-resolved"; approvalKind: ChannelApprovalKind };
 
 export type ChannelOutboundTargetRef = {
   channel: string;
@@ -132,16 +151,22 @@ export type ChannelOutboundTargetRef = {
   threadId?: string | number | null;
 };
 
-export type ChannelOutboundFormattedContext = ChannelOutboundContext & {
+type ChannelOutboundFormattedContext = ChannelOutboundContext & {
   abortSignal?: AbortSignal;
 };
 
-export type ChannelOutboundChunkContext = {
+type ChannelOutboundChunkContext = {
   formatting?: OutboundDeliveryFormattingOptions;
 };
 
-export type ChannelOutboundNormalizePayloadParams = {
+type ChannelOutboundNormalizePayloadParams = {
   payload: ReplyPayload;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+};
+
+type ChannelOutboundNormalizePayloadBatchParams = {
+  payloads: readonly { index: number; payload: ReplyPayload }[];
   cfg: OpenClawConfig;
   accountId?: string | null;
 };
@@ -153,18 +178,41 @@ export type ChannelOutboundAdapter = {
   chunkedTextFormatting?: OutboundDeliveryFormattingOptions;
   /** Lift remote Markdown image syntax in text into outbound media attachments. */
   extractMarkdownImages?: boolean;
+  /** Preserve model-authored Markdown details blocks for a native channel renderer. */
+  preserveMarkdownDetails?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
   textChunkLimit?: number;
-  sanitizeText?: (params: { text: string; payload: ReplyPayload }) => string;
+  /**
+   * Reserve the exact provider id used by the next single-message send.
+   * Presence opts the channel into conversations_turn reply correlation.
+   */
+  prepareConversationTurnMessageId?: (params: {
+    cfg: OpenClawConfig;
+    to: string;
+    text: string;
+    accountId?: string | null;
+    threadId?: string | number | null;
+  }) => string;
+  sanitizeText?: (params: {
+    text: string;
+    payload: ReplyPayload;
+    cfg?: OpenClawConfig;
+    accountId?: string;
+  }) => string;
   pollMaxOptions?: number;
   supportsPollDurationSeconds?: boolean;
   supportsAnonymousPolls?: boolean;
   normalizePayload?: (params: ChannelOutboundNormalizePayloadParams) => ReplyPayload | null;
+  /** Normalize an ordered batch in place. Return one entry per input; null suppresses that send. */
+  normalizePayloadBatch?: (
+    params: ChannelOutboundNormalizePayloadBatchParams,
+  ) => ReadonlyArray<ReplyPayload | null>;
   sendTextOnlyErrorPayloads?: boolean;
   shouldSkipPlainTextSanitization?: (params: { payload: ReplyPayload }) => boolean;
   resolveEffectiveTextChunkLimit?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     fallbackLimit?: number;
+    formatting?: OutboundDeliveryFormattingOptions;
   }) => number | undefined;
   shouldSuppressLocalPayloadPrompt?: (params: {
     cfg: OpenClawConfig;
@@ -184,13 +232,32 @@ export type ChannelOutboundAdapter = {
     payload: ReplyPayload;
     results: readonly OutboundDeliveryResult[];
   }) => Promise<void> | void;
+  /** Adopt a provider-created thread for later payloads in the same durable batch. */
+  adoptTargetFromDelivery?: (params: {
+    cfg: OpenClawConfig;
+    target: ChannelOutboundTargetRef;
+    result: OutboundDeliveryResult;
+  }) => { threadId: string | number } | null | undefined;
   /** Channel-advertised presentation features and limits used by core adaptation. */
   presentationCapabilities?: ChannelPresentationCapabilities;
+  /**
+   * Account- and formatting-aware capability resolution; takes precedence over
+   * the static declaration. Formatting is the delivery's outbound formatting
+   * options, so capabilities that only apply to one text funnel (for example
+   * rich tables on the markdown path) can turn off for HTML-mode sends.
+   */
+  resolvePresentationCapabilities?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    formatting?: OutboundDeliveryFormattingOptions;
+  }) => ChannelPresentationCapabilities;
   deliveryCapabilities?: ChannelDeliveryCapabilities;
   /** Render an adapted portable presentation into channel-native payload data. */
   renderPresentation?: (params: {
     payload: ReplyPayload;
     presentation: MessagePresentation;
+    /** Normalized original for readable fallbacks; native rendering uses presentation. */
+    sourcePresentation?: MessagePresentation;
     ctx: ChannelOutboundPayloadContext;
   }) => Promise<ReplyPayload | null> | ReplyPayload | null;
   pinDeliveredMessage?: (params: {

@@ -1,10 +1,6 @@
 // Memory Core tests cover concept vocabulary plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  classifyConceptTagScript,
-  deriveConceptTags,
-  summarizeConceptTagScriptCoverage,
-} from "./concept-vocabulary.js";
+import { deriveConceptTags, summarizeConceptTagScriptCoverage } from "./concept-vocabulary.js";
 
 describe("concept vocabulary", () => {
   it("extracts Unicode-aware concept tags for common European languages", () => {
@@ -29,6 +25,29 @@ describe("concept vocabulary", () => {
     expect(tags).not.toContain("2026-04-04.md");
   });
 
+  it.each([
+    ["Store the session in kv and back up to s3 nightly.", ["kv", "s3"], []],
+    ["Played the mkv recording and tuned the css3 layout.", ["mkv", "css3"], ["kv", "s3"]],
+    ["kv𐐀 𐐀kv s3𐐀 𐐀s3", ["kv𐐨", "𐐨kv", "s3𐐨", "𐐨s3"], ["kv", "s3"]],
+  ])("preserves short glossary terms only as whole words: %s", (snippet, present, absent) => {
+    const tags = deriveConceptTags({ path: "memory/2026-04-04.md", snippet });
+    expect(tags).toEqual(expect.arrayContaining(present));
+    for (const tag of absent) {
+      expect(tags).not.toContain(tag);
+    }
+  });
+
+  it.each(["42", "1.00", "51-54", "１.００", "５１-５４", "2026-04-04", "2026-04-04.md"])(
+    "rejects numeric and date noise without losing technical tags: %s",
+    (noise) => {
+      const tags = deriveConceptTags({
+        path: "memory/2026-04-04.md",
+        snippet: `${noise} kv s3 router`,
+      });
+      expect(tags).toStrictEqual(["kv", "router", "s3"]);
+    },
+  );
+
   it("extracts protected and segmented CJK concept tags", () => {
     const tags = deriveConceptTags({
       path: "memory/2026-04-04.md",
@@ -50,12 +69,6 @@ describe("concept vocabulary", () => {
     expect(tags).not.toContain("ター");
   });
 
-  it("classifies concept tags by script family", () => {
-    expect(classifyConceptTagScript("routeur")).toBe("latin");
-    expect(classifyConceptTagScript("路由器")).toBe("cjk");
-    expect(classifyConceptTagScript("qmd路由器")).toBe("mixed");
-  });
-
   it("drops chat scaffolding stop words from derived concept tags", () => {
     const tags = deriveConceptTags({
       path: "memory/.dreams/session-corpus/2026-04-16.txt",
@@ -72,12 +85,27 @@ describe("concept vocabulary", () => {
     expect(tags).not.toContain("your");
   });
 
+  it("ignores project and recall annotations when deriving concept tags", () => {
+    const tags = deriveConceptTags({
+      path: "memory/2026-07-28.md",
+      snippet:
+        "Alpha ingest workflow. <!-- project: github.com/acme/alpha --> <!-- trigger: kraken deploy ritual --> <!-- importance: 8 -->",
+    });
+
+    expect(tags).toContain("alpha");
+    expect(tags).toContain("ingest");
+    expect(tags).not.toContain("github.com/acme/alpha");
+    expect(tags).not.toContain("acme");
+    expect(tags).not.toContain("kraken");
+    expect(tags).not.toContain("importance");
+  });
+
   it("summarizes entry coverage across latin, cjk, and mixed tags", () => {
     expect(
       summarizeConceptTagScriptCoverage([
         ["routeur", "sauvegarde"],
         ["路由器", "备份"],
-        ["qmd", "路由器"],
+        ["vectors", "路由器"],
         ["сервер"],
       ]),
     ).toEqual({

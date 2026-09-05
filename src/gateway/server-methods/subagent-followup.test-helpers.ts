@@ -9,12 +9,22 @@ export function expectSubagentFollowupReactivation(params: {
   broadcastToConnIds: unknown;
   completedRun: unknown;
   childSessionKey: string;
+  status: "queued" | "running";
+  /**
+   * Canonical follow-up prompt text the caller passed to
+   * `reactivateCompletedSubagentSession`. Mirrors the `task` override now
+   * threaded through `replaceSubagentRunAfterSteer` so restart redispatch
+   * rewraps the dispatched follow-up instead of the stale original task.
+   */
+  task?: string;
 }) {
   expect(params.replaceSubagentRunAfterSteerMock).toHaveBeenCalledWith({
     previousRunId: "run-old",
     nextRunId: "run-new",
     fallback: params.completedRun,
     runTimeoutSeconds: 0,
+    persistenceFailure: "throw",
+    ...(params.task ? { task: params.task } : {}),
   });
   const call = (
     params.broadcastToConnIds as {
@@ -30,7 +40,7 @@ export function expectSubagentFollowupReactivation(params: {
               endedAt?: number;
             },
             Set<string>,
-            { dropIfSlow?: boolean },
+            { agentId?: string; dropIfSlow?: boolean },
           ]
         >;
       };
@@ -39,9 +49,13 @@ export function expectSubagentFollowupReactivation(params: {
   expect(call?.[0]).toBe("sessions.changed");
   expect(call?.[1]?.sessionKey).toBe(params.childSessionKey);
   expect(call?.[1]?.reason).toBe("send");
-  expect(call?.[1]?.status).toBe("running");
+  expect(call?.[1]?.status).toBe(params.status);
   expect(call?.[1]?.startedAt).toBe(123);
   expect(call?.[1]?.endedAt).toBeUndefined();
   expect(call?.[2]).toEqual(new Set(["conn-1"]));
-  expect(call?.[3]).toEqual({ dropIfSlow: true });
+  expect(call?.[3]).toEqual({
+    agentId: "main",
+    dropIfSlow: true,
+    sessionKeys: [params.childSessionKey],
+  });
 }

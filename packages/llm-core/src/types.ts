@@ -1,6 +1,6 @@
-// LLM Core type module defines shared TypeScript contracts.
-export type { AssistantMessageDiagnostic, DiagnosticErrorInfo } from "./utils/diagnostics.js";
+import type { TSchema } from "typebox";
 import type { AssistantMessageDiagnostic } from "./utils/diagnostics.js";
+export type { AssistantMessageDiagnostic, DiagnosticErrorInfo } from "./utils/diagnostics.js";
 
 /** Provider API families with first-class request/stream adapters in OpenClaw. */
 export type KnownApi =
@@ -68,6 +68,11 @@ export interface StreamOptions {
   temperature?: number;
   maxTokens?: number;
   /**
+   * Optional JSON Schema for the generated response. Providers that support
+   * constrained decoding map it to their native request shape; others ignore it.
+   */
+  responseFormat?: Record<string, unknown>;
+  /**
    * Stop sequences forwarded to providers that support them. Providers map this
    * to their native request field, such as OpenAI `stop` or Anthropic
    * `stop_sequences`.
@@ -92,6 +97,11 @@ export interface StreamOptions {
    */
   sessionId?: string;
   /**
+   * Opaque per-model-call identifier for provider transport correlation.
+   * Providers that do not expose request correlation ignore it.
+   */
+  requestId?: string;
+  /**
    * Optional provider prompt-cache affinity key, distinct from transcript/session identity.
    * Providers that do not support separate cache affinity ignore it.
    */
@@ -107,6 +117,23 @@ export interface StreamOptions {
    */
   onResponse?: (response: ProviderResponse, model: Model) => void | Promise<void>;
   /**
+   * Observe a live response that accepts user input before generation finishes.
+   * `steer` resolves false only when the input was definitely not admitted;
+   * admitted input cannot be withdrawn. Providers settle pending submissions
+   * before closing the response and call the returned cleanup on closure.
+   */
+  onActiveResponse?: (control: {
+    steer(messages: readonly UserMessage[]): Promise<boolean>;
+    /** Read-only after closure: deferred input still needs an explicit continuation request. */
+    needsContinuation?: () => boolean;
+  }) => (() => void) | void;
+  /**
+   * The caller can execute completed async calls before generation finishes.
+   * Providers advertise async tools only with this host capability; this is
+   * independent of parallel execution of an ordinary completed tool batch.
+   */
+  asyncToolExecution?: boolean;
+  /**
    * Optional custom HTTP headers to include in API requests.
    * Merged with provider defaults; can override default headers.
    * Not supported by all providers (e.g., AWS Bedrock uses SDK auth).
@@ -117,10 +144,7 @@ export interface StreamOptions {
    * For example, OpenAI and Anthropic SDK clients default to 10 minutes.
    */
   timeoutMs?: number;
-  /**
-   * Maximum retry attempts for providers/SDKs that support client-side retries.
-   * For example, OpenAI and Anthropic SDK clients default to 2.
-   */
+  /** @deprecated Ignored by built-in text transports; retries are owned by the host runner. */
   maxRetries?: number;
   /**
    * Maximum delay in milliseconds to wait for a retry when the server requests a long wait.
@@ -185,7 +209,7 @@ export type ProviderImagesOptions = ImagesOptions & Record<string, unknown>;
 
 /** Unified text options used by simple completion helpers. */
 export interface SimpleStreamOptions extends StreamOptions {
-  reasoning?: ThinkingLevel;
+  reasoning?: ModelThinkingLevel;
   /** Custom token budgets for thinking levels (token-based providers only) */
   thinkingBudgets?: ThinkingBudgets;
 }
@@ -240,6 +264,21 @@ export interface ThinkingContent {
   redacted?: boolean;
 }
 
+/** Opaque provider-owned state that must survive transcript replay without being rendered. */
+export interface ProviderReplayState {
+  v: 1;
+  type: string;
+  id?: string;
+  data: string;
+  replayIndex?: number;
+  provider: Provider;
+  api: Api;
+  model: string;
+  baseUrlHash?: string;
+  sessionHash?: string;
+  authProfileHash?: string;
+}
+
 /** Base64 image content block with MIME type metadata. */
 export interface ImageContent {
   type: "image";
@@ -249,6 +288,8 @@ export interface ImageContent {
 
 /** Normalized assistant tool call emitted by providers or repaired from text. */
 export interface ToolCall {
+  /** The provider completed this call and permits generation to continue without its result. */
+  async?: true;
   type: "toolCall";
   id: string;
   name: string;
@@ -263,6 +304,14 @@ export interface Usage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Whether the provider reported a cache-read/write token split. */
+  cacheTelemetry?: { state: "available" | "unavailable" };
+  /** Subset of `cacheWrite` written with 1-hour retention when reported. */
+  cacheWrite1h?: number;
+  /** Exact context snapshot for the final provider iteration. */
+  contextUsage?:
+    | { state: "available"; promptTokens: number; totalTokens: number }
+    | { state: "unavailable" };
   totalTokens: number;
   cost: {
     input: number;
@@ -270,28 +319,80 @@ export interface Usage {
     cacheRead: number;
     cacheWrite: number;
     total: number;
+    /** Provenance for the recorded total cost; provider-billed totals are authoritative. */
+    totalOrigin?: "provider-billed";
   };
 }
 
+/** Per-million-token rates for separately billed token buckets. */
+export type ModelCostRates = Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite">;
+
+/** One whole-request tier on the cache-inclusive prompt-token axis. */
+export type PricingTier = ModelCostRates & {
+  /** Half-open prompt-token interval `[start, end)`. */
+  range: [number, number];
+};
+
+export type RawPricingTier = ModelCostRates & {
+  /** `[start]` is an open-ended upper tier. */
+  range: [number, number] | [number];
+};
+
+/** Normalized pricing used by token accounting and usage summaries. */
+export type ModelCostConfig = ModelCostRates & { tieredPricing?: PricingTier[] };
+export type RawModelCostConfig = ModelCostRates & { tieredPricing?: RawPricingTier[] };
+
 /** Normalized assistant stop reasons across text providers. */
 export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
+
+/** Stable error codes for provider outcomes that cannot be replayed safely. */
+export const PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE = "PROVIDER_POST_DISPATCH_AMBIGUITY";
+export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OUTPUT";
 
 /** User turn in a text-model conversation. */
 export interface UserMessage {
   role: "user";
   content: string | (TextContent | ImageContent)[];
   timestamp: number; // Unix timestamp in milliseconds
+  /**
+   * Marks a user message carrying runtime context. Provider replay policy decides
+   * whether the carrier is transient or retained append-only; only retained
+   * carriers are stable prompt-cache anchors.
+   */
+  runtimeContextCarrier?: boolean;
 }
 
 /** Assistant turn, including provider identity and final stop state. */
+export type AssistantDeliveryTtsFacts = {
+  tagged: true;
+  text?: string;
+  directives?: Array<{
+    provider?: string;
+    values: Record<string, string>;
+  }>;
+};
+
 export interface AssistantMessage {
   role: "assistant";
   content: (TextContent | ThinkingContent | ToolCall)[];
+  openclawDelivery?: {
+    audioAsVoice?: true;
+    /** Exact media directives consumed by the managed-media transcript rewrite owner. */
+    mediaUrls?: string[];
+    replyToCurrent?: true;
+    replyToId?: string;
+    /** Provider text phase is unresolved until the assistant turn reaches terminal state. */
+    textPhaseRequiresTerminal?: true;
+    /** Parsed once at the assistant write boundary; delivery resolves policy from these facts. */
+    tts?: AssistantDeliveryTtsFacts;
+  };
   api: Api;
   provider: Provider;
   model: string;
   responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
   responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
+  providerReplay?: ProviderReplayState; // Opaque provider state carried into a compatible later request.
+  turnId?: string; // Runtime-assigned stable turn identity when the provider does not expose one
   diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime diagnostics for failures and recoveries.
   usage: Usage;
   stopReason: StopReason;
@@ -341,8 +442,6 @@ export interface AssistantImages {
   errorMessage?: string;
   timestamp: number; // Unix timestamp in milliseconds
 }
-
-import type { TSchema } from "typebox";
 
 /** Provider tool declaration with a TypeBox/JSON-schema parameter object. */
 export interface Tool<TParameters extends TSchema = TSchema> {
@@ -414,6 +513,8 @@ export interface OpenAICompletionsCompat {
   supportsDeveloperRole?: boolean;
   /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
   supportsReasoningEffort?: boolean;
+  /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
+  reasoningEffortMap?: Record<string, string>;
   /** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
   supportsUsageInStreaming?: boolean;
   /** Which field to use for max tokens. Default: auto-detected from URL. */
@@ -443,6 +544,8 @@ export interface OpenAICompletionsCompat {
   zaiToolStream?: boolean;
   /** Whether the provider supports the `strict` field in tool definitions. Default: true. */
   supportsStrictMode?: boolean;
+  /** Whether the provider supports JSON Schema through `response_format`. Default: false for unknown compatible endpoints. */
+  supportsJsonSchemaResponseFormat?: boolean;
   /** Cache control convention for prompt caching. "anthropic" applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and last user/assistant text content. */
   cacheControlFormat?: "anthropic";
   /** Whether to send known session-affinity headers (`session_id`, `x-client-request-id`, `x-session-affinity`) from `options.sessionId` when caching is enabled. Default: false. */
@@ -455,10 +558,20 @@ export interface OpenAICompletionsCompat {
 
 /** Compatibility settings for OpenAI Responses APIs. */
 export interface OpenAIResponsesCompat {
+  /** Whether the provider supports the `developer` role (vs `system`). Default: true. */
+  supportsDeveloperRole?: boolean;
+  /** Whether to send reasoning effort settings. Defaults to the model's known capabilities. */
+  supportsReasoningEffort?: boolean;
+  /** Provider-native reasoning efforts accepted by the model. Overrides known model defaults. */
+  supportedReasoningEfforts?: string[];
+  /** Whether the model accepts the `temperature` parameter. Default: true. */
+  supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
   sendSessionIdHeader?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
+  /** Whether the provider honors top-level `instructions`. Defaults to true only for verified native routes (OpenAI, xAI); every other route defaults to false and embeds the system prompt in `input` unless set true here after verifying against that endpoint. */
+  supportsInstructions?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */
@@ -489,6 +602,8 @@ export interface AnthropicMessagesCompat {
    * Default: true.
    */
   supportsCacheControlOnTools?: boolean;
+  /** Whether empty thinking signatures can be replayed as native thinking blocks. Default: false. */
+  allowEmptySignature?: boolean;
 }
 
 /**
@@ -578,7 +693,6 @@ export interface VercelGatewayRouting {
   order?: string[];
 }
 
-// Model interface for the unified model system
 export interface Model<TApi extends Api = Api> {
   id: string;
   name: string;
@@ -592,13 +706,8 @@ export interface Model<TApi extends Api = Api> {
    */
   thinkingLevelMap?: ThinkingLevelMap;
   input: ("text" | "image")[];
-  cost: {
-    input: number; // $/million tokens
-    output: number; // $/million tokens
-    cacheRead: number; // $/million tokens
-    cacheWrite: number; // $/million tokens
-  };
-  contextWindow: number;
+  cost: RawModelCostConfig;
+  contextWindow?: number;
   /**
    * Optional effective runtime cap used for compaction/session budgeting.
    * Keeps provider/native contextWindow metadata intact while allowing a
@@ -614,7 +723,7 @@ export interface Model<TApi extends Api = Api> {
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
   compat?: TApi extends "openai-completions"
     ? OpenAICompletionsCompat
-    : TApi extends "openai-responses"
+    : TApi extends "openai-responses" | "azure-openai-responses" | "openai-codex-responses"
       ? OpenAIResponsesCompat
       : TApi extends "anthropic-messages"
         ? AnthropicMessagesCompat

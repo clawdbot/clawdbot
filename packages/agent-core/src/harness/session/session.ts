@@ -1,5 +1,4 @@
-// Agent Core module implements session behavior.
-import type { ImageContent, TextContent } from "../../../../llm-core/src/index.js";
+import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import type { AgentMessage } from "../../types.js";
 import {
   asAgentMessage,
@@ -7,29 +6,138 @@ import {
   createCompactionSummaryMessage,
   createCustomMessage,
 } from "../messages.js";
-import type {
-  BranchSummaryEntry,
-  CompactionEntry,
-  CustomEntry,
-  CustomMessageEntry,
-  LabelEntry,
-  MessageEntry,
-  ModelChangeEntry,
-  SessionContext,
-  SessionInfoEntry,
-  SessionMetadata,
-  SessionStorage,
-  SessionTreeEntry,
-  ThinkingLevelChangeEntry,
-} from "../types.js";
-import { SessionError } from "../types.js";
+import type { SessionContext, SessionTreeEntry } from "../types.js";
+import { selectResetKeptEntries } from "./tool-result-pairing.js";
 
-/** Build model context from the active session branch and its latest state markers. */
+const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
+
+/** The same semantic cut is used before payload acquisition and when building messages. */
+function resolveSessionContextWindow(
+  entries: readonly { id: string; type: string; firstKeptEntryId?: string }[],
+): { boundaryIndex: number; firstKeptIndex: number } {
+  const boundaryIndex = entries.findLastIndex(
+    (entry) => entry.type === "reset" || entry.type === "compaction",
+  );
+  const firstKeptIndex = entries.findIndex(
+    (entry) => entry.id === entries[boundaryIndex]?.firstKeptEntryId,
+  );
+  return {
+    boundaryIndex,
+    firstKeptIndex:
+      firstKeptIndex >= 0 && firstKeptIndex < boundaryIndex ? firstKeptIndex : boundaryIndex,
+  };
+}
+
+/** Project persisted session entries into the message shared by replay and summarization. */
+export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessage | undefined {
+  switch (entry.type) {
+    case "message":
+      // Display-only history stays persisted but never enters replay or summarization.
+      return "excludeFromContext" in entry.message && entry.message.excludeFromContext === true
+        ? undefined
+        : entry.message;
+    case "custom_message":
+      return asAgentMessage(
+        createCustomMessage(
+          entry.customType,
+          entry.content,
+          entry.display,
+          entry.details,
+          entry.timestamp,
+        ),
+      );
+    case "branch_summary":
+      return asAgentMessage(
+        createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp),
+      );
+    case "compaction":
+      return asAgentMessage(
+        createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp),
+      );
+    default:
+      return undefined;
+  }
+}
+
+/** Select the canonical window using only navigation and tool-pairing facts. */
+export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
+  pathEntries: readonly T[],
+): Generator<{ entry: T; context: "current" | "retained" | "reset-retained" }> {
+  const { boundaryIndex, firstKeptIndex } = resolveSessionContextWindow(pathEntries);
+  const boundary = pathEntries[boundaryIndex];
+  const resetKept =
+    boundary?.type === "reset"
+      ? new Set(selectResetKeptEntries(pathEntries.slice(firstKeptIndex, boundaryIndex)))
+      : undefined;
+  if (boundary) {
+    yield { entry: boundary, context: "current" };
+  }
+  for (const [index, entry] of pathEntries.entries()) {
+    const retained = index < boundaryIndex;
+    if (
+      index === boundaryIndex ||
+      (retained && (index < firstKeptIndex || (resetKept && !resetKept.has(entry))))
+    ) {
+      continue;
+    }
+    const hasMessage =
+      entry.type === "message" ||
+      entry.type === "custom_message" ||
+      entry.type === "branch_summary";
+    if (
+      !hasMessage ||
+      (!resetKept?.has(entry) &&
+        entry.type === "message" &&
+        "excludeFromContext" in entry.message &&
+        entry.message.excludeFromContext === true)
+    ) {
+      continue;
+    }
+    const context = retained ? (resetKept ? "reset-retained" : "retained") : "current";
+    yield { entry, context };
+  }
+}
+
+/** Hydrate selected messages lazily so bounded consumers can stop before later payloads. */
+export function* iterateSessionContextMessages<T extends SessionTreeEntry>(
+  pathEntries: readonly T[],
+  readEntry: (entry: T) => SessionTreeEntry = (entry) => entry,
+): Generator<AgentMessage> {
+  for (const { entry, context } of iterateSessionContextEntries(pathEntries)) {
+    if (entry.type === "reset") {
+      continue;
+    }
+    const hydrated = readEntry(entry);
+    if (hydrated.type === "branch_summary" && !hydrated.summary) {
+      continue;
+    }
+    // Explicit reset retention can include otherwise excluded user/assistant messages.
+    let message =
+      context === "reset-retained" && hydrated.type === "message"
+        ? hydrated.message
+        : projectSessionEntryMessage(hydrated);
+    if (!message) {
+      continue;
+    }
+    if (context !== "current" && message.role === "assistant") {
+      message = stripCompactionReplayCheckpoint(message);
+    }
+    if (context === "reset-retained" && (message.role === "user" || message.role === "assistant")) {
+      message = { ...message };
+      Object.defineProperty(message, SESSION_HISTORY_PRELUDE, {
+        configurable: true,
+        enumerable: false,
+        value: true,
+      });
+    }
+    yield message;
+  }
+}
+
+/** Build model context from an ordered session branch and its latest state markers. */
 export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionContext {
   let thinkingLevel = "off";
   let model: { provider: string; modelId: string } | null = null;
-  let compaction: CompactionEntry | null = null;
-
   for (const entry of pathEntries) {
     if (entry.type === "thinking_level_change") {
       thinkingLevel = entry.thinkingLevel;
@@ -37,254 +145,7 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
       model = { provider: entry.provider, modelId: entry.modelId };
     } else if (entry.type === "message" && entry.message.role === "assistant") {
       model = { provider: entry.message.provider, modelId: entry.message.model };
-    } else if (entry.type === "compaction") {
-      compaction = entry;
     }
   }
-
-  const messages: AgentMessage[] = [];
-  const appendMessage = (entry: SessionTreeEntry) => {
-    if (entry.type === "message") {
-      messages.push(entry.message);
-    } else if (entry.type === "custom_message") {
-      messages.push(
-        asAgentMessage(
-          createCustomMessage(
-            entry.customType,
-            entry.content,
-            entry.display,
-            entry.details,
-            entry.timestamp,
-          ),
-        ),
-      );
-    } else if (entry.type === "branch_summary" && entry.summary) {
-      messages.push(
-        asAgentMessage(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp)),
-      );
-    }
-  };
-
-  if (compaction) {
-    messages.push(
-      asAgentMessage(
-        createCompactionSummaryMessage(
-          compaction.summary,
-          compaction.tokensBefore,
-          compaction.timestamp,
-        ),
-      ),
-    );
-    const compactionIdx = pathEntries.findIndex(
-      (e) => e.type === "compaction" && e.id === compaction.id,
-    );
-    // Replay only the compacted entry's retained tail plus newer branch entries; older
-    // transcript content is represented by the synthetic compaction summary above.
-    let foundFirstKept = false;
-    for (let i = 0; i < compactionIdx; i++) {
-      const entry = pathEntries[i];
-      if (entry.id === compaction.firstKeptEntryId) {
-        foundFirstKept = true;
-      }
-      if (foundFirstKept) {
-        appendMessage(entry);
-      }
-    }
-    for (let i = compactionIdx + 1; i < pathEntries.length; i++) {
-      appendMessage(pathEntries[i]);
-    }
-  } else {
-    for (const entry of pathEntries) {
-      appendMessage(entry);
-    }
-  }
-
-  return { messages, thinkingLevel, model };
-}
-
-/** High-level session API backed by pluggable tree storage. */
-export class Session<TMetadata extends SessionMetadata = SessionMetadata> {
-  private storage: SessionStorage<TMetadata>;
-
-  constructor(storage: SessionStorage<TMetadata>) {
-    this.storage = storage;
-  }
-
-  getMetadata(): Promise<TMetadata> {
-    return this.storage.getMetadata();
-  }
-
-  getStorage(): SessionStorage<TMetadata> {
-    return this.storage;
-  }
-
-  getLeafId(): Promise<string | null> {
-    return this.storage.getLeafId();
-  }
-
-  private getAppendParentId(): Promise<string | null> {
-    return this.storage.getAppendParentId?.() ?? this.storage.getLeafId();
-  }
-
-  getEntry(id: string): Promise<SessionTreeEntry | undefined> {
-    return this.storage.getEntry(id);
-  }
-
-  getEntries(): Promise<SessionTreeEntry[]> {
-    return this.storage.getEntries();
-  }
-
-  async getBranch(fromId?: string): Promise<SessionTreeEntry[]> {
-    const leafId = fromId ?? (await this.storage.getLeafId());
-    return this.storage.getPathToRoot(leafId);
-  }
-
-  async buildContext(): Promise<SessionContext> {
-    return buildSessionContext(await this.getBranch());
-  }
-
-  getLabel(id: string): Promise<string | undefined> {
-    return this.storage.getLabel(id);
-  }
-
-  async getSessionName(): Promise<string | undefined> {
-    const entries = await this.storage.findEntries("session_info");
-    return entries[entries.length - 1]?.name?.trim() || undefined;
-  }
-
-  private async appendTypedEntry(entry: SessionTreeEntry): Promise<string> {
-    await this.storage.appendEntry(entry);
-    return entry.id;
-  }
-
-  async appendMessage(message: AgentMessage): Promise<string> {
-    return this.appendTypedEntry({
-      type: "message",
-      id: await this.storage.createEntryId(),
-      parentId: await this.getAppendParentId(),
-      timestamp: new Date().toISOString(),
-      message,
-    } satisfies MessageEntry);
-  }
-
-  async appendThinkingLevelChange(thinkingLevel: string): Promise<string> {
-    return this.appendTypedEntry({
-      type: "thinking_level_change",
-      id: await this.storage.createEntryId(),
-      parentId: await this.getAppendParentId(),
-      timestamp: new Date().toISOString(),
-      thinkingLevel,
-    } satisfies ThinkingLevelChangeEntry);
-  }
-
-  async appendModelChange(provider: string, modelId: string): Promise<string> {
-    return this.appendTypedEntry({
-      type: "model_change",
-      id: await this.storage.createEntryId(),
-      parentId: await this.getAppendParentId(),
-      timestamp: new Date().toISOString(),
-      provider,
-      modelId,
-    } satisfies ModelChangeEntry);
-  }
-
-  async appendCompaction(
-    summary: string,
-    firstKeptEntryId: string,
-    tokensBefore: number,
-    details?: unknown,
-    fromHook?: boolean,
-  ): Promise<string> {
-    return this.appendTypedEntry({
-      type: "compaction",
-      id: await this.storage.createEntryId(),
-      parentId: await this.getAppendParentId(),
-      timestamp: new Date().toISOString(),
-      summary,
-      firstKeptEntryId,
-      tokensBefore,
-      details,
-      fromHook,
-    } satisfies CompactionEntry);
-  }
-
-  /** Append a non-LLM transcript marker for harness-specific state. */
-  async appendCustomEntry(customType: string, data?: unknown): Promise<string> {
-    return this.appendTypedEntry({
-      type: "custom",
-      id: await this.storage.createEntryId(),
-      parentId: await this.getAppendParentId(),
-      timestamp: new Date().toISOString(),
-      customType,
-      data,
-    } satisfies CustomEntry);
-  }
-
-  /** Append harness-specific content that can also be replayed into model context. */
-  async appendCustomMessageEntry(
-    customType: string,
-    content: string | (TextContent | ImageContent)[],
-    display: boolean,
-    details?: unknown,
-  ): Promise<string> {
-    return this.appendTypedEntry({
-      type: "custom_message",
-      id: await this.storage.createEntryId(),
-      parentId: await this.getAppendParentId(),
-      timestamp: new Date().toISOString(),
-      customType,
-      content,
-      display,
-      details,
-    } satisfies CustomMessageEntry);
-  }
-
-  /** Record or clear the display label for an existing session entry. */
-  async appendLabel(targetId: string, label: string | undefined): Promise<string> {
-    if (!(await this.storage.getEntry(targetId))) {
-      throw new SessionError("not_found", `Entry ${targetId} not found`);
-    }
-    return this.appendTypedEntry({
-      type: "label",
-      id: await this.storage.createEntryId(),
-      parentId: await this.getAppendParentId(),
-      timestamp: new Date().toISOString(),
-      targetId,
-      label,
-    } satisfies LabelEntry);
-  }
-
-  async appendSessionName(name: string): Promise<string> {
-    return this.appendTypedEntry({
-      type: "session_info",
-      id: await this.storage.createEntryId(),
-      parentId: await this.getAppendParentId(),
-      timestamp: new Date().toISOString(),
-      name: name.trim(),
-    } satisfies SessionInfoEntry);
-  }
-
-  /** Move the visible branch leaf and optionally attach a summary of the abandoned branch. */
-  async moveTo(
-    entryId: string | null,
-    summary?: { summary: string; details?: unknown; fromHook?: boolean },
-  ): Promise<string | undefined> {
-    if (entryId !== null && !(await this.storage.getEntry(entryId))) {
-      throw new SessionError("not_found", `Entry ${entryId} not found`);
-    }
-    await this.storage.setLeafId(entryId);
-    if (!summary) {
-      return undefined;
-    }
-    return this.appendTypedEntry({
-      type: "branch_summary",
-      id: await this.storage.createEntryId(),
-      parentId: entryId,
-      timestamp: new Date().toISOString(),
-      fromId: entryId ?? "root",
-      summary: summary.summary,
-      details: summary.details,
-      fromHook: summary.fromHook,
-    } satisfies BranchSummaryEntry);
-  }
+  return { messages: Array.from(iterateSessionContextMessages(pathEntries)), thinkingLevel, model };
 }

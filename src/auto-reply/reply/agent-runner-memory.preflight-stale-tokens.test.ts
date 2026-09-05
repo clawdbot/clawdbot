@@ -2,51 +2,62 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
-} from "../../plugins/memory-state.js";
+} from "../../plugins/memory-state.test-fixtures.js";
+import { runSessionCompactionIfNeeded as runSessionCompactionIfNeededRaw } from "./agent-runner-memory.js";
 import {
-  runPreflightCompactionIfNeeded,
-  setAgentRunnerMemoryTestDeps,
-} from "./agent-runner-memory.js";
-import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+  createTestFollowupRun,
+  withTestModelContextTokens,
+  writeTestSessionStore,
+} from "./agent-runner.test-fixtures.js";
 
-const compactEmbeddedAgentSessionMock = vi.fn();
+const { compactEmbeddedAgentSessionMock, incrementCompactionCountMock } = vi.hoisted(() => ({
+  compactEmbeddedAgentSessionMock: vi.fn(),
+  incrementCompactionCountMock: vi.fn(),
+}));
 
-function createReplyOperation(): ReplyOperation {
-  return {
-    key: "test",
-    sessionId: "session",
-    abortSignal: new AbortController().signal,
-    resetTriggered: false,
-    phase: "queued",
-    result: null,
-    setPhase: vi.fn(),
-    updateSessionId: vi.fn(),
-    attachBackend: vi.fn(),
-    detachBackend: vi.fn(),
-    retainFailureUntilComplete: vi.fn(),
-    complete: vi.fn(),
-    completeThen: vi.fn((afterClear: () => void) => {
-      afterClear();
+vi.mock("../../agents/embedded-agent-runner/run-entry.js", () => ({
+  runEmbeddedAgentEntry: vi.fn(),
+}));
+vi.mock("../../agents/embedded-agent.js", () => ({
+  compactEmbeddedAgentSession: compactEmbeddedAgentSessionMock,
+}));
+vi.mock("./session-updates.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-updates.js")>()),
+  incrementCompactionCount: incrementCompactionCountMock,
+}));
+vi.mock("./queue.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./queue.js")>()),
+  refreshQueuedFollowupSession: vi.fn(),
+}));
+
+type PreflightCompactionTestParams = Parameters<typeof runSessionCompactionIfNeededRaw>[0] & {
+  modelContextTokens?: number;
+};
+
+async function runSessionCompactionIfNeeded(params: PreflightCompactionTestParams) {
+  const { modelContextTokens, ...runParams } = params;
+  return await runSessionCompactionIfNeededRaw({
+    ...runParams,
+    cfg: withTestModelContextTokens({
+      cfg: runParams.cfg,
+      followupRun: runParams.followupRun,
+      defaultModel: runParams.defaultModel,
+      contextTokens: modelContextTokens,
     }),
-    completeWithAfterClearBarrier: vi.fn(),
-    fail: vi.fn(),
-    abortByUser: vi.fn(),
-    abortForRestart: vi.fn(),
-  } as unknown as ReplyOperation;
+  });
 }
 
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
 }
 
-describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
+describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
   let rootDir = "";
 
   beforeEach(async () => {
@@ -64,24 +75,17 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
       compacted: true,
       result: { tokensAfter: 42 },
     });
-    setAgentRunnerMemoryTestDeps({
-      compactEmbeddedAgentSession: compactEmbeddedAgentSessionMock as never,
-      incrementCompactionCount: vi.fn() as never,
-      refreshQueuedFollowupSession: vi.fn() as never,
-      registerAgentRunContext: vi.fn() as never,
-      emitAgentEvent: vi.fn() as never,
-    });
+    incrementCompactionCountMock.mockReset().mockResolvedValue(1);
   });
 
   afterEach(async () => {
-    setAgentRunnerMemoryTestDeps();
     cliBackendsTesting.resetDepsForTest();
     clearMemoryPluginState();
     await fs.rm(rootDir, { recursive: true, force: true });
   });
 
   async function runWithEntry(sessionEntry: SessionEntry, sessionFile: string) {
-    return await runPreflightCompactionIfNeeded({
+    return await runSessionCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({
         sessionId: "session",
@@ -89,13 +93,13 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
         sessionKey: "agent:main:main",
       }),
       defaultModel: "anthropic/claude-opus-4-6",
-      agentCfgContextTokens: 100_000,
+      modelContextTokens: 100_000,
       sessionEntry,
       sessionStore: { "agent:main:main": sessionEntry },
       sessionKey: "agent:main:main",
       storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      abortSignal: new AbortController().signal,
     });
   }
 
@@ -113,7 +117,11 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
       totalTokens: 200_000,
       totalTokensFresh: false,
     };
-    await writeTestSessionStore(path.join(rootDir, "sessions.json"), "agent:main:main", sessionEntry);
+    await writeTestSessionStore(
+      path.join(rootDir, "sessions.json"),
+      "agent:main:main",
+      sessionEntry,
+    );
 
     const entry = await runWithEntry(sessionEntry, sessionFile);
 
@@ -134,11 +142,152 @@ describe("runPreflightCompactionIfNeeded stale totalTokens gating", () => {
       updatedAt: Date.now(),
       totalTokens: 200_000,
       totalTokensFresh: true,
+      totalTokensVersion: 1,
     };
-    await writeTestSessionStore(path.join(rootDir, "sessions.json"), "agent:main:main", sessionEntry);
+    await writeTestSessionStore(
+      path.join(rootDir, "sessions.json"),
+      "agent:main:main",
+      sessionEntry,
+    );
 
     await runWithEntry(sessionEntry, sessionFile);
 
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
   });
+
+  it("forwards the routed account id into preflight compaction", async () => {
+    // Group session keys carry no account identity, so if this launcher drops the
+    // account the compaction path resolves the root history limit after prompt
+    // preparation already used the account limit.
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 200_000,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    };
+    await writeTestSessionStore(
+      path.join(rootDir, "sessions.json"),
+      "agent:main:main",
+      sessionEntry,
+    );
+
+    await runSessionCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "agent:main:main",
+        agentAccountId: "work",
+        conversationRoutePeerId: "peer",
+        chatType: "direct",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      modelContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      abortSignal: new AbortController().signal,
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(compactEmbeddedAgentSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      agentAccountId: "work",
+      conversationRoutePeerId: "peer",
+      chatType: "direct",
+    });
+  });
+
+  it.each([
+    {
+      name: "the configured roster default for an embedded provider",
+      runAgentId: undefined,
+      expectedAgentId: "ops",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      expectsCompaction: true,
+    },
+    {
+      name: "the explicitly prepared agent for an embedded provider",
+      runAgentId: "worker",
+      expectedAgentId: "worker",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      expectsCompaction: true,
+    },
+    {
+      name: "the configured roster default before provider runtime selection",
+      runAgentId: undefined,
+      expectedAgentId: "ops",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      expectsCompaction: false,
+    },
+    {
+      name: "the explicitly prepared agent before provider runtime selection",
+      runAgentId: "worker",
+      expectedAgentId: "worker",
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      expectsCompaction: false,
+    },
+  ])(
+    "resolves an unscoped session key with $name",
+    async ({ runAgentId, expectedAgentId, provider, model, expectsCompaction }) => {
+      const sessionFile = path.join(rootDir, "session.jsonl");
+      const storePath = path.join(rootDir, "sessions.json");
+      await fs.writeFile(
+        sessionFile,
+        `${JSON.stringify({ message: { role: "user", content: "x".repeat(2_000) } })}\n`,
+        "utf8",
+      );
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        sessionFile,
+        updatedAt: Date.now(),
+        totalTokens: 200_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      };
+      await writeTestSessionStore(storePath, "main", sessionEntry);
+
+      const result = await runSessionCompactionIfNeeded({
+        cfg: {
+          agents: {
+            list: [{ id: "ops", default: true }, { id: "worker" }],
+            defaults: { compaction: { memoryFlush: {} } },
+          },
+        },
+        followupRun: createTestFollowupRun({
+          agentId: runAgentId,
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "main",
+          provider,
+          model,
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        modelContextTokens: 100_000,
+        sessionEntry,
+        sessionStore: { main: sessionEntry },
+        sessionKey: "main",
+        storePath,
+        isHeartbeat: false,
+        abortSignal: new AbortController().signal,
+      });
+
+      expect(result).toBe(sessionEntry);
+      if (expectsCompaction) {
+        expect(compactEmbeddedAgentSessionMock.mock.calls[0]?.[0]).toMatchObject({
+          sessionTarget: { agentId: expectedAgentId },
+        });
+      } else {
+        expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

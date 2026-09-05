@@ -1,11 +1,13 @@
 // Bootstraps device identity and trust state on first run.
-import path from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
+  deviceBootstrapProfilesEqual,
   normalizeDeviceBootstrapHandoffProfile,
   normalizeDeviceBootstrapProfile,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -15,36 +17,33 @@ import {
 } from "../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
-import { resolvePairingPaths } from "./pairing-files.js";
-import { createAsyncLock, pruneExpiredPending, tryReadJson, writeJson } from "./pairing-files.js";
+import {
+  confirmDevicePairSetupCompletionDeliveryInTransaction,
+  consumeDeviceBootstrapTokenWithSetupCompletionInTransaction,
+  loadDeviceBootstrapTokenRecords,
+  loadDevicePairSetupCompletionRecord,
+  persistDeviceBootstrapTokenRecords as persistState,
+  pruneExpiredDevicePairSetupCompletionRecords,
+} from "./device-pairing-store.js";
+import type {
+  DeviceBootstrapTokenRecord,
+  DevicePairSetupCompletionRecord,
+  PairedDevice,
+} from "./device-pairing.types.js";
+import { createAsyncLock, pruneExpiredPending } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 /** Bootstrap pairing tokens are short-lived bearer credentials for first device auth. */
-export const DEVICE_BOOTSTRAP_TOKEN_TTL_MS = 10 * 60 * 1000;
+const DEVICE_BOOTSTRAP_TOKEN_TTL_MS = 10 * 60 * 1000;
 
-/** Persisted bootstrap token state, including binding and role/scope redemption progress. */
-type DeviceBootstrapTokenRecord = {
-  token: string;
-  ts: number;
-  deviceId?: string;
-  publicKey?: string;
-  profile?: DeviceBootstrapProfile;
-  redeemedProfile?: DeviceBootstrapProfile;
-  pendingProfile?: DeviceBootstrapProfile;
-  roles?: string[];
-  scopes?: string[];
-  issuedAtMs: number;
-  lastUsedAtMs?: number;
-};
+// Outlive the credential itself: a client that waits for the full TTL still has
+// to find its completion after the code it was showing has expired.
+const DEVICE_PAIR_SETUP_COMPLETION_RETENTION_MS = 2 * DEVICE_BOOTSTRAP_TOKEN_TTL_MS;
 
 type DeviceBootstrapStateFile = Record<string, DeviceBootstrapTokenRecord>;
 
 const withLock = createAsyncLock();
 const log = createSubsystemLogger("device-bootstrap");
-
-function resolveBootstrapPath(baseDir?: string): string {
-  return path.join(resolvePairingPaths(baseDir, "devices").dir, "bootstrap.json");
-}
 
 function resolveIssuedBootstrapProfileInput(params: {
   profile?: DeviceBootstrapProfileInput;
@@ -66,7 +65,7 @@ function resolveIssuedBootstrapProfileInput(params: {
 function resolvePersistedBootstrapProfile(
   record: Partial<DeviceBootstrapTokenRecord>,
 ): DeviceBootstrapProfile {
-  return normalizeDeviceBootstrapProfile(record.profile ?? record);
+  return normalizeDeviceBootstrapProfile(record.profile);
 }
 
 function resolvePersistedRedeemedProfile(
@@ -84,24 +83,13 @@ function resolvePersistedPendingProfile(
 function resolveRequestedBootstrapProfile(params: {
   role: string;
   scopes: readonly string[];
+  purpose?: DeviceBootstrapProfile["purpose"];
 }): DeviceBootstrapProfile {
   return normalizeDeviceBootstrapProfile({
     roles: [params.role],
-    scopes: resolveBootstrapProfileScopesForRole(params.role, params.scopes),
+    scopes: resolveBootstrapProfileScopesForRole(params.role, params.scopes, params.purpose),
+    purpose: params.purpose,
   });
-}
-
-function sameBootstrapProfile(
-  left: DeviceBootstrapProfile,
-  right: DeviceBootstrapProfile,
-): boolean {
-  if (left.roles.length !== right.roles.length || left.scopes.length !== right.scopes.length) {
-    return false;
-  }
-  return (
-    left.roles.every((role, index) => role === right.roles[index]) &&
-    left.scopes.every((scope, index) => scope === right.scopes[index])
-  );
 }
 
 function resolveIssuedBootstrapProfile(params: {
@@ -114,6 +102,8 @@ function resolveIssuedBootstrapProfile(params: {
     // Issued tokens can request many roles/scopes, but bootstrap handoff persists only the allowlist.
     return normalizeDeviceBootstrapHandoffProfile(input);
   }
+  // Generic bootstrap callers stay least-privilege. Official mobile setup
+  // passes the full profile explicitly after validating the advertised URL.
   return PAIRING_SETUP_BOOTSTRAP_PROFILE;
 }
 
@@ -169,6 +159,7 @@ function bootstrapProfileSatisfiesProfile(params: {
     const requiredScopes = resolveBootstrapProfileScopesForRole(
       requiredRole,
       params.requiredProfile.scopes,
+      params.requiredProfile.purpose,
     );
     if (
       requiredScopes.length > 0 &&
@@ -197,52 +188,20 @@ function normalizeBootstrapPublicKey(publicKey: string): string {
 }
 
 async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
-  const bootstrapPath = resolveBootstrapPath(baseDir);
-  const rawState = (await tryReadJson<DeviceBootstrapStateFile>(bootstrapPath)) ?? {};
-  const state: DeviceBootstrapStateFile = {};
-  if (!rawState || typeof rawState !== "object" || Array.isArray(rawState)) {
-    return state;
-  }
-  for (const [tokenKey, entry] of Object.entries(rawState)) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      continue;
-    }
-    const record = entry as Partial<DeviceBootstrapTokenRecord>;
-    // Older files may be keyed by a map id instead of the bearer token itself.
-    const token =
-      typeof record.token === "string" && record.token.trim().length > 0 ? record.token : tokenKey;
-    const issuedAtMs = asDateTimestampMs(record.issuedAtMs) ?? 0;
-    const profile = resolvePersistedBootstrapProfile(record);
-    const pendingProfile = resolvePersistedPendingProfile(record);
-    state[tokenKey] = {
-      token,
-      profile,
-      redeemedProfile: resolvePersistedRedeemedProfile(record),
-      ...(pendingProfile ? { pendingProfile } : {}),
-      deviceId: typeof record.deviceId === "string" ? record.deviceId : undefined,
-      publicKey: typeof record.publicKey === "string" ? record.publicKey : undefined,
-      issuedAtMs,
-      ts: asDateTimestampMs(record.ts) ?? issuedAtMs,
-      lastUsedAtMs: typeof record.lastUsedAtMs === "number" ? record.lastUsedAtMs : undefined,
-    };
-  }
+  const state = loadDeviceBootstrapTokenRecords(baseDir);
   pruneExpiredPending(state, asDateTimestampMs(Date.now()) ?? 0, DEVICE_BOOTSTRAP_TOKEN_TTL_MS);
   return state;
 }
 
-async function persistState(state: DeviceBootstrapStateFile, baseDir?: string): Promise<void> {
-  const bootstrapPath = resolveBootstrapPath(baseDir);
-  await writeJson(bootstrapPath, state);
-}
+type DeviceBootstrapTokenIssueParams = {
+  baseDir?: string;
+  profile?: DeviceBootstrapProfileInput;
+  roles?: readonly string[];
+  scopes?: readonly string[];
+};
 
-/** Issue a short-lived bootstrap token with a bounded role/scope handoff profile. */
-export async function issueDeviceBootstrapToken(
-  params: {
-    baseDir?: string;
-    profile?: DeviceBootstrapProfileInput;
-    roles?: readonly string[];
-    scopes?: readonly string[];
-  } = {},
+async function issueDeviceBootstrapTokenRecord(
+  params: DeviceBootstrapTokenIssueParams & { setupId?: string },
 ): Promise<{ token: string; expiresAtMs: number }> {
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
@@ -260,14 +219,162 @@ export async function issueDeviceBootstrapToken(
     warnIfIssuedBootstrapScopesWereStripped({ input: profileInput, profile });
     state[token] = {
       token,
+      ...(params.setupId ? { setupId: params.setupId } : {}),
       ts: issuedAtMs,
       profile,
       redeemedProfile: normalizeDeviceBootstrapProfile(undefined),
       issuedAtMs,
     };
-    await persistState(state, params.baseDir);
+    persistState(state, params.baseDir);
     return { token, expiresAtMs };
   });
+}
+
+/** Issue a short-lived generic bootstrap token with a bounded role/scope handoff profile. */
+export async function issueDeviceBootstrapToken(
+  params: DeviceBootstrapTokenIssueParams = {},
+): Promise<{ token: string; expiresAtMs: number }> {
+  return await issueDeviceBootstrapTokenRecord(params);
+}
+
+/**
+ * Issue a setup bootstrap token plus an opaque correlation id. `setupId` is
+ * minted here, beside the credential, so the presenting client can follow one
+ * exact credential without ever handling the bearer token. Generic bootstrap
+ * handoffs stay uncorrelated: only setup codes have a presenting client.
+ */
+export async function issueDevicePairSetupBootstrapToken(params: {
+  baseDir?: string;
+  profile: DeviceBootstrapProfileInput;
+}): Promise<{ token: string; expiresAtMs: number; setupId: string }> {
+  const setupId = randomUUID();
+  const issued = await issueDeviceBootstrapTokenRecord({ ...params, setupId });
+  return { ...issued, setupId };
+}
+
+type EnsuredDevicePairSetupBootstrap =
+  | { status: "pending"; token: string; expiresAtMs: number; setupId: string }
+  | { status: "completed"; setupId: string; deviceId: string };
+
+/** Reuse one environment-owned setup credential across provider replay. */
+export async function ensureDevicePairSetupBootstrapToken(params: {
+  setupId: string;
+  baseDir?: string;
+  profile: DeviceBootstrapProfileInput;
+}): Promise<EnsuredDevicePairSetupBootstrap> {
+  const setupId = params.setupId.trim();
+  if (!setupId) {
+    throw new Error("Device setup id must be non-empty.");
+  }
+  return await withLock(async () => {
+    const completion = loadDevicePairSetupCompletionRecord(setupId, Date.now(), params.baseDir);
+    if (completion) {
+      return { status: "completed", setupId, deviceId: completion.deviceId };
+    }
+    const state = await loadState(params.baseDir);
+    const existing = Object.values(state).find((record) => record.setupId === setupId);
+    const profile = normalizeDeviceBootstrapHandoffProfile(params.profile);
+    if (existing) {
+      if (!deviceBootstrapProfilesEqual(existing.profile, profile)) {
+        throw new Error("Device setup profile changed during replay.");
+      }
+      return {
+        status: "pending",
+        token: existing.token,
+        expiresAtMs: existing.issuedAtMs + DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
+        setupId,
+      };
+    }
+    const issuedAtMs = asDateTimestampMs(Date.now());
+    const expiresAtMs =
+      issuedAtMs === undefined
+        ? undefined
+        : resolveExpiresAtMsFromDurationMs(DEVICE_BOOTSTRAP_TOKEN_TTL_MS, { nowMs: issuedAtMs });
+    if (issuedAtMs === undefined || expiresAtMs === undefined) {
+      throw new Error("Device bootstrap token expiry could not be resolved.");
+    }
+    const token = generatePairingToken();
+    state[token] = {
+      token,
+      setupId,
+      ts: issuedAtMs,
+      profile,
+      redeemedProfile: normalizeDeviceBootstrapProfile(undefined),
+      issuedAtMs,
+    };
+    persistState(state, params.baseDir);
+    return { status: "pending", token, expiresAtMs, setupId };
+  });
+}
+
+/**
+ * Record that credential delivery is not yet known. Only cloud-worker setup
+ * keeps its device-bound bearer until delivery is confirmed, allowing the same
+ * worker to retry when its credential-bearing response never arrives.
+ */
+export async function consumeDeviceBootstrapTokenWithSetupCompletion(params: {
+  token: string;
+  deviceId: string;
+  completedAtMs: number;
+  pairedDeviceMatches?: (device: PairedDevice | null) => boolean;
+  baseDir?: string;
+}) {
+  return await withLock(async () => {
+    const nowMs = Date.now();
+    return consumeDeviceBootstrapTokenWithSetupCompletionInTransaction({
+      token: params.token,
+      deviceId: params.deviceId,
+      completedAtMs: params.completedAtMs,
+      oldestValidIssuedAtMs: nowMs - DEVICE_BOOTSTRAP_TOKEN_TTL_MS,
+      // Retention follows the store clock rather than an injected event time.
+      retentionNowMs: nowMs,
+      retainUntilMs: nowMs + DEVICE_PAIR_SETUP_COMPLETION_RETENTION_MS,
+      ...(params.pairedDeviceMatches ? { pairedDeviceMatches: params.pairedDeviceMatches } : {}),
+      ...(params.baseDir ? { baseDir: params.baseDir } : {}),
+    });
+  });
+}
+
+/** Confirm that the pairing client received the credential-bearing handoff response. */
+export async function confirmDevicePairSetupCompletionDelivery(params: {
+  setupId: string;
+  deviceId: string;
+  baseDir?: string;
+}): Promise<DevicePairSetupCompletionRecord | null> {
+  return await withLock(async () =>
+    confirmDevicePairSetupCompletionDeliveryInTransaction({
+      setupId: params.setupId,
+      deviceId: params.deviceId,
+      nowMs: Date.now(),
+      ...(params.baseDir ? { baseDir: params.baseDir } : {}),
+    }),
+  );
+}
+
+/**
+ * Read the terminal outcome for one setup credential, or null while none is
+ * recorded. Shares this module's lock with issuance and revocation so a status
+ * query never observes a setup mid-settlement.
+ */
+export async function readDevicePairSetupCompletion(params: {
+  setupId: string;
+  baseDir?: string;
+}): Promise<DevicePairSetupCompletionRecord | null> {
+  return await withLock(async () =>
+    loadDevicePairSetupCompletionRecord(params.setupId, Date.now(), params.baseDir),
+  );
+}
+
+/** Remove retained setup outcomes independently of status requests or later pairings. */
+export async function pruneExpiredDevicePairSetupCompletions(
+  params: {
+    nowMs?: number;
+    baseDir?: string;
+  } = {},
+): Promise<number> {
+  return await withLock(async () =>
+    pruneExpiredDevicePairSetupCompletionRecords(params.nowMs ?? Date.now(), params.baseDir),
+  );
 }
 
 /** Remove every outstanding bootstrap token from the pairing state file. */
@@ -279,7 +386,7 @@ export async function clearDeviceBootstrapTokens(
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     const removed = Object.keys(state).length;
-    await persistState({}, params.baseDir);
+    persistState({}, params.baseDir);
     return { removed };
   });
 }
@@ -303,7 +410,7 @@ export async function revokeDeviceBootstrapToken(params: {
     }
     const [tokenKey, record] = found;
     delete state[tokenKey];
-    await persistState(state, params.baseDir);
+    persistState(state, params.baseDir);
     return { removed: true, record };
   });
 }
@@ -333,39 +440,26 @@ export async function revokeDeviceBootstrapTokensForDevice(params: {
       }
     }
     if (removed > 0) {
-      await persistState(state, params.baseDir);
+      persistState(state, params.baseDir);
     }
     return { removed };
   });
 }
 
-/** Restore a previously revoked bootstrap token record after a downstream send failure. */
-export async function restoreDeviceBootstrapToken(params: {
+/** Restore an uncorrelated bootstrap bearer when its credential response was not delivered. */
+export async function restoreGenericDeviceBootstrapToken(params: {
   record: DeviceBootstrapTokenRecord;
   baseDir?: string;
-}): Promise<void> {
+}): Promise<boolean> {
+  if (params.record.setupId) {
+    // Correlated setup credentials are settled only by their exact completion owner.
+    return false;
+  }
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     state[params.record.token] = params.record;
-    await persistState(state, params.baseDir);
-  });
-}
-
-/** Read the issued profile for a valid token without binding or redeeming it. */
-export async function getDeviceBootstrapTokenProfile(params: {
-  token: string;
-  baseDir?: string;
-}): Promise<DeviceBootstrapProfile | null> {
-  return await withLock(async () => {
-    const providedToken = params.token.trim();
-    if (!providedToken) {
-      return null;
-    }
-    const state = await loadState(params.baseDir);
-    const found = Object.values(state).find((candidate) =>
-      verifyPairingToken(providedToken, candidate.token),
-    );
-    return found ? resolvePersistedBootstrapProfile(found) : null;
+    persistState(state, params.baseDir);
+    return true;
   });
 }
 
@@ -396,8 +490,9 @@ export async function redeemDeviceBootstrapTokenProfile(params: {
       roles: [...resolvePersistedRedeemedProfile(record).roles, params.role],
       scopes: [
         ...resolvePersistedRedeemedProfile(record).scopes,
-        ...resolveBootstrapProfileScopesForRole(params.role, params.scopes),
+        ...resolveBootstrapProfileScopesForRole(params.role, params.scopes, issuedProfile.purpose),
       ],
+      purpose: issuedProfile.purpose,
     });
     const nextPendingProfile =
       pendingProfile &&
@@ -418,7 +513,7 @@ export async function redeemDeviceBootstrapTokenProfile(params: {
       delete nextRecord.pendingProfile;
     }
     state[tokenKey] = nextRecord;
-    await persistState(state, params.baseDir);
+    persistState(state, params.baseDir);
     return {
       recorded: true,
       fullyRedeemed: bootstrapProfileSatisfiesProfile({
@@ -459,10 +554,17 @@ export async function verifyDeviceBootstrapToken(params: {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
     const allowedProfile = resolvePersistedBootstrapProfile(record);
+    const requestedProfile = resolveRequestedBootstrapProfile({
+      role,
+      scopes: params.scopes,
+      purpose: allowedProfile.purpose,
+    });
     // Fail closed for any attempt to redeem the token outside the issued
     // role/scope allowlist before binding it to a concrete device identity.
     if (
       allowedProfile.roles.length === 0 ||
+      (deviceBootstrapProfilesEqual(allowedProfile, CONTROL_UI_OWNER_BOOTSTRAP_PROFILE) &&
+        !deviceBootstrapProfilesEqual(requestedProfile, CONTROL_UI_OWNER_BOOTSTRAP_PROFILE)) ||
       !bootstrapProfileAllowsRequest({
         allowedProfile,
         requestedRole: role,
@@ -471,10 +573,6 @@ export async function verifyDeviceBootstrapToken(params: {
     ) {
       return { ok: false, reason: "bootstrap_token_invalid" };
     }
-    const requestedProfile = resolveRequestedBootstrapProfile({
-      role,
-      scopes: params.scopes,
-    });
 
     const boundDeviceId = record.deviceId?.trim();
     const boundPublicKey =
@@ -486,7 +584,7 @@ export async function verifyDeviceBootstrapToken(params: {
         return { ok: false, reason: "bootstrap_token_invalid" };
       }
       const pendingProfile = resolvePersistedPendingProfile(record);
-      if (pendingProfile && !sameBootstrapProfile(pendingProfile, requestedProfile)) {
+      if (pendingProfile && !deviceBootstrapProfilesEqual(pendingProfile, requestedProfile)) {
         return { ok: false, reason: "bootstrap_token_invalid" };
       }
       state[tokenKey] = {
@@ -497,7 +595,7 @@ export async function verifyDeviceBootstrapToken(params: {
         publicKey,
         lastUsedAtMs: Date.now(),
       };
-      await persistState(state, params.baseDir);
+      persistState(state, params.baseDir);
       return { ok: true };
     }
 
@@ -509,23 +607,28 @@ export async function verifyDeviceBootstrapToken(params: {
       publicKey,
       lastUsedAtMs: Date.now(),
     };
-    await persistState(state, params.baseDir);
+    persistState(state, params.baseDir);
     return { ok: true };
   });
 }
 
+type BoundDeviceBootstrapContext = {
+  profile: DeviceBootstrapProfile;
+  setupId?: string;
+};
+
 /**
- * Reads the already-bound bootstrap profile for a verified device identity.
+ * Reads already-bound bootstrap context for a verified device identity.
  *
  * Call this only after `verifyDeviceBootstrapToken()` has returned `{ ok: true }`
  * for the same `token` / `deviceId` / `publicKey` tuple in the current handshake.
  */
-export async function getBoundDeviceBootstrapProfile(params: {
+export async function getBoundDeviceBootstrapContext(params: {
   token: string;
   deviceId: string;
   publicKey: string;
   baseDir?: string;
-}): Promise<DeviceBootstrapProfile | null> {
+}): Promise<BoundDeviceBootstrapContext | null> {
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     const providedToken = params.token.trim();
@@ -551,6 +654,16 @@ export async function getBoundDeviceBootstrapProfile(params: {
     if (record.deviceId?.trim() !== deviceId || recordPublicKey !== publicKey) {
       return null;
     }
-    return resolvePersistedBootstrapProfile(record);
+    return {
+      profile: resolvePersistedBootstrapProfile(record),
+      ...(record.setupId ? { setupId: record.setupId } : {}),
+    };
   });
+}
+
+/** Read the profile from already-bound bootstrap context. */
+export async function getBoundDeviceBootstrapProfile(
+  params: Parameters<typeof getBoundDeviceBootstrapContext>[0],
+): Promise<DeviceBootstrapProfile | null> {
+  return (await getBoundDeviceBootstrapContext(params))?.profile ?? null;
 }

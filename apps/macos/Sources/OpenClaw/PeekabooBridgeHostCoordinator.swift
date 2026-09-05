@@ -1,20 +1,127 @@
+import Darwin
 import Foundation
 import os
-import PeekabooAutomationKit
 import PeekabooBridge
-import PeekabooFoundation
-import Security
+
+protocol PeekabooBridgeRuntimeControlling: Sendable {
+    func startChecked() async throws -> PeekabooEmbeddedBridgeRuntimeSnapshot
+    func stopChecked() async
+    func snapshot() async -> PeekabooEmbeddedBridgeRuntimeSnapshot
+}
+
+extension PeekabooEmbeddedBridgeRuntime: PeekabooBridgeRuntimeControlling {}
+
+struct LegacyPeekabooSocketAliasManager {
+    let targetSocketPath: String
+    let aliasSocketPaths: [String]
+
+    func ensureAliases(logger: Logger) {
+        for aliasPath in self.aliasSocketPaths {
+            self.ensureAlias(at: aliasPath, logger: logger)
+        }
+    }
+
+    private func ensureAlias(at aliasPath: String, logger: Logger) {
+        let fileManager = FileManager.default
+        let aliasURL = URL(fileURLWithPath: aliasPath)
+        do {
+            try fileManager.createDirectory(
+                at: aliasURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+
+            var pathInfo = Darwin.stat()
+            if lstat(aliasPath, &pathInfo) == 0 {
+                guard pathInfo.st_mode & S_IFMT == S_IFLNK else {
+                    logger.debug(
+                        "Preserving non-symlink legacy PeekabooBridge path at \(aliasPath, privacy: .public)")
+                    return
+                }
+                let destination = try fileManager.destinationOfSymbolicLink(atPath: aliasPath)
+                let destinationURL = URL(
+                    fileURLWithPath: destination,
+                    relativeTo: aliasURL.deletingLastPathComponent()).standardizedFileURL
+                let targetURL = URL(fileURLWithPath: self.targetSocketPath).standardizedFileURL
+                guard destinationURL.path == targetURL.path else {
+                    logger.debug(
+                        "Preserving unowned legacy PeekabooBridge symlink at \(aliasPath, privacy: .public)")
+                    return
+                }
+                return
+            }
+            guard errno == ENOENT else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            try fileManager.createSymbolicLink(
+                atPath: aliasPath,
+                withDestinationPath: self.targetSocketPath)
+        } catch {
+            let message = "Failed to create legacy PeekabooBridge socket symlink: \(error.localizedDescription)"
+            logger.debug("\(message, privacy: .public)")
+        }
+    }
+}
 
 @MainActor
 final class PeekabooBridgeHostCoordinator {
+    typealias RuntimeFactory = @MainActor () -> any PeekabooBridgeRuntimeControlling
+
     static let shared = PeekabooBridgeHostCoordinator()
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "PeekabooBridge")
-
-    private var host: PeekabooBridgeHost?
-    private var services: OpenClawPeekabooBridgeServices?
+    static let allowedClientTeamIDs = PeekabooBridgeConstants.trustedReleaseTeamIDs
+    static let allowedClientBundleIDs: Set<String> = ["boo.peekaboo.peekaboo"]
 
     private static let legacySocketDirectoryNames = ["clawdbot", "clawdis", "moltbot"]
+
+    private let logger: Logger
+    private let runtimeFactory: RuntimeFactory
+    private let aliasManager: LegacyPeekabooSocketAliasManager
+
+    private var desiredEnabled = false
+    private var retainedRuntime: (any PeekabooBridgeRuntimeControlling)?
+    private var reconciliationTail: Task<Void, Never>?
+
+    init() {
+        let socketPath = Self.openclawSocketPath
+        self.logger = Logger(subsystem: "ai.openclaw", category: "PeekabooBridge")
+        self.runtimeFactory = {
+            PeekabooEmbeddedBridgeRuntime.make(
+                configuration: .init(
+                    socketPath: socketPath,
+                    allowlistedTeams: Self.allowedClientTeamIDs,
+                    allowlistedBundles: Self.allowedClientBundleIDs,
+                    hostKind: .gui),
+                snapshotOptions: .init(
+                    snapshotValidityWindow: 600,
+                    maxSnapshots: 50,
+                    deleteArtifactsOnCleanup: false,
+                    copyArtifactsOnStore: true))
+        }
+        self.aliasManager = LegacyPeekabooSocketAliasManager(
+            targetSocketPath: socketPath,
+            aliasSocketPaths: Self.legacySocketPaths)
+    }
+
+    init(runtimeFactory: @escaping RuntimeFactory, aliasManager: LegacyPeekabooSocketAliasManager) {
+        self.logger = Logger(subsystem: "ai.openclaw", category: "PeekabooBridge")
+        self.runtimeFactory = runtimeFactory
+        self.aliasManager = aliasManager
+    }
+
+    func setEnabled(_ enabled: Bool) async {
+        self.desiredEnabled = enabled
+        let predecessor = self.reconciliationTail
+        let operation = Task { @MainActor [weak self] in
+            await predecessor?.value
+            await self?.reconcileDesiredState()
+        }
+        self.reconciliationTail = operation
+        await operation.value
+    }
+
+    func shutdown() async {
+        await self.setEnabled(false)
+    }
 
     private static var openclawSocketPath: String {
         let fileManager = FileManager.default
@@ -37,168 +144,76 @@ final class PeekabooBridgeHostCoordinator {
         return Self.legacySocketDirectoryNames.map { Self.makeSocketPath(for: $0, in: base) }
     }
 
-    func setEnabled(_ enabled: Bool) async {
-        if enabled {
-            await self.startIfNeeded()
+    private func reconcileDesiredState() async {
+        if self.desiredEnabled {
+            await self.ensureStarted()
         } else {
-            await self.stop()
+            await self.ensureStopped()
         }
     }
 
-    func stop() async {
-        guard let host else { return }
-        await host.stop()
-        self.host = nil
-        self.services = nil
+    private func ensureStarted() async {
+        if let retainedRuntime {
+            let snapshot = await retainedRuntime.snapshot()
+            guard snapshot.state != .ready else { return }
+            do {
+                let started = try await retainedRuntime.startChecked()
+                guard started.state == .ready else {
+                    self.logger.error("PeekabooBridge retained runtime did not become ready")
+                    return
+                }
+                self.aliasManager.ensureAliases(logger: self.logger)
+            } catch {
+                let message = "Failed to restart retained PeekabooBridge runtime: \(error.localizedDescription)"
+                self.logger.error("\(message, privacy: .public)")
+            }
+            return
+        }
+
+        let candidate = self.runtimeFactory()
+        do {
+            let started = try await candidate.startChecked()
+            guard started.state == .ready else {
+                await self.stopCandidate(candidate)
+                self.logger.error("PeekabooBridge runtime returned before becoming ready")
+                return
+            }
+            guard self.desiredEnabled else {
+                await self.stopCandidate(candidate)
+                return
+            }
+
+            self.retainedRuntime = candidate
+            self.aliasManager.ensureAliases(logger: self.logger)
+            self.logger.info("PeekabooBridge host ready at \(started.socketPath, privacy: .public)")
+        } catch {
+            self.logger.error("Failed to start PeekabooBridge host: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func ensureStopped() async {
+        guard let retainedRuntime else { return }
+        await retainedRuntime.stopChecked()
+        let snapshot = await retainedRuntime.snapshot()
+        guard snapshot.state == .stopped else {
+            // A runtime that still owns the socket must stay retained so the next reconciliation can finish teardown.
+            let state = snapshot.state.rawValue
+            self.logger.error("PeekabooBridge host retained after incomplete stop in state \(state, privacy: .public)")
+            return
+        }
+        self.retainedRuntime = nil
         self.logger.info("PeekabooBridge host stopped")
     }
 
-    private func startIfNeeded() async {
-        guard self.host == nil else { return }
-
-        var allowlistedTeamIDs: Set = ["Y5PE65HELJ"]
-        if let teamID = Self.currentTeamID() {
-            allowlistedTeamIDs.insert(teamID)
+    private func stopCandidate(_ candidate: any PeekabooBridgeRuntimeControlling) async {
+        await candidate.stopChecked()
+        let snapshot = await candidate.snapshot()
+        guard snapshot.state == .stopped else {
+            self.retainedRuntime = candidate
+            let state = snapshot.state.rawValue
+            let message = "PeekabooBridge candidate retained after incomplete stop in state \(state)"
+            self.logger.error("\(message, privacy: .public)")
+            return
         }
-        let allowlistedBundles: Set<String> = []
-
-        self.ensureLegacySocketSymlinks()
-
-        let services = OpenClawPeekabooBridgeServices()
-        let server = PeekabooBridgeServer(
-            services: services,
-            hostKind: .gui,
-            allowlistedTeams: allowlistedTeamIDs,
-            allowlistedBundles: allowlistedBundles)
-
-        let host = PeekabooBridgeHost(
-            socketPath: Self.openclawSocketPath,
-            server: server,
-            allowedTeamIDs: allowlistedTeamIDs,
-            requestTimeoutSec: 10)
-
-        self.services = services
-        self.host = host
-
-        await host.start()
-        self.logger
-            .info("PeekabooBridge host started at \(Self.openclawSocketPath, privacy: .public)")
-    }
-
-    private func ensureLegacySocketSymlinks() {
-        for legacyPath in Self.legacySocketPaths {
-            self.ensureLegacySocketSymlink(at: legacyPath)
-        }
-    }
-
-    private func ensureLegacySocketSymlink(at legacyPath: String) {
-        let fileManager = FileManager.default
-        let legacyDirectory = (legacyPath as NSString).deletingLastPathComponent
-        do {
-            let directoryAttributes: [FileAttributeKey: Any] = [
-                .posixPermissions: 0o700,
-            ]
-            try fileManager.createDirectory(
-                atPath: legacyDirectory,
-                withIntermediateDirectories: true,
-                attributes: directoryAttributes)
-            let linkURL = URL(fileURLWithPath: legacyPath)
-            let linkValues = try? linkURL.resourceValues(forKeys: [.isSymbolicLinkKey])
-            if linkValues?.isSymbolicLink == true {
-                let destination = try FileManager.default.destinationOfSymbolicLink(atPath: legacyPath)
-                let destinationURL = URL(fileURLWithPath: destination, relativeTo: linkURL.deletingLastPathComponent())
-                    .standardizedFileURL
-                if destinationURL.path == URL(fileURLWithPath: Self.openclawSocketPath).standardizedFileURL.path {
-                    return
-                }
-                try fileManager.removeItem(atPath: legacyPath)
-            } else if fileManager.fileExists(atPath: legacyPath) {
-                try fileManager.removeItem(atPath: legacyPath)
-            }
-            try fileManager.createSymbolicLink(atPath: legacyPath, withDestinationPath: Self.openclawSocketPath)
-        } catch {
-            let message = "Failed to create legacy PeekabooBridge socket symlink: \(error.localizedDescription)"
-            self.logger
-                .debug("\(message, privacy: .public)")
-        }
-    }
-
-    private static func currentTeamID() -> String? {
-        var code: SecCode?
-        guard SecCodeCopySelf(SecCSFlags(), &code) == errSecSuccess,
-              let code
-        else {
-            return nil
-        }
-
-        var staticCode: SecStaticCode?
-        guard SecCodeCopyStaticCode(code, SecCSFlags(), &staticCode) == errSecSuccess,
-              let staticCode
-        else {
-            return nil
-        }
-
-        var infoCF: CFDictionary?
-        guard SecCodeCopySigningInformation(
-            staticCode,
-            SecCSFlags(rawValue: kSecCSSigningInformation),
-            &infoCF) == errSecSuccess,
-            let info = infoCF as? [String: Any]
-        else {
-            return nil
-        }
-
-        return info[kSecCodeInfoTeamIdentifier as String] as? String
-    }
-}
-
-@MainActor
-private final class OpenClawPeekabooBridgeServices: PeekabooBridgeServiceProviding {
-    let permissions: PermissionsService
-    let screenCapture: any ScreenCaptureServiceProtocol
-    let automation: any UIAutomationServiceProtocol
-    let windows: any WindowManagementServiceProtocol
-    let applications: any ApplicationServiceProtocol
-    let menu: any MenuServiceProtocol
-    let dock: any DockServiceProtocol
-    let dialogs: any DialogServiceProtocol
-    let snapshots: any SnapshotManagerProtocol
-    let desktopObservation: any DesktopObservationServiceProtocol
-
-    init() {
-        let logging = LoggingService(subsystem: "ai.openclaw.peekaboo")
-        let feedbackClient: any AutomationFeedbackClient = NoopAutomationFeedbackClient()
-
-        let snapshots = InMemorySnapshotManager(options: .init(
-            snapshotValidityWindow: 600,
-            maxSnapshots: 50,
-            deleteArtifactsOnCleanup: false))
-        let applications = ApplicationService(feedbackClient: feedbackClient)
-
-        let screenCapture = ScreenCaptureService(loggingService: logging)
-        let automation = UIAutomationService(
-            snapshotManager: snapshots,
-            loggingService: logging,
-            searchPolicy: .balanced,
-            feedbackClient: feedbackClient)
-        let menu = MenuService(applicationService: applications, feedbackClient: feedbackClient)
-        let screens = ScreenService()
-
-        self.permissions = PermissionsService()
-        self.snapshots = snapshots
-        self.applications = applications
-        self.screenCapture = screenCapture
-        self.automation = automation
-        self.windows = WindowManagementService(applicationService: applications, feedbackClient: feedbackClient)
-        self.menu = menu
-        self.dock = DockService(feedbackClient: feedbackClient)
-        self.dialogs = DialogService(feedbackClient: feedbackClient)
-        self.desktopObservation = DesktopObservationService(
-            screenCapture: screenCapture,
-            automation: automation,
-            applications: applications,
-            menu: menu,
-            screens: screens,
-            snapshotManager: snapshots)
     }
 }

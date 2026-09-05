@@ -39,6 +39,12 @@ extension CronJobEditor {
             self.scheduleKind = .cron
             self.cronExpr = expr
             self.cronTz = tz ?? ""
+        case .onExit:
+            // on-exit jobs are CLI-managed and have no editor form yet; fall back to
+            // the cron form so the editor still OPENS instead of failing to compile.
+            // Saving an on-exit job from the editor should be gated to avoid rewriting
+            // it as cron — tracked as a macOS read-only-editor follow-up.
+            self.scheduleKind = .cron
         }
 
         switch job.payload {
@@ -50,6 +56,8 @@ extension CronJobEditor {
             self.agentMessage = message
             self.thinking = thinking ?? ""
             self.timeoutSeconds = timeoutSeconds.map(String.init) ?? ""
+        case .command, .script:
+            break
         }
 
         if let delivery = job.delivery {
@@ -74,6 +82,27 @@ extension CronJobEditor {
     }
 
     func buildPayload() throws -> [String: AnyCodable] {
+        if let job, !job.payload.isEditableInMacApp {
+            throw NSError(
+                domain: "Cron",
+                code: 0,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Command and script cron payloads are read-only in the macOS app; manage them with the CLI.",
+                ])
+        }
+        // Gate on-exit saves: the editor has no on-exit schedule form (it falls back to
+        // the cron form), so saving would rewrite the on-exit schedule as cron and
+        // corrupt the job. Block it until a read-only/native on-exit editor exists.
+        if let job, case .onExit = job.schedule {
+            throw NSError(
+                domain: "Cron",
+                code: 0,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "on-exit cron jobs can't be edited in the macOS app yet; manage them with the CLI.",
+                ])
+        }
         let name = try self.requireName()
         let description = self.trimmed(self.description)
         let agentId = self.trimmed(self.agentId)
@@ -119,6 +148,13 @@ extension CronJobEditor {
             } else if self.job?.delivery?.bestEffort == true {
                 delivery["bestEffort"] = false
             }
+            if let destination = self.job?.delivery?.completionDestination {
+                delivery["completionDestination"] = destination.mapValues(\.value)
+            }
+        }
+        if let threadId = self.job?.delivery?.threadId { delivery["threadId"] = threadId.value }
+        if let destination = self.job?.delivery?.failureDestination {
+            delivery["failureDestination"] = destination.mapValues(\.value)
         }
         return delivery
     }

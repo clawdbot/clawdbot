@@ -1,3 +1,5 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Matrix plugin module implements verification events behavior.
 import type { MatrixClient } from "../sdk.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
@@ -31,53 +33,38 @@ type MatrixVerificationSummaryLike = {
   };
 };
 
-type MatrixDirectRoomDeps = {
-  inspectMatrixDirectRooms: typeof import("../direct-management.js").inspectMatrixDirectRooms;
-  isStrictDirectRoom: typeof import("../direct-room.js").isStrictDirectRoom;
-};
-
-let matrixDirectRoomDepsPromise: Promise<MatrixDirectRoomDeps> | undefined;
-
-async function loadMatrixDirectRoomDeps(): Promise<MatrixDirectRoomDeps> {
-  matrixDirectRoomDepsPromise ??= Promise.all([
-    import("../direct-management.js"),
-    import("../direct-room.js"),
-  ]).then(([directManagementModule, directRoomModule]) => ({
-    inspectMatrixDirectRooms: directManagementModule.inspectMatrixDirectRooms,
-    isStrictDirectRoom: directRoomModule.isStrictDirectRoom,
-  }));
-  return await matrixDirectRoomDepsPromise;
-}
-
-function trimMaybeString(input: unknown): string | null {
-  if (typeof input !== "string") {
-    return null;
-  }
-  const trimmed = input.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
+const loadMatrixDirectRoomDeps = createLazyRuntimeModule(() =>
+  Promise.all([import("../direct-management.js"), import("../direct-room.js")]).then(
+    ([directManagementModule, directRoomModule]) => ({
+      inspectMatrixDirectRooms: directManagementModule.inspectMatrixDirectRooms,
+      isStrictDirectRoom: directRoomModule.isStrictDirectRoom,
+    }),
+  ),
+);
 
 function readVerificationSignal(event: MatrixRawEvent): {
   stage: MatrixVerificationStage;
   flowId: string | null;
 } | null {
-  const type = trimMaybeString(event?.type) ?? "";
+  const type = normalizeNullableString(event?.type) ?? "";
   const content = event?.content ?? {};
-  const msgtype = trimMaybeString((content as { msgtype?: unknown }).msgtype) ?? "";
-  const relatedEventId = trimMaybeString(
+  const msgtype = normalizeNullableString((content as { msgtype?: unknown }).msgtype) ?? "";
+  const relatedEventId = normalizeNullableString(
     (content as { "m.relates_to"?: { event_id?: unknown } })["m.relates_to"]?.event_id,
   );
-  const transactionId = trimMaybeString((content as { transaction_id?: unknown }).transaction_id);
+  const transactionId = normalizeNullableString(
+    (content as { transaction_id?: unknown }).transaction_id,
+  );
   if (type === EventType.RoomMessage && isMatrixVerificationRequestMsgType(msgtype)) {
     return {
       stage: "request",
-      flowId: trimMaybeString(event.event_id) ?? transactionId ?? relatedEventId,
+      flowId: normalizeNullableString(event.event_id) ?? transactionId ?? relatedEventId,
     };
   }
   if (!isMatrixVerificationEventType(type)) {
     return null;
   }
-  const flowId = transactionId ?? relatedEventId ?? trimMaybeString(event.event_id);
+  const flowId = transactionId ?? relatedEventId ?? normalizeNullableString(event.event_id);
   if (type === `${matrixVerificationConstants.eventPrefix}request`) {
     return { stage: "request", flowId };
   }
@@ -113,8 +100,8 @@ function formatVerificationStageNotice(params: {
     case "done":
       return `Matrix verification completed with ${senderId}.`;
     case "cancel": {
-      const code = trimMaybeString(content.code);
-      const reason = trimMaybeString(content.reason);
+      const code = normalizeNullableString(content.code);
+      const reason = normalizeNullableString(content.reason);
       if (code && reason) {
         return `Matrix verification cancelled by ${senderId} (${code}: ${reason}).`;
       }
@@ -137,7 +124,8 @@ function formatVerificationSasNotice(summary: MatrixVerificationSummaryLike): st
     Array.isArray(sas.emoji) && sas.emoji.length > 0
       ? `SAS emoji: ${sas.emoji
           .map(
-            ([emoji, name]) => `${trimMaybeString(emoji) ?? "?"} ${trimMaybeString(name) ?? "?"}`,
+            ([emoji, name]) =>
+              `${normalizeNullableString(emoji) ?? "?"} ${normalizeNullableString(name) ?? "?"}`,
           )
           .join(" | ")}`
       : null;
@@ -170,7 +158,7 @@ function resolveVerificationFlowCandidates(params: {
   };
   const candidates = new Set<string>();
   const add = (value: unknown) => {
-    const normalized = trimMaybeString(value);
+    const normalized = normalizeNullableString(value);
     if (normalized) {
       candidates.add(normalized);
     }
@@ -241,7 +229,7 @@ async function resolveVerificationSummaryForSignal(
     client,
     remoteUserId: params.senderId,
   }).catch(() => null);
-  const activeRoomId = trimMaybeString(inspection?.activeRoomId);
+  const activeRoomId = normalizeNullableString(inspection?.activeRoomId);
   if (activeRoomId) {
     if (activeRoomId !== params.roomId) {
       return null;
@@ -264,7 +252,7 @@ async function resolveVerificationSummaryForSignal(
     .filter((entry) => entry.otherUserId === params.senderId && isActiveVerificationSummary(entry))
     .toSorted((a, b) => resolveSummaryRecency(b) - resolveSummaryRecency(a));
   const activeInRoom = activeByUser.filter((entry) => {
-    const roomId = trimMaybeString(entry.roomId);
+    const roomId = normalizeNullableString(entry.roomId);
     return roomId === params.roomId;
   });
   if (activeInRoom.length > 0) {
@@ -327,7 +315,7 @@ async function sendVerificationNotice(params: {
   body: string;
   logVerboseMessage: (message: string) => void;
 }): Promise<void> {
-  const roomId = trimMaybeString(params.roomId);
+  const roomId = normalizeNullableString(params.roomId);
   if (!roomId) {
     return;
   }
@@ -407,7 +395,7 @@ export function createMatrixVerificationEventRouter(params: {
       client: params.client,
       remoteUserId,
     }).catch(() => null);
-    return trimMaybeString(inspection?.activeRoomId);
+    return normalizeNullableString(inspection?.activeRoomId);
   }
 
   function shouldEmitVerificationEventNotice(event: MatrixRawEvent): boolean {
@@ -434,8 +422,8 @@ export function createMatrixVerificationEventRouter(params: {
   }
 
   function rememberVerificationUserRoom(remoteUserId: string, roomId: string): void {
-    const normalizedUserId = trimMaybeString(remoteUserId);
-    const normalizedRoomId = trimMaybeString(roomId);
+    const normalizedUserId = normalizeNullableString(remoteUserId);
+    const normalizedRoomId = normalizeNullableString(roomId);
     if (!normalizedUserId || !normalizedRoomId) {
       return;
     }
@@ -453,20 +441,20 @@ export function createMatrixVerificationEventRouter(params: {
     summary: MatrixVerificationSummaryLike,
   ): Promise<string | null> {
     const mappedRoomId =
-      trimMaybeString(summary.roomId) ??
-      trimMaybeString(
+      normalizeNullableString(summary.roomId) ??
+      normalizeNullableString(
         summary.transactionId ? verificationFlowRooms.get(summary.transactionId) : null,
       ) ??
-      trimMaybeString(verificationFlowRooms.get(summary.id));
+      normalizeNullableString(verificationFlowRooms.get(summary.id));
     if (mappedRoomId) {
       return mappedRoomId;
     }
 
-    const remoteUserId = trimMaybeString(summary.otherUserId);
+    const remoteUserId = normalizeNullableString(summary.otherUserId);
     if (!remoteUserId) {
       return null;
     }
-    const recentRoomId = trimMaybeString(verificationUserRooms.get(remoteUserId));
+    const recentRoomId = normalizeNullableString(verificationUserRooms.get(remoteUserId));
     const activeRoomId = await resolveActiveDirectRoomId(remoteUserId);
     if (recentRoomId && activeRoomId && recentRoomId === activeRoomId) {
       return recentRoomId;
@@ -537,7 +525,7 @@ export function createMatrixVerificationEventRouter(params: {
   }
 
   function routeVerificationEvent(roomId: string, event: MatrixRawEvent): boolean {
-    const senderId = trimMaybeString(event?.sender);
+    const senderId = normalizeNullableString(event?.sender);
     if (!senderId) {
       return false;
     }
@@ -555,7 +543,7 @@ export function createMatrixVerificationEventRouter(params: {
         return;
       }
       const flowId = signal.flowId;
-      const sourceEventId = trimMaybeString(event?.event_id);
+      const sourceEventId = normalizeNullableString(event?.event_id);
       const sourceFingerprint = sourceEventId ?? `${senderId}:${event.type}:${flowId ?? "none"}`;
       const shouldRouteInRoom = await (
         await loadMatrixDirectRoomDeps()

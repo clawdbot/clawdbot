@@ -4,6 +4,7 @@ import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runti
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import { buildDiscordInboundAccessContext } from "./inbound-context.js";
+import { buildDiscordConversationRouteContext } from "./route-resolution.js";
 
 type BuildDiscordNativeCommandContextParams = {
   prompt: string;
@@ -43,14 +44,15 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
   const conversationLabel = params.isDirectMessage
     ? (params.user.globalName ?? params.user.username)
     : params.channelId;
-  const { groupSystemPrompt, ownerAllowFrom, untrustedContext } = buildDiscordInboundAccessContext({
-    channelConfig: params.channelConfig,
-    guildInfo: params.guildInfo,
-    sender: params.sender,
-    allowNameMatching: params.allowNameMatching,
-    isGuild: params.isGuild,
-    channelTopic: params.channelTopic,
-  });
+  const { groupSystemPrompt, ownerAllowFrom, channelStructuredContext } =
+    buildDiscordInboundAccessContext({
+      channelConfig: params.channelConfig,
+      guildInfo: params.guildInfo,
+      sender: params.sender,
+      allowNameMatching: params.allowNameMatching,
+      isGuild: params.isGuild,
+      channelTopic: params.channelTopic,
+    });
 
   return finalizeInboundContext({
     Body: params.prompt,
@@ -68,6 +70,14 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
     CommandTargetSessionKey: params.commandTargetSessionKey,
     AccountId: params.accountId ?? undefined,
     ChatType: params.isDirectMessage ? "direct" : params.isGroupDm ? "group" : "channel",
+    ...buildDiscordConversationRouteContext({
+      isDirectMessage: params.isDirectMessage,
+      isGroupDm: params.isGroupDm,
+      directUserId: params.user.id,
+      conversationId: params.channelId,
+      isThread: params.isThreadChannel,
+      parentConversationId: params.threadParentId,
+    }),
     ConversationLabel: conversationLabel,
     GroupSubject: params.isGuild ? params.guildName : undefined,
     GroupSpace: params.isGuild
@@ -75,7 +85,7 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
       : undefined,
     MemberRoleIds: params.memberRoleIds,
     GroupSystemPrompt: groupSystemPrompt,
-    UntrustedStructuredContext: untrustedContext,
+    ChannelStructuredContext: channelStructuredContext,
     OwnerAllowFrom: ownerAllowFrom,
     SenderName: params.user.globalName ?? params.user.username,
     SenderId: params.user.id,
@@ -85,7 +95,6 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
     Surface: "discord" as const,
     WasMentioned: true,
     MessageSid: params.interactionId,
-    MessageThreadId: params.isThreadChannel ? params.channelId : undefined,
     Timestamp: params.timestampMs ?? Date.now(),
     CommandAuthorized: params.commandAuthorized,
     CommandTurn: {
@@ -105,6 +114,5 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
         userId: params.user.id,
         channelId: params.channelId,
       }) ?? (params.isDirectMessage ? `user:${params.user.id}` : `channel:${params.channelId}`),
-    ThreadParentId: params.isThreadChannel ? params.threadParentId : undefined,
   });
 }

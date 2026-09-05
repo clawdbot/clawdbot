@@ -1,14 +1,49 @@
 // Tests diagnostics command output and runtime diagnostic toggles.
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
-import { createBundledPluginRecord } from "../../plugins/status.test-helpers.js";
-import type { PluginCommandContext, PluginCommandHandler } from "../../plugins/types.js";
+import { createBundledPluginRecord } from "../../plugins/status.test-fixtures.js";
+import type { OpenClawPluginCommandDefinition, PluginCommandContext } from "../../plugins/types.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+
+type PluginCommandHandler = OpenClawPluginCommandDefinition["handler"];
 import type { MsgContext } from "../templating.js";
-import { createDiagnosticsCommandHandler } from "./commands-diagnostics.js";
+import { handleDiagnosticsCommand as defaultDiagnosticsCommandHandler } from "./commands-diagnostics.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+
+const diagnosticsCommandMocks = vi.hoisted(() => ({
+  createExecTool: vi.fn(),
+  deliverPrivateCommandReply: vi.fn(),
+  resolvePrivateCommandRouteTargets: vi.fn(),
+}));
+
+vi.mock("../../agents/bash-tools.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/bash-tools.js")>(
+    "../../agents/bash-tools.js",
+  );
+  return {
+    ...actual,
+    createExecTool: diagnosticsCommandMocks.createExecTool,
+  };
+});
+
+vi.mock("./commands-private-route.js", async () => {
+  const actual = await vi.importActual<typeof import("./commands-private-route.js")>(
+    "./commands-private-route.js",
+  );
+  return {
+    ...actual,
+    deliverPrivateCommandReply: diagnosticsCommandMocks.deliverPrivateCommandReply,
+    resolvePrivateCommandRouteTargets: diagnosticsCommandMocks.resolvePrivateCommandRouteTargets,
+  };
+});
 
 type ExecCall = {
   defaults: unknown;
@@ -32,7 +67,6 @@ type ExecDefaults = {
 type ExecParams = {
   ask?: string;
   command?: string;
-  security?: string;
 };
 
 type DiagnosticsSession = {
@@ -42,6 +76,11 @@ type DiagnosticsSession = {
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;
+};
+
+type PrivateDiagnosticsReply = {
+  targets: Array<{ channel: string; to: string; accountId?: string | null }>;
+  text?: string;
 };
 
 function requireExecCall(execCalls: ExecCall[], index = 0) {
@@ -119,6 +158,7 @@ function registerHostTrustedReservedCommandForTest(
     activateGlobalSideEffects: true,
   });
   pluginRegistry.registerCommand(createBundledPluginRecord(command.name), command);
+  setActivePluginRegistry(pluginRegistry.registry);
 }
 
 function registerCodexDiagnosticsCommandForTest(
@@ -206,12 +246,12 @@ function createDiagnosticsHandlerForTest(
     };
   } = {},
 ) {
+  diagnosticsCommandMocks.createExecTool.mockReset();
+  diagnosticsCommandMocks.deliverPrivateCommandReply.mockReset();
+  diagnosticsCommandMocks.resolvePrivateCommandRouteTargets.mockReset();
   const execCalls: ExecCall[] = [];
-  const privateReplies: Array<{
-    targets: Array<{ channel: string; to: string; accountId?: string | null }>;
-    text?: string;
-  }> = [];
-  const createExecTool = vi.fn((defaults: unknown) => ({
+  const privateReplies: PrivateDiagnosticsReply[] = [];
+  diagnosticsCommandMocks.createExecTool.mockImplementation((defaults: unknown) => ({
     execute: vi.fn(async (_toolCallId: string, params: unknown) => {
       execCalls.push({ defaults, params });
       return (
@@ -236,17 +276,25 @@ function createDiagnosticsHandlerForTest(
       );
     }),
   }));
+  diagnosticsCommandMocks.resolvePrivateCommandRouteTargets.mockResolvedValue(
+    options.privateTargets ?? [],
+  );
+  diagnosticsCommandMocks.deliverPrivateCommandReply.mockImplementation(
+    async ({
+      targets,
+      reply,
+    }: {
+      targets: PrivateDiagnosticsReply["targets"];
+      reply: { text?: string };
+    }) => {
+      privateReplies.push({ targets, text: reply.text });
+      return true;
+    },
+  );
   return {
     execCalls,
     privateReplies,
-    handleDiagnosticsCommand: createDiagnosticsCommandHandler({
-      createExecTool: createExecTool as never,
-      resolvePrivateDiagnosticsTargets: vi.fn(async () => options.privateTargets ?? []),
-      deliverPrivateDiagnosticsReply: vi.fn(async ({ targets, reply }) => {
-        privateReplies.push({ targets, text: reply.text });
-        return true;
-      }),
-    }),
+    handleDiagnosticsCommand: defaultDiagnosticsCommandHandler,
   };
 }
 
@@ -274,7 +322,6 @@ describe("diagnostics command", () => {
     expect(execCall.defaults.approvalWarningText).toContain(
       "https://docs.openclaw.ai/gateway/diagnostics",
     );
-    expect(execCall.params.security).toBe("allowlist");
     expect(execCall.params.ask).toBe("always");
     const command = execCall.params.command ?? "";
     expect(command).toContain("gateway");
@@ -369,12 +416,12 @@ describe("diagnostics command", () => {
     expect(calls[0]?.args).toBe("diagnostics flaky tool call");
     expect(calls[0]?.diagnosticsPreviewOnly).toBe(true);
     expect(calls[0]?.senderIsOwner).toBe(true);
-    expect(calls[0]?.sessionFile).toBe("/tmp/session.jsonl");
+    expect(calls[0]?.sessionFile).toBe("agent:main:whatsapp:direct:user-1");
     const diagnosticsSessions = requireDiagnosticsSessions(calls[0]);
     expect(diagnosticsSessions).toHaveLength(1);
     expect(diagnosticsSessions[0]?.agentHarnessId).toBe("codex");
     expect(diagnosticsSessions[0]?.sessionId).toBe("session-1");
-    expect(diagnosticsSessions[0]?.sessionFile).toBe("/tmp/session.jsonl");
+    expect(diagnosticsSessions[0]?.sessionFile).toBe("agent:main:whatsapp:direct:user-1");
     expect(diagnosticsSessions[0]?.channel).toBe("whatsapp");
     expect(diagnosticsSessions[0]?.accountId).toBe("account-1");
     const { defaults } = requireExecCall(execCalls);
@@ -393,7 +440,7 @@ describe("diagnostics command", () => {
     expect(calls[1]?.diagnosticsUploadApproved).toBe(true);
   });
 
-  it("passes sidecar-bound session files to Codex diagnostics even when harness metadata is stale", async () => {
+  it("passes canonical session identities to Codex diagnostics when harness metadata is stale", async () => {
     const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(
@@ -414,7 +461,7 @@ describe("diagnostics command", () => {
             sessionId: "discord-session",
             sessionFile: "/tmp/discord.jsonl",
             updatedAt: 2,
-            channel: "discord",
+            delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
           },
         },
       }),
@@ -428,15 +475,65 @@ describe("diagnostics command", () => {
     expect(diagnosticsSessions).toHaveLength(2);
     expect(diagnosticsSessions[0]?.sessionKey).toBe("agent:main:telegram:direct:user-1");
     expect(diagnosticsSessions[0]?.sessionId).toBe("telegram-session");
-    expect(diagnosticsSessions[0]?.sessionFile).toBe("/tmp/telegram.jsonl");
+    expect(diagnosticsSessions[0]?.sessionFile).toBe("agent:main:telegram:direct:user-1");
     expect(diagnosticsSessions[0]?.channel).toBe("whatsapp");
     expect(diagnosticsSessions[1]?.sessionKey).toBe("agent:main:discord:channel:123");
     expect(diagnosticsSessions[1]?.sessionId).toBe("discord-session");
-    expect(diagnosticsSessions[1]?.sessionFile).toBe("/tmp/discord.jsonl");
+    expect(diagnosticsSessions[1]?.sessionFile).toBe("agent:main:discord:channel:123");
     expect(diagnosticsSessions[1]?.channel).toBe("discord");
     expect(requireExecCall(execCalls).defaults.approvalWarningText).toContain(
       "OpenAI Codex harness:",
     );
+  });
+
+  it("loads diagnostics inventory after authorization when the reply view contains one row", async () => {
+    await withOpenClawTestState({ label: "diagnostics-session-inventory" }, async (state) => {
+      const storePath = path.join(state.sessionsDir("main"), "sessions.json");
+      const sessionKey = "agent:main:whatsapp:direct:user-1";
+      const otherKey = "agent:main:discord:channel:123";
+      const current = { sessionId: "active-session", updatedAt: Date.now() };
+      await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, current);
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: otherKey, storePath },
+        {
+          sessionId: "other-session",
+          updatedAt: Date.now(),
+          agentHarnessId: "codex",
+          delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
+          skillsSnapshot: { prompt: "unrelated diagnostics prompt ".repeat(4096), skills: [] },
+        },
+      );
+      const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
+      const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
+      const params = buildDiagnosticsParams("/diagnostics", {
+        agentId: "main",
+        sessionKey,
+        sessionEntry: current,
+        sessionStore: { [sessionKey]: current },
+        storePath,
+      });
+      const reads = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+      try {
+        await handleDiagnosticsCommand(
+          { ...params, command: { ...params.command, senderIsOwner: false } },
+          true,
+        );
+        expect(reads).not.toHaveBeenCalled();
+        expect(calls).toHaveLength(0);
+        await handleDiagnosticsCommand(params, true);
+        expect(requireDiagnosticsSessions(calls[0])).toEqual([
+          expect.objectContaining({ sessionKey, sessionId: "active-session" }),
+          expect.objectContaining({
+            sessionKey: otherKey,
+            sessionId: "other-session",
+            agentHarnessId: "codex",
+            channel: "discord",
+          }),
+        ]);
+      } finally {
+        reads.mockRestore();
+      }
+    });
   });
 
   it("omits the Codex section for ordinary sessions without Codex targets", async () => {
@@ -574,7 +671,7 @@ describe("diagnostics command", () => {
   });
 
   it("requires an owner for diagnostics", async () => {
-    const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
+    const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics", {
         command: {
@@ -585,7 +682,11 @@ describe("diagnostics command", () => {
       true,
     );
 
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
+    });
+    expect(execCalls).toHaveLength(0);
   });
 
   it("routes confirmations back to the Codex diagnostics handler without repeating the preamble", async () => {

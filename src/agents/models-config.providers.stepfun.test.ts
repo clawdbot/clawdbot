@@ -7,8 +7,8 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import { upsertAuthProfile } from "./auth-profiles.js";
 import { installModelsConfigTestHooks } from "./models-config.e2e-harness.js";
 
-const EXPECTED_STANDARD_MODELS = ["step-3.5-flash"];
-const EXPECTED_PLAN_MODELS = ["step-3.5-flash", "step-3.5-flash-2603"];
+const EXPECTED_STANDARD_MODELS = ["step-3.7-flash", "step-3.5-flash"];
+const EXPECTED_PLAN_MODELS = ["step-3.7-flash", "step-3.5-flash", "step-3.5-flash-2603"];
 const STEPFUN_STANDARD_CN_BASE_URL = "https://api.stepfun.com/v1";
 const STEPFUN_STANDARD_INTL_BASE_URL = "https://api.stepfun.ai/v1";
 const STEPFUN_PLAN_CN_BASE_URL = "https://api.stepfun.com/step_plan/v1";

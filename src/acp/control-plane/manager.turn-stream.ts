@@ -17,8 +17,19 @@ type AcpTurnEventGate = {
 /** Summary of whether a turn stream emitted user-visible output or terminal events. */
 type AcpTurnStreamOutcome = {
   sawOutput: boolean;
-  sawTerminalEvent: boolean;
+  terminalStatus?: "completed" | "cancelled";
 };
+
+function isCancellationStopReason(stopReason: string | undefined): boolean {
+  return stopReason === "cancel" || stopReason === "cancelled" || stopReason === "manual-cancel";
+}
+
+/** Resolves legacy and current done events to the manager's canonical terminal status. */
+function resolveAcpTurnTerminalStatus(
+  event: Extract<AcpRuntimeEvent, { type: "done" }>,
+): "completed" | "cancelled" {
+  return event.status ?? (isCancellationStopReason(event.stopReason) ? "cancelled" : "completed");
+}
 
 async function consumeAcpTurnEvents(params: {
   events: AsyncIterable<AcpRuntimeEvent>;
@@ -30,14 +41,17 @@ async function consumeAcpTurnEvents(params: {
 }): Promise<AcpTurnStreamOutcome> {
   let streamError: AcpRuntimeError | null = null;
   let sawOutput = false;
-  let sawTerminalEvent = false;
+  let terminalStatus: AcpTurnStreamOutcome["terminalStatus"];
 
   for await (const event of params.events) {
     if (!params.eventGate.open) {
       continue;
     }
+    let forwardedEvent = event;
     if (event.type === "done") {
-      sawTerminalEvent = true;
+      // Legacy runTurn adapters may omit status but retain the cancellation reason.
+      terminalStatus = resolveAcpTurnTerminalStatus(event);
+      forwardedEvent = { ...event, status: terminalStatus };
     } else if (event.type === "error") {
       streamError = new AcpRuntimeError(
         normalizeAcpErrorCode(event.code),
@@ -48,7 +62,7 @@ async function consumeAcpTurnEvents(params: {
       sawOutput = true;
       await params.onOutputEvent?.(event);
     }
-    await params.onEvent?.(event);
+    await params.onEvent?.(forwardedEvent);
   }
 
   if (params.eventGate.open && streamError) {
@@ -57,7 +71,7 @@ async function consumeAcpTurnEvents(params: {
 
   return {
     sawOutput,
-    sawTerminalEvent,
+    terminalStatus,
   };
 }
 
@@ -83,16 +97,10 @@ async function notifyTerminalResult(params: {
   if (!params.eventGate.open) {
     return;
   }
-  if (params.result.status === "completed") {
+  if (params.result.status === "completed" || params.result.status === "cancelled") {
     await params.onEvent?.({
       type: "done",
-      ...(params.result.stopReason ? { stopReason: params.result.stopReason } : {}),
-    });
-    return;
-  }
-  if (params.result.status === "cancelled") {
-    await params.onEvent?.({
-      type: "done",
+      status: params.result.status,
       ...(params.result.stopReason ? { stopReason: params.result.stopReason } : {}),
     });
     return;
@@ -113,14 +121,31 @@ export async function consumeAcpTurnStream(params: {
   runtime: AcpRuntime;
   turn: AcpRuntimeTurnInput;
   eventGate: AcpTurnEventGate;
+  onBeforePrompt?: () => Promise<void> | void;
+  onPromptStarted?: (params: { authoritative: boolean }) => Promise<void> | void;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
   onOutputEvent?: (
     event: Extract<AcpRuntimeEvent, { type: "text_delta" | "tool_call" }>,
   ) => Promise<void> | void;
 }): Promise<AcpTurnStreamOutcome> {
+  // Gateway admission can still close while runtime preparation is awaited.
+  if (params.onBeforePrompt) {
+    await params.onBeforePrompt();
+  }
   if (params.runtime.startTurn) {
-    // startTurn exposes result and event streams separately; coordinate both before reporting done.
+    // Submission readiness and terminal cleanup are independent backend-owned turn boundaries.
     const turn = params.runtime.startTurn(params.turn);
+    let promptReadinessOpen = true;
+    const readinessPromise = turn.promptStarted?.then(
+      async () => {
+        if (!promptReadinessOpen) {
+          return { kind: "prompt-start-closed" as const };
+        }
+        await params.onPromptStarted?.({ authoritative: true });
+        return { kind: "prompt-started" as const };
+      },
+      (error: unknown) => ({ kind: "prompt-start-error" as const, error }),
+    );
     const eventsPromise = consumeAcpTurnEvents({
       events: turn.events,
       eventGate: params.eventGate,
@@ -131,9 +156,30 @@ export async function consumeAcpTurnStream(params: {
       (error: unknown) => ({ kind: "event-error" as const, error }),
     );
     const resultPromise = turn.result.then(
-      (result) => ({ kind: "result" as const, result }),
-      (error: unknown) => ({ kind: "result-error" as const, error }),
+      (result) => {
+        promptReadinessOpen = false;
+        return { kind: "result" as const, result };
+      },
+      (error: unknown) => {
+        promptReadinessOpen = false;
+        return { kind: "result-error" as const, error };
+      },
     );
+
+    if (readinessPromise) {
+      const readiness = await Promise.race([readinessPromise, resultPromise]);
+      if (readiness.kind === "prompt-start-error") {
+        await turn.closeStream({ reason: "turn-prompt-start-error" }).catch(() => {});
+        // The canonical result settles only after backend persistence and client cleanup finish.
+        const terminalOutcome = await resultPromise;
+        if (terminalOutcome.kind === "result" && terminalOutcome.result.status === "completed") {
+          throw readiness.error;
+        }
+      }
+    } else {
+      // Third-party adapters predating readiness retain their existing output-based replay rules.
+      await params.onPromptStarted?.({ authoritative: false });
+    }
 
     let eventOutcome: AcpTurnStreamOutcome | null = null;
     let result: AcpRuntimeTurnResult | null = null;
@@ -186,12 +232,14 @@ export async function consumeAcpTurnStream(params: {
     }
     return {
       sawOutput: eventOutcome.sawOutput,
-      sawTerminalEvent: true,
+      terminalStatus: result.status,
     };
   }
 
+  const events = params.runtime.runTurn(params.turn);
+  await params.onPromptStarted?.({ authoritative: false });
   return await consumeAcpTurnEvents({
-    events: params.runtime.runTurn(params.turn),
+    events,
     eventGate: params.eventGate,
     onEvent: params.onEvent,
     onOutputEvent: params.onOutputEvent,

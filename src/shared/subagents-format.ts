@@ -1,8 +1,8 @@
 // Subagent formatting helpers expose compact durations and status text.
-export { formatDurationCompact } from "../infra/format-time/format-duration.ts";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 /** Formats token counts using compact k/m suffixes for subagent summaries. */
-export function formatTokenShort(value?: number) {
+function formatTokenShort(value?: number) {
   if (!value || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
@@ -26,14 +26,22 @@ export function formatTokenShort(value?: number) {
 
 /** Truncates a single-line display string without preserving trailing whitespace. */
 export function truncateLine(value: string, maxLength: number) {
-  if (value.length <= maxLength) {
-    return value;
+  const limit = Math.max(0, Math.floor(maxLength));
+  const trimmed = value.trimEnd();
+  if (trimmed.length <= limit) {
+    return trimmed;
   }
-  return `${value.slice(0, maxLength).trimEnd()}...`;
+  const marker = "...";
+  if (limit <= marker.length) {
+    return marker.slice(0, limit);
+  }
+  return `${truncateUtf16Safe(trimmed, limit - marker.length).trimEnd()}${marker}`;
 }
 
 type TokenUsageLike = {
   totalTokens?: unknown;
+  totalTokensFresh?: unknown;
+  totalTokensVersion?: unknown;
   inputTokens?: unknown;
   outputTokens?: unknown;
 };
@@ -43,7 +51,12 @@ export function resolveTotalTokens(entry?: TokenUsageLike) {
   if (!entry || typeof entry !== "object") {
     return undefined;
   }
-  if (typeof entry.totalTokens === "number" && Number.isFinite(entry.totalTokens)) {
+  if (
+    typeof entry.totalTokens === "number" &&
+    Number.isFinite(entry.totalTokens) &&
+    entry.totalTokensFresh === true &&
+    entry.totalTokensVersion === 1
+  ) {
     return entry.totalTokens;
   }
   const input = typeof entry.inputTokens === "number" ? entry.inputTokens : 0;
@@ -53,7 +66,7 @@ export function resolveTotalTokens(entry?: TokenUsageLike) {
 }
 
 /** Resolves finite input/output token usage and the derived total. */
-export function resolveIoTokens(entry?: TokenUsageLike) {
+function resolveIoTokens(entry?: TokenUsageLike) {
   if (!entry || typeof entry !== "object") {
     return undefined;
   }

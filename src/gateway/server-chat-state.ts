@@ -1,6 +1,13 @@
+import type { AgentPlanStep } from "../channels/streaming.js";
 // Gateway chat run state registries.
 // Tracks active runs, delta buffers, tool recipients, and session subscribers.
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import {
+  normalizeLiveAssistantBufferedText,
+  projectLiveAssistantBufferedText,
+} from "./live-chat-projector.js";
+import type { ChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
+import { updateChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
 
 export type ChatRunTiming = {
   ackedAtMs: number;
@@ -18,11 +25,10 @@ export type ChatRunRegistration = {
 };
 
 export type ChatRunEntry = ChatRunRegistration & {
-  registeredAtMs: number;
   registeredSequence: number;
 };
 
-export type ChatAbortMarker = number | { abortedAtMs: number; sequence: number };
+export type ChatAbortMarker = { abortedAtMs: number; sequence: number };
 
 let chatRunOrderingSequence = 0;
 
@@ -32,10 +38,9 @@ function nextChatRunOrderingSequence(): number {
 }
 
 /** Stamp a chat run registration with the process-local ordering metadata used for abort freshness checks. */
-export function createChatRunEntry(entry: ChatRunRegistration): ChatRunEntry {
+function createChatRunEntry(entry: ChatRunRegistration): ChatRunEntry {
   return {
     ...entry,
-    registeredAtMs: Date.now(),
     registeredSequence: nextChatRunOrderingSequence(),
   };
 }
@@ -45,80 +50,159 @@ export function createChatAbortMarker(now = Date.now()): ChatAbortMarker {
   return { abortedAtMs: now, sequence: nextChatRunOrderingSequence() };
 }
 
-/** Return the wall-clock timestamp used by maintenance TTL pruning for both legacy and structured markers. */
+/** Return the wall-clock timestamp used by maintenance TTL pruning. */
 export function chatAbortMarkerTimestampMs(marker: ChatAbortMarker): number {
-  return typeof marker === "number" ? marker : marker.abortedAtMs;
+  return marker.abortedAtMs;
 }
 
 /**
  * Return whether an abort marker should suppress events for the given chat run registration.
- * Structured markers compare the monotonic sequence first so same-millisecond aborts stay ordered;
- * legacy numeric markers fall back to timestamp comparison, and a missing entry preserves old suppress-on-presence behavior.
+ * The shared monotonic sequence keeps same-millisecond aborts ordered; a missing
+ * entry preserves suppress-on-presence behavior.
  */
 export function isChatAbortMarkerCurrent(
   marker: ChatAbortMarker | undefined,
-  entry?: Pick<ChatRunEntry, "registeredAtMs" | "registeredSequence">,
+  entry?: Pick<ChatRunEntry, "registeredSequence">,
 ): boolean {
   if (marker === undefined) {
     return false;
   }
-  if (!entry) {
-    return true;
-  }
-  if (typeof marker !== "number" && typeof entry.registeredSequence === "number") {
-    return marker.sequence >= entry.registeredSequence;
-  }
-  if (typeof entry.registeredAtMs !== "number") {
-    return true;
-  }
-  const abortedAtMs = typeof marker === "number" ? marker : marker.abortedAtMs;
-  return abortedAtMs >= entry.registeredAtMs;
+  return !entry || marker.sequence >= entry.registeredSequence;
 }
 
 export type BufferedAgentEvent = {
   sessionKey?: string;
   agentId?: string;
+  controlUiVisible?: boolean;
+  isCurrent?: () => boolean;
   payload: AgentEventPayload & { spawnedBy?: string };
 };
+
+export type ChatRunPlanSnapshot = {
+  steps: AgentPlanStep[];
+  explanation?: string;
+};
+
+type ChatRunAgentTextState = {
+  lastSentAt?: number;
+  bufferedEvent?: BufferedAgentEvent;
+};
+
+type ChatRunToolRecipientState = {
+  connIds: Set<string>;
+  updatedAt: number;
+  finalizedAt?: number;
+};
+
+type PendingLiveTextFlush = {
+  timer: NodeJS.Timeout;
+  flush: () => void;
+};
+
+type ChatRunRecord = {
+  registrations?: ChatRunEntry[];
+  rawBuffer?: string;
+  buffer?: string;
+  bufferIsCurrent?: () => boolean;
+  /** Retire queued connection snapshots when this buffering generation is cleared. */
+  liveTextGroup?: AbortController;
+  /** Projection stays valid only while source and managed-media facts match the run state. */
+  bufferProjection?: { source: string; suppress: boolean };
+  planSnapshot?: ChatRunPlanSnapshot;
+  progressSnapshot?: ChatRunProgressSnapshot;
+  /** Last time any buffered assistant text changed, including suppressed raw buffers. */
+  bufferUpdatedAt?: number;
+  deltaSentAt?: number;
+  assistantScope?: { itemId: string; prefix: string };
+  managedMediaUrls?: Set<string>;
+  deltaLastBroadcastText?: string;
+  agentText?: Partial<
+    Record<"assistant" | "thinking" | "preamble" | "answer_candidate", ChatRunAgentTextState>
+  >;
+  abortMarker?: ChatAbortMarker;
+  toolRecipient?: ChatRunToolRecipientState;
+  /** Fixed-deadline trailing wake-up owned by this run's buffered state. */
+  pendingTextFlushes?: Partial<Record<"chat" | "agent", PendingLiveTextFlush>>;
+};
+
+type ChatRunRecordStore = {
+  runs: Map<string, ChatRunRecord>;
+  getOrCreate: (runId: string) => ChatRunRecord;
+  releaseIfEmpty: (runId: string) => void;
+};
+
+function createChatRunRecordStore(): ChatRunRecordStore {
+  const runs = new Map<string, ChatRunRecord>();
+  const getOrCreate = (runId: string) => {
+    const existing = runs.get(runId);
+    if (existing) {
+      return existing;
+    }
+    const record: ChatRunRecord = {};
+    runs.set(runId, record);
+    return record;
+  };
+  const releaseIfEmpty = (runId: string) => {
+    const record = runs.get(runId);
+    if (!record || Object.keys(record).length > 0) {
+      return;
+    }
+    runs.delete(runId);
+  };
+  return { runs, getOrCreate, releaseIfEmpty };
+}
+
+function clearPendingLiveTextFlushes(record: ChatRunRecord): void {
+  for (const pending of Object.values(record.pendingTextFlushes ?? {})) {
+    clearTimeout(pending.timer);
+  }
+  delete record.pendingTextFlushes;
+}
 
 export type ChatRunRegistry = {
   add: (sessionId: string, entry: ChatRunRegistration) => void;
   peek: (sessionId: string) => ChatRunEntry | undefined;
   shift: (sessionId: string) => ChatRunEntry | undefined;
   remove: (sessionId: string, clientRunId: string, sessionKey?: string) => ChatRunEntry | undefined;
-  clear: () => void;
 };
 
-/** Create the FIFO registry that maps session IDs to active chat runs. */
-export function createChatRunRegistry(): ChatRunRegistry {
-  const chatRunSessions = new Map<string, ChatRunEntry[]>();
-
+function createChatRunRegistryForStore(store: ChatRunRecordStore): ChatRunRegistry {
   const add = (sessionId: string, entry: ChatRunRegistration) => {
     const registeredEntry = createChatRunEntry(entry);
-    const queue = chatRunSessions.get(sessionId);
+    const record = store.getOrCreate(sessionId);
+    const queue = record.registrations;
     if (queue) {
       queue.push(registeredEntry);
     } else {
-      chatRunSessions.set(sessionId, [registeredEntry]);
+      record.registrations = [registeredEntry];
     }
   };
 
-  const peek = (sessionId: string) => chatRunSessions.get(sessionId)?.[0];
+  const peek = (sessionId: string) => store.runs.get(sessionId)?.registrations?.[0];
 
   const shift = (sessionId: string) => {
-    const queue = chatRunSessions.get(sessionId);
+    const record = store.runs.get(sessionId);
+    if (!record) {
+      return undefined;
+    }
+    const queue = record.registrations;
     if (!queue || queue.length === 0) {
       return undefined;
     }
     const entry = queue.shift();
     if (!queue.length) {
-      chatRunSessions.delete(sessionId);
+      delete record.registrations;
+      store.releaseIfEmpty(sessionId);
     }
     return entry;
   };
 
   const remove = (sessionId: string, clientRunId: string, sessionKey?: string) => {
-    const queue = chatRunSessions.get(sessionId);
+    const record = store.runs.get(sessionId);
+    if (!record) {
+      return undefined;
+    }
+    const queue = record.registrations;
     if (!queue || queue.length === 0) {
       return undefined;
     }
@@ -131,85 +215,134 @@ export function createChatRunRegistry(): ChatRunRegistry {
     }
     const [entry] = queue.splice(idx, 1);
     if (!queue.length) {
-      chatRunSessions.delete(sessionId);
+      delete record.registrations;
+      store.releaseIfEmpty(sessionId);
     }
     return entry;
   };
 
-  const clear = () => {
-    chatRunSessions.clear();
-  };
-
-  return { add, peek, shift, remove, clear };
+  return { add, peek, shift, remove };
 }
 
 export type ChatRunState = {
+  runs: Map<string, ChatRunRecord>;
   registry: ChatRunRegistry;
-  rawBuffers: Map<string, string>;
-  buffers: Map<string, string>;
-  /** Last time any buffered assistant text changed, including suppressed raw buffers. */
-  bufferUpdatedAt: Map<string, number>;
-  deltaSentAt: Map<string, number>;
-  /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
-  deltaLastBroadcastLen: Map<string, number>;
-  deltaLastBroadcastText: Map<string, string>;
-  agentDeltaSentAt: Map<string, number>;
-  bufferedAgentEvents: Map<string, BufferedAgentEvent>;
-  abortedRuns: Map<string, ChatAbortMarker>;
+  toolEventRecipients: ToolEventRecipientRegistry;
+  getOrCreate: (runId: string) => ChatRunRecord;
+  resolveBuffer: (
+    runId: string,
+    options?: { final?: boolean },
+  ) => { text: string; suppress: boolean };
+  hasAbortMarker: (runId: string) => boolean;
+  deleteAbortMarker: (runId: string) => void;
+  recordProgressEvent: (runId: string, event: AgentEventPayload, mode?: "full" | "summary") => void;
   clearRun: (runId: string) => void;
   clear: () => void;
 };
 
-/** Create all mutable chat-run maps used by Gateway runtime state. */
+/** Create the single record map used by Gateway chat-run runtime state. */
 export function createChatRunState(): ChatRunState {
-  const registry = createChatRunRegistry();
-  const rawBuffers = new Map<string, string>();
-  const buffers = new Map<string, string>();
-  const bufferUpdatedAt = new Map<string, number>();
-  const deltaSentAt = new Map<string, number>();
-  const deltaLastBroadcastLen = new Map<string, number>();
-  const deltaLastBroadcastText = new Map<string, string>();
-  const agentDeltaSentAt = new Map<string, number>();
-  const bufferedAgentEvents = new Map<string, BufferedAgentEvent>();
-  const abortedRuns = new Map<string, ChatAbortMarker>();
+  const store = createChatRunRecordStore();
+  const registry = createChatRunRegistryForStore(store);
+  const toolEventRecipients = createToolEventRecipientRegistryForStore(store);
 
-  const clearRun = (runId: string) => {
-    rawBuffers.delete(runId);
-    buffers.delete(runId);
-    bufferUpdatedAt.delete(runId);
-    deltaSentAt.delete(runId);
-    deltaLastBroadcastLen.delete(runId);
-    deltaLastBroadcastText.delete(runId);
-    for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
-      agentDeltaSentAt.delete(key);
-      bufferedAgentEvents.delete(key);
+  const recordProgressEvent = (
+    runId: string,
+    event: AgentEventPayload,
+    mode?: "full" | "summary",
+  ) => {
+    const progressSnapshot = updateChatRunProgressSnapshot(
+      store.runs.get(runId)?.progressSnapshot,
+      event,
+      mode,
+    );
+    if (progressSnapshot) {
+      store.getOrCreate(runId).progressSnapshot = progressSnapshot;
     }
   };
 
+  const clearRun = (runId: string) => {
+    const record = store.runs.get(runId);
+    if (!record) {
+      return;
+    }
+    delete record.rawBuffer;
+    delete record.buffer;
+    delete record.bufferIsCurrent;
+    record.liveTextGroup?.abort();
+    delete record.liveTextGroup;
+    delete record.bufferProjection;
+    delete record.planSnapshot;
+    delete record.progressSnapshot;
+    delete record.bufferUpdatedAt;
+    delete record.deltaSentAt;
+    delete record.assistantScope;
+    delete record.managedMediaUrls;
+    delete record.deltaLastBroadcastText;
+    clearPendingLiveTextFlushes(record);
+    delete record.agentText;
+    store.releaseIfEmpty(runId);
+  };
+
   const clear = () => {
-    registry.clear();
-    rawBuffers.clear();
-    buffers.clear();
-    bufferUpdatedAt.clear();
-    deltaSentAt.clear();
-    deltaLastBroadcastLen.clear();
-    deltaLastBroadcastText.clear();
-    agentDeltaSentAt.clear();
-    bufferedAgentEvents.clear();
-    abortedRuns.clear();
+    for (const record of store.runs.values()) {
+      clearPendingLiveTextFlushes(record);
+      record.liveTextGroup?.abort();
+    }
+    store.runs.clear();
+  };
+
+  const resolveBuffer = (runId: string, options?: { final?: boolean }) => {
+    const record = store.runs.get(runId);
+    if (!record || record.bufferIsCurrent?.() === false) {
+      return projectLiveAssistantBufferedText("");
+    }
+    const rawText = record.rawBuffer;
+    if (rawText === undefined) {
+      return projectLiveAssistantBufferedText(record.buffer ?? "");
+    }
+    if (
+      !options?.final &&
+      record.bufferProjection?.source === rawText &&
+      record.buffer !== undefined
+    ) {
+      return {
+        text: record.buffer,
+        suppress: record.bufferProjection.suppress,
+      };
+    }
+    // Protected blocks and directive tags can span delta frames, so the
+    // projection cache belongs to the complete merged raw buffer.
+    const normalizedText = normalizeLiveAssistantBufferedText(rawText, {
+      ...options,
+      managedMediaUrls: record.managedMediaUrls ? [...record.managedMediaUrls] : undefined,
+    });
+    const projected = projectLiveAssistantBufferedText(normalizedText);
+    // A terminal read releases ambiguous directive prefixes as ordinary text;
+    // caching it would expose that prefix again if a late live reader races cleanup.
+    if (!options?.final) {
+      record.buffer = projected.text;
+      record.bufferProjection = { source: rawText, suppress: projected.suppress };
+    }
+    return projected;
   };
 
   return {
+    runs: store.runs,
     registry,
-    rawBuffers,
-    buffers,
-    bufferUpdatedAt,
-    deltaSentAt,
-    deltaLastBroadcastLen,
-    deltaLastBroadcastText,
-    agentDeltaSentAt,
-    bufferedAgentEvents,
-    abortedRuns,
+    toolEventRecipients,
+    getOrCreate: store.getOrCreate,
+    resolveBuffer,
+    hasAbortMarker: (runId) => store.runs.get(runId)?.abortMarker !== undefined,
+    deleteAbortMarker: (runId) => {
+      const record = store.runs.get(runId);
+      if (!record) {
+        return;
+      }
+      delete record.abortMarker;
+      store.releaseIfEmpty(runId);
+    },
+    recordProgressEvent,
     clearRun,
     clear,
   };
@@ -225,35 +358,43 @@ export type SessionEventSubscriberRegistry = {
   subscribe: (connId: string) => void;
   unsubscribe: (connId: string) => void;
   getAll: () => ReadonlySet<string>;
-  clear: () => void;
 };
 
 export type SessionMessageSubscriberRegistry = {
-  subscribe: (connId: string, sessionKey: string) => void;
+  subscribe: (
+    connId: string,
+    sessionKey: string,
+    opts?: { includeApprovals?: boolean; provisional?: boolean },
+  ) => SessionMessageSubscription | undefined;
   unsubscribe: (connId: string, sessionKey: string) => void;
   unsubscribeAll: (connId: string) => void;
   get: (sessionKey: string) => ReadonlySet<string>;
-  clear: () => void;
+  getApprovals: (sessionKey: string) => ReadonlySet<string>;
+  onChange: (listener: (sessionKey: string) => void) => () => void;
 };
 
-type ToolRecipientEntry = {
-  connIds: Set<string>;
-  updatedAt: number;
-  finalizedAt?: number;
+type SessionMessageSubscription = (() => void) & { commit: () => void };
+
+type ProvisionalSubscriptionState = {
+  base?: boolean;
+  inflight: number;
+  lastSuccess?: { sequence: number; includeApprovals: boolean };
 };
 
 const TOOL_EVENT_RECIPIENT_TTL_MS = 10 * 60 * 1000;
 const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
 
 /** Create the broad sessions.changed subscriber registry. */
-export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRegistry {
+export function createSessionEventSubscriberRegistry(
+  isConnectionActive?: (connId: string) => boolean,
+): SessionEventSubscriberRegistry {
   const connIds = new Set<string>();
   const empty = new Set<string>();
 
   return {
     subscribe: (connId: string) => {
       const normalized = connId.trim();
-      if (!normalized) {
+      if (!normalized || isConnectionActive?.(normalized) === false) {
         return;
       }
       connIds.add(normalized);
@@ -266,34 +407,129 @@ export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRe
       connIds.delete(normalized);
     },
     getAll: () => (connIds.size > 0 ? connIds : empty),
-    clear: () => {
-      connIds.clear();
-    },
   };
 }
 
 /** Create the per-session message subscriber registry. */
-export function createSessionMessageSubscriberRegistry(): SessionMessageSubscriberRegistry {
+export function createSessionMessageSubscriberRegistry(
+  isConnectionActive?: (connId: string) => boolean,
+): SessionMessageSubscriberRegistry {
   const sessionToConnIds = new Map<string, Set<string>>();
-  const connToSessionKeys = new Map<string, Set<string>>();
+  // Booleans retain committed approval mode; records own unsettled replays.
+  // Replacing a record fences late settlements, including connection/session reuse.
+  const connections = new Map<string, Map<string, boolean | ProvisionalSubscriptionState>>();
+  const approvalSessionToConnIds = new Map<string, Set<string>>();
+  const changeListeners = new Set<(sessionKey: string) => void>();
   const empty = new Set<string>();
+  let subscriptionSequence = 0;
 
   const normalize = (value: string): string => value.trim();
+  const setMessageSubscription = (connId: string, sessionKey: string, subscribed: boolean) => {
+    const connIds = sessionToConnIds.get(sessionKey);
+    const wasSubscribed = connIds?.has(connId) === true;
+    if (subscribed) {
+      const nextConnIds = connIds ?? new Set<string>();
+      nextConnIds.add(connId);
+      sessionToConnIds.set(sessionKey, nextConnIds);
+      if (!wasSubscribed) {
+        for (const listener of changeListeners) {
+          listener(sessionKey);
+        }
+      }
+      return;
+    }
+    connIds?.delete(connId);
+    if (connIds?.size === 0) {
+      sessionToConnIds.delete(sessionKey);
+    }
+    if (wasSubscribed) {
+      for (const listener of changeListeners) {
+        listener(sessionKey);
+      }
+    }
+  };
+  const setApprovalSubscription = (connId: string, sessionKey: string, subscribed: boolean) => {
+    const connIds = approvalSessionToConnIds.get(sessionKey);
+    if (subscribed) {
+      const nextConnIds = connIds ?? new Set<string>();
+      nextConnIds.add(connId);
+      approvalSessionToConnIds.set(sessionKey, nextConnIds);
+      return;
+    }
+    connIds?.delete(connId);
+    if (connIds?.size === 0) {
+      approvalSessionToConnIds.delete(sessionKey);
+    }
+  };
 
-  return {
-    subscribe: (connId: string, sessionKey: string) => {
+  const registry: SessionMessageSubscriberRegistry = {
+    subscribe: (connId: string, sessionKey: string, opts) => {
       const normalizedConnId = normalize(connId);
       const normalizedSessionKey = normalize(sessionKey);
-      if (!normalizedConnId || !normalizedSessionKey) {
-        return;
+      if (
+        !normalizedConnId ||
+        !normalizedSessionKey ||
+        isConnectionActive?.(normalizedConnId) === false
+      ) {
+        return undefined;
       }
-      const connIds = sessionToConnIds.get(normalizedSessionKey) ?? new Set<string>();
-      connIds.add(normalizedConnId);
-      sessionToConnIds.set(normalizedSessionKey, connIds);
+      const states =
+        connections.get(normalizedConnId) ??
+        new Map<string, boolean | ProvisionalSubscriptionState>();
+      const previous = states.get(normalizedSessionKey);
+      const state: ProvisionalSubscriptionState =
+        typeof previous === "object" ? previous : { base: previous, inflight: 0 };
+      state.inflight += 1;
+      states.set(normalizedSessionKey, state);
+      connections.set(normalizedConnId, states);
+      subscriptionSequence += 1;
+      const provisionalRecency = subscriptionSequence;
+      setMessageSubscription(normalizedConnId, normalizedSessionKey, true);
 
-      const sessionKeys = connToSessionKeys.get(normalizedConnId) ?? new Set<string>();
-      sessionKeys.add(normalizedSessionKey);
-      connToSessionKeys.set(normalizedConnId, sessionKeys);
+      setApprovalSubscription(
+        normalizedConnId,
+        normalizedSessionKey,
+        opts?.includeApprovals === true,
+      );
+      let settled = false;
+      const settle = (succeeded: boolean) => {
+        if (settled || connections.get(normalizedConnId)?.get(normalizedSessionKey) !== state) {
+          return;
+        }
+        settled = true;
+        if (succeeded) {
+          if (provisionalRecency >= (state.lastSuccess?.sequence ?? -Infinity)) {
+            state.lastSuccess = {
+              sequence: provisionalRecency,
+              includeApprovals: opts?.includeApprovals === true,
+            };
+          }
+        }
+        state.inflight -= 1;
+        if (state.inflight > 0) {
+          return;
+        }
+        const committed = state.lastSuccess?.includeApprovals ?? state.base;
+        if (committed === undefined) {
+          states.delete(normalizedSessionKey);
+          setMessageSubscription(normalizedConnId, normalizedSessionKey, false);
+          setApprovalSubscription(normalizedConnId, normalizedSessionKey, false);
+        } else {
+          states.set(normalizedSessionKey, committed);
+          setMessageSubscription(normalizedConnId, normalizedSessionKey, true);
+          setApprovalSubscription(normalizedConnId, normalizedSessionKey, committed);
+        }
+        if (states.size === 0) {
+          connections.delete(normalizedConnId);
+        }
+      };
+      const rollback = (() => settle(false)) as SessionMessageSubscription;
+      rollback.commit = () => settle(true);
+      if (!opts?.provisional) {
+        rollback.commit();
+        return undefined;
+      }
+      return rollback;
     },
     unsubscribe: (connId: string, sessionKey: string) => {
       const normalizedConnId = normalize(connId);
@@ -301,41 +537,30 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       if (!normalizedConnId || !normalizedSessionKey) {
         return;
       }
-      const connIds = sessionToConnIds.get(normalizedSessionKey);
-      if (connIds) {
-        connIds.delete(normalizedConnId);
-        if (connIds.size === 0) {
-          sessionToConnIds.delete(normalizedSessionKey);
-        }
+      const states = connections.get(normalizedConnId);
+      states?.delete(normalizedSessionKey);
+      if (states?.size === 0) {
+        connections.delete(normalizedConnId);
       }
-      const sessionKeys = connToSessionKeys.get(normalizedConnId);
-      if (sessionKeys) {
-        sessionKeys.delete(normalizedSessionKey);
-        if (sessionKeys.size === 0) {
-          connToSessionKeys.delete(normalizedConnId);
-        }
-      }
+      setMessageSubscription(normalizedConnId, normalizedSessionKey, false);
+      setApprovalSubscription(normalizedConnId, normalizedSessionKey, false);
     },
     unsubscribeAll: (connId: string) => {
       const normalizedConnId = normalize(connId);
       if (!normalizedConnId) {
         return;
       }
-      const sessionKeys = connToSessionKeys.get(normalizedConnId);
-      if (!sessionKeys) {
+      const states = connections.get(normalizedConnId);
+      if (!states) {
         return;
       }
-      for (const sessionKey of sessionKeys) {
-        const connIds = sessionToConnIds.get(sessionKey);
-        if (!connIds) {
-          continue;
-        }
-        connIds.delete(normalizedConnId);
-        if (connIds.size === 0) {
-          sessionToConnIds.delete(sessionKey);
-        }
+      connections.delete(normalizedConnId);
+      for (const sessionKey of states.keys()) {
+        setMessageSubscription(normalizedConnId, sessionKey, false);
       }
-      connToSessionKeys.delete(normalizedConnId);
+      for (const sessionKey of states.keys()) {
+        setApprovalSubscription(normalizedConnId, sessionKey, false);
+      }
     },
     get: (sessionKey: string) => {
       const normalizedSessionKey = normalize(sessionKey);
@@ -344,28 +569,40 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       }
       return sessionToConnIds.get(normalizedSessionKey) ?? empty;
     },
-    clear: () => {
-      sessionToConnIds.clear();
-      connToSessionKeys.clear();
+    getApprovals: (sessionKey: string) => {
+      const normalizedSessionKey = normalize(sessionKey);
+      if (!normalizedSessionKey) {
+        return empty;
+      }
+      return approvalSessionToConnIds.get(normalizedSessionKey) ?? empty;
+    },
+    onChange: (listener) => {
+      changeListeners.add(listener);
+      return () => changeListeners.delete(listener);
     },
   };
+  return registry;
 }
 
-/** Create the run-id recipient registry used for streaming tool events. */
-export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
-  const recipients = new Map<string, ToolRecipientEntry>();
-
+function createToolEventRecipientRegistryForStore(
+  store: ChatRunRecordStore,
+): ToolEventRecipientRegistry {
   const prune = () => {
-    if (recipients.size === 0) {
+    if (store.runs.size === 0) {
       return;
     }
     const now = Date.now();
-    for (const [runId, entry] of recipients) {
+    for (const [runId, record] of store.runs) {
+      const entry = record.toolRecipient;
+      if (!entry) {
+        continue;
+      }
       const cutoff = entry.finalizedAt
         ? entry.finalizedAt + TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS
         : entry.updatedAt + TOOL_EVENT_RECIPIENT_TTL_MS;
       if (now >= cutoff) {
-        recipients.delete(runId);
+        delete record.toolRecipient;
+        store.releaseIfEmpty(runId);
       }
     }
   };
@@ -375,31 +612,32 @@ export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
       return;
     }
     const now = Date.now();
-    const existing = recipients.get(runId);
+    const record = store.getOrCreate(runId);
+    const existing = record.toolRecipient;
     if (existing) {
       existing.connIds.add(connId);
       existing.updatedAt = now;
     } else {
-      recipients.set(runId, {
+      record.toolRecipient = {
         connIds: new Set([connId]),
         updatedAt: now,
-      });
+      };
     }
     prune();
   };
 
   const get = (runId: string) => {
-    const entry = recipients.get(runId);
-    if (!entry) {
-      return undefined;
+    const entry = store.runs.get(runId)?.toolRecipient;
+    if (entry) {
+      entry.updatedAt = Date.now();
+      prune();
     }
-    entry.updatedAt = Date.now();
-    prune();
-    return entry.connIds;
+    // Pruning may retire this finalized run; never return its former audience.
+    return store.runs.get(runId)?.toolRecipient?.connIds;
   };
 
   const markFinal = (runId: string) => {
-    const entry = recipients.get(runId);
+    const entry = store.runs.get(runId)?.toolRecipient;
     if (!entry) {
       return;
     }

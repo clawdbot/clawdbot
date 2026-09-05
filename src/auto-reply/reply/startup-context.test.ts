@@ -50,6 +50,35 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).toContain("yesterday notes");
   });
 
+  it("loads the complete bounded daily memory after positive short reads", async () => {
+    const workspaceDir = await makeWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-11.md"),
+      "alpha beta gamma delta",
+      "utf-8",
+    );
+    const originalRead = fsCore.read.bind(fsCore);
+    vi.spyOn(fsCore, "read").mockImplementation(((...args: unknown[]) => {
+      args[3] = Math.min(args[3] as number, 5);
+      (originalRead as (...forwarded: unknown[]) => void)(...args);
+    }) as typeof fsCore.read);
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "UTC",
+            startupContext: { dailyMemoryDays: 1 },
+          },
+        },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+    });
+
+    expect(prelude).toContain("alpha beta gamma delta");
+  });
+
   it("loads date-prefixed session-memory artifacts saved with friendly suffixes", async () => {
     const workspaceDir = await makeWorkspace();
     await fs.writeFile(
@@ -471,6 +500,32 @@ describe("buildSessionStartupContextPrelude", () => {
     expect(prelude).toContain("...[truncated]...");
     const firstBlock = prelude?.slice(prelude.indexOf("[Untrusted daily memory:"));
     expect(firstBlock?.length).toBeLessThanOrEqual(180);
+  });
+
+  it("does not split a surrogate pair at the per-file character limit", async () => {
+    const workspaceDir = await makeWorkspace();
+    const safePrefix = "x".repeat(79);
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-11.md"),
+      `${safePrefix}🚀tail`,
+      "utf-8",
+    );
+
+    const prelude = await buildSessionStartupContextPrelude({
+      workspaceDir,
+      cfg: {
+        agents: {
+          defaults: {
+            userTimezone: "America/Chicago",
+            startupContext: { maxFileChars: 80 },
+          },
+        },
+      } as OpenClawConfig,
+      nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
+    });
+
+    expect(prelude).toContain(`${safePrefix}\n...[truncated]...`);
+    expect(prelude).not.toContain("🚀tail");
   });
 });
 

@@ -4,52 +4,31 @@
  */
 import type {
   AgentMessage,
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexSystemPromptReport } from "./attempt-context.js";
-import type { CodexAttemptTurnWatchTimeoutKind } from "./attempt-turn-watches.js";
-
-const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_USER_MESSAGE =
-  "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.";
-const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_SIDE_EFFECT_USER_MESSAGE =
-  "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.";
+import type { CodexAttemptTimeout } from "./attempt-deadlines.js";
+import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 
 /** Joins terminal assistant text blocks into the final attempt answer. */
 export function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string {
   return result.assistantTexts.join("\n\n").trim();
 }
 
-/**
- * Builds the user-facing timeout outcome when Codex stops without a terminal
- * turn event.
- */
-export function buildCodexAppServerPromptTimeoutOutcome(params: {
-  result: EmbeddedRunAttemptResult;
-  turnCompletionIdleTimedOut: boolean;
-  turnWatchTimeoutKind?: CodexAttemptTurnWatchTimeoutKind;
-}): EmbeddedRunAttemptResult["promptTimeoutOutcome"] {
-  if (!params.turnCompletionIdleTimedOut) {
+/** Reports the owner's deadline without guessing whether native work finished. */
+export function buildCodexAppServerPromptTimeoutOutcome(
+  timeout: CodexAttemptTimeout | undefined,
+): EmbeddedRunAttemptResult["promptTimeoutOutcome"] {
+  if (!timeout) {
     return undefined;
   }
-  if (params.turnWatchTimeoutKind !== undefined && params.turnWatchTimeoutKind !== "completion") {
-    return undefined;
-  }
-  const replayBlockedReason = resolveCodexAppServerReplayBlockedReason(params.result);
-  const completionIdleTimeoutHadPotentialSideEffects =
-    replayBlockedReason === "tool_activity" ||
-    replayBlockedReason === "potential_side_effect" ||
-    replayBlockedReason === "active_item";
   return {
-    message: completionIdleTimeoutHadPotentialSideEffects
-      ? CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_SIDE_EFFECT_USER_MESSAGE
-      : CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_USER_MESSAGE,
-    ...(replayBlockedReason
-      ? {
-          replayInvalid: true,
-          livenessState: "abandoned" as const,
-        }
-      : {}),
+    message:
+      timeout.kind === "execution"
+        ? "Codex reached the configured execution time limit. Some work may already have been performed; verify the current state before continuing."
+        : "Codex finished its turn, but OpenClaw could not finish processing the result. Some work may already have been performed; verify the current state before continuing.",
+    replayInvalid: true,
+    livenessState: "abandoned",
   };
 }
 
@@ -83,18 +62,15 @@ export function resolveCodexAppServerReplayBlockedReason(
 export function buildCodexTurnStartFailureResult(params: {
   params: EmbeddedRunAttemptParams;
   message: string;
+  promptError?: unknown;
   messagesSnapshot: AgentMessage[];
   systemPromptReport: CodexSystemPromptReport;
 }): EmbeddedRunAttemptResult {
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    promptError: params.message,
-    promptErrorSource: "prompt",
+    terminal: attemptTerminal.normalize({
+      promptError: params.promptError ?? params.message,
+      promptErrorSource: "prompt",
+    }),
     sessionIdUsed: params.params.sessionId,
     messagesSnapshot: params.messagesSnapshot,
     assistantTexts: [],

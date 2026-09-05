@@ -1,5 +1,8 @@
 // Whatsapp plugin module implements inbound policy behavior.
-import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import {
+  resolveStableChannelMessageIngress,
+  type ChannelIngressContextBinding,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -19,7 +22,7 @@ import type { AdmittedWebInboundMessage } from "./inbound/types.js";
 import { resolveWhatsAppRuntimeGroupPolicy } from "./runtime-group-policy.js";
 import { isSelfChatMode, normalizeE164 } from "./text-runtime.js";
 
-export type ResolvedWhatsAppInboundPolicy = {
+type ResolvedWhatsAppInboundPolicy = {
   account: ResolvedWhatsAppAccount;
   dmPolicy: DmPolicy;
   groupPolicy: GroupPolicy;
@@ -39,17 +42,6 @@ function normalizeWhatsAppIngressPhone(value: string): string | null {
     return null;
   }
   return normalizeE164(trimmed);
-}
-
-function maybeSamePhoneDmAllowFrom(params: {
-  isGroup: boolean;
-  policy: ResolvedWhatsAppInboundPolicy;
-  dmSenderId?: string | null;
-}): string[] {
-  if (params.isGroup || !params.dmSenderId || !params.policy.isSamePhone(params.dmSenderId)) {
-    return [];
-  }
-  return [params.dmSenderId];
 }
 
 function buildResolvedWhatsAppGroupConfig(params: {
@@ -131,15 +123,9 @@ export async function resolveWhatsAppIngressAccess(params: {
   isGroup: boolean;
   conversationId: string;
   senderId?: string | null;
-  dmSenderId?: string | null;
   includeCommand?: boolean;
+  contextBinding?: ChannelIngressContextBinding;
 }) {
-  const samePhoneDmAllowFrom = maybeSamePhoneDmAllowFrom({
-    isGroup: params.isGroup,
-    policy: params.policy,
-    dmSenderId: params.dmSenderId,
-  });
-  const dmAllowFrom = [...params.policy.dmAllowFrom, ...samePhoneDmAllowFrom];
   return await resolveStableChannelMessageIngress({
     channelId: "whatsapp",
     accountId: params.policy.account.accountId,
@@ -157,13 +143,21 @@ export async function resolveWhatsAppIngressAccess(params: {
       kind: params.isGroup ? "group" : "direct",
       id: params.conversationId,
     },
+    contextBinding: params.contextBinding,
     dmPolicy: params.policy.dmPolicy,
     groupPolicy: params.policy.groupPolicy,
     policy: {
       groupAllowFromFallbackToAllowFrom: false,
     },
     providerMissingFallbackApplied: params.policy.providerMissingFallbackApplied,
-    allowFrom: dmAllowFrom,
+    // Keep implicit self access direct-only; groups reuse this list for command ownership.
+    allowFrom:
+      !params.isGroup &&
+      params.policy.account.selfChatMode !== false &&
+      params.senderId &&
+      params.policy.isSamePhone(params.senderId)
+        ? [...params.policy.dmAllowFrom, params.senderId]
+        : params.policy.dmAllowFrom,
     groupAllowFrom: params.policy.groupAllowFrom,
     command: params.includeCommand === true ? {} : undefined,
   });
@@ -173,13 +167,14 @@ export async function resolveWhatsAppCommandAuthorized(params: {
   cfg: OpenClawConfig;
   msg: AdmittedWebInboundMessage;
   policy?: ResolvedWhatsAppInboundPolicy;
+  authDir?: string;
 }): Promise<boolean> {
-  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   if (!useAccessGroups) {
     return true;
   }
 
-  const self = getSelfIdentity(params.msg);
+  const self = getSelfIdentity(params.msg, params.authDir);
   const admission = requireWhatsAppInboundAdmission(params.msg);
   const policy =
     params.policy ??
@@ -189,7 +184,7 @@ export async function resolveWhatsAppCommandAuthorized(params: {
       selfE164: self.e164 ?? null,
     });
   const isGroup = admission.conversation.kind === "group";
-  const sender = getSenderIdentity(params.msg);
+  const sender = getSenderIdentity(params.msg, params.authDir);
   const dmSender = sender.e164 ?? admission.conversation.id;
   const groupSender = sender.e164 ?? "";
   if (!normalizeE164(isGroup ? groupSender : dmSender)) {
@@ -202,7 +197,6 @@ export async function resolveWhatsAppCommandAuthorized(params: {
     isGroup,
     conversationId: admission.conversation.id,
     senderId: isGroup ? groupSender : dmSender,
-    dmSenderId: dmSender,
     includeCommand: true,
   });
   return access.commandAccess.authorized;

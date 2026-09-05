@@ -9,6 +9,10 @@ import { describe, expect, it } from "vitest";
 import { createAnthropicPayloadLogger } from "./anthropic-payload-log.js";
 
 describe("createAnthropicPayloadLogger", () => {
+  const bareAnthropicKey = "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx"; // pragma: allowlist secret
+  const bareGithubKey = "ghp_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"; // pragma: allowlist secret
+  const bareGoogleKey = "AIzaSyA1bC2dE3fG4hI5jK6lM7nO8pQrStUvW"; // pragma: allowlist secret
+
   it("sanitizes credential fields and image base64 payload data before writing logs", async () => {
     const lines: string[] = [];
     const logger = createAnthropicPayloadLogger({
@@ -26,6 +30,7 @@ describe("createAnthropicPayloadLogger", () => {
         {
           role: "user",
           authorization: "Bearer sk-secret", // pragma: allowlist secret
+          diagnosticText: bareAnthropicKey,
           content: [
             {
               type: "image",
@@ -38,6 +43,7 @@ describe("createAnthropicPayloadLogger", () => {
         api_key: "sk-test", // pragma: allowlist secret
         nestedToken: "shh", // pragma: allowlist secret
         tokenBudget: 1024,
+        diagnosticText: bareGithubKey,
       },
     };
     const streamFn: StreamFn = ((model, __, options) => {
@@ -61,13 +67,22 @@ describe("createAnthropicPayloadLogger", () => {
       ?.source ?? {}) as Record<string, unknown>;
     const metadata = (sanitizedPayload.metadata ?? {}) as Record<string, unknown>;
     expect(message[0]).not.toHaveProperty("authorization");
+    expect(message[0]?.diagnosticText).toBeTypeOf("string");
+    expect(message[0]?.diagnosticText).not.toBe(bareAnthropicKey);
+    expect(message[0]?.diagnosticText).not.toContain(bareAnthropicKey);
     expect(metadata).not.toHaveProperty("api_key");
     expect(metadata).not.toHaveProperty("nestedToken");
     expect(metadata.tokenBudget).toBe(1024);
+    expect(metadata.diagnosticText).toBeTypeOf("string");
+    expect(metadata.diagnosticText).not.toBe(bareGithubKey);
+    expect(metadata.diagnosticText).not.toContain(bareGithubKey);
     expect(source.data).toBe("<redacted>");
     expect(source.bytes).toBe(4);
     expect(source.sha256).toBe(crypto.createHash("sha256").update("QUJDRA==").digest("hex"));
     expect(event.payloadDigest).toMatch(/^[a-f0-9]{64}$/u);
+    const serialized = JSON.stringify(event);
+    expect(serialized).not.toContain(bareAnthropicKey);
+    expect(serialized).not.toContain(bareGithubKey);
   });
 
   it("sanitizes usage and error fields before writing logs", () => {
@@ -89,14 +104,24 @@ describe("createAnthropicPayloadLogger", () => {
           usage: {
             input: 1,
             authorization: "Bearer sk-secret", // pragma: allowlist secret
+            diagnosticText: bareGithubKey,
           },
         } as never,
       ],
-      new Error("failed with Bearer sk-secret"), // pragma: allowlist secret
+      new Error(`failed with Bearer sk-secret and ${bareGoogleKey}`), // pragma: allowlist secret
     );
 
     const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
-    expect(event.error).toBe("failed with Bearer <redacted>");
-    expect(event.usage).toEqual({ input: 1 });
+    expect(event.error).toBeTypeOf("string");
+    expect(event.error).toContain("failed with Bearer <redacted> and ");
+    expect(event.error).not.toContain(bareGoogleKey);
+    expect(event.usage).toEqual({ input: 1, diagnosticText: expect.any(String) });
+    expect((event.usage as { diagnosticText?: string }).diagnosticText).not.toBe(bareGithubKey);
+    expect((event.usage as { diagnosticText?: string }).diagnosticText).not.toContain(
+      bareGithubKey,
+    );
+    const serialized = JSON.stringify(event);
+    expect(serialized).not.toContain(bareGithubKey);
+    expect(serialized).not.toContain(bareGoogleKey);
   });
 });

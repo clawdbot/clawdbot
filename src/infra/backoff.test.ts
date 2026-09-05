@@ -1,6 +1,6 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Covers retry backoff calculation and abortable sleep behavior.
 import { describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "./backoff.js";
 
 async function expectAbortedSleep(promise: Promise<void>): Promise<Error> {
@@ -55,17 +55,52 @@ describe("backoff helpers", () => {
     expect(error.cause).toBe(controller.signal.reason);
   });
 
-  it("advances with fake timers", async () => {
+  it("removes the abort listener after the sleep completes", async () => {
     vi.useFakeTimers();
+    const controller = new AbortController();
+    const addEventListenerSpy = vi.spyOn(controller.signal, "addEventListener");
+    const removeEventListenerSpy = vi.spyOn(controller.signal, "removeEventListener");
     try {
-      const sleeper = sleepWithAbort(50);
+      const sleeper = sleepWithAbort(50, controller.signal);
+      const onSettled = vi.fn();
+      void sleeper.then(onSettled);
+      const abortListener = addEventListenerSpy.mock.calls[0]?.[1];
+
+      expect(abortListener).toBeDefined();
+      expect(vi.getTimerCount()).toBe(1);
       await vi.advanceTimersByTimeAsync(49);
-      await expect(
-        Promise.race([sleeper.then(() => "done"), Promise.resolve("pending")]),
-      ).resolves.toBe("pending");
+      expect(onSettled).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       await expect(sleeper).resolves.toBeUndefined();
+
+      expect(removeEventListenerSpy).toHaveBeenCalledWith("abort", abortListener);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the timer and listener when aborted during the sleep", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const addEventListenerSpy = vi.spyOn(controller.signal, "addEventListener");
+    const removeEventListenerSpy = vi.spyOn(controller.signal, "removeEventListener");
+    try {
+      const sleeper = sleepWithAbort(50, controller.signal);
+      const rejectedSleep = expectAbortedSleep(sleeper);
+      const abortListener = addEventListenerSpy.mock.calls[0]?.[1];
+
+      expect(abortListener).toBeDefined();
+      expect(vi.getTimerCount()).toBe(1);
+      controller.abort(new Error("stop retrying"));
+
+      const error = await rejectedSleep;
+      expect(error.message).toBe("aborted");
+      expect(removeEventListenerSpy).toHaveBeenCalledWith("abort", abortListener);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.restoreAllMocks();
       vi.useRealTimers();
     }
   });

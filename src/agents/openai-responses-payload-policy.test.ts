@@ -1,13 +1,13 @@
+import {
+  applyOpenAIResponsesPayloadPolicy,
+  resolveOpenAIResponsesPayloadPolicy,
+} from "@openclaw/ai/transports";
 /**
  * Regression coverage for OpenAI Responses payload policy.
  * Verifies store, prompt-cache, compaction, service-tier, and reasoning mutations.
  */
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import {
-  applyOpenAIResponsesPayloadPolicy,
-  resolveOpenAIResponsesPayloadPolicy,
-} from "./openai-responses-payload-policy.js";
 
 describe("openai responses payload policy", () => {
   it("forces store for native OpenAI responses payloads but keeps disable mode for transport defaults", () => {
@@ -236,7 +236,7 @@ describe("openai responses payload policy", () => {
   it("emits store false for aliased native OpenAI Codex responses disable mode", () => {
     const policy = resolveOpenAIResponsesPayloadPolicy(
       {
-        api: "openclaw-openai-responses-transport",
+        api: "openclaw-openai-chatgpt-responses-transport",
         provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api/codex",
       },
@@ -246,5 +246,133 @@ describe("openai responses payload policy", () => {
     expect(policy.explicitStore).toBe(false);
     expect(policy.allowsServiceTier).toBe(true);
     expect(policy.shouldStripStore).toBe(false);
+  });
+
+  it("preserves native Azure payload policy after managed transport aliasing", () => {
+    const payload = {
+      input: [{ type: "message", role: "assistant", status: "completed", content: [] }],
+    } satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(
+        {
+          api: "openclaw-azure-openai-responses-transport",
+          provider: "azure-openai-responses",
+          baseUrl: "https://example.openai.azure.com/openai/v1",
+          contextWindow: 200_000,
+        },
+        {
+          enableServerCompaction: true,
+          extraParams: { responsesServerCompaction: true },
+          storeMode: "provider-policy",
+        },
+      ),
+    );
+
+    expect(payload).toEqual({
+      store: true,
+      context_management: [{ type: "compaction", compact_threshold: 140_000 }],
+      input: [{ type: "message", role: "assistant", status: "completed", content: [] }],
+    });
+  });
+
+  it("strips status from input items for custom openai-responses endpoints", () => {
+    const model = {
+      id: "gpt-5.5",
+      api: "openai-responses",
+      provider: "custom-provider",
+      baseUrl: "http://custom-host:8317/v1",
+    } satisfies {
+      api: unknown;
+      baseUrl: unknown;
+      id: unknown;
+      provider: unknown;
+    };
+    const policy = resolveOpenAIResponsesPayloadPolicy(model);
+    expect(policy.shouldStripInputStatus).toBe(true);
+
+    const payload = {
+      input: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text: "Hello",
+              annotations: [],
+              status: "nested-domain-value",
+            },
+          ],
+          status: "completed",
+        },
+        {
+          type: "function_call",
+          call_id: "call_1",
+          name: "test",
+          arguments: "{}",
+        },
+        {
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "Thinking..." }],
+          status: "completed",
+        },
+      ],
+    };
+    applyOpenAIResponsesPayloadPolicy(payload, policy);
+    expect((payload.input[0] as Record<string, unknown>).status).toBeUndefined();
+    expect((payload.input[2] as Record<string, unknown>).status).toBeUndefined();
+    expect((payload.input[0] as { content: Array<{ status?: string }> }).content[0]?.status).toBe(
+      "nested-domain-value",
+    );
+  });
+
+  it.each([
+    {
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+    },
+    {
+      api: "azure-openai-responses",
+      provider: "azure-openai",
+      baseUrl: "https://example.openai.azure.com/openai/v1",
+    },
+    {
+      api: "azure-openai-responses",
+      provider: "azure",
+      baseUrl: "https://example.cognitiveservices.azure.com/openai/v1",
+    },
+    {
+      api: "azure-openai-responses",
+      provider: "azure",
+      baseUrl: "https://example.services.ai.azure.com/projects/demo/openai/v1",
+    },
+    {
+      api: "azure-openai-responses",
+      provider: "azure",
+      baseUrl: "https://example.api.cognitive.microsoft.com/openai/v1",
+    },
+  ])("preserves status for native $provider Responses endpoints", (route) => {
+    const model = {
+      ...route,
+      id: "native-model",
+    };
+    const policy = resolveOpenAIResponsesPayloadPolicy(model);
+    expect(policy.shouldStripInputStatus).toBe(false);
+
+    const payload = {
+      input: [
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Hello", annotations: [] }],
+          status: "completed",
+        },
+      ],
+    };
+    applyOpenAIResponsesPayloadPolicy(payload, policy);
+    expect((payload.input[0] as Record<string, unknown>).status).toBe("completed");
   });
 });

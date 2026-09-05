@@ -1,6 +1,7 @@
 // Matrix plugin module implements crypto bootstrap behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
+import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { LogService } from "./logger.js";
 import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
@@ -17,7 +18,7 @@ import type {
 } from "./verification-manager.js";
 import { isMatrixDeviceOwnerVerified } from "./verification-status.js";
 
-export type MatrixCryptoBootstrapperDeps<TRawEvent extends MatrixRawEvent> = {
+type MatrixCryptoBootstrapperDeps<TRawEvent extends MatrixRawEvent> = {
   getUserId: () => Promise<string>;
   getPassword?: () => string | undefined;
   canUnlockSecretStorage: () => Promise<boolean>;
@@ -236,7 +237,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
           } catch (repairErr) {
             LogService.warn("MatrixClientLite", "Forced cross-signing reset failed:", repairErr);
             if (options.strict) {
-              throw repairErr instanceof Error ? repairErr : new Error(String(repairErr));
+              throw toStringifiedError(repairErr);
             }
             return { ready: false, published: false };
           }
@@ -250,7 +251,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
               { cause: err },
             );
           }
-          throw err instanceof Error ? err : new Error(String(err));
+          throw toStringifiedError(err);
         }
         return { ready: false, published: false };
       }
@@ -300,7 +301,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         } catch (resetErr) {
           LogService.warn("MatrixClientLite", "Failed to bootstrap cross-signing:", resetErr);
           if (options.strict) {
-            throw resetErr instanceof Error ? resetErr : new Error(String(resetErr));
+            throw toStringifiedError(resetErr);
           }
           return { ready: false, published: false };
         }
@@ -328,7 +329,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     } catch (err) {
       LogService.warn("MatrixClientLite", "Fallback cross-signing bootstrap failed:", err);
       if (options.strict) {
-        throw err instanceof Error ? err : new Error(String(err));
+        throw toStringifiedError(err);
       }
       return { ready: false, published: false };
     }
@@ -371,7 +372,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     } catch (err) {
       LogService.warn("MatrixClientLite", "Failed to bootstrap secret storage:", err);
       if (options.strict) {
-        throw err instanceof Error ? err : new Error(String(err));
+        throw toStringifiedError(err);
       }
     }
   }

@@ -1,11 +1,11 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Extension shared helpers expose cross-plugin runtime utilities that remain SDK-safe.
 import { createAmbientNodeProxyAgent, hasAmbientNodeProxyConfigured } from "@openclaw/proxyline";
 import type { z } from "zod";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveActiveManagedProxyTlsOptions } from "../infra/net/proxy/managed-proxy-undici.js";
-import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
-import { createLoggerBackedRuntime } from "./runtime-logger.js";
+import { createLoggerBackedRuntime } from "./runtime-logger.internal.js";
 export { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
 export { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 
@@ -149,13 +149,7 @@ export function coerceStatusIssueAccountId(value: unknown): string | undefined {
 
 /** Creates a promise with externally controlled resolve/reject hooks for async handoff code. */
 export function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
+  return createDeferredCore<T>();
 }
 
 const DEFAULT_PACKAGE_JSON_VERSION_CANDIDATES = [
@@ -188,7 +182,10 @@ export function formatPluginConfigIssue(
     return options?.invalidConfigMessage ?? "invalid config";
   }
   if (issue.code === "unrecognized_keys" && issue.keys.length > 0) {
-    return options?.unknownKeyMessage?.(issue.keys[0]) ?? `unknown config key: ${issue.keys[0]}`;
+    return (
+      options?.unknownKeyMessage?.(expectDefined(issue.keys[0], "keys entry at 0")) ??
+      `unknown config key: ${issue.keys[0]}`
+    );
   }
   if (issue.code === "invalid_type" && issue.path.length === 0) {
     return options?.rootInvalidTypeMessage ?? "expected config object";
@@ -215,23 +212,6 @@ export function mapPluginConfigIssues(
     path: normalizePluginConfigIssuePath(issue.path),
     message: formatPluginConfigIssue(issue, options),
   }));
-}
-
-/** Checks whether a read-only plugin path may resolve a secret through an env provider. */
-export function canResolveEnvSecretRefInReadOnlyPath(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  id: string;
-}): boolean {
-  const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
-  if (!providerConfig) {
-    return params.provider === resolveDefaultSecretProviderAlias(params.cfg ?? {}, "env");
-  }
-  if (providerConfig.source !== "env") {
-    return false;
-  }
-  const allowlist = providerConfig.allowlist;
-  return !allowlist || allowlist.includes(params.id);
 }
 
 /** Reads plugin package versions across source, bundled, and test layouts with a fallback. */

@@ -27,6 +27,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { confirm, isCancel } from "@clack/prompts";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { stylePromptMessage } from "../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../packages/terminal-core/src/theme.js";
 import {
@@ -58,7 +59,7 @@ function parseArgs(args: string[]): Options {
   };
 
   for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+    const arg = expectDefined(args[index], `shell completion argument at index ${index}`);
     if (arg === "--check-only") {
       options.checkOnly = true;
     } else if (arg === "--force") {
@@ -158,7 +159,10 @@ async function main() {
   // Profile uses slow dynamic pattern - upgrade to cached version
   if (status.usesSlowPattern) {
     console.log(theme.warn("Profile uses slow dynamic completion. Upgrading to cached version..."));
-    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, { shell: status.shell });
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, {
+      shell: status.shell,
+      generationMode: "full",
+    });
     if (cacheGenerated) {
       await installCompletion(status.shell, false, CLI_NAME);
       console.log(theme.success("Upgraded to cached completion."));
@@ -171,7 +175,10 @@ async function main() {
   // Profile has completion but no cache - auto-fix
   if (status.profileInstalled && !status.cacheExists) {
     console.log(theme.warn("Profile has completion but cache is missing. Regenerating..."));
-    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, { shell: status.shell });
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, {
+      shell: status.shell,
+      generationMode: "full",
+    });
     if (cacheGenerated) {
       console.log(theme.success("Cache regenerated successfully."));
     } else {
@@ -208,7 +215,10 @@ async function main() {
   // Generate cache first (required for fast shell startup)
   if (!status.cacheExists) {
     console.log(theme.muted("Generating completion cache..."));
-    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, { shell: status.shell });
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, {
+      shell: status.shell,
+      generationMode: "full",
+    });
     if (!cacheGenerated) {
       console.log(theme.error("Failed to generate completion cache."));
       return;

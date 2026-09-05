@@ -2,7 +2,7 @@
  * HTTP session history revocation tests.
  */
 import { EventEmitter } from "node:events";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { createServer, request, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 let transcriptUpdateHandler:
@@ -17,6 +17,11 @@ let gatewayConfig: {
   allowRealIpFallback: false,
 };
 let authCheckCalls = 0;
+let transcriptReadError: Error | undefined;
+let authenticatedUserProfile:
+  | { profileId: string; displayName: string | null; hasAvatar: boolean; updatedAt: number }
+  | undefined;
+let sessionVisibleToProfile = true;
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({
@@ -24,16 +29,26 @@ vi.mock("../config/config.js", () => ({
   }),
 }));
 
-vi.mock("../sessions/transcript-events.js", () => ({
-  onInternalSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
-    transcriptUpdateHandler = cb;
-    return () => {
-      if (transcriptUpdateHandler === cb) {
-        transcriptUpdateHandler = undefined;
-      }
-    };
-  },
-}));
+vi.mock("../sessions/transcript-events.js", async (importOriginal) => {
+  const {
+    attachSessionTranscriptRunId,
+    readSessionTranscriptUpdateVersion,
+    resolveTerminalAssistantTranscriptRunId,
+  } = await importOriginal<typeof import("../sessions/transcript-events.js")>();
+  return {
+    attachSessionTranscriptRunId,
+    readSessionTranscriptUpdateVersion,
+    resolveTerminalAssistantTranscriptRunId,
+    onInternalSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
+      transcriptUpdateHandler = cb;
+      return () => {
+        if (transcriptUpdateHandler === cb) {
+          transcriptUpdateHandler = undefined;
+        }
+      };
+    },
+  };
+});
 
 vi.mock("./http-utils.js", () => ({
   getHeader: (req: IncomingMessage, name: string) => {
@@ -43,7 +58,10 @@ vi.mock("./http-utils.js", () => ({
   resolveSharedSecretHttpOperatorScopes: () => ["operator.read"],
   authorizeScopedGatewayHttpRequestOrReply: async () => ({
     cfg: { gateway: {} },
-    requestAuth: { trustDeclaredOperatorScopes: true },
+    requestAuth: {
+      trustDeclaredOperatorScopes: true,
+      ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+    },
     operatorScopes: ["operator.read"],
   }),
   checkGatewayHttpRequestAuth: async (params: {
@@ -73,9 +91,22 @@ vi.mock("./http-utils.js", () => ({
     }
     return {
       ok: true as const,
-      requestAuth: { trustDeclaredOperatorScopes: true },
+      requestAuth: {
+        trustDeclaredOperatorScopes: true,
+        ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+      },
     };
   },
+}));
+
+vi.mock("./session-sharing.js", () => ({
+  createSessionListEntryFilter: ({ client }: { client: unknown }) =>
+    client ? () => sessionVisibleToProfile : undefined,
+  resolveSessionSharingTarget: () => ({
+    canonicalKey: "agent:main",
+    agentId: "main",
+    entry: { sessionId: "session-1" },
+  }),
 }));
 
 vi.mock("./session-utils.js", () => ({
@@ -86,26 +117,28 @@ vi.mock("./session-utils.js", () => ({
     agentId: "main",
     store: {},
   }),
-  resolveFreshestSessionEntryFromStoreKeys: () => ({
+  resolveCanonicalSessionEntryFromStoreKeys: () => ({
     sessionId: "session-1",
     sessionFile: "/tmp/session-1.jsonl",
   }),
   resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
 }));
 
-vi.mock("./session-transcript-readers.js", () => ({
-  readRecentSessionMessagesWithStatsAsync: async () => ({ messages: [], totalMessages: 0 }),
-  readSessionMessagesAsync: async () => [],
-  readSessionMessagesWithSourceAsync: async () => ({ messages: [] }),
-}));
-
 vi.mock("./session-history-state.js", () => ({
   buildSessionHistorySnapshot: () => ({
     history: { items: [], nextCursor: null, messages: [] },
   }),
+  resolveCursorSeq: (_cursor: string | undefined) => undefined,
+  readSessionHistoryRawSnapshotAsync: async () => {
+    if (transcriptReadError) {
+      throw transcriptReadError;
+    }
+    return { rawMessages: [] };
+  },
   SessionHistorySseState: {
     fromRawSnapshot: (_params: unknown) => ({
       snapshot: () => ({ items: [], nextCursor: null, messages: [] }),
+      retainRecentMessages: () => ({ items: [], nextCursor: null, messages: [] }),
       appendInlineMessage: ({ message, messageId }: { message: unknown; messageId?: string }) => ({
         message,
         messageSeq: 1,
@@ -117,6 +150,7 @@ vi.mock("./session-history-state.js", () => ({
   },
 }));
 
+import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-accessor.js";
 import { handleSessionHistoryHttpRequest } from "./sessions-history-http.js";
 
 const SESSION_HISTORY_URL = "/sessions/agent%3Amain/history";
@@ -152,6 +186,7 @@ class MockRes extends EventEmitter {
   writes: string[] = [];
   writableEnded = false;
   socket = new EventEmitter();
+  closeOnFrame?: "retry" | "history";
 
   setHeader(name: string, value: string) {
     this.headers.set(name.toLowerCase(), value);
@@ -159,6 +194,12 @@ class MockRes extends EventEmitter {
 
   write(chunk: string) {
     this.writes.push(chunk);
+    const written = this.writes.join("");
+    const closeMarker = this.closeOnFrame === "retry" ? "retry:" : "event: history";
+    if (this.closeOnFrame && written.includes(closeMarker) && written.endsWith("\n\n")) {
+      this.closeOnFrame = undefined;
+      this.emit("close");
+    }
     return true;
   }
 
@@ -178,8 +219,16 @@ class MockRes extends EventEmitter {
 async function openSessionHistoryStream(
   options: Parameters<typeof handleSessionHistoryHttpRequest>[2],
 ) {
+  return (await openSessionHistoryStreamPair(options)).res;
+}
+
+async function openSessionHistoryStreamPair(
+  options: Parameters<typeof handleSessionHistoryHttpRequest>[2],
+  params?: { closeOnFrame?: "retry" | "history"; expectSubscribed?: boolean },
+) {
   const req = new MockReq(SESSION_HISTORY_URL);
   const res = new MockRes();
+  res.closeOnFrame = params?.closeOnFrame;
 
   const handled = await handleSessionHistoryHttpRequest(
     req as unknown as IncomingMessage,
@@ -188,9 +237,103 @@ async function openSessionHistoryStream(
   );
 
   expect(handled).toBe(true);
+  if (params?.expectSubscribed === false) {
+    expect(transcriptUpdateHandler).toBeUndefined();
+  } else {
+    expect(transcriptUpdateHandler).toBeTypeOf("function");
+  }
+
+  return { req, res };
+}
+
+async function withRealNodeSessionHistoryStream(
+  run: (pair: { req: IncomingMessage; res: ServerResponse }) => Promise<void>,
+) {
+  let resolvePair: (pair: { req: IncomingMessage; res: ServerResponse }) => void;
+  const pairPromise = new Promise<{ req: IncomingMessage; res: ServerResponse }>((resolve) => {
+    resolvePair = resolve;
+  });
+  let resolveHandled: (handled: boolean) => void;
+  let rejectHandled: (error: unknown) => void;
+  const handledPromise = new Promise<boolean>((resolve, reject) => {
+    resolveHandled = resolve;
+    rejectHandled = reject;
+  });
+  const server = createServer((req, res) => {
+    resolvePair({ req, res });
+    void handleSessionHistoryHttpRequest(req, res, TRUSTED_PROXY_STARTUP_OPTIONS).then(
+      resolveHandled,
+      rejectHandled,
+    );
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    const handleListenError = (error: Error) => reject(error);
+    server.once("error", handleListenError);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", handleListenError);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected TCP test server address");
+  }
+
+  const clientResponsePromise = new Promise<IncomingMessage>((resolve, reject) => {
+    const clientRequest = request(
+      {
+        host: "127.0.0.1",
+        port: address.port,
+        path: SESSION_HISTORY_URL,
+        method: "GET",
+        headers: {
+          accept: "text/event-stream",
+          authorization: "Bearer token",
+          "x-openclaw-scopes": "operator.read",
+        },
+      },
+      resolve,
+    );
+    clientRequest.once("error", reject);
+    clientRequest.end();
+  });
+
+  const pair = await pairPromise;
+  const clientResponse = await clientResponsePromise;
+  clientResponse.resume();
+  expect(await handledPromise).toBe(true);
   expect(transcriptUpdateHandler).toBeTypeOf("function");
 
-  return res;
+  try {
+    await run(pair);
+  } finally {
+    clientResponse.destroy();
+    pair.res.destroy();
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+}
+
+function emitErrorOnNextTick(emitter: EventEmitter, error: Error): Promise<void> {
+  return new Promise((resolve, reject) => {
+    process.nextTick(() => {
+      try {
+        emitter.emit("error", error);
+        resolve();
+      } catch (emitError) {
+        reject(emitError instanceof Error ? emitError : new Error(String(emitError)));
+      }
+    });
+  });
 }
 
 function emitTranscriptTextUpdate({
@@ -224,6 +367,9 @@ afterEach(() => {
   transcriptUpdateHandler = undefined;
   authRevoked = false;
   authCheckCalls = 0;
+  transcriptReadError = undefined;
+  authenticatedUserProfile = undefined;
+  sessionVisibleToProfile = true;
   gatewayConfig = {
     trustedProxies: ["10.0.0.1"],
     allowRealIpFallback: false,
@@ -231,6 +377,51 @@ afterEach(() => {
 });
 
 describe("session history SSE auth revocation", () => {
+  it("returns not found when a verified role cannot view the requested session", async () => {
+    authenticatedUserProfile = {
+      profileId: "profile-guest",
+      displayName: "Guest",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    sessionVisibleToProfile = false;
+
+    const { res } = await openSessionHistoryStreamPair(TRUSTED_PROXY_STARTUP_OPTIONS, {
+      expectSubscribed: false,
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.writes.join("")).toContain("Session not found");
+  });
+
+  it("closes an existing stream before disclosure when profile access is revoked", async () => {
+    authenticatedUserProfile = {
+      profileId: "profile-guest",
+      displayName: "Guest",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    const res = await openSessionHistoryStream(TRUSTED_PROXY_STARTUP_OPTIONS);
+    sessionVisibleToProfile = false;
+
+    emitTranscriptTextUpdate({ text: "role-revoked secret", messageId: "m-role" });
+
+    await expectStreamClosedWithoutMessage(res, "role-revoked secret");
+  });
+
+  it("returns retryable HTTP unavailable while a dirty projection rebuilds", async () => {
+    transcriptReadError = new SessionTranscriptProjectionUnavailableError("session-1");
+
+    const { req, res } = await openSessionHistoryStreamPair(TRUSTED_PROXY_STARTUP_OPTIONS, {
+      expectSubscribed: false,
+    });
+
+    expect(res.statusCode).toBe(503);
+    expect(res.headers.get("retry-after")).toBe("1");
+    expect(res.writes.join("")).toContain('"retryable":true');
+    expect(req.listenerCount("error")).toBe(0);
+  });
+
   it("closes the stream before delivering transcript updates after auth is revoked", async () => {
     const res = await openSessionHistoryStream({ auth: { mode: "trusted-proxy" } as never });
 
@@ -276,4 +467,77 @@ describe("session history SSE auth revocation", () => {
     expect(joined).not.toContain("other session");
     expect(res.writableEnded).toBe(false);
   });
+
+  it("closes and cleans up the SSE stream when the request stream emits an error", async () => {
+    const { req, res } = await openSessionHistoryStreamPair(TRUSTED_PROXY_STARTUP_OPTIONS);
+
+    expect(() => req.emit("error", new Error("request stream failed"))).not.toThrow();
+
+    expect(res.writableEnded).toBe(true);
+    expect(transcriptUpdateHandler).toBeUndefined();
+    expect(req.listenerCount("error")).toBe(0);
+    expect(res.listenerCount("error")).toBe(0);
+  });
+
+  it("cleans up SSE resources when the response stream emits an error", async () => {
+    const { req, res } = await openSessionHistoryStreamPair(TRUSTED_PROXY_STARTUP_OPTIONS);
+
+    expect(() => res.emit("error", new Error("response stream failed"))).not.toThrow();
+
+    expect(transcriptUpdateHandler).toBeUndefined();
+    expect(req.listenerCount("error")).toBe(1);
+    expect(res.listenerCount("error")).toBe(1);
+
+    emitTranscriptTextUpdate({
+      text: "post-response-error update",
+      messageId: "m-response-error",
+    });
+    expect(res.writes.join("")).not.toContain("post-response-error update");
+
+    res.emit("close");
+    expect(req.listenerCount("error")).toBe(0);
+    expect(res.listenerCount("error")).toBe(0);
+  });
+
+  it("keeps real Node stream errors handled while a request failure ends the response", async () => {
+    await withRealNodeSessionHistoryStream(async ({ req, res }) => {
+      expect(req.listenerCount("error")).toBeGreaterThan(0);
+      expect(res.listenerCount("error")).toBeGreaterThan(0);
+
+      expect(() => req.emit("error", new Error("request stream failed"))).not.toThrow();
+      expect(res.writableEnded).toBe(true);
+
+      await expect(
+        emitErrorOnNextTick(res, new Error("response failed during end flush")),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  it("keeps real Node response errors handled until the ended response closes", async () => {
+    await withRealNodeSessionHistoryStream(async ({ res }) => {
+      expect(() => res.emit("error", new Error("response stream failed"))).not.toThrow();
+      expect(transcriptUpdateHandler).toBeUndefined();
+
+      res.end();
+
+      await expect(
+        emitErrorOnNextTick(res, new Error("response failed after end")),
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  it.each(["retry", "history"] as const)(
+    "cleans up SSE resources when the initial %s frame closes the stream",
+    async (closeOnFrame) => {
+      const { req, res } = await openSessionHistoryStreamPair(TRUSTED_PROXY_STARTUP_OPTIONS, {
+        closeOnFrame,
+        expectSubscribed: false,
+      });
+
+      expect(res.writes.join("")).toContain("retry: 1000\n\n");
+      expect(transcriptUpdateHandler).toBeUndefined();
+      expect(req.listenerCount("error")).toBe(0);
+      expect(res.listenerCount("error")).toBe(0);
+    },
+  );
 });

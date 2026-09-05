@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { runQaCli } from "./suite-runtime-agent-process.js";
+import { runQaCli } from "./qa-cli-process.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 
@@ -59,8 +59,8 @@ describe("qa suite runtime CLI integration", () => {
               OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
             },
           },
-          primaryModel: "openai/gpt-5.5",
-          alternateModel: "openai/gpt-5.5",
+          primaryModel: "openai/gpt-5.6-luna",
+          alternateModel: "openai/gpt-5.6-luna",
           providerMode: "mock-openai",
         } as never,
         ["memory", "status", "--json"],
@@ -71,5 +71,47 @@ describe("qa suite runtime CLI integration", () => {
       subcommand: "status",
       status: "ok",
     });
+  });
+
+  it("retains real child output when the qa cli times out", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-cli-timeout-repo-"));
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-cli-timeout-runtime-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+      await rm(tempRoot, { recursive: true, force: true });
+    });
+    const distDir = path.join(repoRoot, "dist");
+    await mkdir(distDir, { recursive: true });
+    await writeFile(
+      path.join(distDir, "index.js"),
+      [
+        'process.stdout.write("timeout stdout marker\\n");',
+        'process.stderr.write("timeout stderr marker\\n");',
+        "setInterval(() => {}, 60_000);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const error = await runQaCli(
+      {
+        repoRoot,
+        gateway: {
+          tempRoot,
+          runtimeEnv: process.env,
+        },
+        primaryModel: "openai/gpt-5.6-luna",
+        alternateModel: "openai/gpt-5.6-luna",
+        providerMode: "mock-openai",
+      } as never,
+      ["qa", "suite"],
+      { timeoutMs: 1_000 },
+    ).catch((value: unknown) => value);
+
+    expect(error).toMatchObject({ code: "qa_cli_timeout" });
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain("qa cli timed out: openclaw qa suite");
+    expect(message).toContain("stdout:\ntimeout stdout marker");
+    expect(message).toContain("stderr:\ntimeout stderr marker");
   });
 });

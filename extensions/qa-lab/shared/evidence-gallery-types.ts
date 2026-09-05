@@ -1,6 +1,6 @@
-export type QaEvidenceGalleryStatus = "pass" | "fail" | "blocked" | "skipped";
+type QaEvidenceGalleryStatus = "pass" | "fail" | "blocked" | "skipped";
 
-export type QaEvidenceCoverageView = {
+type QaEvidenceCoverageView = {
   id: string;
   role: string;
 };

@@ -8,7 +8,8 @@ import type {
   VideoGenerationProviderCapabilities,
 } from "openclaw/plugin-sdk/video-generation";
 import { DEEPINFRA_VIDEO_ASPECT_RATIOS, DEEPINFRA_VIDEO_DURATIONS } from "./media-models.js";
-import { discoverDeepInfraSurfaces, type DeepInfraSurfaceModel } from "./provider-models.js";
+import type { DeepInfraSurfaceModel } from "./media-models.js";
+import { discoverDeepInfraSurfaces } from "./provider-models.js";
 
 const PROVIDER_ID = "deepinfra";
 
@@ -49,8 +50,6 @@ function buildDeepInfraVideoModelCapabilities(): VideoGenerationProviderCapabili
       negative_prompt: "string",
       negativePrompt: "string",
       style: "string",
-      guidance_scale: "number",
-      guidanceScale: "number",
     },
     generate: {
       maxVideos: 1,

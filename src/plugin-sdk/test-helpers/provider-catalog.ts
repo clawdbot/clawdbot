@@ -6,12 +6,9 @@ export {
   expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55,
   expectedOpenaiPluginCodexCatalogEntriesWithGpt55,
   expectCodexMissingAuthHint,
-} from "../testing.js";
+} from "../../plugins/provider-runtime.test-support.js";
 export type { ProviderPlugin } from "../provider-model-shared.js";
-export {
-  loadBundledPluginPublicSurface,
-  loadBundledPluginPublicSurfaceSync,
-} from "./public-surface-loader.js";
+export { loadBundledPluginPublicSurface } from "./public-surface-loader.js";
 
 type ProviderRuntimeCatalogModule = Pick<
   typeof import("openclaw/plugin-sdk/provider-catalog-runtime"),

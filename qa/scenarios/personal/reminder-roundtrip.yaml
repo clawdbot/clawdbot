@@ -6,10 +6,10 @@ scenario:
   category: reminders
   coverage:
     primary:
-      - personal.reminders
+      - automation.agent-cron-tool-reminders
     secondary:
-      - scheduling.cron
-      - channels.qa-channel
+      - automation.agent-cron-tool
+      - channels.qa-channel-final-reply
   risk: medium
   capabilities:
     - cron.add
@@ -29,8 +29,8 @@ scenario:
   execution:
     kind: flow
     summary: Verify a fake personal reminder roundtrip stays local to the QA channel.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       channelId: qa-personal-room
       channelTitle: QA Personal Room
       reminderPromptTemplate: "A local personal QA reminder fired. Reply in one short sentence containing this exact marker: {{marker}}"

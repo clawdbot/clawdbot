@@ -8,6 +8,7 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
         case empty
         case loading
         case error
+        case systemNotices
     }
 
     let scenario: Scenario
@@ -38,6 +39,31 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
                 domain: "OpenClawChatPreviewTransport",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Gateway not connected. Check Tailscale and retry."])
+        case .systemNotices:
+            return OpenClawChatHistoryPayload(
+                sessionKey: sessionKey,
+                sessionId: "preview-system-notices",
+                messages: [
+                    Self.systemNotice(
+                        text: "[System] Resume the interrupted turn with internal recovery context.",
+                        sourceTool: "main_session_restart_recovery",
+                        timestamp: 1),
+                    Self.systemNotice(
+                        text: "[System] Gateway restarted after installing an update.",
+                        sourceTool: "restart-sentinel",
+                        timestamp: 2),
+                    Self.historyMarker(
+                        kind: "compaction",
+                        id: "preview-compaction",
+                        timestamp: 3,
+                        tokensBefore: 48000,
+                        tokensAfter: 19500),
+                    Self.historyMarker(
+                        kind: "reset",
+                        id: "preview-reset",
+                        timestamp: 4),
+                ],
+                thinkingLevel: "medium")
         }
 
         return OpenClawChatHistoryPayload(
@@ -50,7 +76,9 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
                     timestamp: 1),
                 Self.message(
                     role: "assistant",
-                    text: "Gateway is reachable. The only notable item is that push relay is still using local distribution, so device tests should stay on the local lane.",
+                    text: "Gateway is reachable. The only notable item is that push relay "
+                        + "is still using local distribution, so device tests should stay "
+                        + "on the local lane.",
                     timestamp: 2),
                 Self.toolCall(
                     id: "tool-preview-1",
@@ -66,11 +94,11 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
             thinkingLevel: "medium")
     }
 
-    func listModels() async throws -> [OpenClawChatModelChoice] {
+    func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
         [
             OpenClawChatModelChoice(
-                modelID: "gpt-5.5",
-                name: "GPT-5.5",
+                modelID: "gpt-5.6-luna",
+                name: "GPT-5.6 Luna",
                 provider: "openai",
                 contextWindow: 400_000),
             OpenClawChatModelChoice(
@@ -91,14 +119,18 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
         OpenClawChatSendResponse(runId: idempotencyKey, status: "ok")
     }
 
-    func listSessions(limit _: Int?) async throws -> OpenClawChatSessionsListResponse {
+    func listSessions(
+        limit _: Int?,
+        search _: String?,
+        archived _: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
         OpenClawChatSessionsListResponse(
             ts: 0,
             path: nil,
             count: 2,
             defaults: OpenClawChatSessionsDefaults(
                 modelProvider: "openai",
-                model: "gpt-5.5",
+                model: "gpt-5.6-luna",
                 contextTokens: 400_000,
                 thinkingLevels: [
                     OpenClawChatThinkingLevelOption(id: "off", label: "off"),
@@ -115,7 +147,7 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
 
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
         switch self.scenario {
-        case .connected, .empty, .loading:
+        case .connected, .empty, .loading, .systemNotices:
             true
         case .error:
             false
@@ -135,6 +167,36 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
             "role": role,
             "content": [["type": "text", "text": text]],
             "timestamp": timestamp,
+        ])
+    }
+
+    private static func systemNotice(text: String, sourceTool: String, timestamp: Double) -> AnyCodable {
+        AnyCodable([
+            "role": "user",
+            "content": [["type": "text", "text": text]],
+            "timestamp": timestamp,
+            "provenance": [
+                "kind": "internal_system",
+                "sourceTool": sourceTool,
+            ],
+        ])
+    }
+
+    private static func historyMarker(
+        kind: String,
+        id: String,
+        timestamp: Double,
+        tokensBefore: Double? = nil,
+        tokensAfter: Double? = nil) -> AnyCodable
+    {
+        var marker: [String: Any] = ["kind": kind, "id": id]
+        marker["tokensBefore"] = tokensBefore
+        marker["tokensAfter"] = tokensAfter
+        return AnyCodable([
+            "role": "system",
+            "content": [],
+            "timestamp": timestamp,
+            "__openclaw": marker,
         ])
     }
 
@@ -196,11 +258,12 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
             outputTokens: 900,
             totalTokens: 3400,
             modelProvider: "openai",
-            model: "gpt-5.5",
+            model: "gpt-5.6-luna",
             contextTokens: 400_000)
     }
 }
 
+#if os(iOS)
 #Preview("Chat") {
     OpenClawChatPreview(scenario: .connected)
 }
@@ -227,6 +290,12 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
         sessionKey: "error-preview")
 }
 
+#Preview("System notices") {
+    OpenClawChatPreview(
+        scenario: .systemNotices,
+        sessionKey: "system-notices-preview")
+}
+
 #Preview("Onboarding chat") {
     OpenClawChatView(
         viewModel: OpenClawChatViewModel(
@@ -237,6 +306,7 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
         markdownVariant: .standard,
         userAccent: OpenClawChatTheme.accent)
 }
+#endif
 
 private struct OpenClawChatPreview: View {
     let scenario: OpenClawChatPreviewTransport.Scenario

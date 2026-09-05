@@ -1,12 +1,12 @@
 #!/usr/bin/env -S pnpm tsx
 // Macos Smoke script supports OpenClaw repository automation.
+import { readFileSync } from "node:fs";
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { posixAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
-  ensureValue,
   currentRunningSnapshotInfo,
   extractLastOpenClawVersionFromLog,
   makeTempDir,
@@ -14,13 +14,10 @@ import {
   packageBuildCommitFromTgz,
   packageVersionFromTgz,
   parseMacosDsclUserHomeLine,
-  packOpenClaw,
-  parseMode,
-  parseProvider,
   modelProviderConfigBatchJson,
   posixCodexPlatformPackageRepairFunction,
   posixProviderOnlyPluginIsolationScript,
-  parseTcpPort,
+  readGitCommitEnv,
   readPositiveIntEnv,
   resolveParallelsModelTimeoutSeconds,
   resolveHostIp,
@@ -33,7 +30,6 @@ import {
   shouldSkipSnapshotRestore,
   shellQuote,
   validateSnapshotRestoreMode,
-  startHostServer,
   warn,
   withProgressOnStderr,
   writeJson,
@@ -50,25 +46,18 @@ import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runne
 import { MacosDiscordSmoke } from "./macos-discord.ts";
 import { resolveMacosVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
+import {
+  installSmokeRuntimeCompanions,
+  npmRegistryEnv,
+  packAndServeSmokeArtifact,
+  parseSmokeCliArgs,
+  posixStopGatewayScript,
+  type SmokeCliOptions,
+} from "./smoke-common.ts";
 
-interface MacosOptions {
-  vmName: string;
+interface MacosOptions extends SmokeCliOptions {
   vmNameExplicit: boolean;
-  snapshotHint: string;
-  mode: Mode;
-  provider: Provider;
-  apiKeyEnv?: string;
-  modelId?: string;
-  installUrl: string;
-  hostPort: number;
-  hostPortExplicit: boolean;
-  hostIp?: string;
-  latestVersion?: string;
-  installVersion?: string;
-  targetPackageSpec?: string;
   skipLatestRefCheck: boolean;
-  keepServer: boolean;
-  json: boolean;
   discordTokenEnv?: string;
   discordGuildId?: string;
   discordChannelId?: string;
@@ -128,6 +117,7 @@ const defaultOptions = (): MacosOptions => ({
   latestVersion: "",
   mode: "both",
   modelId: undefined,
+  npmRegistry: undefined,
   provider: "openai",
   skipLatestRefCheck: false,
   snapshotHint: "macOS 26.5 latest",
@@ -155,6 +145,7 @@ Options:
   --install-version <ver>    Pin site-installer version/dist-tag for the baseline lane.
   --target-package-spec <npm-spec>
                              Install this npm package tarball instead of packing current main.
+  --npm-registry <url>       Registry used for target package installs.
   --skip-latest-ref-check    Skip the known latest-release ref-mode precheck in upgrade lane.
   --keep-server              Leave temp host HTTP server running.
   --discord-token-env <var>  Host env var name for Discord bot token.
@@ -162,102 +153,30 @@ Options:
   --discord-channel-id <id>  Discord channel ID for smoke roundtrip.
   --json                     Print machine-readable JSON summary.
   -h, --help                 Show help.
+
+Environment:
+  OPENCLAW_PARALLELS_DEV_TARGET_REF
+                             Pin the guest dev update to a full commit SHA.
 `;
 }
 
 export function parseArgs(argv: string[]): MacosOptions {
-  const args = stripLeadingPackageManagerSeparator(argv);
   const options = defaultOptions();
-  parseArgv: for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    switch (arg) {
-      case "--":
-        break parseArgv;
-      case "--vm":
-        options.vmName = ensureValue(args, i, arg);
-        options.vmNameExplicit = true;
-        i++;
-        break;
-      case "--snapshot-hint":
-        options.snapshotHint = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--mode":
-        options.mode = parseMode(ensureValue(args, i, arg));
-        i++;
-        break;
-      case "--provider":
-        options.provider = parseProvider(ensureValue(args, i, arg));
-        i++;
-        break;
-      case "--model":
-        options.modelId = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--api-key-env":
-      case "--openai-api-key-env":
-        options.apiKeyEnv = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--install-url":
-        options.installUrl = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--host-port":
-        options.hostPort = parseTcpPort(ensureValue(args, i, arg), arg);
-        options.hostPortExplicit = true;
-        i++;
-        break;
-      case "--host-ip":
-        options.hostIp = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--latest-version":
-        options.latestVersion = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--install-version":
-        options.installVersion = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--target-package-spec":
-        options.targetPackageSpec = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--skip-latest-ref-check":
-        options.skipLatestRefCheck = true;
-        break;
-      case "--keep-server":
-        options.keepServer = true;
-        break;
-      case "--discord-token-env":
-        options.discordTokenEnv = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--discord-guild-id":
-        options.discordGuildId = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--discord-channel-id":
-        options.discordChannelId = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--json":
-        options.json = true;
-        break;
-      case "-h":
-      case "--help":
-        process.stdout.write(usage());
-        process.exit(0);
-      default:
-        die(`unknown arg: ${arg}`);
-    }
-  }
-  return options;
-}
-
-function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
-  return argv[0] === "--" ? argv.slice(1) : argv;
+  return parseSmokeCliArgs(argv, options, {
+    flagHandlers: {
+      "--skip-latest-ref-check": (parsed) => (parsed.skipLatestRefCheck = true),
+    },
+    usage,
+    valueHandlers: {
+      "--discord-channel-id": (parsed, value) => (parsed.discordChannelId = value),
+      "--discord-guild-id": (parsed, value) => (parsed.discordGuildId = value),
+      "--discord-token-env": (parsed, value) => (parsed.discordTokenEnv = value),
+      "--vm": (parsed, value) => {
+        parsed.vmName = value;
+        parsed.vmNameExplicit = true;
+      },
+    },
+  });
 }
 
 class MacosSmoke {
@@ -276,11 +195,14 @@ class MacosSmoke {
   private snapshot!: SnapshotInfo;
   private phases!: PhaseRunner;
   private guest!: MacosGuest;
+  private guestEnv: Record<string, string> = {};
   private discord: MacosDiscordSmoke | null = null;
   private guestUser = "";
   private guestTransport: "current-user" | "sudo" = "current-user";
   private modelTimeoutSeconds: number;
   private updateDevTimeoutSeconds: number;
+  private devTargetCommit: string | undefined;
+  private options: MacosOptions;
 
   private status = {
     freshAgent: "skip",
@@ -299,7 +221,8 @@ class MacosSmoke {
     upgradeVersion: "skip",
   };
 
-  constructor(private options: MacosOptions) {
+  constructor(options: MacosOptions) {
+    this.options = options;
     this.auth = resolveProviderAuth({
       apiKeyEnv: options.apiKeyEnv,
       modelId: options.modelId,
@@ -311,6 +234,7 @@ class MacosSmoke {
       "OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S",
       1800,
     );
+    this.devTargetCommit = readGitCommitEnv("OPENCLAW_PARALLELS_DEV_TARGET_REF");
     this.validateDiscord();
   }
 
@@ -321,6 +245,7 @@ class MacosSmoke {
     this.guest = new MacosGuest(
       {
         getTransport: () => this.guestTransport,
+        getEnv: () => this.guestEnv,
         getUser: () => this.guestUser,
         path: guestPath,
         resolveDesktopHome: (user) => this.resolveDesktopHome(user),
@@ -337,12 +262,6 @@ class MacosSmoke {
         : resolveSnapshot(this.options.vmName, this.options.snapshotHint);
       this.latestVersion = resolveLatestVersion(this.options.latestVersion);
       this.installVersion = this.options.installVersion || this.latestVersion;
-      this.hostIp = resolveHostIp(this.options.hostIp);
-      this.hostPort = await resolveHostPort(
-        this.options.hostPort,
-        this.options.hostPortExplicit,
-        defaultOptions().hostPort,
-      );
 
       say(`VM: ${this.options.vmName}`);
       say(`Snapshot hint: ${this.options.snapshotHint}`);
@@ -356,24 +275,26 @@ class MacosSmoke {
       );
       say(`Run logs: ${this.runDir}`);
 
-      if (await this.needsHostTgz()) {
-        this.artifact = await packOpenClaw({
-          destination: this.tgzDir,
-          packageSpec: this.options.targetPackageSpec,
-          requireControlUi: true,
-        });
+      if (this.needsHostTgz()) {
+        this.hostIp = resolveHostIp(this.options.hostIp);
+        this.hostPort = await resolveHostPort(
+          this.options.hostPort,
+          this.options.hostPortExplicit,
+          defaultOptions().hostPort,
+        );
+        [this.artifact, this.server, this.hostPort] = await packAndServeSmokeArtifact(
+          this.tgzDir,
+          this.options.targetPackageSpec,
+          this.hostIp,
+          this.hostPort,
+          this.artifactLabel(),
+          true,
+          this.options.provider,
+        );
         if (this.options.targetPackageSpec) {
           this.targetExpectVersion =
             this.artifact.version || (await packageVersionFromTgz(this.artifact.path));
         }
-        this.server = await startHostServer({
-          artifactPath: this.artifact.path,
-          dir: this.tgzDir,
-          hostIp: this.hostIp,
-          label: this.artifactLabel(),
-          port: this.hostPort,
-        });
-        this.hostPort = this.server.port;
       } else if (this.targetInstallsDirectly()) {
         this.targetExpectVersion = run(
           "npm",
@@ -467,11 +388,10 @@ class MacosSmoke {
     return Boolean(spec && !/^(https?:|file:|\/|\.\/|\.\.\/|.*\.tgz$)/.test(spec));
   }
 
-  private async needsHostTgz(): Promise<boolean> {
-    if (!this.options.targetPackageSpec) {
-      return true;
-    }
-    return !this.targetInstallsDirectly();
+  private needsHostTgz(): boolean {
+    return this.options.targetPackageSpec
+      ? !this.targetInstallsDirectly()
+      : this.options.mode !== "upgrade";
   }
 
   private artifactLabel(): string {
@@ -502,6 +422,15 @@ class MacosSmoke {
     this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
     await this.phase("fresh.verify-main-version", 60, () => this.verifyTargetVersion());
     await this.phase("fresh.verify-bundle-permissions", 180, () => this.verifyBundlePermissions());
+    await this.phase("fresh.install-companions", 600, () =>
+      installSmokeRuntimeCompanions({
+        provider: this.options.provider,
+        readCli: (args) => this.guestExec([guestOpenClaw, ...args]),
+        installCli: (args) => {
+          this.guestExec([guestOpenClaw, ...args]);
+        },
+      }),
+    );
     await this.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
     await this.phase("fresh.gateway-start", 180, () => this.startManualGatewayIfNeeded());
     await this.phase("fresh.gateway-status", 180, () => this.verifyGateway());
@@ -726,6 +655,8 @@ exec node "$entry" ${argv}`,
   }
 
   private restoreSnapshot(): void {
+    // A restored baseline must resolve public packages, not the previous candidate registry.
+    this.guestEnv = {};
     if (shouldSkipSnapshotRestore()) {
       say(`Skip snapshot restore; using current running VM ${this.options.vmName}`);
       this.waitForCurrentUser();
@@ -736,7 +667,7 @@ exec node "$entry" ${argv}`,
     for (let attempt = 1; attempt <= 2; attempt++) {
       const result = run(
         "prlctl",
-        ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id, "--skip-resume"],
+        ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id],
         { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(360_000) },
       );
       this.log(result.stdout);
@@ -818,6 +749,7 @@ ${guestOpenClaw} --version`,
   }
 
   private installMain(tempName: string): void {
+    this.guestEnv = npmRegistryEnv(this.options.npmRegistry ?? this.server?.registry?.url);
     if (this.targetInstallsDirectly()) {
       this
         .guestSh(`printf 'install-source: registry-spec %s\\n' ${shellQuote(this.options.targetPackageSpec || "")}
@@ -901,6 +833,7 @@ fi`);
       "local",
       "--auth-choice",
       this.auth.authChoice,
+      ...(this.auth.tokenProvider ? ["--token-provider", this.auth.tokenProvider] : []),
       "--secret-input-mode",
       "ref",
       "--gateway-port",
@@ -920,10 +853,15 @@ fi`);
   }
 
   private ensureGuestPnpm(): void {
+    const { packageManager } = JSON.parse(
+      readFileSync(new URL("../../../package.json", import.meta.url), "utf8"),
+    ) as { packageManager: string };
+    const spec = packageManager.replace(/\+.*$/u, "");
+    const version = spec.slice("pnpm@".length);
     this.guestSh(String.raw`set -eu
 bootstrap_root=/tmp/openclaw-smoke-pnpm-bootstrap
 bootstrap_bin="$bootstrap_root/node_modules/.bin"
-if [ -x "$bootstrap_bin/pnpm" ]; then
+if [ -x "$bootstrap_bin/pnpm" ] && [ "$("$bootstrap_bin/pnpm" --version)" = ${shellQuote(version)} ]; then
   echo "bootstrap-pnpm: reuse"
   "$bootstrap_bin/pnpm" --version
   exit 0
@@ -931,14 +869,19 @@ fi
 echo "bootstrap-pnpm: install"
 rm -rf "$bootstrap_root"
 mkdir -p "$bootstrap_root"
-npm install --prefix "$bootstrap_root" --no-save pnpm@11
-"$bootstrap_bin/pnpm" --version`);
+node -e 'require("node:fs").writeFileSync(process.argv[1], JSON.stringify({private: true, allowScripts: {[process.argv[2]]: true}}))' "$bootstrap_root/package.json" ${shellQuote(spec)}
+npm install --prefix "$bootstrap_root" --no-save ${shellQuote(spec)}
+test "$("$bootstrap_bin/pnpm" --version)" = ${shellQuote(version)}`);
   }
 
-  private runDevChannelUpdate(): void {
+  private async runDevChannelUpdate(): Promise<void> {
     this.ensureGuestPnpm();
     const home = this.guestHome();
-    this.guestSh(
+    const devTargetEnv = this.devTargetCommit
+      ? ` OPENCLAW_UPDATE_DEV_TARGET_REF=${shellQuote(this.devTargetCommit)}`
+      : "";
+    await this.guest.shBackground(
+      "macos-update-dev",
       `set -eu
 rm -rf ${shellQuote(`${home}/openclaw`)}
 export PATH=${shellQuote(`/tmp/openclaw-smoke-pnpm-bootstrap/node_modules/.bin:${guestPath}`)}
@@ -946,21 +889,42 @@ ${guestNode} - <<'JS'
 const fs = require("node:fs");
 const path = require("node:path");
 const configPath = path.join(process.env.HOME || ${JSON.stringify(home)}, ".openclaw", "openclaw.json");
-const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+const config = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
 config.update = { ...(config.update || {}), channel: "dev" };
+fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
 JS
-/usr/bin/env NODE_OPTIONS=--max-old-space-size=8192 OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 ${guestOpenClawEntryRunner} update --channel dev --yes --json
+/usr/bin/env NODE_OPTIONS=--max-old-space-size=8192 OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1${devTargetEnv} ${guestOpenClawEntryRunner} update --channel dev --yes --json --no-restart --timeout ${this.updateDevTimeoutSeconds}
 ${guestOpenClawEntryRunner} --version
 ${guestOpenClawEntryRunner} update status --json`,
+      {},
+      this.updateDevTimeoutSeconds * 1000,
     );
   }
 
   private verifyDevChannelUpdate(): void {
     const status = this.guestOpenClawEntryExec(["update", "status", "--json"]);
-    for (const needle of ['"installKind": "git"', '"value": "dev"', '"branch": "main"']) {
+    const expectedBranch = this.devTargetCommit ? "HEAD" : "main";
+    for (const needle of [
+      '"installKind": "git"',
+      '"value": "dev"',
+      `"branch": "${expectedBranch}"`,
+    ]) {
       if (!status.includes(needle)) {
         throw new Error(`dev update status missing ${needle}`);
+      }
+    }
+    if (this.devTargetCommit) {
+      const checkoutHead =
+        this.guestSh(`git -C ${shellQuote(`${this.guestHome()}/openclaw`)} rev-parse HEAD`)
+          .replaceAll("\r", "")
+          .trim()
+          .split("\n")
+          .at(-1) ?? "";
+      if (checkoutHead !== this.devTargetCommit) {
+        throw new Error(
+          `dev update checkout head ${checkoutHead || "<empty>"} did not match ${this.devTargetCommit}`,
+        );
       }
     }
   }
@@ -1013,29 +977,7 @@ sleep 1`,
   }
 
   private guestOpenClaw(args: string[], check: boolean): boolean {
-    const result = run(
-      "prlctl",
-      [
-        "exec",
-        this.options.vmName,
-        ...(this.guestTransport === "sudo"
-          ? [
-              "/usr/bin/sudo",
-              "-H",
-              "-u",
-              this.guestUser,
-              "/usr/bin/env",
-              `HOME=${this.guestHome()}`,
-              `PATH=${guestPath}`,
-            ]
-          : ["--current-user", "/usr/bin/env", `PATH=${guestPath}`]),
-        guestOpenClaw,
-        ...args,
-      ],
-      { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs() },
-    );
-    this.log(result.stdout);
-    this.log(result.stderr);
+    const result = this.guest.run([guestOpenClaw, ...args], { check: false });
     if (check && result.status !== 0) {
       throw new Error(`openclaw ${args.join(" ")} failed`);
     }
@@ -1091,6 +1033,9 @@ exit 1`);
   }
 
   private verifyTurn(): void {
+    this.guestSh(
+      `set -euo pipefail\n${posixStopGatewayScript(this.guestTransport === "sudo" ? undefined : guestOpenClawEntryRunner)}`,
+    );
     this.guestOpenClawEntryExec(["models", "set", this.auth.modelId]);
     const modelProviderConfigBatch = modelProviderConfigBatchJson(
       this.auth.modelId,

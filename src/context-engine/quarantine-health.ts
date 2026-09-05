@@ -1,12 +1,13 @@
 // Persists context-engine runtime quarantines so health surfaces can see
 // failures recorded in sibling runtime processes.
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   createRuntimeHealthRecordEnvelope,
   createRuntimeHealthStore,
   type RuntimeHealthRecordEnvelope,
 } from "../plugin-state/runtime-health-store.js";
 
-export type PersistedContextEngineRuntimeQuarantine = {
+type PersistedContextEngineRuntimeQuarantine = {
   engineId: string;
   owner?: string;
   operation: string;
@@ -14,16 +15,8 @@ export type PersistedContextEngineRuntimeQuarantine = {
   failedAt: Date;
 };
 
-type PersistedContextEngineQuarantineRecord = RuntimeHealthRecordEnvelope & {
-  engineId: string;
-  owner?: string;
-  operation: string;
-  reason: string;
-};
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
+type PersistedContextEngineQuarantineRecord = RuntimeHealthRecordEnvelope &
+  Omit<PersistedContextEngineRuntimeQuarantine, "failedAt">;
 
 // No TTL: a quarantine is recorded once per failure and stays valid for the
 // recorder's lifetime, so process liveness alone owns expiry here.
@@ -33,9 +26,9 @@ const quarantineStore = createRuntimeHealthStore<PersistedContextEngineQuarantin
   maxEntries: 64,
   normalizeRecord: (value) => {
     if (
-      !isNonEmptyString(value.engineId) ||
-      !isNonEmptyString(value.operation) ||
-      !isNonEmptyString(value.reason)
+      !hasNonEmptyString(value.engineId) ||
+      !hasNonEmptyString(value.operation) ||
+      !hasNonEmptyString(value.reason)
     ) {
       return undefined;
     }
@@ -47,7 +40,7 @@ const quarantineStore = createRuntimeHealthStore<PersistedContextEngineQuarantin
       processId: value.processId,
       processToken: value.processToken,
       processStartTime: value.processStartTime,
-      ...(isNonEmptyString(value.owner) ? { owner: value.owner } : {}),
+      ...(hasNonEmptyString(value.owner) ? { owner: value.owner } : {}),
     };
   },
   displayKey: (record) => record.engineId,
@@ -55,10 +48,6 @@ const quarantineStore = createRuntimeHealthStore<PersistedContextEngineQuarantin
   // so health output points at the root cause, not follow-on failures.
   pick: "earliest",
 });
-
-function recordKey(record: Pick<PersistedContextEngineQuarantineRecord, "engineId" | "processId">) {
-  return JSON.stringify([record.engineId, record.processId]);
-}
 
 export function recordPersistedContextEngineQuarantine(
   quarantine: PersistedContextEngineRuntimeQuarantine,
@@ -72,19 +61,19 @@ export function recordPersistedContextEngineQuarantine(
   };
   // The in-memory registry only records the first quarantine per engine, so
   // this is called at most once per (engine, process) and overwrite is safe.
-  quarantineStore.register(recordKey(record), record);
+  quarantineStore.register(JSON.stringify([record.engineId, record.processId]), record);
 }
 
 export function listPersistedContextEngineQuarantines(): PersistedContextEngineRuntimeQuarantine[] {
-  return quarantineStore.list().map((record) => {
+  return quarantineStore.list().map(({ engineId, operation, reason, owner, failedAtMs }) => {
     const quarantine: PersistedContextEngineRuntimeQuarantine = {
-      engineId: record.engineId,
-      operation: record.operation,
-      reason: record.reason,
-      failedAt: new Date(record.failedAtMs),
+      engineId,
+      operation,
+      reason,
+      failedAt: new Date(failedAtMs),
     };
-    if (record.owner) {
-      quarantine.owner = record.owner;
+    if (owner) {
+      quarantine.owner = owner;
     }
     return quarantine;
   });

@@ -13,12 +13,16 @@ export npm_config_prefix=/tmp/npm-prefix
 export NPM_CONFIG_PREFIX=/tmp/npm-prefix
 export PATH="/tmp/npm-prefix/bin:$PATH"
 export CI=true
-export OPENCLAW_DISABLE_BUNDLED_PLUGINS=1
 export OPENCLAW_NO_ONBOARD=1
 export OPENCLAW_NO_PROMPT=1
 
 baseline="${OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE:-openclaw@latest}"
 update_timeout_seconds="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS 900)"
+default_update_step_timeout_seconds="$update_timeout_seconds"
+if [ "$update_timeout_seconds" -gt 60 ]; then
+  default_update_step_timeout_seconds=$((10#$update_timeout_seconds - 30))
+fi
+update_step_timeout_seconds="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPDATE_CORRUPT_PLUGIN_STEP_TIMEOUT_SECONDS "$default_update_step_timeout_seconds")"
 echo "Installing baseline OpenClaw package: $baseline"
 if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix /tmp/npm-prefix --omit=optional "$baseline" >/tmp/openclaw-update-corrupt-baseline-install.log 2>&1; then
   openclaw_e2e_print_log /tmp/openclaw-update-corrupt-baseline-install.log >&2
@@ -31,13 +35,28 @@ export OPENCLAW_ENTRY="$entry"
 
 npm_pack_dir="$(mktemp -d "/tmp/openclaw-corrupt-plugin-pack.XXXXXX")"
 npm_registry_dir="$(mktemp -d "/tmp/openclaw-corrupt-plugin-registry.XXXXXX")"
+trap 'rm -rf "$npm_pack_dir" "$npm_registry_dir"' EXIT
+# The post-core writer applies parent permissions; match its owned-directory contract.
+post_core_result_path="$npm_pack_dir/post-core.json"
 pack_fixture_plugin "$npm_pack_dir" /tmp/demo-corrupt-plugin.tgz demo-corrupt-plugin 0.0.1 demo.corrupt "Demo Corrupt Plugin"
-start_npm_fixture_registry "@openclaw/demo-corrupt-plugin" "0.0.1" /tmp/demo-corrupt-plugin.tgz "$npm_registry_dir"
+(
+  # Restore the candidate registry and stop serving the synthetic plugin before update.
+  # The parent retains the pack directory needed for post-core result evidence.
+  trap - EXIT
+  start_npm_fixture_registry "@openclaw/demo-corrupt-plugin" "0.0.1" /tmp/demo-corrupt-plugin.tgz "$npm_registry_dir"
 
-echo "Installing managed external plugin..."
-node "$entry" plugins install "npm:@openclaw/demo-corrupt-plugin@0.0.1" >/tmp/openclaw-corrupt-plugin-install.log 2>&1
-node "$entry" plugins inspect demo-corrupt-plugin --runtime --json >/tmp/openclaw-corrupt-plugin-before.json
-unset NPM_CONFIG_REGISTRY npm_config_registry
+  echo "Installing managed external plugin..."
+  if ! openclaw_e2e_fixture_plugin_command node "$entry" -- plugins install "npm:@openclaw/demo-corrupt-plugin@0.0.1" --force >/tmp/openclaw-corrupt-plugin-install.log 2>&1; then
+    openclaw_e2e_print_log /tmp/openclaw-corrupt-plugin-install.log >&2
+    exit 1
+  fi
+  node "$entry" config set plugins.allow '["demo-corrupt-plugin"]' >/dev/null
+  node "$entry" config set agents.defaults.model anthropic/claude-sonnet-4-6 >/dev/null
+  # Keep Doctor's route repair from re-enabling the unrelated Codex runtime.
+  node "$entry" config set plugins.entries.codex.enabled false >/dev/null
+  node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-policy-preserved "$OPENCLAW_CONFIG_PATH" demo-corrupt-plugin
+  node "$entry" plugins inspect demo-corrupt-plugin --runtime --json >/tmp/openclaw-corrupt-plugin-before.json
+)
 
 plugin_dir="$(
   node -e '
@@ -64,6 +83,7 @@ openclaw_e2e_maybe_timeout "${update_timeout_seconds}s" \
   --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}" \
   --yes \
   --no-restart \
+  --timeout "$update_step_timeout_seconds" \
   --json \
   >/tmp/openclaw-update-corrupt-plugin.json \
   2>/tmp/openclaw-update-corrupt-plugin.err
@@ -80,11 +100,12 @@ if [ "$update_status" -ne 0 ]; then
   set +e
   OPENCLAW_UPDATE_POST_CORE=1 \
     OPENCLAW_UPDATE_POST_CORE_CHANNEL=beta \
-    OPENCLAW_UPDATE_POST_CORE_RESULT_PATH=/tmp/openclaw-update-corrupt-plugin-post-core.json \
+    OPENCLAW_UPDATE_POST_CORE_RESULT_PATH="$post_core_result_path" \
     openclaw_e2e_maybe_timeout "${update_timeout_seconds}s" \
     node "$entry" update \
     --yes \
     --no-restart \
+    --timeout "$update_step_timeout_seconds" \
     --json \
     >/tmp/openclaw-update-corrupt-plugin-post-core.stdout \
     2>/tmp/openclaw-update-corrupt-plugin-post-core.err
@@ -94,10 +115,11 @@ if [ "$update_status" -ne 0 ]; then
     echo "updated OpenClaw entry failed or timed out after ${update_timeout_seconds}s during post-core plugin verification" >&2
     openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin-post-core.err >&2
     openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin-post-core.stdout >&2
-    openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin-post-core.json >&2
+    openclaw_e2e_print_log "$post_core_result_path" >&2
     exit "$post_core_status"
   fi
-  node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-plugin-result /tmp/openclaw-update-corrupt-plugin-post-core.json demo-corrupt-plugin
+  node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-plugin-result "$post_core_result_path" demo-corrupt-plugin
+  node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-policy-preserved "$OPENCLAW_CONFIG_PATH" demo-corrupt-plugin
   exit 0
 fi
 
@@ -108,3 +130,4 @@ if ! node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-update /tmp/ope
   openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin.err >&2
   exit 1
 fi
+node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-policy-preserved "$OPENCLAW_CONFIG_PATH" demo-corrupt-plugin

@@ -8,8 +8,8 @@ import type {
   ConversationRef,
   SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
-import type { ChannelConfiguredBindingConversationRef } from "./types.adapters.js";
 import type {
+  ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingMatch,
   ChannelConfiguredBindingProvider,
 } from "./types.adapters.js";
@@ -18,7 +18,7 @@ import type { ChannelId } from "./types.public.js";
 /**
  * Normalized conversation facts used to match configured channel bindings.
  */
-export type ConfiguredBindingConversation = ConversationRef;
+type ConfiguredBindingConversation = ConversationRef;
 
 /**
  * Channel id used by configured binding rules.

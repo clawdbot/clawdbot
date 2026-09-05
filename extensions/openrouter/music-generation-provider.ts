@@ -1,4 +1,7 @@
 // Openrouter provider module implements model/runtime integration.
+import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import type {
   MusicGenerationProvider,
   MusicGenerationRequest,
@@ -6,21 +9,20 @@ import type {
 } from "openclaw/plugin-sdk/music-generation";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   postJsonRequest,
-  resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
+import { resolveOpenRouterGenerationRequestContext } from "./generation-request-context.js";
 
 const DEFAULT_OPENROUTER_MUSIC_MODEL = "google/lyria-3-pro-preview";
 const OPENROUTER_CLIP_MUSIC_MODEL = "google/lyria-3-clip-preview";
 const DEFAULT_TIMEOUT_MS = 180_000;
+const OPENROUTER_SSE_ENVELOPE_OVERHEAD_BYTES = 64 * 1024;
 const OPENROUTER_MUSIC_MODELS = [
   DEFAULT_OPENROUTER_MUSIC_MODEL,
   OPENROUTER_CLIP_MUSIC_MODEL,
@@ -29,6 +31,15 @@ const OPENROUTER_MUSIC_MODELS = [
 type OpenRouterAudioStreamResult = {
   audioBuffer: Buffer;
   transcript: string;
+};
+
+type OpenRouterAudioStreamAccumulator = {
+  audioBuffers: Buffer[];
+  audioBytes: number;
+  audioBase64Remainder: string;
+  transcriptChunks: string[];
+  transcriptBytes: number;
+  maxBytes: number;
 };
 
 function resolveOpenRouterMusicModel(model: string | undefined): string {
@@ -46,7 +57,7 @@ function imageToContentPart(image: MusicGenerationSourceImage): {
   const url =
     normalizeOptionalString(image.url) ??
     (image.buffer
-      ? `data:${normalizeOptionalString(image.mimeType) ?? "image/png"};base64,${image.buffer.toString("base64")}`
+      ? toImageDataUrl({ ...image, buffer: image.buffer, defaultMimeType: "image/png" })
       : undefined);
   if (!url) {
     throw new Error("OpenRouter music generation reference image is missing data.");
@@ -111,10 +122,77 @@ function readDeltaAudio(part: unknown): { data?: string; transcript?: string } |
   };
 }
 
-function processOpenRouterSseLine(
-  line: string,
-  result: { audioBuffers: Buffer[]; transcriptChunks: string[] },
-): boolean {
+function resolveOpenRouterSseEventMaxBytes(maxBytes: number): number {
+  const maxBase64Bytes = Math.ceil(maxBytes / 3) * 4;
+  return maxBase64Bytes + maxBytes + OPENROUTER_SSE_ENVELOPE_OVERHEAD_BYTES;
+}
+
+function createOpenRouterMusicTooLargeError(kind: "audio" | "transcript", maxBytes: number) {
+  return new Error(`OpenRouter music generation ${kind} exceeded ${maxBytes} bytes`);
+}
+
+function appendDecodedOpenRouterMusicAudio(
+  result: OpenRouterAudioStreamAccumulator,
+  base64: string,
+): void {
+  if (!base64) {
+    return;
+  }
+  const remainingBytes = result.maxBytes - result.audioBytes;
+  if (estimateBase64DecodedBytes(base64) > remainingBytes) {
+    throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);
+  }
+  const canonicalAudio = canonicalizeBase64(base64);
+  if (!canonicalAudio) {
+    throw new Error("OpenRouter music generation returned malformed base64 audio data");
+  }
+  const decodedBytes = Buffer.byteLength(canonicalAudio, "base64");
+  if (decodedBytes > remainingBytes) {
+    throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);
+  }
+  const buffer = Buffer.from(canonicalAudio, "base64");
+  const nextBytes = result.audioBytes + buffer.byteLength;
+  if (nextBytes > result.maxBytes) {
+    throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);
+  }
+  result.audioBytes = nextBytes;
+  result.audioBuffers.push(buffer);
+}
+
+function appendOpenRouterMusicAudio(result: OpenRouterAudioStreamAccumulator, data: string): void {
+  // OpenRouter defines delta.audio.data as slices of one base64 stream. Keep
+  // only the incomplete quartet so arbitrary provider chunk boundaries decode safely.
+  const combined = result.audioBase64Remainder + data;
+  const completeLength = combined.length - (combined.length % 4);
+  result.audioBase64Remainder = combined.slice(completeLength);
+  appendDecodedOpenRouterMusicAudio(result, combined.slice(0, completeLength));
+}
+
+function flushOpenRouterMusicAudio(result: OpenRouterAudioStreamAccumulator): void {
+  appendDecodedOpenRouterMusicAudio(result, result.audioBase64Remainder);
+  result.audioBase64Remainder = "";
+}
+
+function appendOpenRouterMusicTranscript(
+  result: OpenRouterAudioStreamAccumulator,
+  transcript: string,
+): void {
+  const nextBytes = result.transcriptBytes + Buffer.byteLength(transcript, "utf8");
+  if (nextBytes > result.maxBytes) {
+    throw createOpenRouterMusicTooLargeError("transcript", result.maxBytes);
+  }
+  result.transcriptBytes = nextBytes;
+  result.transcriptChunks.push(transcript);
+}
+
+function readOpenRouterStreamError(part: unknown): string | undefined {
+  if (!isRecord(part) || !isRecord(part.error)) {
+    return undefined;
+  }
+  return normalizeOptionalString(part.error.message) ?? "unknown provider stream error";
+}
+
+function processOpenRouterSseLine(line: string, result: OpenRouterAudioStreamAccumulator): boolean {
   if (!line.startsWith("data:")) {
     return false;
   }
@@ -125,12 +203,17 @@ function processOpenRouterSseLine(
   if (data === "[DONE]") {
     return true;
   }
-  const audio = readDeltaAudio(JSON.parse(data));
+  const payload: unknown = JSON.parse(data);
+  const streamError = readOpenRouterStreamError(payload);
+  if (streamError) {
+    throw new Error(`OpenRouter music generation failed: ${streamError}`);
+  }
+  const audio = readDeltaAudio(payload);
   if (audio?.data) {
-    result.audioBuffers.push(Buffer.from(audio.data, "base64"));
+    appendOpenRouterMusicAudio(result, audio.data);
   }
   if (audio?.transcript) {
-    result.transcriptChunks.push(audio.transcript);
+    appendOpenRouterMusicTranscript(result, audio.transcript);
   }
   return false;
 }
@@ -170,14 +253,24 @@ async function readOpenRouterStreamChunk(
 async function readOpenRouterAudioStream(
   response: Response,
   deadline: ProviderOperationDeadline,
+  maxBytes: number,
 ): Promise<OpenRouterAudioStreamResult> {
   if (!response.body) {
     throw new Error("OpenRouter music generation response missing stream body");
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  const result = { audioBuffers: [] as Buffer[], transcriptChunks: [] as string[] };
+  const result = {
+    audioBuffers: [] as Buffer[],
+    audioBytes: 0,
+    audioBase64Remainder: "",
+    transcriptChunks: [] as string[],
+    transcriptBytes: 0,
+    maxBytes,
+  };
+  const maxEventBytes = resolveOpenRouterSseEventMaxBytes(maxBytes);
   let buffer = "";
+  let pendingBytes = 0;
   let doneSeen = false;
   try {
     for (;;) {
@@ -185,14 +278,25 @@ async function readOpenRouterAudioStream(
       if (done) {
         break;
       }
+      for (const byte of value) {
+        pendingBytes = byte === 0x0a ? 0 : pendingBytes + 1;
+        if (pendingBytes > maxEventBytes) {
+          throw new Error(
+            `OpenRouter music generation SSE event exceeded ${maxEventBytes} bytes for a ${maxBytes}-byte media limit`,
+          );
+        }
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split(/\r?\n/u);
       buffer = lines.pop() ?? "";
       for (const line of lines) {
         if (processOpenRouterSseLine(line.trim(), result)) {
-          await reader.cancel();
+          flushOpenRouterMusicAudio(result);
+          // Once [DONE] is observed, the generated result is authoritative.
+          // Cancellation is cleanup and must not replace it with a transport error.
+          await reader.cancel().catch(() => {});
           return {
-            audioBuffer: Buffer.concat(result.audioBuffers),
+            audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
             transcript: result.transcriptChunks.join(""),
           };
         }
@@ -200,6 +304,12 @@ async function readOpenRouterAudioStream(
     }
     resolveOpenRouterStreamRemainingMs(deadline);
     buffer += decoder.decode();
+    pendingBytes = Buffer.byteLength(buffer, "utf8");
+    if (pendingBytes > maxEventBytes) {
+      throw new Error(
+        `OpenRouter music generation SSE event exceeded ${maxEventBytes} bytes for a ${maxBytes}-byte media limit`,
+      );
+    }
     if (buffer.trim()) {
       for (const line of buffer.split(/\r?\n/u)) {
         if (processOpenRouterSseLine(line.trim(), result)) {
@@ -210,10 +320,14 @@ async function readOpenRouterAudioStream(
     if (!doneSeen) {
       throw new Error("OpenRouter music generation stream ended before completion");
     }
+    flushOpenRouterMusicAudio(result);
     return {
-      audioBuffer: Buffer.concat(result.audioBuffers),
+      audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
       transcript: result.transcriptChunks.join(""),
     };
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
   } finally {
     try {
       reader.releaseLock();
@@ -227,11 +341,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
     label: "OpenRouter",
     defaultModel: DEFAULT_OPENROUTER_MUSIC_MODEL,
     models: [...OPENROUTER_MUSIC_MODELS],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "openrouter",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "openrouter", ...ctx }),
     capabilities: {
       generate: {
         maxTracks: 1,
@@ -258,30 +368,13 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
       if ((req.inputImages?.length ?? 0) > 1) {
         throw new Error("OpenRouter music generation supports at most one reference image.");
       }
-      const auth = await resolveApiKeyForProvider({
-        provider: "openrouter",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("OpenRouter API key missing");
-      }
-
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: req.cfg?.models?.providers?.openrouter?.baseUrl,
-          defaultBaseUrl: OPENROUTER_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://openclaw.ai",
-            "X-OpenRouter-Title": "OpenClaw",
-          },
-          provider: "openrouter",
+        await resolveOpenRouterGenerationRequestContext({
+          cfg: req.cfg,
+          agentDir: req.agentDir,
+          authStore: req.authStore,
           capability: "audio",
-          transport: "http",
+          jsonContentType: true,
         });
       const model = resolveOpenRouterMusicModel(req.model);
       const format = req.format ?? "wav";
@@ -309,7 +402,11 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
 
       try {
         await assertOkOrThrowHttpError(response, "OpenRouter music generation failed");
-        const streamResult = await readOpenRouterAudioStream(response, streamDeadline);
+        const streamResult = await readOpenRouterAudioStream(
+          response,
+          streamDeadline,
+          resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+        );
         if (streamResult.audioBuffer.byteLength === 0) {
           throw new Error("OpenRouter music generation response missing audio data");
         }

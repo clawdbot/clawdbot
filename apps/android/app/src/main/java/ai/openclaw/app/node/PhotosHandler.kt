@@ -1,23 +1,20 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.gateway.GatewaySession
-import android.Manifest
+import ai.openclaw.app.hasPhotoReadPermission
 import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
-import androidx.core.content.ContextCompat
 import androidx.core.graphics.scale
+import androidx.exifinterface.media.ExifInterface
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import java.io.ByteArrayOutputStream
 import java.time.Instant
 import kotlin.math.max
@@ -37,12 +34,14 @@ internal data class PhotosLatestRequest(
 )
 
 /** Encoded photo payload returned to the gateway. */
+@Serializable
 internal data class EncodedPhotoPayload(
   val format: String,
   val base64: String,
   val width: Int,
   val height: Int,
-  val createdAt: String?,
+  // A missing capture time is omitted, not serialized as JSON null.
+  val createdAt: String? = null,
 )
 
 /** Photo access seam for Android MediaStore and tests. */
@@ -56,16 +55,7 @@ internal interface PhotosDataSource {
 }
 
 private object SystemPhotosDataSource : PhotosDataSource {
-  /** Checks the API-specific image read permission used by MediaStore image access. */
-  override fun hasPermission(context: Context): Boolean {
-    val permission =
-      if (Build.VERSION.SDK_INT >= 33) {
-        Manifest.permission.READ_MEDIA_IMAGES
-      } else {
-        Manifest.permission.READ_EXTERNAL_STORAGE
-      }
-    return ContextCompat.checkSelfPermission(context, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
-  }
+  override fun hasPermission(context: Context): Boolean = hasPhotoReadPermission(context)
 
   override fun latest(
     context: Context,
@@ -124,7 +114,8 @@ private object SystemPhotosDataSource : PhotosDataSource {
         MediaStore.Images.Media.DATE_ADDED,
       )
     val sortOrder =
-      "${MediaStore.Images.Media.DATE_TAKEN} DESC, ${MediaStore.Images.Media.DATE_ADDED} DESC"
+      "COALESCE(NULLIF(${MediaStore.Images.Media.DATE_TAKEN}, 0), " +
+        "${MediaStore.Images.Media.DATE_ADDED} * 1000) DESC, ${MediaStore.Images.Media._ID} DESC"
     val args =
       Bundle().apply {
         putString(ContentResolver.QUERY_ARG_SQL_SORT_ORDER, sortOrder)
@@ -169,7 +160,14 @@ private object SystemPhotosDataSource : PhotosDataSource {
     }
     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
 
-    val inSampleSize = computeInSampleSize(bounds.outWidth, maxWidth)
+    val orientation = JpegSizeLimiter.readOrientation { resolver.openInputStream(uri) }
+    val sourceWidth =
+      if (orientation in ExifInterface.ORIENTATION_TRANSPOSE..ExifInterface.ORIENTATION_ROTATE_270) {
+        bounds.outHeight
+      } else {
+        bounds.outWidth
+      }
+    val inSampleSize = computeInSampleSize(sourceWidth, maxWidth)
     val decodeOptions = BitmapFactory.Options().apply { this.inSampleSize = inSampleSize }
     val decoded =
       resolver.openInputStream(uri).use { input ->
@@ -177,14 +175,15 @@ private object SystemPhotosDataSource : PhotosDataSource {
         BitmapFactory.decodeStream(input, null, decodeOptions)
       } ?: return null
 
-    if (decoded.width <= maxWidth) return decoded
+    val oriented = JpegSizeLimiter.normalizeOrientation(decoded, orientation)
+    if (oriented.width <= maxWidth) return oriented
     // Decode sampling is power-of-two only; finish with exact scaling when the
     // sampled bitmap is still wider than the requested max width.
-    val targetHeight = max(1, ((decoded.height.toDouble() * maxWidth) / decoded.width).roundToInt())
+    val targetHeight = max(1, ((oriented.height.toDouble() * maxWidth) / oriented.width).roundToInt())
     return try {
-      decoded.scale(maxWidth, targetHeight, true)
+      oriented.scale(maxWidth, targetHeight, true)
     } finally {
-      decoded.recycle()
+      oriented.recycle()
     }
   }
 
@@ -193,10 +192,8 @@ private object SystemPhotosDataSource : PhotosDataSource {
     maxWidth: Int,
   ): Int {
     var sample = 1
-    var candidate = width
-    while (candidate > maxWidth && sample < 64) {
+    while (width / sample / 2 >= maxWidth) {
       sample *= 2
-      candidate = width / sample
     }
     return sample
   }
@@ -242,12 +239,10 @@ private object SystemPhotosDataSource : PhotosDataSource {
 }
 
 /** Handles photos.latest by querying MediaStore and returning bounded JPEG payloads. */
-class PhotosHandler private constructor(
+class PhotosHandler internal constructor(
   private val appContext: Context,
-  private val dataSource: PhotosDataSource,
+  private val dataSource: PhotosDataSource = SystemPhotosDataSource,
 ) {
-  constructor(appContext: Context) : this(appContext = appContext, dataSource = SystemPhotosDataSource)
-
   /** Returns the newest accessible photos as gateway-sized base64 JPEGs. */
   fun handlePhotosLatest(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasPermission(appContext)) {
@@ -264,26 +259,7 @@ class PhotosHandler private constructor(
         )
     return try {
       val photos = dataSource.latest(appContext, request)
-      val payload =
-        buildJsonObject {
-          put(
-            "photos",
-            buildJsonArray {
-              photos.forEach { photo ->
-                add(
-                  buildJsonObject {
-                    put("format", JsonPrimitive(photo.format))
-                    put("base64", JsonPrimitive(photo.base64))
-                    put("width", JsonPrimitive(photo.width))
-                    put("height", JsonPrimitive(photo.height))
-                    photo.createdAt?.let { put("createdAt", JsonPrimitive(it)) }
-                  },
-                )
-              }
-            },
-          )
-        }.toString()
-      GatewaySession.InvokeResult.ok(payload)
+      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("photos" to photos)))
     } catch (err: Throwable) {
       GatewaySession.InvokeResult.error(
         code = "PHOTOS_UNAVAILABLE",
@@ -300,12 +276,7 @@ class PhotosHandler private constructor(
         quality = DEFAULT_PHOTOS_QUALITY,
       )
     }
-    val params =
-      try {
-        Json.parseToJsonElement(paramsJson).asObjectOrNull()
-      } catch (_: Throwable) {
-        null
-      } ?: return null
+    val params = parseJsonParamsObject(paramsJson) ?: return null
 
     val limitRaw = (params["limit"] as? JsonPrimitive)?.content?.toIntOrNull()
     val maxWidthRaw = (params["maxWidth"] as? JsonPrimitive)?.content?.toIntOrNull()
@@ -316,13 +287,5 @@ class PhotosHandler private constructor(
     val maxWidth = (maxWidthRaw ?: DEFAULT_PHOTOS_MAX_WIDTH).coerceIn(240, 4096)
     val quality = (qualityRaw ?: DEFAULT_PHOTOS_QUALITY).coerceIn(0.1, 1.0)
     return PhotosLatestRequest(limit = limit, maxWidth = maxWidth, quality = quality)
-  }
-
-  companion object {
-    /** Creates a handler with an injected photo source for parser and payload tests. */
-    internal fun forTesting(
-      appContext: Context,
-      dataSource: PhotosDataSource,
-    ): PhotosHandler = PhotosHandler(appContext = appContext, dataSource = dataSource)
   }
 }

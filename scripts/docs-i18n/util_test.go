@@ -1,17 +1,20 @@
 package main
 
-import "testing"
+import (
+	"strconv"
+	"strings"
+	"testing"
+)
 
-func TestDocsI18nProviderUsesOpenAI(t *testing.T) {
-	t.Setenv(envDocsI18nProvider, "anthropic")
-	t.Setenv("ANTHROPIC_API_KEY", "anthropic-key")
+func TestCacheNamespaceIncludesPromptVersion(t *testing.T) {
+	t.Parallel()
 
-	if got := docsI18nProvider(); got != "openai" {
-		t.Fatalf("expected OpenAI provider, got %q", got)
+	if want := "prompt=" + strconv.Itoa(promptVersion); !strings.Contains(cacheNamespace(), want) {
+		t.Fatalf("expected cache namespace to contain %q, got %q", want, cacheNamespace())
 	}
 }
 
-func TestDocsI18nModelKeepsOpenAIDefaultAtGPT55(t *testing.T) {
+func TestDocsI18nModelKeepsOpenAIDefault(t *testing.T) {
 	t.Setenv(envDocsI18nModel, "")
 
 	if got := docsI18nModel(); got != defaultOpenAIModel {
@@ -24,5 +27,14 @@ func TestDocsI18nModelPrefersExplicitOverride(t *testing.T) {
 
 	if got := docsI18nModel(); got != "__test_model_override__" {
 		t.Fatalf("expected explicit model override, got %q", got)
+	}
+}
+
+func TestCacheNamespaceDoesNotFingerprintModelSelection(t *testing.T) {
+	t.Setenv(envDocsI18nModel, "private-primary")
+	first := cacheNamespace()
+	t.Setenv(envDocsI18nModel, "private-replacement")
+	if got := cacheNamespace(); got != first {
+		t.Fatal("public cache keys must not fingerprint private model selection")
 	}
 }

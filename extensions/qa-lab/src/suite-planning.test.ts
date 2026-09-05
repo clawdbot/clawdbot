@@ -4,13 +4,19 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { defaultQaSuiteConcurrencyForTransport } from "./qa-transport-registry.js";
+import { readQaScenarioById } from "./scenario-catalog.js";
+import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import {
-  collectQaSuiteGatewayConfigPatch,
+  applyQaSuiteGatewayConfigPatches,
+  collectQaSuiteGatewayConfigPatches,
   collectQaSuiteGatewayRuntimeOptions,
   collectQaSuitePluginIds,
+  collectQaSuiteTransportPolicy,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  normalizeQaSuiteScenarioChannel,
   resolveQaSuiteScenarioChannel,
+  resolveQaSuiteScenarioChannels,
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
@@ -25,12 +31,40 @@ function makePlaywrightQaSuiteTestScenario(id: string): ReturnType<typeof makeQa
     ...makeQaSuiteTestScenario(id),
     execution: {
       kind: "playwright",
-      path: `ui/src/ui/e2e/${id}.e2e.test.ts`,
+      path: `ui/src/e2e/${id}.e2e.test.ts`,
+    },
+  };
+}
+
+function makeMatrixFlowQaSuiteTestScenario(
+  id: string,
+  providerMode?: "live-frontier" | "mock-openai",
+): ReturnType<typeof makeQaSuiteTestScenario> {
+  return {
+    ...makeQaSuiteTestScenario(id),
+    execution: {
+      kind: "flow",
+      channel: "matrix",
+      channels: ["matrix"],
+      timeoutMs: 60_000,
+      retryCount: 0,
+      ...(providerMode ? { providerMode } : {}),
     },
   };
 }
 
 describe("qa suite planning helpers", () => {
+  it("normalizes blank scenario channels as unpinned", () => {
+    expect(
+      normalizeQaSuiteScenarioChannel(makeQaSuiteTestScenario("blank-channel", { channel: "   " })),
+    ).toBeUndefined();
+    expect(
+      normalizeQaSuiteScenarioChannel(
+        makeQaSuiteTestScenario("matrix-channel", { channel: " Matrix " }),
+      ),
+    ).toBe("matrix");
+  });
+
   it("normalizes suite concurrency to a bounded integer", () => {
     const previous = process.env.OPENCLAW_QA_SUITE_CONCURRENCY;
     delete process.env.OPENCLAW_QA_SUITE_CONCURRENCY;
@@ -159,6 +193,25 @@ describe("qa suite planning helpers", () => {
     expect(result).toEqual([10, 20, 30, 40]);
   });
 
+  it("stops sequential suite work after the first matching result", async () => {
+    const started: number[] = [];
+    const result = await mapQaSuiteWithConcurrency(
+      [1, 2, 3, 4],
+      1,
+      async (item) => {
+        started.push(item);
+        return { item, failed: item === 2 };
+      },
+      { shouldStop: (entry) => entry.failed },
+    );
+
+    expect(started).toEqual([1, 2]);
+    expect(result).toEqual([
+      { item: 1, failed: false },
+      { item: 2, failed: true },
+    ]);
+  });
+
   it("staggers scenario starts without reducing mapped concurrency", async () => {
     const sleeps: number[] = [];
     const releaseSleeps: Array<() => void> = [];
@@ -231,13 +284,61 @@ describe("qa suite planning helpers", () => {
     ).toBe(25);
   });
 
-  it("keeps explicitly requested provider-specific scenarios", () => {
+  it("rejects an explicitly requested scenario for the wrong model", () => {
     const scenarios = [
-      makeQaSuiteTestScenario("generic"),
-      makeQaSuiteTestScenario("anthropic-only", {
+      makeQaSuiteTestScenario("openai-model", {
         config: {
-          requiredProvider: "anthropic",
-          requiredModel: "claude-opus-4-8",
+          requiredProvider: "openai",
+          requiredModel: "gpt-5.6-luna",
+        },
+      }),
+    ];
+
+    expect(() =>
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["openai-model"],
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-terra",
+      }),
+    ).toThrow(
+      "selected QA scenario(s) do not match the current QA lane: openai-model (model=gpt-5.6-luna)",
+    );
+  });
+
+  it("rejects an explicitly requested scenario for the wrong auth mode", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("claude-subscription", {
+        config: {
+          requiredProvider: "claude-cli",
+          authMode: "subscription",
+        },
+      }),
+    ];
+
+    expect(() =>
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["claude-subscription"],
+        providerMode: "live-frontier",
+        primaryModel: "claude-cli/claude-sonnet-4-6",
+        claudeCliAuthMode: "api-key",
+      }),
+    ).toThrow(
+      "selected QA scenario(s) do not match the current QA lane: claude-subscription (authMode=subscription)",
+    );
+  });
+
+  it("keeps an explicitly requested scenario when every lane contract matches", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("strict-live-lane", {
+        channel: "matrix",
+        runtimePairLane: "core",
+        config: {
+          requiredProviderMode: "live-frontier",
+          requiredProvider: "claude-cli",
+          requiredModel: "claude-sonnet-4-6",
+          authMode: "subscription",
         },
       }),
     ];
@@ -245,11 +346,58 @@ describe("qa suite planning helpers", () => {
     expect(
       selectQaFlowSuiteScenarios({
         scenarios,
-        scenarioIds: ["anthropic-only"],
+        scenarioIds: ["strict-live-lane"],
         providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.5",
+        primaryModel: "claude-cli/claude-sonnet-4-6",
+        claudeCliAuthMode: "subscription",
+        channelDriver: "live",
+        channel: "matrix",
       }).map((scenario) => scenario.id),
-    ).toEqual(["anthropic-only"]);
+    ).toEqual(["strict-live-lane"]);
+  });
+
+  it.each([
+    { channelDriver: "qa-channel" as const, channel: undefined, expectedChannel: "qa-channel" },
+    { channelDriver: "crabline" as const, channel: "telegram", expectedChannel: "telegram" },
+  ])(
+    "selects the real channel streaming scenario for the $channelDriver driver",
+    ({ channelDriver, channel, expectedChannel }) => {
+      const scenario = readQaScenarioById("channel-message-flows");
+      const selected = selectQaFlowSuiteScenarios({
+        scenarios: [scenario],
+        scenarioIds: [scenario.id],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver,
+        channel,
+      });
+
+      expect(selected).toEqual([scenario]);
+      expect(
+        resolveQaSuiteScenarioChannel({
+          defaultChannel: expectedChannel,
+          explicitChannel: channel,
+          scenarios: selected,
+        }),
+      ).toBe(expectedChannel);
+    },
+  );
+
+  it("rejects channel streaming evidence on unsupported Crabline channels", () => {
+    const scenario = readQaScenarioById("channel-message-flows");
+
+    expect(() =>
+      selectQaFlowSuiteScenarios({
+        scenarios: [scenario],
+        scenarioIds: [scenario.id],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver: "crabline",
+        channel: "discord",
+      }),
+    ).toThrow(
+      "selected QA scenario(s) do not match the current QA lane: channel-message-flows (channel=qa-channel|telegram)",
+    );
   });
 
   it("keeps explicitly requested scenarios in request order", () => {
@@ -264,9 +412,39 @@ describe("qa suite planning helpers", () => {
         scenarios,
         scenarioIds: ["third", "first"],
         providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.5",
+        primaryModel: "openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["third", "first"]);
+  });
+
+  it("applies the same lane contract to explicit and implicit selection", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("generic"),
+      makeQaSuiteTestScenario("openai-only", {
+        config: { requiredProvider: "openai", requiredModel: "gpt-5.6-luna" },
+      }),
+      makeQaSuiteTestScenario("anthropic-only", {
+        config: { requiredProvider: "anthropic", requiredModel: "claude-opus-4-8" },
+      }),
+    ];
+    const lane = {
+      scenarios,
+      providerMode: "live-frontier" as const,
+      primaryModel: "openai/gpt-5.6-luna",
+    };
+
+    expect(selectQaFlowSuiteScenarios(lane).map((scenario) => scenario.id)).toEqual([
+      "generic",
+      "openai-only",
+    ]);
+    expect(
+      selectQaFlowSuiteScenarios({ ...lane, scenarioIds: ["openai-only"] }).map(
+        (scenario) => scenario.id,
+      ),
+    ).toEqual(["openai-only"]);
+    expect(() => selectQaFlowSuiteScenarios({ ...lane, scenarioIds: ["anthropic-only"] })).toThrow(
+      "selected QA scenario(s) do not match the current QA lane: anthropic-only (provider=anthropic, model=claude-opus-4-8)",
+    );
   });
 
   it("resolves driver channels from scenario execution with explicit and default fallbacks", () => {
@@ -308,6 +486,16 @@ describe("qa suite planning helpers", () => {
         ],
       }),
     ).toThrow("Selected QA scenarios require multiple channels");
+    expect(
+      resolveQaSuiteScenarioChannels({
+        defaultChannel: "telegram",
+        scenarios: [
+          makeQaSuiteTestScenario("plain"),
+          makeQaSuiteTestScenario("matrix-flow", { channel: "matrix" }),
+          makeQaSuiteTestScenario("slack-flow", { channel: "slack" }),
+        ],
+      }),
+    ).toEqual(["telegram", "matrix", "slack"]);
   });
 
   it("isolates flow scenarios with explicit suite isolation metadata", () => {
@@ -317,6 +505,68 @@ describe("qa suite planning helpers", () => {
       ),
     ).toBe(true);
     expect(scenarioRequiresIsolatedQaSuiteWorker(makeQaSuiteTestScenario("plain"))).toBe(false);
+    expect(
+      scenarioRequiresIsolatedQaSuiteWorker(readQaScenarioById("matrix-dm-thread-reply-override")),
+    ).toBe(true);
+  });
+
+  it("isolates Matrix reaction flows that require a fresh native canary", () => {
+    const scenarioIds = [
+      "matrix-reaction-notification",
+      "matrix-reaction-threaded",
+      "matrix-reaction-not-a-reply",
+      "matrix-reaction-redaction-observed",
+    ];
+
+    for (const scenarioId of scenarioIds) {
+      const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
+      expect(scenario.execution.suiteIsolation, scenarioId).toBe("isolated");
+      expect(scenario.execution.isolationReason, scenarioId).toContain("fresh canary reply");
+      expect(scenarioRequiresIsolatedQaSuiteWorker(scenario), scenarioId).toBe(true);
+    }
+  });
+
+  it("isolates only positive model-driven Matrix allowBots admission flows", () => {
+    const isolatedScenarioIds = [
+      "matrix-allowbots-mentions-mentioned-room",
+      "matrix-allowbots-room-override-enables-account-off",
+      "matrix-allowbots-true-unmentioned-open-room",
+    ];
+    const sharedScenarioIds = [
+      "matrix-allowbots-default-block",
+      "matrix-allowbots-self-sender-ignored",
+      "matrix-mention-metadata-spoof-block",
+    ];
+
+    for (const scenarioId of isolatedScenarioIds) {
+      expect(
+        scenarioRequiresIsolatedQaSuiteWorker(readQaScenarioById(scenarioId)),
+        scenarioId,
+      ).toBe(true);
+    }
+    for (const scenarioId of sharedScenarioIds) {
+      expect(
+        scenarioRequiresIsolatedQaSuiteWorker(readQaScenarioById(scenarioId)),
+        scenarioId,
+      ).toBe(false);
+    }
+  });
+
+  it("isolates and collects scenario-declared transport policy", () => {
+    const scenario = makeQaSuiteTestScenario("sender-policy", {
+      transportPolicy: {
+        directMessageOnly: true,
+        requireGroupMention: true,
+        senderAllowlist: ["driver"],
+      },
+    });
+
+    expect(scenarioRequiresIsolatedQaSuiteWorker(scenario)).toBe(true);
+    expect(collectQaSuiteTransportPolicy([scenario])).toEqual({
+      directMessageOnly: true,
+      requireGroupMention: true,
+      senderAllowlist: ["driver"],
+    });
   });
 
   it("collects unique scenario-declared bundled plugins in encounter order", () => {
@@ -366,7 +616,9 @@ describe("qa suite planning helpers", () => {
       }),
     ];
 
-    expect(collectQaSuiteGatewayConfigPatch(scenarios)).toEqual({
+    expect(
+      applyQaSuiteGatewayConfigPatches({}, collectQaSuiteGatewayConfigPatches(scenarios)),
+    ).toEqual({
       agents: {
         defaults: {
           thinkingDefault: "minimal",
@@ -395,10 +647,68 @@ describe("qa suite planning helpers", () => {
       }),
     ];
 
-    const patch = collectQaSuiteGatewayConfigPatch(scenarios);
+    const patch = applyQaSuiteGatewayConfigPatches(
+      {},
+      collectQaSuiteGatewayConfigPatches(scenarios),
+    );
 
     expect(patch).toEqual({ plugins: { entries: {} } });
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+
+  it("keeps a scenario deletion from resurrecting baseline siblings", () => {
+    // One document cannot express "delete this parent, then recreate part of
+    // it": composing the two would merge the later object into the baseline and
+    // keep the siblings the first scenario removed. Startup replays them in
+    // order instead.
+    const scenarios = [
+      makeQaSuiteTestScenario("drops-tools", { gatewayConfigPatch: { tools: null } }),
+      makeQaSuiteTestScenario("adds-web-search", {
+        gatewayConfigPatch: { tools: { web: { search: { enabled: true } } } },
+      }),
+    ];
+    const baseline = { tools: { profile: "coding", deny: ["shell"] } };
+
+    expect(
+      applyQaSuiteGatewayConfigPatches(baseline, collectQaSuiteGatewayConfigPatches(scenarios)),
+    ).toEqual({ tools: { web: { search: { enabled: true } } } });
+  });
+
+  it("applies scenario startup patches in scenario order", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("first", {
+        gatewayConfigPatch: { agents: { defaults: { thinkingDefault: "minimal" } } },
+      }),
+      makeQaSuiteTestScenario("second", {
+        gatewayConfigPatch: { agents: { defaults: { thinkingDefault: "medium" } } },
+      }),
+    ];
+
+    expect(collectQaSuiteGatewayConfigPatches(scenarios)).toHaveLength(2);
+    expect(
+      applyQaSuiteGatewayConfigPatches({}, collectQaSuiteGatewayConfigPatches(scenarios)),
+    ).toEqual({ agents: { defaults: { thinkingDefault: "medium" } } });
+  });
+
+  it("targets the selected adapter account in scenario startup config patches", () => {
+    const scenarios = [readQaScenarioById("whatsapp-access-control-dm-open")];
+
+    expect(
+      applyQaSuiteGatewayConfigPatches(
+        {},
+        collectQaSuiteGatewayConfigPatches(scenarios, "whatsapp-alt"),
+      ),
+    ).toEqual({
+      channels: {
+        whatsapp: {
+          accounts: {
+            "whatsapp-alt": {
+              dmPolicy: "open",
+            },
+          },
+        },
+      },
+    });
   });
 
   it("collects gateway runtime options across selected scenarios", () => {
@@ -412,9 +722,13 @@ describe("qa suite planning helpers", () => {
         plugins: ["diagnostics-otel"],
         gatewayRuntime: { preserveDebugArtifacts: true },
       }),
+      makeQaSuiteTestScenario("blocked-channel", {
+        gatewayRuntime: { allowUnhealthyStartup: true },
+      }),
     ];
 
     expect(collectQaSuiteGatewayRuntimeOptions(scenarios)).toEqual({
+      allowUnhealthyStartup: true,
       forwardHostHome: true,
       preserveDebugArtifacts: true,
     });
@@ -442,6 +756,45 @@ describe("qa suite planning helpers", () => {
     ).toBe(true);
   });
 
+  it.each([
+    {
+      reason: "explicit scenario isolation",
+      makeScenario: () => makeQaSuiteTestScenario("isolated", { suiteIsolation: "isolated" }),
+    },
+    {
+      reason: "gateway runtime changes",
+      makeScenario: () =>
+        makeQaSuiteTestScenario("runtime-options", { gatewayRuntime: { forwardHostHome: true } }),
+    },
+    {
+      reason: "scenario-owned plugins",
+      makeScenario: () => makeQaSuiteTestScenario("plugin", { plugins: ["diagnostics-otel"] }),
+    },
+    {
+      reason: "memory state",
+      makeScenario: () => makeQaSuiteTestScenario("memory", { surface: "memory" }),
+    },
+    {
+      reason: "image generation setup",
+      makeScenario: () =>
+        makeQaSuiteTestScenario("image-generation", { config: { ensureImageGeneration: true } }),
+    },
+    {
+      reason: "state-mutating flow calls",
+      makeScenario: () => readQaScenarioById("plugin-lifecycle-hot-reload"),
+    },
+  ])("isolates serial runs for $reason", ({ makeScenario }) => {
+    const scenario = makeScenario();
+
+    expect(scenarioRequiresIsolatedQaSuiteWorker(scenario)).toBe(true);
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios: [makeQaSuiteTestScenario("baseline"), scenario],
+        concurrency: 1,
+      }),
+    ).toBe(true);
+  });
+
   it("does not isolate plain serial scenario runs", () => {
     expect(
       shouldUseIsolatedQaSuiteScenarioWorkers({
@@ -449,6 +802,32 @@ describe("qa suite planning helpers", () => {
         concurrency: 1,
       }),
     ).toBe(false);
+  });
+
+  it("isolates serial runs when a flow scenario changes provider mode", () => {
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios: [
+          makeMatrixFlowQaSuiteTestScenario("default"),
+          makeMatrixFlowQaSuiteTestScenario("live-override", "live-frontier"),
+        ],
+        concurrency: 1,
+      }),
+    ).toBe(true);
+  });
+
+  it("isolates serial runs when transport policy would leak into another scenario", () => {
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios: [
+          makeQaSuiteTestScenario("dm-baseline"),
+          makeQaSuiteTestScenario("sender-policy", {
+            transportPolicy: { senderAllowlist: ["driver"] },
+          }),
+        ],
+        concurrency: 1,
+      }),
+    ).toBe(true);
   });
 
   it("keeps concurrent runs on isolated workers", () => {
@@ -475,7 +854,7 @@ describe("qa suite planning helpers", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
       makeQaSuiteTestScenario("openai-only", {
-        config: { requiredProvider: "openai", requiredModel: "gpt-5.5" },
+        config: { requiredProvider: "openai", requiredModel: "gpt-5.6-luna" },
       }),
       makeQaSuiteTestScenario("anthropic-only", {
         config: { requiredProvider: "anthropic", requiredModel: "claude-opus-4-8" },
@@ -489,7 +868,7 @@ describe("qa suite planning helpers", () => {
       selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.5",
+        primaryModel: "openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "openai-only"]);
 
@@ -513,7 +892,7 @@ describe("qa suite planning helpers", () => {
       selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["flow"]);
   });
@@ -529,17 +908,17 @@ describe("qa suite planning helpers", () => {
         scenarios,
         scenarioIds: ["playwright"],
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
       }),
     ).toThrow(
-      "flow execution requires execution.kind: flow; unsupported scenario(s): playwright (playwright)",
+      "suite execution requires flow scenarios; unsupported scenario(s): playwright (playwright)",
     );
   });
 
   it("filters provider-mode-specific scenarios from implicit suite selections", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
-      makeQaSuiteTestScenario("live-only", {
+      makeQaSuiteTestScenario("live-provider", {
         config: { requiredProviderMode: "live-frontier" },
       }),
       makeQaSuiteTestScenario("mock-only", {
@@ -551,7 +930,7 @@ describe("qa suite planning helpers", () => {
       selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "mock-only"]);
 
@@ -559,64 +938,140 @@ describe("qa suite planning helpers", () => {
       selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.5",
+        primaryModel: "openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
-    ).toEqual(["generic", "live-only"]);
+    ).toEqual(["generic", "live-provider"]);
   });
 
-  it("filters channel-driver-specific scenarios from implicit suite selections", () => {
+  it("filters scenario-selected providers from implicit suite selections", () => {
     const scenarios = [
-      makeQaSuiteTestScenario("generic"),
-      makeQaSuiteTestScenario("qa-channel-only", {
-        config: { requiredChannelDriver: "qa-channel" },
-      }),
-      makeQaSuiteTestScenario("crabline-only", {
-        config: { requiredChannelDriver: "crabline" },
-      }),
+      makeMatrixFlowQaSuiteTestScenario("mock-selected", "mock-openai"),
+      makeMatrixFlowQaSuiteTestScenario("live-selected", "live-frontier"),
     ];
 
     expect(
       selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver: "live",
+        channel: "matrix",
       }).map((scenario) => scenario.id),
-    ).toEqual(["generic", "qa-channel-only"]);
-
+    ).toEqual(["mock-selected"]);
     expect(
       selectQaFlowSuiteScenarios({
         scenarios,
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.6-luna",
+        channelDriver: "live",
+        channel: "matrix",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["live-selected"]);
+  });
+
+  it("filters implicit scenarios that require another channel driver", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("generic"),
+      makeQaSuiteTestScenario("live-only", {
+        channel: "telegram",
+        config: { requiredChannelDriver: "live" },
+      }),
+      makeQaSuiteTestScenario("telegram", {
+        channel: "telegram",
+      }),
+    ];
+
+    const selectForDriver = (channelDriver: "crabline" | "live") =>
+      selectQaFlowSuiteScenarios({
+        scenarios,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        channelDriver,
+        channel: "telegram",
+      }).map((scenario) => scenario.id);
+
+    expect(selectForDriver("crabline")).toEqual(["generic", "telegram"]);
+    expect(selectForDriver("live")).toEqual(["generic", "live-only", "telegram"]);
+  });
+
+  it("rejects explicitly requested scenarios that do not match the current lane", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("generic"),
+      makeQaSuiteTestScenario("qa-channel-only", {
+        channel: "qa-channel",
+      }),
+    ];
+
+    expect(() =>
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["qa-channel-only"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
         channelDriver: "crabline",
-      }).map((scenario) => scenario.id),
-    ).toEqual(["generic", "crabline-only"]);
-  });
-
-  it("keeps explicitly requested channel-driver-specific scenarios", () => {
-    const scenarios = [
-      makeQaSuiteTestScenario("generic"),
-      makeQaSuiteTestScenario("qa-channel-only", {
-        config: { requiredChannelDriver: "qa-channel" },
+        channel: "telegram",
       }),
-    ];
+    ).toThrow(
+      "selected QA scenario(s) do not match the current QA lane: qa-channel-only (channel=qa-channel)",
+    );
 
     expect(
       selectQaFlowSuiteScenarios({
         scenarios,
         scenarioIds: ["qa-channel-only"],
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
-        channelDriver: "crabline",
+        primaryModel: "mock-openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["qa-channel-only"]);
   });
 
-  it("keeps live-only runtime parity scenarios out of implicit mock selections", () => {
+  it("requires an external lane matching a channel-specific scenario", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("matrix-transport", {
+        channel: "matrix",
+      }),
+    ];
+
+    expect(() =>
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["matrix-transport"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }),
+    ).toThrow(
+      "selected QA scenario(s) do not match the current QA lane: matrix-transport (channel=matrix)",
+    );
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["matrix-transport"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        channelDriver: "crabline",
+        channel: "matrix",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["matrix-transport"]);
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["matrix-transport"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        channelDriver: "live",
+        channel: "matrix",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["matrix-transport"]);
+  });
+
+  it("keeps provider eligibility independent from runtime-pair membership", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
       makeQaSuiteTestScenario("live-runtime", {
-        runtimeParityTier: "live-only",
+        runtimePairLane: "core",
+        config: { requiredProviderMode: "live-frontier" },
       }),
     ];
 
@@ -624,17 +1079,19 @@ describe("qa suite planning helpers", () => {
       selectQaFlowSuiteScenarios({
         scenarios,
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
+        primaryModel: "mock-openai/gpt-5.6-luna",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic"]);
 
-    expect(
+    expect(() =>
       selectQaFlowSuiteScenarios({
         scenarios,
         scenarioIds: ["live-runtime"],
         providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.5",
-      }).map((scenario) => scenario.id),
-    ).toEqual(["live-runtime"]);
+        primaryModel: "mock-openai/gpt-5.6-luna",
+      }),
+    ).toThrow(
+      "selected QA scenario(s) do not match the current QA lane: live-runtime (providerMode=live-frontier)",
+    );
   });
 });

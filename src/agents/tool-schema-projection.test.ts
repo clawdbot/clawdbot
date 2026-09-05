@@ -70,6 +70,129 @@ describe("runtime tool input schema projection", () => {
     });
   });
 
+  it("reports non-finite numeric schema values before JSON projection", () => {
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          score: { type: "number", default: Number.NaN },
+        },
+      }),
+    ).toEqual({
+      schema: {},
+      violations: ["parameters.properties.score.default is not JSON-serializable"],
+    });
+  });
+
+  it("rejects raw JSON numeric overflow at the root and inside schemas", ({ skip }) => {
+    if (!("rawJSON" in JSON) || typeof JSON.rawJSON !== "function") {
+      skip();
+      return;
+    }
+    const overflow: unknown = JSON.rawJSON("1e400");
+    for (const schema of [
+      overflow,
+      { type: "object", properties: { score: { default: overflow } } },
+      { type: "object", anyOf: [{ $dynamicRef: "#value", default: overflow }] },
+    ]) {
+      expect(projectRuntimeToolInputSchema(schema)).toEqual({
+        schema: {},
+        violations: ["parameters is not a JSON value"],
+      });
+    }
+  });
+
+  it("reports non-finite values returned by nested toJSON serializers", () => {
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          score: {
+            toJSON() {
+              return { type: "number", maximum: Number.POSITIVE_INFINITY };
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      schema: {},
+      violations: ["parameters.properties.score.maximum is not JSON-serializable"],
+    });
+  });
+
+  it("keeps empty property names in non-finite diagnostic paths", () => {
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          "": { type: "number", maximum: Number.POSITIVE_INFINITY },
+        },
+      }),
+    ).toEqual({
+      schema: {},
+      violations: ["parameters.properties..maximum is not JSON-serializable"],
+    });
+  });
+
+  it("reports boxed non-finite numeric schema values", () => {
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          score: { type: "number", maximum: Object(Number.POSITIVE_INFINITY) },
+        },
+      }),
+    ).toEqual({
+      schema: {},
+      violations: ["parameters.properties.score.maximum is not JSON-serializable"],
+    });
+  });
+
+  it("does not treat a spoofed Number tag as a boxed number", () => {
+    const taggedValue = { [Symbol.toStringTag]: "Number", value: "finite" };
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          score: { default: taggedValue },
+        },
+      }),
+    ).toEqual({
+      schema: {
+        type: "object",
+        properties: {
+          score: { default: { value: "finite" } },
+        },
+      },
+      violations: [],
+    });
+  });
+
+  it("ignores an unreadable Number tag that JSON serialization does not use", () => {
+    const taggedValue = {
+      get [Symbol.toStringTag](): string {
+        throw new Error("unreadable tag");
+      },
+      value: "finite",
+    };
+    expect(
+      projectRuntimeToolInputSchema({
+        type: "object",
+        properties: {
+          score: { default: taggedValue },
+        },
+      }),
+    ).toEqual({
+      schema: {
+        type: "object",
+        properties: {
+          score: { default: { value: "finite" } },
+        },
+      },
+      violations: [],
+    });
+  });
+
   it("does not report schema map field names as dynamic JSON Schema keywords", () => {
     // Dynamic keywords are only invalid as JSON Schema control fields; property
     // names and definitions can legally contain the same strings.
@@ -164,6 +287,27 @@ describe("runtime tool input schema projection", () => {
         },
       ],
     });
+  });
+
+  it("snapshots tool references before schema getters replace later array entries", () => {
+    const captured = { name: "captured", parameters: { type: "object" } };
+    const replacement = { name: "replacement", parameters: { type: "array" } };
+    const tools = [
+      {
+        name: "first",
+        get parameters() {
+          tools[1] = replacement;
+          return { type: "object" };
+        },
+      },
+      captured,
+    ];
+
+    expect(filterRuntimeCompatibleTools(tools)).toEqual({
+      tools: [tools[0], captured],
+      diagnostics: [],
+    });
+    expect(tools[1]).toBe(replacement);
   });
 
   it("keeps provider-normalizable object schemas for provider-specific cleanup", () => {

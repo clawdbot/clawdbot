@@ -11,7 +11,8 @@ const resolveAgentWorkspaceDirMock = vi.fn<(_cfg: unknown, _agentId: string) => 
 );
 const buildWorkspaceSkillStatusMock = vi.fn();
 const readLocalSkillCardContentSyncMock = vi.fn();
-const fetchClawHubSkillSecurityVerdictsMock = vi.fn();
+const fetchExactClawHubSkillSecurityVerdictsMock = vi.fn();
+const resolveClawHubBaseUrlMock = vi.fn(() => "https://clawhub.ai");
 const installSkillFromClawHubMock = vi.fn();
 const installSkillMock = vi.fn();
 const updateSkillsFromClawHubMock = vi.fn();
@@ -44,11 +45,18 @@ vi.mock("../../skills/lifecycle/install.js", () => ({
   installSkill: (...args: unknown[]) => installSkillMock(...args),
 }));
 
-vi.mock("../../infra/clawhub.js", () => ({
+vi.mock("../../infra/clawhub-skills.js", () => ({
+  CLAWHUB_SKILLS_SH_REF_PREFIX: "skills-sh:",
   fetchClawHubSkillDetail: vi.fn(),
-  fetchClawHubSkillSecurityVerdicts: (...args: unknown[]) =>
-    fetchClawHubSkillSecurityVerdictsMock(...args),
-  resolveClawHubBaseUrl: () => "https://clawhub.ai",
+}));
+
+vi.mock("../../infra/clawhub-client.js", () => ({
+  resolveClawHubBaseUrl: () => resolveClawHubBaseUrlMock(),
+}));
+
+vi.mock("../../infra/clawhub-skill-security.js", () => ({
+  fetchExactClawHubSkillSecurityVerdicts: (...args: unknown[]) =>
+    fetchExactClawHubSkillSecurityVerdictsMock(...args),
 }));
 
 const { skillsHandlers } = await import("./skills.js");
@@ -79,7 +87,7 @@ async function expectEmptySecurityVerdictsWithoutFetch(): Promise<void> {
 
   expect(error).toBeUndefined();
   expect(ok).toBe(true);
-  expect(fetchClawHubSkillSecurityVerdictsMock).not.toHaveBeenCalled();
+  expect(fetchExactClawHubSkillSecurityVerdictsMock).not.toHaveBeenCalled();
   expectEmptySecurityVerdicts(response);
 }
 
@@ -91,7 +99,8 @@ describe("skills gateway handlers (clawhub)", () => {
     resolveAgentWorkspaceDirMock.mockReset();
     buildWorkspaceSkillStatusMock.mockReset();
     readLocalSkillCardContentSyncMock.mockReset();
-    fetchClawHubSkillSecurityVerdictsMock.mockReset();
+    fetchExactClawHubSkillSecurityVerdictsMock.mockReset();
+    resolveClawHubBaseUrlMock.mockReset();
     installSkillFromClawHubMock.mockReset();
     installSkillMock.mockReset();
     updateSkillsFromClawHubMock.mockReset();
@@ -101,6 +110,7 @@ describe("skills gateway handlers (clawhub)", () => {
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     buildWorkspaceSkillStatusMock.mockReturnValue(emptySkillStatusReport());
+    resolveClawHubBaseUrlMock.mockReturnValue("https://clawhub.ai");
   });
 
   it("returns an empty verdict batch without calling ClawHub when no skills are linked", async () => {
@@ -122,7 +132,9 @@ describe("skills gateway handlers (clawhub)", () => {
       expect.objectContaining({
         agentId: "research",
         config: {},
-        eligibility: expect.any(Object),
+        eligibility: expect.objectContaining({
+          nodeSkills: expect.objectContaining({ canExec: expect.any(Boolean) }),
+        }),
       }),
     );
   });
@@ -150,30 +162,27 @@ describe("skills gateway handlers (clawhub)", () => {
         },
       ],
     });
-    fetchClawHubSkillSecurityVerdictsMock.mockResolvedValue({
-      schema: "clawhub.skill.security-verdicts.v1",
-      items: [
-        {
-          ok: true,
-          decision: "pass",
-          reasons: [],
-          requestedSlug: "agentreceipt",
-          slug: "agentreceipt",
-          requestedVersion: "1.2.3",
-          version: "1.2.3",
-          securityAuditUrl:
-            "https://clawhub.ai/openclaw/skills/agentreceipt/security-audit?version=1.2.3",
-          security: { status: "clean", passed: true },
-          scannerPayload: { ignored: true },
-        },
-      ],
-    });
+    fetchExactClawHubSkillSecurityVerdictsMock.mockResolvedValue([
+      {
+        ok: true,
+        decision: "pass",
+        reasons: [],
+        requestedSlug: "agentreceipt",
+        slug: "agentreceipt",
+        requestedVersion: "1.2.3",
+        version: "1.2.3",
+        securityAuditUrl:
+          "https://clawhub.ai/openclaw/skills/agentreceipt/security-audit?version=1.2.3",
+        security: { status: "clean", passed: true },
+        scannerPayload: { ignored: true },
+      },
+    ]);
 
     const { ok, response, error } = await callSkillsHandler("skills.securityVerdicts", {});
 
     expect(error).toBeUndefined();
-    expect(fetchClawHubSkillSecurityVerdictsMock).toHaveBeenCalledTimes(1);
-    expect(fetchClawHubSkillSecurityVerdictsMock).toHaveBeenCalledWith({
+    expect(fetchExactClawHubSkillSecurityVerdictsMock).toHaveBeenCalledTimes(1);
+    expect(fetchExactClawHubSkillSecurityVerdictsMock).toHaveBeenCalledWith({
       baseUrl: "https://clawhub.ai",
       items: [{ slug: "agentreceipt", version: "1.2.3" }],
       skipAuth: true,
@@ -197,7 +206,152 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(JSON.stringify(response)).not.toContain('"security":');
   });
 
-  it("does not passively fetch verdicts from a non-default registry", async () => {
+  it("keeps owner-qualified verdict targets distinct for shared slugs", async () => {
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/openclaw/skills",
+      skills: [
+        {
+          name: "alice-weather",
+          skillKey: "alice-weather",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "weather",
+            ownerHandle: "alice",
+            installedVersion: "1.2.3",
+            installedAt: 123,
+          },
+        },
+        {
+          name: "bob-weather",
+          skillKey: "bob-weather",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "weather",
+            ownerHandle: "bob",
+            installedVersion: "1.2.3",
+            installedAt: 456,
+          },
+        },
+      ],
+    });
+    fetchExactClawHubSkillSecurityVerdictsMock.mockResolvedValue([
+      {
+        ok: true,
+        decision: "pass",
+        reasons: [],
+        requestedSlug: "weather",
+        requestedOwnerHandle: "alice",
+        requestedVersion: "1.2.3",
+        slug: "weather",
+        version: "1.2.3",
+        publisherHandle: "alice",
+        security: { status: "clean", passed: true },
+      },
+      {
+        ok: false,
+        decision: "fail",
+        reasons: ["security.suspicious"],
+        requestedSlug: "weather",
+        requestedOwnerHandle: "bob",
+        requestedVersion: "1.2.3",
+        slug: "weather",
+        version: "1.2.3",
+        publisherHandle: "bob",
+        security: { status: "suspicious", passed: false },
+      },
+    ]);
+
+    const { ok, response, error } = await callSkillsHandler("skills.securityVerdicts", {});
+
+    expect(error).toBeUndefined();
+    expect(fetchExactClawHubSkillSecurityVerdictsMock).toHaveBeenCalledTimes(1);
+    expect(fetchExactClawHubSkillSecurityVerdictsMock).toHaveBeenCalledWith({
+      baseUrl: "https://clawhub.ai",
+      items: [
+        { slug: "weather", ownerHandle: "alice", version: "1.2.3" },
+        { slug: "weather", ownerHandle: "bob", version: "1.2.3" },
+      ],
+      skipAuth: true,
+    });
+    expect(ok).toBe(true);
+    expect(response).toEqual({
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: [
+        expect.objectContaining({
+          requestedSlug: "weather",
+          requestedOwnerHandle: "alice",
+          requestedVersion: "1.2.3",
+          publisherHandle: "alice",
+        }),
+        expect.objectContaining({
+          requestedSlug: "weather",
+          requestedOwnerHandle: "bob",
+          requestedVersion: "1.2.3",
+          publisherHandle: "bob",
+        }),
+      ],
+    });
+  });
+
+  it("passively fetches verdicts from the configured custom registry without auth", async () => {
+    resolveClawHubBaseUrlMock.mockReturnValue("https://registry.example/base/");
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/openclaw/skills",
+      skills: [
+        {
+          name: "agentreceipt",
+          skillKey: "agentreceipt",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://registry.example/base",
+            slug: "agentreceipt",
+            ownerHandle: "openclaw",
+            installedVersion: "1.2.3",
+            installedAt: 123,
+          },
+        },
+      ],
+    });
+    fetchExactClawHubSkillSecurityVerdictsMock.mockResolvedValue([
+      {
+        ok: true,
+        decision: "pass",
+        reasons: [],
+        requestedSlug: "agentreceipt",
+        requestedOwnerHandle: "openclaw",
+        requestedVersion: "1.2.3",
+        slug: "agentreceipt",
+        version: "1.2.3",
+        publisherHandle: "openclaw",
+        security: { status: "clean", passed: true },
+      },
+    ]);
+
+    const { ok, error } = await callSkillsHandler("skills.securityVerdicts", {});
+
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+    expect(fetchExactClawHubSkillSecurityVerdictsMock).toHaveBeenCalledWith({
+      baseUrl: "https://registry.example/base",
+      items: [
+        {
+          slug: "agentreceipt",
+          ownerHandle: "openclaw",
+          version: "1.2.3",
+        },
+      ],
+      skipAuth: true,
+    });
+  });
+
+  it("does not passively fetch verdicts from a non-configured registry", async () => {
     buildWorkspaceSkillStatusMock.mockReturnValue({
       workspaceDir: "/tmp/workspace",
       managedSkillsDir: "/tmp/openclaw/skills",
@@ -263,6 +417,7 @@ describe("skills gateway handlers (clawhub)", () => {
       slug: "calendar",
       version: "1.2.3",
       targetDir: "/tmp/workspace/skills/calendar",
+      warning: "Review ClawHub security details before installing.",
     });
 
     const { ok, response, error } = await callSkillsHandler("skills.install", {
@@ -276,17 +431,107 @@ describe("skills gateway handlers (clawhub)", () => {
       slug: "calendar",
       version: "1.2.3",
       force: false,
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
     const result = response as
-      | { ok?: boolean; message?: string; slug?: string; version?: string }
+      | { ok?: boolean; message?: string; slug?: string; version?: string; warning?: string }
       | undefined;
     expect(result?.ok).toBe(true);
     expect(result?.message).toBe("Installed calendar@1.2.3");
     expect(result?.slug).toBe("calendar");
     expect(result?.version).toBe("1.2.3");
+    expect(result?.warning).toBe("Review ClawHub security details before installing.");
+  });
+
+  it("deduplicates concurrent exact ClawHub installs across reconnects", async () => {
+    let finishInstall: ((value: unknown) => void) | undefined;
+    installSkillFromClawHubMock.mockReturnValue(
+      new Promise((resolve) => {
+        finishInstall = resolve;
+      }),
+    );
+
+    const params = {
+      source: "clawhub",
+      slug: "calendar",
+      version: "1.2.3",
+    } as const;
+    const first = callSkillsHandler("skills.install", params);
+    const reconnectRetry = callSkillsHandler("skills.install", params);
+
+    await vi.waitFor(() => expect(installSkillFromClawHubMock).toHaveBeenCalledTimes(1));
+    finishInstall?.({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace/skills/calendar",
+    });
+
+    const [firstResult, retryResult] = await Promise.all([first, reconnectRetry]);
+    expect(firstResult.ok).toBe(true);
+    expect(retryResult.ok).toBe(true);
+  });
+
+  it("returns ClawHub skill install trust warnings in Gateway error details", async () => {
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: false,
+      error: "ClawHub blocked this release; install was not started.",
+      code: "clawhub_download_blocked",
+      version: "1.2.3",
+      warning: "BLOCKED - ClawHub flagged this release as malicious",
+    });
+
+    const { ok, response, error } = await callSkillsHandler("skills.install", {
+      source: "clawhub",
+      slug: "calendar",
+    });
+
+    expect(ok).toBe(false);
+    expect(response).toEqual({
+      ok: false,
+      error: "ClawHub blocked this release; install was not started.",
+      code: "clawhub_download_blocked",
+      version: "1.2.3",
+      warning: "BLOCKED - ClawHub flagged this release as malicious",
+    });
+    expect(error).toEqual({
+      code: "UNAVAILABLE",
+      message: "ClawHub blocked this release; install was not started.",
+      details: {
+        clawhubTrustCode: "clawhub_download_blocked",
+        version: "1.2.3",
+        warning: "BLOCKED - ClawHub flagged this release as malicious",
+      },
+    });
+  });
+
+  it("forwards ClawHub skill install risk acknowledgements", async () => {
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace/skills/calendar",
+    });
+
+    const { ok, error } = await callSkillsHandler("skills.install", {
+      source: "clawhub",
+      slug: "calendar",
+      version: "1.2.3",
+    });
+
+    expect(installSkillFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      slug: "calendar",
+      version: "1.2.3",
+      force: false,
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
+      config: {},
+    });
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
   });
 
   it("routes explicit agent ClawHub installs through that agent workspace", async () => {
@@ -314,6 +559,7 @@ describe("skills gateway handlers (clawhub)", () => {
       slug: "calendar",
       version: "1.2.3",
       force: false,
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });
     expect(ok).toBe(true);
@@ -338,6 +584,7 @@ describe("skills gateway handlers (clawhub)", () => {
 
     expect(installSkillMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace",
+      agentId: "main",
       skillName: "calendar",
       installId: "deps",
       timeoutMs: 120_000,
@@ -359,6 +606,7 @@ describe("skills gateway handlers (clawhub)", () => {
         version: "1.2.3",
         changed: true,
         targetDir: "/tmp/workspace/skills/calendar",
+        warning: "Latest skill version needs review before use.",
       },
     ]);
 
@@ -370,6 +618,7 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace",
       slug: "calendar",
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
       config: {},
     });
     expect(ok).toBe(true);
@@ -380,7 +629,7 @@ describe("skills gateway handlers (clawhub)", () => {
           skillKey?: string;
           config?: {
             source?: string;
-            results?: Array<{ ok?: boolean; slug?: string; version?: string }>;
+            results?: Array<{ ok?: boolean; slug?: string; version?: string; warning?: string }>;
           };
         }
       | undefined;
@@ -391,6 +640,113 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(result?.config?.results?.[0]?.ok).toBe(true);
     expect(result?.config?.results?.[0]?.slug).toBe("calendar");
     expect(result?.config?.results?.[0]?.version).toBe("1.2.3");
+    expect(result?.config?.results?.[0]?.warning).toBe(
+      "Latest skill version needs review before use.",
+    );
+  });
+
+  it("forwards ClawHub skill update risk acknowledgements", async () => {
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "calendar",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+        targetDir: "/tmp/workspace/skills/calendar",
+      },
+    ]);
+
+    const { ok, error } = await callSkillsHandler("skills.update", {
+      source: "clawhub",
+      slug: "calendar",
+    });
+
+    expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      slug: "calendar",
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
+      config: {},
+    });
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+  });
+
+  it("forwards ClawHub skill update force overrides", async () => {
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "calendar",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+        targetDir: "/tmp/workspace/skills/calendar",
+      },
+    ]);
+
+    const { ok, error } = await callSkillsHandler("skills.update", {
+      source: "clawhub",
+      slug: "calendar",
+      force: true,
+    });
+
+    expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      slug: "calendar",
+      force: true,
+      logger: expect.objectContaining({ warn: expect.any(Function) }),
+      config: {},
+    });
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+  });
+
+  it("returns ClawHub skill update trust warnings in Gateway error details", async () => {
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: false,
+        error: "ClawHub blocked this release; update was not started.",
+        code: "clawhub_download_blocked",
+        warning: "Latest skill version is marked malicious; OpenClaw will not download it.",
+      },
+    ]);
+
+    const { ok, response, error } = await callSkillsHandler("skills.update", {
+      source: "clawhub",
+      slug: "calendar",
+    });
+
+    expect(ok).toBe(false);
+    expect(response).toEqual({
+      ok: false,
+      skillKey: "calendar",
+      config: {
+        source: "clawhub",
+        results: [
+          {
+            ok: false,
+            error: "ClawHub blocked this release; update was not started.",
+            code: "clawhub_download_blocked",
+            warning: "Latest skill version is marked malicious; OpenClaw will not download it.",
+          },
+        ],
+      },
+    });
+    expect(error).toEqual({
+      code: "UNAVAILABLE",
+      message: "ClawHub blocked this release; update was not started.",
+      details: {
+        results: [
+          {
+            ok: false,
+            error: "ClawHub blocked this release; update was not started.",
+            code: "clawhub_download_blocked",
+            warning: "Latest skill version is marked malicious; OpenClaw will not download it.",
+          },
+        ],
+        warnings: ["Latest skill version is marked malicious; OpenClaw will not download it."],
+      },
+    });
   });
 
   it("rejects ClawHub skills.update requests without slug or all", async () => {

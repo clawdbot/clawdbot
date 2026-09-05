@@ -19,6 +19,7 @@ const WEB_FETCH_ARTIFACT_CANDIDATES = [
   "web-fetch-provider.js",
   "web-fetch.js",
 ] as const;
+const WEB_FETCH_RUNTIME_ARTIFACT_CANDIDATES = ["web-fetch-provider.js", "web-fetch.js"] as const;
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
@@ -40,14 +41,6 @@ function isWebProviderPlugin(
     typeof value.setCredentialValue === "function" &&
     typeof value.createTool === "function"
   );
-}
-
-function isWebSearchProviderPlugin(value: unknown): value is WebSearchProviderPlugin {
-  return isWebProviderPlugin(value);
-}
-
-function isWebFetchProviderPlugin(value: unknown): value is WebFetchProviderPlugin {
-  return isWebProviderPlugin(value);
 }
 
 function collectProviderFactories<TProvider>(params: {
@@ -91,10 +84,6 @@ function unableToInitializeProviderError(params: {
   });
 }
 
-function normalizeExplicitBundledPluginIds(pluginIds: readonly string[]): string[] {
-  return sortUniqueStrings(pluginIds);
-}
-
 function loadBundledProviderEntriesFromDir<TProvider extends object>(params: {
   dirName: string;
   pluginId: string;
@@ -126,16 +115,32 @@ function loadBundledProviderEntriesFromDir<TProvider extends object>(params: {
   return providers.map((provider) => Object.assign({}, provider, { pluginId: params.pluginId }));
 }
 
+function resolveBundledExplicitProviders<TProvider>(params: {
+  onlyPluginIds: readonly string[];
+  loadProviders: (pluginId: string) => TProvider[] | null;
+}): TProvider[] | null {
+  const providers: TProvider[] = [];
+  // Sorted plugin IDs plus each module's sorted factories preserve stable
+  // plugin and factory ordering across all three explicit resolution paths.
+  for (const pluginId of sortUniqueStrings(params.onlyPluginIds)) {
+    const loadedProviders = params.loadProviders(pluginId);
+    if (!loadedProviders) {
+      return null;
+    }
+    providers.push(...loadedProviders);
+  }
+  return providers;
+}
+
 export function loadBundledWebSearchProviderEntriesFromDir(params: {
   dirName: string;
   pluginId: string;
 }): PluginWebSearchProviderEntry[] | null {
   return loadBundledProviderEntriesFromDir<WebSearchProviderPlugin>({
-    dirName: params.dirName,
-    pluginId: params.pluginId,
+    ...params,
     artifactCandidates: WEB_SEARCH_ARTIFACT_CANDIDATES,
     suffix: "WebSearchProvider",
-    isProvider: isWebSearchProviderPlugin,
+    isProvider: (value): value is WebSearchProviderPlugin => isWebProviderPlugin(value),
   });
 }
 
@@ -144,44 +149,51 @@ export function loadBundledWebFetchProviderEntriesFromDir(params: {
   pluginId: string;
 }): PluginWebFetchProviderEntry[] | null {
   return loadBundledProviderEntriesFromDir<WebFetchProviderPlugin>({
-    dirName: params.dirName,
-    pluginId: params.pluginId,
+    ...params,
     artifactCandidates: WEB_FETCH_ARTIFACT_CANDIDATES,
     suffix: "WebFetchProvider",
-    isProvider: isWebFetchProviderPlugin,
+    isProvider: (value): value is WebFetchProviderPlugin => isWebProviderPlugin(value),
+  });
+}
+
+function loadBundledRuntimeWebFetchProviderEntriesFromDir(params: {
+  dirName: string;
+  pluginId: string;
+}): PluginWebFetchProviderEntry[] | null {
+  return loadBundledProviderEntriesFromDir<WebFetchProviderPlugin>({
+    ...params,
+    artifactCandidates: WEB_FETCH_RUNTIME_ARTIFACT_CANDIDATES,
+    suffix: "WebFetchProvider",
+    isProvider: (value): value is WebFetchProviderPlugin => isWebProviderPlugin(value),
   });
 }
 
 export function resolveBundledExplicitWebSearchProvidersFromPublicArtifacts(params: {
   onlyPluginIds: readonly string[];
 }): PluginWebSearchProviderEntry[] | null {
-  const providers: PluginWebSearchProviderEntry[] = [];
-  for (const pluginId of normalizeExplicitBundledPluginIds(params.onlyPluginIds)) {
-    const loadedProviders = loadBundledWebSearchProviderEntriesFromDir({
-      dirName: pluginId,
-      pluginId,
-    });
-    if (!loadedProviders) {
-      return null;
-    }
-    providers.push(...loadedProviders);
-  }
-  return providers;
+  return resolveBundledExplicitProviders({
+    ...params,
+    loadProviders: (pluginId) =>
+      loadBundledWebSearchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
+  });
 }
 
 export function resolveBundledExplicitWebFetchProvidersFromPublicArtifacts(params: {
   onlyPluginIds: readonly string[];
 }): PluginWebFetchProviderEntry[] | null {
-  const providers: PluginWebFetchProviderEntry[] = [];
-  for (const pluginId of normalizeExplicitBundledPluginIds(params.onlyPluginIds)) {
-    const loadedProviders = loadBundledWebFetchProviderEntriesFromDir({
-      dirName: pluginId,
-      pluginId,
-    });
-    if (!loadedProviders) {
-      return null;
-    }
-    providers.push(...loadedProviders);
-  }
-  return providers;
+  return resolveBundledExplicitProviders({
+    ...params,
+    loadProviders: (pluginId) =>
+      loadBundledWebFetchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
+  });
+}
+
+export function resolveBundledExplicitRuntimeWebFetchProvidersFromPublicArtifacts(params: {
+  onlyPluginIds: readonly string[];
+}): PluginWebFetchProviderEntry[] | null {
+  return resolveBundledExplicitProviders({
+    ...params,
+    loadProviders: (pluginId) =>
+      loadBundledRuntimeWebFetchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
+  });
 }

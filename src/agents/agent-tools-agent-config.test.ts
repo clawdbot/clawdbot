@@ -16,8 +16,8 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
-import type { SandboxDockerConfig } from "./sandbox.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import type { SandboxDockerConfig } from "./sandbox/types.docker.js";
 import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
 
 type ToolWithExecute = {
@@ -37,6 +37,7 @@ describe("Agent-specific tool filtering", () => {
     }),
     readFile: async () => Buffer.from(""),
     writeFile: async () => {},
+    createFileExclusive: async () => "created",
     mkdirp: async () => {},
     remove: async () => {},
     rename: async () => {},
@@ -199,7 +200,7 @@ describe("Agent-specific tool filtering", () => {
     const toolNames = tools.map((t) => t.name);
     expect(toolNames).toContain("read");
     expect(toolNames).not.toContain("browser");
-    expect(toolNames).not.toContain("cron");
+    expect(toolNames).not.toContain("automations");
     expect(toolNames).not.toContain("message");
   });
 
@@ -477,6 +478,46 @@ describe("Agent-specific tool filtering", () => {
     expect(names).toContain("read");
     expect(names).not.toContain("exec");
     expect(names).not.toContain("process");
+  });
+
+  it("keeps core tools for owner WebChat while restricting non-owners", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        toolsBySender: {
+          "*": { deny: ["exec", "process"] },
+        },
+      },
+    };
+    const createWebChatTools = (senderIsOwner: boolean) =>
+      createOpenClawCodingTools({
+        config: cfg,
+        messageProvider: "webchat",
+        senderIsOwner,
+        workspaceDir: "/tmp/test-webchat-owner-policy",
+        agentDir: "/tmp/agent-webchat-owner-policy",
+      }).map((tool) => tool.name);
+
+    const ownerTools = createWebChatTools(true);
+    const nonOwnerTools = createWebChatTools(false);
+
+    expect(ownerTools).toContain("exec");
+    expect(ownerTools).toContain("process");
+    expect(ownerTools).toContain("automations");
+    expect(ownerTools).toContain("gateway");
+    expect(ownerTools).toContain("nodes");
+    expect(ownerTools).toContain("openclaw");
+    expect(ownerTools).toContain("conversations_list");
+    expect(ownerTools).toContain("conversations_send");
+    expect(ownerTools).toContain("conversations_turn");
+    expect(nonOwnerTools).not.toContain("exec");
+    expect(nonOwnerTools).not.toContain("process");
+    expect(nonOwnerTools).not.toContain("automations");
+    expect(nonOwnerTools).not.toContain("gateway");
+    expect(nonOwnerTools).not.toContain("nodes");
+    expect(nonOwnerTools).not.toContain("openclaw");
+    expect(nonOwnerTools).not.toContain("conversations_list");
+    expect(nonOwnerTools).not.toContain("conversations_send");
+    expect(nonOwnerTools).not.toContain("conversations_turn");
   });
 
   it("should let agent per-sender policy override global sender wildcard", () => {

@@ -1,6 +1,8 @@
 // ACP Core module implements session identifiers behavior.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { normalizeText } from "../normalize-text.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString as normalizeText,
+} from "@openclaw/normalization-core/string-coerce";
 import type { SessionAcpIdentity, SessionAcpMeta } from "../types.js";
 import { isSessionIdentityPending, resolveSessionIdentityFromMeta } from "./session-identity.js";
 
@@ -56,20 +58,6 @@ function resolveAcpAgentResumeHintLine(params: {
   }
   const resolver = ACP_AGENT_RESUME_HINT_BY_KEY.get(agentKey);
   return resolver ? resolver({ agentSessionId }) : undefined;
-}
-
-/** Renders status-safe ACP session identifier lines from persisted session metadata. */
-export function resolveAcpSessionIdentifierLines(params: {
-  sessionKey: string;
-  meta?: SessionAcpMeta;
-}): string[] {
-  const backend = normalizeText(params.meta?.backend) ?? "backend";
-  const identity = resolveSessionIdentityFromMeta(params.meta);
-  return resolveAcpSessionIdentifierLinesFromIdentity({
-    backend,
-    identity,
-    mode: "status",
-  });
 }
 
 /** Renders resolved ACP backend/agent ids, hiding pending ids from thread intros. */

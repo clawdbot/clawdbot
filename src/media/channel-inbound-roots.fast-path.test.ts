@@ -70,9 +70,6 @@ describe("channel inbound roots fast path", () => {
         ctx: createContext("localchat"),
       }),
     ).toEqual(["/remote/work"]);
-    expect(
-      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
-    ).toHaveBeenCalledOnce();
     expect(publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith(
       {
         dirName: "localchat",
@@ -140,9 +137,6 @@ describe("channel inbound roots fast path", () => {
         ctx: createContext("partialchat"),
       }),
     ).toEqual(["/partial/work"]);
-    expect(
-      publicSurfaceLoaderMocks.loadBundledPluginPublicArtifactModuleSync,
-    ).toHaveBeenCalledOnce();
   });
 
   it("resolves local inbound roots from explicit channel context", () => {

@@ -1,5 +1,6 @@
 // Plugin registry test helpers provide a process-wide stub registry with default
 // channel and speech providers for gateway suites.
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -11,47 +12,9 @@ import { createDefaultGatewayTestSpeechProviders } from "./test-helpers.speech.j
  */
 function createStubPluginRegistry(): PluginRegistry {
   return {
-    plugins: [],
-    tools: [],
-    hooks: [],
-    typedHooks: [],
+    ...createEmptyPluginRegistry(),
     channels: createDefaultGatewayTestChannels(),
-    channelSetups: [],
-    providers: [],
-    modelCatalogProviders: [],
-    embeddingProviders: [],
     speechProviders: createDefaultGatewayTestSpeechProviders(),
-    realtimeTranscriptionProviders: [],
-    realtimeVoiceProviders: [],
-    mediaUnderstandingProviders: [],
-    transcriptSourceProviders: [],
-    imageGenerationProviders: [],
-    videoGenerationProviders: [],
-    musicGenerationProviders: [],
-    webFetchProviders: [],
-    webSearchProviders: [],
-    migrationProviders: [],
-    codexAppServerExtensionFactories: [],
-    agentToolResultMiddlewares: [],
-    memoryEmbeddingProviders: [],
-    textTransforms: [],
-    agentHarnesses: [],
-    gatewayHandlers: {},
-    gatewayMethodDescriptors: [],
-    httpRoutes: [],
-    cliRegistrars: [],
-    services: [],
-    gatewayDiscoveryServices: [],
-    commands: [],
-    sessionExtensions: [],
-    trustedToolPolicies: [],
-    toolMetadata: [],
-    controlUiDescriptors: [],
-    runtimeLifecycles: [],
-    agentEventSubscriptions: [],
-    sessionSchedulerJobs: [],
-    conversationBindingResolvedHandlers: [],
-    diagnostics: [],
   };
 }
 
@@ -65,16 +28,21 @@ const pluginRegistryState = resolveGlobalSingleton(GATEWAY_TEST_PLUGIN_REGISTRY_
 
 setActivePluginRegistry(pluginRegistryState.registry);
 
+function replaceTestPluginRegistry(registry: PluginRegistry): void {
+  // Gateway requests retain the startup registry object. Update that owned
+  // snapshot in place so per-test fixtures exercise the same request scope.
+  Object.assign(pluginRegistryState.registry, registry);
+  setActivePluginRegistry(pluginRegistryState.registry);
+}
+
 /** Installs a plugin registry fixture as the active runtime registry. */
 export function setTestPluginRegistry(registry: PluginRegistry): void {
-  pluginRegistryState.registry = registry;
-  setActivePluginRegistry(registry);
+  replaceTestPluginRegistry(registry);
 }
 
 /** Restores the default empty gateway test plugin registry. */
 export function resetTestPluginRegistry(): void {
-  pluginRegistryState.registry = createStubPluginRegistry();
-  setActivePluginRegistry(pluginRegistryState.registry);
+  replaceTestPluginRegistry(createStubPluginRegistry());
 }
 
 /** Returns the currently active gateway test plugin registry. */

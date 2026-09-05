@@ -23,6 +23,7 @@ import type {
   ChannelNativeApprovalTransportSpec,
 } from "./approval-native-runtime-types.js";
 import { createChannelNativeApprovalRuntime } from "./approval-native-runtime.js";
+import { normalizeApprovalRequest } from "./approval-types.js";
 import {
   buildExpiredApprovalView,
   buildPendingApprovalView,
@@ -34,7 +35,6 @@ import type {
   ResolvedApprovalView,
 } from "./approval-view-model.types.js";
 import type { ExecApprovalChannelRuntime } from "./exec-approval-channel-runtime.js";
-import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
 
 export type {
   ApprovalActionView,
@@ -152,6 +152,8 @@ async function applyApprovalFinalAction(params: {
   nativeRuntime: ChannelApprovalNativeRuntimeAdapter;
   baseContext: ChannelApprovalCapabilityHandlerContext;
   wrapped: WrappedPendingEntry;
+  request: ApprovalRequest;
+  approvalKind: ChannelApprovalKind;
   result: ChannelApprovalNativeFinalAction<unknown>;
   phase: "resolved" | "expired";
 }): Promise<void> {
@@ -160,6 +162,8 @@ async function applyApprovalFinalAction(params: {
       await params.nativeRuntime.transport.updateEntry?.({
         ...params.baseContext,
         entry: params.wrapped.entry,
+        request: params.request,
+        approvalKind: params.approvalKind,
         payload: params.result.payload,
         phase: params.phase,
       });
@@ -234,6 +238,8 @@ export function createChannelApprovalNativeRuntimeAdapter<
             updateEntry: async (
               params: {
                 entry: unknown;
+                request: ApprovalRequest;
+                approvalKind: ChannelApprovalKind;
                 payload: unknown;
                 phase: "resolved" | "expired";
               } & ChannelApprovalCapabilityHandlerContext,
@@ -300,6 +306,14 @@ export function createChannelApprovalNativeRuntimeAdapter<
                   onDelivered: (params) => spec.observe?.onDelivered?.(params as never),
                 }
               : {}),
+            ...(spec.observe.onFinalized
+              ? {
+                  onFinalized: (params) => {
+                    // SAFETY: The factory preserves the request and lifecycle types for this adapter.
+                    return spec.observe?.onFinalized?.(params as never);
+                  },
+                }
+              : {}),
           },
         }
       : {}),
@@ -311,11 +325,12 @@ type ChannelApprovalHandlerRuntimeSpec<TRequest extends ApprovalRequest> = {
   clientDisplayName: string;
   cfg: OpenClawConfig;
   gatewayUrl?: string;
-  eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
+  eventKinds?: readonly ChannelApprovalKind[];
   channel?: string;
   channelLabel?: string;
   accountId?: string | null;
   nativeAdapter?: ChannelApprovalNativeAdapter | null;
+  /** @deprecated Trusted compatibility override; omit to derive ownership from the payload. */
   resolveApprovalKind?: (request: TRequest) => ChannelApprovalKind;
   isConfigured: () => boolean;
   shouldHandle: (request: TRequest) => boolean;
@@ -418,7 +433,9 @@ export function createChannelApprovalHandler<
     channelLabel: adapter.runtime.channelLabel,
     accountId: adapter.runtime.accountId,
     nativeAdapter: adapter.runtime.nativeAdapter,
-    resolveApprovalKind: adapter.runtime.resolveApprovalKind,
+    ...(adapter.runtime.resolveApprovalKind
+      ? { resolveApprovalKind: adapter.runtime.resolveApprovalKind }
+      : {}),
     isConfigured: adapter.runtime.isConfigured,
     shouldHandle: adapter.runtime.shouldHandle,
     nowMs: adapter.runtime.nowMs,
@@ -454,10 +471,10 @@ export async function createChannelApprovalHandlerFromCapability(params: {
   const log = createSubsystemLogger(params.label);
   const activeEntries = new Map<string, ActiveApprovalEntries>();
   let stopped = false;
-  const resolveApprovalKind =
-    nativeRuntime.resolveApprovalKind ??
-    ((request: ApprovalRequest) =>
-      request.id.startsWith("plugin:") ? "plugin" : ("exec" as const));
+  const resolveApprovalKind = (request: ApprovalRequest): ChannelApprovalKind => {
+    const normalizedRequest = normalizeApprovalRequest(request);
+    return nativeRuntime.resolveApprovalKind?.(normalizedRequest) ?? normalizedRequest.approvalKind;
+  };
   const baseContext: ChannelApprovalCapabilityHandlerContext = {
     cfg: params.cfg,
     accountId: params.accountId,
@@ -475,10 +492,18 @@ export async function createChannelApprovalHandlerFromCapability(params: {
       gatewayUrl: params.gatewayUrl,
       eventKinds: nativeRuntime.eventKinds,
       nativeAdapter: params.capability?.native as ChannelApprovalNativeAdapter | null,
-      resolveApprovalKind,
+      ...(nativeRuntime.resolveApprovalKind
+        ? { resolveApprovalKind: nativeRuntime.resolveApprovalKind }
+        : {}),
       isConfigured: () => nativeRuntime.availability.isConfigured(baseContext),
-      shouldHandle: (request) =>
-        nativeRuntime.availability.shouldHandle({ ...baseContext, request }),
+      shouldHandle: (request) => {
+        const approvalKind = resolveApprovalKind(request);
+        return nativeRuntime.availability.shouldHandle({
+          ...baseContext,
+          request,
+          approvalKind,
+        });
+      },
       nowMs: params.nowMs,
     },
     content: {
@@ -636,6 +661,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
       },
       finalizeResolved: async ({ request, resolved, entries }) => {
         const resolvedEntries = consumeActiveWrappedEntries(activeEntries, request.id, entries);
+        const approvalKind = resolveApprovalKind(request);
         const view = buildResolvedApprovalView(request, resolved);
         await finalizeWrappedEntries({
           entries: resolvedEntries,
@@ -649,7 +675,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
                 entry: wrapped.entry,
                 binding: wrapped.binding,
                 request,
-                approvalKind: resolveApprovalKind(request),
+                approvalKind,
               });
             }
             const result = await nativeRuntime.presentation.buildResolvedResult({
@@ -663,14 +689,23 @@ export async function createChannelApprovalHandlerFromCapability(params: {
               nativeRuntime,
               baseContext,
               wrapped,
+              request,
+              approvalKind,
               result,
               phase: "resolved",
             });
           },
         });
+        nativeRuntime.observe?.onFinalized?.({
+          ...baseContext,
+          request,
+          approvalKind,
+          phase: "resolved",
+        });
       },
       finalizeExpired: async ({ request, entries }) => {
         const expiredEntries = consumeActiveWrappedEntries(activeEntries, request.id, entries);
+        const approvalKind = resolveApprovalKind(request);
         const view = buildExpiredApprovalView(request);
         await finalizeWrappedEntries({
           entries: expiredEntries,
@@ -684,7 +719,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
                 entry: wrapped.entry,
                 binding: wrapped.binding,
                 request,
-                approvalKind: resolveApprovalKind(request),
+                approvalKind,
               });
             }
             const result = await nativeRuntime.presentation.buildExpiredResult({
@@ -697,10 +732,18 @@ export async function createChannelApprovalHandlerFromCapability(params: {
               nativeRuntime,
               baseContext,
               wrapped,
+              request,
+              approvalKind,
               result,
               phase: "expired",
             });
           },
+        });
+        nativeRuntime.observe?.onFinalized?.({
+          ...baseContext,
+          request,
+          approvalKind,
+          phase: "expired",
         });
       },
       onStopped: async () => {
@@ -724,3 +767,4 @@ export async function createChannelApprovalHandlerFromCapability(params: {
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -8,6 +8,10 @@ const commandsLightEntries = [
     source: "src/commands/dashboard.links.ts",
     test: "src/commands/dashboard.links.test.ts",
   },
+  {
+    source: "src/commands/dashboard.ts",
+    test: "src/commands/dashboard.test.ts",
+  },
   { test: "src/commands/daemon-install-helpers.test.ts" },
   { source: "src/commands/doctor-browser.ts", test: "src/commands/doctor-browser.test.ts" },
   {
@@ -50,10 +54,6 @@ const commandsLightEntries = [
     test: "src/commands/models/list.status.test.ts",
   },
   {
-    source: "src/commands/sandbox-formatters.ts",
-    test: "src/commands/sandbox-formatters.test.ts",
-  },
-  {
     source: "src/commands/status-json-command.ts",
     test: "src/commands/status-json-command.test.ts",
   },
@@ -91,9 +91,6 @@ const commandsLightIncludePatternByFile = new Map(
   ),
 );
 
-export const commandsLightSourceFiles = commandsLightEntries.flatMap(({ source }) =>
-  source ? [source] : [],
-);
 export const commandsLightTestFiles = commandsLightEntries.map(({ test }) => test);
 
 export function isCommandsLightTarget(file) {

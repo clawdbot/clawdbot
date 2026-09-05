@@ -15,7 +15,7 @@ function createHarness(overrides?: {
   const handlers: Record<string, Handler> = {};
   const getSlackAssistantThreadContext = vi.fn(() => overrides?.existingContext);
   const saveSlackAssistantThreadContext = vi.fn();
-  const setSlackAssistantSuggestedPrompts = vi.fn(async () => true);
+  const setSlackSuggestedPrompts = vi.fn(async () => true);
   const replies = overrides?.replies ?? vi.fn(async () => ({ messages: [] }));
   const update = overrides?.update ?? vi.fn(async () => ({}));
   const trackEvent = vi.fn();
@@ -35,14 +35,14 @@ function createHarness(overrides?: {
     shouldDropMismatchedSlackEvent: () => overrides?.shouldDrop === true,
     getSlackAssistantThreadContext,
     saveSlackAssistantThreadContext,
-    setSlackAssistantSuggestedPrompts,
+    setSlackSuggestedPrompts,
   } as unknown as SlackMonitorContext;
   registerSlackAssistantEvents({ ctx, trackEvent });
   return {
     handlers,
     getSlackAssistantThreadContext,
     saveSlackAssistantThreadContext,
-    setSlackAssistantSuggestedPrompts,
+    setSlackSuggestedPrompts,
     replies,
     update,
     trackEvent,
@@ -103,7 +103,7 @@ describe("registerSlackAssistantEvents", () => {
       teamId: "T789",
       enterpriseId: "E123",
     });
-    expect(harness.setSlackAssistantSuggestedPrompts).toHaveBeenCalledWith({
+    expect(harness.setSlackSuggestedPrompts).toHaveBeenCalledWith({
       channelId: "D123",
       threadTs: "1729999327.187299",
       title: "Try asking",
@@ -128,53 +128,56 @@ describe("registerSlackAssistantEvents", () => {
 
     expect(harness.trackEvent).toHaveBeenCalledTimes(1);
     expect(harness.saveSlackAssistantThreadContext).toHaveBeenCalledTimes(1);
-    expect(harness.setSlackAssistantSuggestedPrompts).not.toHaveBeenCalled();
+    expect(harness.setSlackSuggestedPrompts).not.toHaveBeenCalled();
   });
 
-  it("persists changed assistant thread context onto the first bot message", async () => {
-    const replies = vi.fn(async () => ({
-      messages: [
-        { user: "U123", ts: "1729999327.200000", text: "user asks" },
+  it.each(["1729999327.187299", "1729999327.300000"])(
+    "persists changed assistant thread context onto the first bot message at %s",
+    async (botMessageTs) => {
+      const messages = [
         {
           user: "B1",
-          ts: "1729999327.300000",
+          ts: botMessageTs,
           text: "assistant reply",
           blocks: [{ type: "section", text: { type: "mrkdwn", text: "assistant reply" } }],
         },
-      ],
-    }));
-    const update = vi.fn(async () => ({}));
-    const harness = createHarness({ replies, update });
+        { user: "U123", ts: "1729999327.200000", text: "user asks" },
+      ].toSorted((a, b) => Number(a.ts) - Number(b.ts));
+      const replies = vi.fn(
+        async ({ oldest, inclusive }: { oldest?: string; inclusive?: boolean }) => ({
+          messages: messages.filter(
+            (message) =>
+              !oldest ||
+              Number(message.ts) > Number(oldest) ||
+              (message.ts === oldest && inclusive),
+          ),
+        }),
+      );
+      const update = vi.fn(async () => ({}));
+      const harness = createHarness({ replies, update });
 
-    await harness.handlers.assistant_thread_context_changed?.({
-      event: makeThreadEvent("assistant_thread_context_changed"),
-      body: {},
-    });
+      await harness.handlers.assistant_thread_context_changed?.({
+        event: makeThreadEvent("assistant_thread_context_changed"),
+        body: {},
+      });
 
-    expect(replies).toHaveBeenCalledWith({
-      token: "xoxb-test",
-      channel: "D123",
-      ts: "1729999327.187299",
-      oldest: "1729999327.187299",
-      include_all_metadata: true,
-      limit: 4,
-    });
-    expect(update).toHaveBeenCalledWith({
-      token: "xoxb-test",
-      channel: "D123",
-      ts: "1729999327.300000",
-      text: "assistant reply",
-      blocks: [{ type: "section", text: { type: "mrkdwn", text: "assistant reply" } }],
-      metadata: {
-        event_type: "assistant_thread_context",
-        event_payload: {
-          channel_id: "C456",
-          team_id: "T789",
-          enterprise_id: "E123",
+      expect(update).toHaveBeenCalledWith({
+        token: "xoxb-test",
+        channel: "D123",
+        ts: botMessageTs,
+        text: "assistant reply",
+        blocks: [{ type: "section", text: { type: "mrkdwn", text: "assistant reply" } }],
+        metadata: {
+          event_type: "assistant_thread_context",
+          event_payload: {
+            channel_id: "C456",
+            team_id: "T789",
+            enterprise_id: "E123",
+          },
         },
-      },
-    });
-  });
+      });
+    },
+  );
 
   it("accepts Slack assistant context when it is sent beside the thread", async () => {
     const harness = createHarness();
@@ -275,6 +278,6 @@ describe("registerSlackAssistantEvents", () => {
 
     expect(harness.trackEvent).not.toHaveBeenCalled();
     expect(harness.saveSlackAssistantThreadContext).not.toHaveBeenCalled();
-    expect(harness.setSlackAssistantSuggestedPrompts).not.toHaveBeenCalled();
+    expect(harness.setSlackSuggestedPrompts).not.toHaveBeenCalled();
   });
 });

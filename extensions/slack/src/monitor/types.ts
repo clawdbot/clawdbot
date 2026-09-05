@@ -2,6 +2,7 @@
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig, SlackSlashCommandConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import type { SlackAppContext } from "../agent-context.js";
 import type { SlackMessageEvent } from "../types.js";
 
 export type MonitorSlackOpts = {
@@ -66,7 +67,35 @@ export type SlackAppHomeOpenedEvent = {
   user?: string;
   channel?: string;
   tab?: "home" | "messages";
+  context?: SlackAppContext;
   event_ts?: string;
+};
+
+export type SlackAppContextChangedEvent = {
+  type: "app_context_changed";
+  user?: string;
+  context?: SlackAppContext;
+  event_ts?: string;
+};
+
+export type SlackAgentSessionStoppedEvent = {
+  type: "agent_session_stopped";
+  channel: string;
+  thread_ts: string;
+  user: string;
+  event_ts: string;
+  streaming_message_ts: string[];
+};
+
+export type SlackAgentSessionTitleChangedEvent = {
+  type: "agent_session_title_changed";
+  channel: string;
+  thread_ts: string;
+  user: string;
+  title: string;
+  previous_title?: string;
+  team_id: string;
+  event_ts: string;
 };
 
 export type SlackPinEvent = {
@@ -77,12 +106,17 @@ export type SlackPinEvent = {
   event_ts?: string;
 };
 
+type SlackMessageSubtypeMessage = Pick<
+  SlackMessageEvent,
+  "ts" | "thread_ts" | "parent_user_id" | "user" | "bot_id"
+>;
+
 export type SlackMessageChangedEvent = {
   type: "message";
   subtype: "message_changed";
   channel?: string;
-  message?: { ts?: string; user?: string; bot_id?: string };
-  previous_message?: { ts?: string; user?: string; bot_id?: string };
+  message?: SlackMessageSubtypeMessage;
+  previous_message?: SlackMessageSubtypeMessage;
   event_ts?: string;
 };
 
@@ -91,6 +125,6 @@ export type SlackMessageDeletedEvent = {
   subtype: "message_deleted";
   channel?: string;
   deleted_ts?: string;
-  previous_message?: { ts?: string; user?: string; bot_id?: string };
+  previous_message?: SlackMessageSubtypeMessage;
   event_ts?: string;
 };

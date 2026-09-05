@@ -1,7 +1,8 @@
 /**
  * Regression coverage for process-tool supervisor cancellation.
- * Verifies managed session cancellation, process-tree fallback, and registry state.
+ * Verifies canonical cancellation admission and lifecycle-owned registry state.
  */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { supervisorMock } = vi.hoisted(() => ({
@@ -26,45 +27,33 @@ vi.mock("../process/kill-tree.js", () => ({
 }));
 
 let addSession: typeof import("./bash-process-registry.js").addSession;
+let getActiveBackgroundExecSessionCount: typeof import("./bash-process-registry.js").getActiveBackgroundExecSessionCount;
 let getFinishedSession: typeof import("./bash-process-registry.js").getFinishedSession;
 let getSession: typeof import("./bash-process-registry.js").getSession;
-let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
+let markBackgrounded: typeof import("./bash-process-registry.js").markBackgrounded;
+let markExited: typeof import("./bash-process-registry.js").markExited;
+let resetProcessRegistryForTests: typeof import("./bash-process-registry.test-support.js").resetProcessRegistryForTests;
 let createProcessSessionFixture: typeof import("./bash-process-registry.test-helpers.js").createProcessSessionFixture;
 let createProcessTool: typeof import("./bash-tools.process.js").createProcessTool;
 
 function createBackgroundSession(id: string, pid?: number) {
-  return createProcessSessionFixture({
+  const session = createProcessSessionFixture({
     id,
     command: "sleep 999",
-    backgrounded: true,
+    backgrounded: false,
     ...(pid === undefined ? {} : { pid }),
   });
+  addSession(session);
+  markBackgrounded(session);
+  return session;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function expectSessionState(sessionId: string, expected: { exited?: boolean }) {
   const session = requireRecord(getSession(sessionId), sessionId);
   if ("exited" in expected) {
     expect(session.exited).toBe(expected.exited);
-  }
-}
-
-function expectFinishedSessionState(
-  sessionId: string,
-  expected: { status?: string; exitSignal?: string | null },
-) {
-  const session = requireRecord(getFinishedSession(sessionId), sessionId);
-  if ("status" in expected) {
-    expect(session.status).toBe(expected.status);
-  }
-  if ("exitSignal" in expected) {
-    expect(session.exitSignal).toBe(expected.exitSignal);
   }
 }
 
@@ -76,8 +65,15 @@ function expectTextContent(value: unknown, text: string) {
 
 describe("process tool supervisor cancellation", () => {
   beforeAll(async () => {
-    ({ addSession, getFinishedSession, getSession, resetProcessRegistryForTests } =
-      await import("./bash-process-registry.js"));
+    ({
+      addSession,
+      getActiveBackgroundExecSessionCount,
+      getFinishedSession,
+      getSession,
+      markBackgrounded,
+      markExited,
+    } = await import("./bash-process-registry.js"));
+    ({ resetProcessRegistryForTests } = await import("./bash-process-registry.test-support.js"));
     ({ createProcessSessionFixture } = await import("./bash-process-registry.test-helpers.js"));
     ({ createProcessTool } = await import("./bash-tools.process.js"));
   });
@@ -99,7 +95,7 @@ describe("process tool supervisor cancellation", () => {
       runId: "sess",
       state: "running",
     });
-    addSession(createBackgroundSession("sess"));
+    createBackgroundSession("sess");
     const processTool = createProcessTool();
 
     const result = await processTool.execute("toolcall", {
@@ -109,6 +105,7 @@ describe("process tool supervisor cancellation", () => {
 
     expect(supervisorMock.cancel).toHaveBeenCalledWith("sess", "manual-cancel");
     expectSessionState("sess", { exited: false });
+    expect(getActiveBackgroundExecSessionCount()).toBe(1);
     expectTextContent(result.content[0], "Termination requested for session sess.");
   });
 
@@ -117,7 +114,7 @@ describe("process tool supervisor cancellation", () => {
       runId: "sess",
       state: "running",
     });
-    addSession(createBackgroundSession("sess"));
+    const session = createBackgroundSession("sess");
     const processTool = createProcessTool();
 
     const result = await processTool.execute("toolcall", {
@@ -128,41 +125,61 @@ describe("process tool supervisor cancellation", () => {
     expect(supervisorMock.cancel).toHaveBeenCalledWith("sess", "manual-cancel");
     expect(getSession("sess")).toBeUndefined();
     expect(getFinishedSession("sess")).toBeUndefined();
+    expect(getActiveBackgroundExecSessionCount()).toBe(1);
     expectTextContent(result.content[0], "Removed session sess (termination requested).");
+
+    markExited(session, null, "SIGTERM", "failed", "manual-cancel");
+    expect(getActiveBackgroundExecSessionCount()).toBe(0);
+    expect(getFinishedSession("sess")).toBeUndefined();
   });
 
-  it("falls back to process-tree kill when supervisor record is missing", async () => {
+  it.each([
+    {
+      action: "kill" as const,
+      expected:
+        "Unable to terminate session sess-unmanaged: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.",
+    },
+    {
+      action: "remove" as const,
+      expected:
+        "Unable to remove session sess-unmanaged: no active supervisor cancellation handle. Use process poll to check whether it is already exiting.",
+    },
+  ])("refuses $action without a live supervisor record", async ({ action, expected }) => {
     supervisorMock.getRecord.mockReturnValue(undefined);
-    addSession(createBackgroundSession("sess-fallback", 4242));
+    createBackgroundSession("sess-unmanaged", 4242);
     const processTool = createProcessTool();
 
     const result = await processTool.execute("toolcall", {
-      action: "kill",
-      sessionId: "sess-fallback",
+      action,
+      sessionId: "sess-unmanaged",
     });
 
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4242);
-    expect(getSession("sess-fallback")).toBeUndefined();
-    expectFinishedSessionState("sess-fallback", { status: "failed", exitSignal: "SIGKILL" });
-    expectTextContent(result.content[0], "Killed session sess-fallback.");
-  });
-
-  it("fails remove when no supervisor record and no pid is available", async () => {
-    supervisorMock.getRecord.mockReturnValue(undefined);
-    addSession(createBackgroundSession("sess-no-pid"));
-    const processTool = createProcessTool();
-
-    const result = await processTool.execute("toolcall", {
-      action: "remove",
-      sessionId: "sess-no-pid",
-    });
-
+    expect(supervisorMock.cancel).not.toHaveBeenCalled();
     expect(killProcessTreeMock).not.toHaveBeenCalled();
-    expectSessionState("sess-no-pid", { exited: false });
-    expect(requireRecord(result.details, "result details").status).toBe("failed");
-    expectTextContent(
-      result.content[0],
-      "Unable to remove session sess-no-pid: no active supervisor run or process id.",
-    );
+    expectSessionState("sess-unmanaged", { exited: false });
+    expect(getFinishedSession("sess-unmanaged")).toBeUndefined();
+    expect(getActiveBackgroundExecSessionCount()).toBe(1);
+    expectTextContent(result.content[0], expected);
   });
+
+  it.each(["kill", "remove"] as const)(
+    "refuses %s while sandbox finalization owns the terminal transition",
+    async (action) => {
+      supervisorMock.getRecord.mockReturnValue({ runId: "sess-finalizing", state: "exited" });
+      const session = createBackgroundSession("sess-finalizing", 4242);
+      session.finalizing = true;
+      const processTool = createProcessTool();
+
+      const result = await processTool.execute("toolcall", {
+        action,
+        sessionId: "sess-finalizing",
+      });
+
+      expect(supervisorMock.cancel).not.toHaveBeenCalled();
+      expect(killProcessTreeMock).not.toHaveBeenCalled();
+      expectSessionState("sess-finalizing", { exited: false });
+      expect(getActiveBackgroundExecSessionCount()).toBe(1);
+      expectTextContent(result.content[0], "Session sess-finalizing is finalizing.");
+    },
+  );
 });

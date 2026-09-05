@@ -1,43 +1,44 @@
-/** Agent identity fields returned by gateway session listing APIs. */
-export type GatewayAgentIdentity = {
-  name?: string;
-  theme?: string;
-  emoji?: string;
-  avatar?: string;
-  avatarUrl?: string;
-};
-
-/** Model summary returned for an agent/session row. */
-export type GatewayAgentModel = {
-  primary?: string;
-  fallbacks?: string[];
-};
+import type {
+  AgentSummary,
+  ModelChoice,
+  SessionCreatedActor,
+  SessionPerson,
+  SessionsAssignOwnerParams,
+} from "../../packages/gateway-protocol/src/index.js";
 
 /** Runtime selection metadata for an agent row. */
-export type GatewayAgentRuntime = {
-  id: string;
-  fallback?: "openclaw" | "none";
-  source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session-key";
-};
+export type GatewayAgentRuntime = NonNullable<AgentSummary["agentRuntime"]>;
 
 /** Thinking-level option exposed to UI clients. */
-export type GatewayThinkingLevelOption = {
-  id: string;
-  label: string;
-};
+export type GatewayThinkingLevelOption = NonNullable<AgentSummary["thinkingLevels"]>[number];
+
+export type GatewayContextWindowOption = NonNullable<ModelChoice["contextWindows"]>[number];
+
+export type GatewayAgentKind = NonNullable<AgentSummary["kind"]>;
+
+/** Assignable identity returned by the complete session-owner facet. */
+export type SessionOwnerFacetIdentity = SessionsAssignOwnerParams["owner"] &
+  Pick<SessionCreatedActor, "label" | "avatarUrl" | "identity">;
+
+/** Per-session Control UI face preference carried by session list rows. */
+export type SessionBoardFace = "chat" | "dashboard";
 
 /** Common agent row shape used by session list responses. */
-export type GatewayAgentRow = {
-  id: string;
-  name?: string;
-  identity?: GatewayAgentIdentity;
-  workspace?: string;
-  model?: GatewayAgentModel;
-  agentRuntime?: GatewayAgentRuntime;
-  thinkingLevels?: GatewayThinkingLevelOption[];
-  thinkingOptions?: string[];
-  thinkingDefault?: string;
-};
+export type GatewayAgentRow = Pick<
+  AgentSummary,
+  | "id"
+  | "kind"
+  | "name"
+  | "identity"
+  | "workspace"
+  | "workspaceGit"
+  | "model"
+  | "agentRuntime"
+  | "thinkingLevels"
+  | "thinkingOptions"
+  | "thinkingDefault"
+  | "defaultPermissionMode"
+>;
 
 /** Generic base for paged session-list responses. */
 export type SessionsListResultBase<TDefaults, TRow> = {
@@ -49,6 +50,13 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   offset?: number;
   nextOffset?: number | null;
   hasMore?: boolean;
+  /** Complete owner facet for the filtered result, independent of pagination. */
+  owners?: SessionOwnerFacetIdentity[];
+  people?: SessionPerson[];
+  peopleIncomplete?: boolean;
+  peopleSessionCount?: number;
+  /** Canonical profile selected by the person-association filter. */
+  involvingProfileId?: string;
   defaults: TDefaults;
   sessions: TRow[];
 };

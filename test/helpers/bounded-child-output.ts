@@ -1,4 +1,14 @@
+import { StringDecoder } from "node:string_decoder";
+
 export const DEFAULT_CHILD_OUTPUT_TAIL_BYTES = 128 * 1024;
+
+export function decodeUtf8Tail(buffer: Buffer): string {
+  let start = 0;
+  while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) {
+    start += 1;
+  }
+  return new StringDecoder("utf8").end(buffer.subarray(start));
+}
 
 export function createBoundedChildOutput(maxBytes = DEFAULT_CHILD_OUTPUT_TAIL_BYTES) {
   const limit =
@@ -25,7 +35,7 @@ export function createBoundedChildOutput(maxBytes = DEFAULT_CHILD_OUTPUT_TAIL_BY
   };
 
   return {
-    append(chunk: unknown): void {
+    append(this: void, chunk: unknown): void {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
       if (buffer.byteLength >= limit) {
         chunks = [Buffer.from(buffer.subarray(buffer.byteLength - limit))];
@@ -37,7 +47,7 @@ export function createBoundedChildOutput(maxBytes = DEFAULT_CHILD_OUTPUT_TAIL_BY
       trim();
     },
     text(): string {
-      return Buffer.concat(chunks, totalBytes).toString("utf8");
+      return decodeUtf8Tail(Buffer.concat(chunks, totalBytes));
     },
   };
 }

@@ -1,24 +1,32 @@
 // Covers provider auth input collection and credential handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   ensureApiKeyFromEnvOrPrompt,
   ensureApiKeyFromOptionEnvOrPrompt,
-  maybeApplyApiKeyFromOption,
+  formatApiKeyPreview,
   normalizeApiKeyInput,
   normalizeTokenProviderInput,
+  validateApiKeyInput,
 } from "./provider-auth-input.js";
 
 const acceptAnyApiKeyInput = () => undefined;
 
 const resolveEnvApiKey = vi.hoisted(() =>
-  vi.fn((provider: string, env?: NodeJS.ProcessEnv) => {
-    if (provider !== "minimax") {
-      return null;
-    }
-    const apiKey = env?.MINIMAX_API_KEY?.trim();
-    return apiKey ? { apiKey, source: "env: MINIMAX_API_KEY" } : null;
-  }),
+  vi.fn(
+    (
+      provider: string,
+      env?: NodeJS.ProcessEnv,
+      _options?: { config?: OpenClawConfig; workspaceDir?: string },
+    ) => {
+      if (provider !== "minimax") {
+        return null;
+      }
+      const apiKey = env?.MINIMAX_API_KEY?.trim();
+      return apiKey ? { apiKey, source: "env: MINIMAX_API_KEY" } : null;
+    },
+  ),
 );
 
 vi.mock("../agents/model-auth-env.js", () => ({
@@ -92,6 +100,7 @@ function currentMinimaxTestEnv(): NodeJS.ProcessEnv {
 async function ensureMinimaxApiKey(params: {
   config?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["config"];
   env?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["env"];
+  workspaceDir?: string;
   confirm: WizardPrompter["confirm"];
   note?: WizardPrompter["note"];
   select?: WizardPrompter["select"];
@@ -102,6 +111,7 @@ async function ensureMinimaxApiKey(params: {
   return await ensureMinimaxApiKeyInternal({
     config: params.config,
     env: params.env ?? currentMinimaxTestEnv(),
+    workspaceDir: params.workspaceDir,
     prompter: createPrompter({
       confirm: params.confirm,
       note: params.note,
@@ -116,6 +126,7 @@ async function ensureMinimaxApiKey(params: {
 async function ensureMinimaxApiKeyInternal(params: {
   config?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["config"];
   env?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["env"];
+  workspaceDir?: string;
   prompter: WizardPrompter;
   secretInputMode?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["secretInputMode"];
   setCredential: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["setCredential"];
@@ -123,6 +134,7 @@ async function ensureMinimaxApiKeyInternal(params: {
   return await ensureApiKeyFromEnvOrPrompt({
     config: params.config ?? {},
     env: params.env,
+    workspaceDir: params.workspaceDir,
     provider: "minimax",
     envLabel: "MINIMAX_API_KEY",
     promptMessage: "Enter key",
@@ -166,18 +178,6 @@ async function runEnsureMinimaxApiKeyFlow(params: { confirmResult: boolean; text
   });
 
   return { result, setCredential, confirm, text };
-}
-
-async function runMaybeApplyDemoToken(tokenProvider: string) {
-  const setCredential = vi.fn(async () => undefined);
-  const result = await maybeApplyApiKeyFromOption({
-    token: "  opt-key  ",
-    tokenProvider,
-    expectedProviders: ["demo-provider"],
-    normalize: (value) => value.trim(),
-    setCredential,
-  });
-  return { result, setCredential };
 }
 
 function expectMinimaxEnvRefCredentialStored(setCredential: ReturnType<typeof vi.fn>) {
@@ -240,34 +240,47 @@ describe("normalizeApiKeyInput", () => {
   });
 });
 
-describe("maybeApplyApiKeyFromOption", () => {
-  it.each(["demo-provider", "  DeMo-PrOvIdEr  "])(
-    "stores normalized token when provider %p matches",
-    async (tokenProvider) => {
-      const { result, setCredential } = await runMaybeApplyDemoToken(tokenProvider);
-
-      expect(result).toBe("opt-key");
-      expect(setCredential).toHaveBeenCalledWith("opt-key", undefined);
-    },
-  );
-
-  it("skips when provider does not match", async () => {
-    const setCredential = vi.fn(async () => undefined);
-
-    const result = await maybeApplyApiKeyFromOption({
-      token: "opt-key",
-      tokenProvider: "other-provider",
-      expectedProviders: ["demo-provider"],
-      normalize: (value) => value.trim(),
-      setCredential,
-    });
-
-    expect(result).toBeUndefined();
-    expect(setCredential).not.toHaveBeenCalled();
+describe("validateApiKeyInput", () => {
+  it.each([
+    "openclaw onboard --auth-choice zai-coding-global",
+    "openclaw onboard --auth-choice=zai-coding-global",
+    "openclaw onboard --non-interactive --auth-choice zai-coding-global --zai-api-key $ZAI_API_KEY",
+    "openclaw onboard --non-interactive --auth-choice=zai-coding-global --zai-api-key $ZAI_API_KEY",
+  ])("rejects pasted OpenClaw onboarding command %p", (value) => {
+    expect(validateApiKeyInput(value)).toBe(
+      "Paste the API key value, not an OpenClaw onboarding command.",
+    );
   });
 });
 
 describe("ensureApiKeyFromEnvOrPrompt", () => {
+  it("uses the prepared workspace when staged config has no default agent", async () => {
+    const workspaceDir = "/tmp/openclaw-provider-workspace";
+    const config: OpenClawConfig = {
+      agents: { entries: { main: {}, work: { workspace: workspaceDir } } },
+      plugins: { entries: { minimax: { enabled: true } } },
+    };
+    const env = { MINIMAX_API_KEY: "workspace-env-key" } as NodeJS.ProcessEnv;
+    const { confirm, text, setCredential } = createPromptAndCredentialSpies();
+
+    const result = await ensureMinimaxApiKey({
+      config,
+      env,
+      workspaceDir,
+      confirm,
+      text,
+      setCredential,
+    });
+
+    expect(result).toBe("workspace-env-key");
+    expect(resolveEnvApiKey).toHaveBeenCalledWith("minimax", env, {
+      config,
+      workspaceDir,
+    });
+    expect(setCredential).toHaveBeenCalledWith("workspace-env-key", "plaintext");
+    expect(text).not.toHaveBeenCalled();
+  });
+
   it("uses env credential when user confirms", async () => {
     const { result, setCredential, text } = await runEnsureMinimaxApiKeyFlow({
       confirmResult: true,
@@ -489,5 +502,18 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
     expect(confirm).toHaveBeenCalled();
     expect(text).not.toHaveBeenCalled();
     expect(setCredential).toHaveBeenCalledWith("env-key", "plaintext");
+  });
+});
+
+describe("formatApiKeyPreview", () => {
+  it.each([
+    ["sk-abcdef", "sk-a…cdef"],
+    ["short", "sh…rt"],
+    ["a😀b", "a…b"],
+    [`abc😀${"x".repeat(20)}`, "abc…xxxx"],
+    [`${"x".repeat(20)}😀abc`, "xxxx…abc"],
+    ["😀".repeat(10), "😀😀…😀😀"],
+  ])("redacts %p without splitting surrogate pairs", (value, expected) => {
+    expect(formatApiKeyPreview(value)).toBe(expected);
   });
 });

@@ -4,6 +4,7 @@
  * Reads native command/skill defaults from installed plugin manifests without loading plugins.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir, STATE_DIR } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
@@ -16,7 +17,7 @@ const SAFE_MANIFEST_CHANNEL_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 /**
  * Native command/skill auto-enable defaults exposed by channel manifests.
  */
-export type ChannelCommandDefaults = Pick<
+type ChannelCommandDefaults = Pick<
   NonNullable<ChannelPlugin["commands"]>,
   "nativeCommandsAutoEnabled" | "nativeSkillsAutoEnabled"
 >;
@@ -87,7 +88,11 @@ export function resolveReadOnlyChannelCommandDefaults(
   const env = options.env ?? process.env;
   const resolvedSnapshot = resolvePluginMetadataSnapshot({
     config: options.config,
-    stateDir: options.stateDir,
+    stateDir:
+      options.stateDir !== undefined &&
+      options.stateDir === (env === process.env ? STATE_DIR : resolveStateDir(env))
+        ? undefined
+        : options.stateDir,
     workspaceDir: options.workspaceDir,
     env,
     allowWorkspaceScopedCurrent: true,

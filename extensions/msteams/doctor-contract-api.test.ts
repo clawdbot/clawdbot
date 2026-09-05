@@ -10,15 +10,26 @@ import {
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
-} from "openclaw/plugin-sdk/runtime-doctor";
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { stateMigrations } from "./doctor-contract-api.js";
+import {
+  legacyConfigRules,
+  normalizeCompatibilityConfig,
+  stateMigrations,
+} from "./doctor-contract-api.js";
 import {
   buildMSTeamsConversationStateKey,
   MSTEAMS_CONVERSATIONS_NAMESPACE,
   type MSTeamsLegacyConversationStoreData,
 } from "./src/conversation-store-state.js";
 import type { StoredConversationReference } from "./src/conversation-store.js";
+import {
+  MSTEAMS_DELEGATED_TOKEN_KEY,
+  MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES,
+  MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
+} from "./src/delegated-state.js";
+import type { MSTeamsDelegatedTokens } from "./src/oauth.shared.js";
 import {
   buildMSTeamsPollStateKey,
   buildMSTeamsPollVoteBucketKey,
@@ -31,6 +42,7 @@ import {
 } from "./src/polls.js";
 import {
   makeMSTeamsSsoTokenStoreKey,
+  MSTEAMS_MAX_SSO_TOKENS,
   MSTEAMS_SSO_TOKENS_NAMESPACE,
   type MSTeamsSsoStoredToken,
 } from "./src/sso-token-store.js";
@@ -73,6 +85,7 @@ describe("msteams doctor state migration", () => {
   });
 
   afterEach(async () => {
+    resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -137,6 +150,10 @@ describe("msteams doctor state migration", () => {
 
   it("imports legacy polls and vote buckets into plugin state", async () => {
     const filePath = path.join(stateDir, "msteams-polls.json");
+    const legacyBucket = selectMSTeamsPollVoteBucket("poll-legacy", "user-legacy");
+    const sameBucketVoter = Array.from({ length: 1000 }, (_, index) => `collision-${index}`).find(
+      (id) => selectMSTeamsPollVoteBucket("poll-legacy", id) === legacyBucket,
+    )!;
     const poll: MSTeamsPoll = {
       id: "poll-legacy",
       question: "Lunch?",
@@ -146,6 +163,7 @@ describe("msteams doctor state migration", () => {
       votes: {
         "user-legacy": ["0"],
         "user-new": ["1"],
+        [sameBucketVoter]: ["0"],
       },
     };
     await fs.writeFile(
@@ -162,7 +180,6 @@ describe("msteams doctor state migration", () => {
       namespace: MSTEAMS_POLL_VOTE_BUCKETS_NAMESPACE,
       maxEntries: 32_032,
     });
-    const legacyBucket = selectMSTeamsPollVoteBucket("poll-legacy", "user-legacy");
     await voteBucketStore.register(buildMSTeamsPollVoteBucketKey("poll-legacy", legacyBucket), {
       pollId: "poll-legacy",
       bucket: legacyBucket,
@@ -171,13 +188,14 @@ describe("msteams doctor state migration", () => {
     });
 
     const migration = migrationById("msteams-polls-json-to-plugin-state");
-    const result = await migration.migrateLegacyState({
+    const params = {
       config: {},
       env,
       stateDir,
       oauthDir: path.join(stateDir, "oauth"),
       context,
-    });
+    };
+    const result = await migration.migrateLegacyState(params);
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual([
@@ -196,7 +214,7 @@ describe("msteams doctor state migration", () => {
     await expect(
       voteBucketStore.lookup(buildMSTeamsPollVoteBucketKey("poll-legacy", legacyBucket)),
     ).resolves.toMatchObject({
-      votes: { "user-legacy": ["1"] },
+      votes: { "user-legacy": ["1"], [sameBucketVoter]: ["0"] },
     });
     await expect(
       voteBucketStore.lookup(buildMSTeamsPollVoteBucketKey("poll-legacy", newBucket)),
@@ -204,6 +222,19 @@ describe("msteams doctor state migration", () => {
       votes: { "user-new": ["1"] },
     });
     await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+    const source = await fs.readFile(`${filePath}.migrated`, "utf8");
+    const beforeRerun = await voteBucketStore.entries();
+    await fs.writeFile(filePath, source);
+    const rerun = await migration.migrateLegacyState(params);
+    expect(rerun.warnings).toEqual([]);
+    expect(rerun.changes).toContainEqual(
+      expect.stringContaining("Removed already-archived Microsoft Teams poll legacy source"),
+    );
+    expect((await voteBucketStore.entries()).map(({ key, value }) => ({ key, value }))).toEqual(
+      beforeRerun.map(({ key, value }) => ({ key, value })),
+    );
+    await expect(fs.readFile(`${filePath}.migrated`, "utf8")).resolves.toBe(source);
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
   });
 
   it("imports legacy SSO tokens into the existing plugin-state token namespace", async () => {
@@ -248,6 +279,146 @@ describe("msteams doctor state migration", () => {
     ).resolves.toEqual(token);
     expect(result.changes.join("\n")).not.toContain(token.token);
     expect(result.warnings.join("\n")).not.toContain(token.token);
+    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    { scenario: "zero writes", writeLimit: 0, extraLegacy: 0, existing: false },
+    { scenario: "partial writes", writeLimit: 1, extraLegacy: 0, existing: false },
+    { scenario: "evicted imported token", extraLegacy: 1, existing: false },
+    { scenario: "evicted pre-existing token", extraLegacy: 0, existing: true },
+    { scenario: "complete import", extraLegacy: 0, existing: false },
+  ])(
+    "checks SSO survivors before archiving: $scenario",
+    async ({ writeLimit, extraLegacy, existing }) => {
+      const filePath = path.join(stateDir, "msteams-sso-tokens.json");
+      const tokens = Array.from({ length: MSTEAMS_MAX_SSO_TOKENS + extraLegacy }, (_, index) => ({
+        connectionName: "conn",
+        userId: `user-${index}`,
+        token: `test-token-${index}`,
+        updatedAt: "2026-04-10T00:00:00.000Z",
+      }));
+      const source = JSON.stringify({
+        version: 1,
+        tokens: Object.fromEntries(tokens.map((token) => [token.userId, token])),
+      });
+      await fs.writeFile(filePath, source);
+      const context = createDoctorContext(env);
+      const store = context.openPluginStateKeyedStore<MSTeamsSsoStoredToken>({
+        namespace: MSTEAMS_SSO_TOKENS_NAMESPACE,
+        maxEntries: MSTEAMS_MAX_SSO_TOKENS,
+      });
+      if (existing) {
+        await store.register(makeMSTeamsSsoTokenStoreKey("conn", "existing"), {
+          ...tokens[0]!,
+          userId: "existing",
+        });
+      }
+      const migration = migrationById("msteams-sso-tokens-json-to-plugin-state");
+      const params = { config: {}, env, stateDir, oauthDir: stateDir, context };
+      let writes = 0;
+      const result = await migration.migrateLegacyState({
+        ...params,
+        context: {
+          openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> {
+            const target = context.openPluginStateKeyedStore<T>(options);
+            return {
+              ...target,
+              registerIfAbsent: async (...args) =>
+                writeLimit === undefined || writes++ < writeLimit
+                  ? target.registerIfAbsent(...args)
+                  : false,
+            };
+          },
+        },
+      });
+      expect(await store.entries()).toHaveLength(writeLimit ?? MSTEAMS_MAX_SSO_TOKENS);
+      if (writeLimit !== undefined || extraLegacy || existing) {
+        await expect(fs.readFile(filePath, "utf8")).resolves.toBe(source);
+        await expect(fs.access(`${filePath}.migrated`)).rejects.toThrow();
+        expect(result.changes).toEqual([]);
+        expect(result.warnings).toEqual([
+          expect.stringContaining("failed to retain every required entry"),
+        ]);
+        await expect(migration.detectLegacyState(params)).resolves.not.toBeNull();
+        return;
+      }
+
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toEqual([
+        expect.stringContaining(`Migrated ${tokens.length} Microsoft Teams SSO token entries`),
+        expect.stringContaining("Archived Microsoft Teams SSO-token legacy source"),
+      ]);
+      expect(new Map((await store.entries()).map(({ key, value }) => [key, value]))).toEqual(
+        new Map(
+          tokens.map((token) => [
+            makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId),
+            token,
+          ]),
+        ),
+      );
+      await expect(fs.readFile(`${filePath}.migrated`, "utf8")).resolves.toBe(source);
+      await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+      await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+        changes: [],
+        warnings: [],
+      });
+
+      // A restored source must converge without replacing a newer canonical token.
+      const newerToken = { ...tokens[0]!, token: "test-newer-token" };
+      const key = makeMSTeamsSsoTokenStoreKey(newerToken.connectionName, newerToken.userId);
+      await store.register(key, newerToken);
+      await fs.writeFile(filePath, source);
+      const rerun = await migration.migrateLegacyState(params);
+      expect(rerun.warnings).toEqual([]);
+      expect(rerun.changes).toEqual([
+        expect.stringContaining("Migrated 0 Microsoft Teams SSO token entries"),
+        expect.stringContaining("Removed already-archived Microsoft Teams SSO-token legacy source"),
+      ]);
+      await expect(store.lookup(key)).resolves.toEqual(newerToken);
+      await expect(fs.access(filePath)).rejects.toThrow();
+      await expect(fs.readFile(`${filePath}.migrated`, "utf8")).resolves.toBe(source);
+    },
+  );
+
+  it("imports delegated OAuth tokens into plugin state before archiving the file", async () => {
+    const filePath = path.join(stateDir, "msteams-delegated.json");
+    const token: MSTeamsDelegatedTokens = {
+      accessToken: "delegated-access",
+      refreshToken: "delegated-refresh",
+      expiresAt: 1_800_000_000_000,
+      scopes: ["User.Read", "offline_access"],
+      userPrincipalName: "user@example.com",
+    };
+    await fs.writeFile(filePath, JSON.stringify(token));
+    const migration = migrationById("msteams-delegated-token-json-to-plugin-state");
+    const context = createDoctorContext(env);
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    };
+
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: [
+        `- Microsoft Teams delegated OAuth token -> plugin state (${MSTEAMS_DELEGATED_TOKEN_NAMESPACE})`,
+      ],
+    });
+    const result = await migration.migrateLegacyState(params);
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Microsoft Teams delegated OAuth token -> plugin state",
+      expect.stringContaining("Archived Microsoft Teams delegated OAuth token legacy source"),
+    ]);
+    const store = context.openPluginStateKeyedStore<MSTeamsDelegatedTokens>({
+      namespace: MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
+      maxEntries: MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await expect(store.lookup(MSTEAMS_DELEGATED_TOKEN_KEY)).resolves.toEqual(token);
     await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
   });
 
@@ -346,5 +517,97 @@ describe("msteams doctor state migration", () => {
       sessionKey: sanitizedSessionKey,
       learnings: ["Prefer cards for channel feedback"],
     });
+  });
+});
+
+describe("msteams streaming legacy config rules", () => {
+  const rule = legacyConfigRules.find((entry) => entry.message.includes("chunkMode"));
+
+  it("matches flat streaming aliases", () => {
+    expect(rule?.match?.({ blockStreaming: true }, {})).toBe(true);
+    expect(rule?.match?.({ chunkMode: "newline" }, {})).toBe(true);
+    expect(rule?.match?.({ streamMode: "block" }, {})).toBe(true);
+    expect(rule?.match?.({ streaming: { mode: "partial" } }, {})).toBe(false);
+  });
+});
+
+describe("msteams normalizeCompatibilityConfig streaming aliases", () => {
+  function msteamsConfig(entry: Record<string, unknown>) {
+    return { channels: { msteams: entry } } as never;
+  }
+
+  it("moves flat aliases into the nested streaming shape", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: msteamsConfig({
+        streamMode: "block",
+        chunkMode: "newline",
+        blockStreaming: true,
+        blockStreamingCoalesce: { idleMs: 250 },
+      }),
+    });
+
+    const msteams = result.config.channels?.msteams as Record<string, unknown>;
+    expect(msteams.streaming).toEqual({
+      mode: "block",
+      chunkMode: "newline",
+      block: { enabled: true, coalesce: { idleMs: 250 } },
+    });
+    expect(msteams.streamMode).toBeUndefined();
+    expect(msteams.chunkMode).toBeUndefined();
+    expect(msteams.blockStreaming).toBeUndefined();
+    expect(msteams.blockStreamingCoalesce).toBeUndefined();
+    for (const change of [
+      "Moved channels.msteams.streamMode → channels.msteams.streaming.mode (block).",
+      "Moved channels.msteams.chunkMode → channels.msteams.streaming.chunkMode.",
+      "Moved channels.msteams.blockStreaming → channels.msteams.streaming.block.enabled.",
+      "Moved channels.msteams.blockStreamingCoalesce → channels.msteams.streaming.block.coalesce.",
+    ]) {
+      expect(result.changes).toContain(change);
+    }
+  });
+
+  it("removes a conflicting streamMode when streaming.mode is already set", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: msteamsConfig({
+        streamMode: "off",
+        streaming: { mode: "block" },
+      }),
+    });
+
+    const msteams = result.config.channels?.msteams as Record<string, unknown>;
+    expect(msteams.streamMode).toBeUndefined();
+    expect(msteams.streaming).toEqual({ mode: "block" });
+    // Doctor drops mutations without change messages, so the conflict removal
+    // must be reported or the invalid flat key would never be persisted away.
+    expect(result.changes).toEqual([
+      "Removed channels.msteams.streamMode (channels.msteams.streaming.mode already set).",
+    ]);
+  });
+
+  it("removes flat aliases when the nested value is already set", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: msteamsConfig({
+        blockStreaming: false,
+        streaming: { block: { enabled: true } },
+      }),
+    });
+
+    const msteams = result.config.channels?.msteams as Record<string, unknown>;
+    expect(msteams.streaming).toEqual({ block: { enabled: true } });
+    expect(msteams.blockStreaming).toBeUndefined();
+    expect(result.changes).toContain(
+      "Removed channels.msteams.blockStreaming (channels.msteams.streaming.block.enabled already set).",
+    );
+  });
+
+  it("is idempotent: a second run reports no changes", () => {
+    const first = normalizeCompatibilityConfig({
+      cfg: msteamsConfig({ streamMode: "block", chunkMode: "newline" }),
+    });
+    expect(first.changes.length).toBeGreaterThan(0);
+
+    const second = normalizeCompatibilityConfig({ cfg: first.config });
+    expect(second.changes).toEqual([]);
+    expect(second.config).toBe(first.config);
   });
 });

@@ -1,7 +1,126 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseArgs } from "../../scripts/docs-sync-publish.mjs";
+import { renderDocsHeadingMap } from "../../scripts/docs-list.js";
+import {
+  composeDocsConfig,
+  parseArgs,
+  reportOrphanLocaleDocs,
+  writePublishedDocsMap,
+} from "../../scripts/docs-sync-publish.mjs";
+
+function collectPages(entry: unknown, pages: string[] = []): string[] {
+  if (typeof entry === "string") {
+    pages.push(entry);
+    return pages;
+  }
+  if (Array.isArray(entry)) {
+    for (const item of entry) {
+      collectPages(item, pages);
+    }
+    return pages;
+  }
+  if (!entry || typeof entry !== "object") {
+    return pages;
+  }
+  const record = entry as Record<string, unknown>;
+  if (typeof record.page === "string") {
+    pages.push(record.page);
+  }
+  collectPages(record.pages, pages);
+  collectPages(record.groups, pages);
+  collectPages(record.tabs, pages);
+  return pages;
+}
 
 describe("docs-sync-publish", () => {
+  it("executes the copied MDX checker and shared anchor runtime closures", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-sync-runtime-"));
+    const publishRoot = path.join(tempRoot, "publish");
+    const clawhubRoot = path.join(tempRoot, "clawhub");
+    const minimalMdx = path.join(tempRoot, "valid.mdx");
+
+    fs.mkdirSync(publishRoot, { recursive: true });
+    fs.mkdirSync(path.join(clawhubRoot, "docs"), { recursive: true });
+    fs.writeFileSync(path.join(publishRoot, "package.json"), "{}\n");
+    fs.writeFileSync(path.join(clawhubRoot, "docs", "index.md"), "# ClawHub\n");
+    fs.writeFileSync(minimalMdx, "# Valid MDX\n\nThis file is valid.\n");
+    fs.symlinkSync(
+      path.resolve("node_modules"),
+      path.join(publishRoot, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    try {
+      execFileSync(
+        process.execPath,
+        ["scripts/docs-sync-publish.mjs", "--target", publishRoot, "--clawhub-repo", clawhubRoot],
+        { stdio: "pipe" },
+      );
+      execFileSync(
+        process.execPath,
+        [path.join(publishRoot, ".openclaw-sync", "check-docs-mdx.mjs"), minimalMdx],
+        { cwd: publishRoot, stdio: "pipe" },
+      );
+      const anchors = execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          String.raw`
+        import assert from 'node:assert/strict';
+        import { parseDocsDocument } from './.openclaw-sync/lib/docs-markdown.mjs';
+        import { resolveRedirects } from './.openclaw-sync/lib/docs-redirects.mjs';
+        const redirect = (source, destination) => resolveRedirects({
+          redirects: [{ source, destination }], pages: [], localeCodes: ['en'], prefixes: [], publicPath: x => x,
+        });
+        const rejected = [...Array.from({ length: 33 }, (_, code) => String.fromCharCode(code)), '<', '>', '\\', '*'];
+        for (const character of rejected) {
+          assert.throws(() => redirect('/a' + character + 'b', 'https://example.com/valid'), /Unsafe redirect path/);
+          for (const prefix of ['/', 'https://example.com/']) {
+            assert.throws(() => redirect('/from', prefix + 'a' + character + 'b.png'), /Unsupported redirect destination/);
+          }
+        }
+        for (const route of ['/a:b', '/a%2Fb', '/a%5Cb', '/a/%2e%2e/b', '/a/%2E/b', '/bad%zz']) {
+          assert.throws(() => redirect(route, 'https://example.com/valid'), /Unsafe redirect path/);
+          assert.throws(() => redirect('/from', route + '.png'), /Unsafe redirect path/);
+        }
+        for (const [source, destination] of [
+          ['/日本語/🦞', '/目標.png'],
+          ['/encoded%20%00%3C%3E%2A%3A', '/encoded%20%00%3C%3E%2A%3A.png'],
+          ['/nonbreaking\u00a0space', '/nonbreaking\u00a0space.png'],
+          ['/del\u007fbyte', '/del\u007fbyte.png'],
+          ['/query', '/image.png?q=a:b#c:d'],
+          ['/external', 'https://example.com/a:b/%2F?q=é#章'],
+        ]) {
+          assert.deepEqual(redirect(source, destination), [{ source, destination }]);
+        }
+        console.log(JSON.stringify(parseDocsDocument('## agents.defaults.cwd').ids));
+        console.log(resolveRedirects({redirects: [], pages: [], localeCodes: ['en'], prefixes: [], publicPath: x => x}).length);
+      `,
+        ],
+        { cwd: publishRoot, encoding: "utf8" },
+      );
+      expect(anchors).toBe('["agents.defaults.cwd","agents-defaults-cwd"]\n0\n');
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("materializes the public docs map only in the publish tree", () => {
+    const targetDocsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-map-publish-"));
+    try {
+      const outputPath = writePublishedDocsMap(targetDocsDir);
+      expect(fs.readFileSync(outputPath, "utf8")).toBe(
+        renderDocsHeadingMap(path.resolve(import.meta.dirname, "../../docs")),
+      );
+    } finally {
+      fs.rmSync(targetDocsDir, { recursive: true, force: true });
+    }
+  });
+
   it("parses docs sync provenance args", () => {
     expect(
       parseArgs([
@@ -42,6 +161,130 @@ describe("docs-sync-publish", () => {
         `${flag} requires a value`,
       );
       expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
+    }
+  });
+
+  it("defers orphan locale deletion to translation finalization", () => {
+    const docsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-sync-"));
+    const mirroredEnglish = path.join(docsDir, "clawhub", "api.md");
+    const localizedMirror = path.join(docsDir, "de", "clawhub", "api.md");
+    const orphan = path.join(docsDir, "de", "removed.md");
+
+    fs.mkdirSync(path.dirname(mirroredEnglish), { recursive: true });
+    fs.mkdirSync(path.dirname(localizedMirror), { recursive: true });
+    fs.writeFileSync(mirroredEnglish, "# ClawHub API\n");
+    fs.writeFileSync(localizedMirror, "# ClawHub-API\n");
+    fs.writeFileSync(orphan, "# Removed\n");
+
+    try {
+      expect(reportOrphanLocaleDocs(docsDir)).toBe(1);
+      expect(fs.existsSync(localizedMirror)).toBe(true);
+      expect(fs.existsSync(orphan)).toBe(true);
+    } finally {
+      fs.rmSync(docsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps generated locale navigation aligned with English routes", () => {
+    const config = composeDocsConfig() as {
+      navigation: {
+        languages: Array<{
+          language: string;
+          tabs: Array<{
+            tab: string;
+            groups?: Array<{ group: string; pages?: unknown }>;
+          }>;
+        }>;
+      };
+    };
+    const english = config.navigation.languages.find((entry) => entry.language === "en");
+    const simplifiedChinese = config.navigation.languages.find(
+      (entry) => entry.language === "zh-Hans",
+    );
+    const german = config.navigation.languages.find((entry) => entry.language === "de");
+
+    expect(english).toBeDefined();
+    expect(simplifiedChinese).toBeDefined();
+    expect(german).toBeDefined();
+    expect(english!.tabs.slice(-4).map((tab) => tab.tab)).toEqual([
+      "Gateway & Ops",
+      "Reference",
+      "Release & CI",
+      "Help",
+    ]);
+
+    const releaseTab = english!.tabs.find((tab) => tab.tab === "Release & CI");
+    const releaseNotes = collectPages(releaseTab?.groups?.[0]);
+    expect(releaseTab?.groups?.map((group) => group.group)).toEqual([
+      "Release notes",
+      "Maturity",
+      "Release process",
+      "Testing and CI",
+    ]);
+    // Every release adds a releases/<version> page, so read the published versions from the
+    // navigation rather than pinning them here; only the index-first ordering and the version
+    // route shape are invariant. Pinning the list makes this assertion fail on release PRs whose
+    // change classification never selects this lane, so the break first lands on main.
+    expect(releaseNotes[0]).toBe("releases/index");
+    expect(releaseNotes.length).toBeGreaterThan(1);
+    for (const page of releaseNotes.slice(1)) {
+      expect(page).toMatch(/^releases\/\d{4}\.\d{1,2}\.\d+$/);
+    }
+    const releaseRoutes = [
+      ...releaseNotes,
+      "maturity/scorecard",
+      "maturity/taxonomy",
+      "reference/RELEASING",
+      "reference/full-release-validation",
+      "reference/release-performance-sweep",
+      "reference/test",
+      "ci",
+      "help/scripts",
+    ];
+    expect(collectPages(releaseTab)).toEqual(releaseRoutes);
+    expect(new Set(releaseRoutes)).toHaveLength(releaseRoutes.length);
+
+    const englishWithoutClawHub = {
+      ...english,
+      tabs: english!.tabs.filter((tab) => tab.tab !== "ClawHub"),
+    };
+    const expectedZhPages = collectPages(englishWithoutClawHub)
+      .map((page) => `zh-CN/${page}`)
+      .toSorted();
+    expect(collectPages(simplifiedChinese).toSorted()).toEqual(expectedZhPages);
+    expect(simplifiedChinese!.tabs[0]?.tab).toBe("快速开始");
+    expect(simplifiedChinese!.tabs[0]?.groups?.[0]?.group).toBe("首页");
+    const simplifiedChineseReleaseTab = simplifiedChinese!.tabs.find(
+      (tab) => tab.tab === "发布与 CI",
+    );
+    expect(simplifiedChineseReleaseTab?.groups?.map((group) => group.group)).toEqual([
+      "发布说明",
+      "成熟度",
+      "发布流程",
+      "测试与 CI",
+    ]);
+    expect(collectPages(simplifiedChineseReleaseTab?.groups?.[0])).toEqual(
+      releaseNotes.map((page) => `zh-CN/${page}`),
+    );
+    expect(collectPages(simplifiedChineseReleaseTab)).toEqual(
+      releaseRoutes.map((page) => `zh-CN/${page}`),
+    );
+    expect(new Set(collectPages(simplifiedChineseReleaseTab))).toHaveLength(releaseRoutes.length);
+
+    expect(collectPages(german)).toHaveLength(collectPages(englishWithoutClawHub).length);
+    expect(german!.tabs[0]?.tab).toBe("Loslegen");
+    expect(german!.tabs[0]?.groups?.[0]?.group).toBe("Überblick");
+
+    for (const locale of config.navigation.languages.filter(
+      (entry) => entry.language !== "en" && entry.language !== "zh-Hans",
+    )) {
+      const localeDir = collectPages(locale)[0]?.split("/")[0];
+      const localizedRoutes = releaseRoutes.map((page) => `${localeDir}/${page}`);
+      const localizedReleaseTab = locale.tabs.find((tab) =>
+        collectPages(tab).includes(`${localeDir}/releases/index`),
+      );
+      expect(collectPages(localizedReleaseTab)).toEqual(localizedRoutes);
+      expect(new Set(collectPages(localizedReleaseTab))).toHaveLength(localizedRoutes.length);
     }
   });
 });

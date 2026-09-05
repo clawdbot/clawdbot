@@ -1,5 +1,7 @@
 // OpenClaw SDK module implements client behavior.
 import { randomUUID } from "node:crypto";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { EventHub } from "./event-hub.js";
 import { normalizeGatewayEvent } from "./normalize.js";
 import { GatewayClientTransport, isConnectableTransport } from "./transport.js";
@@ -13,6 +15,7 @@ import type {
   ArtifactsDownloadResult,
   ArtifactsGetResult,
   ArtifactsListResult,
+  EnvironmentCreateParams,
   EnvironmentSummary,
   EnvironmentsListResult,
   GatewayEvent,
@@ -83,7 +86,7 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
       timeoutPhase === "post_turn");
   const hasTerminalTimeoutMetadata =
     readOptionalTimestamp(record.endedAt) !== undefined ||
-    (!pendingError && readOptionalString(record.error) !== undefined) ||
+    (!pendingError && readNonEmptyString(record.error) !== undefined) ||
     stopReason.length > 0 ||
     typeof record.livenessState === "string" ||
     record.yielded === true;
@@ -128,10 +131,6 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
     return "accepted";
   }
   return "failed";
-}
-
-function readOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function readOptionalTimestamp(value: unknown): RunTimestamp | undefined {
@@ -220,10 +219,6 @@ type ChatProjection = {
   state: ChatProjectionState;
   payload: Record<string, unknown>;
 };
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
 
 function hasArtifactQueryScope(params: unknown): params is ArtifactQuery {
   const record = asRecord(params);
@@ -661,14 +656,14 @@ export class Run {
     );
     const record = asRecord(raw);
     const status = runStatusFromWaitPayload(raw);
-    const error = readOptionalString(record.error)
-      ? { message: readOptionalString(record.error) ?? "run failed" }
+    const error = readNonEmptyString(record.error)
+      ? { message: readNonEmptyString(record.error) ?? "run failed" }
       : undefined;
     return {
       runId: this.id,
       status,
-      sessionKey: readOptionalString(record.sessionKey) ?? this.sessionKey,
-      sessionId: readOptionalString(record.sessionId),
+      sessionKey: readNonEmptyString(record.sessionKey) ?? this.sessionKey,
+      sessionId: readNonEmptyString(record.sessionId),
       startedAt: readOptionalTimestamp(record.startedAt),
       endedAt: readOptionalTimestamp(record.endedAt),
       ...(error ? { error } : {}),
@@ -704,7 +699,7 @@ export class Session {
       ...(timeoutMs !== undefined ? { timeoutMs: timeoutMs === 0 ? null : timeoutMs } : {}),
     });
     const record = asRecord(raw);
-    const runId = readOptionalString(record.runId);
+    const runId = readNonEmptyString(record.runId);
     if (!runId) {
       throw new Error("sessions.send did not return a runId");
     }
@@ -723,7 +718,12 @@ export class Session {
   }
 
   async compact(params?: { maxLines?: number }): Promise<unknown> {
-    return await this.client.request("sessions.compact", { key: this.key, ...params });
+    return await this.client.request(
+      "sessions.compact",
+      { key: this.key, ...params },
+      // The server owns the configurable terminal compaction deadline.
+      { timeoutMs: null },
+    );
   }
 }
 
@@ -764,7 +764,7 @@ export class SessionsNamespace {
     const raw = await this.client.request("sessions.create", params);
     const record = asRecord(raw);
     const key =
-      readOptionalString(record.key) ?? readOptionalString(record.sessionKey) ?? params.key;
+      readNonEmptyString(record.key) ?? readNonEmptyString(record.sessionKey) ?? params.key;
     if (!key) {
       throw new Error("sessions.create did not return a session key");
     }
@@ -797,11 +797,11 @@ export class RunsNamespace {
       ...(timeoutMs !== undefined ? { timeoutMs: timeoutMs === 0 ? null : timeoutMs } : {}),
     });
     const record = asRecord(raw);
-    const runId = readOptionalString(record.runId);
+    const runId = readNonEmptyString(record.runId);
     if (!runId) {
       throw new Error("agent did not return a runId");
     }
-    return new Run(this.client, runId, readOptionalString(record.sessionKey) ?? params.sessionKey);
+    return new Run(this.client, runId, readNonEmptyString(record.sessionKey) ?? params.sessionKey);
   }
 
   async get(runId: string): Promise<Run> {
@@ -890,6 +890,7 @@ export class ToolsNamespace extends RpcNamespace {
   async invoke(name: string, params?: ToolInvokeParams): Promise<ToolInvokeResult> {
     return await this.call("invoke", {
       name,
+      conversationReadOrigin: "direct-operator",
       ...(params?.args ? { args: params.args } : {}),
       ...(params?.sessionKey ? { sessionKey: params.sessionKey } : {}),
       ...(params?.agentId ? { agentId: params.agentId } : {}),
@@ -950,13 +951,16 @@ export class EnvironmentsNamespace extends RpcNamespace {
     return await this.call("list", params === undefined ? {} : params);
   }
 
-  async create(params?: unknown): Promise<unknown> {
-    void params;
-    return unsupportedGatewayApi("oc.environments.create");
+  async create(params: EnvironmentCreateParams): Promise<EnvironmentSummary> {
+    return await this.call("create", params);
   }
 
   async status(environmentId: string): Promise<EnvironmentSummary> {
     return await this.call("status", { environmentId });
+  }
+
+  async destroy(environmentId: string): Promise<EnvironmentSummary> {
+    return await this.call("destroy", { environmentId });
   }
 
   async delete(environmentId: string): Promise<unknown> {
@@ -964,3 +968,4 @@ export class EnvironmentsNamespace extends RpcNamespace {
     return unsupportedGatewayApi("oc.environments.delete");
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

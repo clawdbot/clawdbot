@@ -5,26 +5,30 @@ import path from "node:path";
 import type { MacosGuest } from "./guest-transports.ts";
 import { run, say, shellQuote, warn } from "./host-command.ts";
 
-export type DiscordSmokePhase = "fresh" | "upgrade";
+type DiscordSmokePhase = "fresh" | "upgrade";
 
-export interface MacosDiscordConfig {
+interface MacosDiscordConfig {
   channelId: string;
   guildId: string;
   token: string;
 }
 
+type MacosDiscordSmokeInput = {
+  config: MacosDiscordConfig;
+  guest: MacosGuest;
+  guestNode: string;
+  guestOpenClaw: string;
+  guestOpenClawEntry: string;
+  runDir: string;
+  vmName: string;
+};
+
 export class MacosDiscordSmoke {
-  constructor(
-    private input: {
-      config: MacosDiscordConfig;
-      guest: MacosGuest;
-      guestNode: string;
-      guestOpenClaw: string;
-      guestOpenClawEntry: string;
-      runDir: string;
-      vmName: string;
-    },
-  ) {}
+  private input: MacosDiscordSmokeInput;
+
+  constructor(input: MacosDiscordSmokeInput) {
+    this.input = input;
+  }
 
   configure(): void {
     const guilds = JSON.stringify({
@@ -136,6 +140,10 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe
   private async discordApi(method: string, apiPath: string, payload?: unknown): Promise<string> {
     const args = [
       "-fsS",
+      "--connect-timeout",
+      "10",
+      "--max-time",
+      "30",
       "-X",
       method,
       "-H",
@@ -145,7 +153,8 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe
         : ["-H", "Content-Type: application/json", "--data", JSON.stringify(payload)]),
       `https://discord.com/api/v10${apiPath}`,
     ];
-    return run("curl", args, { quiet: true }).stdout;
+    // Keep smoke phase deadlines enforceable even if curl itself fails to terminate promptly.
+    return run("curl", args, { quiet: true, timeoutMs: 45_000 }).stdout;
   }
 
   private async waitForHostVisibility(nonce: string, messageId: string): Promise<void> {

@@ -3,8 +3,10 @@ import type {
   AnthropicMessagesCompat,
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
+  RawModelCostConfig,
   ThinkingLevelMap,
 } from "../llm/types.js";
+import { isStringOption } from "../utils/string-readers.js";
 import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
@@ -30,8 +32,10 @@ type SupportedOpenAICompatFields = Pick<
   | "supportsStore"
   | "supportsDeveloperRole"
   | "supportsReasoningEffort"
+  | "reasoningEffortMap"
   | "supportsUsageInStreaming"
   | "supportsStrictMode"
+  | "supportsJsonSchemaResponseFormat"
   | "maxTokensField"
   | "requiresToolResultName"
   | "requiresAssistantAfterToolResult"
@@ -47,7 +51,10 @@ type SupportedOpenAICompatFields = Pick<
 
 type SupportedOpenAIResponsesCompatFields = Pick<
   OpenAIResponsesCompat,
-  "sendSessionIdHeader" | "supportsLongCacheRetention"
+  | "sendSessionIdHeader"
+  | "supportsLongCacheRetention"
+  | "supportsTemperature"
+  | "supportsInstructions"
 >;
 
 type SupportedAnthropicMessagesCompatFields = Pick<
@@ -74,7 +81,7 @@ export const MODEL_THINKING_FORMATS = [
 
 /** Runtime guard for config-provided thinking format strings. */
 export function isModelThinkingFormat(value: string): value is SupportedThinkingFormat {
-  return (MODEL_THINKING_FORMATS as readonly string[]).includes(value);
+  return isStringOption(value, MODEL_THINKING_FORMATS);
 }
 
 /** Provider/model compatibility switches consumed by request builders and tool schema adapters. */
@@ -85,12 +92,12 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
     thinkingFormat?: SupportedThinkingFormat;
     /** Provider-accepted reasoning effort labels. */
     supportedReasoningEfforts?: string[];
-    /** Maps OpenClaw reasoning effort labels to provider-specific labels. */
-    reasoningEffortMap?: Record<string, string>;
     /** Reasoning detail block types safe to expose in visible transcripts. */
     visibleReasoningDetailTypes?: string[];
     /** Whether this model supports tool/function calling. */
     supportsTools?: boolean;
+    /** Code-mode tier consumed by `tools.codeMode.enabled: "auto"`; absent means "capable". */
+    codeMode?: "preferred" | "capable";
     /** Whether provider accepts prompt-cache/session affinity keys. */
     supportsPromptCacheKey?: boolean;
     /** Whether all message parts must be coerced to plain strings. */
@@ -101,12 +108,8 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
     toolSchemaProfile?: string;
     /** JSON Schema keywords rejected by this provider's tool schema validator. */
     unsupportedToolSchemaKeywords?: string[];
-    /** Whether this model/provider exposes a native web search tool. */
-    nativeWebSearchTool?: boolean;
     /** Encoding expected for tool-call arguments in provider payloads. */
     toolCallArgumentsEncoding?: string;
-    /** Whether Mistral-compatible tool-call ids must be generated/normalized. */
-    requiresMistralToolIds?: boolean;
     /** Whether OpenAI-style calls must be reshaped to Anthropic-compatible tool payloads. */
     requiresOpenAiAnthropicToolPayload?: boolean;
   };
@@ -163,26 +166,9 @@ export type ModelDefinitionConfig = {
   /** Supported input modalities for routing and media-tool selection. */
   input: Array<"text" | "image" | "video" | "audio">;
   /** Token pricing in USD per million tokens. */
-  cost: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    /** Optional tiered pricing.  When present, cost calculation uses
-     *  per-tier rates instead of the flat rates above.  Prices are
-     *  USD / million tokens; ranges are half-open `[start, end)` on the
-     *  input-token axis. */
-    tieredPricing?: Array<{
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-      /** Bounded tier: `[start, end)`. Open-ended top tier: `[start]` (normalized to `[start, Infinity]` at load time). */
-      range: [number, number] | [number];
-    }>;
-  };
+  cost: RawModelCostConfig;
   /** Provider/native maximum context window in tokens. */
-  contextWindow: number;
+  contextWindow?: number;
   /**
    * Optional effective runtime cap used for compaction/session budgeting.
    * Keeps provider/native contextWindow metadata intact while letting configs
@@ -216,10 +202,6 @@ export type ModelProviderConfig = {
   auth?: ModelProviderAuthMode;
   /** Default API adapter for models under this provider. */
   api?: ModelApi;
-  /** Provider-level default context window. */
-  contextWindow?: number;
-  /** Provider-level effective runtime context cap. */
-  contextTokens?: number;
   /** Provider-level default max output tokens. */
   maxTokens?: number;
   /** Provider request timeout in seconds. */
@@ -271,9 +253,11 @@ export type DiscoveryToggleConfig = {
   enabled?: boolean;
 };
 
-export type ModelPricingConfig = {
-  /** Enable external or generated pricing enrichment. */
+export type ModelCatalogRefreshConfig = {
+  /** Fetch model catalog updates from the hosted OpenClaw catalog. Default: true. */
   enabled?: boolean;
+  /** Override the hosted catalog URL (HTTPS mirrors, or localhost HTTP for testing). */
+  url?: string;
 };
 
 export type ModelsConfig = {
@@ -281,8 +265,8 @@ export type ModelsConfig = {
   mode?: "merge" | "replace";
   /** Configured provider catalog keyed by provider id. */
   providers?: Record<string, ModelProviderConfig>;
-  /** Pricing enrichment settings. */
-  pricing?: ModelPricingConfig;
+  /** Hosted model catalog refresh settings. */
+  catalogRefresh?: ModelCatalogRefreshConfig;
 };
 
 /** Top-level models config input before provider entries are normalized. */

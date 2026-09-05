@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { compactReleaseNotes } from "./lib/release-notes-compaction.mjs";
 
 const CHANGELOG_PATH = "CHANGELOG.md";
 const PACKAGE_JSON_PATH = "package.json";
@@ -22,7 +23,7 @@ const PRERELEASE_VERSION_PATTERN =
 /**
  * Resolves acceptable changelog headings for a package version.
  */
-export function resolvePackageChangelogVersions(packageVersion) {
+export function resolvePackageChangelogVersions(packageVersion, options = {}) {
   const match = RELEASE_VERSION_PATTERN.exec(packageVersion);
   if (!match) {
     throw new Error(
@@ -32,25 +33,19 @@ export function resolvePackageChangelogVersions(packageVersion) {
   if (PRERELEASE_VERSION_PATTERN.test(packageVersion)) {
     return [packageVersion, match[1], UNRELEASED_HEADING];
   }
-  return [packageVersion];
+  return options.allowUnreleased ? [packageVersion, UNRELEASED_HEADING] : [packageVersion];
 }
 
 function splitLines(content) {
   return content.replace(/^\uFEFF/u, "").split(/\r?\n/u);
 }
 
-function parseLevelTwoHeading(line) {
-  const releaseMatch = RELEASE_HEADING_PATTERN.exec(line);
-  if (releaseMatch) {
-    return releaseMatch[1];
-  }
-  return /^##\s+Unreleased(?:\s+.*)?$/u.test(line) ? UNRELEASED_HEADING : null;
-}
-
 function findLevelTwoHeadings(lines) {
   return lines.flatMap((line, index) => {
-    const version = parseLevelTwoHeading(line);
-    return version ? [{ index, version }] : [];
+    const version =
+      RELEASE_HEADING_PATTERN.exec(line)?.[1] ??
+      (/^##\s+Unreleased(?:\s+.*)?$/u.test(line) ? UNRELEASED_HEADING : null);
+    return version ? [{ index, version, unreleased: /\s+\(Unreleased\)$/u.test(line) }] : [];
   });
 }
 
@@ -58,15 +53,31 @@ function extractPreamble(lines, firstHeadingIndex) {
   return lines.slice(0, firstHeadingIndex).join("\n").trimEnd();
 }
 
+function assertMeaningfulReleaseBody(section, version) {
+  const body = section.split(/\r?\n/u).slice(1).join("\n").trim();
+  const bodyBytes = Buffer.byteLength(body, "utf8");
+  if (bodyBytes < MIN_RELEASE_SECTION_BODY_BYTES) {
+    throw new Error(
+      `Packaged changelog section for ${version} is only ${bodyBytes} body bytes, which is below the ${MIN_RELEASE_SECTION_BODY_BYTES} byte safety minimum.`,
+    );
+  }
+}
+
 /**
  * Extracts the current release changelog section for package publishing.
  */
-export function extractCurrentPackageChangelog(content, packageVersion) {
-  const targetVersions = resolvePackageChangelogVersions(packageVersion);
+export function extractCurrentPackageChangelog(content, packageVersion, options = {}) {
+  const targetVersions = resolvePackageChangelogVersions(packageVersion, options);
   const lines = splitLines(content);
   const headings = findLevelTwoHeadings(lines);
+  // Keep numbered drafts exact-matchable; their marker only widens the allowed draft fallback.
   const heading = targetVersions
-    .map((version) => headings.find((entry) => entry.version === version))
+    .map((version) =>
+      headings.find(
+        (entry) =>
+          entry.version === version || (version === UNRELEASED_HEADING && entry.unreleased),
+      ),
+    )
     .find((entry) => entry !== undefined);
   if (!heading) {
     throw new Error(
@@ -80,14 +91,20 @@ export function extractCurrentPackageChangelog(content, packageVersion) {
     .slice(heading.index, nextHeading?.index ?? lines.length)
     .join("\n")
     .trimEnd();
-  const releaseBody = releaseSection.split(/\r?\n/u).slice(1).join("\n").trim();
-  const releaseBodyBytes = Buffer.byteLength(releaseBody, "utf8");
-  if (releaseBodyBytes < MIN_RELEASE_SECTION_BODY_BYTES) {
-    throw new Error(
-      `Packaged changelog section for ${heading.version} is only ${releaseBodyBytes} body bytes, which is below the ${MIN_RELEASE_SECTION_BODY_BYTES} byte safety minimum.`,
+  assertMeaningfulReleaseBody(releaseSection, heading.version);
+  let packaged = `${preamble}\n\n${releaseSection}\n`;
+  if (Buffer.byteLength(packaged, "utf8") > MAX_PACKAGED_CHANGELOG_BYTES) {
+    // Keep every editorial note; only the audited record moves behind its immutable source link.
+    const compacted = compactReleaseNotes(
+      releaseSection,
+      "openclaw/openclaw",
+      `v${packageVersion}`,
     );
+    if (compacted) {
+      assertMeaningfulReleaseBody(compacted.editorialNotes, heading.version);
+      packaged = `${preamble}\n\n${compacted.body}\n`;
+    }
   }
-  const packaged = `${preamble}\n\n${releaseSection}\n`;
   const packagedBytes = Buffer.byteLength(packaged, "utf8");
   if (packagedBytes > MAX_PACKAGED_CHANGELOG_BYTES) {
     throw new Error(
@@ -125,11 +142,17 @@ export async function restorePackageChangelog(cwd = process.cwd()) {
     try {
       expectedPackaged = extractCurrentPackageChangelog(backup, packageVersion);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Refusing to restore stale packaged changelog backup from ${BACKUP_PATH}: ${message}`,
-        { cause: error },
-      );
+      try {
+        expectedPackaged = extractCurrentPackageChangelog(backup, packageVersion, {
+          allowUnreleased: true,
+        });
+      } catch {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Refusing to restore stale packaged changelog backup from ${BACKUP_PATH}: ${message}`,
+          { cause: error },
+        );
+      }
     }
     if (current !== expectedPackaged) {
       throw new Error(
@@ -145,13 +168,13 @@ export async function restorePackageChangelog(cwd = process.cwd()) {
 /**
  * Writes packaged changelog content while preserving a restorable backup.
  */
-export async function preparePackageChangelog(cwd = process.cwd()) {
+export async function preparePackageChangelog(cwd = process.cwd(), options = {}) {
   await restorePackageChangelog(cwd);
   const changelogPath = path.join(cwd, CHANGELOG_PATH);
   const backupPath = path.join(cwd, BACKUP_PATH);
   const original = await readFile(changelogPath, "utf8");
   const packageVersion = await readPackageVersion(cwd);
-  const packaged = extractCurrentPackageChangelog(original, packageVersion);
+  const packaged = extractCurrentPackageChangelog(original, packageVersion, options);
   if (packaged === original) {
     return false;
   }

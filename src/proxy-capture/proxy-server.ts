@@ -1,19 +1,28 @@
 // Proxy capture server records proxied HTTP traffic for deterministic test fixtures.
 import { randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { request as httpRequest } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+  request as httpRequest,
+} from "node:http";
 import { request as httpsRequest } from "node:https";
 import net from "node:net";
+import { StringDecoder } from "node:string_decoder";
 import { URL } from "node:url";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { ensureDebugProxyCa } from "./ca.js";
 import type { DebugProxySettings } from "./env.js";
+import { redactedCaptureHeaders } from "./header-redaction.js";
 import { getDebugProxyCaptureStore } from "./store.sqlite.js";
 import type { CaptureEventRecord } from "./types.js";
 
-const TRUTHY_ENV = new Set(["1", "true", "yes", "on"]);
 const DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE =
   "OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY";
 const CAPTURE_BODY_PREVIEW_BYTES = 8192;
+const BAD_GATEWAY_BODY = "Bad Gateway\n";
+const DEBUG_PROXY_CONNECT_TIMEOUT_MS = 30_000;
+const GATEWAY_TIMEOUT_BODY = "Gateway Timeout\n";
 
 type BodyPreviewCapture = {
   chunks: Buffer[];
@@ -21,10 +30,6 @@ type BodyPreviewCapture = {
   totalBytes: number;
   truncated: boolean;
 };
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return TRUTHY_ENV.has((value ?? "").trim().toLowerCase());
-}
 
 function isManagedProxyActive(env: NodeJS.ProcessEnv = process.env): boolean {
   return isTruthyEnvValue(env["OPENCLAW_PROXY_ACTIVE"]);
@@ -34,7 +39,7 @@ function allowsDirectConnectWithManagedProxy(env: NodeJS.ProcessEnv = process.en
   return isTruthyEnvValue(env[DEBUG_PROXY_DIRECT_CONNECT_OVERRIDE]);
 }
 
-export function assertDebugProxyDirectUpstreamAllowed(env: NodeJS.ProcessEnv = process.env): void {
+function assertDebugProxyDirectUpstreamAllowed(env: NodeJS.ProcessEnv = process.env): void {
   if (!isManagedProxyActive(env) || allowsDirectConnectWithManagedProxy(env)) {
     return;
   }
@@ -69,7 +74,7 @@ function createProxyCaptureRecorder(params: {
   };
 }
 
-export function parseConnectTarget(rawTarget: string | undefined): {
+function parseConnectTarget(rawTarget: string | undefined): {
   hostname: string;
   port: number;
 } {
@@ -137,7 +142,9 @@ function finishBodyPreviewCapture(capture: BodyPreviewCapture): {
   metaJson?: string;
 } {
   return {
-    dataText: Buffer.concat(capture.chunks, capture.previewBytes).toString("utf8"),
+    // write(), unlike end(), omits an incomplete trailing code point introduced
+    // by the byte cap instead of injecting a replacement character into the preview.
+    dataText: new StringDecoder("utf8").write(Buffer.concat(capture.chunks, capture.previewBytes)),
     metaJson: capture.truncated
       ? JSON.stringify({
           bodyBytes: capture.totalBytes,
@@ -146,6 +153,24 @@ function finishBodyPreviewCapture(capture: BodyPreviewCapture): {
         })
       : undefined,
   };
+}
+
+function finishProxyResponseAfterUpstreamError(res: ServerResponse): void {
+  if (res.destroyed || res.writableEnded) {
+    return;
+  }
+  // HTTP status cannot be replaced after forwarding upstream headers. Closing
+  // the downstream prevents a partial 2xx body from looking complete.
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  res.writeHead(502, {
+    Connection: "close",
+    "Content-Type": "text/plain; charset=utf-8",
+    "Content-Length": Buffer.byteLength(BAD_GATEWAY_BODY),
+  });
+  res.end(BAD_GATEWAY_BODY);
 }
 
 export async function startDebugProxyServer(params: {
@@ -225,20 +250,85 @@ export async function startDebugProxyServer(params: {
         },
         (upstreamRes) => {
           const responseCapture = createBodyPreviewCapture();
-          upstreamRes.on("data", (chunk) => {
-            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-            appendBodyPreviewCapture(responseCapture, buffer);
-            res.write(buffer);
-          });
-          upstreamRes.on("end", () => {
+          let upstreamFinished = false;
+          let upstreamFailed = false;
+          let responseFinished = false;
+          let downstreamFailed = false;
+          let pausedForDownstream = false;
+          const resumeUpstreamResponse = () => {
+            pausedForDownstream = false;
+            if (!res.destroyed && !res.writableEnded && !upstreamRes.destroyed) {
+              upstreamRes.resume();
+            }
+          };
+          const handleDownstreamFailure = (error?: Error) => {
+            if (downstreamFailed || responseFinished || upstreamFailed) {
+              return;
+            }
+            downstreamFailed = true;
+            res.off("drain", resumeUpstreamResponse);
+            recordTargetEvent({
+              direction: "local",
+              kind: "error",
+              errorText: error?.message ?? "Downstream response closed before completion",
+            });
+            upstream.destroy();
+            upstreamRes.destroy();
+          };
+          res.on("finish", () => {
+            if (!upstreamFinished || downstreamFailed || upstreamFailed) {
+              return;
+            }
+            responseFinished = true;
+            res.off("drain", resumeUpstreamResponse);
             recordTargetEvent({
               direction: "inbound",
               kind: "response",
               status: upstreamRes.statusCode ?? undefined,
-              headersJson: JSON.stringify(upstreamRes.headers),
+              headersJson: JSON.stringify(redactedCaptureHeaders(upstreamRes.headers)),
               ...finishBodyPreviewCapture(responseCapture),
             });
-            res.end();
+          });
+          res.on("error", handleDownstreamFailure);
+          res.on("close", () => handleDownstreamFailure());
+          upstreamRes.on("data", (chunk) => {
+            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            appendBodyPreviewCapture(responseCapture, buffer);
+            if (res.destroyed || res.writableEnded) {
+              handleDownstreamFailure();
+              return;
+            }
+            try {
+              if (!res.write(buffer) && !pausedForDownstream) {
+                pausedForDownstream = true;
+                upstreamRes.pause();
+                res.once("drain", resumeUpstreamResponse);
+              }
+            } catch (error) {
+              handleDownstreamFailure(error instanceof Error ? error : new Error(String(error)));
+            }
+          });
+          upstreamRes.on("end", () => {
+            upstreamFinished = true;
+            res.off("drain", resumeUpstreamResponse);
+            if (!res.destroyed && !res.writableEnded) {
+              res.end();
+            } else if (!res.writableFinished) {
+              handleDownstreamFailure();
+            }
+          });
+          upstreamRes.on("error", (error) => {
+            if (downstreamFailed || responseFinished || upstreamFailed) {
+              return;
+            }
+            upstreamFailed = true;
+            res.off("drain", resumeUpstreamResponse);
+            recordTargetEvent({
+              direction: "inbound",
+              kind: "error",
+              errorText: error.message,
+            });
+            finishProxyResponseAfterUpstreamError(res);
           });
           res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
         },
@@ -250,7 +340,7 @@ export async function startDebugProxyServer(params: {
         recordTargetEvent({
           direction: "outbound",
           kind: "request",
-          headersJson: JSON.stringify(req.headers),
+          headersJson: JSON.stringify(redactedCaptureHeaders(req.headers)),
           ...finishBodyPreviewCapture(requestCapture),
         });
       });
@@ -268,8 +358,7 @@ export async function startDebugProxyServer(params: {
           kind: "error",
           errorText: error.message,
         });
-        res.statusCode = 502;
-        res.end(error.message);
+        finishProxyResponseAfterUpstreamError(res);
       });
       req.pipe(upstream);
     })();
@@ -303,7 +392,7 @@ export async function startDebugProxyServer(params: {
       flowId,
       host: hostname,
       path: req.url ?? "",
-      headersJson: JSON.stringify(req.headers),
+      headersJson: JSON.stringify(redactedCaptureHeaders(req.headers)),
     });
     try {
       assertDebugProxyDirectUpstreamAllowed();
@@ -325,6 +414,10 @@ export async function startDebugProxyServer(params: {
       return;
     }
     const upstreamSocket = net.connect(port, hostname, () => {
+      // This inactivity timeout only protects opening the upstream socket. CONNECT
+      // tunnels are intentionally long-lived and must not inherit it.
+      upstreamSocket.setTimeout(0);
+      upstreamSocket.off("timeout", onUpstreamConnectTimeout);
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       if (head.length > 0) {
         upstreamSocket.write(head);
@@ -332,6 +425,24 @@ export async function startDebugProxyServer(params: {
       clientSocket.pipe(upstreamSocket);
       upstreamSocket.pipe(clientSocket);
     });
+    function onUpstreamConnectTimeout() {
+      const message = `CONNECT upstream opening timed out after ${DEBUG_PROXY_CONNECT_TIMEOUT_MS}ms of inactivity`;
+      recordProxyEvent({
+        protocol: "connect",
+        direction: "local",
+        kind: "error",
+        flowId,
+        host: hostname,
+        path: req.url ?? "",
+        errorText: message,
+      });
+      upstreamSocket.destroy();
+      clientSocket.end(
+        `HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: ${Buffer.byteLength(GATEWAY_TIMEOUT_BODY)}\r\n\r\n${GATEWAY_TIMEOUT_BODY}`,
+        () => clientSocket.destroy(),
+      );
+    }
+    upstreamSocket.setTimeout(DEBUG_PROXY_CONNECT_TIMEOUT_MS, onUpstreamConnectTimeout);
     clientSocket.on("error", (error) => {
       recordProxyEvent({
         protocol: "connect",

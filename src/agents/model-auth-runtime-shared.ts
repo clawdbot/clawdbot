@@ -25,12 +25,19 @@ type ProviderAuthErrorCode = "missing-api-key" | "missing-provider-auth";
 export class ProviderAuthError extends Error {
   readonly code: ProviderAuthErrorCode;
   readonly provider: string;
+  readonly providerGuidance: boolean;
 
-  constructor(code: ProviderAuthErrorCode, provider: string, message: string) {
+  constructor(
+    code: ProviderAuthErrorCode,
+    provider: string,
+    message: string,
+    options?: { providerGuidance?: boolean },
+  ) {
     super(message);
     this.name = "ProviderAuthError";
     this.code = code;
     this.provider = provider;
+    this.providerGuidance = options?.providerGuidance === true;
   }
 }
 

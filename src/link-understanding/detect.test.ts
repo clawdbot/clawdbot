@@ -20,6 +20,39 @@ describe("extractLinksFromMessage", () => {
     expect(links).toEqual(["https://bare.example"]);
   });
 
+  it("ignores markdown links whose label contains brackets", () => {
+    // The closing "]" inside the label must not break markdown stripping, otherwise
+    // the citation URL leaks out as a bare link (with a stray trailing ")").
+    const links = extractLinksFromMessage(
+      "Check [my notes [v2]](https://internal.example/doc) for details",
+    );
+    expect(links).toStrictEqual([]);
+  });
+
+  it.each([
+    ["double-quoted title", '[doc](https://docs.example "Docs")'],
+    ["single-quoted title", "[doc](https://docs.example 'Docs')"],
+    ["parenthesized title", "[doc](https://docs.example (Docs))"],
+    ["escaped double quote", '[doc](https://docs.example "A \\"quoted\\" title")'],
+    ["escaped single quote", "[doc](https://docs.example 'A \\'quoted\\' title')"],
+    ["escaped parenthesis", "[doc](https://docs.example (a \\(paren\\) title))"],
+    ["title line break", '[doc](https://docs.example "line one\nline two")'],
+    ["angle destination", '[doc](<https://docs.example/a b> "Docs")'],
+    ["balanced destination parentheses", "[doc](https://docs.example/a_(b))"],
+    ["escaped destination parenthesis", String.raw`[doc](https://docs.example/a\)b)`],
+  ])("ignores markdown links with a %s", (_name, markdownLink) => {
+    expect(extractLinksFromMessage(`${markdownLink} https://bare.example`)).toStrictEqual([
+      "https://bare.example",
+    ]);
+  });
+
+  it.each([
+    ["unterminated title", '[doc](https://docs.example "Docs)'],
+    ["escaped closing delimiter", '[doc](https://docs.example "t\\")'],
+  ])("does not strip a link with an %s", (_name, message) => {
+    expect(extractLinksFromMessage(message)).toStrictEqual(["https://docs.example"]);
+  });
+
   it("blocks 127.0.0.1", () => {
     const links = extractLinksFromMessage("http://127.0.0.1/test https://ok.test");
     expect(links).toEqual(["https://ok.test"]);

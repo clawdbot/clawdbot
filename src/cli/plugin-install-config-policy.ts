@@ -180,7 +180,10 @@ function resolvePluginInstallArgvRequest(commandPath: string[], argv: string[]) 
   let rawSpec: string | null = null;
   let marketplace: string | undefined;
   for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index];
+    const token = tokens.at(index);
+    if (token === undefined) {
+      break;
+    }
     if (token.startsWith("--marketplace=")) {
       marketplace = token.slice("--marketplace=".length);
       continue;

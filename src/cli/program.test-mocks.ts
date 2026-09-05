@@ -30,7 +30,7 @@ const programMocks = vi.hoisted(() => {
     runChannelLogin: vi.fn(),
     runChannelLogout: vi.fn(),
     runTui: vi.fn(),
-    runCrestodian: vi.fn(),
+    runSystemAgentWithInference: vi.fn(),
     loadAndMaybeMigrateDoctorConfig: vi.fn(),
     ensureConfigReady: vi.fn(),
     ensurePluginRegistryLoaded: vi.fn(),
@@ -39,12 +39,12 @@ const programMocks = vi.hoisted(() => {
 });
 
 export const configureCommand = programMocks.configureCommand as AnyMock;
-export const setupCommand = programMocks.setupCommand as AnyMock;
-export const setupWizardCommand = programMocks.setupWizardCommand as AnyMock;
-export const callGateway = programMocks.callGateway as AnyMock;
-export const runTui = programMocks.runTui as AnyMock;
-export const runCrestodian = programMocks.runCrestodian as AnyMock;
-export const ensureConfigReady = programMocks.ensureConfigReady as AnyMock;
+export const setupCommandMock = programMocks.setupCommand as AnyMock;
+export const setupWizardCommandMock = programMocks.setupWizardCommand as AnyMock;
+export const programGatewayCallMock = programMocks.callGateway as AnyMock;
+export const tuiRunMock = programMocks.runTui as AnyMock;
+export const systemAgentRunMock = programMocks.runSystemAgentWithInference as AnyMock;
+export const ensureConfigReadyMock = programMocks.ensureConfigReady as AnyMock;
 
 export const runtime = programMocks.runtime as {
   log: Mock<(...args: unknown[]) => void>;
@@ -83,15 +83,22 @@ vi.mock("../commands/onboard.js", () => ({
   onboardCommand: programMocks.onboardCommand,
   setupWizardCommand: programMocks.setupWizardCommand,
 }));
-vi.mock("../runtime.js", () => ({ defaultRuntime: programMocks.runtime }));
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  defaultRuntime: programMocks.runtime,
+}));
 vi.mock("./channel-auth.js", () => ({
   runChannelLogin: programMocks.runChannelLogin,
   runChannelLogout: programMocks.runChannelLogout,
 }));
 vi.mock("../tui/tui.js", () => ({ runTui: programMocks.runTui }));
-vi.mock("../crestodian/crestodian.js", () => ({ runCrestodian: programMocks.runCrestodian }));
+vi.mock("../commands/system-agent-with-inference.js", () => ({
+  runSystemAgentWithInference: programMocks.runSystemAgentWithInference,
+}));
 vi.mock("../gateway/call.js", () => ({
   callGateway: programMocks.callGateway,
+  GatewayStoredDeviceAuthUnavailableError: class extends Error {},
+  GatewayTransportError: class extends Error {},
   randomIdempotencyKey: () => "idem-test",
   buildGatewayConnectionDetails: () => ({
     url: "ws://127.0.0.1:1234",

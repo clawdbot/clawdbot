@@ -269,7 +269,7 @@ html.dark .nav-tabs-underline {
 
 .maturity-summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   margin: 14px 0 20px;
   border-top: 1px solid color-mix(in oklab, rgb(var(--primary)) 18%, transparent);
   border-bottom: 1px solid color-mix(in oklab, rgb(var(--primary)) 18%, transparent);
@@ -700,6 +700,10 @@ html.dark .nav-tabs-underline {
 .maturity-category-docs a:hover {
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+.maturity-category-docs p {
+  margin: 0;
 }
 
 .maturity-level-list {

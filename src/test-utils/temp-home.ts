@@ -2,7 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { captureEnv } from "./env.js";
+import { expectDefined } from "@openclaw/normalization-core";
+import { captureEnv, setTestEnvValue } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 const HOME_ENV_KEYS = [
@@ -47,27 +48,34 @@ async function ensurePrefixRoot(prefix: string): Promise<string> {
 export async function createTempHomeEnv(prefix: string): Promise<TempHomeEnv> {
   const prefixRoot = await ensurePrefixRoot(prefix);
   const home = path.join(prefixRoot, `home-${String(nextHomeIndex)}`);
+  const stateDir = path.join(home, ".openclaw");
   nextHomeIndex += 1;
-  await fs.rm(home, { recursive: true, force: true });
-  await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
-
   const snapshot = captureEnv([...HOME_ENV_KEYS]);
-  process.env.HOME = home;
-  process.env.USERPROFILE = home;
-  process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+  try {
+    await fs.rm(home, { recursive: true, force: true });
+    await fs.mkdir(stateDir, { recursive: true });
+    setTestEnvValue("HOME", home);
+    setTestEnvValue("USERPROFILE", home);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 
-  if (process.platform === "win32") {
-    const match = home.match(/^([A-Za-z]:)(.*)$/);
-    if (match) {
-      process.env.HOMEDRIVE = match[1];
-      process.env.HOMEPATH = match[2] || "\\";
+    if (process.platform === "win32") {
+      const match = home.match(/^([A-Za-z]:)(.*)$/);
+      if (match) {
+        setTestEnvValue("HOMEDRIVE", expectDefined(match[1], "temp home regex capture 1"));
+        setTestEnvValue("HOMEPATH", match[2] || "\\");
+      }
     }
+  } catch (error) {
+    // No fixture work has started, so rollback must not drain shared session state.
+    snapshot.restore();
+    await fs.rm(home, { recursive: true, force: true });
+    throw error;
   }
 
   return {
     home,
     restore: async () => {
-      await cleanupSessionStateForTest().catch(() => undefined);
+      await cleanupSessionStateForTest({ stateDir }).catch(() => undefined);
       snapshot.restore();
       await fs.rm(home, { recursive: true, force: true });
     },

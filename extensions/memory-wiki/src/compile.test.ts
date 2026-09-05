@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { compileMemoryWikiVault } from "./compile.js";
+import { compileMemoryWikiVault, refreshMemoryWikiIndexesAfterImport } from "./compile.js";
+import { loadMemoryWikiCompiledCache, readMemoryWikiDashboardState } from "./compiled-cache.js";
 import { renderWikiMarkdown, WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
 import { writeMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -57,12 +58,12 @@ describe("compileMemoryWikiVault", () => {
     return page;
   }
 
-  function expectDigestCluster<T extends { key: string }>(clusters: T[], key: string): T {
-    const cluster = clusters.find((candidate) => candidate.key === key);
-    if (!cluster) {
-      throw new Error(`Expected digest contradiction cluster ${key}`);
+  async function expectCompiledCache(config: Parameters<typeof compileMemoryWikiVault>[0]) {
+    const snapshot = await loadMemoryWikiCompiledCache(config);
+    if (!snapshot) {
+      throw new Error(`Expected compiled cache for ${config.vault.path}`);
     }
-    return cluster;
+    return snapshot;
   }
 
   it("writes root and directory indexes for native markdown", async () => {
@@ -104,21 +105,270 @@ describe("compileMemoryWikiVault", () => {
     await expect(fs.readFile(path.join(rootDir, "sources", "index.md"), "utf8")).resolves.toContain(
       "[Alpha](alpha.md)",
     );
-    const agentDigest = JSON.parse(
-      await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
-    ) as {
-      claimCount: number;
-      pages: Array<{ path: string; claimCount: number; topClaims: Array<{ text: string }> }>;
-    };
+    const { digest: agentDigest, claims } = await expectCompiledCache(config);
     expect(agentDigest.claimCount).toBe(1);
     const alphaPage = expectDigestPage(agentDigest.pages, "sources/alpha.md");
     expect(alphaPage.claimCount).toBe(1);
     expect(alphaPage.topClaims.map((claim) => claim.text)).toEqual([
       "Alpha is the canonical source page.",
     ]);
-    await expect(
-      fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
-    ).resolves.toContain('"text":"Alpha is the canonical source page."');
+    expect(claims.map((claim) => claim.text)).toContain("Alpha is the canonical source page.");
+  });
+
+  it("keeps changed imports compile-required when auto-compile is disabled", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      config: {
+        ingest: { autoCompile: false },
+        render: { createBacklinks: false, createDashboards: false },
+      },
+      initialize: true,
+    });
+    const sourcePath = path.join(rootDir, "sources", "cache-only.md");
+    const renderSource = (value: string) =>
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          sourceType: "chatgpt-export",
+          title: "Cache only",
+        },
+        body: `# Cache only\n\n## Auto Digest\n- First user line: ${value}\n`,
+      });
+    await fs.writeFile(sourcePath, renderSource("before"), "utf8");
+    await compileMemoryWikiVault(config);
+    const snapshotBefore = await loadMemoryWikiCompiledCache(config);
+    const indexBefore = await fs.readFile(path.join(rootDir, "index.md"), "utf8");
+
+    await fs.writeFile(sourcePath, renderSource("after"), "utf8");
+    const refresh = await refreshMemoryWikiIndexesAfterImport({
+      config,
+      syncResult: { importedCount: 0, updatedCount: 1, removedCount: 0 },
+    });
+    const snapshotAfter = await loadMemoryWikiCompiledCache(config);
+
+    expect(refresh).toMatchObject({ refreshed: false, reason: "auto-compile-disabled" });
+    expect(JSON.stringify(snapshotBefore?.dashboards)).toContain("before");
+    expect(snapshotAfter).toEqual(snapshotBefore);
+    expect(JSON.stringify(snapshotAfter?.dashboards)).not.toContain("after");
+    await expect(readMemoryWikiDashboardState(config)).resolves.toEqual({
+      state: "compile-required",
+    });
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toBe(indexBefore);
+  });
+
+  it("serves an unchanged compiled cache without reading the vault", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "stable.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          sourceType: "chatgpt-export",
+          title: "Stable",
+        },
+        body: "# Stable\n\n## Auto Digest\n- First user line: cached\n",
+      }),
+      "utf8",
+    );
+    await compileMemoryWikiVault(config);
+    const readFile = vi.spyOn(fs, "readFile");
+
+    const result = await refreshMemoryWikiIndexesAfterImport({
+      config,
+      syncResult: { importedCount: 0, updatedCount: 0, removedCount: 0 },
+    });
+
+    expect(result).toMatchObject({ refreshed: false, reason: "no-import-changes" });
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it("preserves source page bytes while rebuilding derived artifacts", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+      config: { render: { createDashboards: false } },
+    });
+    const sourcePath = path.join(rootDir, "sources", "preserved.md");
+    const source = renderWikiMarkdown({
+      frontmatter: {
+        pageType: "source",
+        id: "source.preserved",
+        title: "Preserved",
+      },
+      body: "# Preserved\n",
+    });
+    await fs.writeFile(sourcePath, source, "utf8");
+
+    const preserved = await compileMemoryWikiVault(config, {
+      sourcePageWrites: "preserve",
+    });
+
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(source);
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
+      "[Preserved](sources/preserved.md)",
+    );
+    expect(preserved.updatedFiles).not.toContain(sourcePath);
+    expect((await expectCompiledCache(config)).digest.pages.map((page) => page.path)).toContain(
+      "sources/preserved.md",
+    );
+
+    const normal = await compileMemoryWikiVault(config);
+    expect(normal.updatedFiles).toContain(sourcePath);
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toContain(
+      "<!-- openclaw:wiki:related:start -->",
+    );
+  });
+
+  it("excludes malformed pages from indexes, digests, counts, and page writes (#96125)", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+      config: { render: { createDashboards: false } },
+    });
+    const brokenPath = path.join(rootDir, "syntheses", "broken.md");
+    const brokenPage = [
+      "---",
+      "pageType: synthesis",
+      "id: synthesis.broken",
+      "sourceIds:",
+      '  - **MEMORY.md line 235**:"some quoted, value"',
+      "---",
+      "",
+      "# Broken",
+      "",
+      "Body that compile must not rewrite.",
+    ].join("\n");
+    await fs.writeFile(brokenPath, brokenPage, "utf8");
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "healthy.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.healthy",
+          title: "Healthy",
+          sourceIds: ["source.alpha"],
+        },
+        body: "# Healthy\n",
+      }),
+      "utf8",
+    );
+
+    const result = await compileMemoryWikiVault(config);
+
+    expect(result.frontmatterErrors).toHaveLength(1);
+    expect(result.frontmatterErrors[0]).toMatchObject({
+      relativePath: "syntheses/broken.md",
+    });
+    expect(result.pageCounts.synthesis).toBe(1);
+    expect(result.pages.map((page) => page.relativePath)).not.toContain("syntheses/broken.md");
+    await expect(fs.readFile(brokenPath, "utf8")).resolves.toBe(brokenPage);
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.not.toContain(
+      "Broken",
+    );
+    expect((await expectCompiledCache(config)).digest.pages.map((page) => page.path)).not.toContain(
+      "syntheses/broken.md",
+    );
+  });
+
+  it.each([
+    {
+      name: "root index with syntax-error frontmatter",
+      relativePath: "index.md",
+      frontmatterLines: [
+        "pageType: report",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+      ],
+      error: "Unexpected scalar",
+    },
+    {
+      name: "root index with sequence-root frontmatter",
+      relativePath: "index.md",
+      frontmatterLines: ["- pageType: report"],
+      error: "Wiki frontmatter must be a YAML mapping",
+    },
+    {
+      name: "directory index with syntax-error frontmatter",
+      relativePath: "sources/index.md",
+      frontmatterLines: [
+        "pageType: report",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+      ],
+      error: "Unexpected scalar",
+    },
+    {
+      name: "directory index with scalar-root frontmatter",
+      relativePath: "sources/index.md",
+      frontmatterLines: ["report"],
+      error: "Wiki frontmatter must be a YAML mapping",
+    },
+  ])(
+    "rejects $name without changing its bytes",
+    async ({ relativePath, frontmatterLines, error }) => {
+      const { rootDir, config } = await createVault({
+        rootDir: nextCaseRoot(),
+        initialize: true,
+        config: { render: { createDashboards: false } },
+      });
+      const targetPath = path.join(rootDir, relativePath);
+      const original = [
+        "---",
+        ...frontmatterLines,
+        "---",
+        "",
+        "# Existing Index",
+        "",
+        "Keep this body.",
+      ].join("\n");
+      await fs.writeFile(targetPath, original, "utf8");
+
+      await expect(compileMemoryWikiVault(config)).rejects.toThrow(error);
+      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(original);
+    },
+  );
+
+  it("discovers pages in nested subdirectories during compile", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.mkdir(path.join(rootDir, "sources", "sub"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "top.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.top", title: "Top Source" },
+        body: "# Top Source\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "sub", "nested.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.nested", title: "Nested Source" },
+        body: "# Nested Source\n",
+      }),
+      "utf8",
+    );
+
+    const result = await compileMemoryWikiVault(config);
+
+    expect(result.pageCounts.source).toBe(2);
+    // Root index should link to both
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
+      "[Top Source](sources/top.md)",
+    );
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
+      "[Nested Source](sources/sub/nested.md)",
+    );
+    // Sources index should link to nested file
+    await expect(fs.readFile(path.join(rootDir, "sources", "index.md"), "utf8")).resolves.toContain(
+      "[Nested Source](sub/nested.md)",
+    );
   });
 
   it("renders native directory index links relative to each generated index", async () => {
@@ -165,7 +415,7 @@ describe("compileMemoryWikiVault", () => {
     ).resolves.toContain("[Alpha Synthesis](alpha-synthesis.md)");
   });
 
-  it("bounds concurrent page reads while compiling", async () => {
+  it("bounds concurrent page reads and stops the queue after abort", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
       initialize: true,
@@ -187,6 +437,8 @@ describe("compileMemoryWikiVault", () => {
     }
 
     const originalReadFile = fs.readFile.bind(fs);
+    const abortController = new AbortController();
+    let pageReads = 0;
     let activePageReads = 0;
     let maxActivePageReads = 0;
     const readFileSpy = vi
@@ -201,7 +453,11 @@ describe("compileMemoryWikiVault", () => {
         }
 
         activePageReads += 1;
+        pageReads += 1;
         maxActivePageReads = Math.max(maxActivePageReads, activePageReads);
+        if (pageReads === 16) {
+          abortController.abort();
+        }
         try {
           await Promise.resolve();
           return await originalReadFile(...args);
@@ -211,12 +467,14 @@ describe("compileMemoryWikiVault", () => {
       });
 
     try {
-      await compileMemoryWikiVault(config);
+      await expect(
+        compileMemoryWikiVault(config, { signal: abortController.signal }),
+      ).rejects.toThrow();
     } finally {
       readFileSpy.mockRestore();
     }
 
-    expect(maxActivePageReads).toBeGreaterThan(0);
+    expect(pageReads).toBe(16);
     expect(maxActivePageReads).toBeLessThanOrEqual(16);
   });
 
@@ -546,17 +804,7 @@ describe("compileMemoryWikiVault", () => {
     await expect(
       fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8"),
     ).resolves.toContain("Tracked Raw Alpha Source");
-    const agentDigest = JSON.parse(
-      await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
-    ) as {
-      claimHealth: { missingEvidence: number; freshness: { unknown: number } };
-      contradictionClusters: Array<{ key: string }>;
-    };
-    expect(agentDigest.claimHealth.missingEvidence).toBeGreaterThanOrEqual(1);
-    expect(agentDigest.claimHealth.freshness.unknown).toBeGreaterThanOrEqual(1);
-    expect(expectDigestCluster(agentDigest.contradictionClusters, "claim.alpha.db").key).toBe(
-      "claim.alpha.db",
-    );
+    expect((await expectCompiledCache(config)).digest.contradictionCount).toBeGreaterThanOrEqual(1);
   });
 
   it("excludes concept and synthesis pages from stale-pages report", async () => {
@@ -737,25 +985,13 @@ describe("compileMemoryWikiVault", () => {
       fs.readFile(path.join(rootDir, "reports", "privacy-review.md"), "utf8"),
     ).resolves.toContain("[Brad Groux](../entities/brad.md)");
 
-    const agentDigest = JSON.parse(
-      await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
-    ) as {
-      pages: Array<{
-        path: string;
-        canonicalId?: string;
-        aliases?: string[];
-        personCard?: { lane?: string };
-        relationshipCount?: number;
-      }>;
-    };
+    const { digest: agentDigest, claims } = await expectCompiledCache(config);
     const bradPage = expectDigestPage(agentDigest.pages, "entities/brad.md");
     expect(bradPage.canonicalId).toBe("maintainer.brad-groux");
     expect(bradPage.aliases).toEqual(["brad"]);
     expect(bradPage.personCard?.lane).toBe("Microsoft Teams");
     expect(bradPage.relationshipCount).toBe(1);
-    await expect(
-      fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
-    ).resolves.toContain('"evidenceKinds":["maintainer-whois"]');
+    expect(claims.flatMap((claim) => claim.evidenceKinds ?? [])).toContain("maintainer-whois");
   });
 
   it("ignores generated related links when computing backlinks on repeated compile", async () => {

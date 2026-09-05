@@ -4,6 +4,7 @@ import ai.openclaw.app.NotificationBurstLimiter
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.allowsPackage
 import ai.openclaw.app.isWithinQuietHours
+import ai.openclaw.app.takeUtf16Safe
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.RemoteInput
@@ -27,7 +28,19 @@ private const val NOTIFICATIONS_CHANGED_EVENT = "notifications.changed"
 internal fun sanitizeNotificationText(value: CharSequence?): String? {
   val normalized = value?.toString()?.trim().orEmpty()
   // Notification extras can include long previews; cap before sending over node events.
-  return normalized.take(MAX_NOTIFICATION_TEXT_CHARS).ifEmpty { null }
+  return normalized.takeUtf16Safe(MAX_NOTIFICATION_TEXT_CHARS).ifEmpty { null }
+}
+
+/**
+ * Keeps app-owned notifications outside the gateway list/action trust boundary.
+ */
+internal fun isGatewayVisibleNotification(
+  appPackageName: String,
+  notificationPackageName: String?,
+): Boolean {
+  val appPackage = appPackageName.trim()
+  val notificationPackage = notificationPackageName?.trim().orEmpty()
+  return appPackage.isNotEmpty() && notificationPackage.isNotEmpty() && notificationPackage != appPackage
 }
 
 /**
@@ -137,10 +150,16 @@ private object DeviceNotificationStore {
     }
   }
 
-  fun snapshot(enabled: Boolean): DeviceNotificationSnapshot {
+  fun snapshot(
+    enabled: Boolean,
+    appPackageName: String,
+  ): DeviceNotificationSnapshot {
     val (isConnected, entries) =
       synchronized(lock) {
-        connected to byKey.values.sortedByDescending { it.postTimeMs }
+        connected to
+          byKey.values
+            .filter { isGatewayVisibleNotification(appPackageName, it.packageName) }
+            .sortedByDescending { it.postTimeMs }
       }
     return DeviceNotificationSnapshot(
       enabled = enabled,
@@ -181,12 +200,11 @@ class DeviceNotificationListenerService : NotificationListenerService() {
 
   override fun onNotificationPosted(sbn: StatusBarNotification?) {
     super.onNotificationPosted(sbn)
-    val entry = sbn?.toEntry() ?: return
+    val posted = sbn ?: return
+    if (!isGatewayVisibleNotification(packageName, posted.packageName)) return
+    val entry = posted.toEntry()
     DeviceNotificationStore.upsert(entry)
     rememberRecentPackage(entry.packageName)
-    if (entry.packageName == packageName) {
-      return
-    }
     val payload = notificationChangedPayload(entry) ?: return
     emitNotificationsChanged(payload)
   }
@@ -276,7 +294,10 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     val entries =
       runCatching {
         activeNotifications
+          ?.asSequence()
+          ?.filter { isGatewayVisibleNotification(packageName, it.packageName) }
           ?.mapNotNull { it.toEntry() }
+          ?.toList()
           ?: emptyList()
       }.getOrElse { emptyList() }
     DeviceNotificationStore.replace(entries)
@@ -359,7 +380,11 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     fun snapshot(
       context: Context,
       enabled: Boolean = isAccessEnabled(context),
-    ): DeviceNotificationSnapshot = DeviceNotificationStore.snapshot(enabled = enabled)
+    ): DeviceNotificationSnapshot =
+      DeviceNotificationStore.snapshot(
+        enabled = enabled,
+        appPackageName = context.packageName,
+      )
 
     /** Asks Android to rebind the listener after settings grant access but callbacks have not arrived. */
     fun requestServiceRebind(context: Context) {
@@ -419,7 +444,10 @@ class DeviceNotificationListenerService : NotificationListenerService() {
   private fun executeActionInternal(request: NotificationActionRequest): NotificationActionResult {
     val sbn =
       activeNotifications
-        ?.firstOrNull { it.key == request.key }
+        ?.firstOrNull {
+          it.key == request.key &&
+            isGatewayVisibleNotification(packageName, it.packageName)
+        }
         ?: return NotificationActionResult(
           ok = false,
           code = "NOTIFICATION_NOT_FOUND",

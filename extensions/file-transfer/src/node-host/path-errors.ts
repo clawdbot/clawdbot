@@ -1,18 +1,20 @@
 // File Transfer plugin module implements path errors behavior.
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError, resolveAbsolutePathForRead } from "openclaw/plugin-sdk/security-runtime";
+import { fileIdentity, readPathBinding, type FileIdentity } from "../shared/path-binding.js";
 
-export type InvalidPathResult = {
+type InvalidPathResult = {
   ok: false;
   code: "INVALID_PATH";
   message: string;
 };
 
-export const SYMLINK_REJECTED_MESSAGE =
+const SYMLINK_REJECTED_MESSAGE =
   "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)";
 
-export type FsSafeReadErrorCode = "INVALID_PATH" | "NOT_FOUND" | "SYMLINK_REDIRECT";
+type FsSafeReadErrorCode = "INVALID_PATH" | "NOT_FOUND" | "SYMLINK_REDIRECT";
 
 export function classifyFsSafeReadError(err: unknown): FsSafeReadErrorCode | undefined {
   if (!(err instanceof FsSafeError)) {
@@ -43,7 +45,19 @@ export function readAbsolutePath(input: unknown): string | InvalidPathResult {
   return input;
 }
 
-export function canonicalPathFromFsSafeError(err: unknown): string | undefined {
+export function rejectCanonicalPathChange(expected: unknown, actual: string) {
+  if (typeof expected !== "string" || expected === actual) {
+    return undefined;
+  }
+  return {
+    ok: false as const,
+    code: "CANONICAL_PATH_CHANGED" as const,
+    message: "canonical path differs from the authorized target",
+    canonicalPath: actual,
+  };
+}
+
+function canonicalPathFromFsSafeError(err: unknown): string | undefined {
   if (!(err instanceof FsSafeError) || !err.cause || typeof err.cause !== "object") {
     return undefined;
   }
@@ -85,11 +99,12 @@ export async function statRequiredDirectory<Code extends string>(
   canonicalPath: string,
   classifyError: (err: unknown) => Code,
 ): Promise<
-  { ok: true } | { ok: false; code: Code | "IS_FILE"; message: string; canonicalPath: string }
+  | { ok: true; identity: FileIdentity }
+  | { ok: false; code: Code | "IS_FILE"; message: string; canonicalPath: string }
 > {
-  let stats: Awaited<ReturnType<typeof fs.stat>>;
+  let stats: BigIntStats;
   try {
-    stats = await fs.stat(canonicalPath);
+    stats = await fs.stat(canonicalPath, { bigint: true });
   } catch (err) {
     const code = classifyError(err);
     return {
@@ -108,5 +123,50 @@ export async function statRequiredDirectory<Code extends string>(
       canonicalPath,
     };
   }
-  return { ok: true };
+  return { ok: true, identity: fileIdentity(stats) };
+}
+
+export async function resolveBoundReadDirectory<Code extends string>(input: {
+  requestedPath: string;
+  followSymlinks: boolean;
+  classifyError: (err: unknown) => Code;
+  notFoundMessage: string;
+  expectedCanonicalPath?: unknown;
+  expectedBinding?: unknown;
+}): Promise<
+  | { ok: true; canonicalPath: string; identity: FileIdentity }
+  | {
+      ok: false;
+      code: Code | "IS_FILE" | "CANONICAL_PATH_CHANGED";
+      message: string;
+      canonicalPath?: string;
+    }
+> {
+  const canonicalPath = await resolveCanonicalReadPath(input);
+  if (typeof canonicalPath !== "string") {
+    return canonicalPath;
+  }
+  const canonicalPathChange = rejectCanonicalPathChange(input.expectedCanonicalPath, canonicalPath);
+  if (canonicalPathChange) {
+    return canonicalPathChange;
+  }
+  const directory = await statRequiredDirectory(canonicalPath, input.classifyError);
+  if (!directory.ok) {
+    return directory;
+  }
+  const expectedBinding = readPathBinding(input.expectedBinding);
+  if (
+    input.expectedBinding !== undefined &&
+    (expectedBinding?.kind !== "existing" ||
+      expectedBinding.device !== directory.identity.device ||
+      expectedBinding.inode !== directory.identity.inode)
+  ) {
+    return {
+      ok: false,
+      code: "CANONICAL_PATH_CHANGED",
+      message: "filesystem identity differs from the authorized target",
+      canonicalPath,
+    };
+  }
+  return { ...directory, canonicalPath };
 }

@@ -1,6 +1,7 @@
 // Maintains channel catalog entries advertised by plugins.
 import { normalizeOptionalString as resolveOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginPackageChannel, PluginPackageInstall } from "./manifest.js";
@@ -16,32 +17,40 @@ export type PluginChannelCatalogEntry = {
   install?: PluginPackageInstall;
 };
 
+type ChannelCatalogParams = {
+  origin?: PluginOrigin;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  extraPaths?: string[];
+  /**
+   * Optional override.  When omitted and `origin !== "bundled"`, the persisted
+   * plugin install ledger is loaded synchronously so that npm-installed
+   * channels stored outside the discovery roots are visible to the catalog.
+   * Bundled-only callers skip the load to avoid the disk read.
+   */
+  installRecords?: Record<string, PluginInstallRecord>;
+  discovery?: PluginDiscoveryResult;
+};
+
 export function listChannelCatalogEntries(
-  params: {
-    origin?: PluginOrigin;
-    workspaceDir?: string;
-    env?: NodeJS.ProcessEnv;
-    extraPaths?: string[];
-    /**
-     * Optional override.  When omitted and `origin !== "bundled"`, the persisted
-     * plugin install ledger is loaded synchronously so that npm-installed
-     * channels stored outside the discovery roots are visible to the catalog.
-     * Bundled-only callers skip the load to avoid the disk read.
-     */
-    installRecords?: Record<string, PluginInstallRecord>;
-    discovery?: PluginDiscoveryResult;
-  } = {},
+  params: ChannelCatalogParams = {},
 ): PluginChannelCatalogEntry[] {
-  const installRecords = resolveInstallRecords(params);
-  const discovery =
-    params.discovery ??
-    discoverOpenClawPlugins({
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      extraPaths: params.extraPaths,
-      ...(installRecords && Object.keys(installRecords).length > 0 ? { installRecords } : {}),
-    });
-  return discovery.candidates.flatMap((candidate) => {
+  // Preserve the ledger-read behavior for callers supplying an exact discovery.
+  if (params.discovery) {
+    resolveInstallRecords(params);
+  }
+  const snapshot =
+    !params.discovery && !params.installRecords ? getGatewayPluginMetadataSnapshot() : undefined;
+  // Keep bundled owners available to callers that exclude untrusted workspace shadows.
+  const candidates = snapshot
+    ? [
+        ...snapshot.plugins,
+        ...(snapshot.bundledManifestRegistry?.plugins ?? []).filter(
+          (bundled) => snapshot.byPluginId.get(bundled.id)?.rootDir !== bundled.rootDir,
+        ),
+      ]
+    : (params.discovery ?? resolveChannelCatalogDiscovery(params)).candidates;
+  return candidates.flatMap((candidate) => {
     if (params.origin && candidate.origin !== params.origin) {
       return [];
     }
@@ -49,7 +58,7 @@ export function listChannelCatalogEntries(
     if (!channel?.id) {
       return [];
     }
-    const pluginId = resolveChannelCatalogPluginId(candidate);
+    const pluginId = "id" in candidate ? candidate.id : resolveChannelCatalogPluginId(candidate);
     if (!pluginId) {
       return [];
     }
@@ -69,6 +78,16 @@ export function listChannelCatalogEntries(
   });
 }
 
+function resolveChannelCatalogDiscovery(params: ChannelCatalogParams) {
+  const installRecords = resolveInstallRecords(params);
+  return discoverOpenClawPlugins({
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    extraPaths: params.extraPaths,
+    ...(installRecords && Object.keys(installRecords).length > 0 ? { installRecords } : {}),
+  });
+}
+
 function resolveChannelCatalogPluginId(
   candidate: PluginDiscoveryResult["candidates"][number],
 ): string | undefined {
@@ -80,20 +99,16 @@ function resolveChannelCatalogPluginId(
   );
 }
 
-function resolveInstallRecords(params: {
-  origin?: PluginOrigin;
-  env?: NodeJS.ProcessEnv;
-  installRecords?: Record<string, PluginInstallRecord>;
-}): Record<string, PluginInstallRecord> | undefined {
-  if (params.installRecords) {
+function resolveInstallRecords(
+  params: ChannelCatalogParams,
+): Record<string, PluginInstallRecord> | undefined {
+  if (params.installRecords || params.origin === "bundled") {
     return params.installRecords;
-  }
-  if (params.origin === "bundled") {
-    return undefined;
   }
   try {
     return loadInstalledPluginIndexInstallRecordsSync(params.env ? { env: params.env } : {});
   } catch {
+    // Failed ledger reads remain retryable within the operation owner.
     return undefined;
   }
 }

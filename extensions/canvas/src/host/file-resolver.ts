@@ -6,13 +6,6 @@ import { root as fsRoot, FsSafeError } from "openclaw/plugin-sdk/security-runtim
 
 type CanvasOpenResult = Awaited<ReturnType<Awaited<ReturnType<typeof fsRoot>>["open"]>>;
 
-/** Normalizes a decoded URL path into a leading-slash POSIX path. */
-export function normalizeUrlPath(rawPath: string): string {
-  const decoded = decodeURIComponent(rawPath || "/");
-  const normalized = path.posix.normalize(decoded);
-  return normalized.startsWith("/") ? normalized : `/${normalized}`;
-}
-
 function pathEscapesRoot(decodedPath: string): boolean {
   let depth = 0;
   for (const segment of decodedPath.split("/")) {

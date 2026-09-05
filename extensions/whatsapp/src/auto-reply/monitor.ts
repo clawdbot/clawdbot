@@ -1,18 +1,17 @@
 // Whatsapp plugin module implements monitor behavior.
 import type { WAMessageKey } from "baileys";
-import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
+import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
+  registerUnhandledRejectionHandler,
+  getChildLogger,
   defaultRuntime,
   formatDurationPrecise,
   warn,
@@ -27,15 +26,14 @@ import {
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
-import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
 import {
-  attachWebInboxToSocket,
   readWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysGroupMetadataCache,
   type WhatsAppBaileysMessageCache,
-  type WhatsAppGroupMetadataCache,
-} from "../inbound/monitor.js";
-import type { WebInboundMessageInput } from "../inbound/types.js";
+} from "../inbound/baileys-cache.js";
+import type { WhatsAppGroupMetadataCache } from "../inbound/group-metadata-cache.js";
+import { attachWebInboxToSocket } from "../inbound/monitor.js";
+import type { WebInboundCallbackMessage } from "../inbound/types.js";
 import {
   newConnectionId,
   resolveHeartbeatSeconds,
@@ -44,11 +42,10 @@ import {
 } from "../reconnect.js";
 import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
 import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
-import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "./config.runtime.js";
+import { getRuntimeConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
-import { createEchoTracker } from "./monitor/echo.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
 import type { WebMonitorTuning } from "./types.js";
@@ -65,13 +62,9 @@ function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
 type ReplyResolver = typeof import("./reply-resolver.runtime.js").getReplyFromConfig;
 type WhatsAppRuntimeConfig = ReturnType<typeof getRuntimeConfig>;
 
-let replyResolverRuntimePromise: Promise<typeof import("./reply-resolver.runtime.js")> | null =
-  null;
-
-function loadReplyResolverRuntime() {
-  replyResolverRuntimePromise ??= import("./reply-resolver.runtime.js");
-  return replyResolverRuntimePromise;
-}
+const loadReplyResolverRuntime = createLazyRuntimeModule(
+  () => import("./reply-resolver.runtime.js"),
+);
 
 function resolveWebMonitorConfigSnapshot(params: {
   cfg: WhatsAppRuntimeConfig;
@@ -90,15 +83,16 @@ function resolveWebMonitorConfigSnapshot(params: {
       ...params.cfg.channels,
       whatsapp: {
         ...params.cfg.channels?.whatsapp,
-        ackReaction: account.ackReaction,
-        messagePrefix: account.messagePrefix,
+        responsePrefix: account.messagePrefix,
         allowFrom: account.allowFrom,
         groupAllowFrom: account.groupAllowFrom,
         groupPolicy: account.groupPolicy,
         textChunkLimit: account.textChunkLimit,
-        chunkMode: account.chunkMode,
+        // Account merge replaces `streaming` wholesale, so pinning the
+        // account-resolved object here keeps downstream root-level resolver
+        // reads (chunk mode, block enable/coalesce) on this account's config.
+        streaming: account.streaming,
         mediaMaxMb: account.mediaMaxMb,
-        blockStreaming: account.blockStreaming,
         groups: account.groups,
       },
     },
@@ -106,37 +100,12 @@ function resolveWebMonitorConfigSnapshot(params: {
   return { cfg, account };
 }
 
-function normalizeReconnectAccountId(accountId?: string | null): string {
-  return (accountId ?? "").trim() || "default";
-}
-
 function isNoListenerReconnectError(lastError?: string): boolean {
   return typeof lastError === "string" && /No active WhatsApp Web listener/i.test(lastError);
 }
 
-function resolveExplicitWhatsAppDebounceOverride(params: {
-  cfg: ReturnType<typeof getRuntimeConfig>;
-  sourceCfg?: ReturnType<typeof getRuntimeConfig> | null;
-  accountId: string;
-}): number | undefined {
-  const channel = params.sourceCfg?.channels?.whatsapp;
-  if (!channel) {
-    return undefined;
-  }
-
-  const accountId = normalizeReconnectAccountId(params.accountId);
-  const accountDebounce = resolveAccountEntry(channel.accounts, accountId)?.debounceMs;
-  if (accountDebounce !== undefined) {
-    return accountDebounce;
-  }
-  if (accountId !== "default") {
-    const defaultAccountDebounce = resolveAccountEntry(channel.accounts, "default")?.debounceMs;
-    if (defaultAccountDebounce !== undefined) {
-      return defaultAccountDebounce;
-    }
-  }
-
-  return channel.debounceMs;
+function normalizeReconnectAccountId(accountId?: string | null): string {
+  return (accountId ?? "").trim() || "default";
 }
 
 function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnstableError {
@@ -150,6 +119,7 @@ function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnst
 }
 
 const DEFAULT_TRANSPORT_TIMEOUT_MS = 5 * 60 * 1000;
+const WHATSAPP_RECONNECT_CATCH_UP_MAX_MS = 20 * 60_000;
 
 export async function monitorWebChannel(
   verbose: boolean,
@@ -167,7 +137,6 @@ export async function monitorWebChannel(
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
   const reconnectLogger = getChildLogger({ module: "web-reconnect", runId });
   const baseCfg = getRuntimeConfig();
-  const sourceCfg = getRuntimeConfigSourceSnapshot();
   const { cfg, account } = resolveWebMonitorConfigSnapshot({
     cfg: baseCfg,
     accountId: tuning.accountId,
@@ -181,7 +150,7 @@ export async function monitorWebChannel(
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
-  const socketTiming = resolveWhatsAppSocketTiming(cfg, tuning.socketTiming);
+  const socketTiming = resolveWhatsAppSocketTiming(tuning.socketTiming);
   const baseMentionConfig = buildMentionConfig(cfg);
   const groupHistoryLimit =
     account.historyLimit ??
@@ -202,7 +171,6 @@ export async function monitorWebChannel(
   const groupMetadataCache: WhatsAppGroupMetadataCache = new Map();
   const recentMessageKeys: WhatsAppBaileysMessageCache = new Map();
   const baileysGroupMetaCache: WhatsAppBaileysGroupMetadataCache = new Map();
-  const echoTracker = createEchoTracker({ maxItems: 100, logVerbose });
 
   const sleep =
     tuning.sleep ??
@@ -224,6 +192,10 @@ export async function monitorWebChannel(
 
   const transportTimeoutMs = tuning.transportTimeoutMs ?? DEFAULT_TRANSPORT_TIMEOUT_MS;
   const messageTimeoutMs = tuning.messageTimeoutMs ?? 30 * 60 * 1000;
+  const reconnectCatchUpWindowMs = Math.min(
+    Math.max(messageTimeoutMs, 60_000),
+    WHATSAPP_RECONNECT_CATCH_UP_MAX_MS,
+  );
   const watchdogCheckMs = tuning.watchdogCheckMs ?? 60 * 1000;
   const controller = new WhatsAppConnectionController({
     accountId: account.accountId,
@@ -250,28 +222,13 @@ export async function monitorWebChannel(
       }
 
       const connectionId = newConnectionId();
-      const inboundDebounceMs = resolveInboundDebounceMs({
-        cfg,
-        channel: "whatsapp",
-        overrideMs: resolveExplicitWhatsAppDebounceOverride({
+      const shouldDebounce = (msg: WebInboundCallbackMessage) =>
+        shouldDebounceTextInbound({
+          text: msg.payload.commandBody ?? msg.payload.body,
           cfg,
-          sourceCfg,
-          accountId: account.accountId,
-        }),
-      });
-      const shouldDebounce = (msg: WebInboundMessageInput) => {
-        const normalized = normalizeWebInboundMessage(msg);
-        if (normalized.payload.media?.path || normalized.payload.media?.type) {
-          return false;
-        }
-        if (normalized.payload.location) {
-          return false;
-        }
-        if (normalized.quote?.id || normalized.quote?.body) {
-          return false;
-        }
-        return !isControlCommandMessage(normalized.payload.body, cfg);
-      };
+          hasMedia: Boolean(msg.payload.media?.path || msg.payload.media?.type),
+          allowDebounce: !(msg.payload.location || msg.quote?.id || msg.quote?.body),
+        });
 
       let connection;
       try {
@@ -286,6 +243,10 @@ export async function monitorWebChannel(
             return meta?.participants?.length ? meta : undefined;
           },
           createListener: async ({ sock, connection: connectionLocal }) => {
+            // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
+            const pluginChannelRuntime = tuning.channelRuntime as
+              | PluginRuntime["channel"]
+              | undefined;
             const onMessage = createWebOnMessageHandler({
               cfg,
               loadConfig: loadCurrentMonitorConfig,
@@ -295,14 +256,15 @@ export async function monitorWebChannel(
               groupHistoryLimit,
               groupHistories,
               groupMemberNames,
-              echoTracker,
               backgroundTasks: connectionLocal.backgroundTasks,
               replyResolver: activeReplyResolver,
               replyLogger,
               baseMentionConfig,
               account,
+              buildContext: pluginChannelRuntime?.inbound.buildContext,
+              // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
+              dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
             });
-
             return (await (listenerFactory ?? attachWebInboxToSocket)({
               cfg,
               loadConfig: loadCurrentMonitorConfig,
@@ -313,7 +275,14 @@ export async function monitorWebChannel(
               selfChatMode: account.selfChatMode,
               sendReadReceipts: account.sendReadReceipts,
               socketTiming,
-              debounceMs: inboundDebounceMs,
+              debounceMs: tuning.debounceMs,
+              appendReplyWindow: connectionLocal.openedAfterRecentInbound
+                ? {
+                    afterMs: connectionLocal.startedAt - reconnectCatchUpWindowMs,
+                    untilMs: connectionLocal.startedAt + reconnectCatchUpWindowMs,
+                    maxAgeMs: reconnectCatchUpWindowMs,
+                  }
+                : undefined,
               shouldDebounce,
               socketRef: controller.socketRef,
               shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),
@@ -322,12 +291,14 @@ export async function monitorWebChannel(
               groupMetadataCache,
               recentMessageKeys,
               baileysGroupMetaCache,
-              onMessage: async (msg: WebInboundMessageInput) => {
-                const normalized = normalizeWebInboundMessage(msg);
+              onMessage: async (msg: WebInboundCallbackMessage) => {
                 const inboundAt = Date.now();
                 controller.noteInbound(inboundAt);
                 statusController.noteInbound(inboundAt);
-                await onMessage(normalized);
+                await onMessage(msg);
+              },
+              onPendingWorkChanged: (pendingWorkCount, at) => {
+                statusController.noteBusy(pendingWorkCount > 0, at);
               },
               sock,
             })) as ManagedWhatsAppListener;

@@ -17,7 +17,7 @@ import {
   consumeGatewayRestartIntentPayloadSync,
   consumeGatewayRestartIntentSync,
   writeGatewayRestartIntentSync,
-} from "./restart.js";
+} from "./restart-intent.js";
 
 const tempDirs: string[] = [];
 type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
@@ -120,7 +120,7 @@ describe("gateway restart intent", () => {
     expect(readIntentRow(env)).toBeUndefined();
   });
 
-  it("round-trips restart reason, force, and wait options", () => {
+  it("round-trips restart options without persisting process-local successor identity", () => {
     const env = createIntentEnv();
 
     expect(
@@ -128,7 +128,15 @@ describe("gateway restart intent", () => {
         env,
         targetPid: process.pid,
         reason: "gateway.restart",
-        intent: { force: true, waitMs: 12_345 },
+        intent: {
+          force: true,
+          waitMs: 12_345,
+          successorOwner: {
+            kind: "managed-update-handoff",
+            handoffId: "private-handoff",
+            installRoot: "/private/install",
+          },
+        },
       }),
     ).toBe(true);
 
@@ -139,6 +147,15 @@ describe("gateway restart intent", () => {
     });
     expect(readIntentRow(env)).toBeUndefined();
     expect(fs.existsSync(legacyIntentPath(env))).toBe(false);
+  });
+
+  it("backs off before an emoji that crosses the persisted reason limit", () => {
+    const env = createIntentEnv();
+    insertIntentRow(env, { reason: "x".repeat(199) + "🧠tail" });
+
+    expect(consumeGatewayRestartIntentPayloadSync(env)).toEqual({
+      reason: "x".repeat(199),
+    });
   });
 
   it("overwrites the previous pending intent row", () => {

@@ -10,151 +10,156 @@ ROOT_DIR="${ROOT_DIR:-$(cd "$DOCKER_E2E_PACKAGE_LIB_DIR/../.." && pwd)}"
 if ! declare -F run_logged >/dev/null 2>&1; then
   source "$DOCKER_E2E_PACKAGE_LIB_DIR/docker-e2e-logs.sh"
 fi
-if ! declare -F docker_e2e_docker_cmd >/dev/null 2>&1; then
+if ! declare -F docker_e2e_docker_cmd >/dev/null 2>&1 || \
+  ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
   source "$DOCKER_E2E_PACKAGE_LIB_DIR/docker-e2e-container.sh"
-fi
-if ! declare -F docker_e2e_docker_run_resource_args >/dev/null 2>&1; then
-  docker_e2e_resource_limits_disabled() {
-    case "${OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS:-}" in
-      1 | true | TRUE | yes | YES | on | ON)
-        return 0
-        ;;
-    esac
-    return 1
-  }
-
-  docker_e2e_resource_value_disabled() {
-    case "${1:-}" in
-      "" | 0 | none | NONE | off | OFF | false | FALSE)
-        return 0
-        ;;
-    esac
-    return 1
-  }
-
-  docker_e2e_detect_available_cpus() {
-    if [ -n "${OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS:-}" ]; then
-      printf '%s\n' "$OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS"
-      return 0
-    fi
-    if command -v nproc >/dev/null 2>&1; then
-      nproc
-      return 0
-    fi
-    if command -v getconf >/dev/null 2>&1; then
-      getconf _NPROCESSORS_ONLN
-      return 0
-    fi
-    return 1
-  }
-
-  docker_e2e_resolve_cpus() {
-    local requested="$1"
-    local available=""
-    available="$(docker_e2e_detect_available_cpus 2>/dev/null || true)"
-    if [[ "$requested" =~ ^[0-9]+$ ]] && [[ "$available" =~ ^[0-9]+$ ]] && [ "$requested" -gt "$available" ]; then
-      printf '%s\n' "$available"
-      return 0
-    fi
-    printf '%s\n' "$requested"
-  }
-
-  docker_e2e_run_arg_present() {
-    local option="$1"
-    shift
-    local arg
-    for arg in "$@"; do
-      if [ "$arg" = "$option" ] || [[ "$arg" == "$option="* ]]; then
-        return 0
-      fi
-      case "$option:$arg" in
-        --memory:-m | --memory:-m=*)
-          return 0
-          ;;
-      esac
-    done
-    return 1
-  }
-
-  docker_e2e_resolve_pids_limit() {
-    local pids_limit="$1"
-    if [[ ! "$pids_limit" =~ ^[0-9]+$ ]] || (( 10#$pids_limit < 1 )); then
-      echo "invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: $pids_limit" >&2
-      return 2
-    fi
-    printf '%s\n' "$((10#$pids_limit))"
-  }
-
-  docker_e2e_docker_run_resource_args() {
-    DOCKER_E2E_RUN_RESOURCE_ARGS=()
-    if docker_e2e_resource_limits_disabled; then
-      return 0
-    fi
-
-    local memory="${OPENCLAW_DOCKER_E2E_MEMORY:-8g}"
-    local cpus="${OPENCLAW_DOCKER_E2E_CPUS:-16}"
-    local pids_limit="${OPENCLAW_DOCKER_E2E_PIDS_LIMIT:-2048}"
-    cpus="$(docker_e2e_resolve_cpus "$cpus")"
-
-    if ! docker_e2e_resource_value_disabled "$memory" && ! docker_e2e_run_arg_present --memory "$@"; then
-      DOCKER_E2E_RUN_RESOURCE_ARGS+=(--memory "$memory")
-    fi
-    if ! docker_e2e_resource_value_disabled "$cpus" && ! docker_e2e_run_arg_present --cpus "$@"; then
-      DOCKER_E2E_RUN_RESOURCE_ARGS+=(--cpus "$cpus")
-    fi
-    if ! docker_e2e_resource_value_disabled "$pids_limit" && ! docker_e2e_run_arg_present --pids-limit "$@"; then
-      pids_limit="$(docker_e2e_resolve_pids_limit "$pids_limit")" || return $?
-      DOCKER_E2E_RUN_RESOURCE_ARGS+=(--pids-limit "$pids_limit")
-    fi
-  }
-fi
-if ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
-  docker_e2e_docker_run_cmd() {
-    if [ "${1:-}" = "run" ]; then
-      shift
-      docker_e2e_docker_run_resource_args "$@" || return $?
-      if declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
-        if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
-          docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-        else
-          docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker run "$@"
-        fi
-        return
-      fi
-      if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
-        set -- run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-      else
-        set -- run "$@"
-      fi
-    fi
-    if declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
-      docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker "$@"
-      return
-    fi
-    local timeout_value="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}"
-    local timeout_bin=""
-    if command -v timeout >/dev/null 2>&1; then
-      timeout_bin="timeout"
-    elif command -v gtimeout >/dev/null 2>&1; then
-      timeout_bin="gtimeout"
-    fi
-    if [ -n "$timeout_bin" ]; then
-      if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
-        "$timeout_bin" --kill-after=30s "$timeout_value" docker "$@"
-      else
-        "$timeout_bin" "$timeout_value" docker "$@"
-      fi
-      return
-    fi
-    echo "timeout command not found; cannot bound Docker run after ${timeout_value}" >&2
-    return 127
-  }
 fi
 
 docker_e2e_abs_path() {
   local file="$1"
   (cd "$(dirname "$file")" && printf '%s/%s\n' "$(pwd)" "$(basename "$file")")
 }
+
+docker_e2e_restore_package_dist_from_image() (
+  local image="$1"
+  local ai_backup_dir=""
+  local ai_dist_dir=""
+  local ai_dist_installed=0
+  local ai_package_dir=""
+  local backup_dir=""
+  local container_id=""
+  local dist_installed=0
+  local requires_ai_dist=0
+  local restore_root=""
+  local restore_complete=0
+  local temp_dir=""
+
+  cleanup_restore_package_dist() {
+    if [ -n "$container_id" ]; then
+      docker_e2e_docker_cmd rm -f "$container_id" >/dev/null 2>&1 || true
+    fi
+    # Root and AI artifacts come from one image. Restore both on partial failure
+    # so the package step cannot combine outputs from different builds.
+    if [ "$restore_complete" != "1" ]; then
+      if [ "$dist_installed" = "1" ]; then
+        rm -rf "$restore_root/dist" >/dev/null 2>&1 || true
+      fi
+      if [ -n "$backup_dir" ] && [ -d "$backup_dir" ]; then
+        if [ ! -e "$restore_root/dist" ] && \
+          mv "$backup_dir" "$restore_root/dist" >/dev/null 2>&1; then
+          backup_dir=""
+        fi
+      fi
+      if [ "$ai_dist_installed" = "1" ]; then
+        rm -rf "$ai_dist_dir" >/dev/null 2>&1 || true
+      fi
+      if [ -n "$ai_backup_dir" ] && [ -d "$ai_backup_dir" ]; then
+        if [ ! -e "$ai_dist_dir" ] && \
+          mv "$ai_backup_dir" "$ai_dist_dir" >/dev/null 2>&1; then
+          ai_backup_dir=""
+        fi
+      fi
+    fi
+    if [ -n "$temp_dir" ]; then
+      rm -rf "$temp_dir"
+    fi
+    if [ "$restore_complete" = "1" ] && [ -n "$backup_dir" ]; then
+      rm -rf "$backup_dir"
+    fi
+    if [ "$restore_complete" = "1" ] && [ -n "$ai_backup_dir" ]; then
+      rm -rf "$ai_backup_dir"
+    fi
+  }
+
+  if ! restore_root="$(cd "$ROOT_DIR" && pwd -P)"; then
+    echo "unable to resolve package restore root: $ROOT_DIR" >&2
+    return 1
+  fi
+  # The trusted workflow owns this static checkout and runs no candidate process
+  # concurrently. Resolve owner paths once and reuse them through every swap.
+  if [ -L "$restore_root/packages" ] || [ -L "$restore_root/packages/ai" ]; then
+    echo "refusing package artifact restore through a symlinked packages path" >&2
+    return 1
+  fi
+  if [ -f "$restore_root/packages/ai/package.json" ]; then
+    if ! ai_package_dir="$(cd "$restore_root/packages/ai" && pwd -P)"; then
+      echo "unable to resolve bundled AI package path" >&2
+      return 1
+    fi
+    case "$ai_package_dir/" in
+      "$restore_root"/*) ;;
+      *)
+        echo "refusing bundled AI artifact restore outside the package root" >&2
+        return 1
+        ;;
+    esac
+    ai_dist_dir="$ai_package_dir/dist"
+    requires_ai_dist=1
+  fi
+
+  echo "==> Reuse package build artifacts from Docker image: $image"
+  if ! container_id="$(docker_e2e_docker_cmd create "$image")"; then
+    cleanup_restore_package_dist
+    return 1
+  fi
+  if ! temp_dir="$(mktemp -d "$restore_root/.package-dist.XXXXXX")"; then
+    cleanup_restore_package_dist
+    return 1
+  fi
+  if ! docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$temp_dir/dist"; then
+    cleanup_restore_package_dist
+    return 1
+  fi
+  if [ "$requires_ai_dist" = "1" ] && \
+    ! docker_e2e_docker_cmd cp \
+      "${container_id}:/app/node_modules/@openclaw/ai/dist" \
+      "$temp_dir/ai-dist"; then
+    cleanup_restore_package_dist
+    return 1
+  fi
+  if [ -e "$restore_root/dist" ]; then
+    if ! backup_dir="$(mktemp -d "$restore_root/.dist-backup.XXXXXX")"; then
+      cleanup_restore_package_dist
+      return 1
+    fi
+    if ! rmdir "$backup_dir"; then
+      cleanup_restore_package_dist
+      return 1
+    fi
+    if ! mv "$restore_root/dist" "$backup_dir"; then
+      cleanup_restore_package_dist
+      return 1
+    fi
+  fi
+  if ! mv "$temp_dir/dist" "$restore_root/dist"; then
+    cleanup_restore_package_dist
+    return 1
+  fi
+  dist_installed=1
+  if [ "$requires_ai_dist" = "1" ]; then
+    if [ -e "$ai_dist_dir" ]; then
+      if ! ai_backup_dir="$(mktemp -d "$ai_package_dir/.dist-backup.XXXXXX")"; then
+        cleanup_restore_package_dist
+        return 1
+      fi
+      if ! rmdir "$ai_backup_dir"; then
+        cleanup_restore_package_dist
+        return 1
+      fi
+      if ! mv "$ai_dist_dir" "$ai_backup_dir"; then
+        cleanup_restore_package_dist
+        return 1
+      fi
+    fi
+    if ! mv "$temp_dir/ai-dist" "$ai_dist_dir"; then
+      cleanup_restore_package_dist
+      return 1
+    fi
+    ai_dist_installed=1
+  fi
+  restore_complete=1
+  cleanup_restore_package_dist
+)
 
 docker_e2e_prepare_package_tgz() {
   local label="$1"
@@ -172,8 +177,11 @@ docker_e2e_prepare_package_tgz() {
   local pack_dir
   pack_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-docker-e2e-pack.XXXXXX")"
   local pack_status=0
+  # ROOT_DIR can be a frozen candidate; resolve tooling beside this helper.
   package_tgz="$(
-    node "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" \
+    node "$DOCKER_E2E_PACKAGE_LIB_DIR/../package-openclaw-for-docker.mjs" \
+      --source-dir "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" \
+      --allow-unreleased-changelog \
       --output-dir "$pack_dir" \
       --output-name openclaw-current.tgz
   )" || pack_status="$?"
@@ -202,6 +210,46 @@ docker_e2e_prepare_package_context() {
     rm -rf "$context_dir"
     return "$copy_status"
   fi
+  # The root package keeps its published dependency declarations. Carry the
+  # verified candidate registry into BuildKit so unpublished core packages resolve.
+  if ! node --input-type=module - \
+    "$DOCKER_E2E_PACKAGE_LIB_DIR/../prepublish-plugin-registry-artifact.mjs" \
+    "$context_dir" <<'NODE'
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const [, , artifactScript, contextDir] = process.argv;
+const registryDir = process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR;
+const target = path.join(contextDir, "prepublish-plugin-registry");
+fs.mkdirSync(target);
+let identity = {};
+if (registryDir) {
+  const { PREPUBLISH_PLUGIN_REGISTRY_MANIFEST, validatePrepublishPluginRegistryArtifact } =
+    await import(pathToFileURL(artifactScript).href);
+  const bytes = fs.readFileSync(path.join(registryDir, PREPUBLISH_PLUGIN_REGISTRY_MANIFEST));
+  const manifest = JSON.parse(bytes);
+  identity = {
+    sourceSha: process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA || manifest.sourceSha,
+    candidateVersion: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION || manifest.candidateVersion,
+    manifestSha256: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256 || createHash("sha256").update(bytes).digest("hex"),
+  };
+  validatePrepublishPluginRegistryArtifact({
+    artifactDir: registryDir,
+    expectedSourceSha: identity.sourceSha,
+    expectedCandidateVersion: identity.candidateVersion,
+    expectedManifestSha256: identity.manifestSha256,
+    requiredPackages: [],
+  });
+  fs.cpSync(registryDir, target, { recursive: true });
+}
+fs.writeFileSync(path.join(contextDir, "registry-identity.json"), `${JSON.stringify(identity)}\n`);
+NODE
+  then
+    rm -rf "$context_dir"
+    return 1
+  fi
   printf '%s\n' "$context_dir"
 }
 
@@ -209,6 +257,13 @@ docker_e2e_package_mount_args() {
   local package_tgz="$1"
   local target="${2:-/tmp/openclaw-current.tgz}"
   DOCKER_E2E_PACKAGE_ARGS=(-v "$package_tgz:$target:ro" -e "OPENCLAW_CURRENT_PACKAGE_TGZ=$target")
+  if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+    source "$DOCKER_E2E_PACKAGE_LIB_DIR/../e2e/lib/prepublish-plugin-registry.sh"
+    openclaw_prepublish_plugin_registry_configure_docker_args "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
+    DOCKER_E2E_PACKAGE_ARGS+=(
+      "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}"
+    )
+  fi
   if [ -n "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-}" ]; then
     DOCKER_E2E_PACKAGE_ARGS+=(-e "OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$OPENCLAW_E2E_NPM_INSTALL_TIMEOUT")
   fi
@@ -258,12 +313,19 @@ docker_e2e_cleanup_container_cidfile() {
 }
 
 docker_e2e_harness_mount_args() {
+  local harness_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"
   DOCKER_E2E_HARNESS_ARGS=(
-    -v "$ROOT_DIR/scripts/e2e:/app/scripts/e2e:ro"
-    -v "$ROOT_DIR/scripts/lib:/app/scripts/lib:ro"
-    -v "$ROOT_DIR/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"
-    -v "$ROOT_DIR/test/helpers:/app/test/helpers:ro"
-    -v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"
+    -v "$harness_root/scripts/e2e:/app/scripts/e2e:ro"
+    -v "$harness_root/scripts/docker/verify-fs-safe-native.mjs:/app/scripts/docker/verify-fs-safe-native.mjs:ro"
+    -v "$harness_root/scripts/lib:/app/scripts/lib:ro"
+    -v "$harness_root/packages/gateway-client/src:/app/packages/gateway-client/src:ro"
+    -v "$harness_root/packages/normalization-core/package.json:/app/packages/normalization-core/package.json:ro"
+    -v "$harness_root/packages/normalization-core/src:/app/packages/normalization-core/src:ro"
+    -v "$harness_root/tsconfig.json:/app/tsconfig.json:ro"
+    -v "$harness_root/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"
+    -v "$harness_root/test/helpers:/app/test/helpers:ro"
+    -v "$harness_root/scripts/prepublish-plugin-registry-artifact.mjs:/app/scripts/prepublish-plugin-registry-artifact.mjs:ro"
+    -v "$harness_root/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"
   )
 }
 

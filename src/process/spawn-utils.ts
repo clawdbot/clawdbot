@@ -1,24 +1,27 @@
 // Spawn utilities configure child processes and normalize spawned process handles.
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "../infra/errors.js";
 
-export type SpawnFallback = {
+type SpawnFallback = {
   label: string;
   options: SpawnOptions;
 };
 
-export type SpawnWithFallbackResult = {
+type SpawnWithFallbackResult = {
   child: ChildProcess;
   usedFallback: boolean;
   fallbackLabel?: string;
 };
 
 type SpawnWithFallbackParams = {
+  assertCurrent?: () => void;
   argv: string[];
   options: SpawnOptions;
   fallbacks?: SpawnFallback[];
-  spawnImpl?: typeof spawn;
+  spawnImpl?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
   retryCodes?: string[];
   onFallback?: (err: unknown, fallback: SpawnFallback) => void;
 };
@@ -40,46 +43,18 @@ function shouldRetry(err: unknown, codes: string[]): boolean {
 }
 
 async function spawnAndWaitForSpawn(
-  spawnImpl: typeof spawn,
+  spawnImpl: NonNullable<SpawnWithFallbackParams["spawnImpl"]>,
   argv: string[],
   options: SpawnOptions,
 ): Promise<ChildProcess> {
-  const child = spawnImpl(argv[0], argv.slice(1), options);
+  const child = spawnImpl(expectDefined(argv[0], "argv entry at 0"), argv.slice(1), options);
 
-  return await new Promise((resolve, reject) => {
-    let settled = false;
-    const cleanup = () => {
-      child.removeListener("error", onError);
-      child.removeListener("spawn", onSpawn);
-    };
-    const finishResolve = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      resolve(child);
-    };
-    const onError = (err: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(toErrorObject(err, "Non-Error rejection"));
-    };
-    const onSpawn = () => {
-      finishResolve();
-    };
-    child.once("error", onError);
-    child.once("spawn", onSpawn);
-    // Ensure mocked spawns that never emit "spawn" don't stall.
-    process.nextTick(() => {
-      if (typeof child.pid === "number") {
-        finishResolve();
-      }
-    });
-  });
+  try {
+    await once(child, "spawn");
+  } catch (err) {
+    throw toErrorObject(err, "Non-Error rejection");
+  }
+  return child;
 }
 
 export async function spawnWithFallback(
@@ -98,8 +73,9 @@ export async function spawnWithFallback(
   ];
 
   let lastError: unknown;
-  for (let index = 0; index < attempts.length; index += 1) {
-    const attempt = attempts[index];
+  for (const [index, attempt] of attempts.entries()) {
+    // Caller revocation is not a spawn failure and cannot select a fallback.
+    params.assertCurrent?.();
     try {
       const child = await spawnAndWaitForSpawn(spawnImpl, params.argv, attempt.options);
       return {

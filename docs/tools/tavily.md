@@ -13,15 +13,16 @@ title: "Tavily"
 - as the `web_search` provider for the generic search tool
 - as explicit plugin tools: `tavily_search` and `tavily_extract`
 
-Tavily returns structured results optimized for LLM consumption with configurable search depth, topic filtering, domain filters, AI-generated answer summaries, and content extraction from URLs (including JavaScript-rendered pages).
+Tavily returns structured results optimized for LLM consumption, with configurable search depth, topic filtering, domain filters, AI-generated answer summaries, and content extraction from URLs (including JavaScript-rendered pages).
 
-| Property  | Value                               |
-| --------- | ----------------------------------- |
-| Plugin id | `tavily`                            |
-| Package   | `@openclaw/tavily-plugin`           |
-| Auth      | `TAVILY_API_KEY` or config `apiKey` |
-| Base URL  | `https://api.tavily.com` (default)  |
-| Tools     | `tavily_search`, `tavily_extract`   |
+| Property  | Value                                                                                         |
+| --------- | --------------------------------------------------------------------------------------------- |
+| Plugin id | `tavily`                                                                                      |
+| Package   | `@openclaw/tavily-plugin`                                                                     |
+| Auth      | `TAVILY_API_KEY` env var or config `apiKey`                                                   |
+| Base URL  | `https://api.tavily.com` (default); `TAVILY_BASE_URL` env var or config `baseUrl` to override |
+| Timeouts  | 30s search, 60s extract (default)                                                             |
+| Tools     | `tavily_search`, `tavily_extract`                                                             |
 
 ## Getting started
 
@@ -75,16 +76,22 @@ Choosing Tavily in onboarding or `openclaw configure --section web` installs and
 
 Use this when you want Tavily-specific search controls instead of generic `web_search`.
 
-| Parameter         | Type         | Constraints / default                  | Description                                     |
-| ----------------- | ------------ | -------------------------------------- | ----------------------------------------------- |
-| `query`           | string       | required                               | Search query string. Keep under 400 characters. |
-| `search_depth`    | enum         | `basic` (default), `advanced`          | `advanced` is slower but higher relevance.      |
-| `topic`           | enum         | `general` (default), `news`, `finance` | Filter by topic family.                         |
-| `max_results`     | integer      | 1-20                                   | Number of results.                              |
-| `include_answer`  | boolean      | default `false`                        | Include a Tavily AI-generated answer summary.   |
-| `time_range`      | enum         | `day`, `week`, `month`, `year`         | Filter results by recency.                      |
-| `include_domains` | string array | (none)                                 | Only include results from these domains.        |
-| `exclude_domains` | string array | (none)                                 | Exclude results from these domains.             |
+| Parameter         | Type         | Constraints / default                  | Description                                   |
+| ----------------- | ------------ | -------------------------------------- | --------------------------------------------- |
+| `query`           | string       | required                               | Search query string.                          |
+| `search_depth`    | enum         | `basic` (default), `advanced`          | `advanced` is slower but higher relevance.    |
+| `topic`           | enum         | `general` (default), `news`, `finance` | Filter by topic family.                       |
+| `max_results`     | integer      | 1-20, default `5`                      | Number of results.                            |
+| `include_answer`  | boolean      | default `false`                        | Include a Tavily AI-generated answer summary. |
+| `time_range`      | enum         | `day`, `week`, `month`, `year`         | Filter results by recency.                    |
+| `include_domains` | string array | (none)                                 | Only include results from these domains.      |
+| `exclude_domains` | string array | (none)                                 | Exclude results from these domains.           |
+
+For publication metadata, use `topic: "news"`. When Tavily supplies a
+`published_date`, OpenClaw returns it as `published`; GMT news timestamps are
+converted to ISO 8601. Missing dates, relative ages, and arbitrary text stay
+absent. A `time_range` filter is not evidence of a publication date, and returned
+dates still need source verification for freshness-sensitive workflows.
 
 Search depth tradeoff:
 
@@ -130,6 +137,12 @@ The generic `web_search` tool with Tavily as provider supports `query` and `coun
 
 ## Advanced configuration
 
+Tavily `web_search` and `tavily_search` use `tools.web.search.cacheTtlMinutes`
+for OpenClaw's local result cache (default: 15 minutes). Set it to `0` to bypass
+cache reads and writes. A shorter TTL limits reuse of existing entries; a
+longer TTL does not extend their original expiry. This setting does not control
+the separate `tavily_extract` cache.
+
 <AccordionGroup>
   <Accordion title="API key resolution order">
     The Tavily client looks up its API key in this order:
@@ -137,12 +150,12 @@ The generic `web_search` tool with Tavily as provider supports `query` and `coun
     1. `plugins.entries.tavily.config.webSearch.apiKey` (resolved through SecretRefs).
     2. `TAVILY_API_KEY` from the gateway environment.
 
-    `tavily_extract` raises a setup error if neither is present.
+    `tavily_search` and `tavily_extract` both raise a setup error if neither is present.
 
   </Accordion>
 
   <Accordion title="Custom base URL">
-    Override `plugins.entries.tavily.config.webSearch.baseUrl` if you front Tavily through a proxy. The default is `https://api.tavily.com`.
+    Override `plugins.entries.tavily.config.webSearch.baseUrl`, or set `TAVILY_BASE_URL`, if you front Tavily through a proxy. Config takes priority over the env var. The default is `https://api.tavily.com`.
   </Accordion>
 
   <Accordion title="`chunks_per_source` requires `query`">

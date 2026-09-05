@@ -1,4 +1,9 @@
 {
+  "schemaVersion": 1,
+  "id": "openclaw-official-external-plugins",
+  "generatedAt": "2026-06-22T00:00:00.000Z",
+  "sequence": 1,
+  "description": "Bundled fallback feed for official external OpenClaw plugins.",
   "entries": [
     {
       "name": "@openclaw/acpx",
@@ -47,6 +52,26 @@
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10",
           "allowInvalidConfigRecovery": true
+        }
+      }
+    },
+    {
+      "name": "@openclaw/codex",
+      "description": "OpenClaw Codex app-server harness and native session catalog",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "codex",
+          "label": "Codex"
+        },
+        "contracts": {
+          "migrationProviders": ["codex"]
+        },
+        "install": {
+          "npmSpec": "@openclaw/codex",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.1-beta.1"
         }
       }
     },
@@ -114,7 +139,12 @@
           "id": "diffs",
           "label": "Diffs"
         },
+        "catalog": {
+          "featured": true,
+          "order": 40
+        },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/diffs",
           "npmSpec": "@openclaw/diffs",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.30"
@@ -136,6 +166,46 @@
           "clawhubSpec": "clawhub:@openclaw/diffs-language-pack",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.27"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/duckduckgo-plugin",
+      "description": "OpenClaw DuckDuckGo plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "duckduckgo",
+          "label": "DuckDuckGo"
+        },
+        "contracts": {
+          "webSearchProviders": [
+            "duckduckgo"
+          ]
+        },
+        "webSearchProviders": [
+          {
+            "id": "duckduckgo",
+            "label": "DuckDuckGo Search (experimental)",
+            "hint": "Free web search fallback with no API key required",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "requiresCredential": false,
+            "envVars": [],
+            "placeholder": "(no key needed)",
+            "signupUrl": "https://duckduckgo.com/",
+            "docsUrl": "https://docs.openclaw.ai/tools/duckduckgo-search",
+            "credentialPath": "",
+            "autoDetectOrder": 100
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/duckduckgo-plugin",
+          "npmSpec": "@openclaw/duckduckgo-plugin",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
         }
       }
     },
@@ -196,7 +266,8 @@
             "firecrawl"
           ],
           "webSearchProviders": [
-            "firecrawl"
+            "firecrawl",
+            "firecrawl-free"
           ],
           "tools": [
             "firecrawl_search",
@@ -220,6 +291,20 @@
             "docsUrl": "https://docs.openclaw.ai/tools/firecrawl",
             "credentialPath": "plugins.entries.firecrawl.config.webSearch.apiKey",
             "autoDetectOrder": 60
+          },
+          {
+            "id": "firecrawl-free",
+            "label": "Firecrawl Search (Free)",
+            "hint": "Free web search via Firecrawl's hosted starter tier — no API key required",
+            "onboardingScopes": [
+              "text-inference"
+            ],
+            "requiresCredential": false,
+            "envVars": [],
+            "placeholder": "(no key needed)",
+            "signupUrl": "https://www.firecrawl.dev/",
+            "docsUrl": "https://docs.openclaw.ai/tools/firecrawl",
+            "credentialPath": ""
           }
         ],
         "install": {
@@ -227,6 +312,25 @@
           "npmSpec": "@openclaw/firecrawl-plugin",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/fish-audio-speech",
+      "description": "OpenClaw Fish Audio speech plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "legacyPluginIds": ["fish-audio"],
+        "plugin": {
+          "id": "fish-audio-speech",
+          "label": "Fish Audio Speech"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/fish-audio-speech",
+          "npmSpec": "@openclaw/fish-audio-speech",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
         }
       }
     },
@@ -303,7 +407,12 @@
           "id": "lobster",
           "label": "Lobster"
         },
+        "catalog": {
+          "featured": true,
+          "order": 50
+        },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/lobster",
           "npmSpec": "@openclaw/lobster",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.25"
@@ -320,7 +429,12 @@
           "id": "memory-lancedb",
           "label": "Memory LanceDB"
         },
+        "catalog": {
+          "featured": true,
+          "order": 70
+        },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/memory-lancedb",
           "npmSpec": "@openclaw/memory-lancedb",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.31"
@@ -329,7 +443,7 @@
     },
     {
       "name": "@openclaw/llama-cpp-provider",
-      "description": "OpenClaw llama.cpp embedding provider plugin",
+      "description": "OpenClaw managed llama.cpp server provider plugin",
       "source": "official",
       "kind": "plugin",
       "openclaw": {
@@ -344,6 +458,23 @@
           "npmSpec": "@openclaw/llama-cpp-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.2"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/mxc-sandbox",
+      "description": "OpenClaw MXC sandbox execution plugin for MXC-capable hosts",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "mxc",
+          "label": "MXC Sandbox Execution"
+        },
+        "install": {
+          "npmSpec": "@openclaw/mxc-sandbox",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.11"
         }
       }
     },
@@ -465,24 +596,6 @@
       }
     },
     {
-      "name": "@openclaw/pixverse-provider",
-      "description": "OpenClaw PixVerse video generation provider plugin",
-      "source": "official",
-      "kind": "plugin",
-      "openclaw": {
-        "plugin": {
-          "id": "pixverse",
-          "label": "PixVerse"
-        },
-        "install": {
-          "clawhubSpec": "clawhub:@openclaw/pixverse-provider",
-          "npmSpec": "@openclaw/pixverse-provider",
-          "defaultChoice": "npm",
-          "minHostVersion": ">=2026.5.26"
-        }
-      }
-    },
-    {
       "name": "@openclaw/searxng-plugin",
       "description": "OpenClaw SearXNG plugin",
       "source": "official",
@@ -574,6 +687,32 @@
       }
     },
     {
+      "name": "@openclaw/teams-meetings",
+      "description": "OpenClaw Microsoft Teams browser meeting participant plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "teams-meetings",
+          "label": "Microsoft Teams meetings"
+        },
+        "contracts": {
+          "tools": [
+            "teams_meetings"
+          ],
+          "transcriptSourceProviders": [
+            "teams"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/teams-meetings",
+          "npmSpec": "@openclaw/teams-meetings",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/tokenjuice",
       "description": "OpenClaw tokenjuice exec output compaction plugin",
       "source": "official",
@@ -582,6 +721,10 @@
         "plugin": {
           "id": "tokenjuice",
           "label": "Tokenjuice"
+        },
+        "catalog": {
+          "featured": true,
+          "order": 60
         },
         "install": {
           "clawhubSpec": "clawhub:@openclaw/tokenjuice",
@@ -605,6 +748,32 @@
           "npmSpec": "@openclaw/voice-call",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.4.10"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/zoom-meetings",
+      "description": "OpenClaw Zoom browser meeting participant plugin.",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "zoom-meetings",
+          "label": "Zoom meetings"
+        },
+        "contracts": {
+          "tools": [
+            "zoom_meetings"
+          ],
+          "transcriptSourceProviders": [
+            "zoom"
+          ]
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/zoom-meetings",
+          "npmSpec": "@openclaw/zoom-meetings",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
         }
       }
     }

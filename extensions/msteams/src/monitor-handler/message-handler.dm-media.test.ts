@@ -1,55 +1,68 @@
-// Msteams tests cover message handlerm media plugin behavior.
-import { describe, expect, it } from "vitest";
-import { translateMSTeamsDmConversationIdForGraph } from "../inbound.js";
+// Msteams tests cover personal-chat media identifier routing.
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../runtime-api.js";
+import type { resolveMSTeamsInboundMedia } from "./inbound-media.js";
+import "./message-handler-mock-support.test-support.js";
 
-describe("translateMSTeamsDmConversationIdForGraph", () => {
-  it("translates a: conversation ID to Graph format for DMs", () => {
-    const result = translateMSTeamsDmConversationIdForGraph({
-      isDirectMessage: true,
-      conversationId: "a:1abc2def3",
-      aadObjectId: "user-aad-id",
-      appId: "bot-app-id",
-    });
-    expect(result).toBe("19:user-aad-id_bot-app-id@unq.gbl.spaces");
+const inboundMediaMockState = vi.hoisted(() => ({
+  resolve: vi.fn<typeof resolveMSTeamsInboundMedia>(),
+}));
+
+vi.mock("./inbound-media.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./inbound-media.js")>();
+  return {
+    ...actual,
+    resolveMSTeamsInboundMedia: inboundMediaMockState.resolve,
+  };
+});
+
+import { createMSTeamsMessageHandler } from "./message-handler.js";
+import { buildChannelActivity, createMessageHandlerDeps } from "./message-handler.test-support.js";
+
+const cfg = {
+  channels: { msteams: { dmPolicy: "open", allowFrom: ["*"] } },
+} as OpenClawConfig;
+
+function buildPersonalAttachmentActivity() {
+  return buildChannelActivity({
+    text: "please inspect this file",
+    conversation: { id: "a:bot-framework-dm", conversationType: "personal" },
+    channelData: {},
+    attachments: [
+      {
+        contentType: "text/html",
+        content: '<div><attachment id="attachment-1"></attachment></div>',
+      },
+    ],
+    entities: [],
+  });
+}
+
+function firstInboundMediaParams(): Record<string, unknown> {
+  const [call] = inboundMediaMockState.resolve.mock.calls;
+  if (!call?.[0] || typeof call[0] !== "object") {
+    throw new Error("expected inbound media parameters");
+  }
+  return call[0] as Record<string, unknown>;
+}
+
+describe("msteams personal media identifier routing", () => {
+  beforeEach(() => {
+    inboundMediaMockState.resolve.mockReset();
+    inboundMediaMockState.resolve.mockResolvedValue([]);
   });
 
-  it("passes through non-a: conversation IDs unchanged", () => {
-    const result = translateMSTeamsDmConversationIdForGraph({
-      isDirectMessage: true,
-      conversationId: "19:existing@unq.gbl.spaces",
-      aadObjectId: "user-aad-id",
-      appId: "bot-app-id",
-    });
-    expect(result).toBe("19:existing@unq.gbl.spaces");
-  });
+  it("preserves the raw Bot Framework ID for personal attachment recovery", async () => {
+    const { deps } = createMessageHandlerDeps(cfg);
+    const handler = createMSTeamsMessageHandler(deps);
 
-  it("passes through when aadObjectId is missing", () => {
-    const result = translateMSTeamsDmConversationIdForGraph({
-      isDirectMessage: true,
-      conversationId: "a:1abc2def3",
-      aadObjectId: null,
-      appId: "bot-app-id",
-    });
-    expect(result).toBe("a:1abc2def3");
-  });
+    await handler({
+      activity: buildPersonalAttachmentActivity(),
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
 
-  it("passes through when appId is missing", () => {
-    const result = translateMSTeamsDmConversationIdForGraph({
-      isDirectMessage: true,
-      conversationId: "a:1abc2def3",
-      aadObjectId: "user-aad-id",
-      appId: null,
-    });
-    expect(result).toBe("a:1abc2def3");
-  });
-
-  it("passes through for non-DM conversations even with a: prefix", () => {
-    const result = translateMSTeamsDmConversationIdForGraph({
-      isDirectMessage: false,
-      conversationId: "a:1abc2def3",
-      aadObjectId: "user-aad-id",
-      appId: "bot-app-id",
-    });
-    expect(result).toBe("a:1abc2def3");
+    const params = firstInboundMediaParams();
+    expect(params).toMatchObject({ conversationId: "a:bot-framework-dm" });
+    expect(params).not.toHaveProperty("graphChatId");
   });
 });

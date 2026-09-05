@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { recordPersistedRuntimeToolSchemaQuarantine } from "../agents/tool-schema-quarantine-health.js";
 import { resolveReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { recordPersistedContextEngineQuarantine } from "../context-engine/quarantine-health.js";
-import { clearContextEngineRuntimeQuarantine } from "../context-engine/registry.js";
+import { resetContextEngineRuntimeQuarantineForTests } from "../context-engine/registry.test-support.js";
 import {
   createCorePluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
@@ -61,7 +61,7 @@ function seedPersistedToolQuarantineForTest(record: {
 describe("runtime plugin health snapshot", () => {
   it("includes persisted context-engine quarantines", async () => {
     await withStateDirEnv("openclaw-status-plugin-health-", async () => {
-      clearContextEngineRuntimeQuarantine();
+      resetContextEngineRuntimeQuarantineForTests();
       recordPersistedContextEngineQuarantine({
         engineId: "lossless-claw",
         owner: "plugin:lossless-claw",
@@ -244,5 +244,17 @@ describe("runtime plugin health snapshot", () => {
       },
     ]);
     expect(resolveReadOnlyChannelPluginsForConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("records only runtime status:loaded plugins as runtime-loaded", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      { id: "runtime-ok", status: "loaded", enabled: true } as never,
+      { id: "runtime-broken", status: "error", enabled: true } as never,
+      { id: "runtime-off", status: "disabled", enabled: false } as never,
+    );
+    setActivePluginRegistry(registry, "runtime-loaded-ids", "default", "/tmp/ws");
+
+    expect(collectRuntimePluginHealthSnapshot().runtimeLoadedPluginIds).toEqual(["runtime-ok"]);
   });
 });

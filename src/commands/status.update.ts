@@ -3,13 +3,32 @@
 
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
-import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
+import {
+  normalizeUpdateChannel,
+  resolveEffectiveUpdateChannel,
+  type UpdateChannel,
+} from "../infra/update-channels.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
   type UpdateCheckResult,
+  type UpdateInstallIdentity,
 } from "../infra/update-check.js";
 import { VERSION } from "../version.js";
+
+/** Chooses a registry tag only after the status check has identified the install. */
+export function resolveStatusRegistryUpdateChannel(
+  params: UpdateInstallIdentity & {
+    configChannel?: UpdateChannel | null;
+  },
+): UpdateChannel {
+  return resolveEffectiveUpdateChannel({
+    configChannel: params.configChannel,
+    currentVersion: VERSION,
+    installKind: params.installKind,
+    git: params.git,
+  }).channel;
+}
 
 /** Runs the update check using the configured update channel and current install root. */
 export async function getUpdateCheckResult(params: {
@@ -29,10 +48,12 @@ export async function getUpdateCheckResult(params: {
     timeoutMs: params.timeoutMs,
     fetchGit: params.fetchGit,
     includeRegistry: params.includeRegistry,
-    registryChannel: resolveRegistryUpdateChannel({
-      configChannel,
-      currentVersion: VERSION,
-    }),
+    resolveRegistryChannel: ({ installKind, git }) =>
+      resolveStatusRegistryUpdateChannel({
+        configChannel,
+        installKind,
+        git,
+      }),
   });
 }
 
@@ -106,11 +127,31 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
             : `npm update ${update.registry.latestVersion}`,
         );
       } else {
-        parts.push(`${registryLabel} ${update.registry.latestVersion} (local newer)`);
+        parts.push(
+          update.registry.tag === "extended-stable"
+            ? `ahead of extended-stable (${update.registry.latestVersion})`
+            : `${registryLabel} ${update.registry.latestVersion} (local newer)`,
+        );
       }
       return;
     }
     if (update.registry?.error) {
+      if (update.registry.reason === "unsupported_git_channel") {
+        parts.push("extended-stable requires a package install");
+        return;
+      }
+      if (update.registry.reason === "selector_missing") {
+        parts.push("npm extended-stable selector missing");
+        return;
+      }
+      if (update.registry.reason === "selector_query_failed") {
+        parts.push("npm extended-stable query failed");
+        return;
+      }
+      if (update.registry.reason === "exact_package_mismatch") {
+        parts.push("npm extended-stable exact package verification failed");
+        return;
+      }
       parts.push(`${registryLabel} unknown`);
     }
   };
@@ -150,9 +191,6 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     }
     if (update.deps.status === "missing") {
       parts.push("deps missing");
-    }
-    if (update.deps.status === "stale") {
-      parts.push("deps stale");
     }
   }
   return `Update: ${parts.join(" · ")}`;

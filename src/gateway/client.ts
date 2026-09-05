@@ -1,25 +1,24 @@
 // OpenClaw Gateway client facade.
-// Wraps the shared gateway-client package with OpenClaw host dependencies.
-import {
-  GatewayClient as BaseGatewayClient,
-  GATEWAY_CLOSE_CODE_HINTS as BASE_GATEWAY_CLOSE_CODE_HINTS,
-  GatewayClientRequestError as BaseGatewayClientRequestError,
-  describeGatewayCloseCode as baseDescribeGatewayCloseCode,
-  isGatewayConnectAssemblyError as baseIsGatewayConnectAssemblyError,
-  resolveGatewayClientConnectChallengeTimeoutMs as baseResolveGatewayClientConnectChallengeTimeoutMs,
-} from "../../packages/gateway-client/src/index.js";
+// Injects OpenClaw host dependencies into the shared gateway-client package.
+import { GatewayClient as BaseGatewayClient } from "../../packages/gateway-client/src/index.js";
 import type {
-  GatewayClientMode,
-  GatewayClientName,
-} from "../../packages/gateway-protocol/src/client-info.js";
-import type { EventFrame, HelloOk } from "../../packages/gateway-protocol/src/index.js";
+  GatewayClientConnectionMetadata,
+  GatewayClientHostDeps,
+  GatewayClientOptions as BaseGatewayClientOptions,
+  GatewayClientRequestOptions,
+} from "../../packages/gateway-client/src/index.js";
 import {
   clearDeviceAuthToken,
+  clearOriginDeviceToken,
   loadDeviceAuthToken,
+  loadDeviceAuthTokenReadOnly,
+  loadOriginDeviceToken,
+  loadOriginDeviceTokenReadOnly,
   storeDeviceAuthToken,
+  storeOriginDeviceToken,
 } from "../infra/device-auth-store.js";
-import type { DeviceIdentity } from "../infra/device-identity.js";
 import {
+  loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
@@ -28,184 +27,138 @@ import {
   ensureInheritedManagedProxyRoutingActive,
   registerManagedProxyGatewayLoopbackBypass,
 } from "../infra/net/proxy/proxy-lifecycle.js";
-import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { logDebug, logError } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import type { DeviceAuthEntry } from "../shared/device-auth.js";
+import { resolveGatewayClientPlatformIdentity } from "../shared/gateway-client-platform.js";
 import { VERSION } from "../version.js";
 
-export type DeviceAuthTokenRecord = {
-  token?: string;
-  scopes?: string[];
-};
+export {
+  GatewayClientRequestError,
+  isGatewayConnectAssemblyError,
+  isGatewayProtocolResponseError,
+} from "../../packages/gateway-client/src/index.js";
+export type {
+  GatewayClientCloseInfo,
+  GatewayClientRequestOptions,
+  GatewayReconnectPausedInfo,
+} from "../../packages/gateway-client/src/index.js";
 
-export type GatewayClientHostDeps = {
-  loadOrCreateDeviceIdentity?: () => DeviceIdentity | undefined;
-  signDevicePayload?: (privateKeyPem: string, payload: string) => string;
-  publicKeyRawBase64UrlFromPem?: (publicKeyPem: string) => string;
-  loadDeviceAuthToken?: (params: {
-    deviceId: string;
-    role: string;
-    env?: NodeJS.ProcessEnv;
-  }) => DeviceAuthTokenRecord | null;
-  storeDeviceAuthToken?: (params: {
-    deviceId: string;
-    role: string;
-    token: string;
-    scopes: string[];
-    env?: NodeJS.ProcessEnv;
-  }) => void;
-  clearDeviceAuthToken?: (params: {
-    deviceId: string;
-    role: string;
-    env?: NodeJS.ProcessEnv;
-  }) => void;
-  beforeConnect?: () => void;
-  registerGatewayLoopbackBypass?: (url: string) => (() => void) | undefined;
-  logDebug?: (message: string) => void;
-  logError?: (message: string) => void;
-  redactForLog?: (message: string) => string;
-  normalizeTlsFingerprint?: (fingerprint: string | undefined) => string;
-};
-
-export type GatewayClientRequestOptions = {
-  expectFinal?: boolean;
-  timeoutMs?: number | null;
-  signal?: AbortSignal;
-  onAccepted?: (payload: unknown) => void;
-};
-
-export type GatewayReconnectPausedInfo = {
-  code: number;
-  reason: string;
-  detailCode: string | null;
-};
-
-export type GatewayClientCloseInfo = {
-  phase: "pre-hello" | "post-hello";
-  socketOpened: boolean;
-  transportValidated: boolean;
-  transientPreHelloCleanClose: boolean;
-};
-
-type GatewayClientErrorShape = {
-  message: string;
-  code?: string;
-  details?: unknown;
-  retryable?: boolean;
-  retryAfterMs?: number;
-};
-
-export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> =
-  BASE_GATEWAY_CLOSE_CODE_HINTS;
-
-export const GatewayClientRequestError = BaseGatewayClientRequestError as unknown as {
-  new (error: GatewayClientErrorShape): Error & {
-    readonly gatewayCode: string;
-    readonly details?: unknown;
-    readonly retryable: boolean;
-    readonly retryAfterMs?: number;
-  };
-};
-
-export type GatewayClientRequestError = InstanceType<typeof GatewayClientRequestError>;
-
-export function describeGatewayCloseCode(code: number): string | undefined {
-  return baseDescribeGatewayCloseCode(code);
-}
-
-export function isGatewayConnectAssemblyError(value: unknown): value is Error {
-  return baseIsGatewayConnectAssemblyError(value);
-}
-
-export type GatewayClientOptions = {
-  url?: string;
-  connectChallengeTimeoutMs?: number;
-  /** @deprecated Use connectChallengeTimeoutMs. */
-  connectDelayMs?: number;
-  preauthHandshakeTimeoutMs?: number;
-  tickWatchMinIntervalMs?: number;
-  tickWatchTimeoutMs?: number;
-  requestTimeoutMs?: number;
-  token?: string;
-  bootstrapToken?: string;
-  deviceToken?: string;
-  password?: string;
-  approvalRuntimeToken?: string;
-  instanceId?: string;
-  clientName?: GatewayClientName;
-  clientDisplayName?: string;
-  clientVersion?: string;
-  platform?: string;
-  deviceFamily?: string;
-  mode?: GatewayClientMode;
-  role?: string;
-  scopes?: string[];
-  caps?: string[];
-  commands?: string[];
-  permissions?: Record<string, boolean>;
-  pathEnv?: string;
-  env?: NodeJS.ProcessEnv;
-  deviceIdentity?: DeviceIdentity | null;
-  hostDeps?: GatewayClientHostDeps;
-  minProtocol?: number;
-  maxProtocol?: number;
-  tlsFingerprint?: string;
-  onEvent?: (evt: EventFrame) => void;
-  onHelloOk?: (hello: HelloOk) => void;
-  onConnectError?: (err: Error) => void;
-  onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
-  onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
-  onGap?: (info: { expected: number; received: number }) => void;
-};
-
-export type GatewayClientConnectionMetadata = {
-  clientName?: GatewayClientName;
-  hasDeviceIdentity: boolean;
-  mode?: GatewayClientMode;
-  preauthHandshakeTimeoutMs?: number;
+export type GatewayClientOptions = BaseGatewayClientOptions & {
+  /** Exact normalized remote gateway scope for origin-bound device credentials. */
+  deviceAuthScope?: string;
+  /** Prevent this client lifecycle from creating or mutating shared state. */
+  sharedStateMode?: "read-only";
+  /** Auth already resolved and validated by the one-shot call owner. */
+  preparedDeviceAuth?: DeviceAuthEntry;
 };
 
 function createOpenClawGatewayClientHostDeps(
   overrides?: GatewayClientHostDeps,
+  deviceAuthScope?: string,
+  suppressOriginDeviceAuth = false,
+  sharedStateMode?: "read-only",
+  preparedDeviceAuth?: DeviceAuthEntry,
 ): GatewayClientHostDeps {
+  const readOnly = sharedStateMode === "read-only";
+  // Prepared auth is immutable request input. Any later durable mutation must
+  // still match this token so a stale request cannot undo a concurrent rotation.
+  const rotationFence = preparedDeviceAuth
+    ? { expectedToken: preparedDeviceAuth.token }
+    : undefined;
+  const deviceAuthDeps: Pick<
+    GatewayClientHostDeps,
+    "loadDeviceAuthToken" | "storeDeviceAuthToken" | "clearDeviceAuthToken"
+  > = deviceAuthScope
+    ? {
+        loadDeviceAuthToken: (params) =>
+          suppressOriginDeviceAuth
+            ? null
+            : readOnly
+              ? loadOriginDeviceTokenReadOnly({ ...params, gatewayScope: deviceAuthScope })
+              : loadOriginDeviceToken({ ...params, gatewayScope: deviceAuthScope }),
+        storeDeviceAuthToken: readOnly
+          ? () => {}
+          : (params) =>
+              storeOriginDeviceToken({
+                ...params,
+                gatewayScope: deviceAuthScope,
+                ...rotationFence,
+              }),
+        clearDeviceAuthToken: readOnly
+          ? () => {}
+          : (params) =>
+              clearOriginDeviceToken({
+                ...params,
+                gatewayScope: deviceAuthScope,
+                ...rotationFence,
+              }),
+      }
+    : readOnly
+      ? {
+          loadDeviceAuthToken: loadDeviceAuthTokenReadOnly,
+          storeDeviceAuthToken: () => {},
+          clearDeviceAuthToken: () => {},
+        }
+      : {
+          loadDeviceAuthToken,
+          storeDeviceAuthToken: (params) => storeDeviceAuthToken({ ...params, ...rotationFence }),
+          clearDeviceAuthToken: (params) => clearDeviceAuthToken({ ...params, ...rotationFence }),
+        };
+  const preparedDeviceAuthDeps = preparedDeviceAuth
+    ? { ...deviceAuthDeps, loadDeviceAuthToken: () => preparedDeviceAuth }
+    : deviceAuthDeps;
   return {
     // This wrapper is the only place the package reaches into OpenClaw runtime
     // state. Keep device identity, token storage, proxy, and redaction here.
     loadOrCreateDeviceIdentity,
     signDevicePayload,
     publicKeyRawBase64UrlFromPem,
-    loadDeviceAuthToken,
-    storeDeviceAuthToken,
-    clearDeviceAuthToken,
+    ...preparedDeviceAuthDeps,
     beforeConnect: ensureInheritedManagedProxyRoutingActive,
     registerGatewayLoopbackBypass: registerManagedProxyGatewayLoopbackBypass,
-    normalizeTlsFingerprint: (fingerprint) => normalizeFingerprint(fingerprint ?? ""),
     logDebug,
     logError,
     redactForLog: redactToolPayloadText,
     ...overrides,
+    ...(readOnly
+      ? {
+          // Read-only is an authoritative lifecycle policy: caller overrides
+          // must not restore identity creation or token writes behind it.
+          loadOrCreateDeviceIdentity: () => loadDeviceIdentityIfPresent() ?? undefined,
+          ...preparedDeviceAuthDeps,
+        }
+      : {}),
   };
-}
-
-export function resolveGatewayClientConnectChallengeTimeoutMs(
-  opts: Pick<
-    GatewayClientOptions,
-    "connectChallengeTimeoutMs" | "connectDelayMs" | "env" | "preauthHandshakeTimeoutMs"
-  >,
-): number {
-  return baseResolveGatewayClientConnectChallengeTimeoutMs(opts);
 }
 
 export class GatewayClient {
   #client: BaseGatewayClient;
 
   constructor(opts: GatewayClientOptions) {
-    // Inject host deps here so the reusable package stays decoupled from
-    // OpenClaw device identity, token storage, proxy routing, and logging.
+    const { deviceAuthScope, preparedDeviceAuth, sharedStateMode, ...baseOptions } = opts;
+    const runtimeIdentity = resolveGatewayClientPlatformIdentity(process.platform);
+    const suppressOriginDeviceAuth = Boolean(
+      deviceAuthScope && (baseOptions.token?.trim() || baseOptions.password?.trim()),
+    );
+    for (const value of Object.values(baseOptions.edgeAuthHeaders ?? {})) {
+      registerSecretValueForRedaction(value);
+    }
     this.#client = new BaseGatewayClient({
-      ...opts,
-      clientVersion: opts.clientVersion ?? VERSION,
-      hostDeps: createOpenClawGatewayClientHostDeps(opts.hostDeps),
+      ...baseOptions,
+      clientVersion: baseOptions.clientVersion ?? VERSION,
+      platform: baseOptions.platform ?? runtimeIdentity.platform,
+      deviceFamily:
+        baseOptions.deviceFamily ??
+        (baseOptions.platform === undefined ? runtimeIdentity.deviceFamily : undefined),
+      hostDeps: createOpenClawGatewayClientHostDeps(
+        baseOptions.hostDeps,
+        deviceAuthScope,
+        suppressOriginDeviceAuth,
+        sharedStateMode,
+        preparedDeviceAuth,
+      ),
     });
   }
 
@@ -230,14 +183,14 @@ export class GatewayClient {
   }
 
   getConnectionMetadata(): GatewayClientConnectionMetadata {
-    const opts = (this.#client as unknown as { opts: GatewayClientOptions }).opts;
-    return {
-      clientName: opts.clientName,
-      hasDeviceIdentity: Boolean(opts.deviceIdentity),
-      mode: opts.mode,
-      preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
-    };
+    return this.#client.getConnectionMetadata();
+  }
+
+  updateNodeManifest(manifest: {
+    caps: string[];
+    commands: string[];
+    computerUse?: BaseGatewayClientOptions["computerUse"];
+  }): void {
+    this.#client.updateNodeManifest(manifest);
   }
 }
-
-export type { DeviceIdentity };

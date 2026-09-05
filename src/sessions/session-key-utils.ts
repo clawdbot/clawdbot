@@ -4,6 +4,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { escapeRegExp } from "../shared/regexp.js";
 
 export type ParsedAgentSessionKey = {
   agentId: string;
@@ -13,6 +15,19 @@ export type ParsedAgentSessionKey = {
 export type ParsedThreadSessionSuffix = {
   baseSessionKey: string | undefined;
   threadId: string | undefined;
+};
+
+type ParsedSessionDeliveryRoute = {
+  accountId?: string;
+  channel: string;
+  peerId: string;
+  peerKind: "channel" | "direct" | "dm" | "group";
+  threadId?: string;
+};
+
+type ParsedCronRunScopeSuffix = {
+  baseSessionKey: string | undefined;
+  runId: string | undefined;
 };
 
 export type RawSessionConversationRef = {
@@ -51,15 +66,22 @@ const CASE_PRESERVING_PEERS: readonly CasePreservingPeerDescriptor[] = [
   { channel: "matrix", peerKinds: new Set(["channel", "group"]), span: "tail", unscoped: true },
 ];
 
-/** True when (channel, peerKind) owns a case-sensitive opaque peer ID. */
-export function isCasePreservingPeer(
-  channel: string | undefined | null,
-  peerKind: string | undefined | null,
-): boolean {
-  const c = normalizeLowercaseStringOrEmpty(channel);
-  const k = normalizeLowercaseStringOrEmpty(peerKind);
-  return findCasePreservingPeerDescriptor(c, k) !== undefined;
-}
+const CASE_PRESERVING_PEER_PATTERNS = CASE_PRESERVING_PEERS.flatMap((descriptor) =>
+  [...descriptor.peerKinds].map((peerKind) => {
+    const prefix = `${escapeRegExp(descriptor.channel)}:${escapeRegExp(peerKind)}:`;
+    return {
+      span: descriptor.span,
+      pattern: new RegExp(
+        descriptor.span === "segment" ? `(^|:)${prefix}([^:]+)` : `^(?:agent:[^:]*:)+:*${prefix}`,
+        descriptor.span === "segment" ? "gi" : "i",
+      ),
+      unscopedPattern:
+        descriptor.span === "tail" && descriptor.unscoped
+          ? new RegExp(`^${prefix}`, "i")
+          : undefined,
+    };
+  }),
+);
 
 function findCasePreservingPeerDescriptor(
   channel: string | undefined | null,
@@ -71,8 +93,29 @@ function findCasePreservingPeerDescriptor(
 }
 
 export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefined | null): boolean {
-  const ref = parseRawSessionConversationRef(sessionKey);
-  const descriptor = findCasePreservingPeerDescriptor(ref?.channel, ref?.kind);
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return false;
+  }
+  const parts = raw.split(":");
+  let bodyStartIndex = 0;
+  let hasAgentWrapper = false;
+  while (
+    parts.length - bodyStartIndex >= 3 &&
+    normalizeOptionalLowercaseString(parts[bodyStartIndex]) === "agent"
+  ) {
+    hasAgentWrapper = true;
+    bodyStartIndex += 2;
+  }
+  if (hasAgentWrapper) {
+    while (bodyStartIndex < parts.length && !normalizeOptionalString(parts[bodyStartIndex])) {
+      bodyStartIndex += 1;
+    }
+  }
+  const descriptor = findCasePreservingPeerDescriptor(
+    parts[bodyStartIndex],
+    parts[bodyStartIndex + 1],
+  );
   return descriptor?.span === "tail";
 }
 
@@ -85,13 +128,9 @@ export function normalizeSessionPeerId(params: {
   if (!peerId) {
     return "";
   }
-  return isCasePreservingPeer(params.channel, params.peerKind)
+  return findCasePreservingPeerDescriptor(params.channel, params.peerKind) !== undefined
     ? peerId
     : normalizeLowercaseStringOrEmpty(peerId);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 type PreservedSpan = { start: number; end: number; trim: boolean };
@@ -111,17 +150,10 @@ function writeNormalizedSessionKeyCache(raw: string, normalized: string): void {
     return;
   }
   normalizedSessionKeyCache.set(raw, normalized);
-  while (normalizedSessionKeyCache.size > NORMALIZED_SESSION_KEY_CACHE_MAX_ENTRIES) {
-    const oldest = normalizedSessionKeyCache.keys().next().value;
-    if (oldest === undefined) {
-      return;
-    }
-    normalizedSessionKeyCache.delete(oldest);
-  }
+  pruneMapToMaxSize(normalizedSessionKeyCache, NORMALIZED_SESSION_KEY_CACHE_MAX_ENTRIES);
 }
 
-function mayContainCasePreservingPeer(raw: string): boolean {
-  const folded = raw.toLowerCase();
+function mayContainCasePreservingPeer(folded: string): boolean {
   return CASE_PRESERVING_PEERS.some((descriptor) => folded.includes(`${descriptor.channel}:`));
 }
 
@@ -133,55 +165,36 @@ function mayContainCasePreservingPeer(raw: string): boolean {
  */
 function collectCasePreservedSpans(raw: string): PreservedSpan[] {
   const spans: PreservedSpan[] = [];
-  for (const descriptor of CASE_PRESERVING_PEERS) {
-    const channel = escapeRegExp(descriptor.channel);
-    for (const peerKind of descriptor.peerKinds) {
-      const kind = escapeRegExp(peerKind);
-      if (descriptor.span === "segment") {
-        // Unscoped: `<channel>:<peerKind>:<segment>` at start or after any colon.
-        const re = new RegExp(`(^|:)${channel}:${kind}:([^:]+)`, "gi");
-        for (const match of raw.matchAll(re)) {
-          const matched = match[0] ?? "";
-          const segment = match[2] ?? "";
-          const segStart = (match.index ?? 0) + matched.length - segment.length;
-          // Segment spans match the legacy `peerId.trim()` behavior exactly.
-          spans.push({ start: segStart, end: segStart + segment.length, trim: true });
-        }
-      } else {
-        const collectTailSpan = (tailStart: number): void => {
-          if (tailStart >= raw.length) {
-            return;
-          }
-          // Preserve Matrix room/event IDs, but keep structural thread marker
-          // casing canonical so `:Thread:` cannot fork a session key.
-          const tail = raw.slice(tailStart);
-          const threadMarker = ":thread:";
-          const markerIndex = normalizeLowercaseStringOrEmpty(tail).lastIndexOf(threadMarker);
-          if (markerIndex === -1) {
-            spans.push({ start: tailStart, end: raw.length, trim: false });
-            return;
-          }
-          spans.push({ start: tailStart, end: tailStart + markerIndex, trim: false });
-          const threadIdStart = tailStart + markerIndex + threadMarker.length;
-          if (threadIdStart < raw.length) {
-            spans.push({ start: threadIdStart, end: raw.length, trim: false });
-          }
-        };
-        // Tail: anchored to the real agent-scoped head; preserve through key end.
-        const scopedRe = new RegExp(`^agent:[^:]+:${channel}:${kind}:`, "i");
-        const scopedMatch = scopedRe.exec(raw);
-        if (scopedMatch) {
-          collectTailSpan(scopedMatch[0].length);
-          continue;
-        }
-        if (descriptor.unscoped) {
-          const unscopedRe = new RegExp(`^${channel}:${kind}:`, "i");
-          const unscopedMatch = unscopedRe.exec(raw);
-          if (unscopedMatch) {
-            collectTailSpan(unscopedMatch[0].length);
-          }
-        }
+  for (const descriptor of CASE_PRESERVING_PEER_PATTERNS) {
+    if (descriptor.span === "segment") {
+      // matchAll clones the global matcher, so separate keys never share a cursor.
+      for (const match of raw.matchAll(descriptor.pattern)) {
+        const matched = match[0] ?? "";
+        const segment = match[2] ?? "";
+        const segStart = (match.index ?? 0) + matched.length - segment.length;
+        // Segment spans match the legacy peerId.trim() behavior exactly.
+        spans.push({ start: segStart, end: segStart + segment.length, trim: true });
       }
+      continue;
+    }
+    // Nested/malformed ownership wrappers remain opaque; only the matcher owns their shape.
+    const match = descriptor.pattern.exec(raw) ?? descriptor.unscopedPattern?.exec(raw);
+    if (!match || match[0].length >= raw.length) {
+      continue;
+    }
+    const tailStart = match[0].length;
+    const tail = raw.slice(tailStart);
+    const threadMarker = ":thread:";
+    const markerIndex = normalizeLowercaseStringOrEmpty(tail).lastIndexOf(threadMarker);
+    if (markerIndex === -1) {
+      spans.push({ start: tailStart, end: raw.length, trim: false });
+      continue;
+    }
+    // Room/event bytes stay opaque; only the structural thread marker is folded.
+    spans.push({ start: tailStart, end: tailStart + markerIndex, trim: false });
+    const threadIdStart = tailStart + markerIndex + threadMarker.length;
+    if (threadIdStart < raw.length) {
+      spans.push({ start: threadIdStart, end: raw.length, trim: false });
     }
   }
   return spans;
@@ -198,10 +211,11 @@ export function normalizeSessionKeyPreservingOpaquePeerIds(
   if (cached !== undefined) {
     return cached;
   }
-  if (!mayContainCasePreservingPeer(raw)) {
-    const normalized = raw.toLowerCase();
-    writeNormalizedSessionKeyCache(raw, normalized);
-    return normalized;
+  const folded = raw.toLowerCase();
+  // Ordinary inventory keys are cheap to fold and would churn the bounded
+  // opaque-key cache, repeatedly scanning deleted Map entries during eviction.
+  if (!mayContainCasePreservingPeer(folded)) {
+    return folded;
   }
   const spans = collectCasePreservedSpans(raw)
     .filter((span) => span.end > span.start)
@@ -236,16 +250,16 @@ export function parseAgentSessionKey(
   if (!raw) {
     return null;
   }
-  const parts = raw.split(":").filter(Boolean);
-  if (parts.length < 3) {
+  if (!raw.startsWith("agent:")) {
     return null;
   }
-  if (parts[0] !== "agent") {
+  const agentIdEnd = raw.indexOf(":", "agent:".length);
+  if (agentIdEnd === -1) {
     return null;
   }
-  const agentId = normalizeOptionalString(parts[1]);
-  const rest = parts.slice(2).join(":");
-  if (!agentId || !rest) {
+  const agentId = normalizeOptionalString(raw.slice("agent:".length, agentIdEnd));
+  const rest = raw.slice(agentIdEnd + 1);
+  if (!agentId || !rest || rest.startsWith(":")) {
     return null;
   }
   return { agentId, rest };
@@ -257,6 +271,32 @@ export function isCronRunSessionKey(sessionKey: string | undefined | null): bool
     return false;
   }
   return /^cron:[^:]+:run:[^:]+(?::|$)/.test(parsed.rest);
+}
+
+/**
+ * Splits the terminal per-run `:run:<id>` scope off an isolated cron session key
+ * (`agent:<id>:cron:<job>:run:<runId>`), yielding the cache-stable base key.
+ * The run scope is only ever appended to cron keys, so this is gated to that exact
+ * shape: any other key (including channel ids that embed a `:run:` segment) is returned
+ * unchanged with `runId` undefined, never truncating an unrelated session identity.
+ */
+export function parseCronRunScopeSuffix(
+  sessionKey: string | undefined | null,
+): ParsedCronRunScopeSuffix {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return { baseSessionKey: undefined, runId: undefined };
+  }
+  const parsed = parseAgentSessionKey(raw);
+  if (!parsed || !/^cron:[^:]+:run:[^:]+$/.test(parsed.rest)) {
+    return { baseSessionKey: raw, runId: undefined };
+  }
+  const runMarker = ":run:";
+  const markerIndex = raw.toLowerCase().lastIndexOf(runMarker);
+  return {
+    baseSessionKey: raw.slice(0, markerIndex),
+    runId: raw.slice(markerIndex + runMarker.length),
+  };
 }
 
 export function isCronSessionKey(sessionKey: string | undefined | null): boolean {
@@ -284,7 +324,11 @@ export function getSubagentDepth(sessionKey: string | undefined | null): number 
   if (!raw) {
     return 0;
   }
-  return raw.split(":subagent:").length - 1;
+
+  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
+  const normalized = scoped.toLowerCase();
+  const matches = normalized.match(/(^|:)subagent:/g);
+  return matches?.length ?? 0;
 }
 
 export function isAcpSessionKey(sessionKey: string | undefined | null): boolean {
@@ -298,6 +342,14 @@ export function isAcpSessionKey(sessionKey: string | undefined | null): boolean 
   }
   const parsed = parseAgentSessionKey(raw);
   return normalizeOptionalLowercaseString(parsed?.rest)?.startsWith("acp:") === true;
+}
+
+/** Stored ACP bindings and stale ACP keys both belong to ACP dispatch, never local fallback. */
+export function resolveSessionDispatchKind(
+  sessionKey: string | undefined | null,
+  entry?: { acp?: unknown },
+): "agent" | "acp" {
+  return entry?.acp || isAcpSessionKey(sessionKey) ? "acp" : "agent";
 }
 
 export function parseThreadSessionSuffix(
@@ -321,6 +373,56 @@ export function parseThreadSessionSuffix(
   return { baseSessionKey, threadId };
 }
 
+const SESSION_DELIVERY_PEER_KINDS = new Set<ParsedSessionDeliveryRoute["peerKind"]>([
+  "channel",
+  "direct",
+  "dm",
+  "group",
+]);
+
+/** Parse only complete external delivery shapes; nested ownership stays opaque. */
+export function parseSessionDeliveryRoute(
+  sessionKey: string | undefined | null,
+): ParsedSessionDeliveryRoute | null {
+  const parsedThread = parseThreadSessionSuffix(sessionKey);
+  const parsed = parseAgentSessionKey(parsedThread.baseSessionKey ?? sessionKey);
+  if (!parsed) {
+    return null;
+  }
+  const parts = parsed.rest.split(":");
+  if (parts[0] === "agent" || parts.length < 3) {
+    return null;
+  }
+  const channel = normalizeOptionalLowercaseString(parts[0]);
+  if (!channel) {
+    return null;
+  }
+
+  if (parts.length >= 4 && (parts[2] === "direct" || parts[2] === "dm")) {
+    const accountId = normalizeOptionalString(parts[1]);
+    const firstPeerIdSegment = normalizeOptionalString(parts[3]);
+    const peerId = normalizeOptionalString(parts.slice(3).join(":"));
+    if (!accountId || !firstPeerIdSegment || !peerId) {
+      return null;
+    }
+    return {
+      accountId,
+      channel,
+      peerId,
+      peerKind: parts[2],
+      threadId: parsedThread.threadId,
+    };
+  }
+
+  const peerKind = parts[1] as ParsedSessionDeliveryRoute["peerKind"] | undefined;
+  const firstPeerIdSegment = normalizeOptionalString(parts[2]);
+  const peerId = normalizeOptionalString(parts.slice(2).join(":"));
+  if (!peerKind || !SESSION_DELIVERY_PEER_KINDS.has(peerKind) || !firstPeerIdSegment || !peerId) {
+    return null;
+  }
+  return { channel, peerId, peerKind, threadId: parsedThread.threadId };
+}
+
 export function parseRawSessionConversationRef(
   sessionKey: string | undefined | null,
 ): RawSessionConversationRef | null {
@@ -329,11 +431,21 @@ export function parseRawSessionConversationRef(
     return null;
   }
 
-  const rawParts = raw.split(":").filter(Boolean);
-  const bodyStartIndex =
-    rawParts.length >= 3 && normalizeOptionalLowercaseString(rawParts[0]) === "agent" ? 2 : 0;
+  const rawParts = raw.split(":");
+  // Only the outer ownership wrapper is authoritative for routing. Any inner
+  // agent-shaped identity is opaque plugin input and must not inherit policy.
+  const hasAgentWrapper = normalizeOptionalLowercaseString(rawParts[0]) === "agent";
+  if (hasAgentWrapper && (!normalizeOptionalString(rawParts[1]) || rawParts.length < 3)) {
+    return null;
+  }
+  const bodyStartIndex = hasAgentWrapper ? 2 : 0;
   const parts = rawParts.slice(bodyStartIndex);
-  if (parts.length < 3) {
+  if (normalizeOptionalLowercaseString(parts[0]) === "agent") {
+    return null;
+  }
+  // Empty opaque tail segments are valid (for example compressed IPv6), but
+  // structural owner/channel/kind/first-id segments must be present.
+  if (parts.length < 3 || !normalizeOptionalString(parts[2])) {
     return null;
   }
 

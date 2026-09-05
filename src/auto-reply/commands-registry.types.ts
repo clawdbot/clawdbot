@@ -16,6 +16,7 @@ export type CommandScope = "text" | "native" | "both";
  */
 export type CommandTier = "essential" | "standard" | "power";
 
+// v2026.8.1 SDK definitions may still use "docks"; it remains presentation-only.
 export type CommandCategory =
   | "session"
   | "options"
@@ -33,6 +34,7 @@ export type CommandArgChoiceContext = {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  agentRuntime?: string;
   catalog?: ThinkingCatalogEntry[];
   command: ChatCommandDefinition;
   arg: CommandArgDefinition;
@@ -66,6 +68,7 @@ export type ChatCommandDefinition = {
   key: string;
   nativeName?: string;
   nativeAliases?: string[];
+  nativeProviders?: string[];
   description: string;
   /** Localized descriptions for native command surfaces that support them. */
   descriptionLocalizations?: Record<string, string>;
@@ -79,6 +82,8 @@ export type ChatCommandDefinition = {
   category?: CommandCategory;
   /** Progressive disclosure tier. Defaults to "standard" when omitted. */
   tier?: CommandTier;
+  /** Handler is safe to resolve while another run owns the session execution slot. */
+  activeRunSafe?: true;
 };
 
 /** Provider-facing native command registration shape. */
@@ -94,6 +99,10 @@ export type NativeCommandSpec = {
 /** Extra context used when normalizing slash command text. */
 export type CommandNormalizeOptions = {
   botUsername?: string;
+  /** Keeps complete directive/task arguments, including whitespace and later lines. */
+  preserveArguments?: boolean;
+  /** Strip an explicit command target only while channel bot identity is unavailable. */
+  targetedCommandMode?: "pre-identity";
 };
 
 /** Cached exact/regex command detector built from current registry aliases. */

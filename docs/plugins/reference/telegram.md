@@ -1,5 +1,5 @@
 ---
-summary: "Adds the Telegram channel surface for sending and receiving OpenClaw messages."
+summary: "OpenClaw Telegram channel plugin."
 read_when:
   - You are installing, configuring, or auditing the telegram plugin
 title: "Telegram plugin"
@@ -7,7 +7,7 @@ title: "Telegram plugin"
 
 # Telegram plugin
 
-Adds the Telegram channel surface for sending and receiving OpenClaw messages.
+OpenClaw Telegram channel plugin.
 
 ## Distribution
 
@@ -16,8 +16,8 @@ Adds the Telegram channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: telegram
+channels: `telegram`
 
 ## Related docs
 
-- [telegram](/channels/telegram)
+- [Telegram](/channels/telegram)

@@ -10,7 +10,7 @@ import {
   getHoisted,
   preloadRunEmbeddedAttemptForTests,
   resetEmbeddedAttemptHarness,
-} from "./attempt.spawn-workspace.test-support.js";
+} from "./attempt-spawn-workspace.test-support.js";
 
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
@@ -63,6 +63,66 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       | { cwd?: string }
       | undefined;
     expect(resourceLoaderInit?.cwd).toBe(taskRepo);
+    expect(hoisted.embeddedSystemPromptInputs[0]).toMatchObject({
+      workspaceDir: bootstrapCall?.workspaceDir,
+      runtimeCwd: taskRepo,
+    });
+  });
+
+  it.each([
+    ["read-only", "deny"],
+    ["guarded", "ask"],
+    ["workspace", "auto"],
+    ["full", "full"],
+  ] as const)("maps session permission mode %s to native exec mode %s", async (mode, execMode) => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-permission-mode-"));
+    tempPaths.push(root);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:dashboard:permission-mode",
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        permissionMode: mode,
+        sessionRoot: root,
+        workspaceDir: root,
+      },
+    });
+
+    const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls.at(-1)?.[0] as
+      | {
+          exec?: { mode?: string };
+          sessionPermissionPolicy?: { root: string; mode: string };
+        }
+      | undefined;
+    expect(toolsCall?.sessionPermissionPolicy).toEqual({ root, mode });
+    expect(toolsCall?.exec?.mode).toBe(execMode);
+  });
+
+  it("defaults rootless session permission boundaries to the canonical agent workspace", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rootless-permission-"));
+    tempPaths.push(workspaceDir);
+    const canonicalWorkspace = await fs.realpath(workspaceDir);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:discord:direct:rootless-permission",
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        permissionMode: "workspace",
+        workspaceDir,
+      },
+    });
+
+    const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls.at(-1)?.[0] as
+      | { sessionPermissionPolicy?: { root: string; mode: string } }
+      | undefined;
+    expect(toolsCall?.sessionPermissionPolicy).toEqual({
+      root: canonicalWorkspace,
+      mode: "workspace",
+    });
   });
 
   it("forwards native and routable channel targets into runtime tools", async () => {
@@ -71,6 +131,7 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       sessionKey: "agent:main:slack:direct:U123",
       tempPaths,
       attemptOverrides: {
+        chatId: "oc_native_chat",
         currentChannelId: "D123",
         currentMessagingTarget: "user:U123",
         disableTools: false,
@@ -78,12 +139,32 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     });
 
     const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0] as
-      | { currentChannelId?: string; currentMessagingTarget?: string }
+      | {
+          currentChannelId?: string;
+          currentMessagingTarget?: string;
+          nativeChannelId?: string;
+        }
       | undefined;
     expect(toolsCall).toMatchObject({
       currentChannelId: "D123",
       currentMessagingTarget: "user:U123",
+      nativeChannelId: "oc_native_chat",
     });
+  });
+
+  it("skips runtime tool construction when the selected model does not support tools", async () => {
+    hoisted.supportsModelToolsMock.mockReturnValueOnce(false);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:main",
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+      },
+    });
+
+    expect(hoisted.createOpenClawCodingToolsMock).not.toHaveBeenCalled();
   });
 
   it("rejects cwd overrides for sandboxed runs instead of silently ignoring them", async () => {
@@ -106,5 +187,30 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       }),
     ).rejects.toThrow("cwd override is not supported");
     expect(hoisted.createOpenClawCodingToolsMock).not.toHaveBeenCalled();
+  });
+
+  it("runs a managed worktree when sandbox workspace and cwd match", async () => {
+    const worktree = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-worktree-"));
+    tempPaths.push(worktree);
+    hoisted.resolveSandboxContextMock.mockResolvedValueOnce({
+      enabled: true,
+      workspaceAccess: "rw",
+      workspaceDir: worktree,
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:dashboard:worktree",
+      tempPaths,
+      attemptOverrides: {
+        workspaceDir: worktree,
+        cwd: worktree,
+        disableTools: false,
+      },
+    });
+
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: worktree, workspaceDir: worktree }),
+    );
   });
 });

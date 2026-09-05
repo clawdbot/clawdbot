@@ -4,7 +4,7 @@ import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-con
 export default defineBundledChannelEntry({
   id: "sms",
   name: "SMS",
-  description: "Twilio SMS channel plugin for OpenClaw text messages.",
+  description: "Twilio SMS/MMS channel plugin for OpenClaw messages.",
   importMetaUrl: import.meta.url,
   plugin: {
     specifier: "./channel-plugin-api.js",

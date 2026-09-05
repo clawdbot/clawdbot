@@ -1,8 +1,8 @@
 // Lazy Commander placeholder registration used to keep CLI startup imports small.
 import type { Command } from "commander";
-import { reparseProgramFromActionArgs } from "./action-reparse.js";
+import { reparseProgramFromActionCommand } from "./action-reparse.js";
 import { removeCommandByName } from "./command-tree.js";
-import { resolveCommandOptionArgs } from "./helpers.js";
+import { markCommanderLazyCommand } from "./commander-parse-facts.js";
 
 type RegisterLazyCommandParams = {
   program: Command;
@@ -12,7 +12,7 @@ type RegisterLazyCommandParams = {
     flags: string;
     description: string;
   }[];
-  removeNames?: string[];
+  removeNames?: readonly string[];
   register: () => Promise<void> | void;
 };
 
@@ -26,25 +26,17 @@ export function registerLazyCommand({
   register,
 }: RegisterLazyCommandParams): void {
   const placeholder = program.command(name).description(description);
+  markCommanderLazyCommand(placeholder);
   for (const option of options ?? []) {
     placeholder.option(option.flags, option.description);
   }
-  placeholder.allowUnknownOption(true);
-  placeholder.allowExcessArguments(true);
+  placeholder.allowUnknownOption(true).allowExcessArguments(true);
   placeholder.action(async (...actionArgs) => {
-    const actionCommand = actionArgs.at(-1) as (Command & { args?: string[] }) | undefined;
-    if (actionCommand) {
-      // Commander separates option values from positional args on placeholders; restore them
-      // before reparsing so the real command sees the original token order.
-      actionCommand.args = [
-        ...resolveCommandOptionArgs(actionCommand),
-        ...(actionCommand.args ?? []),
-      ];
-    }
+    const actionCommand = actionArgs.at(-1) as Command;
     for (const commandName of new Set(removeNames ?? [name])) {
       removeCommandByName(program, commandName);
     }
     await register();
-    await reparseProgramFromActionArgs(program, actionArgs);
+    await reparseProgramFromActionCommand(program, actionCommand);
   });
 }

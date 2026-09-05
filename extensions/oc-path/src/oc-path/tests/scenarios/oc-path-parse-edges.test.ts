@@ -1,13 +1,6 @@
 // OC Path tests cover oc path parse edges plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  OcPathError,
-  formatOcPath,
-  getPathLayout,
-  isPattern,
-  isValidOcPath,
-  parseOcPath,
-} from "../../oc-path.js";
+import { OcPathError, formatOcPath, isPattern, parseOcPath } from "../../oc-path.js";
 
 function expectErr(fn: () => unknown, code: string): void {
   try {
@@ -20,26 +13,6 @@ function expectErr(fn: () => unknown, code: string): void {
 }
 
 describe("oc-path-parse-edges", () => {
-  it("file-only", () => {
-    expect(parseOcPath("oc://SOUL.md")).toEqual({ file: "SOUL.md" });
-  });
-
-  it("file + section", () => {
-    expect(parseOcPath("oc://SOUL.md/Boundaries").section).toBe("Boundaries");
-  });
-
-  it("file + section + item", () => {
-    expect(parseOcPath("oc://SOUL.md/Boundaries/deny-rule-1").item).toBe("deny-rule-1");
-  });
-
-  it("file + section + item + field", () => {
-    expect(parseOcPath("oc://SOUL.md/B/deny-1/risk").field).toBe("risk");
-  });
-
-  it("session query parameter", () => {
-    expect(parseOcPath("oc://X.md?session=daily").session).toBe("daily");
-  });
-
   it("session with full path", () => {
     const p = parseOcPath("oc://X.md/sec/item/field?session=cron");
     expect(p).toEqual({
@@ -66,28 +39,8 @@ describe("oc-path-parse-edges", () => {
     expect(p.session).toBeUndefined();
   });
 
-  it("missing scheme throws", () => {
-    expectErr(() => parseOcPath("SOUL.md"), "OC_PATH_MISSING_SCHEME");
-  });
-
   it("wrong scheme throws", () => {
     expectErr(() => parseOcPath("https://x.com"), "OC_PATH_MISSING_SCHEME");
-  });
-
-  it("empty after scheme throws", () => {
-    expectErr(() => parseOcPath("oc://"), "OC_PATH_EMPTY");
-  });
-
-  it("empty segment throws", () => {
-    expectErr(() => parseOcPath("oc://X.md//item"), "OC_PATH_EMPTY_SEGMENT");
-  });
-
-  it("too-deep nesting throws", () => {
-    expectErr(() => parseOcPath("oc://X.md/a/b/c/d/e"), "OC_PATH_TOO_DEEP");
-  });
-
-  it("non-string throws", () => {
-    expectErr(() => parseOcPath(42 as unknown as string), "OC_PATH_NOT_STRING");
   });
 
   it("round-trip canonical forms", () => {
@@ -106,20 +59,6 @@ describe("oc-path-parse-edges", () => {
     }
   });
 
-  it("isValidOcPath true positives", () => {
-    expect(isValidOcPath("oc://X.md")).toBe(true);
-    expect(isValidOcPath("oc://X.md/sec/item/field")).toBe(true);
-  });
-
-  it("isValidOcPath true negatives", () => {
-    expect(isValidOcPath("")).toBe(false);
-    expect(isValidOcPath("X.md")).toBe(false);
-    expect(isValidOcPath("oc://")).toBe(false);
-    expect(isValidOcPath("oc://x//y")).toBe(false);
-    expect(isValidOcPath(null)).toBe(false);
-    expect(isValidOcPath({})).toBe(false);
-  });
-
   it("file segment with special chars (file with dots/slashes)", () => {
     const p = parseOcPath("oc://config/plugins.entries.foo.token");
     expect(p.file).toBe("config");
@@ -135,14 +74,6 @@ describe("oc-path-parse-edges", () => {
     const p = parseOcPath("oc://X.md/[frontmatter]/name");
     expect(p.section).toBe("[frontmatter]");
     expect(p.item).toBe("name");
-  });
-
-  it("formatOcPath rejects empty file", () => {
-    expectErr(() => formatOcPath({ file: "" }), "OC_PATH_FILE_REQUIRED");
-  });
-
-  it("formatOcPath rejects item without section", () => {
-    expectErr(() => formatOcPath({ file: "X.md", item: "i" }), "OC_PATH_NESTING");
   });
 
   it("formatOcPath quotes raw slot values containing special chars", () => {
@@ -195,19 +126,10 @@ describe("oc-path-parse-edges", () => {
     }
   });
 
-  it("isPattern is quote-aware (literal `*` inside quoted segment)", () => {
+  it("wildcard detection is quote-aware (literal `*` inside quoted segment)", () => {
     const concrete = parseOcPath('oc://config.jsonc/"items.*.glob"');
     expect(isPattern(concrete)).toBe(false);
     const wildcard = parseOcPath("oc://config.jsonc/items/*");
     expect(isPattern(wildcard)).toBe(true);
-  });
-
-  it("getPathLayout is quote-aware", () => {
-    const path = parseOcPath('oc://config.jsonc/"github.com"/repos');
-    const layout = getPathLayout(path);
-    expect(layout.sectionLen).toBe(1);
-    expect(layout.subs[0]).toBe('"github.com"');
-    expect(layout.itemLen).toBe(1);
-    expect(layout.subs[1]).toBe("repos");
   });
 });

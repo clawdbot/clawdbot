@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements jsonl replay behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   runRuntimeParityScenario,
   type RuntimeId,
@@ -15,14 +16,14 @@ export type JsonlReplayInput = {
   providerMode: "mock-openai" | "live-frontier";
 };
 
-export type JsonlReplayTurn = {
+type JsonlReplayTurn = {
   turn: number;
   lineNumber: number;
   userText: string;
   transcriptPrefix: string;
 };
 
-export type JsonlReplayCellRunner = (params: {
+type JsonlReplayCellRunner = (params: {
   runtime: RuntimeId;
   transcriptPath: string;
   turn: JsonlReplayTurn;
@@ -30,7 +31,7 @@ export type JsonlReplayCellRunner = (params: {
   providerMode: JsonlReplayInput["providerMode"];
 }) => Promise<RuntimeParityScenarioExecution>;
 
-export type JsonlReplayResult = {
+type JsonlReplayResult = {
   transcripts: Array<{
     transcriptPath: string;
     userTurnCount: number;
@@ -40,38 +41,30 @@ export type JsonlReplayResult = {
   }>;
 };
 
-export type JsonlReplayOptions = {
+type JsonlReplayOptions = {
   runCell?: JsonlReplayCellRunner;
 };
 
-export type JsonlReplayMarkdownReport = {
+type JsonlReplayMarkdownReport = {
   generatedAt: string;
   providerMode: JsonlReplayInput["providerMode"];
   runtimePair: JsonlReplayInput["runtimePair"];
   transcripts: JsonlReplayResult["transcripts"];
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
 function readReplayMessage(record: Record<string, unknown>): Record<string, unknown> | undefined {
   if (isRecord(record.message)) {
     return record.message;
   }
-  return readString(record.role) ? record : undefined;
+  return normalizeOptionalString(record.role) ? record : undefined;
 }
 
 function readRole(message: Record<string, unknown>) {
-  return readString(message.role)?.toLowerCase();
+  return normalizeOptionalString(message.role)?.toLowerCase();
 }
 
 function isTextLikeContentBlock(block: Record<string, unknown>) {
-  const type = readString(block.type)?.toLowerCase();
+  const type = normalizeOptionalString(block.type)?.toLowerCase();
   return (
     !type ||
     type === "text" ||
@@ -100,7 +93,7 @@ function extractTextContent(content: unknown): string {
     if (!isRecord(block) || !isTextLikeContentBlock(block)) {
       continue;
     }
-    const text = readString(block.text) ?? readString(block.content);
+    const text = normalizeOptionalString(block.text) ?? normalizeOptionalString(block.content);
     if (text) {
       parts.push(text);
     }
@@ -108,7 +101,7 @@ function extractTextContent(content: unknown): string {
   return parts.join("\n").trim();
 }
 
-export function extractJsonlReplayUserTurns(transcriptBytes: string): JsonlReplayTurn[] {
+function extractJsonlReplayUserTurns(transcriptBytes: string): JsonlReplayTurn[] {
   const turns: JsonlReplayTurn[] = [];
   const acceptedLines: string[] = [];
   for (const [lineIndex, rawLine] of transcriptBytes.split(/\r?\n/u).entries()) {
@@ -174,7 +167,7 @@ function assertSupportedRuntimePair(runtimePair: JsonlReplayInput["runtimePair"]
 
 export function createMockJsonlReplayCellRunner(): JsonlReplayCellRunner {
   return async ({ runtime, turn }) => ({
-    scenarioStatus: "pass",
+    status: "pass",
     cell: {
       runtime,
       transcriptBytes: turn.transcriptPrefix,

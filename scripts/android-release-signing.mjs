@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
-
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+import { runAndroidSigningCommandSync } from "./lib/android-release-signing-process.mjs";
+import { parseFlagArgs, stringFlag } from "./lib/arg-utils.runtime.mjs";
+import { isRecord } from "./lib/record-shared.mjs";
+import { resolveRepoRoot } from "./lib/repo-root.mjs";
+const rootDir = resolveRepoRoot(import.meta.url);
 const defaultManifestPath = path.join(rootDir, "apps", "android", "Config", "ReleaseSigning.json");
 const requiredPropertyNames = [
   "OPENCLAW_ANDROID_STORE_FILE",
@@ -21,6 +22,7 @@ function usage() {
   process.stdout.write(`Usage:
   scripts/android-release-signing.mjs --mode plan
   scripts/android-release-signing.mjs --mode check
+  scripts/android-release-signing.mjs --mode materialize
   scripts/android-release-signing.mjs --mode sync-pull
   scripts/android-release-signing.mjs --mode sync-push --keystore PATH --properties PATH
 
@@ -45,33 +47,43 @@ function parseArgs(argv) {
     keystorePath: process.env.OPENCLAW_ANDROID_UPLOAD_KEYSTORE || "",
     propertiesPath: process.env.OPENCLAW_ANDROID_SIGNING_PROPERTIES || "",
   };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--mode") {
-      options.mode = readOptionValue(argv, index, arg);
-      index += 1;
-    } else if (arg === "--manifest") {
-      options.manifestPath = path.resolve(readOptionValue(argv, index, arg));
-      index += 1;
-    } else if (arg === "--workspace") {
-      options.workspace = path.resolve(readOptionValue(argv, index, arg));
-      index += 1;
-    } else if (arg === "--materialized-dir") {
-      options.materializedDir = path.resolve(readOptionValue(argv, index, arg));
-      index += 1;
-    } else if (arg === "--keystore") {
-      options.keystorePath = path.resolve(readOptionValue(argv, index, arg));
-      index += 1;
-    } else if (arg === "--properties") {
-      options.propertiesPath = path.resolve(readOptionValue(argv, index, arg));
-      index += 1;
-    } else if (arg === "-h" || arg === "--help") {
-      usage();
-      process.exit(0);
-    } else {
-      throw new Error(`Unknown argument: ${arg}`);
-    }
+  const helpIndex = argv.findIndex((arg) => arg === "-h" || arg === "--help");
+  parseFlagArgs(
+    helpIndex === -1 ? argv : argv.slice(0, helpIndex),
+    options,
+    [
+      stringFlag("--mode", "mode", {
+        allowInline: false,
+        missingValueMessage: "Missing value for --mode.",
+        rejectShortOptions: true,
+        repeatable: true,
+      }),
+      ...[
+        ["--manifest", "manifestPath"],
+        ["--workspace", "workspace"],
+        ["--materialized-dir", "materializedDir"],
+        ["--keystore", "keystorePath"],
+        ["--properties", "propertiesPath"],
+      ].map(([flag, key]) =>
+        stringFlag(flag, key, {
+          allowInline: false,
+          missingValueMessage: `Missing value for ${flag}.`,
+          rejectShortOptions: true,
+          repeatable: true,
+          transform: path.resolve,
+        }),
+      ),
+    ],
+    {
+      ignoreDoubleDash: false,
+      onUnhandledArg(arg) {
+        throw new Error(`Unknown argument: ${arg}`);
+      },
+    },
+  );
+  if (helpIndex !== -1) {
+    usage();
+    process.exit(0);
   }
 
   if (!options.mode) {
@@ -81,14 +93,6 @@ function parseArgs(argv) {
   return options;
 }
 
-function readOptionValue(argv, index, option) {
-  const value = argv[index + 1] ?? "";
-  if (!value || value.startsWith("-")) {
-    throw new Error(`Missing value for ${option}.`);
-  }
-  return value;
-}
-
 function requireString(value, key) {
   if (typeof value !== "string" || value.trim() === "") {
     throw new Error(`Android release signing manifest missing ${key}.`);
@@ -96,8 +100,23 @@ function requireString(value, key) {
   return value.trim();
 }
 
+function requireGradlePropertyNames(value) {
+  if (
+    !Array.isArray(value) ||
+    !value.every((name) => typeof name === "string") ||
+    value.length !== requiredPropertyNames.length ||
+    !requiredPropertyNames.every((name) => value.includes(name))
+  ) {
+    throw new Error(
+      `Android release signing manifest must list Gradle properties: ${requiredPropertyNames.join(", ")}.`,
+    );
+  }
+  return value;
+}
+
 function readManifest(manifestPath) {
-  const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const value = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const parsed = isRecord(value) ? value : {};
   const manifest = {
     signingRepo: requireString(parsed.signingRepo, "signingRepo"),
     signingBranch: requireString(parsed.signingBranch, "signingBranch"),
@@ -110,17 +129,13 @@ function readManifest(manifestPath) {
       parsed.gradlePropertiesEncryptedFile,
       "gradlePropertiesEncryptedFile",
     ),
+    apkCertificateSha256: requireString(parsed.apkCertificateSha256, "apkCertificateSha256"),
     materializedRoot: requireString(parsed.materializedRoot, "materializedRoot"),
-    gradlePropertyNames: parsed.gradlePropertyNames,
+    gradlePropertyNames: requireGradlePropertyNames(parsed.gradlePropertyNames),
   };
-
-  if (
-    !Array.isArray(manifest.gradlePropertyNames) ||
-    manifest.gradlePropertyNames.length !== requiredPropertyNames.length ||
-    !requiredPropertyNames.every((name) => manifest.gradlePropertyNames.includes(name))
-  ) {
+  if (!/^[a-f0-9]{64}$/u.test(manifest.apkCertificateSha256)) {
     throw new Error(
-      `Android release signing manifest must list Gradle properties: ${requiredPropertyNames.join(", ")}.`,
+      "Android release signing manifest apkCertificateSha256 must be 64 lowercase hex digits.",
     );
   }
 
@@ -178,7 +193,7 @@ function requireMatchPassword() {
 }
 
 function run(command, args, options = {}) {
-  execFileSync(command, args, {
+  runAndroidSigningCommandSync(command, args, {
     cwd: options.cwd,
     env: options.env || process.env,
     stdio: options.stdio || "pipe",
@@ -186,7 +201,7 @@ function run(command, args, options = {}) {
 }
 
 function runText(command, args, options = {}) {
-  return execFileSync(command, args, {
+  return runAndroidSigningCommandSync(command, args, {
     cwd: options.cwd,
     env: options.env || process.env,
     encoding: "utf8",
@@ -320,6 +335,7 @@ Signing branch: ${manifest.signingBranch}
 Signing assets: ${manifest.assetPath}
 Encrypted upload keystore: ${manifest.uploadKeystoreEncryptedFile}
 Encrypted Gradle properties: ${manifest.gradlePropertiesEncryptedFile}
+Pinned APK certificate SHA-256: ${manifest.apkCertificateSha256}
 Materialized output: ${relativePath(materializedDir)}
 Gradle bridge: Fastlane exports ORG_GRADLE_PROJECT_* values from the materialized properties file.
 `);
@@ -332,17 +348,18 @@ function writeSigningRepoManifest(workspace, manifest) {
     assetPath: manifest.assetPath,
     uploadKeystoreEncryptedFile: manifest.uploadKeystoreEncryptedFile,
     gradlePropertiesEncryptedFile: manifest.gradlePropertiesEncryptedFile,
+    apkCertificateSha256: manifest.apkCertificateSha256,
     gradlePropertyNames: requiredPropertyNames,
   };
   fs.writeFileSync(signingManifestPath, `${JSON.stringify(signingManifest, null, 2)}\n`);
 }
 
-function syncPull(manifest, options) {
+function materialize(manifest, options) {
   const workspace = resolveWorkspace(manifest, options);
   const materializedDir = resolveMaterializedDir(manifest, options);
   const tempPropertiesPath = path.join(materializedDir, ".gradle.properties.decrypted.tmp");
 
-  cloneSigningRepo(manifest, workspace, materializedDir);
+  assertWorkspaceInsideMaterialized(workspace, materializedDir);
   if (!fs.existsSync(encryptedKeystorePath(workspace, manifest))) {
     throw new Error(
       `Missing encrypted Android upload keystore in signing repo at ${manifest.assetPath}/${manifest.uploadKeystoreEncryptedFile}.`,
@@ -377,6 +394,13 @@ function syncPull(manifest, options) {
   process.stdout.write(
     `Materialized Android release signing assets in ${relativePath(materializedDir)}.\n`,
   );
+}
+
+function syncPull(manifest, options) {
+  const workspace = resolveWorkspace(manifest, options);
+  const materializedDir = resolveMaterializedDir(manifest, options);
+  cloneSigningRepo(manifest, workspace, materializedDir);
+  materialize(manifest, options);
 }
 
 function requirePushSources(options) {
@@ -444,6 +468,8 @@ try {
   } else if (options.mode === "check") {
     validateMaterializedSigning(resolveMaterializedDir(manifest, options));
     process.stdout.write("Android release signing materialization is valid.\n");
+  } else if (options.mode === "materialize") {
+    materialize(manifest, options);
   } else if (options.mode === "sync-pull") {
     syncPull(manifest, options);
   } else if (options.mode === "sync-push") {
@@ -452,6 +478,6 @@ try {
     throw new Error(`Unknown mode: ${options.mode}`);
   }
 } catch (error) {
-  process.stderr.write(`${error.message}\n`);
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exit(1);
 }

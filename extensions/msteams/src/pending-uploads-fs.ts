@@ -20,7 +20,7 @@ const PENDING_UPLOAD_META_MAX_ENTRIES = MAX_PENDING_UPLOADS + 100;
 
 const PENDING_UPLOAD_META_NAMESPACE = "pending-uploads";
 const PENDING_UPLOAD_CHUNKS_NAMESPACE = "pending-upload-chunks";
-const PENDING_UPLOAD_LOCK_FILENAME = "msteams-pending-uploads.sqlite.lock";
+const PENDING_UPLOAD_MUTATION_KEY = "pending-uploads";
 
 type PendingUploadFsRecord = {
   id: string;
@@ -175,7 +175,7 @@ async function withPendingUploadLock<T>(
   options: PendingUploadsFsOptions | undefined,
   run: () => Promise<T>,
 ): Promise<T> {
-  return await withMSTeamsSqliteMutationLock(options, PENDING_UPLOAD_LOCK_FILENAME, run);
+  return await withMSTeamsSqliteMutationLock(options, PENDING_UPLOAD_MUTATION_KEY, run);
 }
 
 async function readUploadRows(

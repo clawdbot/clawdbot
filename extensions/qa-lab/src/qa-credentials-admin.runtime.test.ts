@@ -1,4 +1,6 @@
 // Qa Lab tests cover qa credentials admin plugin behavior.
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -266,6 +268,70 @@ describe("qa credential admin runtime", () => {
       includePayload: true,
       limit: 5,
     });
+  });
+
+  it("rejects and cancels oversized streamed admin responses", async () => {
+    const chunk = Buffer.alloc(64 * 1024, "x");
+    const totalChunks = 64;
+    let chunksSent = 0;
+    let responseClosed = false;
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      let nextChunkTimer: ReturnType<typeof setTimeout> | undefined;
+      res.once("close", () => {
+        responseClosed = true;
+        if (nextChunkTimer) {
+          clearTimeout(nextChunkTimer);
+        }
+      });
+      const scheduleNext = () => {
+        nextChunkTimer = setTimeout(sendNext, 2);
+      };
+      const sendNext = () => {
+        if (res.destroyed || chunksSent >= totalChunks) {
+          if (!res.destroyed) {
+            res.end();
+          }
+          return;
+        }
+        chunksSent += 1;
+        if (res.write(chunk)) {
+          scheduleNext();
+        } else {
+          res.once("drain", scheduleNext);
+        }
+      };
+      sendNext();
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const error = await listQaCredentialSets({
+        siteUrl: `http://127.0.0.1:${port}`,
+        env: {
+          OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
+          OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
+        },
+      }).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+
+      expect(error).toBeInstanceOf(QaCredentialAdminError);
+      const adminError = error as QaCredentialAdminError;
+      expect(adminError.code).toBe("BROKER_REQUEST_FAILED");
+      expect(adminError.message).toMatch(/Convex credential admin response exceeds/);
+      await vi.waitFor(() => expect(responseClosed).toBe(true));
+      expect(chunksSent).toBeLessThan(totalChunks);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 
   it("doctors credential broker env without exposing secret values", async () => {

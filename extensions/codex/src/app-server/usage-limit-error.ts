@@ -5,18 +5,18 @@
 import {
   embeddedAgentLog,
   formatErrorMessage,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { markAuthProfileBlockedUntil } from "openclaw/plugin-sdk/agent-runtime";
+import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
+import { isJsonObject, type CodexServerNotification, type JsonValue } from "./protocol.js";
 import {
-  isJsonObject,
-  type CodexServerNotification,
-  type JsonObject,
-  type JsonValue,
-} from "./protocol.js";
-import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
+  readCodexRateLimitsRevision,
+  readRecentCodexRateLimits,
+  rememberCodexRateLimitsRead,
+} from "./rate-limit-cache.js";
 import {
   formatCodexUsageLimitErrorMessage,
   resolveCodexUsageLimitResetAtMs,
@@ -36,6 +36,44 @@ type CodexUsageLimitErrorResult = {
   message: string;
   rateLimitsForProfile?: JsonValue;
 };
+
+// HTTP 429 alone is not subscription exhaustion and must not inherit its reset cooldown.
+export class CodexUsageLimitPromptError extends Error {
+  readonly status = 429;
+}
+
+export function resolveCodexPromptError(
+  source: Pick<CodexUsageLimitErrorSource, "message" | "codexErrorInfo" | "rateLimits">,
+): string | Error | undefined {
+  const usageLimitMessage = formatCodexUsageLimitErrorMessage(source);
+  if (usageLimitMessage) {
+    return new CodexUsageLimitPromptError(usageLimitMessage);
+  }
+  // Native retry exhaustion is not a permanent model/configuration failure.
+  // Preserve the provider facts before terminal projection drops the native envelope.
+  const info = source.codexErrorInfo;
+  let status = info === "serverOverloaded" ? 503 : info === "internalServerError" ? 500 : undefined;
+  if (isJsonObject(info)) {
+    for (const variant of [
+      "httpConnectionFailed",
+      "responseStreamConnectionFailed",
+      "responseStreamDisconnected",
+      "responseTooManyFailedAttempts",
+    ]) {
+      const detail = info[variant];
+      if (isJsonObject(detail) && typeof detail.httpStatusCode === "number") {
+        status = detail.httpStatusCode;
+        break;
+      }
+    }
+  }
+  return status === undefined
+    ? (source.message ?? undefined)
+    : Object.assign(new Error(source.message ?? "codex app-server error"), {
+        status,
+        ...(info === "serverOverloaded" ? { code: "OVERLOADED" } : {}),
+      });
+}
 
 /** Marks a Codex auth profile blocked until the reset time advertised by rate limits. */
 export async function markCodexAuthProfileBlockedFromRateLimits(params: {
@@ -73,13 +111,19 @@ export async function markCodexAuthProfileBlockedFromRateLimits(params: {
 export async function formatCodexTurnStartUsageLimitError(params: {
   client: CodexAppServerClient;
   error: unknown;
-  pendingNotifications: CodexServerNotification[];
+  errorNotification?: CodexServerNotification;
+  rateLimitsRevisionBeforeTurnStart?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<CodexUsageLimitErrorResult | undefined> {
   return refreshCodexUsageLimitError({
     client: params.client,
-    source: readCodexTurnStartUsageLimitErrorSource(params.error, params.pendingNotifications),
+    source: readCodexTurnStartUsageLimitErrorSource(
+      params.client,
+      params.error,
+      params.errorNotification,
+      params.rateLimitsRevisionBeforeTurnStart,
+    ),
     timeoutMs: params.timeoutMs,
     signal: params.signal,
   });
@@ -91,22 +135,20 @@ export async function refreshCodexUsageLimitPromptError(params: {
   message: string | undefined;
   timeoutMs?: number;
   signal?: AbortSignal;
-}): Promise<string | undefined> {
+}): Promise<CodexUsageLimitErrorResult | undefined> {
   if (!shouldRefreshCodexRateLimitsForUsageLimitMessage(params.message)) {
     return undefined;
   }
-  return (
-    await refreshCodexUsageLimitError({
-      client: params.client,
-      source: {
-        message: params.message,
-        codexErrorInfo: "usageLimitExceeded",
-        rateLimits: readRecentCodexRateLimits(),
-      },
-      timeoutMs: params.timeoutMs,
-      signal: params.signal,
-    })
-  )?.message;
+  return refreshCodexUsageLimitError({
+    client: params.client,
+    source: {
+      message: params.message,
+      codexErrorInfo: "usageLimitExceeded",
+      rateLimits: readRecentCodexRateLimits(params.client),
+    },
+    timeoutMs: params.timeoutMs,
+    signal: params.signal,
+  });
 }
 
 async function refreshCodexUsageLimitError(params: {
@@ -145,6 +187,7 @@ async function refreshCodexUsageLimitError(params: {
     message: params.source.message,
     codexErrorInfo: params.source.codexErrorInfo,
     rateLimits,
+    rateLimitsAuthoritative: true,
   });
   const message = refreshedMessage ?? initialMessage;
   return message ? { message, rateLimitsForProfile: rateLimits } : undefined;
@@ -163,7 +206,7 @@ async function readCodexRateLimitsFromAppServerForUsageLimitError(params: {
       timeoutMs: resolveCodexUsageLimitRateLimitRefreshTimeoutMs(params.timeoutMs),
       signal: params.signal,
     });
-    rememberCodexRateLimits(rateLimits);
+    rememberCodexRateLimitsRead(params.client, rateLimits);
     return rateLimits;
   } catch (error) {
     embeddedAgentLog.debug("codex app-server rate-limit refresh failed after usage-limit error", {
@@ -181,54 +224,42 @@ function resolveCodexUsageLimitRateLimitRefreshTimeoutMs(timeoutMs: number | und
 }
 
 function readCodexTurnStartUsageLimitErrorSource(
+  client: CodexAppServerClient,
   error: unknown,
-  pendingNotifications: CodexServerNotification[],
+  errorNotification: CodexServerNotification | undefined,
+  rateLimitsRevisionBeforeTurnStart: number | undefined,
 ): CodexUsageLimitErrorSource {
-  const notificationError = readLatestCodexErrorNotification(pendingNotifications);
-  const notificationRateLimits = readLatestRateLimitNotificationPayload(pendingNotifications);
+  const notificationError = readCodexErrorNotification(errorNotification);
   const errorPayload = readCodexErrorPayload(error);
-  const rateLimits =
-    notificationRateLimits ?? errorPayload.rateLimits ?? readRecentCodexRateLimits();
+  const rateLimits = errorPayload.rateLimits ?? readRecentCodexRateLimits(client);
+  // The cached snapshot may predate this attempt or belong to another turn on
+  // the same process. Trust it for the auth profile only when this client saw
+  // a primary update after this turn's startup began.
+  const cacheUpdatedDuringTurnStart =
+    rateLimitsRevisionBeforeTurnStart !== undefined &&
+    readCodexRateLimitsRevision(client) > rateLimitsRevisionBeforeTurnStart;
   return {
     message: notificationError?.message ?? errorPayload.message ?? formatErrorMessage(error),
     codexErrorInfo: notificationError?.codexErrorInfo ?? errorPayload.codexErrorInfo,
     rateLimits,
     rateLimitsTrustedForProfile:
-      notificationRateLimits !== undefined || errorPayload.rateLimits !== undefined,
+      errorPayload.rateLimits !== undefined || cacheUpdatedDuringTurnStart,
   };
 }
 
-function readLatestRateLimitNotificationPayload(
-  notifications: CodexServerNotification[],
-): JsonValue | undefined {
-  for (let index = notifications.length - 1; index >= 0; index -= 1) {
-    const notification = notifications[index];
-    if (notification?.method === "account/rateLimits/updated") {
-      rememberCodexRateLimits(notification.params);
-      return notification.params;
-    }
-  }
-  return undefined;
-}
-
-function readLatestCodexErrorNotification(
-  notifications: CodexServerNotification[],
+function readCodexErrorNotification(
+  notification: CodexServerNotification | undefined,
 ): { message?: string; codexErrorInfo?: JsonValue | null } | undefined {
-  for (let index = notifications.length - 1; index >= 0; index -= 1) {
-    const notification = notifications[index];
-    if (notification?.method !== "error" || !isJsonObject(notification.params)) {
-      continue;
-    }
-    const error = notification.params.error;
-    if (!isJsonObject(error)) {
-      continue;
-    }
-    return {
-      message: readString(error, "message"),
-      codexErrorInfo: error.codexErrorInfo,
-    };
+  if (notification?.method !== "error" || !isJsonObject(notification.params)) {
+    return undefined;
   }
-  return undefined;
+  const error = notification.params.error;
+  return isJsonObject(error)
+    ? {
+        message: readString(error, "message"),
+        codexErrorInfo: error.codexErrorInfo,
+      }
+    : undefined;
 }
 
 function readCodexErrorPayload(error: unknown): {
@@ -246,17 +277,9 @@ function readCodexErrorPayload(error: unknown): {
   }
   const nestedError = isJsonObject(data.error) ? data.error : data;
   const rateLimits = nestedError.rateLimits ?? data.rateLimits;
-  if (rateLimits !== undefined) {
-    rememberCodexRateLimits(rateLimits);
-  }
   return {
     message: readString(nestedError, "message") ?? message,
     codexErrorInfo: nestedError.codexErrorInfo,
     rateLimits,
   };
-}
-
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
 }

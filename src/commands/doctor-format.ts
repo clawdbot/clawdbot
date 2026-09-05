@@ -5,12 +5,12 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
-import { resolveDaemonContainerContext } from "../daemon/container-context.js";
 import { formatRuntimeStatus } from "../daemon/runtime-format.js";
 import { buildPlatformRuntimeLogHints } from "../daemon/runtime-hints.js";
 import {
   getSystemdCgroupHygieneSummary,
   isSystemdCgroupHygieneRisk,
+  isSystemdStartLimitHit,
   type GatewayServiceRuntime,
 } from "../daemon/service-runtime.js";
 import {
@@ -44,7 +44,6 @@ export function buildGatewayRuntimeHints(
   }
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
-  const container = Boolean(resolveDaemonContainerContext(env));
   const fileLog = (() => {
     try {
       return getResolvedLoggerSettings().file;
@@ -52,12 +51,13 @@ export function buildGatewayRuntimeHints(
       return null;
     }
   })();
-  if (platform === "linux" && isSystemdUnavailableDetail(runtime.detail)) {
+  const systemdDetail = runtime.inspectionFailure?.detail ?? runtime.detail;
+  if (platform === "linux" && isSystemdUnavailableDetail(systemdDetail)) {
     hints.push(
       ...renderSystemdUnavailableHints({
         wsl: isWSLEnv(env),
-        kind: classifySystemdUnavailableDetail(runtime.detail),
-        container,
+        kind: classifySystemdUnavailableDetail(systemdDetail),
+        env,
       }),
     );
     if (fileLog) {
@@ -104,7 +104,16 @@ export function buildGatewayRuntimeHints(
     return hints;
   }
   if (runtime.status === "stopped") {
-    hints.push("Service is loaded but not running (likely exited immediately).");
+    if (platform === "linux" && isSystemdStartLimitHit(runtime)) {
+      // start-limit-hit means systemd gave up restarting after repeated crashes;
+      // a plain "exited immediately" hint would hide that recovery needs a restart.
+      hints.push(
+        "systemd stopped restarting the gateway after repeated crashes.",
+        `Recover with: ${formatCliCommand("openclaw gateway restart", env)}, then inspect logs if it keeps crashing.`,
+      );
+    } else {
+      hints.push("Service is loaded but not running (likely exited immediately).");
+    }
     if (fileLog) {
       hints.push(`File logs: ${fileLog}`);
     }

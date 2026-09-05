@@ -5,7 +5,13 @@ import {
   createConfigIO,
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
+  resolveConfigSnapshotHash,
 } from "../../config/config.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+  type RuntimeConfigWriteApplicationStatus,
+} from "../../config/runtime-write-application.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -14,42 +20,27 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
-import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime-state.js";
-import { resolveEffectiveSharedGatewayAuth, resolveGatewayAuth } from "../auth.js";
-import { buildGatewayReloadPlan } from "../config-reload-plan.js";
+import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
+import { getActiveSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
+import { isRecord } from "../../utils.js";
+import { resolveGatewayAuth } from "../auth.js";
+import { invalidateConfigGetResponseCache } from "../config-get-response.js";
+import { buildGatewayReloadPlan, isNoopGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plane-audit.js";
+import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
+import { resolveSharedGatewaySessionGeneration } from "../server/ws-shared-generation.js";
 import { parseRestartRequestParams } from "./restart-request.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
 
-export type ConfigWriteSnapshot = Awaited<
-  ReturnType<typeof readConfigFileSnapshotForWrite>
->["snapshot"];
-export type ConfigWriteOptions = Awaited<
+type ConfigWriteSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>["snapshot"];
+type ConfigWriteOptions = Awaited<
   ReturnType<typeof readConfigFileSnapshotForWrite>
 >["writeOptions"];
 
 /** Resolves the on-disk config path used in config method responses. */
 export function resolveGatewayConfigPath(snapshot?: Pick<ConfigWriteSnapshot, "path">): string {
   return snapshot?.path ?? createConfigIO().configPath;
-}
-
-function normalizeStringListForAuthCompare(items: readonly string[] | undefined): string[] {
-  return [...(items ?? [])].toSorted();
-}
-
-function normalizeTrustedProxyAuthForCompare(auth: ReturnType<typeof resolveGatewayAuth>): {
-  userHeader: string | undefined;
-  requiredHeaders: string[];
-  allowUsers: string[];
-  allowLoopback: boolean | undefined;
-} {
-  return {
-    userHeader: auth.trustedProxy?.userHeader,
-    requiredHeaders: normalizeStringListForAuthCompare(auth.trustedProxy?.requiredHeaders),
-    allowUsers: normalizeStringListForAuthCompare(auth.trustedProxy?.allowUsers),
-    allowLoopback: auth.trustedProxy?.allowLoopback,
-  };
 }
 
 /** Compares the effective shared Gateway auth surface that active clients use. */
@@ -64,108 +55,114 @@ export function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawC
     env: process.env,
     tailscaleMode: next.gateway?.tailscale?.mode,
   });
-  if (prevResolvedAuth.mode === "trusted-proxy" || nextResolvedAuth.mode === "trusted-proxy") {
-    if (prevResolvedAuth.mode !== nextResolvedAuth.mode) {
-      return true;
-    }
-    return (
-      !isDeepStrictEqual(
-        normalizeTrustedProxyAuthForCompare(prevResolvedAuth),
-        normalizeTrustedProxyAuthForCompare(nextResolvedAuth),
-      ) ||
-      !isDeepStrictEqual(
-        normalizeStringListForAuthCompare(prev.gateway?.trustedProxies),
-        normalizeStringListForAuthCompare(next.gateway?.trustedProxies),
-      )
+  return (
+    prevResolvedAuth.mode !== nextResolvedAuth.mode ||
+    resolveSharedGatewaySessionGeneration(prevResolvedAuth, prev.gateway?.trustedProxies) !==
+      resolveSharedGatewaySessionGeneration(nextResolvedAuth, next.gateway?.trustedProxies)
+  );
+}
+
+// Active secrets snapshots own authored leaves, while runtime config can add fixed siblings.
+// Project only matching authored values so stale snapshots cannot drive disconnect decisions.
+function projectAuthoredValuesOntoRuntimeOverlay(params: {
+  source: unknown;
+  activeSource: unknown;
+  active: unknown;
+  fallback: unknown;
+}): unknown {
+  const { source, active } = params;
+  if (active === undefined) {
+    return structuredClone(params.fallback);
+  }
+  if (!isRecord(source) || !isRecord(active)) {
+    return structuredClone(
+      isDeepStrictEqual(source, params.activeSource) ? active : params.fallback,
     );
   }
-
-  const prevAuth = resolveEffectiveSharedGatewayAuth({
-    authConfig: prev.gateway?.auth,
-    env: process.env,
-    tailscaleMode: prev.gateway?.tailscale?.mode,
-  });
-  const nextAuth = resolveEffectiveSharedGatewayAuth({
-    authConfig: next.gateway?.auth,
-    env: process.env,
-    tailscaleMode: next.gateway?.tailscale?.mode,
-  });
-  if (prevAuth === null || nextAuth === null) {
-    return prevAuth !== nextAuth;
-  }
-  return prevAuth.mode !== nextAuth.mode || !isDeepStrictEqual(prevAuth.secret, nextAuth.secret);
+  const fallback = isRecord(params.fallback) ? params.fallback : {};
+  const activeSource = isRecord(params.activeSource) ? params.activeSource : {};
+  const sourceKeys = new Set(Object.keys(source));
+  return Object.fromEntries([
+    ...Object.entries(fallback).filter(([key]) => !sourceKeys.has(key)),
+    ...Object.keys(source).map((key) => [
+      key,
+      projectAuthoredValuesOntoRuntimeOverlay({
+        source: source[key],
+        activeSource: activeSource[key],
+        active: active[key],
+        fallback: fallback[key],
+      }),
+    ]),
+  ]);
 }
 
 /** Compares against the active secrets-expanded config when one is available. */
 export function didActiveSharedGatewayAuthChange(params: {
   fallbackPrev: OpenClawConfig;
+  fallbackSource?: OpenClawConfig;
   next: OpenClawConfig;
 }): boolean {
-  return didSharedGatewayAuthChange(
-    getActiveSecretsRuntimeSnapshot()?.config ?? params.fallbackPrev,
-    params.next,
-  );
-}
-
-function queueSharedGatewayAuthDisconnect(
-  shouldDisconnect: boolean,
-  context?: GatewayRequestContext,
-): void {
-  if (!shouldDisconnect) {
-    return;
+  const active = getActiveSecretsRuntimeSnapshotState();
+  if (!active) {
+    return didSharedGatewayAuthChange(params.fallbackPrev, params.next);
   }
-  queueMicrotask(() => {
-    context?.disconnectClientsUsingSharedGatewayAuth?.();
-  });
-}
-
-function queueSharedGatewayAuthGenerationRefresh(
-  shouldRefresh: boolean,
-  nextConfig: OpenClawConfig,
-  context?: GatewayRequestContext,
-): void {
-  if (!shouldRefresh) {
-    return;
-  }
-  queueMicrotask(() => {
-    context?.enforceSharedGatewayAuthGenerationForConfigWrite?.(nextConfig);
-  });
-}
-
-function isNoopConfigReloadPlan(plan: ReturnType<typeof buildGatewayReloadPlan>): boolean {
-  return (
-    !plan.restartGateway &&
-    plan.hotReasons.length === 0 &&
-    !plan.reloadHooks &&
-    !plan.restartGmailWatcher &&
-    !plan.restartCron &&
-    !plan.restartHeartbeat &&
-    !plan.restartHealthMonitor &&
-    !plan.reloadPlugins &&
-    !plan.disposeMcpRuntimes &&
-    plan.restartChannels.size === 0
-  );
+  const currentSourceGateway = (params.fallbackSource ?? active.sourceConfig).gateway;
+  const activeSourceGateway = active.sourceConfig.gateway;
+  const activeGateway = active.config.gateway;
+  const fallbackGateway = params.fallbackPrev.gateway;
+  const selectOwnedGatewayValue = <Key extends "auth" | "tailscale" | "trustedProxies">(
+    key: Key,
+  ): NonNullable<OpenClawConfig["gateway"]>[Key] =>
+    currentSourceGateway && Object.hasOwn(currentSourceGateway, key)
+      ? (projectAuthoredValuesOntoRuntimeOverlay({
+          source: currentSourceGateway[key],
+          activeSource: activeSourceGateway?.[key],
+          active: activeGateway?.[key],
+          fallback: fallbackGateway?.[key],
+        }) as NonNullable<OpenClawConfig["gateway"]>[Key])
+      : fallbackGateway?.[key];
+  const activeSharedAuthConfig: OpenClawConfig = {
+    ...params.fallbackPrev,
+    gateway: {
+      ...fallbackGateway,
+      // Secrets snapshots only own authored leaves; retain runtime-only auth siblings.
+      auth: selectOwnedGatewayValue("auth"),
+      tailscale: selectOwnedGatewayValue("tailscale"),
+      trustedProxies: selectOwnedGatewayValue("trustedProxies"),
+    },
+  };
+  return didSharedGatewayAuthChange(activeSharedAuthConfig, params.next);
 }
 
 function resolveConfigRestartRequirement(params: {
   changedPaths: string[];
+  previousConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
 }): { requiresRestart: boolean; scheduleDirectRestart: boolean } {
   const reloadSettings = resolveGatewayReloadSettings(params.nextConfig);
-  const plan = buildGatewayReloadPlan(params.changedPaths);
-  if (isNoopConfigReloadPlan(plan)) {
+  const plan = buildGatewayReloadPlan(params.changedPaths, {
+    previousConfig: params.previousConfig,
+    candidateConfig: params.nextConfig,
+  });
+  if (isNoopGatewayReloadPlan(plan)) {
     return { requiresRestart: false, scheduleDirectRestart: false };
   }
   if (reloadSettings.mode === "off") {
     return { requiresRestart: true, scheduleDirectRestart: true };
   }
-  if (reloadSettings.mode === "restart") {
+  if (plan.restartGateway) {
     return { requiresRestart: true, scheduleDirectRestart: false };
   }
-  if (plan.restartGateway) {
-    return { requiresRestart: true, scheduleDirectRestart: reloadSettings.mode === "hot" };
-  }
   return { requiresRestart: false, scheduleDirectRestart: false };
+}
+
+/** Returns whether a managed config write can settle without restarting the Gateway. */
+export function shouldAwaitGatewayConfigApplication(params: {
+  changedPaths: string[];
+  previousConfig: OpenClawConfig;
+  nextConfig: OpenClawConfig;
+}): boolean {
+  return !resolveConfigRestartRequirement(params).requiresRestart;
 }
 
 function resolveConfigRestartRequest(params: unknown): {
@@ -240,26 +237,64 @@ export async function commitGatewayConfigWrite(params: {
   nextConfig: OpenClawConfig;
   context?: GatewayRequestContext;
   disconnectSharedAuthClients?: boolean;
-}): Promise<{ path: string; config: OpenClawConfig; queueFollowUp: () => void }> {
+  awaitRuntimeApplication?: boolean;
+  respond?: RespondFn;
+}): Promise<{
+  path: string;
+  config: OpenClawConfig;
+  hash: string | null;
+  application?: Promise<RuntimeConfigWriteApplicationStatus>;
+  queueFollowUp: () => void;
+}> {
+  const application = params.awaitRuntimeApplication
+    ? createRuntimeConfigWriteApplication(captureGatewayRootWorkAdmissionContinuationScope()?.run)
+    : undefined;
+  holdGatewayPolicyResponse(params.respond);
   const result = await replaceConfigFile({
     nextConfig: params.nextConfig,
-    writeOptions: {
-      ...params.writeOptions,
-      runtimeRefresh: {
-        ...params.writeOptions.runtimeRefresh,
-        includeAuthStoreRefs: false,
+    // The early RPC hash check is only advisory until this lock-time CAS. Without
+    // it, concurrent writers can both succeed and overwrite each other's config.
+    baseHash: resolveConfigSnapshotHash(params.snapshot) ?? undefined,
+    writeOptions: attachRuntimeConfigWriteApplication<ConfigWriteOptions>(
+      {
+        ...params.writeOptions,
+        auditOrigin: "config-rpc",
+        runtimeRefresh: {
+          ...params.writeOptions.runtimeRefresh,
+          includeAuthStoreRefs: false,
+        },
       },
-    },
+      application,
+    ),
     afterWrite: { mode: "auto" },
   });
+  // Watcher acceptance is debounced; clear now so the writer's immediate
+  // follow-up config.get observes the committed bytes before that hook runs.
+  invalidateConfigGetResponseCache();
   return {
     path: resolveGatewayConfigPath(params.snapshot),
     config: result.nextConfig,
+    // Persisted hash of the re-read file (resolveConfigSnapshotHash), i.e.
+    // exactly what a follow-up config.get reports — writers ack against it.
+    hash: result.persistedHash,
+    ...(application
+      ? {
+          application: application.claimed
+            ? application.result
+            : Promise.resolve<RuntimeConfigWriteApplicationStatus>("unclaimed"),
+        }
+      : {}),
     queueFollowUp: () => {
-      // Defer generation refresh/disconnect until after the RPC response so
-      // the writer receives the success payload before its connection is closed.
-      queueSharedGatewayAuthGenerationRefresh(true, result.nextConfig, params.context);
-      queueSharedGatewayAuthDisconnect(Boolean(params.disconnectSharedAuthClients), params.context);
+      // A claimed receipt owns publication and rollback. Unmanaged writes still
+      // reconcile after responding, including receipts no runtime owner claimed.
+      if (!application?.claimed) {
+        queueMicrotask(() => {
+          params.context?.enforceSharedGatewayAuthGenerationForConfigWrite?.(result.nextConfig);
+          if (params.disconnectSharedAuthClients) {
+            params.context?.disconnectClientsUsingSharedGatewayAuth?.();
+          }
+        });
+      }
     },
   };
 }
@@ -271,6 +306,7 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
   mode: "config.patch" | "config.apply";
   configPath: string;
   changedPaths: string[];
+  previousConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
   actor: ControlPlaneActor;
   context?: GatewayRequestContext;
@@ -283,6 +319,7 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
     resolveConfigRestartRequest(params.requestParams);
   const restartRequirement = resolveConfigRestartRequirement({
     changedPaths: params.changedPaths,
+    previousConfig: params.previousConfig,
     nextConfig: params.nextConfig,
   });
   const payload = buildConfigRestartSentinelPayload({

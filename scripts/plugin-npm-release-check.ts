@@ -3,28 +3,33 @@
 
 import { pathToFileURL } from "node:url";
 import {
-  collectChangedExtensionIdsFromGitRange,
-  collectPublishablePluginPackages,
+  assertPluginReleaseDependencyFreshness,
   assertPluginReleaseVersionFloors,
-  parsePluginReleaseArgs,
+  collectPluginNpmGitRangeSelection,
+  collectPublishablePluginPackages,
+  parsePluginNpmReleaseArgs,
   resolveChangedPublishablePluginPackages,
   resolveSelectedPublishablePluginPackages,
 } from "./lib/plugin-npm-release.ts";
 
-export function runPluginNpmReleaseCheck(argv: string[]) {
-  const { selection, selectionMode, baseRef, headRef } = parsePluginReleaseArgs(argv);
-  const changedExtensionIds =
+function runPluginNpmReleaseCheck(argv: string[]) {
+  const { selection, selectionMode, npmDistTag, baseRef, headRef } =
+    parsePluginNpmReleaseArgs(argv);
+  const gitRangeSelection =
     baseRef && headRef
-      ? collectChangedExtensionIdsFromGitRange({
+      ? collectPluginNpmGitRangeSelection({
           gitRange: { baseRef, headRef },
         })
-      : [];
+      : undefined;
   const publishable = collectPublishablePluginPackages(".", {
     extensionIds:
-      selectionMode === "all-publishable" || !(baseRef && headRef)
+      selectionMode === "all-publishable" ||
+      !gitRangeSelection ||
+      gitRangeSelection.authorityChanged
         ? undefined
-        : changedExtensionIds,
+        : gitRangeSelection.changedExtensionIds,
     packageNames: selection.length > 0 ? selection : undefined,
+    npmDistTag,
   });
   const selected =
     selectionMode === "all-publishable"
@@ -34,16 +39,19 @@ export function runPluginNpmReleaseCheck(argv: string[]) {
             plugins: publishable,
             selection,
           })
-        : baseRef && headRef
-          ? resolveChangedPublishablePluginPackages({
-              plugins: publishable,
-              changedExtensionIds,
-            })
+        : gitRangeSelection
+          ? gitRangeSelection.authorityChanged
+            ? publishable
+            : resolveChangedPublishablePluginPackages({
+                plugins: publishable,
+                changedExtensionIds: gitRangeSelection.changedExtensionIds,
+              })
           : publishable;
 
   if (selectionMode !== undefined || selection.length > 0) {
     assertPluginReleaseVersionFloors(selected, "plugin-npm-release-check");
   }
+  assertPluginReleaseDependencyFreshness(selected, "plugin-npm-release-check");
 
   console.log("plugin-npm-release-check: publishable plugin metadata looks OK.");
   if (baseRef && headRef && selected.length === 0) {

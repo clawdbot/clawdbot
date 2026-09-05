@@ -1,29 +1,71 @@
 /**
  * Shared ClickClack config, runtime account, API object, and target types.
  */
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  ChannelBotLoopProtectionConfig,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
+import type { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+
+/** Session-linked ClickClack discussion settings for one account. */
+type ClickClackDiscussionsConfig = {
+  enabled?: boolean;
+  workspace?: string;
+  controlUrlBase?: string;
+  section?: string;
+};
+
+/** Per-channel group policy for a ClickClack group/channel. */
+export type ClickClackGroupConfig = {
+  requireMention?: boolean;
+  mentionPatterns?: string[];
+  allowBots?: boolean | "mentions";
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
+};
 
 /** User-configurable settings for one ClickClack account. */
 export type ClickClackAccountConfig = {
+  /** Megabyte cap for media this channel accepts and delivers. */
+  mediaMaxMb?: number;
   name?: string;
   enabled?: boolean;
+  responsePrefix?: string;
   baseUrl?: string;
+  apiBaseUrl?: string;
   token?: unknown;
+  tokenFile?: string;
   workspace?: string;
   botUserId?: string;
   agentId?: string;
   replyMode?: "agent" | "model";
   model?: string;
   systemPrompt?: string;
-  timeoutSeconds?: number;
   toolsAllow?: string[];
   defaultTo?: string;
   allowFrom?: string[];
+  /** Accept messages authored by other ClickClack bots. */
+  allowBots?: boolean | "mentions";
+  /** Sliding-window bot-pair loop guard for accepted bot messages. */
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   reconnectMs?: number;
+  /** Opt-in: publish durable agent activity (commentary + tool) rows. */
+  agentActivity?: boolean;
+  /** Opt-in: publish ephemeral native progress while an agent turn runs. */
+  nativeProgress?: boolean;
+  /** Publish the native command catalog to ClickClack composer autocomplete. */
+  commandMenu?: boolean;
+  /** Create and synchronize one managed ClickClack channel per OpenClaw session. */
+  discussions?: ClickClackDiscussionsConfig;
+  /** Require a direct mention before dispatching group messages (default false). */
+  requireMention?: boolean;
+  /** Mention patterns for this account in group channels. */
+  mentionPatterns?: string[];
+  /** Per-channel group policy overrides keyed by ClickClack channel ID. */
+  groups?: Record<string, ClickClackGroupConfig>;
 };
 
 /** Root ClickClack channel config with optional named accounts. */
-export type ClickClackConfig = ClickClackAccountConfig & {
+type ClickClackConfig = ClickClackAccountConfig & {
   accounts?: Record<string, Partial<ClickClackAccountConfig>>;
   defaultAccount?: string;
 };
@@ -42,19 +84,40 @@ export type ResolvedClickClackAccount = {
   configured: boolean;
   name?: string;
   baseUrl: string;
+  apiEndpoint: string;
   token: string;
+  tokenSource?: "env" | "tokenFile" | "config" | "none";
+  tokenStatus?: "available" | "configured_unavailable" | "missing";
+  credentialDiagnostics?: Extract<
+    ReturnType<typeof tryReadSecretFileSync>,
+    { status: "configured_unavailable" }
+  >["diagnostic"][];
   workspace: string;
   botUserId?: string;
+  botHandle?: string;
   agentId?: string;
   replyMode: "agent" | "model";
   model?: string;
   systemPrompt?: string;
-  timeoutSeconds?: number;
   toolsAllow?: string[];
   defaultTo: string;
   allowFrom: string[];
+  allowBots: boolean | "mentions";
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   reconnectMs: number;
+  agentActivity: boolean;
+  nativeProgress?: boolean;
+  commandMenu: boolean;
+  discussions: {
+    enabled: boolean;
+    workspace: string;
+    controlUrlBase?: string;
+    section: string;
+  };
   config: ClickClackAccountConfig;
+  requireMention: boolean;
+  mentionPatterns: string[];
+  groups: Record<string, ClickClackGroupConfig>;
 };
 
 /** User object returned by the ClickClack API. */
@@ -68,9 +131,45 @@ export type ClickClackUser = {
   created_at: string;
 };
 
+/** Bot command row returned by the ClickClack command-menu API. */
+export type ClickClackBotCommand = {
+  id: string;
+  workspace_id: string;
+  bot_user_id: string;
+  command: string;
+  description: string;
+  args_hint: string;
+  created_at: string;
+  updated_at: string;
+};
+
+/** One-time bot token and installer context returned by setup-code claim. */
+export type ClickClackSetupCodeClaim = {
+  contract_version?: 1;
+  api_base_url?: string;
+  token: string;
+  bot: {
+    id: string;
+    handle: string;
+    display_name: string;
+  };
+  workspace: {
+    id: string;
+    route_id: string;
+    slug: string;
+    name: string;
+  };
+  defaults: {
+    defaultTo?: string;
+    allowFrom?: string[];
+    agentActivity?: boolean;
+  };
+};
+
 /** Workspace object returned by the ClickClack API. */
 export type ClickClackWorkspace = {
   id: string;
+  route_id: string;
   name: string;
   slug: string;
   created_at: string;
@@ -79,9 +178,17 @@ export type ClickClackWorkspace = {
 /** Channel object returned by the ClickClack API. */
 export type ClickClackChannel = {
   id: string;
+  route_id: string;
   workspace_id: string;
   name: string;
   kind: string;
+  external_managed?: boolean;
+  external_ref?: string;
+  external_url?: string;
+  sidebar_section?: string;
+  display_title?: string;
+  archived?: boolean;
+  archived_at?: string | null;
   created_at: string;
 };
 
@@ -99,7 +206,14 @@ export type ClickClackMessage = {
   body: string;
   body_format: "markdown";
   created_at: string;
+  kind?: "message" | "agent_commentary" | "agent_tool";
   author?: ClickClackUser;
+  thread_state?: {
+    root_message_id: string;
+    reply_count: number;
+    last_reply_at?: string;
+    last_reply_author_ids: string[];
+  };
 };
 
 /** Realtime event envelope returned by ClickClack polling/websocket APIs. */
@@ -112,6 +226,18 @@ export type ClickClackEvent = {
   seq?: number;
   created_at: string;
   payload: Record<string, unknown>;
+};
+
+/**
+ * Optional attribution metadata stamped onto agent-authored posts
+ * (author_model / author_thinking / author_runtime). Servers that do not
+ * define these columns ignore the unknown JSON fields, so sending them is
+ * always safe; servers that do define them persist per-message provenance.
+ */
+export type ClickClackMessageProvenance = {
+  model?: string;
+  thinking?: string;
+  runtime?: string;
 };
 
 /** Parsed outbound destination for ClickClack delivery. */

@@ -127,6 +127,7 @@ export async function enforceTelegramDmAccess(params: {
       const telegramUserId = sender.userId ?? sender.candidateId;
       await createChannelPairingChallengeIssuer({
         channel: "telegram",
+        accountId,
         upsertPairingRequest: async ({ id, meta }) =>
           await (upsertPairingRequest ?? upsertChannelPairingRequest)({
             channel: "telegram",

@@ -4,13 +4,17 @@ import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
   readStringParam,
-} from "../runtime-api.js";
-import type { OpenClawConfig } from "../runtime-api.js";
+} from "openclaw/plugin-sdk/channel-actions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   DiscordChannelCreate,
   DiscordChannelEdit,
   DiscordChannelMove,
 } from "../send.types.js";
+
+/** Discord REST auto_archive_duration allowlist (minutes). */
+const DISCORD_AUTO_ARCHIVE_MINUTES = new Set([60, 1440, 4320, 10080]);
 
 export function readDiscordParentIdParam(
   params: Record<string, unknown>,
@@ -24,11 +28,22 @@ export function readDiscordParentIdParam(
   return readStringParam(params, "parentId");
 }
 
-function readDiscordBooleanParam(
+/**
+ * Reads Discord auto-archive duration minutes and rejects values Discord will
+ * not accept, so thread/channel edits fail closed before the REST call.
+ */
+export function readDiscordAutoArchiveDurationParam(
   params: Record<string, unknown>,
   key: string,
-): boolean | undefined {
-  return typeof params[key] === "boolean" ? params[key] : undefined;
+): number | undefined {
+  const value = readPositiveIntegerParam(params, key);
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!DISCORD_AUTO_ARCHIVE_MINUTES.has(value)) {
+    throw new Error(`${key} must be one of 60, 1440, 4320, or 10080 minutes`);
+  }
+  return value;
 }
 
 export function createDiscordActionOptions<
@@ -59,7 +74,7 @@ export function readDiscordChannelCreateParams(
     parentId: parentId ?? undefined,
     topic: readStringParam(params, "topic") ?? undefined,
     position: readNonNegativeIntegerParam(params, "position") ?? undefined,
-    nsfw: readDiscordBooleanParam(params, "nsfw"),
+    nsfw: asBoolean(params.nsfw),
   };
 }
 
@@ -71,11 +86,11 @@ export function readDiscordChannelEditParams(params: Record<string, unknown>): D
     topic: readStringParam(params, "topic") ?? undefined,
     position: readNonNegativeIntegerParam(params, "position") ?? undefined,
     parentId: parentId === undefined ? undefined : parentId,
-    nsfw: readDiscordBooleanParam(params, "nsfw"),
+    nsfw: asBoolean(params.nsfw),
     rateLimitPerUser: readNonNegativeIntegerParam(params, "rateLimitPerUser") ?? undefined,
-    archived: readDiscordBooleanParam(params, "archived"),
-    locked: readDiscordBooleanParam(params, "locked"),
-    autoArchiveDuration: readPositiveIntegerParam(params, "autoArchiveDuration") ?? undefined,
+    archived: asBoolean(params.archived),
+    locked: asBoolean(params.locked),
+    autoArchiveDuration: readDiscordAutoArchiveDurationParam(params, "autoArchiveDuration"),
     availableTags: parseAvailableTags(params.availableTags),
   };
 }

@@ -1,6 +1,6 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Fire-and-forget hook tests cover async hook execution without blocking callers.
 import { describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { fireAndForgetBoundedHook, fireAndForgetHook } from "./fire-and-forget.js";
 
 function requireFirstLog(logger: ReturnType<typeof vi.fn>): string {
@@ -16,6 +16,15 @@ function requireFirstLog(logger: ReturnType<typeof vi.fn>): string {
 }
 
 describe("fireAndForgetHook", () => {
+  it("keeps truncated error logs free of lone surrogates", async () => {
+    const logger = vi.fn();
+    fireAndForgetHook(Promise.reject(new Error(`${"a".repeat(499)}😀tail`)), "hook", logger);
+    await Promise.resolve();
+
+    const message = requireFirstLog(logger);
+    expect(Buffer.from(message).toString()).toBe(message);
+  });
+
   it("logs rejection errors as sanitized single-line messages", async () => {
     const logger = vi.fn();
     fireAndForgetHook(

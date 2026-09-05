@@ -1,13 +1,6 @@
 // Discord plugin module implements channel.loaders behavior.
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-
-let discordProviderRuntimePromise:
-  | Promise<typeof import("./monitor/provider.runtime.js")>
-  | undefined;
-let discordProbeRuntimePromise: Promise<typeof import("./probe.runtime.js")> | undefined;
-let discordAuditModulePromise: Promise<typeof import("./audit.js")> | undefined;
-let discordSendModulePromise: Promise<typeof import("./send.js")> | undefined;
-let discordDirectoryLiveModulePromise: Promise<typeof import("./directory-live.js")> | undefined;
+import type { DiscordProbe } from "./probe.js";
 
 export const loadDiscordDirectoryConfigModule = createLazyRuntimeModule(
   () => import("./directory-config.js"),
@@ -25,27 +18,28 @@ export const loadDiscordTargetResolverModule = createLazyRuntimeModule(
   () => import("./target-resolver.js"),
 );
 
-export async function loadDiscordProviderRuntime() {
-  discordProviderRuntimePromise ??= import("./monitor/provider.runtime.js");
-  return await discordProviderRuntimePromise;
+export const loadDiscordProviderRuntime = createLazyRuntimeModule(
+  () => import("./monitor/provider.runtime.js"),
+);
+
+export const loadDiscordProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
+
+export async function probeDiscordStatusAccount(params: {
+  token: string;
+  timeoutMs: number;
+}): Promise<DiscordProbe> {
+  const startedAtMs = Date.now();
+  const runtime = await loadDiscordProbeRuntime();
+  // The gateway starts its hook deadline before lazy plugin loading. Carry only the remaining
+  // budget into the probe or a cold import can let optional metadata outrun the caller.
+  const remainingMs = Math.max(1, params.timeoutMs - Math.max(0, Date.now() - startedAtMs));
+  return await runtime.probeDiscord(params.token, remainingMs, { includeApplication: true });
 }
 
-export async function loadDiscordProbeRuntime() {
-  discordProbeRuntimePromise ??= import("./probe.runtime.js");
-  return await discordProbeRuntimePromise;
-}
+export const loadDiscordAuditModule = createLazyRuntimeModule(() => import("./audit.js"));
 
-export async function loadDiscordAuditModule() {
-  discordAuditModulePromise ??= import("./audit.js");
-  return await discordAuditModulePromise;
-}
+export const loadDiscordSendModule = createLazyRuntimeModule(() => import("./send.js"));
 
-export async function loadDiscordSendModule() {
-  discordSendModulePromise ??= import("./send.js");
-  return await discordSendModulePromise;
-}
-
-export async function loadDiscordDirectoryLiveModule() {
-  discordDirectoryLiveModulePromise ??= import("./directory-live.js");
-  return await discordDirectoryLiveModulePromise;
-}
+export const loadDiscordDirectoryLiveModule = createLazyRuntimeModule(
+  () => import("./directory-live.js"),
+);

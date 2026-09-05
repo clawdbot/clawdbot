@@ -1,10 +1,14 @@
 // Telegram tests cover bot.media.stickers and fragments plugin behavior.
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { telegramBotDepsForTest } from "./bot.media.e2e-harness.js";
+import { readRemoteMediaBufferSpy, telegramBotDepsForTest } from "./bot.media.e2e.test-harness.js";
 import {
   TELEGRAM_TEST_TIMINGS,
   cacheStickerSpy,
   createBotHandlerWithOptions,
+  holdTelegramMediaTimeouts,
   describeStickerImageSpy,
   getCachedStickerSpy,
 } from "./bot.media.test-utils.js";
@@ -161,12 +165,9 @@ describe("telegram stickers", () => {
   );
 
   it(
-    "skips animated and video sticker formats that cannot be downloaded",
+    "rejects animated and video sticker downloads before fetching bytes",
     async () => {
       const proxyFetch = vi.fn();
-      const { handler, replySpy, runtimeError } = await createBotHandlerWithOptions({
-        proxyFetch: proxyFetch as unknown as typeof fetch,
-      });
 
       for (const scenario of [
         {
@@ -200,56 +201,127 @@ describe("telegram stickers", () => {
           },
         },
       ]) {
-        replySpy.mockClear();
-        runtimeError.mockClear();
         proxyFetch.mockClear();
+        const getFile = vi.fn(async () => ({ file_path: scenario.filePath }));
 
-        await handler({
-          message: {
-            message_id: scenario.messageId,
-            chat: { id: 1234, type: "private" },
-            from: { id: 777, is_bot: false, first_name: "Ada" },
-            sticker: scenario.sticker,
-            date: 1736380800,
-          },
-          me: { username: "openclaw_bot" },
-          getFile: async () => ({ file_path: scenario.filePath }),
+        const media = await resolveMedia({
+          maxBytes: 2 * 1024 * 1024,
+          token: "tok",
+          transport: {
+            close: async () => {},
+            fetch: proxyFetch as unknown as typeof fetch,
+            sourceFetch: proxyFetch as unknown as typeof fetch,
+          } satisfies TelegramTransport,
+          ctx: {
+            message: {
+              message_id: scenario.messageId,
+              chat: { id: 1234, type: "private" },
+              from: { id: 777, is_bot: false, first_name: "Ada" },
+              sticker: scenario.sticker,
+              date: 1736380800,
+            },
+            getFile,
+          } as unknown as TelegramContext,
         });
 
+        expect(media).toBeNull();
+        expect(getFile).not.toHaveBeenCalled();
         expect(proxyFetch).not.toHaveBeenCalled();
-        expect(replySpy).not.toHaveBeenCalled();
-        expect(runtimeError).not.toHaveBeenCalled();
       }
     },
     STICKER_TEST_TIMEOUT_MS,
   );
 });
 
+describe("telegram local Bot API media", () => {
+  it("reads a container-local file from its trusted host volume mount", async () => {
+    const token = "123:test-token";
+    const tempRoot = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-tg-local-")));
+    const relativePath = path.join(token, "documents", "file_12.zip");
+    try {
+      await mkdir(path.dirname(path.join(tempRoot, relativePath)), { recursive: true });
+      await writeFile(path.join(tempRoot, relativePath), "zip-data");
+
+      const media = await resolveMedia({
+        maxBytes: 1024,
+        token,
+        trustedLocalFileRoots: [tempRoot],
+        ctx: {
+          message: {
+            message_id: 104,
+            chat: { id: 1234, type: "private" },
+            from: { id: 777, is_bot: false, first_name: "Ada" },
+            document: {
+              file_id: "document_file_id",
+              file_unique_id: "document_unique_id",
+              file_name: "archive.zip",
+              mime_type: "application/zip",
+            },
+            date: 1736380800,
+          },
+          getFile: async () => ({
+            file_path: `/var/lib/telegram-bot-api/${token}/documents/file_12.zip`,
+          }),
+        } as TelegramContext,
+      });
+
+      expect(readRemoteMediaBufferSpy).not.toHaveBeenCalled();
+      expect(media).toMatchObject({
+        path: "/tmp/telegram-media",
+        contentType: "application/zip",
+        kind: "document",
+      });
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+});
 describe("telegram text fragments", () => {
   afterEach(() => {
     vi.clearAllTimers();
   });
 
   const TEXT_FRAGMENT_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
+  const buildNearLimitMessage = (params: {
+    messageId: number;
+    prefix?: string;
+    suffix?: string;
+    entities?: Array<{ type: "bot_command"; offset: number; length: number }>;
+  }) => {
+    const text = `${params.prefix ?? ""}${"A".repeat(4050)}${params.suffix ?? ""}`;
+    return {
+      text,
+      message: {
+        chat: { id: 42, type: "private" as const },
+        from: { id: 777, is_bot: false as const, first_name: "Ada" },
+        message_id: params.messageId,
+        date: 1736380800,
+        text,
+        ...(params.entities ? { entities: params.entities } : {}),
+      },
+    };
+  };
 
-  it(
-    "buffers near-limit text and processes sequential parts as one message",
-    async () => {
+  it.each([
+    { label: "plain", prefix: "" },
+    { label: "slash-prefixed non-command", prefix: "/not_a_command " },
+  ])(
+    "buffers $label near-limit text and processes sequential parts as one message",
+    async ({ prefix }) => {
       const { handler, replySpy } = await createBotHandlerWithOptions({});
-      const part1 = "A".repeat(4050);
+      const quote = "FRAGMENT_REPLY_QUOTE";
+      const { text: part1, message: firstMessage } = buildNearLimitMessage({
+        messageId: 10,
+        prefix,
+        suffix: ` ${quote}`,
+      });
       const part2 = "B".repeat(50);
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
 
       try {
         await handler({
-          message: {
-            chat: { id: 42, type: "private" },
-            from: { id: 777, is_bot: false, first_name: "Ada" },
-            message_id: 10,
-            date: 1736380800,
-            text: part1,
-          },
+          message: firstMessage,
           me: { username: "openclaw_bot" },
           getFile: async () => ({}),
         });
@@ -261,6 +333,8 @@ describe("telegram text fragments", () => {
             message_id: 11,
             date: 1736380801,
             text: part2,
+            reply_to_message: { ...firstMessage, reply_to_message: undefined },
+            quote: { text: quote, position: part1.indexOf(quote) },
           },
           me: { username: "openclaw_bot" },
           getFile: async () => ({}),
@@ -274,13 +348,36 @@ describe("telegram text fragments", () => {
         );
 
         await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
-        const payload = replySpy.mock.calls.at(0)?.[0] as { RawBody?: string };
+        const payload = replySpy.mock.calls.at(0)?.[0] as { Body?: string; RawBody?: string };
         expect(payload.RawBody).toContain(part1.slice(0, 32));
         expect(payload.RawBody).toContain(part2.slice(0, 32));
+        expect(payload.Body).toContain(`[1. Ada id:10]\n"${quote}"`);
       } finally {
         setTimeoutSpy.mockRestore();
         clearTimeoutSpy.mockRestore();
       }
+    },
+    TEXT_FRAGMENT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "processes leading Telegram bot commands immediately without static registration",
+    async () => {
+      const { handler, replySpy } = await createBotHandlerWithOptions({});
+      const command = "/deploy@openclaw_bot";
+      const { message } = buildNearLimitMessage({
+        messageId: 20,
+        prefix: `${command} `,
+        entities: [{ type: "bot_command", offset: 0, length: command.length }],
+      });
+
+      await handler({
+        message,
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
     },
     TEXT_FRAGMENT_TEST_TIMEOUT_MS,
   );
@@ -308,12 +405,7 @@ describe("telegram text fragments", () => {
 
       const runtimeError = vi.fn();
       const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
-      let nextTimerHandle = 1;
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(() => {
-        const handle = nextTimerHandle;
-        nextTimerHandle += 1;
-        return handle as unknown as ReturnType<typeof setTimeout>;
-      });
+      const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.textFragmentGapMs);
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
       const part1 = "A".repeat(4050);
       const part2 = "B".repeat(50);
@@ -384,12 +476,7 @@ describe("telegram text fragments", () => {
 
       const runtimeError = vi.fn();
       const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
-      let nextTimerHandle = 1;
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(() => {
-        const handle = nextTimerHandle;
-        nextTimerHandle += 1;
-        return handle as unknown as ReturnType<typeof setTimeout>;
-      });
+      const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.textFragmentGapMs);
       const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
 
       try {

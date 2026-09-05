@@ -1,5 +1,6 @@
 // Agent Core module implements messages behavior.
-import type { ImageContent, Message, TextContent } from "../../../llm-core/src/index.js";
+import type { ImageContent, Message, TextContent } from "@openclaw/llm-core";
+import { parseDateStringTimestampMs as parseSessionTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type {
   AgentMessage,
   BashExecutionMessage,
@@ -7,7 +8,6 @@ import type {
   CompactionSummaryMessage,
   CustomMessage,
 } from "../types.js";
-import { parseSessionTimestampMs, requireSessionTimestampMs } from "./session/timestamps.js";
 
 export type {
   BashExecutionMessage,
@@ -28,6 +28,14 @@ export type HarnessMessage =
 // boundary even though these message roles are part of AgentMessage.
 export function asAgentMessage(message: HarnessMessage): AgentMessage {
   return message as AgentMessage;
+}
+
+function requireSessionTimestampMs(value: string, label: string): number {
+  const parsed = parseSessionTimestampMs(value);
+  if (parsed === undefined) {
+    throw new Error(`${label} must be a valid timestamp`);
+  }
+  return parsed;
 }
 
 function normalizeCompactionSummaryTimestamp(timestamp: number | string): number {
@@ -135,14 +143,23 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
             timestamp: message.timestamp,
           };
         case "custom": {
+          if (message.excludeFromContext) {
+            return undefined;
+          }
           const content =
             typeof message.content === "string"
               ? [{ type: "text" as const, text: message.content }]
               : message.content;
+          // Preserve carrier identity so provider-owned replay and cache policy
+          // can distinguish transient context from append-only context.
+          const runtimeContextCarrier =
+            (message.details as { runtimeContextCarrier?: unknown } | undefined)
+              ?.runtimeContextCarrier === true;
           return {
             role: "user",
             content,
             timestamp: message.timestamp,
+            ...(runtimeContextCarrier ? { runtimeContextCarrier: true } : {}),
           };
         }
         case "branchSummary":

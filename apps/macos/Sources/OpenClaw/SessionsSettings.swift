@@ -1,4 +1,5 @@
 import AppKit
+import OpenClawChatUI
 import SwiftUI
 
 @MainActor
@@ -36,7 +37,7 @@ struct SessionsSettings: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Sessions")
+                Text("Threads")
                     .font(.title3.weight(.semibold))
                 Text("Peek at the stored conversation buckets the CLI reuses for context and rate limits.")
                     .font(.callout)
@@ -50,37 +51,36 @@ struct SessionsSettings: View {
         }
     }
 
+    @ViewBuilder
     private var content: some View {
-        Group {
-            if self.rows.isEmpty, self.errorMessage == nil {
-                Text("No sessions yet. They appear after the first inbound message or heartbeat.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 6)
-            } else {
-                ScrollView(.vertical) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(self.rows.enumerated()), id: \.element.id) { index, row in
-                            self.sessionRow(row)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 8)
+        if self.rows.isEmpty, self.errorMessage == nil {
+            Text("No threads yet. They appear after the first inbound message or heartbeat.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.top, 6)
+        } else {
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(self.rows.enumerated()), id: \.element.id) { index, row in
+                        self.sessionRow(row)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 8)
 
-                            if index != self.rows.count - 1 {
-                                Divider()
-                                    .padding(.leading, 8)
-                            }
+                        if index != self.rows.count - 1 {
+                            Divider()
+                                .padding(.leading, 8)
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .overlay(alignment: .topLeading) {
-                    if let errorMessage {
-                        Text(errorMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                            .padding(.leading, 8)
-                            .padding(.top, 4)
-                    }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .overlay(alignment: .topLeading) {
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .padding(.leading, 8)
+                        .padding(.top, 4)
                 }
             }
         }
@@ -101,7 +101,7 @@ struct SessionsSettings: View {
 
             HStack(spacing: 6) {
                 if row.kind != .direct {
-                    SessionKindBadge(kind: row.kind)
+                    SessionKindBadge(kind: row.kind, color: row.color)
                 }
                 if !row.flagLabels.isEmpty {
                     ForEach(row.flagLabels, id: \.self) { flag in
@@ -122,8 +122,7 @@ struct SessionsSettings: View {
                 }
                 ContextUsageBar(
                     usedTokens: row.tokens.total,
-                    contextTokens: row.tokens.contextTokens,
-                    width: nil)
+                    contextTokens: row.tokens.contextTokens)
             }
 
             HStack(spacing: 10) {
@@ -176,15 +175,21 @@ struct SessionsSettings: View {
 }
 
 private struct SessionKindBadge: View {
+    @Environment(\.colorScheme) private var colorScheme
     let kind: SessionKind
+    let color: String?
+
+    private var tint: Color {
+        OpenClawSessionColor(name: self.color)?.tint(in: self.colorScheme) ?? self.kind.tint
+    }
 
     var body: some View {
         Text(self.kind.label)
             .font(.caption2.weight(.bold))
             .padding(.horizontal, 7)
             .padding(.vertical, 4)
-            .foregroundStyle(self.kind.tint)
-            .background(self.kind.tint.opacity(0.15))
+            .foregroundStyle(self.tint)
+            .background(self.tint.opacity(0.15))
             .clipShape(Capsule())
     }
 }

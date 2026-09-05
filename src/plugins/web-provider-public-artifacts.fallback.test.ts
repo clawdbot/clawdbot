@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: vi.fn(() => null),
   loadBundledWebSearchProviderEntriesFromDir: vi.fn(),
   loadBundledWebFetchProviderEntriesFromDir: vi.fn(),
+  readBundledDiscoveryMode: vi.fn<() => "compat" | "allowlist">(),
 }));
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
@@ -15,14 +16,13 @@ vi.mock("./plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
 }));
 
-vi.mock("./web-search-providers.shared.js", () => ({
-  resolveBundledWebSearchResolutionConfig: (params: { config?: unknown }) => ({
-    config: params.config,
-  }),
+vi.mock("./bundled-discovery-state.js", () => ({
+  readBundledDiscoveryMode: mocks.readBundledDiscoveryMode,
 }));
 
-vi.mock("./web-fetch-providers.shared.js", () => ({
-  resolveBundledWebFetchResolutionConfig: (params: { config?: unknown }) => ({
+vi.mock("./web-provider-resolution-shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./web-provider-resolution-shared.js")>()),
+  resolveBundledWebProviderResolutionConfig: (params: { config?: unknown }) => ({
     config: params.config,
   }),
 }));
@@ -43,6 +43,7 @@ const {
 
 describe("web provider public artifact manifest fallback", () => {
   beforeEach(() => {
+    mocks.readBundledDiscoveryMode.mockReturnValue("allowlist");
     vi.clearAllMocks();
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       diagnostics: [],
@@ -124,6 +125,7 @@ describe("web provider public artifact manifest fallback", () => {
   });
 
   it("keeps deprecated bundledDiscovery compat discovery outside plugin allowlists", () => {
+    mocks.readBundledDiscoveryMode.mockReturnValue("compat");
     const resolveExplicitWebSearchProviders =
       mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts as unknown as {
         mockImplementation: (
@@ -140,7 +142,6 @@ describe("web provider public artifact manifest fallback", () => {
       config: {
         plugins: {
           allow: ["some-other-plugin"],
-          bundledDiscovery: "compat",
         },
       },
       onlyPluginIds: ["fallback-search"],

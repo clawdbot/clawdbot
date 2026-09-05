@@ -69,6 +69,7 @@ describe("matrixMessageActions", () => {
     const actions = discovery.actions;
     expect(actions).toContain("poll");
     expect(actions).toContain("poll-vote");
+    expect(discovery.capabilities).toEqual(["presentation"]);
     expect(supportsAction({ action: "poll" } as never)).toBe(false);
     expect(supportsAction({ action: "poll-vote" } as never)).toBe(true);
   });
@@ -89,7 +90,10 @@ describe("matrixMessageActions", () => {
     if (!schema) {
       throw new Error("matrix schema missing");
     }
-    const properties = (schema as { properties?: Record<string, unknown> }).properties ?? {};
+    const profileSchema = Array.isArray(schema)
+      ? schema.find((contribution) => contribution.actions?.includes("set-profile"))
+      : schema;
+    const properties = profileSchema?.properties ?? {};
 
     expect(actions).toContain(profileAction);
     expect(supportsAction({ action: profileAction } as never)).toBe(true);
@@ -109,6 +113,32 @@ describe("matrixMessageActions", () => {
     expect(properties.avatarPath).toHaveProperty("type", "string");
   });
 
+  it("advertises custom-emote discovery and its reaction hint only when reactions are enabled", () => {
+    const cfg = createConfiguredMatrixConfig();
+    const enabled = matrixMessageActions.describeMessageTool({ cfg } as never);
+    const disabled = matrixMessageActions.describeMessageTool({
+      cfg: {
+        channels: {
+          matrix: { ...cfg.channels?.matrix, actions: { reactions: false } },
+        },
+      },
+    } as never);
+
+    expect(enabled?.actions).toContain("emoji-list");
+    expect(matrixMessageActions.supportsAction?.({ action: "emoji-list" } as never)).toBe(true);
+    expect(enabled?.schema).toMatchObject({
+      actions: ["react", "reactions"],
+      properties: {
+        emoji: {
+          description: expect.stringContaining('action:"emoji-list"'),
+        },
+      },
+    });
+    expect(disabled?.actions).not.toContain("emoji-list");
+    expect(disabled?.actions).not.toContain("react");
+    expect(disabled?.schema).toBeNull();
+  });
+
   it("hides self-profile updates without owner identity context", () => {
     const discovery = matrixMessageActions.describeMessageTool({
       cfg: createConfiguredMatrixConfig(),
@@ -118,6 +148,30 @@ describe("matrixMessageActions", () => {
     }
 
     expect(discovery.actions).not.toContain(profileAction);
+  });
+
+  it("exposes verification actions only with owner identity context", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          ...createConfiguredMatrixConfig().channels?.matrix,
+          encryption: true,
+          actions: { verification: true },
+        },
+      },
+    } as CoreConfig;
+
+    const nonOwnerDiscovery = matrixMessageActions.describeMessageTool({
+      cfg,
+      senderIsOwner: false,
+    } as never);
+    const ownerDiscovery = matrixMessageActions.describeMessageTool({
+      cfg,
+      senderIsOwner: true,
+    } as never);
+
+    expect(nonOwnerDiscovery?.actions).not.toContain("permissions");
+    expect(ownerDiscovery?.actions).toContain("permissions");
   });
 
   it("hides gated actions when the default Matrix account disables them", () => {
@@ -162,6 +216,7 @@ describe("matrixMessageActions", () => {
     const actions = discovery.actions;
 
     expect(actions).toEqual(["poll", "poll-vote"]);
+    expect(discovery.capabilities).toEqual(["presentation"]);
   });
 
   it("hides actions until defaultAccount is set for ambiguous multi-account configs", () => {
@@ -189,6 +244,7 @@ describe("matrixMessageActions", () => {
     const actions = discovery.actions;
 
     expect(actions).toStrictEqual([]);
+    expect(discovery.capabilities).toStrictEqual([]);
   });
 
   it("honors the selected Matrix account during discovery", () => {
@@ -243,7 +299,9 @@ describe("matrixMessageActions", () => {
 
     expect(assistantActions).not.toContain("react");
     expect(assistantActions).not.toContain("reactions");
+    expect(assistantActions).not.toContain("emoji-list");
     expect(opsActions).toContain("react");
     expect(opsActions).toContain("reactions");
+    expect(opsActions).toContain("emoji-list");
   });
 });

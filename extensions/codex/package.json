@@ -1,16 +1,18 @@
 {
   "name": "@openclaw/codex",
-  "version": "2026.6.10",
-  "description": "OpenClaw Codex app-server harness and model provider plugin with a Codex-managed GPT catalog.",
+  "version": "2026.9.1",
+  "description": "OpenClaw Codex app-server harness and native session supervision plugin.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
   "dependencies": {
-    "@openai/codex": "0.139.0",
-    "typebox": "1.1.39",
-    "ws": "8.21.0",
+    "@openai/codex": "0.153.4",
+    "semver": "7.8.5",
+    "smol-toml": "1.8.0",
+    "typebox": "1.3.18",
+    "ws": "8.21.3",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -34,14 +36,17 @@
       ]
     },
     "compat": {
-      "pluginApi": ">=2026.6.10"
+      "pluginApi": ">=2026.9.1"
     },
     "build": {
-      "openclawVersion": "2026.6.10"
+      "openclawVersion": "2026.9.1"
     },
     "release": {
       "publishToClawHub": true,
       "publishToNpm": true,
+      "requireLatestDependencies": [
+        "@openai/codex"
+      ],
       "bundleRuntimeDependencies": false
     }
   }

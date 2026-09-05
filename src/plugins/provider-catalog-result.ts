@@ -3,18 +3,22 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import {
   copyArrayEntries,
   copyRecordEntries,
-  isRecord,
+  isRecordWithoutThrowing,
   readRecordValue,
 } from "../shared/safe-record.js";
-import type { ProviderCatalogResult } from "./types.js";
+import type { ProviderCatalogOutcome, ProviderCatalogResult } from "./types.js";
+
+const PROVIDER_CATALOG_OUTCOME_STATUSES = new Set<ProviderCatalogOutcome["status"]>([
+  "ready",
+  "auth-rejected",
+  "unavailable",
+]);
 
 const MODEL_PROVIDER_CONFIG_KEYS = [
   "baseUrl",
   "apiKey",
   "auth",
   "api",
-  "contextWindow",
-  "contextTokens",
   "maxTokens",
   "timeoutSeconds",
   "region",
@@ -46,7 +50,7 @@ const MODEL_DEFINITION_CONFIG_KEYS = [
 ] as const satisfies readonly (keyof ModelDefinitionConfig)[];
 
 /** Projection of a provider catalog result into provider config entries. */
-export type ProviderCatalogResultProjection =
+type ProviderCatalogResultProjection =
   | { kind: "provider"; provider: ModelProviderConfig }
   | { kind: "providers"; providers: Array<[string, ModelProviderConfig]> }
   | { kind: "empty" };
@@ -69,6 +73,40 @@ export function copyProviderCatalogResultProjection(
   return providers.length > 0 ? { kind: "providers", providers } : { kind: "empty" };
 }
 
+/** Copies valid, secret-free provider outcomes out of a catalog hook result. */
+export function copyProviderCatalogOutcomes(
+  result: ProviderCatalogResult,
+): ProviderCatalogOutcome[] {
+  return copyArrayEntries(readRecordValue(result, "outcomes")).flatMap((entry) => {
+    if (!isRecordWithoutThrowing(entry)) {
+      return [];
+    }
+    const provider = readRecordValue(entry, "provider");
+    const profileId = readRecordValue(entry, "profileId");
+    const rejectionScope = readRecordValue(entry, "rejectionScope");
+    const status = readRecordValue(entry, "status");
+    if (
+      typeof provider !== "string" ||
+      provider.trim().length === 0 ||
+      (profileId !== undefined &&
+        (typeof profileId !== "string" || profileId.trim().length === 0)) ||
+      (rejectionScope !== undefined && rejectionScope !== "catalog") ||
+      typeof status !== "string" ||
+      !PROVIDER_CATALOG_OUTCOME_STATUSES.has(status as ProviderCatalogOutcome["status"])
+    ) {
+      return [];
+    }
+    return [
+      {
+        provider: provider.trim(),
+        ...(typeof profileId === "string" ? { profileId: profileId.trim() } : {}),
+        ...(rejectionScope === "catalog" ? { rejectionScope } : {}),
+        status: status as ProviderCatalogOutcome["status"],
+      },
+    ];
+  });
+}
+
 /** Copies provider catalog result entries, using providerId for single-provider results. */
 export function copyProviderCatalogResultEntries(params: {
   providerId: string;
@@ -82,17 +120,21 @@ export function copyProviderCatalogResultEntries(params: {
 }
 
 /** Copies model definitions from provider catalog provider config. */
-export function copyProviderCatalogModels(
+function copyProviderCatalogModels(
   providerConfig: ModelProviderConfig,
 ): ModelProviderConfig["models"] {
-  return copyArrayEntries(readRecordValue(providerConfig, "models")).flatMap((entry) => {
+  const models: ModelDefinitionConfig[] = [];
+  for (const entry of copyArrayEntries(readRecordValue(providerConfig, "models"))) {
     const copied = copyProviderCatalogModel(entry);
-    return copied ? [copied] : [];
-  });
+    if (copied) {
+      models.push(copied);
+    }
+  }
+  return models;
 }
 
 function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undefined {
-  if (!isRecord(model)) {
+  if (!isRecordWithoutThrowing(model)) {
     return undefined;
   }
   const id = readRecordValue(model, "id");
@@ -115,10 +157,10 @@ function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undef
 }
 
 /** Copies the supported provider config fields from a provider catalog result. */
-export function copyProviderCatalogProviderConfig(
+function copyProviderCatalogProviderConfig(
   providerConfig: unknown,
 ): ModelProviderConfig | undefined {
-  if (!isRecord(providerConfig)) {
+  if (!isRecordWithoutThrowing(providerConfig)) {
     return undefined;
   }
 

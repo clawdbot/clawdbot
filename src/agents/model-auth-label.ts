@@ -1,9 +1,11 @@
 /**
  * Formats user-facing auth labels for resolved provider/model credentials.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
@@ -12,16 +14,12 @@ import {
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
-import {
-  readClaudeCliCredentialsCached,
-  readCodexCliCredentialsCached,
-} from "./cli-credentials.js";
+import { readCodexCliCredentialsCached } from "./cli-credentials.js";
 import {
   resolveEnvApiKey,
   resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
 } from "./model-auth.js";
-import { normalizeProviderId } from "./model-selection.js";
 
 // Builds concise auth labels for UI/status surfaces without exposing credential
 // values. Resolution follows profile override, provider profiles, env, CLI, then
@@ -33,6 +31,7 @@ export function resolveModelAuthLabel(params: {
   sessionEntry?: Partial<Pick<SessionEntry, "authProfileOverride">>;
   agentDir?: string;
   workspaceDir?: string;
+  codexCliCredentialsHome?: string;
   includeExternalProfiles?: boolean;
   acceptedProviderIds?: readonly string[];
 }): string | undefined {
@@ -42,17 +41,18 @@ export function resolveModelAuthLabel(params: {
   }
 
   const providerKey = normalizeProviderId(resolvedProvider);
+  const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
   const store =
     params.includeExternalProfiles === false
-      ? loadAuthProfileStoreWithoutExternalProfiles(params.agentDir)
+      ? loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, { profileId: profileOverride })
       : ensureAuthProfileStore(params.agentDir, {
+          profileId: profileOverride,
           externalCli: externalCliDiscoveryForProviderAuth({
             cfg: params.cfg,
             provider: providerKey,
-            preferredProfile: params.sessionEntry?.authProfileOverride,
+            preferredProfile: profileOverride,
           }),
         });
-  const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
   const acceptedProviderKeys = uniqueStrings(
     [...(params.acceptedProviderIds ?? []).map(normalizeProviderId), providerKey].filter(Boolean),
   );
@@ -82,18 +82,12 @@ export function resolveModelAuthLabel(params: {
     ) {
       continue;
     }
-    const label = resolveAuthProfileDisplayLabel({
-      cfg: params.cfg,
-      store,
-      profileId,
-    });
-    if (profile.type === "oauth") {
-      return `oauth${label ? ` (${label})` : ""}`;
-    }
-    if (profile.type === "token") {
-      return `token${label ? ` (${label})` : ""}`;
-    }
-    return `api-key${label ? ` (${label})` : ""}`;
+    // Status can be visible to collaborators; personal credential metadata stays private.
+    const label = isUserModelAuthProfileId(profileId)
+      ? "personal account"
+      : resolveAuthProfileDisplayLabel({ cfg: params.cfg, store, profileId });
+    const mode = profile.type === "api_key" ? "api-key" : profile.type;
+    return `${mode}${label ? ` (${label})` : ""}`;
   }
 
   const providerEntryProfileRef = resolveProviderEntryApiKeyProfileReference({
@@ -118,6 +112,18 @@ export function resolveModelAuthLabel(params: {
     return "unknown";
   }
 
+  if (
+    params.codexCliCredentialsHome &&
+    (providerKey === "openai" || providerKey === "codex") &&
+    readCodexCliCredentialsCached({
+      codexHome: params.codexCliCredentialsHome,
+      ttlMs: 5_000,
+      allowKeychainPrompt: false,
+    })
+  ) {
+    return "oauth (codex-cli)";
+  }
+
   const envKey = resolveEnvApiKey(providerKey, process.env, {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -135,11 +141,8 @@ export function resolveModelAuthLabel(params: {
   ) {
     return "oauth (codex-cli)";
   }
-  if (
-    providerKey === "claude-cli" &&
-    readClaudeCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
-  ) {
-    return "oauth (claude-cli)";
+  if (providerKey === "claude-cli") {
+    return "native (claude-cli)";
   }
 
   const customKey = resolveUsableCustomProviderApiKey({

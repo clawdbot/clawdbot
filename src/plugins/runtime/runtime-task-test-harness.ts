@@ -1,14 +1,14 @@
 // Runtime task test harness helpers build mocked plugin runtimes for task-flow tests.
 import { vi } from "vitest";
-import { resetDetachedTaskLifecycleRuntimeForTests } from "../../tasks/detached-task-runtime.js";
 import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  resetTaskFlowRegistryForTests,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
   setTaskRegistryControlRuntimeForTests,
   setTaskRegistryDeliveryRuntimeForTests,
-} from "../../tasks/runtime-internal.js";
-import { resetTaskFlowRegistryForTests } from "../../tasks/task-flow-runtime-internal.js";
+} from "../../tasks/task-runtime.test-helpers.js";
 
 const runtimeTaskMocks = vi.hoisted(() => ({
   sendMessageMock: vi.fn(),
@@ -25,6 +25,7 @@ export function installRuntimeTaskDeliveryMock(): void {
     sendMessage: runtimeTaskMocks.sendMessageMock,
   });
   setTaskRegistryControlRuntimeForTests({
+    cancelActiveCronTaskRun: () => false,
     getAcpSessionManager: () => ({
       cancelSession: runtimeTaskMocks.cancelSessionMock,
     }),
@@ -32,13 +33,15 @@ export function installRuntimeTaskDeliveryMock(): void {
   });
 }
 
-export function resetRuntimeTaskTestState(
-  taskRegistryOptions?: Parameters<typeof resetTaskRegistryForTests>[0],
-): void {
+// Runtime task tests write durable rows into the worker's shared state store.
+// Skipping the reset write leaves those rows behind, and the next
+// ensureTaskRegistryReady() restores them into the process registry as active
+// restart blockers for every later test file in the same worker.
+export function resetRuntimeTaskTestState(): void {
   resetDetachedTaskLifecycleRuntimeForTests();
   resetTaskRegistryControlRuntimeForTests();
   resetTaskRegistryDeliveryRuntimeForTests();
-  resetTaskRegistryForTests(taskRegistryOptions);
-  resetTaskFlowRegistryForTests({ persist: false });
+  resetTaskRegistryForTests();
+  resetTaskFlowRegistryForTests();
   vi.clearAllMocks();
 }

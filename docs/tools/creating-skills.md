@@ -1,7 +1,8 @@
 ---
+doc-schema-version: 1
 title: "Creating skills"
 sidebarTitle: "Creating skills"
-summary: "Build, test, and publish custom SKILL.md workspace skills for your OpenClaw agents."
+summary: "Build, test, and publish custom SKILL.md workspace skills or personal skills on a shared Gateway."
 read_when:
   - You are creating a new custom skill
   - You need a quick starter workflow for SKILL.md-based skills
@@ -16,8 +17,7 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
 
 <Steps>
   <Step title="Create the skill directory">
-    Skills live in your workspace `skills/` folder. Create a directory for your
-    new skill:
+    Skills live in your workspace `skills/` folder:
 
     ```bash
     mkdir -p ~/.openclaw/workspace/skills/hello-world
@@ -34,8 +34,7 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
   </Step>
 
   <Step title="Write SKILL.md">
-    Create `SKILL.md` inside the directory. The frontmatter defines metadata;
-    the body gives the agent instructions.
+    The frontmatter defines metadata; the body gives the agent instructions.
 
     ```markdown
     ---
@@ -80,8 +79,6 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
   </Step>
 
   <Step title="Test it">
-    Send a message that should trigger the skill:
-
     ```bash
     openclaw agent --message "give me a greeting"
     ```
@@ -91,6 +88,25 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
 
   </Step>
 </Steps>
+
+## Create a personal skill on a shared Gateway
+
+For a skill that should follow your signed-in profile rather than belong to an
+agent workspace, use **Plugins → Skills → My skills**. Create or import the
+`SKILL.md` bundle there, then review the saved revision and activation result.
+You do not need host shell access or permission to edit shared Gateway settings.
+
+You can also ask the agent to create or improve a personal skill. Its
+`skill_workshop` tool uses the Gateway's authorized library service; it does not
+write managed revision directories directly. The result distinguishes a
+published skill from a pending proposal and explains when the session can use
+it. Ask explicitly to use the new revision in the current session or share it
+with the team.
+
+The single-admin default remains the workspace workflow above. Extra channel
+identities for the same operator do not turn a personal installation into a
+team setup. See [personal skills and revisions](/tools/skills#personal-skills-on-a-shared-gateway)
+for ownership, sharing, storage, and session behavior.
 
 ## SKILL.md reference
 
@@ -117,8 +133,8 @@ For gating fields (`requires.bins`, `requires.env`, etc.) see
 
 ### Using `{baseDir}`
 
-Use `{baseDir}` in the skill body to reference files inside the skill
-directory without hardcoding paths:
+Reference files inside the skill directory without hardcoding paths — the
+agent resolves `{baseDir}` against the skill's own directory:
 
 ```markdown
 Run the helper script at `{baseDir}/scripts/run.sh`.
@@ -145,7 +161,7 @@ metadata: { "openclaw": { "requires": { "bins": ["gemini"] }, "primaryEnv": "GEM
     | `requires.env` | Each env var must exist in the process or config |
     | `requires.config` | Each `openclaw.json` path must be truthy |
     | `os` | Platform filter: `["darwin"]`, `["linux"]`, `["win32"]` |
-    | `always` | Set `true` to skip all gates and always include the skill |
+    | `always` | Include on a compatible OS even when `requires.*` checks fail |
 
     Full reference: [Skills — Gating](/tools/skills#gating).
 
@@ -201,13 +217,14 @@ openclaw skills workshop propose-create \
   --proposal-dir ./hello-world-proposal/
 ```
 
-The directory must contain `PROPOSAL.md`. Support files can go in `assets/`,
-`examples/`, `references/`, `scripts/`, or `templates/`.
+The directory must contain `PROPOSAL.md` at its root. Support files go under
+`assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.
 
 After review:
 
 ```bash
 openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop evaluate <proposal-id>
 openclaw skills workshop apply <proposal-id>
 ```
 
@@ -215,26 +232,32 @@ See [Skill Workshop](/tools/skill-workshop) for the full proposal lifecycle.
 
 ## Publishing to ClawHub
 
+An owner is a ClawHub publisher handle, such as `@alice` or `@your-org`.
+Your account has a personal owner. Organization owners can have members with
+`owner`, `admin`, or `publisher` roles; all three roles can publish. Choose your
+personal owner or an organization where you have publisher access.
+
 <Steps>
   <Step title="Ensure your SKILL.md is complete">
     Make sure `name`, `description`, and any `metadata.openclaw` gating fields
     are set. Add a `homepage` URL if you have a project page.
   </Step>
-  <Step title="Install the ClawHub skill">
-    The ClawHub skill documents the current publish command shape and required
-    metadata:
-
+  <Step title="Install the standalone ClawHub CLI and log in">
     ```bash
-    openclaw skills install @openclaw/clawhub-publish
+    npm i -g clawhub
+    clawhub login
     ```
-
   </Step>
   <Step title="Publish">
     ```bash
-    clawhub publish
+    clawhub skill publish ./path/to/hello-world
     ```
 
-    See [ClawHub — Publishing](/clawhub/publishing) for the full flow.
+    Add `--version <version>` or `--owner <owner>` to override the inferred
+    version or publish under a specific owner. See
+    [ClawHub — Publishing](/clawhub/publishing) and
+    [ClawHub CLI](/clawhub/cli) for the full flow, owner scoping, and other
+    maintenance commands (`clawhub sync`, `clawhub skill rename`, ...).
 
   </Step>
 </Steps>

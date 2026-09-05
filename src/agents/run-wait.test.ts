@@ -1,6 +1,6 @@
 /**
  * Regression coverage for gateway-backed agent run waiting.
- * Exercises timeout normalization, reply snapshots, and dynamic drain loops.
+ * Exercises timeout normalization, run-owned replies, and dynamic drain loops.
  */
 import {
   addTimerTimeoutGraceMs,
@@ -15,13 +15,10 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 import {
-  testing,
-  isRecoverableAgentWaitError,
   readLatestAssistantReply,
-  readLatestAssistantReplySnapshot,
   waitForAgentRun,
   waitForAgentRunsToDrain,
-  waitForAgentRunAndReadUpdatedAssistantReply,
+  waitForAgentRunReply,
 } from "./run-wait.js";
 
 type AgentWaitGatewayRequest = {
@@ -76,10 +73,7 @@ function expectAgentWaitRequest(
 
 describe("readLatestAssistantReply", () => {
   beforeEach(() => {
-    callGatewayMock.mockClear();
-    testing.setDepsForTest({
-      callGateway: async (opts) => await callGatewayMock(opts),
-    });
+    callGatewayMock.mockReset();
   });
 
   it("returns the most recent assistant message when compaction markers trail history", async () => {
@@ -117,21 +111,62 @@ describe("readLatestAssistantReply", () => {
     expect(result).toBe("older output");
   });
 
-  it("returns assistant fingerprints for delta comparisons", async () => {
+  it("skips trailing transcript-only OpenClaw assistant mirrors for normal latest-reply reads", async () => {
     callGatewayMock.mockResolvedValue({
       messages: [
         {
           role: "assistant",
-          content: [{ type: "text", text: "new output" }],
-          timestamp: 42,
+          content: [{ type: "text", text: "real worker reply" }],
+          timestamp: 10,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "already delivered through message tool" }],
+          openclawMessageToolMirror: {
+            toolName: "message",
+            toolCallId: "call-message-send",
+          },
+          timestamp: 11,
+        },
+        {
+          role: "assistant",
+          provider: "openclaw",
+          model: "gateway-injected",
+          content: [{ type: "text", text: "gateway notice" }],
+          timestamp: 12,
         },
       ],
     });
 
-    const result = await readLatestAssistantReplySnapshot({ sessionKey: "agent:main:child" });
+    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
 
-    expect(result.text).toBe("new output");
-    expect(result.fingerprint).toContain('"timestamp":42');
+    expect(result).toBe("real worker reply");
+  });
+
+  it("skips trailing inter-session input rows for normal latest-reply reads", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "older worker reply" }],
+          timestamp: 10,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "forwarded sessions_send prompt" }],
+          provenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:source",
+            sourceTool: "sessions_send",
+          },
+          timestamp: 11,
+        },
+      ],
+    });
+
+    const result = await readLatestAssistantReply({ sessionKey: "agent:main:target" });
+
+    expect(result).toBe("older worker reply");
   });
 
   it("reads only final_answer text from phased assistant history", async () => {
@@ -194,10 +229,7 @@ describe("readLatestAssistantReply", () => {
 
 describe("waitForAgentRun", () => {
   beforeEach(() => {
-    callGatewayMock.mockClear();
-    testing.setDepsForTest({
-      callGateway: async (opts) => await callGatewayMock(opts),
-    });
+    callGatewayMock.mockReset();
   });
 
   it("maps gateway timeouts to timeout status", async () => {
@@ -219,8 +251,49 @@ describe("waitForAgentRun", () => {
     expect(result).toEqual({
       status: "error",
       error: "gateway closed (1006): transport close",
+      retryableTransportError: true,
     });
-    expect(isRecoverableAgentWaitError(result.error)).toBe(true);
+  });
+
+  it.each([
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "EPIPE",
+    "EHOSTUNREACH",
+    "ENETUNREACH",
+    "EAI_AGAIN",
+    "UND_ERR_SOCKET",
+  ])("records %s recovery only when the wait RPC rejects", async (code) => {
+    const error = `connect ${code} 127.0.0.1:443`;
+    callGatewayMock.mockResolvedValueOnce({
+      status: "error",
+      error,
+      retryableTransportError: true,
+    });
+    const terminal = await waitForAgentRun({ runId: "run-terminal", timeoutMs: 500 });
+    expect(terminal).toMatchObject({ status: "error", error });
+    expect(terminal).not.toHaveProperty("retryableTransportError");
+
+    callGatewayMock.mockRejectedValueOnce(new Error(error));
+    await expect(waitForAgentRun({ runId: "run-disconnected", timeoutMs: 500 })).resolves.toEqual({
+      status: "error",
+      error,
+      retryableTransportError: true,
+    });
+  });
+
+  it.each([
+    undefined,
+    "",
+    "gateway timeout",
+    "gateway request timeout for agent.wait",
+    "ENOENT: no such file",
+    "getaddrinfo ENOTFOUND gateway.example.com",
+  ])("does not mark a nonrecoverable rejected wait RPC: %s", async (error) => {
+    callGatewayMock.mockRejectedValueOnce(new Error(error));
+    const result = await waitForAgentRun({ runId: "run-unrecoverable", timeoutMs: 500 });
+    expect(result).not.toHaveProperty("retryableTransportError");
   });
 
   it("preserves pending agent.wait status", async () => {
@@ -245,6 +318,54 @@ describe("waitForAgentRun", () => {
       error: "429 RESOURCE_EXHAUSTED",
       pendingError: true,
     });
+  });
+
+  it("carries a bounded terminal reply snapshot from agent.wait", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "ok",
+      terminalReply: { disposition: "visible", text: "final reply" },
+    });
+
+    await expect(waitForAgentRun({ runId: "run-reply", timeoutMs: 500 })).resolves.toEqual({
+      status: "ok",
+      terminalReply: { disposition: "visible", text: "final reply" },
+    });
+  });
+
+  it.each([
+    { name: "confirmed final source reply", sourceReplyDelivered: true, expected: true },
+    { name: "progress-only reply", sourceReplyDelivered: false, expected: undefined },
+    { name: "another destination", sourceReplyDelivered: undefined, expected: undefined },
+    { name: "non-boolean marker", sourceReplyDelivered: "true", expected: undefined },
+    {
+      name: "another run",
+      sourceReplyDelivered: true,
+      receiptRunId: "run-other",
+      expected: undefined,
+    },
+  ])("accepts source delivery evidence only for the waited run: $name", async (entry) => {
+    callGatewayMock.mockResolvedValue({
+      status: "ok",
+      terminalReceipt: {
+        runId: entry.receiptRunId ?? "run-source-reply",
+        sessionId: "session-source",
+        turnId: "turn-source",
+        requested: { provider: "openai", model: "gpt-5.6-luna" },
+        effective: {
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          responseModel: "gpt-5.6-luna",
+        },
+        successfulToolNames: ["message"],
+        rerouted: false,
+        terminalDisposition: "visible",
+        sourceReplyDelivered: entry.sourceReplyDelivered,
+      },
+    });
+
+    const result = await waitForAgentRun({ runId: "run-source-reply", timeoutMs: 500 });
+
+    expect(result.sourceReplyDelivered).toBe(entry.expected);
   });
 
   it("normalizes wait timeouts before sending agent.wait", async () => {
@@ -378,82 +499,84 @@ describe("waitForAgentRun", () => {
   });
 });
 
-describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
+describe("waitForAgentRunReply", () => {
   beforeEach(() => {
-    callGatewayMock.mockClear();
-    testing.setDepsForTest({
-      callGateway: async (opts) => await callGatewayMock(opts),
-    });
+    callGatewayMock.mockReset();
   });
 
-  it("returns undefined when the latest assistant fingerprint matches the baseline", async () => {
-    const assistantMessage = {
-      role: "assistant",
-      content: [{ type: "text", text: "same reply" }],
-      timestamp: 42,
-    };
-    callGatewayMock
-      .mockResolvedValueOnce({
+  it("returns the run's reply and metadata without consulting unrelated session history", async () => {
+    callGatewayMock.mockImplementation(async (request) => {
+      if (request.method !== "agent.wait") {
+        throw new Error("session history is not delivery evidence");
+      }
+      return {
         status: "ok",
-      })
-      .mockResolvedValueOnce({
-        messages: [assistantMessage],
-      });
+        startedAt: 100,
+        endedAt: 200,
+        stopReason: "completed",
+        yielded: true,
+        providerStarted: true,
+        terminalReply: { disposition: "visible", text: "authoritative reply" },
+      };
+    });
 
-    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
-      runId: "run-1",
-      sessionKey: "agent:main:child",
+    const result = await waitForAgentRunReply({
+      runId: "run-visible-terminal-reply",
       timeoutMs: 1_000,
-      baseline: {
-        text: "same reply",
-        fingerprint: JSON.stringify(assistantMessage),
-      },
     });
 
     expect(result).toEqual({
       status: "ok",
-      replyText: undefined,
+      startedAt: 100,
+      endedAt: 200,
+      stopReason: "completed",
+      yielded: true,
+      providerStarted: true,
+      terminalReply: { disposition: "visible", text: "authoritative reply" },
+      replyText: "authoritative reply",
     });
+    expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual(["agent.wait"]);
   });
 
-  it("returns the new assistant text when the fingerprint changes", async () => {
-    callGatewayMock
-      .mockResolvedValueOnce({
-        status: "ok",
-      })
-      .mockResolvedValueOnce({
-        messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "fresh reply" }],
-            timestamp: 99,
-          },
-        ],
+  it.each([
+    { name: "silent", terminalReply: { disposition: "silent" } },
+    { name: "empty", terminalReply: { disposition: "empty" } },
+    { name: "missing", terminalReply: undefined },
+  ])("does not resurrect history for a $name terminal reply", async ({ terminalReply }) => {
+    callGatewayMock.mockImplementation(async (request) => {
+      if (request.method !== "agent.wait") {
+        throw new Error("history must not override terminal reply evidence");
+      }
+      return { status: "ok", terminalReply };
+    });
+
+    const result = await waitForAgentRunReply({ runId: "run-no-reply", timeoutMs: 1_000 });
+
+    expect(result).toEqual({ status: "ok", terminalReply });
+    expect(result.replyText).toBeUndefined();
+    expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual(["agent.wait"]);
+  });
+
+  it.each(["timeout", "error", "pending"] as const)(
+    "does not return visible text from a run whose status is %s",
+    async (status) => {
+      callGatewayMock.mockResolvedValue({
+        status,
+        terminalReply: { disposition: "visible", text: "unfinished reply" },
       });
 
-    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
-      runId: "run-2",
-      sessionKey: "agent:main:child",
-      timeoutMs: 1_000,
-      baseline: {
-        text: "older reply",
-        fingerprint: "old-fingerprint",
-      },
-    });
+      const result = await waitForAgentRunReply({ runId: "run-unfinished", timeoutMs: 1_000 });
 
-    expect(result).toEqual({
-      status: "ok",
-      replyText: "fresh reply",
-    });
-  });
+      expect(result.status).toBe(status);
+      expect(result.replyText).toBeUndefined();
+      expect(callGatewayMock).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe("waitForAgentRunsToDrain", () => {
   beforeEach(() => {
-    callGatewayMock.mockClear();
-    testing.setDepsForTest({
-      callGateway: async (opts) => await callGatewayMock(opts),
-    });
+    callGatewayMock.mockReset();
   });
 
   it("waits across rounds until descendant runs stop changing", async () => {

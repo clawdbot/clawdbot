@@ -1,7 +1,7 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Covers shared provider usage helpers.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
-import { clampPercent, resolveUsageProviderId, withTimeout } from "./provider-usage.shared.js";
+import { clampPercent, raceUsageTimeout, resolveUsageProviderId } from "./provider-usage.shared.js";
 
 describe("provider-usage.shared", () => {
   afterEach(() => {
@@ -10,15 +10,18 @@ describe("provider-usage.shared", () => {
   });
 
   it.each([
+    { value: "clawrouter", expected: "clawrouter" },
     { value: "deepseek", expected: "deepseek" },
     { value: "zai", expected: "zai" },
-    { value: "z-ai", expected: undefined },
+    { value: "z-ai", expected: "z-ai" },
     { value: " GOOGLE-GEMINI-CLI ", expected: "google-gemini-cli" },
     { value: "minimax-portal", expected: "minimax" },
     { value: "minimax-cn", expected: "minimax" },
     { value: "minimax-portal-cn", expected: "minimax" },
+    { value: "claude-cli", expected: "anthropic" },
+    { value: " CLAUDE-CLI ", expected: "anthropic" },
     { value: " XIAOMI-TOKEN-PLAN ", expected: "xiaomi-token-plan" },
-    { value: "unknown-provider", expected: undefined },
+    { value: "unknown-provider", expected: "unknown-provider" },
     { value: undefined, expected: undefined },
     { value: null, expected: undefined },
   ])("normalizes provider ids for %j", ({ value, expected }) => {
@@ -54,10 +57,10 @@ describe("provider-usage.shared", () => {
     },
   ])("$name", async ({ promise, expected, error }) => {
     if (error) {
-      await expect(withTimeout(promise(), 100, "fallback")).rejects.toThrow(error);
+      await expect(raceUsageTimeout(promise(), 100, "fallback")).rejects.toThrow(error);
       return;
     }
-    await expect(withTimeout(promise(), 100, "fallback")).resolves.toBe(expected);
+    await expect(raceUsageTimeout(promise(), 100, "fallback")).resolves.toBe(expected);
   });
 
   it("returns fallback when timeout wins", async () => {
@@ -65,7 +68,7 @@ describe("provider-usage.shared", () => {
     const late = new Promise<string>((resolve) => {
       setTimeout(() => resolve("late"), 50);
     });
-    const result = withTimeout(late, 1, "fallback");
+    const result = raceUsageTimeout(late, 1, "fallback");
     await vi.advanceTimersByTimeAsync(1);
     await expect(result).resolves.toBe("fallback");
   });
@@ -74,7 +77,11 @@ describe("provider-usage.shared", () => {
     vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
-    const result = withTimeout(new Promise<string>(() => {}), Number.MAX_SAFE_INTEGER, "fallback");
+    const result = raceUsageTimeout(
+      new Promise<string>(() => {}),
+      Number.MAX_SAFE_INTEGER,
+      "fallback",
+    );
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
 
@@ -85,7 +92,7 @@ describe("provider-usage.shared", () => {
   it("clears the timeout after successful work", async () => {
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
 
-    await expect(withTimeout(Promise.resolve("ok"), 100, "fallback")).resolves.toBe("ok");
+    await expect(raceUsageTimeout(Promise.resolve("ok"), 100, "fallback")).resolves.toBe("ok");
 
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
   });

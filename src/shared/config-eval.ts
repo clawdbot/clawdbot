@@ -1,9 +1,10 @@
 // Config evaluation helpers load dynamic config modules with guarded evaluation.
 import fs from "node:fs";
 import path from "node:path";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
 /** Normalizes primitive config values into the truthiness rules used by requirements checks. */
-export function isTruthy(value: unknown): boolean {
+function isTruthy(value: unknown): boolean {
   if (value === undefined || value === null) {
     return false;
   }
@@ -20,16 +21,26 @@ export function isTruthy(value: unknown): boolean {
 }
 
 /** Resolves dotted config paths, tolerating extra dots and missing branches. */
-export function resolveConfigPath(config: unknown, pathStr: string): unknown {
+function resolveConfigPath(config: unknown, pathStr: string): unknown {
   const parts = pathStr.split(".").filter(Boolean);
   let current: unknown = config;
   for (const part of parts) {
     if (typeof current !== "object" || current === null) {
       return undefined;
     }
+    if (isBlockedObjectKey(part)) {
+      return undefined;
+    }
     current = (current as Record<string, unknown>)[part];
   }
   return current;
+}
+
+function hasBlockedConfigPathSegment(pathStr: string): boolean {
+  return pathStr
+    .split(".")
+    .filter(Boolean)
+    .some((part) => isBlockedObjectKey(part));
 }
 
 /** Checks a config path with fallback defaults only when the path is unresolved. */
@@ -39,7 +50,11 @@ export function isConfigPathTruthyWithDefaults(
   defaults: Record<string, boolean>,
 ): boolean {
   const value = resolveConfigPath(config, pathStr);
-  if (value === undefined && pathStr in defaults) {
+  if (
+    value === undefined &&
+    !hasBlockedConfigPathSegment(pathStr) &&
+    Object.hasOwn(defaults, pathStr)
+  ) {
     return defaults[pathStr] ?? false;
   }
   return isTruthy(value);
@@ -62,7 +77,7 @@ type RuntimeRequirementEvalParams = {
 };
 
 /** Evaluates binary/env/config requirements against local and optional remote capabilities. */
-export function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): boolean {
+function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): boolean {
   const requires = params.requires;
   if (!requires) {
     return true;
@@ -110,7 +125,7 @@ export function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): b
   return true;
 }
 
-/** Evaluates OS gating and runtime requirements for skill/plugin entry eligibility. */
+/** Enforces OS compatibility before allowing `always` to bypass runtime requirements. */
 export function evaluateRuntimeEligibility(
   params: {
     os?: string[];
@@ -141,7 +156,7 @@ export function evaluateRuntimeEligibility(
 }
 
 /** Returns the current Node runtime platform used by eligibility checks. */
-export function resolveRuntimePlatform(): string {
+function resolveRuntimePlatform(): string {
   return process.platform;
 }
 
@@ -154,21 +169,20 @@ function windowsPathExtensions(): string[] {
 
 let cachedHasBinaryPath: string | undefined;
 let cachedHasBinaryPathExt: string | undefined;
-const hasBinaryCache = new Map<string, boolean>();
+// Installs can create binaries under unchanged PATH/PATHEXT, so cache only successful probes.
+const hasBinaryCache = new Set<string>();
 
 /** Checks PATH for an executable binary, including PATHEXT candidates on Windows. */
 export function hasBinary(bin: string): boolean {
   const pathEnv = process.env.PATH ?? "";
   const pathExt = process.platform === "win32" ? (process.env.PATHEXT ?? "") : "";
   if (cachedHasBinaryPath !== pathEnv || cachedHasBinaryPathExt !== pathExt) {
-    // PATH/PATHEXT changes invalidate all cached binary probes; keeping stale misses
-    // would make newly installed tools invisible until process restart.
     cachedHasBinaryPath = pathEnv;
     cachedHasBinaryPathExt = pathExt;
     hasBinaryCache.clear();
   }
   if (hasBinaryCache.has(bin)) {
-    return hasBinaryCache.get(bin)!;
+    return true;
   }
 
   const parts = pathEnv.split(path.delimiter).filter(Boolean);
@@ -178,13 +192,12 @@ export function hasBinary(bin: string): boolean {
       const candidate = path.join(part, bin + ext);
       try {
         fs.accessSync(candidate, fs.constants.X_OK);
-        hasBinaryCache.set(bin, true);
+        hasBinaryCache.add(bin);
         return true;
       } catch {
         // keep scanning
       }
     }
   }
-  hasBinaryCache.set(bin, false);
   return false;
 }

@@ -6,8 +6,8 @@ const recordSessionMetaFromInboundMock = vi.fn((_args?: unknown) => Promise.reso
 const updateLastRouteMock = vi.fn((_args?: unknown) => Promise.resolve(undefined));
 
 vi.mock("../config/sessions/inbound.runtime.js", () => ({
-  recordSessionMetaFromInbound: (args: unknown) => recordSessionMetaFromInboundMock(args),
-  updateLastRoute: (args: unknown) => updateLastRouteMock(args),
+  recordInboundSessionMeta: (args: unknown) => recordSessionMetaFromInboundMock(args),
+  updateSessionLastRoute: (args: unknown) => updateLastRouteMock(args),
 }));
 
 type SessionModule = typeof import("./session.js");
@@ -188,5 +188,40 @@ describe("recordInboundSession", () => {
     const route = requireFirstCallArg(updateLastRouteMock);
     expect(route.sessionKey).toBe("agent:main:main");
     expect(route.createIfMissing).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "throws synchronously",
+      handler: (_err: unknown): void => {
+        throw new Error("handler failed");
+      },
+    },
+    {
+      name: "returns a rejected promise",
+      handler: ((_err: unknown) => Promise.reject(new Error("handler failed"))) as (
+        _err: unknown,
+      ) => void,
+    },
+  ])("settles the tracked meta task when onRecordError $name", async ({ handler }) => {
+    const recordError = new Error("db failed");
+    recordSessionMetaFromInboundMock.mockRejectedValueOnce(recordError);
+    const onRecordError = vi.fn(handler);
+    let trackedMetaTask: Promise<unknown> | undefined;
+
+    await recordInboundSession({
+      storePath: "/tmp/openclaw-session-store.json",
+      sessionKey: "agent:main:demo-channel:1234:thread:42",
+      ctx,
+      onRecordError,
+      trackSessionMetaTask: (task) => {
+        trackedMetaTask = task;
+      },
+    });
+
+    expect(trackedMetaTask).toBeDefined();
+    await expect(trackedMetaTask).resolves.toBeUndefined();
+    expect(onRecordError).toHaveBeenCalledTimes(1);
+    expect(onRecordError).toHaveBeenCalledWith(recordError);
   });
 });

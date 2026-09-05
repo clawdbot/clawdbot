@@ -109,13 +109,13 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
     }
 }
 
-/// Short-lived speech recognizer that records while the hotkey is held.
+/// Records speech while the hotkey is held.
 actor VoicePushToTalk {
     static let shared = VoicePushToTalk()
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.ptt")
 
-    private var recognizer: SFSpeechRecognizer?
+    private var recognizerCache = SpeechRecognizerCache()
     // Lazily created on begin() to avoid creating an AVAudioEngine at app launch, which can switch Bluetooth
     // headphones into the low-quality headset profile even if push-to-talk is never used.
     private var audioEngine: AVAudioEngine?
@@ -160,7 +160,8 @@ actor VoicePushToTalk {
         self.isCapturing = true
         self.triggerChimePlayed = false
         self.finalized = false
-        self.timeoutTask?.cancel(); self.timeoutTask = nil
+        self.timeoutTask?.cancel()
+        self.timeoutTask = nil
         let snapshot = await MainActor.run { VoiceSessionCoordinator.shared.snapshot() }
         self.adoptedPrefix = snapshot.visible ? snapshot.text.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         self.logger.info("ptt begin adopted_prefix_len=\(self.adoptedPrefix.count, privacy: .public)")
@@ -227,8 +228,7 @@ actor VoicePushToTalk {
     // MARK: - Private
 
     private func startRecognition(localeID: String?, sessionID: UUID) async throws {
-        let locale = localeID.flatMap { Locale(identifier: $0) } ?? Locale(identifier: Locale.current.identifier)
-        self.recognizer = SFSpeechRecognizer(locale: locale)
+        let recognizer = self.recognizerCache.recognizer(localeID: localeID ?? Locale.current.identifier)
         guard let recognizer, recognizer.isAvailable else {
             throw NSError(
                 domain: "VoicePushToTalk",
@@ -237,8 +237,8 @@ actor VoicePushToTalk {
         }
 
         self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        self.recognitionRequest?.shouldReportPartialResults = true
         guard let request = self.recognitionRequest else { return }
+        SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
 
         // Lazily create the engine here so app launch doesn't grab audio resources / trigger Bluetooth HFP.
         if self.audioEngine == nil {
@@ -321,7 +321,8 @@ actor VoicePushToTalk {
         }
         self.finalized = true
         self.isCapturing = false
-        self.timeoutTask?.cancel(); self.timeoutTask = nil
+        self.timeoutTask?.cancel()
+        self.timeoutTask = nil
 
         let finalRecognized: String = {
             if let override = transcriptOverride?.trimmingCharacters(in: .whitespacesAndNewlines) {
@@ -387,19 +388,6 @@ actor VoicePushToTalk {
             localeID: state.voiceWakeLocaleID,
             triggerChime: state.voiceWakeTriggerChime,
             sendChime: state.voiceWakeSendChime)
-    }
-
-    // MARK: - Test helpers
-
-    static func _testDelta(committed: String, current: String) -> String {
-        VoiceOverlayTextFormatting.delta(after: committed, current: current)
-    }
-
-    static func _testAttributedColors(isFinal: Bool) -> (NSColor, NSColor) {
-        let sample = VoiceOverlayTextFormatting.makeAttributed(committed: "a", volatile: "b", isFinal: isFinal)
-        let committedColor = sample.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor ?? .clear
-        let volatileColor = sample.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor ?? .clear
-        return (committedColor, volatileColor)
     }
 
     private static func join(_ prefix: String, _ suffix: String) -> String {

@@ -1,4 +1,5 @@
 // Fal provider module implements model/runtime integration.
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import {
   downloadGeneratedMusicAsset,
   extractGeneratedMusicFileCandidates,
@@ -6,7 +7,11 @@ import {
   type MusicGenerationRequest,
 } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { assertOkOrThrowHttpError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowHttpError,
+  postJsonRequest,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFalHttpRequestConfig } from "./http-config.js";
 
@@ -14,7 +19,6 @@ const DEFAULT_FAL_MUSIC_MODEL = "fal-ai/minimax-music/v2.6";
 const FAL_ACE_STEP_MODEL = "fal-ai/ace-step/prompt-to-audio";
 const FAL_STABLE_AUDIO_MODEL = "fal-ai/stable-audio-25/text-to-audio";
 const DEFAULT_TIMEOUT_MS = 180_000;
-const DEFAULT_GENERATED_MUSIC_MAX_BYTES = 16 * 1024 * 1024;
 
 const FAL_MUSIC_MODELS = [
   DEFAULT_FAL_MUSIC_MODEL,
@@ -24,14 +28,6 @@ const FAL_MUSIC_MODELS = [
 
 function resolveFalMusicModel(model: string | undefined): string {
   return normalizeOptionalString(model) ?? DEFAULT_FAL_MUSIC_MODEL;
-}
-
-function resolveGeneratedMusicMaxBytes(req: MusicGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_MUSIC_MAX_BYTES;
 }
 
 function buildFalMinimaxBody(req: MusicGenerationRequest): Record<string, unknown> {
@@ -110,11 +106,7 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
     label: "fal",
     defaultModel: DEFAULT_FAL_MUSIC_MODEL,
     models: [...FAL_MUSIC_MODELS],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: "fal",
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "fal", ...ctx }),
     capabilities: {
       generate: {
         maxTracks: 1,
@@ -161,7 +153,7 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
 
       try {
         await assertOkOrThrowHttpError(response, "fal music generation failed");
-        const payload = await response.json();
+        const payload = await readProviderJsonResponse<unknown>(response, "fal music generation");
         const [candidate] = extractGeneratedMusicFileCandidates(payload);
         if (!candidate) {
           throw new Error("fal music generation response missing audio output");
@@ -172,7 +164,7 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
           fetchFn: fetch,
           provider: "fal",
           requestFailedMessage: "fal generated music download failed",
-          maxBytes: resolveGeneratedMusicMaxBytes(req),
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
         });
         const lyrics =
           typeof payload === "object" && payload && !Array.isArray(payload)

@@ -16,7 +16,7 @@ export type PendingDeviceApprovalKind =
   | "scope-upgrade"
   | "re-approval";
 
-export type PendingDeviceApprovalState = {
+type PendingDeviceApprovalState = {
   kind: PendingDeviceApprovalKind;
   /** Access requested by the pending pairing attempt. */
   requested: DevicePairingAccessSummary;
@@ -66,7 +66,7 @@ function includesAll(allowed: readonly string[], requested: readonly string[]): 
 }
 
 /** Normalizes requested roles/scopes from pending pairing records, including legacy singular role. */
-export function summarizePendingDeviceAccess(request: PendingLike): DevicePairingAccessSummary {
+function summarizePendingDeviceAccess(request: PendingLike): DevicePairingAccessSummary {
   return {
     roles: normalizeRoleList(request.roles, request.role),
     scopes: normalizeDeviceAuthScopes(request.scopes),
@@ -74,7 +74,7 @@ export function summarizePendingDeviceAccess(request: PendingLike): DevicePairin
 }
 
 /** Summarizes currently approved device access, excluding roles whose tokens are revoked. */
-export function summarizeApprovedDeviceAccess(device: PairedLike): DevicePairingAccessSummary {
+function summarizeApprovedDeviceAccess(device: PairedLike): DevicePairingAccessSummary {
   const approvedRoles = normalizeRoleList(device.roles, device.role);
   const tokenList = Array.isArray(device.tokens)
     ? device.tokens

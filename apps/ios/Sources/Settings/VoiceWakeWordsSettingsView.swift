@@ -14,6 +14,7 @@ struct VoiceWakeWordsSettingsView: View {
                     TextField("Wake word", text: self.binding(for: index))
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .font(OpenClawType.subhead)
                         .focused(self.$focusedTriggerIndex, equals: index)
                         .onSubmit {
                             self.commitTriggerWords()
@@ -25,23 +26,36 @@ struct VoiceWakeWordsSettingsView: View {
                     self.addWord()
                 } label: {
                     Label("Add word", systemImage: "plus")
+                        .font(OpenClawType.subheadSemiBold)
                 }
                 .disabled(self.triggerWords
                     .contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
 
-                Button("Reset defaults") {
+                Button {
                     self.triggerWords = VoiceWakePreferences.defaultTriggerWords
+                } label: {
+                    Text("Reset defaults")
+                        .font(OpenClawType.subheadSemiBold)
                 }
             } header: {
                 Text("Wake Words")
+                    .font(OpenClawType.captionSemiBold)
             } footer: {
+                // Keep the extraction key contiguous for the native localization inventory.
+                // swiftlint:disable line_length
                 Text(
-                    "OpenClaw reacts when any trigger appears in a transcription. "
-                        + "Keep them short to avoid false positives.")
+                    String(
+                        localized:
+                        "OpenClaw reacts when any trigger appears in a transcription. Keep them short to avoid false positives."))
+                    .font(OpenClawType.caption)
+                // swiftlint:enable line_length
             }
         }
         .navigationTitle("Wake Words")
-        .toolbar { EditButton() }
+        .toolbar {
+            EditButton()
+                .font(OpenClawType.subheadSemiBold)
+        }
         .onAppear {
             if self.triggerWords.isEmpty {
                 self.triggerWords = VoiceWakePreferences.defaultTriggerWords

@@ -1,32 +1,4 @@
 // Volcengine provider module implements model/runtime integration.
-import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildDoubaoCodingProvider, buildDoubaoProvider } from "./provider-catalog.js";
+import { VOLCENGINE_PROVIDER_CATALOG } from "./models.js";
 
-const volcengineProviderDiscovery: ProviderPlugin[] = [
-  {
-    id: "volcengine",
-    label: "Volcengine",
-    docsPath: "/providers/models",
-    auth: [],
-    staticCatalog: {
-      order: "simple",
-      run: async () => ({
-        provider: buildDoubaoProvider(),
-      }),
-    },
-  },
-  {
-    id: "volcengine-plan",
-    label: "Volcengine Plan",
-    docsPath: "/providers/models",
-    auth: [],
-    staticCatalog: {
-      order: "simple",
-      run: async () => ({
-        provider: buildDoubaoCodingProvider(),
-      }),
-    },
-  },
-];
-
-export default volcengineProviderDiscovery;
+export default VOLCENGINE_PROVIDER_CATALOG.staticDiscovery;

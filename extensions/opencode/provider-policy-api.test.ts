@@ -42,4 +42,54 @@ describe("opencode provider policy public artifact", () => {
       defaultLevel: "adaptive",
     });
   });
+
+  it("exposes the full GPT-5.6 reasoning profile", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "opencode",
+        modelId: "gpt-5.6-luna",
+        compat: {
+          supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+        },
+      }),
+    ).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "max" },
+      ],
+      defaultLevel: "medium",
+    });
+  });
+
+  it("derives non-Claude profiles only from exact provider effort metadata", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "opencode",
+        modelId: "grok-4.5",
+        compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }],
+      defaultLevel: "medium",
+    });
+    expect(
+      resolveThinkingProfile({
+        provider: "opencode",
+        modelId: "kimi-k3",
+        compat: { supportedReasoningEfforts: ["max"] },
+      }),
+    ).toEqual({ levels: [{ id: "off" }, { id: "max" }], defaultLevel: "off" });
+    expect(
+      resolveThinkingProfile({
+        provider: "opencode",
+        modelId: "big-pickle",
+        api: "openai-completions",
+        reasoning: true,
+      }),
+    ).toEqual({ levels: [{ id: "off", label: "always on" }], defaultLevel: "off" });
+  });
 });

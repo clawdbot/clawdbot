@@ -3,10 +3,8 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
-import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
-import type { PluginCandidate } from "./discovery.js";
+import { resolvePluginInstallOwnerLookup } from "./candidate-install-owner.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import type { PluginLogger } from "./types.js";
@@ -22,7 +20,7 @@ type InstallTrackingRule = {
 };
 
 /** Provenance lookup for trusted plugin load paths and install records. */
-export type PluginProvenanceIndex = {
+type PluginProvenanceIndex = {
   loadPathMatcher: PathMatcher;
   installRules: Map<string, InstallTrackingRule>;
 };
@@ -125,93 +123,6 @@ function isTrackedByProvenance(params: {
   return matchesPathMatcher(params.index.loadPathMatcher, canonicalSourcePath);
 }
 
-function matchesExplicitInstallRule(params: {
-  pluginId: string;
-  source: string;
-  index: PluginProvenanceIndex;
-  env: NodeJS.ProcessEnv;
-}): boolean {
-  const sourcePath = resolveUserPath(params.source, params.env);
-  const canonicalSourcePath = safeRealpathSync(sourcePath) ?? sourcePath;
-  const installRule = params.index.installRules.get(params.pluginId);
-  if (!installRule || installRule.trackedWithoutPaths) {
-    return false;
-  }
-  return matchesPathMatcher(installRule.matcher, canonicalSourcePath);
-}
-
-function resolveCandidateDuplicateRank(params: {
-  candidate: PluginCandidate;
-  manifestByRoot: Map<string, PluginManifestRecord>;
-  provenance: PluginProvenanceIndex;
-  env: NodeJS.ProcessEnv;
-}): number {
-  const manifestRecord = params.manifestByRoot.get(params.candidate.rootDir);
-  const pluginId = manifestRecord?.id;
-  const isExplicitInstall =
-    params.candidate.origin === "global" &&
-    pluginId !== undefined &&
-    matchesExplicitInstallRule({
-      pluginId,
-      source: params.candidate.source,
-      index: params.provenance,
-      env: params.env,
-    });
-
-  if (params.candidate.origin === "config") {
-    return 0;
-  }
-  if (
-    params.candidate.origin === "bundled" &&
-    isBundledPluginInsideDevSourceRoot({
-      rootDir: params.candidate.rootDir,
-      env: params.env,
-    })
-  ) {
-    return 1;
-  }
-  if (params.candidate.origin === "global" && isExplicitInstall) {
-    return 2;
-  }
-  if (params.candidate.origin === "bundled") {
-    // Bundled plugin ids stay reserved unless the operator configured an override.
-    return 3;
-  }
-  if (params.candidate.origin === "workspace") {
-    return 4;
-  }
-  return 5;
-}
-
-/** Orders duplicate plugin candidates by configured, installed, bundled, then workspace trust. */
-export function compareDuplicateCandidateOrder(params: {
-  left: PluginCandidate;
-  right: PluginCandidate;
-  manifestByRoot: Map<string, PluginManifestRecord>;
-  provenance: PluginProvenanceIndex;
-  env: NodeJS.ProcessEnv;
-}): number {
-  const leftPluginId = params.manifestByRoot.get(params.left.rootDir)?.id;
-  const rightPluginId = params.manifestByRoot.get(params.right.rootDir)?.id;
-  if (!leftPluginId || leftPluginId !== rightPluginId) {
-    return 0;
-  }
-  return (
-    resolveCandidateDuplicateRank({
-      candidate: params.left,
-      manifestByRoot: params.manifestByRoot,
-      provenance: params.provenance,
-      env: params.env,
-    }) -
-    resolveCandidateDuplicateRank({
-      candidate: params.right,
-      manifestByRoot: params.manifestByRoot,
-      provenance: params.provenance,
-      env: params.env,
-    })
-  );
-}
-
 /** Warns when an open plugin allowlist may auto-load non-bundled plugins. */
 export function warnWhenAllowlistIsOpen(params: {
   emitWarning: boolean;
@@ -220,6 +131,7 @@ export function warnWhenAllowlistIsOpen(params: {
   allow: string[];
   warningCacheKey: string;
   warningCache: OpenAllowlistWarningCache;
+  explicitlyEnabledPluginIds?: ReadonlySet<string>;
   discoverablePlugins: Array<{ id: string; source: string; origin: PluginRecord["origin"] }>;
 }) {
   if (!params.emitWarning) {
@@ -229,7 +141,9 @@ export function warnWhenAllowlistIsOpen(params: {
     return;
   }
   const autoDiscoverable = params.discoverablePlugins.filter(
-    (entry) => entry.origin === "workspace" || entry.origin === "global",
+    (entry) =>
+      (entry.origin === "workspace" || entry.origin === "global") &&
+      !params.explicitlyEnabledPluginIds?.has(entry.id),
   );
   if (autoDiscoverable.length === 0) {
     return;
@@ -298,9 +212,11 @@ export function warnAboutUntrackedLoadedPlugins(params: {
     if (allowSet.has(plugin.id)) {
       continue;
     }
+    const installOwner = resolvePluginInstallOwnerLookup(params)?.get(plugin.id);
     if (
+      installOwner &&
       isTrackedByProvenance({
-        pluginId: plugin.id,
+        pluginId: installOwner,
         source: plugin.source,
         index: params.provenance,
         env: params.env,
@@ -308,7 +224,7 @@ export function warnAboutUntrackedLoadedPlugins(params: {
     ) {
       continue;
     }
-    const message = `loaded without install/load-path provenance; treat as untracked local code. Verify source with '${formatPluginInspectCommand(plugin.id)}', then pin trust via plugins.allow (e.g. "plugins": { "allow": [${JSON.stringify(plugin.id)}] }) or reinstall from a trusted source so OpenClaw records install provenance.`;
+    const message = `OpenClaw can't verify where this plugin came from. Review it with '${formatPluginInspectCommand(plugin.id)}'. Adding it to plugins.allow lets it load, but does not make it trusted. If it's an official plugin, reinstall it from its official npm package or its official ClawHub listing to enable trusted features.`;
     params.registry.diagnostics.push({
       level: "warn",
       pluginId: plugin.id,

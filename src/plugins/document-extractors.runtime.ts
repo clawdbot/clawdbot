@@ -7,18 +7,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
 import { loadBundledDocumentExtractorEntriesFromDir } from "./document-extractor-public-artifacts.js";
 import type { PluginDocumentExtractorEntry } from "./document-extractor-types.js";
-
-function compareExtractors(
-  left: PluginDocumentExtractorEntry,
-  right: PluginDocumentExtractorEntry,
-): number {
-  const leftOrder = left.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-  const rightOrder = right.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-  if (leftOrder !== rightOrder) {
-    return leftOrder - rightOrder;
-  }
-  return left.id.localeCompare(right.id) || left.pluginId.localeCompare(right.pluginId);
-}
+import { sortPluginEntriesForAutoDetect } from "./plugin-entry-order.js";
+import { createPluginIdScopeSet } from "./plugin-scope.js";
 
 function resolveExplicitAllowedDocumentExtractorPluginIds(params: {
   config?: OpenClawConfig;
@@ -28,8 +18,7 @@ function resolveExplicitAllowedDocumentExtractorPluginIds(params: {
   if (!Array.isArray(allow) || allow.length === 0) {
     return null;
   }
-  const onlyPluginIdSet =
-    params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
+  const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
   const deniedPluginIds = new Set(params.config?.plugins?.deny ?? []);
   const entries = params.config?.plugins?.entries ?? {};
   return sortUniqueStrings(
@@ -61,10 +50,6 @@ export function resolvePluginDocumentExtractors(params?: {
       env: params?.env,
       onlyPluginIds: params?.onlyPluginIds,
       contract: "documentExtractors",
-      compatMode: {
-        enablement: "always",
-        vitest: true,
-      },
     }).map((plugin) => plugin.id);
   for (const pluginId of pluginIds) {
     let loaded: PluginDocumentExtractorEntry[] | null;
@@ -86,5 +71,5 @@ export function resolvePluginDocumentExtractors(params?: {
       cause: loadErrors.length === 1 ? loadErrors[0] : new AggregateError(loadErrors),
     });
   }
-  return extractors.toSorted(compareExtractors);
+  return sortPluginEntriesForAutoDetect(extractors);
 }

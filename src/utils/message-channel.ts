@@ -8,8 +8,10 @@ import {
   normalizeGatewayClientName,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { listBundledChannelCatalogEntries } from "../channels/bundled-channel-catalog-read.js";
-import { getChatChannelMeta } from "../channels/chat-meta.js";
+import { findChatChannelMeta } from "../channels/chat-meta.js";
 import { getRegisteredChannelPluginMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
+import { normalizeMessageChannel } from "./message-channel-normalize.js";
 export {
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
@@ -17,19 +19,11 @@ export {
   normalizeMessageChannel,
   resolveGatewayMessageChannel,
   resolveMessageChannel,
-  type DeliverableMessageChannel,
-  type GatewayMessageChannel,
 } from "./message-channel-normalize.js";
 export {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
-  NATIVE_APPROVAL_CHANNELS,
-  isNativeApprovalChannel,
-  type InternalMessageChannel,
-  type NativeApprovalChannel,
 } from "./message-channel-constants.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
-import { normalizeMessageChannel } from "./message-channel-normalize.js";
 
 /**
  * Message channel and Gateway client classification helpers.
@@ -50,16 +44,42 @@ export function isGatewayCliClient(client?: GatewayClientInfoLike | null): boole
   return normalizeGatewayClientMode(client?.mode) === GATEWAY_CLIENT_MODES.CLI;
 }
 
+/**
+ * Return whether a Gateway client is an ephemeral control-plane connection.
+ * Test-mode clients stay excluded from this list: suites use them as stand-ins
+ * for real clients and assert presence propagation through the full pipeline.
+ */
+export function isEphemeralGatewayClient(client?: GatewayClientInfoLike | null): boolean {
+  const mode = normalizeGatewayClientMode(client?.mode);
+  return (
+    mode === GATEWAY_CLIENT_MODES.CLI ||
+    mode === GATEWAY_CLIENT_MODES.BACKEND ||
+    mode === GATEWAY_CLIENT_MODES.PROBE
+  );
+}
+
 /** Return whether a client is one of the operator UI clients. */
 export function isOperatorUiClient(client?: GatewayClientInfoLike | null): boolean {
   const clientId = normalizeGatewayClientName(client?.id);
-  return clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI || clientId === GATEWAY_CLIENT_NAMES.TUI;
+  return (
+    clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI ||
+    clientId === GATEWAY_CLIENT_NAMES.BROWSER_COPILOT ||
+    clientId === GATEWAY_CLIENT_NAMES.TUI
+  );
 }
 
 /** Return whether a client is the browser Control UI. */
 export function isBrowserOperatorUiClient(client?: GatewayClientInfoLike | null): boolean {
   const clientId = normalizeGatewayClientName(client?.id);
-  return clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI;
+  return (
+    clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI ||
+    clientId === GATEWAY_CLIENT_NAMES.BROWSER_COPILOT
+  );
+}
+
+/** Return whether a client is the first-party browser side-panel copilot. */
+export function isBrowserCopilotClient(client?: GatewayClientInfoLike | null): boolean {
+  return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.BROWSER_COPILOT;
 }
 
 /** Return whether a raw channel id resolves to OpenClaw's internal channel. */
@@ -78,6 +98,28 @@ export function isWebchatClient(client?: GatewayClientInfoLike | null): boolean 
   return normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.WEBCHAT_UI;
 }
 
+const PROGRESS_CARD_RENDERER_PLATFORMS = new Set(["web", "ios", "android", "macos", "darwin"]);
+
+/** Return whether a paired Gateway client can render progress cards. */
+export function isProgressCardRendererClient(
+  paired?: {
+    clientId?: string | null;
+    clientMode?: string | null;
+    platform?: string | null;
+  } | null,
+): boolean {
+  const client = { id: paired?.clientId, mode: paired?.clientMode };
+  const clientId = normalizeGatewayClientName(client?.id);
+  const rendererClient =
+    (clientId === GATEWAY_CLIENT_NAMES.CONTROL_UI && isBrowserOperatorUiClient(client)) ||
+    (clientId === GATEWAY_CLIENT_NAMES.WEBCHAT_UI && isWebchatClient(client)) ||
+    clientId === GATEWAY_CLIENT_NAMES.IOS_APP ||
+    clientId === GATEWAY_CLIENT_NAMES.ANDROID_APP ||
+    clientId === GATEWAY_CLIENT_NAMES.MACOS_APP;
+  const platform = paired?.platform?.trim().toLowerCase();
+  return rendererClient || (platform ? PROGRESS_CARD_RENDERER_PLATFORMS.has(platform) : false);
+}
+
 /** Resolve whether a channel can receive markdown without plain-text downgrade. */
 export function isMarkdownCapableMessageChannel(raw?: string | null): boolean {
   const channel = normalizeMessageChannel(raw);
@@ -89,7 +131,7 @@ export function isMarkdownCapableMessageChannel(raw?: string | null): boolean {
   }
   const builtInChannel = normalizeChatChannelId(channel);
   if (builtInChannel) {
-    const builtInMeta = getChatChannelMeta(builtInChannel);
+    const builtInMeta = findChatChannelMeta(builtInChannel);
     if (builtInMeta) {
       return builtInMeta.markdownCapable === true;
     }

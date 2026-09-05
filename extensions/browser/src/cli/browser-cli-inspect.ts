@@ -2,12 +2,16 @@
  * Browser CLI inspection commands for screenshots and snapshots.
  */
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { SnapshotResult } from "../browser/client.js";
+import { writeExternalFileWithinOutputRoot } from "../browser/output-files.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserNonNegativeIntegerValue,
+  parseBrowserPositiveIntegerOption,
   parseBrowserPositiveIntegerValue,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
@@ -15,8 +19,8 @@ import {
   danger,
   defaultRuntime,
   getRuntimeConfig,
+  inheritOptionFromParent,
   shortenHomePath,
-  type SnapshotResult,
 } from "./core-api.js";
 
 function parseOptionalIntegerOption(
@@ -39,6 +43,35 @@ function parseOptionalIntegerOption(
   return parsed;
 }
 
+function parseBrowserChoiceOption<const T extends string>(
+  value: string,
+  label: string,
+  choices: readonly T[],
+): T | undefined {
+  if ((choices as readonly string[]).includes(value)) {
+    return value as T;
+  }
+  defaultRuntime.error(danger(`Invalid ${label}: expected ${choices.join(" or ")}`));
+  defaultRuntime.exit(1);
+  return undefined;
+}
+
+function resolveBrowserInspectTimeout(
+  command: Command,
+  parent: BrowserParentOpts,
+  value: string | undefined,
+): { parent: BrowserParentOpts; timeoutMs?: number } {
+  const timeout =
+    command.getOptionValueSource("timeout") === "cli"
+      ? value
+      : inheritOptionFromParent<string>(command, "timeout", "cli");
+  if (timeout === undefined) {
+    return { parent };
+  }
+  const timeoutMs = parseBrowserPositiveIntegerOption(timeout, "--timeout");
+  return { parent: { ...parent, timeout: String(timeoutMs) }, timeoutMs };
+}
+
 /** Registers Browser screenshot and snapshot commands. */
 export function registerBrowserInspectCommands(
   browser: Command,
@@ -57,27 +90,30 @@ export function registerBrowserInspectCommands(
       false,
     )
     .option("--type <png|jpeg>", "Output type (default: png)", "png")
+    .option("--timeout <ms>", "Timeout in ms")
     .action(async (targetId: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
+      const type = parseBrowserChoiceOption(opts.type, "--type", ["png", "jpeg"]);
+      if (type === undefined) {
+        return;
+      }
       try {
-        const result = await callBrowserRequest<{ path: string }>(
-          parent,
-          {
-            method: "POST",
-            path: "/screenshot",
-            query: profile ? { profile } : undefined,
-            body: {
-              targetId: normalizeOptionalString(targetId),
-              fullPage: Boolean(opts.fullPage),
-              ref: normalizeOptionalString(opts.ref),
-              element: normalizeOptionalString(opts.element),
-              labels: Boolean(opts.labels),
-              type: opts.type === "jpeg" ? "jpeg" : "png",
-            },
+        const request = resolveBrowserInspectTimeout(cmd, parent, opts.timeout);
+        const result = await callBrowserRequest<{ path: string }>(request.parent, {
+          method: "POST",
+          path: "/screenshot",
+          query: profile ? { profile } : undefined,
+          body: {
+            targetId: normalizeOptionalString(targetId),
+            fullPage: Boolean(opts.fullPage),
+            ref: normalizeOptionalString(opts.ref),
+            element: normalizeOptionalString(opts.element),
+            labels: Boolean(opts.labels),
+            type,
+            ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
           },
-          { timeoutMs: 20000 },
-        );
+        });
         if (parent?.json) {
           defaultRuntime.writeJson(result);
           return;
@@ -105,20 +141,30 @@ export function registerBrowserInspectCommands(
     .option("--labels", "Include label overlay screenshot with annotations", false)
     .option("--urls", "Append discovered link URLs to AI snapshots", false)
     .option("--out <path>", "Write snapshot to a file")
-    .action(async (opts, cmd) => {
+    .option("--timeout <ms>", "Timeout in ms")
+    .action(async (opts, cmd: Command) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
-      const format = opts.format === "aria" ? "aria" : "ai";
-      const formatWasExplicit =
-        typeof cmd.getOptionValueSource === "function" &&
-        cmd.getOptionValueSource("format") === "cli";
+      const format = parseBrowserChoiceOption(opts.format, "--format", ["aria", "ai"]);
+      if (format === undefined) {
+        return;
+      }
+      const explicitMode =
+        opts.mode === undefined
+          ? undefined
+          : parseBrowserChoiceOption(opts.mode, "--mode", ["efficient"]);
+      if (opts.mode !== undefined && explicitMode === undefined) {
+        return;
+      }
+      const formatWasExplicit = cmd.getOptionValueSource("format") === "cli";
       const configMode =
         !formatWasExplicit &&
         format === "ai" &&
         getRuntimeConfig().browser?.snapshotDefaults?.mode === "efficient"
           ? "efficient"
           : undefined;
-      const mode = opts.efficient === true || opts.mode === "efficient" ? "efficient" : configMode;
+      const mode =
+        opts.efficient === true || explicitMode === "efficient" ? "efficient" : configMode;
       const limit = parseOptionalIntegerOption(opts.limit, "--limit", { min: 1 });
       const depth = parseOptionalIntegerOption(opts.depth, "--depth", { min: 0 });
       if (
@@ -128,6 +174,7 @@ export function registerBrowserInspectCommands(
         return;
       }
       try {
+        const request = resolveBrowserInspectTimeout(cmd, parent, opts.timeout);
         const query: Record<string, string | number | boolean | undefined> = {
           format,
           targetId: normalizeOptionalString(opts.targetId),
@@ -141,24 +188,23 @@ export function registerBrowserInspectCommands(
           urls: opts.urls ? true : undefined,
           mode,
           profile,
+          ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
         };
-        const result = await callBrowserRequest<SnapshotResult>(
-          parent,
-          {
-            method: "GET",
-            path: "/snapshot",
-            query,
-          },
-          { timeoutMs: 20000 },
-        );
+        const result = await callBrowserRequest<SnapshotResult>(request.parent, {
+          method: "GET",
+          path: "/snapshot",
+          query,
+        });
 
         if (opts.out) {
-          if (result.format === "ai") {
-            await fs.writeFile(opts.out, result.snapshot, "utf8");
-          } else {
-            const payload = JSON.stringify(result, null, 2);
-            await fs.writeFile(opts.out, payload, "utf8");
-          }
+          const payload =
+            result.format === "ai" ? result.snapshot : JSON.stringify(result, null, 2);
+          await writeExternalFileWithinOutputRoot({
+            path: path.resolve(opts.out),
+            write: async (tempPath) => {
+              await fs.writeFile(tempPath, payload, "utf8");
+            },
+          });
           if (parent?.json) {
             defaultRuntime.writeJson({
               ok: true,

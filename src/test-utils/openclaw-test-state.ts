@@ -3,10 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import {
+  closeAuthProfileReadPool,
+  resolveAuthProfileDatabasePath,
+} from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import * as configRuntime from "../config/config.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { captureEnv } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
@@ -24,7 +29,7 @@ type OpenClawTestStateScenario =
   | "gateway-loopback"
   | "external-service";
 
-export type OpenClawTestStateOptions = {
+type OpenClawTestStateOptions = {
   prefix?: string;
   label?: string;
   layout?: OpenClawTestStateLayout;
@@ -55,7 +60,7 @@ export type OpenClawTestState = {
   writeText: (relativePath: string, value: string) => Promise<string>;
   writeAuthProfiles: (store: unknown, agentId?: string) => Promise<string>;
   applyEnv: () => void;
-  restoreEnv: () => void;
+  restoreEnv: () => Promise<void>;
   cleanup: () => Promise<void>;
 };
 
@@ -65,6 +70,7 @@ const ENV_KEYS = [
   "USERPROFILE",
   "HOMEDRIVE",
   "HOMEPATH",
+  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
@@ -232,6 +238,7 @@ function buildEnvVars(params: {
     OPENCLAW_STATE_DIR: params.stateDir,
     OPENCLAW_CONFIG_PATH: params.configPath,
     ...agentDirEnv,
+    PI_CODING_AGENT_DIR: undefined,
     ...params.scenarioEnv,
     ...params.extraEnv,
   };
@@ -269,101 +276,128 @@ export async function createOpenClawTestState(
 ): Promise<OpenClawTestState> {
   const label = normalizeLabel(options.label ?? options.scenario);
   const prefix = options.prefix ?? `${DEFAULT_PREFIX}${label}-`;
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   const layout = options.layout ?? "home";
-  const paths = resolveLayout(root, layout);
-
-  await fs.mkdir(paths.stateDir, { recursive: true });
-  await fs.mkdir(paths.workspaceDir, { recursive: true });
-  if (layout !== "state-only") {
-    await fs.mkdir(paths.home, { recursive: true });
-  }
-
   const config = scenarioConfig(options);
-  if (config !== undefined) {
-    await writeJsonFile(paths.configPath, config);
-  }
+  let root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const removeRoot = () =>
+    fs.rm(root, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 25,
+    });
+  let rollbackEnv: (() => void) | undefined;
+  try {
+    // Keep the allocated path for rollback if canonicalization fails. macOS tmpdir
+    // sits behind /var -> /private/var; successful fixtures expose canonical paths.
+    root = await fs.realpath(root);
+    const paths = resolveLayout(root, layout);
 
-  const mainAgentDir = path.join(paths.stateDir, "agents", "main", "agent");
-  const envVars = buildEnvVars({
-    layout,
-    home: paths.home,
-    stateDir: paths.stateDir,
-    configPath: paths.configPath,
-    agentDir: mainAgentDir,
-    agentEnv: options.agentEnv ?? "clear",
-    scenarioEnv: scenarioEnv(options),
-    extraEnv: options.env ?? {},
-  });
-  const env = createSpawnEnv(envVars);
-  const snapshot = captureEnv(uniqueStrings([...ENV_KEYS, ...Object.keys(envVars)]));
-  let envApplied = false;
-  let cleaned = false;
-  const agentDir = (agentId = "main") => path.join(paths.stateDir, "agents", agentId, "agent");
-  const sessionsDir = (agentId = "main") =>
-    path.join(paths.stateDir, "agents", agentId, "sessions");
-
-  const state: OpenClawTestState = {
-    root,
-    ...paths,
-    env,
-    envVars,
-    path: (...parts) => path.join(root, ...parts),
-    statePath: (...parts) => path.join(paths.stateDir, ...parts),
-    agentDir,
-    sessionsDir,
-    writeConfig: (value) => writeJsonFile(paths.configPath, value),
-    writeJson: (relativePath, value) =>
-      writeJsonFile(path.join(paths.stateDir, relativePath), value),
-    writeText: async (relativePath, value) => {
-      const filePath = path.join(paths.stateDir, relativePath);
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, value, "utf8");
-      return filePath;
-    },
-    writeAuthProfiles: (store, agentId = "main") => {
-      const targetAgentDir = agentDir(agentId);
-      saveAuthProfileStore(store as AuthProfileStore, targetAgentDir, {
-        filterExternalAuthProfiles: false,
-        syncExternalCli: false,
-      });
-      return Promise.resolve(resolveAuthProfileDatabasePath(targetAgentDir));
-    },
-    applyEnv: () => {
-      resetConfigRuntimeStateForTest();
-      for (const [key, value] of Object.entries(envVars)) {
-        // Test fixtures apply a fixed OpenClaw env set, not plugin-provided host env.
-        if (value === undefined) {
-          Reflect.deleteProperty(process.env, key);
-        } else {
-          Reflect.set(process.env, key, value);
-        }
-      }
-      envApplied = true;
-    },
-    restoreEnv: () => {
+    const mainAgentDir = path.join(paths.stateDir, "agents", "main", "agent");
+    const envVars = buildEnvVars({
+      layout,
+      home: paths.home,
+      stateDir: paths.stateDir,
+      configPath: paths.configPath,
+      agentDir: mainAgentDir,
+      agentEnv: options.agentEnv ?? "clear",
+      scenarioEnv: scenarioEnv(options),
+      extraEnv: options.env ?? {},
+    });
+    const env = createSpawnEnv(envVars);
+    const snapshot = captureEnv(uniqueStrings([...ENV_KEYS, ...Object.keys(envVars)]));
+    let envApplied = false;
+    let releasePromise: Promise<void> | undefined;
+    let cleanupPromise: Promise<void> | undefined;
+    const restoreAppliedEnv = () => {
       if (envApplied) {
         snapshot.restore();
         resetConfigRuntimeStateForTest();
         envApplied = false;
       }
-    },
-    cleanup: async () => {
-      if (cleaned) {
-        return;
-      }
-      cleaned = true;
-      await cleanupSessionStateForTest().catch(() => undefined);
-      state.restoreEnv();
-      await fs.rm(root, { recursive: true, force: true });
-    },
-  };
+    };
+    const agentDir = (agentId = "main") => path.join(paths.stateDir, "agents", agentId, "agent");
+    const sessionsDir = (agentId = "main") =>
+      path.join(paths.stateDir, "agents", agentId, "sessions");
 
-  if (options.applyEnv !== false) {
-    state.applyEnv();
+    const state: OpenClawTestState = {
+      root,
+      ...paths,
+      env,
+      envVars,
+      path: (...parts) => path.join(root, ...parts),
+      statePath: (...parts) => path.join(paths.stateDir, ...parts),
+      agentDir,
+      sessionsDir,
+      writeConfig: (value) => writeJsonFile(paths.configPath, value),
+      writeJson: (relativePath, value) =>
+        writeJsonFile(path.join(paths.stateDir, relativePath), value),
+      writeText: async (relativePath, value) => {
+        const filePath = path.join(paths.stateDir, relativePath);
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.writeFile(filePath, value, "utf8");
+        return filePath;
+      },
+      writeAuthProfiles: (store, agentId = "main") => {
+        const targetAgentDir = agentDir(agentId);
+        saveAuthProfileStore(store as AuthProfileStore, targetAgentDir, {
+          filterExternalAuthProfiles: false,
+          syncExternalCli: false,
+        });
+        return Promise.resolve(resolveAuthProfileDatabasePath(targetAgentDir));
+      },
+      applyEnv: () => {
+        if (releasePromise || cleanupPromise) {
+          throw new Error("Cannot apply a released OpenClaw test state");
+        }
+        resetConfigRuntimeStateForTest();
+        // A later write can throw after earlier keys changed; restoration still owns them.
+        envApplied = true;
+        for (const [key, value] of Object.entries(envVars)) {
+          // Test fixtures apply a fixed OpenClaw env set, not plugin-provided host env.
+          if (value === undefined) {
+            Reflect.deleteProperty(process.env, key);
+          } else {
+            Reflect.set(process.env, key, value);
+          }
+        }
+      },
+      // The caller stops external producers first. Retain the original release,
+      // including failure, so no concurrent caller can restore selectors early.
+      restoreEnv: () =>
+        (releasePromise ??= Promise.resolve().then(async () => {
+          await cleanupSessionStateForTest({ stateDir: paths.stateDir });
+          closeAuthProfileReadPool({ kind: "root", rootPath: paths.stateDir });
+          restoreAppliedEnv();
+        })),
+      cleanup: () =>
+        (cleanupPromise ??= Promise.resolve().then(async () => {
+          await state.restoreEnv();
+          await removeRoot();
+        })),
+    };
+    rollbackEnv = restoreAppliedEnv;
+
+    await fs.mkdir(paths.stateDir, { recursive: true });
+    await fs.mkdir(paths.workspaceDir, { recursive: true });
+    if (layout !== "state-only") {
+      await fs.mkdir(paths.home, { recursive: true });
+    }
+    if (config !== undefined) {
+      await writeJsonFile(paths.configPath, config);
+    }
+
+    if (options.applyEnv !== false) {
+      state.applyEnv();
+    }
+
+    return state;
+  } catch (error) {
+    // Acquisition has no session/auth work to drain or close. Only undo this fixture.
+    rollbackEnv?.();
+    await removeRoot();
+    throw error;
   }
-
-  return state;
 }
 
 export async function withOpenClawTestState<T>(
@@ -371,9 +405,11 @@ export async function withOpenClawTestState<T>(
   fn: (state: OpenClawTestState) => Promise<T>,
 ): Promise<T> {
   const state = await createOpenClawTestState(options);
+  const work = new AsyncWorkScope();
   try {
-    return await fn(state);
+    return await work.track(() => fn(state));
   } finally {
+    await work.drain();
     await state.cleanup();
   }
 }

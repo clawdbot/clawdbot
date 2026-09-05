@@ -5,9 +5,9 @@ scenario:
   surface: mcp
   coverage:
     primary:
-      - plugins.mcp-tools
-    secondary:
-      - tools.invocation
+      - plugins.activation-plugin-tools
+      - plugins.tool-plugin-mcp-tools
+      - plugins.tool-plugin-invocation
   objective: Verify OpenClaw can expose plugin tools over MCP and a real MCP client can call one successfully.
   successCriteria:
     - Plugin tools MCP server lists memory_search.
@@ -17,48 +17,16 @@ scenario:
     - docs/cli/mcp.md
     - docs/gateway/protocol.md
   codeRefs:
+    - test/e2e/qa-lab/runtime/gateway-mcp-real-transports.ts
     - src/mcp/plugin-tools-serve.ts
-    - extensions/qa-lab/src/suite.ts
+    - src/mcp/plugin-tools-handlers.ts
   execution:
-    kind: flow
-    summary: Verify OpenClaw can expose plugin tools over MCP and a real MCP client can call one successfully.
-    config:
-      memoryFact: "MCP fact: the codename is ORBIT-9."
-      query: "ORBIT-9 codename"
-      expectedNeedle: "ORBIT-9"
-
-flow:
-  steps:
-    - name: serves and calls memory_search over MCP
-      actions:
-        - call: fs.writeFile
-          args:
-            - expr: "path.join(env.gateway.workspaceDir, 'MEMORY.md')"
-            - expr: "`${config.memoryFact}\\n`"
-            - utf8
-        - call: forceMemoryIndex
-          args:
-            - env:
-                ref: env
-              query:
-                expr: config.query
-              expectedNeedle:
-                expr: config.expectedNeedle
-        - call: callPluginToolsMcp
-          saveAs: result
-          args:
-            - env:
-                ref: env
-              toolName: memory_search
-              args:
-                query:
-                  expr: config.query
-                maxResults: 3
-        - set: text
-          value:
-            expr: "JSON.stringify(result.content ?? [])"
-        - assert:
-            expr: "text.includes(config.expectedNeedle)"
-            message:
-              expr: "`MCP memory_search missed expected fact: ${text}`"
-      detailsExpr: text
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/runtime/gateway-mcp-real-transports.ts
+    summary: Registers a fixture plugin, starts the real plugin-tools stdio server, and calls its tool with a real MCP client.
+    args:
+      - --scenario
+      - mcp-plugin-tools-call
+      - --artifact-base
+      - ${outputDir}

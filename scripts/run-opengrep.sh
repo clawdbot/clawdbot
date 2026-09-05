@@ -45,10 +45,8 @@ if ! command -v opengrep >/dev/null 2>&1; then
   cat >&2 <<'EOF'
 error: 'opengrep' not found on PATH.
 
-Install with one of:
-  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.22.0/install.sh | bash -s -- -v v1.22.0
-  brew install opengrep/tap/opengrep
-  pipx install opengrep
+Install with:
+  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.27.1/install.sh | bash -s -- -v v1.27.1
 
 (See https://opengrep.dev for other options.)
 EOF
@@ -118,7 +116,7 @@ write_empty_sarif() {
         "driver": {
           "name": "Opengrep OSS",
           "informationUri": "https://opengrep.dev",
-          "semanticVersion": "1.22.0",
+          "semanticVersion": "1.27.1",
           "rules": []
         }
       },
@@ -173,35 +171,35 @@ resolve_changed_diff_ref() {
 if (( PATHS_PASSED == 0 )); then
   if (( CHANGED_ONLY )); then
     CHANGED_DIFF_REF="$(resolve_changed_diff_ref)"
+    CHANGED_PATHS_DIR="$(mktemp -d)"
+    trap 'rm -rf -- "$CHANGED_PATHS_DIR"' EXIT
+    {
+      git diff --name-only -z --diff-filter=ACMRTUXB "$CHANGED_DIFF_REF"
+      git diff --cached --name-only -z --diff-filter=ACMRTUXB --
+      git diff --name-only -z --diff-filter=ACMRTUXB --
+      git ls-files -z --others --exclude-standard
+    } > "$CHANGED_PATHS_DIR/all"
+    LC_ALL=C sort -zu "$CHANGED_PATHS_DIR/all" > "$CHANGED_PATHS_DIR/sorted"
     SCAN_PATHS=()
-    while IFS= read -r path; do
-      # OpenGrep errors when an explicit changed path is a symlink; scan the
-      # real target content, not duplicate guide aliases such as CLAUDE.md.
-      if [[ -L "$path" ]]; then
-        continue
-      fi
-      if [[ ! -f "$path" && ! -d "$path" ]]; then
-        continue
-      fi
-      SCAN_PATHS+=( "$path" )
-    done < <(
-      {
-        git diff --name-only --diff-filter=ACMRTUXB "$CHANGED_DIFF_REF" 2>/dev/null || true
-        git diff --name-only --diff-filter=ACMRTUXB -- 2>/dev/null || true
-        git ls-files --others --exclude-standard
-      } | awk '/^(src|extensions|apps|packages|scripts)\// { print }' | sort -u
-    )
-    RULEPACK_CHANGED_PATHS=()
-    while IFS= read -r path; do
-      RULEPACK_CHANGED_PATHS+=( "$path" )
-    done < <(
-      {
-        git diff --name-only --diff-filter=ACMRTUXB "$CHANGED_DIFF_REF" 2>/dev/null || true
-        git diff --name-only --diff-filter=ACMRTUXB -- 2>/dev/null || true
-        git ls-files --others --exclude-standard
-      } | awk '/^(security\/opengrep\/|scripts\/run-opengrep\.sh$|\.semgrepignore$|\.github\/workflows\/opengrep-)/ { print }' | sort -u
-    )
-    if (( ${#SCAN_PATHS[@]} == 0 && ${#RULEPACK_CHANGED_PATHS[@]} > 0 )); then
+    RULEPACK_CHANGED=0
+    while IFS= read -r -d '' path; do
+      case "$path" in
+        src/*|extensions/*|apps/*|packages/*|scripts/*)
+          # OpenGrep errors when an explicit changed path is a symlink; scan the
+          # real target content, not duplicate guide aliases such as CLAUDE.md.
+          if [[ ! -L "$path" && ( -f "$path" || -d "$path" ) ]]; then
+            SCAN_PATHS+=( "$path" )
+          fi
+          ;;
+      esac
+      case "$path" in
+        security/opengrep/*|scripts/run-opengrep.sh|.semgrepignore|.github/workflows/opengrep-*)
+          RULEPACK_CHANGED=1
+          ;;
+      esac
+    done < "$CHANGED_PATHS_DIR/sorted"
+    rm -rf -- "$CHANGED_PATHS_DIR"
+    if (( ${#SCAN_PATHS[@]} == 0 && RULEPACK_CHANGED )); then
       # Exercise rulepack loading without scanning the compiled YAML, which contains
       # rule pattern literals that can match themselves.
       SCAN_PATHS=( "scripts/run-opengrep.sh" )

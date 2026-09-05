@@ -1,10 +1,11 @@
 // Covers memory embedding provider runtime hooks from plugins.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  clearMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
-  type MemoryEmbeddingProviderAdapter,
-} from "./memory-embedding-providers.js";
+  clearEmbeddingProviders,
+  registerEmbeddingProvider,
+  type EmbeddingProviderAdapter,
+} from "./embedding-providers.js";
+import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 
 const mocks = vi.hoisted(() => ({
   resolvePluginCapabilityProviders: vi.fn<
@@ -22,7 +23,7 @@ vi.mock("./capability-provider-runtime.js", () => ({
 
 let runtimeModule: typeof import("./memory-embedding-provider-runtime.js");
 
-function createCapabilityAdapter(id: string): MemoryEmbeddingProviderAdapter {
+function createCapabilityAdapter(id: string): EmbeddingProviderAdapter {
   return {
     id,
     create: async () => ({ provider: null }),
@@ -30,7 +31,7 @@ function createCapabilityAdapter(id: string): MemoryEmbeddingProviderAdapter {
 }
 
 beforeEach(async () => {
-  clearMemoryEmbeddingProviders();
+  clearEmbeddingProviders();
   mocks.resolvePluginCapabilityProviders.mockReset();
   mocks.resolvePluginCapabilityProviders.mockReturnValue([]);
   mocks.resolvePluginCapabilityProvider.mockReset();
@@ -39,18 +40,19 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  clearMemoryEmbeddingProviders();
+  clearEmbeddingProviders();
 });
 
 describe("memory embedding provider runtime resolution", () => {
   it("merges registered and declared capability fallback adapters", () => {
-    registerMemoryEmbeddingProvider({
+    registerEmbeddingProvider({
       id: "registered",
       create: async () => ({ provider: null }),
     });
     mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("capability")]);
 
     expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
       "registered",
       "capability",
     ]);
@@ -63,12 +65,13 @@ describe("memory embedding provider runtime resolution", () => {
     mocks.resolvePluginCapabilityProvider.mockReturnValue(createCapabilityAdapter("ollama"));
 
     expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
       "ollama",
     ]);
     expect(runtimeModule.getMemoryEmbeddingProvider("ollama")?.id).toBe("ollama");
     expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
-      key: "memoryEmbeddingProviders",
+      key: "embeddingProviders",
       providerId: "ollama",
       cfg: undefined,
     });
@@ -91,16 +94,16 @@ describe("memory embedding provider runtime resolution", () => {
       providerId === "ollama" ? ollamaAdapter : undefined,
     );
 
-    expect(runtimeModule.getMemoryEmbeddingProvider("ollama-5080", config as never)).toBe(
-      ollamaAdapter,
+    expect(runtimeModule.getMemoryEmbeddingProvider("ollama-5080", config as never)?.id).toBe(
+      ollamaAdapter.id,
     );
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
-      key: "memoryEmbeddingProviders",
+      key: "embeddingProviders",
       providerId: "ollama-5080",
       cfg: config,
     });
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
-      key: "memoryEmbeddingProviders",
+      key: "embeddingProviders",
       providerId: "ollama",
       cfg: config,
     });
@@ -108,38 +111,112 @@ describe("memory embedding provider runtime resolution", () => {
 
   it("uses registered adapters through a configured provider api", () => {
     const ollamaAdapter = createCapabilityAdapter("ollama");
-    registerMemoryEmbeddingProvider(ollamaAdapter);
-
-    expect(
-      runtimeModule.getMemoryEmbeddingProvider("ollama-gpu1", {
-        models: {
-          providers: {
-            "ollama-gpu1": {
-              api: "ollama",
-              baseUrl: "http://ollama-host:11435",
-              models: [],
-            },
+    registerEmbeddingProvider(ollamaAdapter);
+    const config = {
+      models: {
+        providers: {
+          "ollama-gpu1": {
+            api: "ollama",
+            baseUrl: "http://ollama-host:11435",
+            models: [],
           },
         },
-      } as never),
-    ).toBe(ollamaAdapter);
-    expect(mocks.resolvePluginCapabilityProvider).not.toHaveBeenCalled();
+      },
+    } as never;
+
+    expect(runtimeModule.getMemoryEmbeddingProvider("ollama-gpu1", config)?.id).toBe(
+      ollamaAdapter.id,
+    );
+    expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledTimes(1);
+    expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
+      key: "embeddingProviders",
+      providerId: "ollama-gpu1",
+      cfg: config,
+    });
   });
 
   it("prefers registered adapters over declared capability fallback adapters with the same id", () => {
     const registered = {
       id: "openai",
       create: async () => ({ provider: null }),
-    } satisfies MemoryEmbeddingProviderAdapter;
-    registerMemoryEmbeddingProvider({
+    } satisfies EmbeddingProviderAdapter;
+    registerEmbeddingProvider({
       ...registered,
     });
     mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("openai")]);
 
-    expect(runtimeModule.getMemoryEmbeddingProvider("openai")).toStrictEqual(registered);
+    expect(runtimeModule.getMemoryEmbeddingProvider("openai")?.id).toBe(registered.id);
     expect(runtimeModule.listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
       "openai",
     ]);
     expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns generic provider, runtime, and identity objects unchanged", async () => {
+    const close = vi.fn();
+    const embed = vi.fn(async () => [1, 2]);
+    const embedBatch = vi.fn(async (inputs: unknown[]) => inputs.map(() => [3, 4]));
+    const runtime = { id: "generic", inlineQueryTimeoutMs: 1234 };
+    const runtimeFactsKey = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
+    const provider = {
+      id: "generic",
+      model: "generic-model",
+      maxInputTokens: 2048,
+      embed,
+      embedBatch,
+      close,
+    };
+    const runtimeFacts = () => ({ model: "generic-model" });
+    Object.defineProperty(provider, runtimeFactsKey, { value: runtimeFacts });
+    const create = vi.fn(async () => ({ provider, runtime }));
+    registerEmbeddingProvider({
+      id: "generic",
+      defaultModel: "generic-default",
+      transport: "local",
+      resolveIndexIdentity: (options) => ({
+        model: options.model,
+        cacheKeyData: { dimensions: options.dimensions },
+      }),
+      create,
+    });
+
+    const adapter = runtimeModule.getMemoryEmbeddingProvider("generic");
+    expect(adapter).toMatchObject({
+      id: "generic",
+      defaultModel: "generic-default",
+      transport: "local",
+    });
+    expect(runtimeModule.listMemoryEmbeddingProviders().map((entry) => entry.id)).toContain(
+      "generic",
+    );
+    const options = { config: {}, model: "generic-model", dimensions: 7 };
+    expect(adapter?.resolveIndexIdentity?.(options)).toEqual({
+      model: "generic-model",
+      cacheKeyData: { dimensions: 7 },
+    });
+
+    const result = await adapter?.create(options);
+    expect(create).toHaveBeenCalledWith(options);
+    expect(result?.runtime).toBe(runtime);
+    expect(result?.provider).toBe(provider);
+    expect(Reflect.get(provider, runtimeFactsKey)).toBe(runtimeFacts);
+  });
+
+  it("preserves private memory metadata through generic registration", () => {
+    const memoryAdapter = {
+      id: "migrated-memory",
+      autoSelectPriority: 20,
+      allowExplicitWhenConfiguredAuto: true,
+      supportsMultimodalEmbeddings: ({ model }: { model: string }) => model === "multimodal",
+      shouldContinueAutoSelection: () => true,
+      create: async () => ({ provider: null }),
+    } satisfies MemoryEmbeddingProviderAdapter;
+    registerEmbeddingProvider(memoryAdapter);
+
+    const adapter = runtimeModule.getMemoryEmbeddingProvider("migrated-memory");
+    expect(adapter).toBe(memoryAdapter);
+    expect(adapter?.supportsMultimodalEmbeddings?.({ model: "multimodal" })).toBe(true);
+    expect(adapter?.shouldContinueAutoSelection?.(new Error("setup"))).toBe(true);
   });
 });

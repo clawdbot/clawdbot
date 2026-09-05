@@ -2,6 +2,8 @@
 // message-tool source replies, media directives, and tool-error warning policy.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { resolveHeartbeatReplyPayload } from "../../../auto-reply/heartbeat-reply-payload.js";
+import { resolveHeartbeatToolResponseFromReplyResult } from "../../../auto-reply/heartbeat-tool-response.js";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { InteractiveReply, MessagePresentation } from "../../../interactive/payload.js";
 import {
@@ -40,6 +42,53 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads).toStrictEqual([]);
   });
 
+  it("strips provider reasoning close tags from streamed assistant payload text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["</mm:think>Scan complete. No new actionable inbox items."],
+    });
+
+    expectSinglePayloadText(payloads, "Scan complete. No new actionable inbox items.");
+  });
+
+  it("suppresses streamed text that only contains hidden reasoning", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["<mm:think>private reasoning</mm:think>"],
+    });
+
+    expect(payloads).toStrictEqual([]);
+  });
+
+  it("sanitizes every streamed text while preserving multiple visible answers", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        '<tool_call>{"name":"exec","arguments":{"command":"secret"}}</tool_call>',
+        "</mm:think>First visible answer.",
+        "Second visible answer.",
+      ],
+    });
+
+    expect(payloads.map((payload) => payload.text)).toStrictEqual([
+      "First visible answer.",
+      "Second visible answer.",
+    ]);
+  });
+
+  it("keeps media directives while sanitizing streamed assistant text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["</mm:think>MEDIA:/tmp/reply-image.png\nAttached image"],
+      assistantMessageIndex: 1,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Attached image");
+    expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
+    expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      assistantMessageIndex: 1,
+      assistantTranscriptMediaUrls: ["/tmp/reply-image.png"],
+    });
+  });
+
   it("falls back to final-answer assistant text when streamed text is unavailable", () => {
     const payloads = buildPayloads({
       lastAssistant: {
@@ -69,6 +118,105 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expectSinglePayloadText(payloads, "Done.");
+  });
+
+  it("marks runtime-persisted final replies as transcript owned", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Already persisted."],
+      assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
+    });
+  });
+
+  it("does not revive signed unphased text when explicit final-answer text is empty", () => {
+    expectNoPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/old.png",
+            textSignature: JSON.stringify({ v: 1, id: "item_old" }),
+          },
+          {
+            type: "text",
+            text: "   ",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+  });
+
+  it("does not revive signed unphased text when explicit output_text final-answer text is empty", () => {
+    expectNoPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/old.png",
+            textSignature: JSON.stringify({ v: 1, id: "item_old" }),
+          },
+          {
+            type: "output_text",
+            text: "   ",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+  });
+
+  it("keeps literal mid-answer reasoning-looking tags in final-answer text", () => {
+    const text = "Before <think>literal tag text after";
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text,
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, text);
+  });
+
+  it("keeps strict reasoning-tag stripping for legacy string fallback text", () => {
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: "Visible prefix <think>private reasoning tail",
+      } as unknown as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Visible prefix");
   });
 
   it("falls back to final-answer assistant text when streamed text only contains blanks", () => {
@@ -275,6 +423,28 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads).toEqual([]);
   });
 
+  it("keeps progress delivery from publishing the private terminal assistant text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["ordinary final should stay private"],
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:C1",
+          sourceReplyFinal: false,
+        },
+      ],
+      sourceReplyDeliveryMode: "message_tool_only",
+      sessionKey: "agent:main",
+      agentId: "main",
+      runId: "run-1",
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
   it("preserves rich-only internal message-tool source replies", () => {
     const presentation = {
       blocks: [
@@ -371,30 +541,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("marks middleware tool-error warnings after assistant output as non-terminal", () => {
-    // Middleware failures after useful assistant output warn the user without
-    // replacing the successful answer as the terminal payload.
-    const payloads = buildPayloads({
-      assistantTexts: ["Queued 3 topics."],
-      lastToolError: {
-        toolName: "exec",
-        error: "Tool output unavailable due to post-processing error",
-        middlewareError: true,
-      },
-      verboseLevel: "off",
-    });
-
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.text).toBe("Queued 3 topics.");
-    expect(payloads[1]).toMatchObject({
-      isError: true,
-    });
-    expect(payloads[1]?.text).toContain("Exec failed");
-    expect(getReplyPayloadMetadata(payloads[1] as object)).toMatchObject({
-      nonTerminalToolErrorWarning: true,
-    });
-  });
-
   it("surfaces concise bash tool errors when verbose mode is off", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "bash", error: "command failed" },
@@ -416,6 +562,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         mutatingAction: true,
       },
       runAborted: true,
+      runStopReason: "aborted",
     });
 
     expectSingleToolErrorPayload(payloads, {
@@ -424,13 +571,28 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("surfaces exec tool errors for cron sessions even when verbose mode is off", () => {
+  it("renders an intentional Gateway restart as status", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "gateway_exec",
+        error: "OpenClaw dynamic tool call aborted.",
+        executionStarted: true,
+      },
+      runAborted: true,
+      runStopReason: "restart",
+      toolResultFormat: "markdown",
+    });
+
+    expect(payloads).toEqual([{ text: "Gateway restarting…" }]);
+  });
+
+  it("keeps timed-out cron exec failures compact when verbose mode is off", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
         timedOut: true,
         error:
-          "Command timed out after 1800 seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).",
+          "Command timed out after 1800 seconds. The command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.",
       },
       sessionKey: "agent:main:cron:job-1",
       verboseLevel: "off",
@@ -438,12 +600,12 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
-      detail:
-        "Command timed out after 1800 seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).",
+      absentDetail:
+        "Command timed out after 1800 seconds. The command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.",
     });
   });
 
-  it("surfaces timed-out exec tool errors for cron-triggered custom session keys", () => {
+  it("keeps timed-out cron-trigger exec failures compact", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
@@ -457,11 +619,11 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
-      detail: "Command timed out after 1800 seconds.",
+      absentDetail: "Command timed out after 1800 seconds.",
     });
   });
 
-  it("surfaces heartbeat exec tool output details when the task run fails", () => {
+  it("keeps heartbeat exec commands and paths private without full verbosity", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
@@ -474,9 +636,173 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expectSingleToolErrorPayload(payloads, {
-      title: "show last 20 lines",
-      detail: "No such file or directory",
+      title: "Exec",
+      absentDetail: "/home/user/.openclaw/workspace/memory/2026-06-04.md",
     });
+  });
+
+  it("keeps a quiet heartbeat response behind an unresolved mutating failure", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Everything is fine."],
+      heartbeatToolResponse: {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      },
+      isHeartbeatTrigger: true,
+      lastToolError: {
+        toolName: "message",
+        error: "cross-context messaging denied",
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("HEARTBEAT_OK");
+    expect(payloads[1]).toMatchObject({
+      isError: true,
+      text: expect.stringContaining("Message failed"),
+    });
+    expect(resolveHeartbeatToolResponseFromReplyResult(payloads)).toEqual({
+      outcome: "no_change",
+      notify: false,
+      summary: "Nothing needs attention.",
+    });
+    for (const payload of payloads) {
+      expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
+        toolName: "message",
+      });
+    }
+  });
+
+  it("marks plain-text heartbeat replies with unresolved mutating failures", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["The heartbeat check completed."],
+      isHeartbeatTrigger: true,
+      lastToolError: {
+        toolName: "message",
+        error: "cross-context messaging denied",
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("The heartbeat check completed.");
+    for (const payload of payloads) {
+      expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
+        toolName: "message",
+      });
+    }
+  });
+
+  it("retains terminal heartbeat state on the no-reply tool warning", () => {
+    const payloads = buildPayloads({
+      isHeartbeatTrigger: true,
+      lastToolError: {
+        toolName: "message",
+        error: "cross-context messaging denied",
+        mutatingAction: true,
+      },
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Message",
+      absentDetail: "cross-context messaging denied",
+    });
+    expect(getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure).toEqual({
+      toolName: "message",
+    });
+  });
+
+  it("adds a tool warning when a heartbeat failure leaves only reasoning", () => {
+    const payloads = buildPayloads({
+      isHeartbeatTrigger: true,
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "thinking", thinking: "Private reasoning only." }],
+      } as AssistantMessage,
+      lastToolError: {
+        toolName: "message",
+        error: "cross-context messaging denied",
+        mutatingAction: true,
+      },
+      reasoningLevel: "on",
+      thinkingLevel: "high",
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]).toMatchObject({ text: "Private reasoning only.", isReasoning: true });
+    expect(resolveHeartbeatReplyPayload(payloads)).toMatchObject({
+      text: "⚠️ Message failed",
+      isError: true,
+    });
+    for (const payload of payloads) {
+      expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
+        toolName: "message",
+      });
+    }
+  });
+
+  it("does not duplicate a visible heartbeat acknowledgement of a mutating failure", () => {
+    const notificationText = "Message send failed because cross-context messaging was denied.";
+    const payloads = buildPayloads({
+      heartbeatToolResponse: {
+        outcome: "blocked",
+        notify: true,
+        summary: "Message delivery was blocked.",
+        notificationText,
+      },
+      isHeartbeatTrigger: true,
+      lastToolError: {
+        toolName: "message",
+        error: "cross-context messaging denied",
+        mutatingAction: true,
+      },
+    });
+
+    expectSinglePayloadText(payloads, notificationText);
+    expect(getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure).toEqual({
+      toolName: "message",
+    });
+  });
+
+  it("uses a structured blocked heartbeat response as the failure acknowledgement", () => {
+    const payloads = buildPayloads({
+      heartbeatToolResponse: {
+        outcome: "blocked",
+        notify: true,
+        summary: "Message delivery was blocked.",
+      },
+      isHeartbeatTrigger: true,
+      lastToolError: {
+        toolName: "message",
+        error: "cross-context messaging denied",
+        mutatingAction: true,
+      },
+    });
+
+    expectSinglePayloadText(payloads, "Message delivery was blocked.");
+  });
+
+  it("does not infer a terminal mutation from a mixed-action tool name", () => {
+    const payloads = buildPayloads({
+      heartbeatToolResponse: {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      },
+      isHeartbeatTrigger: true,
+      lastToolError: {
+        toolName: "message",
+        error: "message search failed",
+      },
+    });
+
+    expectSinglePayloadText(payloads, "HEARTBEAT_OK");
+    expect(
+      getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure,
+    ).toBeUndefined();
   });
 
   it("surfaces non-timeout exec tool errors for cron sessions without raw details", () => {
@@ -513,32 +839,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
       detail: "command failed",
-    });
-  });
-
-  it("keeps stale full-verbose tool errors compact when live verbose is off", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "write", error: "permission denied" },
-      suppressToolErrorWarnings: () => false,
-      verboseLevel: "full",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Write",
-      absentDetail: "permission denied",
-    });
-  });
-
-  it("preserves full-verbose tool error details with static suppression disabled", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "write", error: "permission denied" },
-      suppressToolErrorWarnings: false,
-      verboseLevel: "full",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Write",
-      detail: "permission denied",
     });
   });
 
@@ -593,10 +893,14 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         mutatingAction: true,
       },
     },
-  ])("suppresses sessions_send errors for $name", ({ lastToolError }) => {
-    expectNoPayloads({
+  ])("warns for silent sessions_send failures: $name", ({ lastToolError }) => {
+    const payloads = buildPayloads({
       lastToolError,
       verboseLevel: "on",
+    });
+    expectSingleToolErrorPayload(payloads, {
+      title: "Session Send",
+      absentDetail: "delivery timeout",
     });
   });
 

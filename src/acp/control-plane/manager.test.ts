@@ -1,18 +1,22 @@
 /** Tests ACP session manager resolution, turn execution, state transitions, and cleanup. */
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
+import type { AcpRuntimeTurnInput } from "@openclaw/acp-core/runtime/types";
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
   requireTaskByRunId,
   withAcpManagerTaskStateDir,
 } from "../../../test/helpers/acp-manager-task-state.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { isAcpTurnActive } from "./active-turns.js";
 import {
   AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
-  createDeferred,
   createRuntime,
   expectRecordFields,
   expectRejectedRecord,
@@ -22,6 +26,7 @@ import {
   hoisted,
   installAcpSessionManagerTestLifecycle,
   mockCallArg,
+  mockParentedAcpSessionEntries,
   readySessionMeta,
   type OpenClawConfig,
   resetAcpSessionManagerForTests,
@@ -82,6 +87,7 @@ describe("AcpSessionManager", () => {
     } as OpenClawConfig;
 
     await manager.runTurn({
+      provenance: "system",
       cfg,
       sessionKey: "main",
       text: "after restart",
@@ -101,6 +107,63 @@ describe("AcpSessionManager", () => {
       { state: "running", skipMaintenance: true, takeCacheOwnership: true },
       { state: "idle", skipMaintenance: true, takeCacheOwnership: true },
     ]);
+  });
+
+  it("records parented ACP turns only for human provenance", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      const childSessionKey = "agent:main:acp:child-state";
+      mockParentedAcpSessionEntries({
+        childSessionKey,
+        parentSessionKey: "agent:main:main",
+      });
+      const manager = new AcpSessionManager();
+
+      await manager.runTurn({
+        provenance: "human",
+        cfg: baseCfg,
+        sessionKey: childSessionKey,
+        text: "human turn",
+        mode: "prompt",
+        requestId: "human-state-turn",
+      });
+      await manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: childSessionKey,
+        text: "system turn",
+        mode: "prompt",
+        requestId: "system-state-turn",
+      });
+      runtimeState.runTurn.mockImplementationOnce(async function* () {
+        yield { type: "done" as const, status: "cancelled" as const };
+      });
+      await manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: childSessionKey,
+        text: "cancelled turn",
+        mode: "prompt",
+        requestId: "cancelled-state-turn",
+      });
+
+      expect(listSessionStateEventsSince(childSessionKey, "main", 0, 200).events).toMatchObject([
+        { kind: "human_direct_message", runId: "human-state-turn" },
+        { kind: "run_completed", runId: "human-state-turn" },
+        { kind: "run_completed", runId: "system-state-turn" },
+        {
+          kind: "run_failed",
+          runId: "cancelled-state-turn",
+          summary: "child run cancelled",
+          payload: { outcome: "cancelled" },
+        },
+      ]);
+      closeOpenClawStateDatabaseForTest();
+    });
   });
 
   it("tracks parented direct ACP turns in the task registry", async () => {
@@ -173,6 +236,7 @@ describe("AcpSessionManager", () => {
 
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Implement the feature and report back",
@@ -259,6 +323,7 @@ describe("AcpSessionManager", () => {
 
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Print the current directory in Korean",
@@ -310,6 +375,7 @@ describe("AcpSessionManager", () => {
 
     const manager = new AcpSessionManager();
     const first = manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "first",
@@ -322,7 +388,9 @@ describe("AcpSessionManager", () => {
       },
       { interval: 1 },
     );
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(1);
     const second = manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "second",
@@ -331,9 +399,11 @@ describe("AcpSessionManager", () => {
     });
     await flushMicrotasks();
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(2);
     releaseFirstTurn.resolve();
     await Promise.all([first, second]);
 
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(0);
     expect(maxInFlight).toBe(1);
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
   });
@@ -377,6 +447,7 @@ describe("AcpSessionManager", () => {
 
       const manager = new AcpSessionManager();
       const turn = manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "long running",
@@ -397,13 +468,13 @@ describe("AcpSessionManager", () => {
         throw new Error("Expected the ACP task record to carry a childSessionKey");
       }
       expect(childSessionKey).toBe("agent:codex:acp:child-1");
-      expect(isAcpTurnActive(childSessionKey)).toBe(true);
+      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(true);
 
       releaseTurn.resolve();
       await turn;
       await flushMicrotasks();
 
-      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(false);
     });
   }, 300_000);
 
@@ -455,6 +526,7 @@ describe("AcpSessionManager", () => {
 
       const manager = new AcpSessionManager();
       const turn = manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "slow init",
@@ -474,13 +546,13 @@ describe("AcpSessionManager", () => {
       }
       // Liveness must already cover initialization, while the turn stream has not started.
       expect(runtimeState.runTurn).not.toHaveBeenCalled();
-      expect(isAcpTurnActive(childSessionKey)).toBe(true);
+      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(true);
 
       releaseInit.resolve();
       await turn;
       await flushMicrotasks();
 
-      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(false);
     });
   }, 300_000);
 
@@ -527,6 +599,7 @@ describe("AcpSessionManager", () => {
       const manager = new AcpSessionManager();
       await expect(
         manager.runTurn({
+          provenance: "system",
           cfg: baseCfg,
           sessionKey: "agent:codex:acp:child-1",
           text: "stale resume",
@@ -539,7 +612,7 @@ describe("AcpSessionManager", () => {
       if (!childSessionKey) {
         throw new Error("Expected the ACP task record to carry a childSessionKey");
       }
-      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+      expect(isAcpTurnActive({ sessionKey: childSessionKey, agentId: "codex" })).toBe(false);
     });
   }, 300_000);
 
@@ -569,6 +642,7 @@ describe("AcpSessionManager", () => {
 
     const manager = new AcpSessionManager();
     const first = manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "first",
@@ -584,6 +658,7 @@ describe("AcpSessionManager", () => {
 
     const abortController = new AbortController();
     const second = manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "second",
@@ -603,11 +678,12 @@ describe("AcpSessionManager", () => {
       }),
     ]);
 
+    expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(2);
     releaseFirstTurn?.();
     await first;
     await vi.waitFor(
       () => {
-        expect(manager.getObservabilitySnapshot(baseCfg).turns.queueDepth).toBe(0);
+        expect(manager.getObservabilitySnapshot().turns.queueDepth).toBe(0);
       },
       { interval: 1 },
     );
@@ -624,89 +700,142 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards the exact elicitation closure with the manager-composed turn signal", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    let captured: AcpRuntimeTurnInput | undefined;
+    runtimeState.runTurn.mockImplementationOnce(async function* (input) {
+      captured = input;
+      await new Promise<void>((resolve) => {
+        input.signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+      yield { type: "done" as const, status: "cancelled" as const };
+    });
+    const onElicitation = vi.fn(async () => ({ action: "cancel" as const }));
+    const caller = new AbortController();
+    const manager = new AcpSessionManager();
+
+    const turn = manager.runTurn({
+      provenance: "system",
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "ask",
+      mode: "prompt",
+      requestId: "r-elicitation",
+      signal: caller.signal,
+      onElicitation,
+    });
+    await vi.waitFor(() => expect(captured).toBeDefined());
+
+    expect(captured?.onElicitation).toBe(onElicitation);
+    expect(captured?.signal).not.toBe(caller.signal);
+    expect(captured?.signal?.aborted).toBe(false);
+
+    caller.abort();
+    await turn;
+    expect(captured?.signal?.aborted).toBe(true);
+  });
+
   it("times out a hung persistent turn after partial progress without closing the session and lets queued work continue", async () => {
     vi.useFakeTimers();
     try {
-      const runtimeState = createRuntime();
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      hoisted.readAcpSessionEntryMock.mockReturnValue({
-        sessionKey: "agent:codex:acp:session-1",
-        storeSessionKey: "agent:codex:acp:session-1",
-        acp: readySessionMeta(),
-      });
+      await withAcpManagerTaskStateDir(async () => {
+        const runtimeState = createRuntime();
+        hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+          id: "acpx",
+          runtime: runtimeState.runtime,
+        });
+        const childSessionKey = "agent:codex:acp:session-1";
+        mockParentedAcpSessionEntries({
+          childSessionKey,
+          parentSessionKey: "agent:main:main",
+        });
 
-      let firstTurnStarted = false;
-      runtimeState.runTurn.mockImplementation(async function* (input: { requestId: string }) {
-        if (input.requestId === "r1") {
-          firstTurnStarted = true;
-          yield { type: "text_delta" as const, text: "Working on it..." };
-          await new Promise(() => {});
-        }
-        yield { type: "done" as const };
-      });
+        let firstTurnStarted = false;
+        runtimeState.runTurn.mockImplementation(async function* (input: { requestId: string }) {
+          if (input.requestId === "r1") {
+            firstTurnStarted = true;
+            yield { type: "text_delta" as const, text: "Working on it..." };
+            await new Promise(() => {});
+          }
+          yield { type: "done" as const };
+        });
 
-      const manager = new AcpSessionManager();
-      const cfg = {
-        ...baseCfg,
-        agents: {
-          defaults: {
-            timeoutSeconds: 1,
+        const manager = new AcpSessionManager();
+        const cfg = {
+          ...baseCfg,
+          agents: {
+            defaults: {
+              timeoutSeconds: 1,
+            },
           },
-        },
-      } as OpenClawConfig;
+        } as OpenClawConfig;
 
-      const first = manager.runTurn({
-        cfg,
-        sessionKey: "agent:codex:acp:session-1",
-        text: "first",
-        mode: "prompt",
-        requestId: "r1",
+        const first = manager.runTurn({
+          provenance: "system",
+          cfg,
+          sessionKey: childSessionKey,
+          text: "first",
+          mode: "prompt",
+          requestId: "r1",
+        });
+        void first.catch(() => undefined);
+        await vi.waitFor(
+          () => {
+            expect(firstTurnStarted).toBe(true);
+          },
+          { interval: 1 },
+        );
+
+        const second = manager.runTurn({
+          provenance: "system",
+          cfg,
+          sessionKey: childSessionKey,
+          text: "second",
+          mode: "prompt",
+          requestId: "r2",
+        });
+
+        await vi.advanceTimersByTimeAsync(3_500);
+
+        await expectRejectedRecord(first, {
+          code: "ACP_TURN_FAILED",
+          message: "ACP turn timed out after 1s.",
+        });
+        await expect(second).resolves.toBeUndefined();
+
+        expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
+        expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+        expectRecordFields(mockCallArg(runtimeState.cancel), {
+          reason: "turn-timeout",
+        });
+        expect(runtimeState.close).not.toHaveBeenCalled();
+        const snapshot = manager.getObservabilitySnapshot();
+        expect(snapshot.runtimeCache.activeSessions).toBe(1);
+        expectRecordFields(snapshot.turns, {
+          active: 0,
+          queueDepth: 0,
+          completed: 1,
+          failed: 1,
+        });
+        expectRecordFields(requireTaskByRunId("r1"), {
+          status: "timed_out",
+          progressSummary: "Working on it...",
+          terminalSummary: "Working on it...",
+        });
+
+        const states = extractStatesFromUpserts();
+        expect(states).toContain("error");
+        expect(states.at(-1)).toBe("idle");
       });
-      void first.catch(() => undefined);
-      await vi.waitFor(
-        () => {
-          expect(firstTurnStarted).toBe(true);
-        },
-        { interval: 1 },
-      );
-
-      const second = manager.runTurn({
-        cfg,
-        sessionKey: "agent:codex:acp:session-1",
-        text: "second",
-        mode: "prompt",
-        requestId: "r2",
-      });
-
-      await vi.advanceTimersByTimeAsync(3_500);
-
-      await expectRejectedRecord(first, {
-        code: "ACP_TURN_FAILED",
-        message: "ACP turn timed out after 1s.",
-      });
-      await expect(second).resolves.toBeUndefined();
-
-      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
-      expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
-      expectRecordFields(mockCallArg(runtimeState.cancel), {
-        reason: "turn-timeout",
-      });
-      expect(runtimeState.close).not.toHaveBeenCalled();
-      const snapshot = manager.getObservabilitySnapshot(cfg);
-      expect(snapshot.runtimeCache.activeSessions).toBe(1);
-      expectRecordFields(snapshot.turns, {
-        active: 0,
-        queueDepth: 0,
-        completed: 1,
-        failed: 1,
-      });
-
-      const states = extractStatesFromUpserts();
-      expect(states).toContain("error");
-      expect(states.at(-1)).toBe("idle");
     } finally {
       vi.useRealTimers();
     }
@@ -731,6 +860,7 @@ describe("AcpSessionManager", () => {
     try {
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "first",
@@ -741,92 +871,6 @@ describe("AcpSessionManager", () => {
       expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
       timeoutSpy.mockRestore();
-    }
-  });
-
-  it("keeps timed-out runtime handles counted until timeout cleanup finishes", async () => {
-    vi.useFakeTimers();
-    try {
-      const runtimeState = createRuntime();
-      runtimeState.cancel.mockImplementation(() => new Promise(() => {}));
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
-        return {
-          sessionKey,
-          storeSessionKey: sessionKey,
-          acp: {
-            ...readySessionMeta(),
-            runtimeSessionName: `runtime:${sessionKey}`,
-          },
-        };
-      });
-
-      let firstTurnStarted = false;
-      runtimeState.runTurn.mockImplementation(async function* (input: { requestId: string }) {
-        if (input.requestId === "r1") {
-          firstTurnStarted = true;
-          await new Promise(() => {});
-        }
-        yield { type: "done" as const };
-      });
-
-      const manager = new AcpSessionManager();
-      const cfg = {
-        ...baseCfg,
-        acp: {
-          ...baseCfg.acp,
-          maxConcurrentSessions: 1,
-        },
-        agents: {
-          defaults: {
-            timeoutSeconds: 1,
-          },
-        },
-      } as OpenClawConfig;
-
-      const first = manager.runTurn({
-        cfg,
-        sessionKey: "agent:codex:acp:session-a",
-        text: "first",
-        mode: "prompt",
-        requestId: "r1",
-      });
-      void first.catch(() => undefined);
-      await vi.waitFor(
-        () => {
-          expect(firstTurnStarted).toBe(true);
-        },
-        { interval: 1 },
-      );
-
-      await vi.advanceTimersByTimeAsync(4_500);
-
-      await expectRejectedRecord(first, {
-        code: "ACP_TURN_FAILED",
-        message: "ACP turn timed out after 1s.",
-      });
-      expect(manager.getObservabilitySnapshot(cfg).runtimeCache.activeSessions).toBe(1);
-
-      await expectRejectedRecord(
-        manager.runTurn({
-          cfg,
-          sessionKey: "agent:codex:acp:session-b",
-          text: "second",
-          mode: "prompt",
-          requestId: "r2",
-        }),
-        {
-          code: "ACP_SESSION_INIT_FAILED",
-          message: "ACP max concurrent sessions reached (1/1).",
-        },
-      );
-      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
     }
   });
 
@@ -869,6 +913,7 @@ describe("AcpSessionManager", () => {
     await Promise.race([
       Promise.all([
         manager.runTurn({
+          provenance: "system",
           cfg: baseCfg,
           sessionKey: "agent:codex:acp:session-a",
           text: "first",
@@ -876,6 +921,7 @@ describe("AcpSessionManager", () => {
           requestId: "r1",
         }),
         manager.runTurn({
+          provenance: "system",
           cfg: baseCfg,
           sessionKey: "agent:codex:acp:session-b",
           text: "second",
@@ -889,55 +935,6 @@ describe("AcpSessionManager", () => {
     ]);
 
     expect(maxInFlight).toBe(2);
-  });
-
-  it("enforces acp.maxConcurrentSessions when opening new runtime handles", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
-      return {
-        sessionKey,
-        storeSessionKey: sessionKey,
-        acp: {
-          ...readySessionMeta(),
-          runtimeSessionName: `runtime:${sessionKey}`,
-        },
-      };
-    });
-    const limitedCfg = {
-      acp: {
-        ...baseCfg.acp,
-        maxConcurrentSessions: 1,
-      },
-    } as OpenClawConfig;
-
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      cfg: limitedCfg,
-      sessionKey: "agent:codex:acp:session-a",
-      text: "first",
-      mode: "prompt",
-      requestId: "r1",
-    });
-
-    await expectRejectedRecord(
-      manager.runTurn({
-        cfg: limitedCfg,
-        sessionKey: "agent:codex:acp:session-b",
-        text: "second",
-        mode: "prompt",
-        requestId: "r2",
-      }),
-      {
-        code: "ACP_SESSION_INIT_FAILED",
-        message: "ACP max concurrent sessions reached (1/1).",
-      },
-    );
-    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
   });
 
   it("uses metadata backend when global acp.backend is unset", async () => {
@@ -975,6 +972,7 @@ describe("AcpSessionManager", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg,
         sessionKey,
         text: "hello",
@@ -1020,16 +1018,10 @@ describe("AcpSessionManager", () => {
           },
         };
       });
-      const limitedCfg = {
-        acp: {
-          ...baseCfg.acp,
-          maxConcurrentSessions: 1,
-        },
-      } as OpenClawConfig;
-
       const manager = new AcpSessionManager();
       await manager.runTurn({
-        cfg: limitedCfg,
+        provenance: "system",
+        cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-a",
         text: "first",
         mode: "prompt",
@@ -1037,7 +1029,7 @@ describe("AcpSessionManager", () => {
       });
 
       const closeResult = await manager.closeSession({
-        cfg: limitedCfg,
+        cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-a",
         reason: "manual-close",
         allowBackendUnavailable: true,
@@ -1047,7 +1039,8 @@ describe("AcpSessionManager", () => {
 
       await expect(
         manager.runTurn({
-          cfg: limitedCfg,
+          provenance: "system",
+          cfg: baseCfg,
           sessionKey: "agent:codex:acp:session-b",
           text: "second",
           mode: "prompt",
@@ -1087,9 +1080,12 @@ describe("AcpSessionManager", () => {
 
     expect(closeResult.runtimeClosed).toBe(false);
     expect(closeResult.runtimeNotice).toBe("Could not initialize ACP session runtime.");
-    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
-      sessionKey: "agent:claude:acp:session-1",
-    });
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:claude:acp:session-1",
+        agentId: "claude",
+      }),
+    );
   });
 
   it("treats unsupported close controls as recoverable during discard cleanup", async () => {
@@ -1125,9 +1121,12 @@ describe("AcpSessionManager", () => {
     expect(closeResult.runtimeClosed).toBe(false);
     expect(closeResult.runtimeNotice).toContain("does not support session/close");
     expect(closeResult.metaCleared).toBe(true);
-    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
-      sessionKey: "agent:openclaw:acp:session-1",
-    });
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:openclaw:acp:session-1",
+        agentId: "openclaw",
+      }),
+    );
   });
 
   it("clears persisted resume identity when close discards persistent state", async () => {
@@ -1247,6 +1246,7 @@ describe("AcpSessionManager", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey,
         text: "who are you?",
@@ -1255,14 +1255,20 @@ describe("AcpSessionManager", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
-      sessionKey,
-    });
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        agentId: "claude",
+      }),
+    );
     expectRecordFields(mockCallArg(runtimeState.ensureSession), {
       sessionKey,
     });
     expect(runtimeState.prepareFreshSession.mock.invocationCallOrder[0]).toBeLessThan(
-      runtimeState.ensureSession.mock.invocationCallOrder[0],
+      expectDefined(
+        runtimeState.ensureSession.mock.invocationCallOrder[0],
+        "runtimeState.ensureSession.mock.invocationCallOrder[0] test invariant",
+      ),
     );
   });
 
@@ -1316,9 +1322,12 @@ describe("AcpSessionManager", () => {
     });
 
     expect(result.runtimeClosed).toBe(false);
-    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
-      sessionKey,
-    });
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        agentId: "claude",
+      }),
+    );
     expect(runtimeState.ensureSession).not.toHaveBeenCalled();
     expect(runtimeState.close).not.toHaveBeenCalled();
     expectRecordFields(entry.acp?.identity, {
@@ -1328,67 +1337,6 @@ describe("AcpSessionManager", () => {
     });
     expect(entry.acp?.identity).not.toHaveProperty("acpxSessionId");
     expect(entry.acp?.identity).not.toHaveProperty("agentSessionId");
-  });
-
-  it("evicts idle cached runtimes before enforcing max concurrent limits", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2026-02-23T00:00:00.000Z"));
-      const runtimeState = createRuntime();
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
-        return {
-          sessionKey,
-          storeSessionKey: sessionKey,
-          acp: {
-            ...readySessionMeta(),
-            runtimeSessionName: `runtime:${sessionKey}`,
-          },
-        };
-      });
-      const cfg = {
-        acp: {
-          ...baseCfg.acp,
-          maxConcurrentSessions: 1,
-          runtime: {
-            ttlMinutes: 0.01,
-          },
-        },
-      } as OpenClawConfig;
-
-      const manager = new AcpSessionManager();
-      await manager.runTurn({
-        cfg,
-        sessionKey: "agent:codex:acp:session-a",
-        text: "first",
-        mode: "prompt",
-        requestId: "r1",
-      });
-
-      vi.advanceTimersByTime(2_000);
-      await manager.runTurn({
-        cfg,
-        sessionKey: "agent:codex:acp:session-b",
-        text: "second",
-        mode: "prompt",
-        requestId: "r2",
-      });
-
-      expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
-      const closeInput = mockCallArg(runtimeState.close);
-      expectRecordFields(closeInput, {
-        reason: "idle-evicted",
-      });
-      expectRecordFields(closeInput.handle, {
-        sessionKey: "agent:codex:acp:session-a",
-      });
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("tracks ACP turn latency and error-code observability", async () => {
@@ -1417,6 +1365,7 @@ describe("AcpSessionManager", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "ok",
@@ -1425,6 +1374,7 @@ describe("AcpSessionManager", () => {
     });
     await expectRejectedRecord(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "boom",
@@ -1434,55 +1384,12 @@ describe("AcpSessionManager", () => {
       { code: "ACP_TURN_FAILED" },
     );
 
-    const snapshot = manager.getObservabilitySnapshot(baseCfg);
+    const snapshot = manager.getObservabilitySnapshot();
     expect(snapshot.turns.completed).toBe(1);
     expect(snapshot.turns.failed).toBe(1);
     expect(snapshot.turns.active).toBe(0);
     expect(snapshot.turns.queueDepth).toBe(0);
     expect(snapshot.errorsByCode.ACP_TURN_FAILED).toBe(1);
-  });
-
-  it("cleans actor-tail bookkeeping after session turns complete", async () => {
-    const runtimeState = createRuntime();
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
-      return {
-        sessionKey,
-        storeSessionKey: sessionKey,
-        acp: {
-          ...readySessionMeta(),
-          runtimeSessionName: `runtime:${sessionKey}`,
-        },
-      };
-    });
-    runtimeState.runTurn.mockImplementation(async function* () {
-      yield { type: "done" as const };
-    });
-
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-a",
-      text: "first",
-      mode: "prompt",
-      requestId: "r1",
-    });
-    await manager.runTurn({
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-b",
-      text: "second",
-      mode: "prompt",
-      requestId: "r2",
-    });
-
-    const internals = manager as unknown as {
-      actorQueue: { getTailMapForTesting(): Map<string, Promise<void>> };
-    };
-    expect(internals.actorQueue.getTailMapForTesting().size).toBe(0);
   });
 
   it("surfaces backend failures raised after a done event", async () => {
@@ -1504,6 +1411,7 @@ describe("AcpSessionManager", () => {
     const manager = new AcpSessionManager();
     await expectRejectedRecord(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "do work",
@@ -1610,9 +1518,12 @@ describe("AcpSessionManager", () => {
 
     expect(result.runtimeClosed).toBe(false);
     expect(result.runtimeNotice).toContain("currently unavailable");
-    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
-      sessionKey: "agent:claude:acp:session-1",
-    });
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:claude:acp:session-1",
+        agentId: "claude",
+      }),
+    );
   });
 
   it("surfaces metadata clear errors during closeSession", async () => {
@@ -1641,3 +1552,4 @@ describe("AcpSessionManager", () => {
     ).rejects.toThrow("disk locked");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

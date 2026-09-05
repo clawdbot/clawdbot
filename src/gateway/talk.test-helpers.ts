@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /**
  * Direct talk method invocation helpers for gateway speech tests.
  */
@@ -24,7 +25,10 @@ export async function invokeTalkSpeakDirect(params: Record<string, unknown>) {
         error?: { code?: string; message?: string; details?: unknown };
       }
     | undefined;
-  await talkHandlers["talk.speak"]({
+  await expectDefined(
+    talkHandlers["talk.speak"],
+    "talk.speak handler",
+  )({
     req: { type: "req", id: "test", method: "talk.speak", params },
     params,
     client: null,

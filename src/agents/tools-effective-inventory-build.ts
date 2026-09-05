@@ -7,11 +7,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { buildPluginToolMetadataKey, getPluginToolMeta } from "../plugins/tools.js";
+import { buildPluginToolMetadataKey, getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import {
-  filterProviderNormalizableTools,
   filterRuntimeCompatibleTools,
   type RuntimeToolSchemaDiagnostic,
 } from "./tool-schema-projection.js";
@@ -41,7 +40,7 @@ function resolveEffectiveToolSource(
   const pluginMeta =
     getPluginToolMeta(tool) ?? (fallbackTool ? getPluginToolMeta(fallbackTool) : undefined);
   if (pluginMeta) {
-    if (pluginMeta.pluginId === "bundle-mcp") {
+    if (pluginMeta.mcp || pluginMeta.pluginId === "bundle-mcp") {
       return { source: "mcp", pluginId: pluginMeta.pluginId };
     }
     return { source: "plugin", pluginId: pluginMeta.pluginId };
@@ -107,7 +106,7 @@ function readMatchingTool(
 
 // Raw tool arrays can contain getters/proxies from plugin boundaries. Read
 // defensively; projection diagnostics handle the exact unreadable entry later.
-function buildReadableRawToolsByName(
+export function buildReadableToolsByName(
   tools: readonly AnyAgentTool[],
 ): ReadonlyMap<string, AnyAgentTool> {
   const toolsByName = new Map<string, AnyAgentTool>();
@@ -119,8 +118,10 @@ function buildReadableRawToolsByName(
   }
   for (let index = 0; index < toolCount; index += 1) {
     try {
-      const tool = tools[index];
-      toolsByName.set(tool.name, tool);
+      const tool = tools.at(index);
+      if (tool) {
+        toolsByName.set(tool.name, tool);
+      }
     } catch {
       // Unreadable entries are reported by the schema projection diagnostics.
     }
@@ -129,7 +130,7 @@ function buildReadableRawToolsByName(
 }
 
 /** Builds effective inventory entries from already runtime-compatible tools. */
-export function buildEffectiveToolInventoryEntries(
+function buildEffectiveToolInventoryEntries(
   tools: readonly AnyAgentTool[],
   rawToolsByName: ReadonlyMap<string, AnyAgentTool> = new Map(),
 ): EffectiveToolInventoryEntry[] {
@@ -159,8 +160,7 @@ export function buildEffectiveToolInventoryEntries(
               summarizeEffectiveToolDescription(tool),
             rawDescription:
               normalizeOptionalString(metadata?.description) ??
-              resolveEffectiveToolRawDescription(tool) ??
-              summarizeEffectiveToolDescription(tool),
+              resolveEffectiveToolRawDescription(tool),
             ...(metadata?.risk ? { risk: metadata.risk } : {}),
             ...(metadata?.tags ? { tags: metadata.tags } : {}),
           },
@@ -185,15 +185,10 @@ export function buildRuntimeCompatibleToolInventory(params: {
   entries: EffectiveToolInventoryEntry[];
   notices: EffectiveToolInventoryNotice[];
 } {
-  const rawToolsByName = buildReadableRawToolsByName(params.tools);
-  const preNormalizationProjection = filterProviderNormalizableTools(params.tools);
-  const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [
-    ...preNormalizationProjection.diagnostics,
-  ];
+  const rawToolsByName = buildReadableToolsByName(params.tools);
+  const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
   const normalizedTools = normalizeAgentRuntimeTools({
-    // Schema normalization can replace tool definitions, so hand the runtime
-    // policy a mutable copy while keeping this inventory API readonly.
-    tools: [...preNormalizationProjection.tools],
+    tools: params.tools,
     provider: params.modelProvider ?? "",
     config: params.cfg,
     workspaceDir: params.workspaceDir,

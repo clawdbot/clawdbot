@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Perplexity provider module implements model/runtime integration.
 import {
   mergeScopedSearchConfig,
@@ -5,20 +6,16 @@ import {
   type WebSearchProviderPlugin,
   type WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createPerplexityWebSearchProviderBase,
+  hasPerplexityLegacyOverride,
+  resolvePerplexityConfig,
   resolvePerplexityWebSearchRuntimeMetadata,
 } from "./perplexity-web-search-provider.shared.js";
 
-type PerplexityWebSearchRuntime = typeof import("./perplexity-web-search-provider.runtime.js");
-
-let perplexityWebSearchRuntimePromise: Promise<PerplexityWebSearchRuntime> | undefined;
-
-function loadPerplexityWebSearchRuntime(): Promise<PerplexityWebSearchRuntime> {
-  perplexityWebSearchRuntimePromise ??= import("./perplexity-web-search-provider.runtime.js");
-  return perplexityWebSearchRuntimePromise;
-}
+const loadPerplexityWebSearchRuntime = createLazyRuntimeModule(
+  () => import("./perplexity-web-search-provider.runtime.js"),
+);
 
 function createPerplexityParameters(transport?: string): Record<string, unknown> {
   const properties: Record<string, unknown> = {
@@ -79,21 +76,15 @@ function createPerplexityParameters(transport?: string): Record<string, unknown>
   };
 }
 
-function hasPerplexityLegacyOverride(searchConfig?: Record<string, unknown>): boolean {
-  const perplexity = isRecord(searchConfig?.perplexity) ? searchConfig.perplexity : undefined;
-  return (
-    (typeof perplexity?.baseUrl === "string" && perplexity.baseUrl.trim().length > 0) ||
-    (typeof perplexity?.model === "string" && perplexity.model.trim().length > 0)
-  );
-}
-
 function createPerplexityToolDefinition(
   searchConfig?: Record<string, unknown>,
   runtimeTransport?: string,
 ): WebSearchProviderToolDefinition {
   const schemaTransport =
     runtimeTransport ??
-    (hasPerplexityLegacyOverride(searchConfig) ? "chat_completions" : undefined);
+    (hasPerplexityLegacyOverride(resolvePerplexityConfig(searchConfig))
+      ? "chat_completions"
+      : undefined);
 
   return {
     description:
@@ -101,9 +92,10 @@ function createPerplexityToolDefinition(
         ? "Search the web using Perplexity Sonar via Perplexity/OpenRouter chat completions. Returns AI-synthesized answers with citations from web-grounded search."
         : "Search the web using Perplexity. Runtime routing decides between native Search API and Sonar chat-completions compatibility. Structured filters are available on the native Search API path.",
     parameters: createPerplexityParameters(schemaTransport),
-    execute: async (args) => {
+    execute: async (args, context) => {
+      context?.signal?.throwIfAborted();
       const { executePerplexitySearch } = await loadPerplexityWebSearchRuntime();
-      return await executePerplexitySearch(args, searchConfig);
+      return await executePerplexitySearch(args, searchConfig, context?.signal);
     },
   };
 }

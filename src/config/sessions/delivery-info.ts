@@ -1,38 +1,27 @@
 // Delivery lookup recovers routable channel context from persisted session stores.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
-  resolveSessionStoreAgentId,
+  resolveSessionStoreIdentity,
   resolveSessionStoreKey,
 } from "../../gateway/session-store-key.js";
 import { requiresFoldedSessionKeyAliasProof } from "../../sessions/session-key-utils.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import {
+  deliveryContextFromSession,
+  hasDeliveryTargetFields,
+} from "../../utils/delivery-context.shared.js";
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveStorePath } from "./paths.js";
+import { resolveSessionStorePathCore } from "./paths.js";
+import { openSessionEntryReadView, type SessionEntryReadView } from "./session-accessor.js";
 import {
   foldedSessionKeyAliasCandidates,
   hasMismatchedCaseSensitiveDeliveryProof,
   isConfirmedLowercasedLegacyAlias,
   normalizeStoreSessionKey,
 } from "./store-entry.js";
-import { readSessionStoreSnapshot } from "./store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
-
-function hasRoutableDeliveryContext(context?: {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-}): context is {
-  channel: string;
-  to: string;
-  accountId?: string;
-  threadId?: string | number;
-} {
-  return Boolean(context?.channel && context?.to);
-}
 
 /**
  * Extracts the routable delivery context and thread id for a persisted session key.
@@ -62,11 +51,11 @@ export function extractDeliveryInfo(
     const lookup = loadDeliverySessionEntry({ cfg, sessionKey, baseSessionKey });
     let entry = lookup.entry;
     let storedDeliveryContext = deliveryContextFromSession(entry);
-    if (!hasRoutableDeliveryContext(storedDeliveryContext) && baseSessionKey !== sessionKey) {
+    if (!hasDeliveryTargetFields(storedDeliveryContext) && baseSessionKey !== sessionKey) {
       entry = lookup.baseEntry;
       storedDeliveryContext = deliveryContextFromSession(entry);
     }
-    if (hasRoutableDeliveryContext(storedDeliveryContext)) {
+    if (hasDeliveryTargetFields(storedDeliveryContext)) {
       deliveryContext = {
         channel: storedDeliveryContext.channel,
         to: storedDeliveryContext.to,
@@ -82,7 +71,7 @@ export function extractDeliveryInfo(
 
 function resolveDeliveryStorePaths(cfg: OpenClawConfig, agentId: string): string[] {
   const paths = new Set<string>();
-  paths.add(resolveStorePath(cfg.session?.store, { agentId }));
+  paths.add(resolveSessionStorePathCore(cfg.session?.store, { agentId }));
   // Delivery can be restored from any resolved agent target; store order keeps the configured
   // primary path first while still covering per-agent stores.
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
@@ -93,14 +82,7 @@ function resolveDeliveryStorePaths(cfg: OpenClawConfig, agentId: string): string
   return [...paths];
 }
 
-function asSessionEntry(entry: unknown): SessionEntry | undefined {
-  return entry as SessionEntry | undefined;
-}
-
-function findSessionEntryInStore(
-  store: ReturnType<typeof readSessionStoreSnapshot>,
-  keys: readonly string[],
-) {
+function findSessionEntryInStore(store: SessionEntryReadView, keys: readonly string[]) {
   let normalizedIndex: Map<string, SessionEntry> | undefined;
   let bestEntry: SessionEntry | undefined;
   let bestUpdatedAt = 0;
@@ -109,12 +91,11 @@ function findSessionEntryInStore(
   // Preference order: routable delivery context first; then Matrix/tail-preserved
   // exact keys over folded aliases; then freshness. Ordinary lowercase-canonical
   // channels keep the previous freshest-routable alias behavior.
-  const acceptCandidate = (candidate: unknown, isExact = false) => {
-    if (!candidate) {
+  const acceptCandidate = (entry: SessionEntry | undefined, isExact = false) => {
+    if (!entry) {
       return;
     }
-    const entry = candidate as SessionEntry;
-    const candidateRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(entry));
+    const candidateRoutable = hasDeliveryTargetFields(deliveryContextFromSession(entry));
     const candidateUpdatedAt = entry.updatedAt ?? 0;
     if (
       !bestEntry ||
@@ -136,37 +117,26 @@ function findSessionEntryInStore(
     const foldedLegacyKeys = foldedSessionKeyAliasCandidates(normalized);
     const exactKeyWins = requiresFoldedSessionKeyAliasProof(normalized);
     let foundRoutableCandidate = false;
-    if (
-      Object.hasOwn(store, normalized) &&
-      !hasMismatchedCaseSensitiveDeliveryProof(asSessionEntry(store[normalized]), normalized)
-    ) {
-      foundRoutableCandidate ||= hasRoutableDeliveryContext(
-        deliveryContextFromSession(asSessionEntry(store[normalized])),
-      );
-      acceptCandidate(store[normalized], exactKeyWins);
+    // Exact and alias probes are raw keyed reads; the store is never enumerated here.
+    const exactEntry = store.get(normalized);
+    if (exactEntry && !hasMismatchedCaseSensitiveDeliveryProof(exactEntry, normalized)) {
+      foundRoutableCandidate ||= hasDeliveryTargetFields(deliveryContextFromSession(exactEntry));
+      acceptCandidate(exactEntry, exactKeyWins);
     }
     for (const foldedLegacyKey of foldedLegacyKeys) {
-      if (
-        !Object.hasOwn(store, foldedLegacyKey) ||
-        !isConfirmedLowercasedLegacyAlias(asSessionEntry(store[foldedLegacyKey]), normalized)
-      ) {
+      const foldedLegacyEntry = store.get(foldedLegacyKey);
+      if (!foldedLegacyEntry || !isConfirmedLowercasedLegacyAlias(foldedLegacyEntry, normalized)) {
         continue;
       }
-      const foldedLegacyEntry = asSessionEntry(store[foldedLegacyKey]);
-      foundRoutableCandidate ||= hasRoutableDeliveryContext(
+      foundRoutableCandidate ||= hasDeliveryTargetFields(
         deliveryContextFromSession(foldedLegacyEntry),
       );
       acceptCandidate(foldedLegacyEntry);
     }
-    if (
-      trimmed !== normalized &&
-      Object.hasOwn(store, trimmed) &&
-      !hasMismatchedCaseSensitiveDeliveryProof(asSessionEntry(store[trimmed]), normalized)
-    ) {
-      foundRoutableCandidate ||= hasRoutableDeliveryContext(
-        deliveryContextFromSession(asSessionEntry(store[trimmed])),
-      );
-      acceptCandidate(store[trimmed]);
+    const trimmedEntry = trimmed !== normalized ? store.get(trimmed) : undefined;
+    if (trimmedEntry && !hasMismatchedCaseSensitiveDeliveryProof(trimmedEntry, normalized)) {
+      foundRoutableCandidate ||= hasDeliveryTargetFields(deliveryContextFromSession(trimmedEntry));
+      acceptCandidate(trimmedEntry);
     }
     if (trimmed !== normalized || !foundRoutableCandidate) {
       // Build the normalized index only after direct/exact probes fail; large session stores can
@@ -187,19 +157,16 @@ function findSessionEntryInStore(
   return bestEntry;
 }
 
-function buildFreshestSessionEntryIndex(
-  store: Readonly<Record<string, unknown>>,
-): Map<string, SessionEntry> {
+function buildFreshestSessionEntryIndex(store: SessionEntryReadView): Map<string, SessionEntry> {
   const index = new Map<string, SessionEntry>();
-  for (const [key, candidate] of Object.entries(store)) {
-    const entry = asSessionEntry(candidate);
+  for (const { sessionKey: key, entry } of store.entries()) {
     if (!entry) {
       continue;
     }
     const normalized = normalizeStoreSessionKey(key);
     const existing = index.get(normalized);
-    const entryRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(entry));
-    const existingRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(existing));
+    const entryRoutable = hasDeliveryTargetFields(deliveryContextFromSession(entry));
+    const existingRoutable = hasDeliveryTargetFields(deliveryContextFromSession(existing));
     if (
       !existing ||
       (entryRoutable && !existingRoutable) ||
@@ -214,7 +181,7 @@ function buildFreshestSessionEntryIndex(
       continue;
     }
     const foldedExisting = index.get(foldedLegacyKey);
-    const foldedExistingRoutable = hasRoutableDeliveryContext(
+    const foldedExistingRoutable = hasDeliveryTargetFields(
       deliveryContextFromSession(foldedExisting),
     );
     if (
@@ -234,15 +201,15 @@ function loadDeliverySessionEntry(params: {
   sessionKey: string;
   baseSessionKey: string;
 }) {
-  const canonicalKey = resolveSessionStoreKey({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-  });
-  const canonicalBaseKey = resolveSessionStoreKey({
+  const { agentId, canonicalKey: canonicalBaseKey } = resolveSessionStoreIdentity({
     cfg: params.cfg,
     sessionKey: params.baseSessionKey,
   });
-  const agentId = resolveSessionStoreAgentId(params.cfg, canonicalKey);
+  const canonicalKey = resolveSessionStoreKey({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    storeAgentId: agentId,
+  });
   const sessionKeys = [params.sessionKey, canonicalKey];
   const baseKeys = [params.baseSessionKey, canonicalBaseKey];
   let fallback:
@@ -252,7 +219,9 @@ function loadDeliverySessionEntry(params: {
       }
     | undefined;
   for (const storePath of resolveDeliveryStorePaths(params.cfg, agentId)) {
-    const store = readSessionStoreSnapshot(storePath);
+    // Borrowed keyed view over this store's rows; exact probes stay cheap keyed reads and the
+    // borrowed rows are dropped before any await (this lookup is fully synchronous).
+    const store = openSessionEntryReadView({ storePath });
     const entry = findSessionEntryInStore(store, sessionKeys);
     const baseEntry = findSessionEntryInStore(store, baseKeys);
     if (!entry && !baseEntry) {
@@ -262,8 +231,8 @@ function loadDeliverySessionEntry(params: {
     // Prefer the first store that can actually route delivery; keep a non-routable fallback only
     // so callers can still inspect thread ids when no target-bearing session exists.
     if (
-      hasRoutableDeliveryContext(deliveryContextFromSession(entry)) ||
-      hasRoutableDeliveryContext(deliveryContextFromSession(baseEntry))
+      hasDeliveryTargetFields(deliveryContextFromSession(entry)) ||
+      hasDeliveryTargetFields(deliveryContextFromSession(baseEntry))
     ) {
       return { entry, baseEntry };
     }

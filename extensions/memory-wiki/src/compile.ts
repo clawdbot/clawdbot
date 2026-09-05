@@ -12,6 +12,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import {
   assessClaimFreshness,
   assessPageFreshness,
@@ -27,24 +28,47 @@ import {
   type WikiFreshnessLevel,
   type WikiPageContradictionCluster,
 } from "./claim-health.js";
+import {
+  createMemoryWikiCompiledCachePublicationId,
+  readMemoryWikiDashboardState,
+  resolveMemoryWikiCompiledCacheGeneration,
+  setMemoryWikiDashboardState,
+  writeMemoryWikiCompiledCache,
+  type MemoryWikiCompiledCacheSnapshot,
+  type MemoryWikiImportInsightItem,
+  type MemoryWikiOverviewItem,
+} from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { appendMemoryWikiLog } from "./log.js";
+import {
+  buildMemoryWikiImportInsights,
+  projectMemoryWikiImportInsight,
+} from "./import-insights.js";
+import {
+  appendMemoryWikiLog,
+  loadMemoryWikiValidatedVaultIdentity,
+  loadMemoryWikiVaultIdentity,
+  resolveMemoryWikiVaultSourceGeneration,
+} from "./log.js";
 import {
   formatWikiLink,
   isUnmanagedRawSourceSummary,
   parseWikiMarkdown,
   renderWikiMarkdown,
-  toWikiPageSummary,
+  scanWikiPageSummary,
   type WikiClaim,
   type WikiClaimEvidence,
+  type WikiPageFrontmatterError,
   type WikiPageKind,
   type WikiPageSummary,
   type WikiRelationship,
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
+import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
+import { isPersonLikePage } from "./person-page.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
-import { initializeMemoryWikiVault } from "./vault.js";
+import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
+import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
 
 const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: string }> = [
   { kind: "source", dir: "sources", heading: "Sources" },
@@ -53,8 +77,6 @@ const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: str
   { kind: "synthesis", dir: "syntheses", heading: "Syntheses" },
   { kind: "report", dir: "reports", heading: "Reports" },
 ];
-const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
-const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
 const READ_PAGE_SUMMARIES_CONCURRENCY = 16;
 const MAX_RELATED_PAGES_PER_SECTION = 12;
 const MAX_SHARED_SOURCE_FANOUT = 24;
@@ -352,39 +374,79 @@ export type CompileMemoryWikiResult = {
   vaultRoot: string;
   pageCounts: Record<WikiPageKind, number>;
   pages: WikiPageSummary[];
+  frontmatterErrors: WikiPageFrontmatterError[];
   claimCount: number;
   updatedFiles: string[];
 };
 
 export type RefreshMemoryWikiIndexesResult = {
   refreshed: boolean;
-  reason: "auto-compile-disabled" | "no-import-changes" | "missing-indexes" | "import-changed";
+  reason:
+    | "auto-compile-disabled"
+    | "no-import-changes"
+    | "missing-indexes"
+    | "missing-compiled-cache"
+    | "import-changed";
   compile?: CompileMemoryWikiResult;
 };
 
+type CompileMemoryWikiOptions = {
+  sourcePageWrites?: "update" | "preserve";
+  signal?: AbortSignal;
+};
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promise<string[]> {
-  const dirPath = path.join(rootDir, relativeDir);
-  const entries = await fs.readdir(dirPath, { withFileTypes: true }).catch(() => []);
+  const entries = await walkMemoryWikiDirectory(rootDir, relativeDir);
   return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-    .map((entry) => path.join(relativeDir, entry.name))
+    .filter((entry) => entry.kind === "file" && entry.relativePath.endsWith(".md"))
+    .map((entry) => entry.relativePath.split(path.sep).join("/"))
     .filter((relativePath) => path.basename(relativePath) !== "index.md")
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-async function readPageSummaries(rootDir: string): Promise<WikiPageSummary[]> {
+async function readPageSummaries(
+  rootDir: string,
+  signal?: AbortSignal,
+): Promise<{
+  pages: WikiPageSummary[];
+  frontmatterErrors: WikiPageFrontmatterError[];
+  importInsights: MemoryWikiImportInsightItem[];
+  overviewItems: MemoryWikiOverviewItem[];
+}> {
   const filePaths = (
     await Promise.all(COMPILE_PAGE_GROUPS.map((group) => collectMarkdownFiles(rootDir, group.dir)))
   ).flat();
+  signal?.throwIfAborted();
 
   const readResult = await runTasksWithConcurrency({
     tasks: filePaths.map((relativePath) => async () => {
+      signal?.throwIfAborted();
       const absolutePath = path.join(rootDir, relativePath);
       const raw = await retryTransientMemoryRead(
         () => fs.readFile(absolutePath, "utf8"),
         `read wiki page ${absolutePath}`,
       );
-      return toWikiPageSummary({ absolutePath, relativePath, raw });
+      signal?.throwIfAborted();
+      // Large imported pages are parsed off the request path, but the compiler
+      // still yields between pages so background recovery cannot starve Gateway ticks.
+      await yieldToEventLoop();
+      signal?.throwIfAborted();
+      const scan = scanWikiPageSummary({ absolutePath, relativePath, raw });
+      if (scan.status !== "valid") {
+        return { scan, importInsight: null, overviewItem: null };
+      }
+      const parsed = parseWikiMarkdown(raw);
+      return {
+        scan,
+        importInsight: projectMemoryWikiImportInsight(scan.page, parsed),
+        overviewItem: projectMemoryWikiOverviewItem(scan.page, parsed.body),
+      };
     }),
     limit: READ_PAGE_SUMMARIES_CONCURRENCY,
     errorMode: "stop",
@@ -392,19 +454,21 @@ async function readPageSummaries(rootDir: string): Promise<WikiPageSummary[]> {
   if (readResult.hasError) {
     throw readResult.firstError;
   }
+  signal?.throwIfAborted();
 
-  return readResult.results
-    .flatMap((page) => (page ? [page] : []))
-    .toSorted((left, right) => left.title.localeCompare(right.title));
-}
-
-function buildPageCounts(pages: WikiPageSummary[]): Record<WikiPageKind, number> {
   return {
-    entity: pages.filter((page) => page.kind === "entity").length,
-    concept: pages.filter((page) => page.kind === "concept").length,
-    source: pages.filter((page) => page.kind === "source").length,
-    synthesis: pages.filter((page) => page.kind === "synthesis").length,
-    report: pages.filter((page) => page.kind === "report").length,
+    pages: readResult.results
+      .flatMap(({ scan }) => (scan.status === "valid" ? [scan.page] : []))
+      .toSorted((left, right) => left.title.localeCompare(right.title)),
+    frontmatterErrors: readResult.results.flatMap(({ scan }) =>
+      scan.status === "invalid-frontmatter" ? [scan.error] : [],
+    ),
+    importInsights: readResult.results.flatMap(({ importInsight }) =>
+      importInsight ? [importInsight] : [],
+    ),
+    overviewItems: readResult.results.flatMap(({ overviewItem }) =>
+      overviewItem ? [overviewItem] : [],
+    ),
   };
 }
 
@@ -445,18 +509,6 @@ function formatListPreview(values: readonly string[], maxItems = 3): string | nu
 
 function formatMaybeDetail(label: string, value: string | null | undefined): string | null {
   return value ? `${label} ${value}` : null;
-}
-
-function isPersonLikePage(page: WikiPageSummary): boolean {
-  const entityType = normalizeLowercaseStringOrEmpty(page.entityType);
-  const pageType = normalizeLowercaseStringOrEmpty(page.pageType);
-  return (
-    Boolean(page.personCard) ||
-    entityType === "person" ||
-    entityType === "maintainer" ||
-    pageType === "person" ||
-    pageType === "maintainer"
-  );
 }
 
 function formatPersonDirectoryLine(
@@ -837,6 +889,7 @@ function buildRelatedBlockBody(params: {
 async function refreshPageRelatedBlocks(params: {
   config: ResolvedMemoryWikiConfig;
   pages: WikiPageSummary[];
+  signal?: AbortSignal;
 }): Promise<string[]> {
   if (!params.config.render.createBacklinks) {
     return [];
@@ -844,10 +897,12 @@ async function refreshPageRelatedBlocks(params: {
   const root = await fsRoot(params.config.vault.path);
   const updatedFiles: string[] = [];
   for (const page of params.pages) {
+    params.signal?.throwIfAborted();
     if (page.kind === "report") {
       continue;
     }
     const original = await root.readText(page.relativePath);
+    params.signal?.throwIfAborted();
     if (original.trim().length === 0) {
       continue;
     }
@@ -868,6 +923,7 @@ async function refreshPageRelatedBlocks(params: {
       continue;
     }
     await root.write(page.relativePath, updated);
+    params.signal?.throwIfAborted();
     updatedFiles.push(page.absolutePath);
   }
   return updatedFiles;
@@ -902,9 +958,15 @@ async function writeManagedMarkdownFile(params: {
   startMarker: string;
   endMarker: string;
   body: string;
+  signal?: AbortSignal;
 }): Promise<boolean> {
+  params.signal?.throwIfAborted();
   const root = await fsRoot(params.rootDir);
   const original = await root.readText(params.relativePath).catch(() => `# ${params.title}\n`);
+  params.signal?.throwIfAborted();
+  // Generated indexes bypass page discovery. Parse existing content here so
+  // managed-block updates cannot rewrite malformed frontmatter.
+  parseWikiMarkdown(original);
   const updated = replaceManagedMarkdownBlock({
     original,
     heading: "## Generated",
@@ -917,6 +979,7 @@ async function writeManagedMarkdownFile(params: {
     return false;
   }
   await root.write(params.relativePath, rendered);
+  params.signal?.throwIfAborted();
   return true;
 }
 
@@ -1004,6 +1067,7 @@ async function refreshDashboardPages(params: {
   managedImportedSourcePagePaths: Set<string>;
   rootDir: string;
   pages: WikiPageSummary[];
+  signal?: AbortSignal;
 }): Promise<string[]> {
   if (!params.config.render.createDashboards) {
     return [];
@@ -1011,6 +1075,7 @@ async function refreshDashboardPages(params: {
   const now = new Date();
   const updatedFiles: string[] = [];
   for (const definition of DASHBOARD_PAGES) {
+    params.signal?.throwIfAborted();
     if (
       await writeDashboardPage({
         config: params.config,
@@ -1023,6 +1088,7 @@ async function refreshDashboardPages(params: {
     ) {
       updatedFiles.push(path.join(params.rootDir, definition.relativePath));
     }
+    params.signal?.throwIfAborted();
   }
   return updatedFiles;
 }
@@ -1071,76 +1137,6 @@ function buildDirectoryIndexBody(params: {
   });
 }
 
-type AgentDigestClaim = {
-  id?: string;
-  text: string;
-  status: string;
-  confidence?: number;
-  evidenceCount: number;
-  missingEvidence: boolean;
-  evidence: WikiClaim["evidence"];
-  freshnessLevel: WikiFreshnessLevel;
-  lastTouchedAt?: string;
-};
-
-type AgentDigestPage = {
-  id?: string;
-  title: string;
-  kind: WikiPageKind;
-  path: string;
-  pageType?: string;
-  entityType?: string;
-  canonicalId?: string;
-  aliases: string[];
-  sourceIds: string[];
-  questions: string[];
-  contradictions: string[];
-  confidence?: number;
-  privacyTier?: string;
-  personCard?: WikiPageSummary["personCard"];
-  bestUsedFor: string[];
-  notEnoughFor: string[];
-  relationshipCount: number;
-  topRelationships: WikiRelationship[];
-  freshnessLevel: WikiFreshnessLevel;
-  lastTouchedAt?: string;
-  lastRefreshedAt?: string;
-  claimCount: number;
-  topClaims: AgentDigestClaim[];
-};
-
-type AgentDigestClaimHealthSummary = {
-  freshness: Record<WikiFreshnessLevel, number>;
-  contested: number;
-  lowConfidence: number;
-  missingEvidence: number;
-};
-
-type AgentDigestContradictionCluster = {
-  key: string;
-  label: string;
-  kind: "claim-id" | "page-note";
-  entryCount: number;
-  paths: string[];
-};
-
-type AgentDigest = {
-  pageCounts: Record<WikiPageKind, number>;
-  claimCount: number;
-  claimHealth: AgentDigestClaimHealthSummary;
-  contradictionClusters: AgentDigestContradictionCluster[];
-  pages: AgentDigestPage[];
-};
-
-function createFreshnessSummary(): Record<WikiFreshnessLevel, number> {
-  return {
-    fresh: 0,
-    aging: 0,
-    stale: 0,
-    unknown: 0,
-  };
-}
-
 function rankFreshnessLevel(level: WikiFreshnessLevel): number {
   switch (level) {
     case "fresh":
@@ -1171,65 +1167,13 @@ function sortClaims(page: WikiPageSummary): WikiClaim[] {
   });
 }
 
-function buildAgentDigestClaimHealthSummary(
-  pages: WikiPageSummary[],
-): AgentDigestClaimHealthSummary {
-  const freshness = createFreshnessSummary();
-  let contested = 0;
-  let lowConfidence = 0;
-  let missingEvidence = 0;
-
-  for (const claim of collectWikiClaimHealth(pages)) {
-    freshness[claim.freshness.level] += 1;
-    if (isClaimHealthContested(claim)) {
-      contested += 1;
-    }
-    if (typeof claim.confidence === "number" && claim.confidence < 0.5) {
-      lowConfidence += 1;
-    }
-    if (claim.missingEvidence) {
-      missingEvidence += 1;
-    }
-  }
-
-  return {
-    freshness,
-    contested,
-    lowConfidence,
-    missingEvidence,
-  };
-}
-
-function buildAgentDigestContradictionClusters(
-  pages: WikiPageSummary[],
-): AgentDigestContradictionCluster[] {
-  const pageClusters = buildPageContradictionClusters(pages).map((cluster) => ({
-    key: cluster.key,
-    label: cluster.label,
-    kind: "page-note" as const,
-    entryCount: cluster.entries.length,
-    paths: uniqueStrings(cluster.entries.map((entry) => entry.pagePath)).toSorted(),
-  }));
-  const claimClusters = buildClaimContradictionClusters({ pages }).map((cluster) => ({
-    key: cluster.key,
-    label: cluster.label,
-    kind: "claim-id" as const,
-    entryCount: cluster.entries.length,
-    paths: uniqueStrings(cluster.entries.map((entry) => entry.pagePath)).toSorted(),
-  }));
-  return [...pageClusters, ...claimClusters].toSorted((left, right) =>
-    left.label.localeCompare(right.label),
-  );
-}
-
-function buildAgentDigest(params: {
-  pages: WikiPageSummary[];
-  pageCounts: Record<WikiPageKind, number>;
-}): AgentDigest {
-  const pages = [...params.pages]
+function buildCompiledCacheSnapshot(
+  scan: Awaited<ReturnType<typeof readPageSummaries>>,
+): MemoryWikiCompiledCacheSnapshot {
+  const pagesInput = scan.pages;
+  const pages = [...pagesInput]
     .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath))
     .map((page) => {
-      const pageFreshness = assessPageFreshness(page);
       return Object.assign(
         {},
         page.id ? { id: page.id } : {},
@@ -1249,12 +1193,8 @@ function buildAgentDigest(params: {
         page.pageType ? { pageType: page.pageType } : {},
         page.entityType ? { entityType: page.entityType } : {},
         page.canonicalId ? { canonicalId: page.canonicalId } : {},
-        typeof page.confidence === "number" ? { confidence: page.confidence } : {},
         page.privacyTier ? { privacyTier: page.privacyTier } : {},
         page.personCard ? { personCard: page.personCard } : {},
-        { freshnessLevel: pageFreshness.level },
-        pageFreshness.lastTouchedAt ? { lastTouchedAt: pageFreshness.lastTouchedAt } : {},
-        page.lastRefreshedAt ? { lastRefreshedAt: page.lastRefreshedAt } : {},
         {
           claimCount: page.claims.length,
           topClaims: sortClaims(page)
@@ -1270,33 +1210,18 @@ function buildAgentDigest(params: {
                 },
                 typeof claim.confidence === "number" ? { confidence: claim.confidence } : {},
                 {
-                  evidenceCount: claim.evidence.length,
-                  missingEvidence: claim.evidence.length === 0,
-                  evidence: [...claim.evidence],
                   freshnessLevel: freshness.level,
                 },
-                freshness.lastTouchedAt ? { lastTouchedAt: freshness.lastTouchedAt } : {},
               );
             }),
         },
       );
     });
-  return {
-    pageCounts: params.pageCounts,
-    claimCount: params.pages.reduce((total, page) => total + page.claims.length, 0),
-    claimHealth: buildAgentDigestClaimHealthSummary(params.pages),
-    contradictionClusters: buildAgentDigestContradictionClusters(params.pages),
-    pages,
-  };
-}
-
-function buildClaimsDigestLines(params: { pages: WikiPageSummary[] }): string[] {
-  return params.pages
+  const claims = pagesInput
     .flatMap((page) =>
       sortClaims(page).map((claim) => {
         const freshness = assessClaimFreshness({ page, claim });
-        return JSON.stringify({
-          ...(claim.id ? { id: claim.id } : {}),
+        return Object.assign({}, claim.id ? { id: claim.id } : {}, {
           pageId: page.id,
           pageTitle: page.title,
           pageKind: page.kind,
@@ -1319,84 +1244,101 @@ function buildClaimsDigestLines(params: { pages: WikiPageSummary[] }): string[] 
               ].flatMap((entry) => entry ?? []),
             ),
           ],
-          evidenceCount: claim.evidence.length,
-          missingEvidence: claim.evidence.length === 0,
-          evidence: claim.evidence,
           freshnessLevel: freshness.level,
           lastTouchedAt: freshness.lastTouchedAt,
         });
       }),
     )
-    .toSorted((left, right) => left.localeCompare(right));
+    .toSorted(
+      (left, right) =>
+        left.pagePath.localeCompare(right.pagePath) || left.text.localeCompare(right.text),
+    );
+  return {
+    digest: {
+      claimCount: claims.length,
+      contradictionCount:
+        buildPageContradictionClusters(pagesInput).length +
+        buildClaimContradictionClusters({ pages: pagesInput }).length,
+      pages,
+    },
+    claims,
+    dashboards: {
+      importInsights: buildMemoryWikiImportInsights(scan.importInsights),
+      overview: buildMemoryWikiOverview(scan.pages, scan.overviewItems),
+    },
+  };
 }
 
-async function writeAgentDigestArtifacts(params: {
-  rootDir: string;
-  pages: WikiPageSummary[];
-  pageCounts: Record<WikiPageKind, number>;
-}): Promise<string[]> {
-  const updatedFiles: string[] = [];
-  const agentDigestPath = path.join(params.rootDir, AGENT_DIGEST_PATH);
-  const claimsDigestPath = path.join(params.rootDir, CLAIMS_DIGEST_PATH);
-  const agentDigest = `${JSON.stringify(
-    buildAgentDigest({
-      pages: params.pages,
-      pageCounts: params.pageCounts,
-    }),
-    null,
-    2,
-  )}\n`;
-  const claimsDigest = withTrailingNewline(
-    buildClaimsDigestLines({ pages: params.pages }).join("\n"),
-  );
-
-  for (const [filePath, content] of [
-    [agentDigestPath, agentDigest],
-    [claimsDigestPath, claimsDigest],
-  ] as const) {
-    const relativePath = path.relative(params.rootDir, filePath);
-    const root = await fsRoot(params.rootDir);
-    const existing = await root.readText(relativePath).catch(() => "");
-    if (existing === content) {
-      continue;
-    }
-    await root.write(relativePath, content);
-    updatedFiles.push(filePath);
-  }
-  return updatedFiles;
-}
-
-export async function compileMemoryWikiVault(
+async function compileMemoryWikiVaultUnlocked(
   config: ResolvedMemoryWikiConfig,
+  options?: CompileMemoryWikiOptions,
 ): Promise<CompileMemoryWikiResult> {
-  await initializeMemoryWikiVault(config);
+  if (options?.sourcePageWrites === "preserve") {
+    await activateExistingMemoryWikiVault(config, options.signal);
+  } else {
+    await initializeMemoryWikiVault(
+      config,
+      options?.signal ? { signal: options.signal } : undefined,
+    );
+  }
+  options?.signal?.throwIfAborted();
   const rootDir = config.vault.path;
+  const compiledInputIdentity = await loadMemoryWikiVaultIdentity(rootDir);
+  if (!compiledInputIdentity.vaultGeneration) {
+    throw new Error(`Memory Wiki vault generation is missing: ${rootDir}`);
+  }
+  const compiledCacheReservationId = createMemoryWikiCompiledCachePublicationId();
+  await appendMemoryWikiLog(rootDir, {
+    type: "compile",
+    timestamp: new Date().toISOString(),
+    details: {
+      compiledCacheReservationId,
+      compiledCacheParentPublicationId: compiledInputIdentity.compiledCachePublicationId,
+    },
+  });
+  const reservedIdentity = await loadMemoryWikiVaultIdentity(rootDir);
+  if (
+    reservedIdentity.vaultGeneration !== compiledInputIdentity.vaultGeneration ||
+    reservedIdentity.compiledCacheReservationId !== compiledCacheReservationId ||
+    reservedIdentity.compiledCachePublicationId !== compiledInputIdentity.compiledCachePublicationId
+  ) {
+    throw new Error("Memory Wiki vault changed before its compiled cache scan began.");
+  }
   const sourceSyncState = await readMemoryWikiSourceSyncState(rootDir);
   const managedImportedSourcePagePaths = new Set(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
   );
-  let pages = await readPageSummaries(rootDir);
-  const updatedFiles = await refreshPageRelatedBlocks({ config, pages });
+  let scan = await readPageSummaries(rootDir, options?.signal);
+  let pages = scan.pages;
+  const updatedFiles =
+    options?.sourcePageWrites === "preserve"
+      ? []
+      : await refreshPageRelatedBlocks({
+          config,
+          pages,
+          ...(options?.signal ? { signal: options.signal } : {}),
+        });
   if (updatedFiles.length > 0) {
-    pages = await readPageSummaries(rootDir);
+    scan = await readPageSummaries(rootDir, options?.signal);
+    pages = scan.pages;
   }
   const dashboardUpdatedFiles = await refreshDashboardPages({
     config,
     managedImportedSourcePagePaths,
     rootDir,
     pages,
+    ...(options?.signal ? { signal: options.signal } : {}),
   });
   updatedFiles.push(...dashboardUpdatedFiles);
   if (dashboardUpdatedFiles.length > 0) {
-    pages = await readPageSummaries(rootDir);
+    scan = await readPageSummaries(rootDir, options?.signal);
+    pages = scan.pages;
   }
-  const counts = buildPageCounts(pages);
-  const digestUpdatedFiles = await writeAgentDigestArtifacts({
-    rootDir,
-    pages,
-    pageCounts: counts,
-  });
-  updatedFiles.push(...digestUpdatedFiles);
+  const compiledSnapshot = buildCompiledCacheSnapshot(scan);
+  const counts = compiledSnapshot.dashboards.overview.pageCounts;
+  const compiledCacheGeneration = resolveMemoryWikiCompiledCacheGeneration(compiledSnapshot);
+  const compiledCachePublicationId = createMemoryWikiCompiledCachePublicationId();
+  let compiledCacheSourceGeneration: string | undefined;
 
   const rootIndexPath = path.join(rootDir, "index.md");
   if (
@@ -1407,6 +1349,7 @@ export async function compileMemoryWikiVault(
       startMarker: "<!-- openclaw:wiki:index:start -->",
       endMarker: "<!-- openclaw:wiki:index:end -->",
       body: buildRootIndexBody({ config, pages, counts }),
+      ...(options?.signal ? { signal: options.signal } : {}),
     })
   ) {
     updatedFiles.push(rootIndexPath);
@@ -1423,30 +1366,112 @@ export async function compileMemoryWikiVault(
         startMarker: `<!-- openclaw:wiki:${group.dir}:index:start -->`,
         endMarker: `<!-- openclaw:wiki:${group.dir}:index:end -->`,
         body: buildDirectoryIndexBody({ config, pages, group }),
+        ...(options?.signal ? { signal: options.signal } : {}),
       })
     ) {
       updatedFiles.push(filePath);
     }
   }
 
-  if (updatedFiles.length > 0) {
-    await appendMemoryWikiLog(rootDir, {
-      type: "compile",
-      timestamp: new Date().toISOString(),
-      details: {
-        pageCounts: counts,
-        updatedFiles: updatedFiles.map((filePath) => path.relative(rootDir, filePath)),
-      },
-    });
-  }
+  // Persist an immutable candidate, then commit its causal publication. A stale
+  // compiler cannot overwrite the accepted row or activate before validation.
+  options?.signal?.throwIfAborted();
+  await writeMemoryWikiCompiledCache(
+    config,
+    compiledSnapshot,
+    compiledCacheGeneration,
+    compiledCachePublicationId,
+    compiledInputIdentity.compiledCachePublicationId,
+    async () => {
+      options?.signal?.throwIfAborted();
+      const currentIdentity = await loadMemoryWikiVaultIdentity(rootDir);
+      if (
+        currentIdentity.vaultGeneration !== compiledInputIdentity.vaultGeneration ||
+        currentIdentity.compiledCacheReservationId !== compiledCacheReservationId ||
+        currentIdentity.compiledCachePublicationId !==
+          compiledInputIdentity.compiledCachePublicationId
+      ) {
+        throw new Error("Memory Wiki vault changed while its compiled cache was being built.");
+      }
+      const sourceGenerationBeforeScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
+      const verifiedScan = await readPageSummaries(rootDir, options?.signal);
+      const verifiedGeneration = resolveMemoryWikiCompiledCacheGeneration(
+        buildCompiledCacheSnapshot(verifiedScan),
+      );
+      const sourceGenerationAfterScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
+      if (
+        verifiedGeneration !== compiledCacheGeneration ||
+        sourceGenerationAfterScan !== sourceGenerationBeforeScan
+      ) {
+        throw new Error("Memory Wiki vault changed while its compiled cache was being published.");
+      }
+      compiledCacheSourceGeneration = sourceGenerationAfterScan;
+      const verifiedIdentity = await loadMemoryWikiVaultIdentity(rootDir);
+      if (
+        verifiedIdentity.vaultGeneration !== compiledInputIdentity.vaultGeneration ||
+        verifiedIdentity.compiledCacheReservationId !== compiledCacheReservationId ||
+        verifiedIdentity.compiledCachePublicationId !==
+          compiledInputIdentity.compiledCachePublicationId
+      ) {
+        throw new Error("Memory Wiki vault changed while its compiled cache was being verified.");
+      }
+      options?.signal?.throwIfAborted();
+    },
+    async () => {
+      options?.signal?.throwIfAborted();
+      if (!compiledCacheSourceGeneration) {
+        throw new Error("Memory Wiki compiled cache source generation is missing.");
+      }
+      await appendMemoryWikiLog(rootDir, {
+        type: "compile",
+        timestamp: new Date().toISOString(),
+        details: {
+          compiledCachePublicationId,
+          compiledCacheParentPublicationId: compiledInputIdentity.compiledCachePublicationId,
+          compiledCacheReservationId,
+          compiledCacheSourceGeneration,
+        },
+      });
+      options?.signal?.throwIfAborted();
+    },
+    () => loadMemoryWikiValidatedVaultIdentity(rootDir),
+  );
+  await appendMemoryWikiLog(rootDir, {
+    type: "compile",
+    timestamp: new Date().toISOString(),
+    details: {
+      pageCounts: counts,
+      updatedFiles: updatedFiles.map((filePath) => path.relative(rootDir, filePath)),
+    },
+  });
 
   return {
     vaultRoot: rootDir,
     pageCounts: counts,
     pages,
+    frontmatterErrors: scan.frontmatterErrors,
     claimCount: pages.reduce((total, page) => total + page.claims.length, 0),
     updatedFiles,
   };
+}
+
+export async function compileMemoryWikiVault(
+  config: ResolvedMemoryWikiConfig,
+  options?: CompileMemoryWikiOptions,
+): Promise<CompileMemoryWikiResult> {
+  try {
+    options?.signal?.throwIfAborted();
+    return await withMemoryWikiVaultMutation(config.vault.path, () => {
+      options?.signal?.throwIfAborted();
+      setMemoryWikiDashboardState(config, { state: "rebuilding" });
+      return compileMemoryWikiVaultUnlocked(config, options);
+    });
+  } catch (error) {
+    if (!options?.signal?.aborted) {
+      setMemoryWikiDashboardState(config, { state: "failed" });
+    }
+    throw error;
+  }
 }
 
 async function hasMissingWikiIndexes(rootDir: string): Promise<boolean> {
@@ -1469,29 +1494,41 @@ async function hasMissingWikiIndexes(rootDir: string): Promise<boolean> {
 export async function refreshMemoryWikiIndexesAfterImport(params: {
   config: ResolvedMemoryWikiConfig;
   syncResult: { importedCount: number; updatedCount: number; removedCount: number };
+  signal?: AbortSignal;
 }): Promise<RefreshMemoryWikiIndexesResult> {
-  await initializeMemoryWikiVault(params.config);
-  if (!params.config.ingest.autoCompile) {
-    return {
-      refreshed: false,
-      reason: "auto-compile-disabled",
-    };
-  }
+  params.signal?.throwIfAborted();
   const importChanged =
     params.syncResult.importedCount > 0 ||
     params.syncResult.updatedCount > 0 ||
     params.syncResult.removedCount > 0;
-  const missingIndexes = await hasMissingWikiIndexes(params.config.vault.path);
-  if (!importChanged && !missingIndexes) {
-    return {
-      refreshed: false,
-      reason: "no-import-changes",
-    };
+  const dashboardState = await readMemoryWikiDashboardState(params.config);
+  params.signal?.throwIfAborted();
+  const dashboardNeedsCompile = dashboardState.state !== "ready";
+  if (!params.config.ingest.autoCompile) {
+    if (importChanged || dashboardNeedsCompile) {
+      setMemoryWikiDashboardState(params.config, { state: "compile-required" });
+    }
+    return { refreshed: false, reason: "auto-compile-disabled" };
   }
-  const compile = await compileMemoryWikiVault(params.config);
+
+  const missingIndexes = await hasMissingWikiIndexes(params.config.vault.path);
+  params.signal?.throwIfAborted();
+  if (!importChanged && !missingIndexes && !dashboardNeedsCompile) {
+    return { refreshed: false, reason: "no-import-changes" };
+  }
+
+  const compile = await compileMemoryWikiVault(
+    params.config,
+    params.signal ? { signal: params.signal } : undefined,
+  );
   return {
     refreshed: true,
-    reason: missingIndexes && !importChanged ? "missing-indexes" : "import-changed",
+    reason: importChanged
+      ? "import-changed"
+      : missingIndexes
+        ? "missing-indexes"
+        : "missing-compiled-cache",
     compile,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

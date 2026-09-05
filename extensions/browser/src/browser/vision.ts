@@ -10,11 +10,11 @@ import type { saveMediaBuffer as SaveMediaBufferFn } from "../sdk-setup-tools.js
 import type { normalizeBrowserScreenshot as NormalizeBrowserScreenshotFn } from "./screenshot.js";
 
 /** Default prompt for turning browser screenshots into text-only page context. */
-export const DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT =
+const DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT =
   "Describe what is visible in this browser screenshot. Capture page layout, headings, primary content blocks, visible text, and notable interactive elements so a text-only assistant can reason about the page.";
 
 /** Input context for browser screenshot image understanding. */
-export type BrowserScreenshotDescriptionContext = {
+type BrowserScreenshotDescriptionContext = {
   cfg: OpenClawConfig;
   filePath: string;
   agentDir?: string;
@@ -35,14 +35,14 @@ export type BrowserScreenshotDescriptionContext = {
 };
 
 /** Dependencies injected so Browser tests can avoid loading media runtimes. */
-export type BrowserScreenshotDescriptionDeps = {
+type BrowserScreenshotDescriptionDeps = {
   describeImageFile: typeof DescribeImageFileFn;
   normalizeBrowserScreenshot: typeof NormalizeBrowserScreenshotFn;
   saveMediaBuffer: typeof SaveMediaBufferFn;
 };
 
 /** Result returned from browser screenshot description. */
-export type BrowserScreenshotDescriptionResult = {
+type BrowserScreenshotDescriptionResult = {
   text: string;
   provider?: string;
   model?: string;
@@ -90,10 +90,18 @@ export async function describeBrowserScreenshot(
   deps: BrowserScreenshotDescriptionDeps,
 ): Promise<BrowserScreenshotDescriptionResult | null> {
   const filePath = await resolveImageUnderstandingFilePath(ctx, deps);
+  const agentId = ctx.agentDir
+    ? undefined
+    : (await import("openclaw/plugin-sdk/agent-scope-runtime")).resolveSessionAgentIdStrict({
+        agentId: ctx.agentId,
+        sessionKey: ctx.mediaScope?.sessionKey,
+        config: ctx.cfg,
+      });
   const described = await deps.describeImageFile({
     filePath,
     cfg: ctx.cfg,
     prompt: DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT,
+    ...(agentId ? { agentId } : {}),
     agentDir: ctx.agentDir,
     workspaceDir: ctx.workspaceDir,
     activeModel: normalizeActiveModel(ctx.activeModel),
@@ -118,8 +126,7 @@ export function neutralizeMediaDirectives(text: string): string {
   }
   const lines = text.split("\n");
   let changed = false;
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
+  for (const [i, line] of lines.entries()) {
     const leading = line.length - line.trimStart().length;
     const rest = line.slice(leading);
     if (/^MEDIA:/i.test(rest)) {

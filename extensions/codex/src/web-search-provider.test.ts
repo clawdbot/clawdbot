@@ -1,10 +1,14 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createCodexWebSearchProvider as createContractCodexWebSearchProvider } from "../web-search-contract-api.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
-import type { CodexServerNotification, JsonValue } from "./app-server/protocol.js";
+import {
+  isJsonObject,
+  type CodexServerNotification,
+  type JsonValue,
+} from "./app-server/protocol.js";
 import { createCodexWebSearchProvider } from "./web-search-provider.js";
 
 function codexModel(
@@ -34,7 +38,7 @@ function codexModel(
   };
 }
 
-function threadStartResult() {
+function threadStartResult(model: string) {
   return {
     thread: {
       id: "thread-1",
@@ -48,7 +52,8 @@ function threadStartResult() {
       status: { type: "idle" },
       path: null,
       cwd: "/tmp/openclaw-agent",
-      cliVersion: "0.125.0",
+      projectId: null,
+      cliVersion: "0.149.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -56,7 +61,7 @@ function threadStartResult() {
       name: null,
       turns: [],
     },
-    model: "gpt-5.5",
+    model,
     modelProvider: "openai",
     serviceTier: null,
     cwd: "/tmp/openclaw-agent",
@@ -94,8 +99,8 @@ function createFakeClient(options?: {
     if (method === "model/list") {
       return { data: options?.models ?? [codexModel()], nextCursor: null };
     }
-    if (method === "thread/start") {
-      return threadStartResult();
+    if (method === "thread/start" && isJsonObject(params) && typeof params.model === "string") {
+      return threadStartResult(params.model);
     }
     if (method === "turn/start") {
       for (const notify of notifications) {
@@ -180,6 +185,12 @@ function createConfig(): OpenClawConfig {
   };
 }
 
+beforeAll(async () => {
+  // Execution cases share this lazy runtime. Import it once so the first case
+  // does not absorb module initialization that every later case reuses.
+  await import("./web-search-provider.runtime.js");
+});
+
 describe("codex web search provider", () => {
   it("registers a selectable keyless provider contract", () => {
     const provider = createContractCodexWebSearchProvider();
@@ -236,13 +247,16 @@ describe("codex web search provider", () => {
             "--listen",
             "stdio://",
             "-c",
+            "openai_base_url=http://127.0.0.1:44080/v1",
+            "--config=model_catalog_json=/tmp/qa catalog/models.json",
+            "-c",
             "mcp_servers.external.command='unsafe'",
           ],
           clearEnv: ["CODEX_HOME", "KEEP_CLEARED"],
         },
       }),
-      clientFactory: async (startOptions) => {
-        isolatedStartOptions = startOptions;
+      clientFactory: async (options) => {
+        isolatedStartOptions = options?.startOptions;
         return client;
       },
     });
@@ -305,7 +319,15 @@ describe("codex web search provider", () => {
     const threadStartCwd = (requests[1]?.params as { cwd?: string } | undefined)?.cwd;
     const isolatedCodexHome = isolatedStartOptions?.env?.CODEX_HOME;
     expect(threadStartCwd).not.toBe("/tmp/openclaw-agent");
-    expect(isolatedStartOptions?.args).toEqual(["app-server", "--listen", "stdio://"]);
+    expect(isolatedStartOptions?.args).toEqual([
+      "app-server",
+      "-c",
+      "openai_base_url=http://127.0.0.1:44080/v1",
+      "-c",
+      "model_catalog_json=/tmp/qa catalog/models.json",
+      "--listen",
+      "stdio://",
+    ]);
     expect(isolatedStartOptions?.clearEnv).toEqual([
       "KEEP_CLEARED",
       "OPENCLAW_CODEX_APP_SERVER_ARGS",
@@ -336,13 +358,11 @@ describe("codex web search provider", () => {
 
     const result = await tool?.execute({ query: "plumbers in Edmonton Alberta" });
 
-    expect(result?.model).toBe("available-default-wire");
+    expect(result?.model).toBe("available-default");
     expect(requests[1]?.params).toEqual(
       expect.objectContaining({ model: "available-default-wire" }),
     );
-    expect(requests[2]?.params).toEqual(
-      expect.objectContaining({ model: "available-default-wire" }),
-    );
+    expect(requests[2]?.params).not.toHaveProperty("model");
   });
 
   it("fails closed when the live catalog has no text-capable model", async () => {

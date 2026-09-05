@@ -1,14 +1,15 @@
 // Plugin/channel activation config merge helpers.
 // Carries activation enablement into runtime config without copying stale state.
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginDiscoveryResult } from "../plugins/discovery.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord } from "../utils.js";
 
 // Activation config carries only operator-controlled enable/allow surfaces into
 // runtime config. Other runtime fields stay canonical to avoid stale activation
 // state overriding live config reloads.
-function hasOwnValue(record: Record<string, unknown>, key: string): boolean {
-  return Object.hasOwn(record, key);
-}
 
 function mergeChannelActivationSections(params: {
   runtimeConfig: OpenClawConfig;
@@ -25,7 +26,7 @@ function mergeChannelActivationSections(params: {
   let nextChannels: Record<string, unknown> | undefined;
 
   for (const [channelId, activationChannel] of Object.entries(activationChannels)) {
-    if (!isRecord(activationChannel) || !hasOwnValue(activationChannel, "enabled")) {
+    if (!isRecord(activationChannel) || !Object.hasOwn(activationChannel, "enabled")) {
       continue;
     }
     const runtimeChannel = runtimeChannels[channelId];
@@ -70,7 +71,7 @@ function mergePluginActivationSections(params: {
     const runtimeEntries = isRecord(runtimePlugins.entries) ? runtimePlugins.entries : {};
     let nextEntries: Record<string, unknown> | undefined;
     for (const [pluginId, activationEntry] of Object.entries(activationEntries)) {
-      if (!isRecord(activationEntry) || !hasOwnValue(activationEntry, "enabled")) {
+      if (!isRecord(activationEntry) || !Object.hasOwn(activationEntry, "enabled")) {
         continue;
       }
       const runtimeEntry = runtimeEntries[pluginId];
@@ -108,4 +109,55 @@ export function mergeActivationSectionsIntoRuntimeConfig(params: {
     ...params,
     runtimeConfig: mergeChannelActivationSections(params),
   });
+}
+
+// Resolves the effective plugin config the gateway startup *plan* is built from:
+// auto-enable the operator activation source, then merge those activation sections into
+// the runtime config (so runtime/defaulted fields survive). This is the exact assembly
+// `prepareGatewayPluginBootstrap` uses (non-minimal branch); sharing it keeps any consumer
+// that recomputes the startup plan — notably the `/status plugins` should-run drift check —
+// from drifting away from real gateway boot. Behavior-preserving extraction only.
+export function resolveGatewayStartupPluginActivationConfig(params: {
+  runtimeConfig: OpenClawConfig;
+  activationSourceConfig: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  manifestRegistry?: PluginManifestRegistry;
+  discovery?: PluginDiscoveryResult;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+}): OpenClawConfig {
+  return mergeActivationSectionsIntoRuntimeConfig({
+    runtimeConfig: params.runtimeConfig,
+    activationConfig: applyPluginAutoEnable({
+      config: params.activationSourceConfig,
+      env: params.env,
+      ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
+      discovery: params.discovery,
+      ambientEnvTriggers: params.ambientEnvTriggers,
+    }).config,
+  });
+}
+
+/** Re-derives source-owned plugin activation and carries it into one reload candidate. */
+export function resolveGatewayReloadPluginActivationCandidate(params: {
+  runtimeConfig: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  manifestRegistry?: PluginManifestRegistry;
+  discovery?: PluginDiscoveryResult;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+}): { runtimeConfig: OpenClawConfig; compareConfig: OpenClawConfig } {
+  const activationConfig = applyPluginAutoEnable({
+    config: params.sourceConfig,
+    env: params.env,
+    ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
+    discovery: params.discovery,
+    ambientEnvTriggers: params.ambientEnvTriggers,
+  }).config;
+  return {
+    runtimeConfig: mergeActivationSectionsIntoRuntimeConfig({
+      runtimeConfig: params.runtimeConfig,
+      activationConfig,
+    }),
+    compareConfig: activationConfig,
+  };
 }

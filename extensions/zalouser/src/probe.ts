@@ -2,36 +2,25 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ZcaUserInfo } from "./types.js";
 import { getZaloUserInfo } from "./zalo-js.js";
 
 export type ZalouserProbeResult = BaseProbeResult<string> & {
   user?: ZcaUserInfo;
+  elapsedMs?: number;
 };
 
 export async function probeZalouser(
   profile: string,
   timeoutMs?: number,
 ): Promise<ZalouserProbeResult> {
-  try {
-    const user = timeoutMs
-      ? await Promise.race([
-          getZaloUserInfo(profile),
-          new Promise<null>((resolve) => {
-            setTimeout(() => resolve(null), resolveTimerTimeoutMs(timeoutMs, 1000, 1000));
-          }),
-        ])
-      : await getZaloUserInfo(profile);
-
-    if (!user) {
-      return { ok: false, error: "Not authenticated" };
-    }
-
-    return { ok: true, user };
-  } catch (error) {
-    return {
-      ok: false,
-      error: formatErrorMessage(error),
-    };
-  }
+  return await runChannelProbe(
+    timeoutMs ? resolveTimerTimeoutMs(timeoutMs, 1000, 1000) : undefined,
+    async () => {
+      const user = await getZaloUserInfo(profile);
+      return user ? { ok: true, user } : { ok: false, error: "Not authenticated" };
+    },
+    (error) => ({ ok: false, error: formatErrorMessage(error) }),
+  );
 }

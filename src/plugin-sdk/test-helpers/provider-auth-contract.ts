@@ -28,7 +28,8 @@ export type ProviderAuthContractPluginLoader = () => Promise<{
   default: Parameters<typeof registerProviders>[0];
 }>;
 
-export type OpenAICodexProviderAuthContractOptions = {
+type OpenAICodexProviderAuthContractOptions = {
+  expectedCodexDefaultModel: string;
   loginOpenAICodexOAuthMock: ReturnType<typeof vi.fn<LoginOpenAICodexOAuth>>;
 };
 
@@ -80,6 +81,7 @@ function buildOpenAICodexOAuthResult(params: {
   refresh: string;
   expires: number;
   email?: string;
+  defaultModel: string;
 }) {
   return {
     profiles: [
@@ -99,12 +101,12 @@ function buildOpenAICodexOAuthResult(params: {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": {},
+            [params.defaultModel]: {},
           },
         },
       },
     },
-    defaultModel: "openai/gpt-5.5",
+    defaultModel: params.defaultModel,
     notes: undefined,
   };
 }
@@ -146,7 +148,7 @@ export function describeOpenAICodexProviderAuthContract(
   const state = {
     authStore: { version: 1, profiles: {} } as AuthProfileStore,
   };
-  const { loginOpenAICodexOAuthMock } = options;
+  const { expectedCodexDefaultModel, loginOpenAICodexOAuthMock } = options;
 
   describe("openai provider ChatGPT auth contract", () => {
     installSharedAuthProfileStoreHooks(state);
@@ -166,6 +168,7 @@ export function describeOpenAICodexProviderAuthContract(
           access: params.access,
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
+          defaultModel: expectedCodexDefaultModel,
         }),
       );
     }
@@ -193,6 +196,7 @@ export function describeOpenAICodexProviderAuthContract(
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
           email: "user@example.com",
+          defaultModel: expectedCodexDefaultModel,
         }),
       );
     });
@@ -219,6 +223,7 @@ export function describeOpenAICodexProviderAuthContract(
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
           email: "jwt-user@example.com",
+          defaultModel: expectedCodexDefaultModel,
         }),
       );
     });
@@ -277,6 +282,7 @@ export function describeOpenAICodexProviderAuthContract(
           access: "not-a-jwt-token",
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
+          defaultModel: expectedCodexDefaultModel,
         }),
       );
     });
@@ -292,7 +298,10 @@ export function describeOpenAICodexProviderAuthContract(
   });
 }
 
-export function describeGithubCopilotProviderAuthContract(load: ProviderAuthContractPluginLoader) {
+export function describeGithubCopilotProviderAuthContract(
+  load: ProviderAuthContractPluginLoader,
+  defaultModel: string,
+) {
   const state = {
     authStore: { version: 1, profiles: {} } as AuthProfileStore,
   };
@@ -305,8 +314,89 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
       return requireProvider(await registerProviders(githubCopilotPlugin), "github-copilot");
     }
 
+    async function runDeviceAuthWithFakeTimers<T>(
+      run: () => T | Promise<T>,
+      openUrl: (url: string) => Promise<void>,
+    ): Promise<T> {
+      vi.useFakeTimers();
+      try {
+        const deviceCodeShown = new Promise<void>((resolve) => {
+          vi.mocked(openUrl).mockImplementation(async () => resolve());
+        });
+        const pending = Promise.resolve(run());
+        const openedBeforeCompletion = await Promise.race([
+          deviceCodeShown.then(() => true),
+          pending.then(() => false),
+        ]);
+        expect(openedBeforeCompletion).toBe(true);
+        // Browser handoff follows the profile, device-code, and prompt work.
+        await vi.advanceTimersByTimeAsync(1_000);
+        return await pending;
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
+    function buildCopilotSetupResponse(target: string): Response | undefined {
+      if (target === "https://api.github.com/copilot_internal/user") {
+        return new Response(
+          JSON.stringify({ endpoints: { api: "https://api.individual.githubcopilot.com" } }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (target === "https://api.individual.githubcopilot.com/models") {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: defaultModel.replace("github-copilot/", ""),
+                name: "Contract starter model",
+                model_picker_enabled: true,
+                model_picker_category: "versatile",
+                policy: { state: "enabled" },
+                capabilities: {
+                  type: "chat",
+                  limits: {
+                    max_context_window_tokens: 200_000,
+                    max_output_tokens: 64_000,
+                  },
+                  supports: { streaming: true, tool_calls: true },
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return undefined;
+    }
+
+    function resolveFetchTarget(input: unknown): string {
+      return typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input instanceof Request
+            ? input.url
+            : String(input);
+    }
+
+    function stubGitHubCatalogFetch() {
+      const fetchMock = vi.fn(async (input: unknown) => {
+        const target = resolveFetchTarget(input);
+        const response = buildCopilotSetupResponse(target);
+        if (response) {
+          return response;
+        }
+        throw new Error(`unexpected fetch in github-copilot catalog stub: ${target}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
     it("keeps existing device auth results provider-owned", async () => {
       const provider = await getProvider();
+      stubGitHubCatalogFetch();
       state.authStore.profiles["github-copilot:github"] = {
         type: "token",
         provider: "github-copilot",
@@ -335,7 +425,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
               },
             },
           ],
-          defaultModel: "github-copilot/claude-opus-4.7",
+          defaultModel,
         });
       } finally {
         if (previousIsTTYDescriptor) {
@@ -350,14 +440,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
       outcome: { accessToken: string } | { error: "access_denied" | "expired_token" },
     ) {
       const fetchMock = vi.fn(async (input: unknown) => {
-        const target =
-          typeof input === "string"
-            ? input
-            : input instanceof URL
-              ? input.toString()
-              : input instanceof Request
-                ? input.url
-                : String(input);
+        const target = resolveFetchTarget(input);
         if (target === "https://github.com/login/device/code") {
           return new Response(
             JSON.stringify({
@@ -380,6 +463,10 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
             headers: { "Content-Type": "application/json" },
           });
         }
+        const setupResponse = buildCopilotSetupResponse(target);
+        if (setupResponse) {
+          return setupResponse;
+        }
         throw new Error(`unexpected fetch in github-copilot device flow stub: ${target}`);
       });
       vi.stubGlobal("fetch", fetchMock);
@@ -397,6 +484,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
     }
 
     afterEach(() => {
+      vi.useRealTimers();
       vi.unstubAllGlobals();
     });
 
@@ -405,7 +493,10 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
       stubGitHubDeviceFlowFetch({ accessToken: "github-device-token" });
       const ctx = buildSpyAuthContext();
 
-      const result = await provider.auth[0]?.run(ctx as never);
+      const result = await runDeviceAuthWithFakeTimers(
+        () => provider.auth[0]?.run(ctx as never),
+        ctx.openUrl,
+      );
 
       expect(result).toEqual({
         profiles: [
@@ -416,9 +507,13 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
               provider: "github-copilot",
               token: "github-device-token",
             },
+            secretStorage: {
+              kind: "store",
+              namePrefix: "GITHUB_COPILOT_TOKEN",
+            },
           },
         ],
-        defaultModel: "github-copilot/claude-opus-4.7",
+        defaultModel,
       });
       // Credential is sourced from the device flow response, not from the existing
       // on-disk auth store. ensureAuthProfileStore is still called by the
@@ -431,7 +526,7 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
       stubGitHubDeviceFlowFetch({ accessToken: "github-device-token" });
       const ctx = buildSpyAuthContext();
 
-      await provider.auth[0]?.run(ctx as never);
+      await runDeviceAuthWithFakeTimers(() => provider.auth[0]?.run(ctx as never), ctx.openUrl);
 
       expect(ctx.openUrl).toHaveBeenCalledWith("https://github.com/login/device");
       const noteCalls = (ctx.prompter.note as ReturnType<typeof vi.fn>).mock.calls;
@@ -456,7 +551,10 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
       const ctx = buildSpyAuthContext();
 
       try {
-        const result = await provider.auth[0]?.run(ctx as never);
+        const result = await runDeviceAuthWithFakeTimers(
+          () => provider.auth[0]?.run(ctx as never),
+          ctx.openUrl,
+        );
         expect(result?.profiles).toEqual([
           {
             profileId: "github-copilot:github",
@@ -464,6 +562,10 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
               type: "token",
               provider: "github-copilot",
               token: "rpc-client-token",
+            },
+            secretStorage: {
+              kind: "store",
+              namePrefix: "GITHUB_COPILOT_TOKEN",
             },
           },
         ]);
@@ -481,7 +583,10 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
       stubGitHubDeviceFlowFetch({ error: "access_denied" });
       const ctx = buildSpyAuthContext();
 
-      const result = await provider.auth[0]?.run(ctx as never);
+      const result = await runDeviceAuthWithFakeTimers(
+        () => provider.auth[0]?.run(ctx as never),
+        ctx.openUrl,
+      );
 
       expect(result).toEqual({ profiles: [] });
       const noteCalls = (ctx.prompter.note as ReturnType<typeof vi.fn>).mock.calls;
@@ -495,7 +600,10 @@ export function describeGithubCopilotProviderAuthContract(load: ProviderAuthCont
       stubGitHubDeviceFlowFetch({ error: "expired_token" });
       const ctx = buildSpyAuthContext();
 
-      const result = await provider.auth[0]?.run(ctx as never);
+      const result = await runDeviceAuthWithFakeTimers(
+        () => provider.auth[0]?.run(ctx as never),
+        ctx.openUrl,
+      );
 
       expect(result).toEqual({ profiles: [] });
       const noteCalls = (ctx.prompter.note as ReturnType<typeof vi.fn>).mock.calls;

@@ -2,9 +2,10 @@
  * Formats Codex command responses for safe chat display, including status,
  * lists, account summaries, and user-facing help text.
  */
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
-import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
+import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import {
   hasCodexRateLimitSnapshots,
   summarizeCodexAccountRateLimits,
@@ -96,13 +97,18 @@ export function formatThreads(response: JsonValue | undefined): string {
     "Codex threads:",
     ...threads.slice(0, 10).map((thread) => {
       const record = isJsonObject(thread) ? thread : {};
-      const id = readString(record, "threadId") ?? readString(record, "id") ?? "<unknown>";
+      const id =
+        normalizeOptionalString(record.threadId) ??
+        normalizeOptionalString(record.id) ??
+        "<unknown>";
       const title =
-        readString(record, "title") ?? readString(record, "name") ?? readString(record, "summary");
+        normalizeOptionalString(record.title) ??
+        normalizeOptionalString(record.name) ??
+        normalizeOptionalString(record.summary);
       const details = [
-        readString(record, "model"),
-        readString(record, "cwd"),
-        readString(record, "updatedAt") ?? readString(record, "lastUpdatedAt"),
+        normalizeOptionalString(record.model),
+        normalizeOptionalString(record.cwd),
+        normalizeOptionalString(record.updatedAt) ?? normalizeOptionalString(record.lastUpdatedAt),
       ].filter((value): value is string => Boolean(value));
       return `- ${formatCodexDisplayText(id)}${title ? ` - ${formatCodexDisplayText(title)}` : ""}${
         details.length > 0 ? ` (${details.map(formatCodexDisplayText).join(", ")})` : ""
@@ -171,15 +177,34 @@ export function formatComputerUseStatus(status: CodexComputerUseStatus): string 
     `Plugin: ${formatCodexDisplayText(status.pluginName)} (${computerUsePluginState(status)})`,
   );
   lines.push(
+    `Installation: ${formatCodexDisplayText(status.installation.status)} (${status.installation.ok ? "ok" : "not ok"})`,
+  );
+  lines.push(
     `MCP server: ${formatCodexDisplayText(status.mcpServerName)}${
       status.mcpServerAvailable ? ` (${status.tools.length} tools)` : " (unavailable)"
     }`,
   );
+  lines.push(
+    `Exposure: ${formatCodexDisplayText(status.exposure.status)} (${status.exposure.ok ? "ok" : "not ok"})`,
+  );
+  lines.push(
+    `Live test: ${formatCodexDisplayText(status.liveTest.status)} (${status.liveTest.attempted ? `${status.liveTest.attempts} attempt${status.liveTest.attempts === 1 ? "" : "s"}, ${status.liveTest.timeoutMs}ms` : "not run"})`,
+  );
+  if (status.liveTest.retried || status.liveTest.repaired) {
+    lines.push(
+      `Live test recovery: retried=${status.liveTest.retried ? "yes" : "no"}, repaired=${
+        status.liveTest.repaired ? "yes" : "no"
+      }`,
+    );
+  }
   if (status.marketplaceName) {
     lines.push(`Marketplace: ${formatCodexDisplayText(status.marketplaceName)}`);
   }
   if (status.tools.length > 0) {
     lines.push(`Tools: ${status.tools.slice(0, 8).map(formatCodexDisplayText).join(", ")}`);
+  }
+  for (const warning of status.warnings) {
+    lines.push(`Warning: ${formatCodexDisplayText(warning)}`);
   }
   lines.push(formatCodexDisplayText(status.message));
   return lines.join("\n");
@@ -203,7 +228,9 @@ export function formatList(response: JsonValue | undefined, label: string): stri
     ...entries.slice(0, 25).map((entry) => {
       const record = isJsonObject(entry) ? entry : {};
       return `- ${formatCodexDisplayText(
-        readString(record, "name") ?? readString(record, "id") ?? JSON.stringify(entry),
+        normalizeOptionalString(record.name) ??
+          normalizeOptionalString(record.id) ??
+          JSON.stringify(entry),
       )}`;
     }),
   ].join("\n");
@@ -248,11 +275,11 @@ export function formatSkills(response: JsonValue | undefined): string {
 
 function formatCodexSkillEntry(entry: JsonValue): string {
   const record = isJsonObject(entry) ? entry : {};
-  const name = readString(record, "name") ?? "<unknown>";
+  const name = normalizeOptionalString(record.name) ?? "<unknown>";
   return `\`${formatCodexDisplayText(name)}\``;
 }
 
-const CODEX_RESUME_SAFE_THREAD_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
+export const CODEX_RESUME_SAFE_THREAD_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
 
 function formatCodexResumeHint(threadId: string): string {
   const safe = formatCodexTextForDisplay(threadId);
@@ -274,7 +301,7 @@ function formatCodexAccountSummary(value: JsonValue | undefined): string {
     : escapeCodexChatText(safe);
 }
 
-function formatCodexTextForDisplay(value: string): string {
+export function formatCodexTextForDisplay(value: string): string {
   const safe = sanitizeCodexTextForDisplay(value).trim();
   return safe || "<unknown>";
 }
@@ -288,7 +315,7 @@ function sanitizeCodexTextForDisplay(value: string): string {
   return safe;
 }
 
-function escapeCodexChatText(value: string): string {
+export function escapeCodexChatText(value: string): string {
   // Command output is public chat text. Escape markdown/control triggers and
   // mention characters so Codex data cannot ping users or inject formatting.
   return value
@@ -359,6 +386,7 @@ export function buildHelp(): string {
     "- /codex status",
     "- /codex models",
     "- /codex threads [filter]",
+    "- /codex goal [status|set <objective>|pause|resume|block|complete|clear]",
     "- /codex sessions --host <node> [filter]",
     "- /codex resume <thread-id>",
     "- /codex resume <session-id> --host <node> --bind here",
@@ -386,15 +414,15 @@ function summarizeAccount(value: JsonValue | undefined): string {
     return "unavailable";
   }
   const account = isJsonObject(value.account) ? value.account : value;
-  const accountType = readString(account, "type");
+  const accountType = normalizeOptionalString(account.type);
   if (accountType === "amazonBedrock") {
     return "Amazon Bedrock";
   }
   return (
-    readString(account, "email") ??
-    readString(account, "accountEmail") ??
-    readString(account, "planType") ??
-    readString(account, "id") ??
+    normalizeOptionalString(account.email) ??
+    normalizeOptionalString(account.accountEmail) ??
+    normalizeOptionalString(account.planType) ??
+    normalizeOptionalString(account.id) ??
     "available"
   );
 }
@@ -481,7 +509,8 @@ function isMeaningfulRateLimitSnapshot(value: JsonValue | undefined): boolean {
     return false;
   }
   const reachedType =
-    readString(value, "rateLimitReachedType") ?? readString(value, "rate_limit_reached_type");
+    normalizeOptionalString(value.rateLimitReachedType) ??
+    normalizeOptionalString(value.rate_limit_reached_type);
   if (reachedType) {
     return true;
   }
@@ -505,10 +534,4 @@ function extractArray(value: JsonValue | undefined): JsonValue[] {
     }
   }
   return [];
-}
-
-/** Reads and trims a non-empty string field from a JSON object. */
-export function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

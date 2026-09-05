@@ -1,5 +1,6 @@
-// Qa Lab plugin module embeds profile scorecard context into QA evidence.
+// QA Lab plugin module embeds profile scorecard context into QA evidence.
 import fs from "node:fs/promises";
+import { normalizeSortedUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   attachQaEvidenceScorecard,
   validateQaEvidenceSummaryJson,
@@ -7,11 +8,11 @@ import {
   type QaEvidenceSummaryEntry,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
+import type { QaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import type {
   QaScorecardCategoryCoverageReport,
   QaScorecardEvidenceMode,
 } from "./scorecard-taxonomy.js";
-import { readQaScorecardFeatureCoverageByCategory } from "./scorecard-taxonomy.js";
 
 type QaProfileScorecardFilters = {
   surface?: string;
@@ -19,12 +20,6 @@ type QaProfileScorecardFilters = {
 };
 
 type EvidenceCoverageRole = QaEvidenceSummaryEntry["coverage"][number]["role"];
-
-function uniqueSortedStrings(values: Iterable<string | undefined>) {
-  return [
-    ...new Set([...values].map((value) => value?.trim()).filter(Boolean) as string[]),
-  ].toSorted((left, right) => left.localeCompare(right));
-}
 
 function percent(part: number, total: number) {
   return total === 0 ? 0 : Number(((part / total) * 100).toFixed(1));
@@ -46,85 +41,97 @@ function coverageIdsForRole(
   );
 }
 
-function statusForCategory(params: { featureCount: number; fulfilledFeatureCount: number }) {
-  if (params.fulfilledFeatureCount === 0) {
+function statusForCategory(params: { coverageIdCount: number; fulfilledCoverageIdCount: number }) {
+  if (params.fulfilledCoverageIdCount === 0) {
     return "missing" as const;
   }
-  if (params.fulfilledFeatureCount === params.featureCount) {
+  if (params.fulfilledCoverageIdCount === params.coverageIdCount) {
     return "fulfilled" as const;
   }
   return "partial" as const;
 }
 
-function categoryFeatureCoverageIds(params: {
-  category: QaScorecardCategoryCoverageReport;
-  featureCoverageByCategoryId?: ReadonlyMap<string, readonly (readonly string[])[]>;
-}) {
-  const features = params.featureCoverageByCategoryId?.get(params.category.id);
-  return features && features.length > 0
-    ? features
-    : params.category.coverageIds.map((coverageId) => [coverageId]);
+function featureCounts(
+  features: readonly { coverageIds: readonly string[] }[],
+  primaryCoverageIds: ReadonlySet<string>,
+) {
+  let fulfilled = 0;
+  let partial = 0;
+  let missing = 0;
+  for (const feature of features) {
+    const coverageIds = normalizeSortedUniqueTrimmedStringList(feature.coverageIds);
+    const fulfilledCoverageIds = coverageIds.filter((coverageId) =>
+      primaryCoverageIds.has(coverageId),
+    ).length;
+    if (coverageIds.length > 0 && fulfilledCoverageIds === coverageIds.length) {
+      fulfilled += 1;
+    } else if (fulfilledCoverageIds > 0) {
+      partial += 1;
+    } else {
+      missing += 1;
+    }
+  }
+  return {
+    total: features.length,
+    fulfilled,
+    partial,
+    missing,
+    fulfillmentPercent: percent(fulfilled, features.length),
+  };
 }
 
-export function buildQaProfileScorecardEvidence(params: {
+function buildQaProfileScorecardEvidence(params: {
   evidence: QaEvidenceSummaryJson;
   filters: QaProfileScorecardFilters;
   categories: readonly QaScorecardCategoryCoverageReport[];
-  featureCoverageByCategoryId?: ReadonlyMap<string, readonly (readonly string[])[]>;
 }): QaEvidenceScorecardJson {
-  const primaryCoverageIds = coverageIdsForRole(params.evidence.entries, "primary");
+  // Only passing primary evidence fulfills coverage; secondary evidence remains diagnostic.
+  const passingEntries = params.evidence.entries.filter((entry) => entry.result.status === "pass");
+  const primaryCoverageIds = coverageIdsForRole(passingEntries, "primary");
   const secondaryCoverageIds = coverageIdsForRole(params.evidence.entries, "secondary");
-  const categoryReports = params.categories.map((category) => {
-    const featureCoverageIds = categoryFeatureCoverageIds({
-      category,
-      featureCoverageByCategoryId: params.featureCoverageByCategoryId,
-    });
-    const fulfilledFeatureCount = featureCoverageIds.filter(
-      (coverageIds) =>
-        coverageIds.length > 0 &&
-        coverageIds.every((coverageId) => primaryCoverageIds.has(coverageId)),
+  const categoryInputs = params.categories.map((category) => ({
+    category,
+    features: category.features,
+    coverageIds: normalizeSortedUniqueTrimmedStringList(category.coverageIds),
+  }));
+  const categoryReports = categoryInputs.map(({ category, features, coverageIds }) => {
+    const fulfilledCoverageIdCount = coverageIds.filter((coverageId) =>
+      primaryCoverageIds.has(coverageId),
     ).length;
-    const secondaryOnlyFeatureCount = featureCoverageIds.filter(
-      (coverageIds) =>
-        coverageIds.some((coverageId) => !primaryCoverageIds.has(coverageId)) &&
-        coverageIds.some(
-          (coverageId) =>
-            !primaryCoverageIds.has(coverageId) && secondaryCoverageIds.has(coverageId),
-        ),
+    const secondaryOnlyCoverageIdCount = coverageIds.filter(
+      (coverageId) => !primaryCoverageIds.has(coverageId) && secondaryCoverageIds.has(coverageId),
     ).length;
-    const missingCoverageIds = uniqueSortedStrings(
-      featureCoverageIds.flatMap((coverageIds) =>
-        coverageIds.filter((coverageId) => !primaryCoverageIds.has(coverageId)),
-      ),
+    const missingCoverageIds = normalizeSortedUniqueTrimmedStringList(
+      coverageIds.filter((coverageId) => !primaryCoverageIds.has(coverageId)),
     );
-    const missingFeatureCount = featureCoverageIds.length - fulfilledFeatureCount;
+    const missingCoverageIdCount = coverageIds.length - fulfilledCoverageIdCount;
     return {
       id: category.id,
       surfaceId: category.taxonomySurfaceId,
       name: category.taxonomyCategoryName,
       status: statusForCategory({
-        featureCount: featureCoverageIds.length,
-        fulfilledFeatureCount,
+        coverageIdCount: coverageIds.length,
+        fulfilledCoverageIdCount,
       }),
-      features: {
-        total: featureCoverageIds.length,
-        fulfilled: fulfilledFeatureCount,
-        secondaryOnly: secondaryOnlyFeatureCount,
-        missing: missingFeatureCount,
-        fulfillmentPercent: percent(fulfilledFeatureCount, featureCoverageIds.length),
+      features: featureCounts(features, primaryCoverageIds),
+      coverageIds: {
+        total: coverageIds.length,
+        fulfilled: fulfilledCoverageIdCount,
+        secondaryOnly: secondaryOnlyCoverageIdCount,
+        missing: missingCoverageIdCount,
+        fulfillmentPercent: percent(fulfilledCoverageIdCount, coverageIds.length),
       },
       missingCoverageIds,
     };
   });
-  const featureCount = categoryReports.reduce((sum, category) => sum + category.features.total, 0);
-  const fulfilledFeatureCount = categoryReports.reduce(
-    (sum, category) => sum + category.features.fulfilled,
-    0,
+  const profileCoverageIds = normalizeSortedUniqueTrimmedStringList(
+    categoryInputs.flatMap((input) => input.coverageIds),
   );
-  const missingFeatureCount = categoryReports.reduce(
-    (sum, category) => sum + category.features.missing,
-    0,
-  );
+  const coverageIdCount = profileCoverageIds.length;
+  const fulfilledCoverageIdCount = profileCoverageIds.filter((coverageId) =>
+    primaryCoverageIds.has(coverageId),
+  ).length;
+  const missingCoverageIdCount = coverageIdCount - fulfilledCoverageIdCount;
   const fulfilledCategoryCount = categoryReports.filter(
     (category) => category.status === "fulfilled",
   ).length;
@@ -134,6 +141,7 @@ export function buildQaProfileScorecardEvidence(params: {
   const missingCategoryCount = categoryReports.filter(
     (category) => category.status === "missing",
   ).length;
+  const profileFeatures = categoryInputs.flatMap((input) => input.features);
   return {
     filters: {
       surface: nullableFilter(params.filters.surface),
@@ -149,11 +157,12 @@ export function buildQaProfileScorecardEvidence(params: {
       missing: missingCategoryCount,
       fulfillmentPercent: percent(fulfilledCategoryCount, categoryReports.length),
     },
-    features: {
-      total: featureCount,
-      fulfilled: fulfilledFeatureCount,
-      missing: missingFeatureCount,
-      fulfillmentPercent: percent(fulfilledFeatureCount, featureCount),
+    features: featureCounts(profileFeatures, primaryCoverageIds),
+    coverageIds: {
+      total: coverageIdCount,
+      fulfilled: fulfilledCoverageIdCount,
+      missing: missingCoverageIdCount,
+      fulfillmentPercent: percent(fulfilledCoverageIdCount, coverageIdCount),
     },
     categoryReports,
   };
@@ -163,6 +172,7 @@ export async function attachQaProfileScorecardEvidenceToFile(params: {
   evidencePath: string;
   evidenceMode?: QaScorecardEvidenceMode;
   profile: string;
+  profilePlan: QaProfileEvidencePlan;
   filters: QaProfileScorecardFilters;
   categories: readonly QaScorecardCategoryCoverageReport[];
 }) {
@@ -173,12 +183,12 @@ export async function attachQaProfileScorecardEvidenceToFile(params: {
     evidence,
     filters: params.filters,
     categories: params.categories,
-    featureCoverageByCategoryId: readQaScorecardFeatureCoverageByCategory(),
   });
   const nextEvidence = attachQaEvidenceScorecard({
     summary: evidence,
     evidenceMode: params.evidenceMode,
     profile: params.profile,
+    profilePlan: params.profilePlan,
     scorecard,
   });
   await fs.writeFile(params.evidencePath, `${JSON.stringify(nextEvidence, null, 2)}\n`, "utf8");

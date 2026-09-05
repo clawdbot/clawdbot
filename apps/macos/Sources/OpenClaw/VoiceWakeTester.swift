@@ -64,6 +64,9 @@ final class VoiceWakeTester {
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Speech recognition unavailable"])
         }
+        guard recognizer.supportsOnDeviceRecognition else {
+            throw SpeechRecognitionRequestPolicy.PolicyError.onDeviceRecognitionUnavailable
+        }
         recognizer.defaultTaskHint = .dictation
 
         guard Self.hasPrivacyStrings else {
@@ -101,9 +104,12 @@ final class VoiceWakeTester {
         self.audioEngine = engine
 
         self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        self.recognitionRequest?.shouldReportPartialResults = true
-        self.recognitionRequest?.taskHint = .dictation
         let request = self.recognitionRequest
+        if let request {
+            try SpeechRecognitionRequestPolicy.configurePassiveVoiceWake(
+                request,
+                supportsOnDeviceRecognition: recognizer.supportsOnDeviceRecognition)
+        }
 
         let inputNode = engine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
@@ -242,7 +248,7 @@ final class VoiceWakeTester {
             let detectedText = match.command.isEmpty ? (match.trigger ?? text) : match.command
             self.detectedText = detectedText
             self.logger.info("voice wake detected (test) (len=\(detectedText.count))")
-            await MainActor.run { AppStateStore.shared.triggerVoiceEars(ttl: nil) }
+            await MainActor.run { AppStateStore.shared.startVoiceEars() }
             self.stop()
             await MainActor.run {
                 AppStateStore.shared.stopVoiceEars()
@@ -397,7 +403,7 @@ final class VoiceWakeTester {
             let detectedText = match.command.isEmpty ? (match.trigger ?? lastText) : match.command
             self.detectedText = detectedText
             self.logger.info("voice wake detected (test, silence) (len=\(detectedText.count))")
-            await MainActor.run { AppStateStore.shared.triggerVoiceEars(ttl: nil) }
+            await MainActor.run { AppStateStore.shared.startVoiceEars() }
             self.stop()
             await MainActor.run {
                 AppStateStore.shared.stopVoiceEars()

@@ -2,19 +2,52 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { describe, expect, it } from "vitest";
 import {
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  clearMemoryPluginState,
+  registerMemoryCapability,
+} from "openclaw/plugin-sdk/memory-host-core";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  buildCodexOpenClawPromptContext,
+  buildCodexWatchedSessionsContext,
   buildCodexWorkspaceBootstrapContext,
   buildCodexSystemPromptReport,
   readContextEngineThreadBootstrapProjection,
-  remapCodexContextFilePath,
+  readMirroredSessionHistoryMessages,
   resolveContextEngineBootstrapProjectionDecision,
 } from "./attempt-context.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import type { CodexAppServerContextEngineBinding } from "./session-binding.js";
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  clearMemoryPluginState();
+});
+
 describe("Codex app-server attempt context", () => {
+  it("treats missing mirrored session history as empty without hook warning", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-attempt-context-history-"));
+    const sessionFile = path.join(dir, "session.jsonl");
+    try {
+      await expect(
+        readMirroredSessionHistoryMessages({
+          sessionFile,
+          sessionId: "codex-session",
+          sessionKey: "codex-session",
+        }),
+      ).resolves.toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("returns a run context report without deferred Codex dynamic tool schemas", () => {
     const tools = [
       {
@@ -61,9 +94,8 @@ describe("Codex app-server attempt context", () => {
       workspaceBootstrapContext: {
         bootstrapFiles: [],
         contextFiles: [],
+        inheritsAgentWorkspace: false,
         promptContextFiles: [],
-        developerInstructionFiles: [],
-        heartbeatReferenceFiles: [],
       },
       skillsPrompt: "",
       tools,
@@ -88,62 +120,162 @@ describe("Codex app-server attempt context", () => {
   });
 
   it("keeps MEMORY.md injected when sandbox effective workspace differs", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-memory-workspace-"));
-    const sandboxWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-memory-sandbox-"));
-    const memorySummary = "Sandboxed turns need bounded memory fallback.";
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+    await withTempDir("codex-memory-workspace-", async (workspaceDir) => {
+      await withTempDir("codex-memory-sandbox-", async (sandboxWorkspaceDir) => {
+        const memorySummary = "Sandboxed turns need bounded memory fallback.";
+        await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
 
-    const context = await buildCodexWorkspaceBootstrapContext({
-      params: {
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        config: {
-          agents: {
-            defaults: {
-              workspace: workspaceDir,
+        const context = await buildCodexWorkspaceBootstrapContext({
+          params: {
+            sessionId: "session-1",
+            sessionKey: "agent:main:session-1",
+            config: {
+              agents: {
+                defaults: {
+                  workspace: workspaceDir,
+                },
+              },
             },
-          },
-        },
-      } as EmbeddedRunAttemptParams,
-      resolvedWorkspace: workspaceDir,
-      effectiveWorkspace: sandboxWorkspaceDir,
-      sessionKey: "agent:main:session-1",
-      sessionAgentId: "main",
-      memoryToolNames: ["memory_search", "memory_get"],
-    });
+          } as EmbeddedRunAttemptParams,
+          resolvedWorkspace: workspaceDir,
+          effectiveWorkspace: sandboxWorkspaceDir,
+          sessionKey: "agent:main:session-1",
+          sessionAgentId: "main",
+          memoryToolNames: ["memory_search", "memory_get"],
+          ringZeroActive: false,
+        });
 
-    expect(context.memoryReferenceFiles).toEqual([]);
-    expect(context.promptContext).toContain(memorySummary);
-    expect(context.memoryToolRouted).toBe(false);
+        expect(context.memoryReferenceFiles).toEqual([]);
+        expect(context.promptContext).toContain(memorySummary);
+        expect(context.memoryToolRouted).toBe(false);
+      });
+    });
   });
 
-  it("remaps Codex bootstrap files under dot-prefixed workspace directories", () => {
-    expect(
-      remapCodexContextFilePath({
-        file: {
-          path: "/real/workspace/..context/SOUL.md",
-          content: "Soul voice goes here.",
-        },
-        sourceWorkspaceDir: "/real/workspace",
-        targetWorkspaceDir: "/sandbox/workspace",
-      }),
-    ).toEqual({
-      path: "/sandbox/workspace/..context/SOUL.md",
-      content: "Soul voice goes here.",
+  it("passes agent context to Codex memory collaboration guidance", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-agent-memory-"));
+    let observedContext:
+      | { agentId?: string; agentSessionKey?: string; sandboxed?: boolean }
+      | undefined;
+    registerMemoryCapability("memory-core", {
+      promptBuilder: (context) => {
+        observedContext = context;
+        return [
+          "## Agent Memory",
+          `agent=${context.agentId} session=${context.agentSessionKey}`,
+          "",
+        ];
+      },
     });
-    expect(
-      remapCodexContextFilePath({
-        file: {
-          path: "/outside/SOUL.md",
-          content: "outside",
-        },
-        sourceWorkspaceDir: "/real/workspace",
-        targetWorkspaceDir: "/sandbox/workspace",
-      }),
-    ).toEqual({
-      path: "/outside/SOUL.md",
-      content: "outside",
-    });
+
+    try {
+      const context = await buildCodexWorkspaceBootstrapContext({
+        params: {
+          sessionId: "session-1",
+          sessionKey: "agent:marketing-agent:session-1",
+          config: {
+            agents: {
+              defaults: { workspace: workspaceDir },
+              list: [{ id: "marketing-agent", default: true, workspace: workspaceDir }],
+            },
+          },
+        } as EmbeddedRunAttemptParams,
+        resolvedWorkspace: workspaceDir,
+        effectiveWorkspace: workspaceDir,
+        sessionKey: "agent:marketing-agent:session-1",
+        sessionAgentId: "marketing-agent",
+        memoryToolNames: ["memory_search", "memory_get"],
+        ringZeroActive: false,
+        sandboxed: true,
+      });
+
+      expect(context.memoryToolRouted).toBe(true);
+      expect(observedContext).toMatchObject({
+        agentId: "marketing-agent",
+        agentSessionKey: "agent:marketing-agent:session-1",
+        sandboxed: true,
+      });
+      expect(context.memoryCollaborationInstructions).toContain(
+        "agent=marketing-agent session=agent:marketing-agent:session-1",
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("inherits agent workspace instructions when Codex executes in another folder", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-agent-workspace-"));
+    const executionDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-execution-workspace-"));
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Canonical agent instructions");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Canonical agent soul");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Canonical agent memory");
+    await fs.writeFile(path.join(executionDir, "AGENTS.md"), "Execution project instructions");
+
+    try {
+      const context = await buildCodexWorkspaceBootstrapContext({
+        params: {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          config: { agents: { defaults: { workspace: workspaceDir } } },
+        } as EmbeddedRunAttemptParams,
+        resolvedWorkspace: workspaceDir,
+        executionWorkspace: executionDir,
+        effectiveWorkspace: executionDir,
+        sessionKey: "agent:main:session-1",
+        sessionAgentId: "main",
+        memoryToolNames: ["memory_search", "memory_get"],
+        ringZeroActive: false,
+      });
+
+      expect(context.threadDeveloperInstructions).toContain("Canonical agent instructions");
+      expect(context.threadDeveloperInstructions).toContain(
+        "OpenClaw Agent Workspace Instructions",
+      );
+      expect(context.threadDeveloperInstructions).toContain(path.join(workspaceDir, "AGENTS.md"));
+      expect(context.threadDeveloperInstructions).not.toContain("Canonical agent soul");
+      expect(context.threadDeveloperInstructions).not.toContain("Execution project instructions");
+      expect(context.threadDeveloperInstructions).not.toContain(
+        path.join(executionDir, "AGENTS.md"),
+      );
+      expect(context.turnScopedDeveloperInstructions).toContain("Canonical agent soul");
+      expect(context.turnScopedDeveloperInstructions).not.toContain("Canonical agent instructions");
+      expect(context.memoryToolRouted).toBe(true);
+      expect(context.promptContext).toBeUndefined();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      await fs.rm(executionDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps ambient workspace instructions out of overlapping ring-zero restrictions", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-ring-zero-workspace-"));
+    const executionDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-ring-zero-execution-"));
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Ambient workspace instructions");
+
+    try {
+      const context = await buildCodexWorkspaceBootstrapContext({
+        params: {
+          sessionId: "session-1",
+          sessionKey: "agent:openclaw:session-1",
+          toolsAllow: ["openclaw"],
+          pluginHarnessToolPolicyRestricted: true,
+          config: { agents: { defaults: { workspace: workspaceDir } } },
+        } as EmbeddedRunAttemptParams,
+        resolvedWorkspace: workspaceDir,
+        executionWorkspace: executionDir,
+        effectiveWorkspace: executionDir,
+        sessionKey: "agent:openclaw:session-1",
+        sessionAgentId: "openclaw",
+        memoryToolNames: [],
+        ringZeroActive: true,
+      });
+
+      expect(context.threadDeveloperInstructions).toBeUndefined();
+      expect(context.threadDeveloperInstructionFiles).toEqual([]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      await fs.rm(executionDir, { recursive: true, force: true });
+    }
   });
 
   it("reads and compares thread-bootstrap context-engine projections", () => {
@@ -199,5 +331,48 @@ describe("Codex app-server attempt context", () => {
       project: true,
       reason: "dynamic-tools-mismatch",
     });
+  });
+
+  it("stitches watched-session context into the per-turn OpenClaw prompt context", () => {
+    const attempt = { config: {} } as EmbeddedRunAttemptParams;
+
+    expect(
+      buildCodexOpenClawPromptContext({
+        params: attempt,
+        watchedSessionsContext: [
+          "## Watched Sessions",
+          "- agent:main:telegram:group:beta — Family group",
+        ].join("\n"),
+      }),
+    ).toContain("## Watched Sessions");
+
+    // No ambient watches (and no state) must render nothing, not an empty section.
+    expect(
+      buildCodexWatchedSessionsContext({
+        attempt,
+        dynamicTools: [
+          {
+            type: "function",
+            name: "sessions_history",
+            description: "history",
+            inputSchema: {},
+          },
+        ],
+        sessionKey: "agent:codex-test:main",
+      }),
+    ).toBe(undefined);
+
+    // Lightweight cron turns keep the runtime context byte-for-byte untouched.
+    expect(
+      buildCodexWatchedSessionsContext({
+        attempt: {
+          config: {},
+          bootstrapContextMode: "lightweight",
+          bootstrapContextRunKind: "cron",
+        } as EmbeddedRunAttemptParams,
+        dynamicTools: [],
+        sessionKey: "agent:codex-test:main",
+      }),
+    ).toBe(undefined);
   });
 });

@@ -1,11 +1,28 @@
 // Openai tests cover openai chatgpt oauth plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testing } from "./openai-chatgpt-oauth.runtime.js";
+import { runOpenAIOAuthTlsPreflight } from "./openai-chatgpt-oauth-preflight.runtime.js";
 
 describe("OpenAI Codex OAuth runtime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("rejects retired authority before the TLS preflight sends a request", async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 302 }));
+    const retired = new Error("owner retired");
+    const outcome = await runOpenAIOAuthTlsPreflight({
+      fetchImpl,
+      signal: controller.signal,
+      assertCurrent: () => {
+        throw retired;
+      },
+    }).catch((error: unknown) => error);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(outcome).toBe(retired);
+    expect(controller.signal.aborted).toBe(false);
   });
 
   it("caps oversized TLS preflight timeouts before creating an abort signal", async () => {
@@ -13,7 +30,7 @@ describe("OpenAI Codex OAuth runtime", () => {
     const fetchImpl = vi.fn(async () => new Response(null, { status: 302 }));
 
     await expect(
-      testing.runOpenAIOAuthTlsPreflight({
+      runOpenAIOAuthTlsPreflight({
         timeoutMs: Number.MAX_SAFE_INTEGER,
         fetchImpl,
       }),
@@ -29,12 +46,35 @@ describe("OpenAI Codex OAuth runtime", () => {
     const fetchImpl = vi.fn(async () => response);
 
     await expect(
-      testing.runOpenAIOAuthTlsPreflight({
+      runOpenAIOAuthTlsPreflight({
         timeoutMs: 20,
         fetchImpl,
       }),
     ).resolves.toEqual({ ok: true });
 
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("uses the shared classifier for hostname mismatch failures", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("fetch failed", {
+        cause: {
+          code: "ERR_TLS_CERT_ALTNAME_INVALID",
+          message: "Hostname/IP does not match certificate's altnames",
+        },
+      });
+    });
+
+    await expect(
+      runOpenAIOAuthTlsPreflight({
+        timeoutMs: 20,
+        fetchImpl,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      kind: "tls-cert",
+      code: "ERR_TLS_CERT_ALTNAME_INVALID",
+      message: "Hostname/IP does not match certificate's altnames",
+    });
   });
 });

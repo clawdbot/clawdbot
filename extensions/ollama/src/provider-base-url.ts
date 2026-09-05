@@ -3,11 +3,16 @@ import type {
   ModelProviderConfig,
   ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 
-/**
- * Provider config input type — partial config without required `models`.
- * Replaces the deprecated `openclaw/plugin-sdk/config-types` import.
- */
+export function resolveOllamaBaseUrlForRun(params: {
+  modelBaseUrl?: string;
+  providerBaseUrl?: string;
+}): string {
+  return params.providerBaseUrl?.trim() || params.modelBaseUrl?.trim() || OLLAMA_DEFAULT_BASE_URL;
+}
+
+/** Provider config input type — partial config without required `models`. */
 type OllamaProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
   models?: ModelDefinitionConfig[];
 };

@@ -2,9 +2,9 @@
  * Contract suite for bundled plugin registration ownership and manifest auth metadata.
  */
 import { describe, expect, it } from "vitest";
-import { loadPluginManifestRegistry, pluginRegistrationContractRegistry } from "../testing.js";
+import { loadPluginManifestRegistryCore } from "../../plugins/manifest-registry.js";
 
-type PluginRegistrationContractParams = {
+export type PluginRegistrationContractParams = {
   pluginId: string;
   cliBackendIds?: string[];
   providerIds?: string[];
@@ -19,10 +19,6 @@ type PluginRegistrationContractParams = {
   videoGenerationProviderIds?: string[];
   musicGenerationProviderIds?: string[];
   toolNames?: string[];
-  requireSpeechVoices?: boolean;
-  requireDescribeImages?: boolean;
-  requireGenerateImage?: boolean;
-  requireGenerateVideo?: boolean;
   manifestAuthChoice?: {
     pluginId: string;
     choiceId: string;
@@ -33,18 +29,23 @@ type PluginRegistrationContractParams = {
   };
 };
 
-function findRegistration(pluginId: string) {
-  const entry = pluginRegistrationContractRegistry.find(
-    (candidate) => candidate.pluginId === pluginId,
-  );
-  if (!entry) {
-    throw new Error(`plugin registration contract missing for ${pluginId}`);
-  }
-  return entry;
-}
+export type PluginRegistrationContractResolver = (
+  pluginId: string,
+) => Omit<PluginRegistrationContractParams, "manifestAuthChoice"> | undefined;
 
 /** Installs tests that pin a bundled plugin's registered provider/tool ownership. */
-export function describePluginRegistrationContract(params: PluginRegistrationContractParams) {
+export function installPluginRegistrationContract(
+  params: PluginRegistrationContractParams,
+  resolveRegistration: PluginRegistrationContractResolver,
+) {
+  const findRegistration = (pluginId: string) => {
+    const entry = resolveRegistration(pluginId);
+    if (!entry) {
+      throw new Error(`plugin registration contract missing for ${pluginId}`);
+    }
+    return entry;
+  };
+
   describe(`${params.pluginId} plugin registration contract`, () => {
     if (params.cliBackendIds) {
       it("keeps bundled cli-backend ownership explicit", () => {
@@ -147,7 +148,7 @@ export function describePluginRegistrationContract(params: PluginRegistrationCon
     const manifestAuthChoice = params.manifestAuthChoice;
     if (manifestAuthChoice) {
       it("keeps onboarding auth grouping explicit", () => {
-        const plugin = loadPluginManifestRegistry({}).plugins.find(
+        const plugin = loadPluginManifestRegistryCore({}).plugins.find(
           (entry) => entry.origin === "bundled" && entry.id === manifestAuthChoice.pluginId,
         );
 

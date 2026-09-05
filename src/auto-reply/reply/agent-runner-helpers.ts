@@ -4,7 +4,7 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -20,6 +20,7 @@ type VerboseGateParams = {
   sessionKey?: string;
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
+  verboseLevelOverride?: VerboseLevel;
 };
 
 const VERBOSE_GATE_SESSION_REFRESH_MS = 250;
@@ -29,7 +30,7 @@ function readCurrentVerboseLevel(params: VerboseGateParams): VerboseLevel | unde
     return undefined;
   }
   try {
-    const entry = loadSessionEntry({
+    const entry = loadSessionEntryReadOnly({
       storePath: params.storePath,
       sessionKey: params.sessionKey,
       clone: false,
@@ -66,23 +67,21 @@ function createVerboseGate(
   params: VerboseGateParams,
   shouldEmit: (level: VerboseLevel) => boolean,
 ): () => boolean {
-  // Normalize verbose values from session store/config so false/"false" still means off.
-  const fallbackVerbose = params.resolvedVerboseLevel;
   const resolveCurrentVerboseLevel = createCurrentVerboseLevelResolver(params);
-  return () => {
-    return shouldEmit(resolveCurrentVerboseLevel() ?? fallbackVerbose);
-  };
+  // Explicit turn hints stay fixed; only inherited settings follow live session changes.
+  return () =>
+    shouldEmit(
+      params.verboseLevelOverride ?? resolveCurrentVerboseLevel() ?? params.resolvedVerboseLevel,
+    );
 }
 
 /** Creates the visibility gate for tool result summaries. */
-export const createShouldEmitToolResult = (params: VerboseGateParams): (() => boolean) => {
-  return createVerboseGate(params, (level) => level !== "off");
-};
+export const createShouldEmitToolResult = (params: VerboseGateParams): (() => boolean) =>
+  createVerboseGate(params, (level) => level !== "off");
 
 /** Creates the visibility gate for command/tool output streams. */
-export const createShouldEmitToolOutput = (params: VerboseGateParams): (() => boolean) => {
-  return createVerboseGate(params, (level) => level === "full");
-};
+export const createShouldEmitToolOutput = (params: VerboseGateParams): (() => boolean) =>
+  createVerboseGate(params, (level) => level === "full");
 
 /** Sends typing signals for visible text payloads when typing is enabled. */
 export const signalTypingIfNeeded = async (

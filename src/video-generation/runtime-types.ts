@@ -6,7 +6,6 @@ import type {
   GeneratedVideoAsset,
   VideoGenerationIgnoredOverride,
   VideoGenerationNormalization,
-  VideoGenerationProvider,
   VideoGenerationResolution,
   VideoGenerationSourceAsset,
 } from "./types.js";
@@ -42,9 +41,3 @@ export type GenerateVideoRuntimeResult = {
   metadata?: Record<string, unknown>;
   ignoredOverrides: VideoGenerationIgnoredOverride[];
 };
-
-export type ListRuntimeVideoGenerationProvidersParams = {
-  config?: OpenClawConfig;
-};
-
-export type RuntimeVideoGenerationProvider = VideoGenerationProvider;

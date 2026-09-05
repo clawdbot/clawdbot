@@ -3,15 +3,18 @@
  * Provides hoisted provider-runtime, CLI credential, doctor, and external CLI
  * sync mocks so OAuth tests can stay focused on store behavior.
  */
-import { vi } from "vitest";
+import { afterAll, vi } from "vitest";
 import type { OAuthCredential } from "./types.js";
 
-const oauthProviderRuntimeMocks = vi.hoisted(() => ({
-  refreshProviderOAuthCredentialWithPluginMock: vi.fn(
-    async (_params?: { context?: unknown }) => undefined,
-  ),
-  formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
-}));
+const oauthProviderRuntimeMocks = vi.hoisted(() => {
+  vi.resetModules();
+  return {
+    refreshProviderOAuthCredentialWithPluginMock: vi.fn<
+      (_params?: { context?: unknown }) => Promise<OAuthCredential | undefined>
+    >(async () => undefined),
+    formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
+  };
+});
 
 /** Return hoisted provider-runtime OAuth mocks for per-test setup. */
 export function getOAuthProviderRuntimeMocks() {
@@ -19,7 +22,6 @@ export function getOAuthProviderRuntimeMocks() {
 }
 
 vi.mock("../cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
@@ -29,8 +31,14 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   formatProviderAuthProfileApiKeyWithPlugin: (params: { context?: { access?: string } }) =>
     oauthProviderRuntimeMocks.formatProviderAuthProfileApiKeyWithPluginMock() ??
     params?.context?.access,
-  refreshProviderOAuthCredentialWithPlugin:
-    oauthProviderRuntimeMocks.refreshProviderOAuthCredentialWithPluginMock,
+  resolveProviderOAuthCredentialWithPlugin: async (params: { credential: OAuthCredential }) => {
+    const credential = await oauthProviderRuntimeMocks.refreshProviderOAuthCredentialWithPluginMock(
+      { context: params.credential },
+    );
+    return credential
+      ? { status: "available", credential, apiKey: credential.access }
+      : { status: "unhandled" };
+  },
 }));
 
 vi.mock("./doctor.js", () => ({
@@ -44,10 +52,17 @@ vi.mock("./external-cli-sync.js", () => ({
     credential.access.trim().length > 0 &&
     Number.isFinite(credential.expires) &&
     credential.expires - now > 5 * 60 * 1000,
-  isSafeToUseExternalCliCredential: () => true,
   readExternalCliBootstrapCredential: () => null,
   resolveExternalCliAuthProfiles: () => [],
   shouldBootstrapFromExternalCliCredential: () => false,
   shouldReplaceStoredOAuthCredential: (existing: unknown, incoming: unknown) =>
     existing !== incoming,
 }));
+
+afterAll(() => {
+  vi.doUnmock("../cli-credentials.js");
+  vi.doUnmock("../../plugins/provider-runtime.runtime.js");
+  vi.doUnmock("./doctor.js");
+  vi.doUnmock("./external-cli-sync.js");
+  vi.resetModules();
+});

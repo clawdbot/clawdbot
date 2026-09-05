@@ -7,8 +7,8 @@ read_when:
 title: "NVIDIA"
 ---
 
-NVIDIA provides an OpenAI-compatible API at `https://integrate.api.nvidia.com/v1` for
-open models for free. Authenticate with an API key from
+NVIDIA serves open models for free through an OpenAI-compatible API at
+`https://integrate.api.nvidia.com/v1`, authenticated with an API key from
 [build.nvidia.com](https://build.nvidia.com/settings/api-keys). OpenClaw
 defaults the NVIDIA provider to Nemotron 3 Ultra, NVIDIA's 550B total / 55B
 active reasoning model for long-context agentic work.
@@ -32,23 +32,22 @@ active reasoning model for long-context agentic work.
   </Step>
 </Steps>
 
-<Warning>
-If you pass `--nvidia-api-key` instead of the env var, the value lands in shell
-history and `ps` output. Prefer the `NVIDIA_API_KEY` environment variable when
-possible.
-</Warning>
-
-For non-interactive setup, you can also pass the key directly:
+For non-interactive setup, pass the key directly:
 
 ```bash
 openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
 ```
 
+<Warning>
+`--nvidia-api-key` lands the key in shell history and `ps` output. Prefer the
+`NVIDIA_API_KEY` environment variable when possible.
+</Warning>
+
 ## Config example
 
 ```json5
 {
-  env: { NVIDIA_API_KEY: "nvapi-..." },
+  env: { vars: { NVIDIA_API_KEY: "nvapi-..." } },
   models: {
     providers: {
       nvidia: {
@@ -65,66 +64,106 @@ openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
 }
 ```
 
-## Featured catalog
+## Live model catalog
 
-When an NVIDIA API key is configured, OpenClaw setup and model-selection paths
-try NVIDIA's public featured-model catalog from
-`https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json` and
-caches the ranked result for 24 hours. New featured models from build.nvidia.com
-therefore appear in setup and model-selection surfaces without waiting for an
-OpenClaw release. When the live feed is available, the first returned model is
-the default option shown during NVIDIA setup.
+When an NVIDIA API key is configured, setup and model-selection paths check
+`https://integrate.api.nvidia.com/v1/models` for available model IDs, cached for
+30 seconds. NVIDIA's public
+`https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json` feed
+provides ranking and token limits, cached for 24 hours. Featured models appear
+first only while the inference inventory still lists them; other available
+bundled chat models follow. A fresh inventory can restore a previously hidden
+model that NVIDIA has republished.
 
-The fetch uses a fixed HTTPS host policy for `assets.ngc.nvidia.com`. If no
-NVIDIA API key is configured, or if that public catalog is unavailable or
-malformed, OpenClaw falls back to the bundled catalog and bundled default below.
+The inventory also contains embeddings and other non-chat endpoints, without
+capability metadata. OpenClaw therefore offers only exact models with bundled
+chat metadata or valid featured-model metadata; it does not guess capabilities
+from model names. Unknown IDs can still be configured explicitly; listing alone
+does not prove chat compatibility. This is not a complete automatic catalog of
+every NVIDIA model.
+
+Both public fetches use fixed HTTPS hosts and send no credentials. If the
+featured feed fails, available bundled chat models still appear. If the
+inventory is unavailable or malformed, browse and setup retain the bundled
+fallback, while the fresh-live catalog stays empty. A successful empty inventory
+does not restore stale bundled entries. Without NVIDIA auth, browsing uses the
+bundled catalog without fetching.
+
+## Nemotron 3.5 Lightning
+
+[`nvidia/nemotron-3.5-lightning-30b-a3b`](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/build)
+is NVIDIA's smaller 30B total / 3B active reasoning model for agentic work. The
+bundled row records its 1M context and a 16,384-token output budget matching
+NVIDIA's hosted example. Select it with:
+
+```bash
+openclaw models set nvidia/nvidia/nemotron-3.5-lightning-30b-a3b
+```
+
+Lightning is selectable when the live inventory lists it even if it is absent
+from the featured feed. Nemotron 3 Ultra remains the default.
 
 ## Nemotron 3 Ultra
 
 Nemotron 3 Ultra is the default NVIDIA model in OpenClaw. NVIDIA's build page for
 [`nvidia/nemotron-3-ultra-550b-a55b`](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b)
 lists it as an available free endpoint with a 1M-token context specification.
-The bundled catalog records a 16,384-token max output to match NVIDIA's current
-OpenAI-compatible sample request for the hosted endpoint.
+
+The bundled Ultra row sends
+`chat_template_kwargs: { enable_thinking: false, force_nonempty_content: true }`
+by default so normal chat output stays in the visible answer instead of
+exposing reasoning text.
 
 Use Ultra for the highest-capability NVIDIA default. Keep Super selected when
 you want the smaller Nemotron 3 option, or choose one of the third-party models
 hosted in NVIDIA's catalog when their context, latency, or behavior fits better.
-The bundled Ultra row sends `chat_template_kwargs.enable_thinking: false` and
-`force_nonempty_content: true` by default so normal chat output stays in the
-visible answer instead of exposing reasoning text.
 
 ## Bundled fallback catalog
 
-| Model ref                                  | Name                         | Context   | Max output | Notes                             |
-| ------------------------------------------ | ---------------------------- | --------- | ---------- | --------------------------------- |
-| `nvidia/nvidia/nemotron-3-ultra-550b-a55b` | NVIDIA Nemotron 3 Ultra 550B | 1,000,000 | 16,384     | Default                           |
-| `nvidia/nvidia/nemotron-3-super-120b-a12b` | NVIDIA Nemotron 3 Super 120B | 262,144   | 8,192      | Featured fallback                 |
-| `nvidia/moonshotai/kimi-k2.5`              | Kimi K2.5                    | 262,144   | 8,192      | Featured fallback                 |
-| `nvidia/minimaxai/minimax-m2.7`            | Minimax M2.7                 | 196,608   | 8,192      | Featured fallback                 |
-| `nvidia/z-ai/glm-5.1`                      | GLM 5.1                      | 202,752   | 8,192      | Featured fallback                 |
-| `nvidia/minimaxai/minimax-m2.5`            | MiniMax M2.5                 | 196,608   | 8,192      | Deprecated, upgrade compatibility |
-| `nvidia/z-ai/glm5`                         | GLM-5                        | 202,752   | 8,192      | Deprecated, upgrade compatibility |
+The bundled rows provide known chat metadata and an offline fallback. Deprecated
+compatibility rows keep existing exact model references recognizable but stay
+out of model pickers.
+
+| Model ref                                      | Name                       | Context   | Max output |
+| ---------------------------------------------- | -------------------------- | --------- | ---------- |
+| `nvidia/nvidia/nemotron-3-ultra-550b-a55b`     | Nemotron 3 Ultra 550B      | 1,048,576 | 8,192      |
+| `nvidia/nvidia/nemotron-3.5-lightning-30b-a3b` | Nemotron 3.5 Lightning 30B | 1,048,576 | 16,384     |
+| `nvidia/nvidia/nemotron-3-super-120b-a12b`     | Nemotron 3 Super 120B      | 1,000,000 | 8,192      |
+| `nvidia/z-ai/glm-5.2`                          | GLM 5.2                    | 202,752   | 8,192      |
+| `nvidia/moonshotai/kimi-k2.6`                  | Kimi K2.6                  | 262,144   | 65,536     |
+| `nvidia/minimaxai/minimax-m3`                  | Minimax M3                 | 196,608   | 8,192      |
+| `nvidia/deepseek-ai/deepseek-v4-pro`           | DeepSeek V4 Pro            | 262,144   | 16,384     |
+
+The full compatibility catalog also retains these shipped refs for existing
+configurations and migration: `nvidia/qwen/qwen3.5-397b-a17b`,
+`nvidia/moonshotai/kimi-k2.5`, `nvidia/z-ai/glm-5.1`, `nvidia/z-ai/glm5`, and
+`nvidia/minimaxai/minimax-m2.7`. These references stay hidden from bundled and
+offline model pickers unless NVIDIA republishes them in its inference inventory.
+NVIDIA has retired the Qwen endpoint, so requests using its model reference no
+longer work. Migrate existing Qwen configurations to an active model.
 
 ## Advanced configuration
 
 <AccordionGroup>
   <Accordion title="Auto-enable behavior">
-    The provider auto-enables when the `NVIDIA_API_KEY` environment variable is set.
-    No explicit provider config is required beyond the key.
+    The provider auto-enables when the `NVIDIA_API_KEY` environment variable is
+    set or a key was stored during onboarding. No explicit provider config is
+    required beyond the key.
   </Accordion>
 
   <Accordion title="Catalog and pricing">
-    OpenClaw prefers NVIDIA's public featured-model catalog when NVIDIA auth is
-    configured and caches it for 24 hours. The bundled fallback catalog is static
-    and keeps deprecated shipped refs for upgrade compatibility. Costs default
-    to `0` in source since NVIDIA currently offers free API access for the
-    listed models.
+    OpenClaw uses NVIDIA's inference inventory for availability and its featured
+    feed for ranking. Exact bundled metadata preserves reasoning and image
+    capabilities omitted by the featured feed. Deprecated exact-reference
+    compatibility rows stay hidden from the offline fallback; fresh inventory
+    can restore models that NVIDIA has republished. Costs default to `0` in source
+    since NVIDIA currently offers free API access for the listed models.
   </Accordion>
 
   <Accordion title="OpenAI-compatible endpoint">
-    NVIDIA uses the standard `/v1` completions endpoint. Any OpenAI-compatible
-    tooling should work out of the box with the NVIDIA base URL.
+    OpenClaw talks to NVIDIA with the `openai-completions` adapter against the
+    standard `/v1` chat completions route. Any OpenAI-compatible tooling should
+    work out of the box with the NVIDIA base URL.
   </Accordion>
 
   <Accordion title="Nemotron 3 Ultra reasoning params">
@@ -152,16 +191,20 @@ visible answer instead of exposing reasoning text.
     }
     ```
 
-    `params.extra_body` is the final OpenAI-compatible request-body override, so
-    use it only for fields NVIDIA documents for the selected endpoint.
+    `params.chat_template_kwargs` merges into any `chat_template_kwargs`
+    already on the request instead of replacing the whole object.
+    `params.extra_body` is the final OpenAI-compatible request-body override
+    and overwrites colliding payload keys, so use it only for fields NVIDIA
+    documents for the selected endpoint.
 
   </Accordion>
 
   <Accordion title="Slow custom provider responses">
-    Some NVIDIA-hosted custom models can take longer than the default model idle
-    watchdog before they emit a first response chunk. For custom NVIDIA provider
-    entries, raise the provider timeout instead of raising the whole agent
-    runtime timeout:
+    Some NVIDIA-hosted custom models can take longer than the default ~120s
+    model idle watchdog before they emit a first response chunk. For custom
+    NVIDIA provider entries, raise the provider timeout instead of the whole
+    agent runtime timeout; `timeoutSeconds` covers provider HTTP requests and
+    raises the idle/stream watchdog ceiling for that provider:
 
     ```json5
     {

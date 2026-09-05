@@ -1,0 +1,394 @@
+#if os(macOS)
+import AppKit
+import SwiftUI
+import UniformTypeIdentifiers
+
+/// Native macOS chat window with a sessions sidebar and conversation toolbar.
+/// Draft controls belong to the composer; the compact menu-bar panel keeps
+/// using `OpenClawChatView` directly.
+@MainActor
+public struct OpenClawChatWindowShell: View {
+    public nonisolated static let assistantTraceDefaultsKey = "openclaw.webchat.showAssistantTrace"
+    public nonisolated static let assistantReasoningDefaultsKey = "openclaw.webchat.showAssistantReasoning"
+    public nonisolated static let assistantToolActivityDefaultsKey = "openclaw.webchat.showAssistantToolActivity"
+
+    @State private var viewModel: OpenClawChatViewModel
+    @State private var sessionQuery = ""
+    @State private var isConfirmingClearHistory = false
+    @State private var isPresentingSessions = false
+    @State private var isRenamingSession = false
+    @State private var isPresentingNewSessionOptions = false
+    @State private var renameSessionKey: String?
+    @State private var renameText = ""
+    private let userAccent: Color?
+    private let displayOptions: OpenClawChatDisplayOptions
+    private let emptyAssistantIntro: String?
+    private let emptyAssistantPrompts: [OpenClawChatView.StarterPrompt]
+    private let talkControl: OpenClawChatTalkControl?
+    private let voiceNoteControl: OpenClawChatVoiceNoteControl?
+    private let speech: OpenClawChatSpeechController?
+    private let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
+
+    /// `showsAssistantTrace` remains as a source-compatible convenience that sets both display options.
+    public init(
+        viewModel: OpenClawChatViewModel,
+        userAccent: Color? = nil,
+        displayOptions: OpenClawChatDisplayOptions? = nil,
+        showsAssistantTrace: Bool = false,
+        emptyAssistantIntro: String? = nil,
+        emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [],
+        talkControl: OpenClawChatTalkControl? = nil,
+        voiceNoteControl: OpenClawChatVoiceNoteControl? = nil,
+        speech: OpenClawChatSpeechController? = nil,
+        mediaPlaybackAllowed: @escaping @MainActor @Sendable () -> Bool = { true })
+    {
+        _viewModel = State(initialValue: viewModel)
+        self.userAccent = userAccent
+        self.displayOptions = displayOptions ?? .assistantTrace(showsAssistantTrace)
+        self.emptyAssistantIntro = emptyAssistantIntro
+        self.emptyAssistantPrompts = emptyAssistantPrompts
+        self.talkControl = talkControl
+        self.voiceNoteControl = voiceNoteControl
+        self.speech = speech
+        self.mediaPlaybackAllowed = mediaPlaybackAllowed
+    }
+
+    public var body: some View {
+        NavigationSplitView {
+            ChatSessionSidebar(
+                viewModel: self.viewModel,
+                query: self.$sessionQuery)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 340)
+        } detail: {
+            OpenClawChatView(
+                viewModel: self.viewModel,
+                drawsBackground: false,
+                userAccent: self.userAccent,
+                displayOptions: self.displayOptions,
+                composerChrome: .clean,
+                emptyAssistantIntro: self.emptyAssistantIntro,
+                emptyAssistantPrompts: self.emptyAssistantPrompts,
+                talkControl: self.talkControl,
+                voiceNoteControl: self.voiceNoteControl,
+                speech: self.speech,
+                mediaPlaybackAllowed: self.mediaPlaybackAllowed)
+                .environment(\.openClawChatDesktopLayout, true)
+                .navigationTitle(self.activeSessionTitle)
+                .toolbar { self.detailToolbar }
+                .background(self.keyboardShortcutHandlers)
+        }
+        .confirmationDialog(
+            "Clear this thread's history?",
+            isPresented: self.$isConfirmingClearHistory)
+        {
+            Button(role: .destructive) {
+                self.viewModel.requestSessionReset()
+            } label: {
+                Text("Clear History")
+                    .font(OpenClawChatTypography.body)
+            }
+        } message: {
+            Text(verbatim: String(
+                format: String(localized: """
+                This resets the conversation for %@. The session key stays the same.
+                """),
+                self.activeSessionTitle))
+                .font(OpenClawChatTypography.body)
+        }
+        .alert(String(localized: "Rename Thread"), isPresented: self.$isRenamingSession) {
+                TextField(String(localized: "Thread name"), text: self.$renameText)
+                Button(String(localized: "Rename")) {
+                    guard let renameSessionKey else { return }
+                    self.viewModel.renameSession(key: renameSessionKey, label: self.renameText)
+                    self.renameSessionKey = nil
+                }
+                Button(String(localized: "Cancel"), role: .cancel) {
+                    self.renameSessionKey = nil
+                }
+            }
+            .sheet(isPresented: self.$isPresentingSessions) {
+                ChatSessionsSheet(viewModel: self.viewModel)
+            }
+            .onChange(of: self.viewModel.pendingRunCount) { previous, current in
+                // Run completion changes timestamps/token totals; pull them once
+                // per run instead of polling.
+                if previous > 0, current == 0 {
+                    self.viewModel.refreshSessions(limit: 200)
+                }
+            }
+    }
+
+    /// Key equivalents only fire for installed views; buttons inside a closed
+    /// toolbar Menu are not built yet, so the shortcuts live here and the menu
+    /// items carry matching labels for discoverability.
+    private var keyboardShortcutHandlers: some View {
+        Group {
+            Button {
+                Task { await self.viewModel.startNewSession() }
+            } label: {
+                Text("New Thread")
+                    .font(OpenClawChatTypography.body)
+            }
+            .keyboardShortcut("n", modifiers: [.command])
+
+            Button {
+                self.viewModel.refresh()
+                self.viewModel.refreshSessions(limit: 200)
+            } label: {
+                Text("Refresh")
+                    .font(OpenClawChatTypography.body)
+            }
+            .keyboardShortcut("r", modifiers: [.command])
+
+            Button {
+                self.exportTranscript()
+            } label: {
+                Text("Export Transcript")
+                    .font(OpenClawChatTypography.body)
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .disabled(self.viewModel.messages.isEmpty)
+
+            Button {
+                self.isPresentingSessions = true
+            } label: {
+                Text("Threads")
+                    .font(OpenClawChatTypography.body)
+            }
+            .keyboardShortcut("s", modifiers: [.command, .shift])
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
+    private var activeSessionTitle: String {
+        if let entry = self.activeSessionEntry {
+            return ChatSessionSidebarModel.displayName(for: entry)
+        }
+        return ChatSessionSidebarModel.displayName(forKey: self.viewModel.sessionKey)
+    }
+
+    private var activeSessionEntry: OpenClawChatSessionEntry? {
+        self.viewModel.currentSessionEntry()
+    }
+
+    private var activeSessionKey: String {
+        self.activeSessionEntry?.key ?? self.viewModel.sessionKey
+    }
+
+    @ToolbarContentBuilder
+    private var detailToolbar: some ToolbarContent {
+        if OpenClawSessionColor(name: self.activeSessionEntry?.color) != nil {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 6) {
+                    OpenClawSessionColorDot(color: self.activeSessionEntry?.color)
+                    Text(self.activeSessionTitle)
+                        .font(OpenClawChatTypography.body.weight(.semibold))
+                        .lineLimit(1)
+                }
+            }
+        }
+        ToolbarItem(placement: .primaryAction) {
+            self.sessionActionsMenu
+        }
+    }
+
+    private var sessionActionsMenu: some View {
+        Menu {
+            Button {
+                Task { await self.viewModel.startNewSession() }
+            } label: {
+                chatWindowActionLabel("New Thread", systemImage: "square.and.pencil")
+            }
+            .keyboardShortcut("n", modifiers: [.command])
+
+            Button {
+                self.isPresentingNewSessionOptions = true
+            } label: {
+                chatWindowActionLabel("New Thread Options…", systemImage: "slider.horizontal.3")
+            }
+
+            Button {
+                self.viewModel.refresh()
+                self.viewModel.refreshSessions(limit: 200)
+            } label: {
+                chatWindowActionLabel("Refresh", systemImage: "arrow.clockwise")
+            }
+            .keyboardShortcut("r", modifiers: [.command])
+
+            Button {
+                self.isPresentingSessions = true
+            } label: {
+                chatWindowActionLabel("Threads…", systemImage: "rectangle.stack")
+            }
+            .keyboardShortcut("s", modifiers: [.command, .shift])
+
+            Divider()
+
+            Button {
+                self.renameSessionKey = self.activeSessionKey
+                self.renameText = self.activeSessionEntry?.label ?? self.activeSessionTitle
+                self.isRenamingSession = true
+            } label: {
+                chatWindowActionLabel(
+                    LocalizedStringKey(String(localized: "Rename Thread…")),
+                    systemImage: "pencil")
+            }
+
+            Button {
+                Task { await self.viewModel.forkSession(key: self.activeSessionKey) }
+            } label: {
+                chatWindowActionLabel(
+                    LocalizedStringKey(
+                        self.activeSessionEntry?.hasActiveRun == true
+                            ? String(localized: "Fork from last completed message")
+                            : String(localized: "Fork")),
+                    systemImage: "arrow.triangle.branch")
+            }
+
+            Button {
+                self.viewModel.setSessionPinned(
+                    key: self.activeSessionKey,
+                    pinned: self.activeSessionEntry?.pinned != true)
+            } label: {
+                chatWindowActionLabel(
+                    LocalizedStringKey(self.activeSessionEntry?.pinned == true
+                        ? String(localized: "Unpin")
+                        : String(localized: "Pin")),
+                    systemImage: self.activeSessionEntry?.pinned == true ? "pin.slash" : "pin")
+            }
+
+            Button {
+                self.viewModel.setSessionUnread(
+                    key: self.activeSessionKey,
+                    unread: self.activeSessionEntry?.unread != true)
+            } label: {
+                chatWindowActionLabel(
+                    LocalizedStringKey(self.activeSessionEntry?.unread == true
+                        ? String(localized: "Mark Read")
+                        : String(localized: "Mark Unread")),
+                    systemImage: self.activeSessionEntry?.unread == true ? "envelope.open" : "envelope.badge")
+            }
+
+            if self.activeSessionEntry.map({
+                ChatSessionSidebarModel.canArchiveSession(
+                    $0,
+                    mainSessionKey: self.viewModel.resolvedMainSessionKey)
+            }) == true {
+                Button {
+                    if let activeSessionEntry = self.activeSessionEntry {
+                        self.viewModel.setSessionArchived(
+                            activeSessionEntry,
+                            archived: !activeSessionEntry.isArchived)
+                    }
+                } label: {
+                    chatWindowActionLabel(
+                        LocalizedStringKey(self.activeSessionEntry?.isArchived == true
+                            ? String(localized: "Restore")
+                            : String(localized: "Archive")),
+                        systemImage: self.activeSessionEntry?.isArchived == true
+                            ? "tray.and.arrow.up"
+                            : "archivebox")
+                }
+            }
+
+            OpenClawSessionColorMenu(color: self.activeSessionEntry?.color) { color in
+                let key = self.activeSessionKey
+                Task { await self.viewModel.setSessionColor(key: key, color: color) }
+            }
+
+            Divider()
+
+            Button {
+                self.copyToPasteboard(self.viewModel.sessionKey)
+            } label: {
+                chatWindowActionLabel("Copy Session Key", systemImage: "doc.on.doc")
+            }
+
+            Button {
+                self.exportTranscript()
+            } label: {
+                chatWindowActionLabel("Export Transcript…", systemImage: "square.and.arrow.up")
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .disabled(self.viewModel.messages.isEmpty)
+
+            Toggle(isOn: Binding(
+                get: { self.displayOptions.contains(.reasoning) },
+                set: {
+                    UserDefaults.standard.set(
+                        $0,
+                        forKey: Self.assistantReasoningDefaultsKey)
+                })) {
+                    chatWindowActionLabel(
+                        "Show Reasoning",
+                        systemImage: "brain.head.profile")
+                }
+
+            Toggle(isOn: Binding(
+                get: { self.displayOptions.contains(.toolActivity) },
+                set: {
+                    UserDefaults.standard.set(
+                        $0,
+                        forKey: Self.assistantToolActivityDefaultsKey)
+                })) {
+                    chatWindowActionLabel(
+                        "Show Tool Activity",
+                        systemImage: "hammer")
+                }
+
+            Divider()
+
+            Button {
+                self.viewModel.requestSessionCompact()
+            } label: {
+                chatWindowActionLabel("Compact Thread", systemImage: "arrow.down.right.and.arrow.up.left")
+            }
+            .disabled(self.viewModel.hasBlockingRunActivity)
+
+            Button(role: .destructive) {
+                self.isConfirmingClearHistory = true
+            } label: {
+                chatWindowActionLabel("Clear History…", systemImage: "trash")
+            }
+        } label: {
+            chatWindowActionLabel("Thread", systemImage: "ellipsis.circle")
+        }
+        .popover(isPresented: self.$isPresentingNewSessionOptions) {
+            ChatNewSessionOptionsPopover(viewModel: self.viewModel) {
+                self.isPresentingNewSessionOptions = false
+            }
+        }
+        .menuIndicator(.hidden)
+        .help("Thread actions")
+    }
+
+    private func copyToPasteboard(_ string: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(string, forType: .string)
+    }
+
+    private func exportTranscript() {
+        let markdown = self.viewModel.exportTranscriptMarkdown()
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
+        panel.nameFieldStringValue = ChatTranscriptExporter.filename(
+            sessionTitle: self.activeSessionTitle,
+            sessionKey: self.viewModel.sessionKey)
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            try? markdown.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+}
+
+func chatWindowActionLabel(_ title: LocalizedStringKey, systemImage: String) -> some View {
+    Label {
+        Text(title)
+            .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
+    } icon: {
+        Image(systemName: systemImage)
+    }
+}
+#endif

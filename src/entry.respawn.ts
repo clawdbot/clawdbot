@@ -1,6 +1,7 @@
 // Respawns the CLI with adjusted process flags when startup requires it.
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
 import {
   isTerminalInteractiveRespawnArgv,
@@ -91,13 +92,16 @@ export function buildCliRespawnPlan(
     platform === "win32" ? normalizeWindowsArgv(argv, { platform, execPath }) : argv;
 
   if (
-    shouldSkipStartupEnvironmentRespawnForArgv(normalizedArgv) ||
+    shouldSkipStartupEnvironmentRespawnForArgv(normalizedArgv, platform) ||
     isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)
   ) {
     return null;
   }
 
   const childEnv: NodeJS.ProcessEnv = { ...env };
+  if (!readNonBlankString(childEnv.NODE_EXTRA_CA_CERTS)) {
+    delete childEnv.NODE_EXTRA_CA_CERTS;
+  }
   const childExecArgv = [...execArgv];
   let needsRespawn = false;
 
@@ -129,7 +133,7 @@ export function buildCliRespawnPlan(
   if (
     autoNodeExtraCaCerts &&
     !isTruthyEnvValue(env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]) &&
-    !env.NODE_EXTRA_CA_CERTS
+    !childEnv.NODE_EXTRA_CA_CERTS
   ) {
     childEnv.NODE_EXTRA_CA_CERTS = autoNodeExtraCaCerts;
     childEnv[OPENCLAW_NODE_EXTRA_CA_CERTS_READY] = "1";
@@ -137,7 +141,7 @@ export function buildCliRespawnPlan(
   }
 
   if (
-    !shouldSkipRespawnForArgv(argv) &&
+    !shouldSkipRespawnForArgv(argv, platform) &&
     !isTruthyEnvValue(env[OPENCLAW_NODE_OPTIONS_READY]) &&
     !hasExperimentalWarningSuppressed({ env, execArgv })
   ) {
@@ -160,21 +164,23 @@ export function buildCliRespawnPlan(
 
 export function runCliRespawnPlan(
   plan: CliRespawnPlan,
-  runtime: CliRespawnRuntime = {
+  runtime?: CliRespawnRuntime,
+  writeError: CliRespawnRuntime["writeError"] = (message, error) => console.error(message, error),
+): ChildProcess {
+  const resolvedRuntime: CliRespawnRuntime = runtime ?? {
     spawn,
     attachChildProcessBridge,
     exit: process.exit.bind(process) as (code?: number) => never,
-    writeError: (message, error) => console.error(message, error),
-  },
-): ChildProcess {
+    writeError,
+  };
   return runRespawnChildWithSignalBridge({
     command: plan.command,
     args: plan.argv,
     env: plan.env,
     detachForProcessTree: plan.detachForProcessTree,
-    runtime,
+    runtime: resolvedRuntime,
     onError: (error) => {
-      runtime.writeError(
+      resolvedRuntime.writeError(
         "[openclaw] Failed to respawn CLI:",
         error instanceof Error ? (error.stack ?? error.message) : error,
       );

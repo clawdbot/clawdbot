@@ -13,4 +13,38 @@ describe("sniffMimeFromBase64", () => {
 
     await expect(sniffMimeFromBase64(onePixelPng)).resolves.toBe("image/png");
   });
+
+  it("keeps byte-only classification unless the caller supplies an audio hint", async () => {
+    const mp4 = Buffer.from("0000001c6674797069736f6d0000000069736f6d0000000000000000", "hex");
+    const base64 = mp4.toString("base64");
+
+    await expect(sniffMimeFromBase64(base64)).resolves.toBe("video/mp4");
+    await expect(
+      sniffMimeFromBase64(base64, { headerMime: "audio/mp4", filePath: "voice.m4a" }),
+    ).resolves.toBe("audio/mp4");
+  });
+
+  it("rejects MIME signatures shorter than two base64 quads", async () => {
+    await expect(
+      sniffMimeFromBase64(Buffer.from("BM").toString("base64")),
+    ).resolves.toBeUndefined();
+    await expect(
+      sniffMimeFromBase64(Buffer.from([0xff, 0xd8, 0xff]).toString("base64")),
+    ).resolves.toBeUndefined();
+  });
+
+  it("sniffs large base64 payloads from their prefix", async () => {
+    const onePixelPng =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+    const png = Buffer.concat([Buffer.from(onePixelPng, "base64"), Buffer.alloc(1_900_000)]);
+
+    await expect(sniffMimeFromBase64(png.toString("base64"))).resolves.toBe("image/png");
+  });
+
+  it("rejects malformed data after a valid MIME prefix", async () => {
+    const onePixelPng =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
+    await expect(sniffMimeFromBase64(onePixelPng + "!")).resolves.toBeUndefined();
+  });
 });

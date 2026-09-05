@@ -1,17 +1,46 @@
 // Googlechat plugin module implements monitor reply delivery behavior.
-import {
-  deliverTextOrMediaReply,
-  resolveSendableOutboundReplyParts,
-} from "openclaw/plugin-sdk/reply-payload";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   deleteGoogleChatMessage,
+  GoogleChatApiError,
   sendGoogleChatMessage,
   updateGoogleChatMessage,
-  uploadGoogleChatAttachment,
 } from "./api.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
+
+export type GoogleChatTypingMessage =
+  | {
+      placement: "top-level";
+      name: string;
+    }
+  | {
+      placement: "thread";
+      name: string;
+      requestedThreadName: string;
+      deliveredThreadName: string;
+    };
+
+export function createGoogleChatTypingMessage(params: {
+  messageName: string;
+  requestedThreadName?: string;
+  deliveredThreadName?: string;
+}): GoogleChatTypingMessage {
+  const name = params.messageName.trim();
+  const requestedThreadName = params.requestedThreadName?.trim();
+  if (!requestedThreadName) {
+    return { placement: "top-level", name };
+  }
+  return {
+    placement: "thread",
+    name,
+    requestedThreadName,
+    deliveredThreadName: params.deliveredThreadName?.trim() || requestedThreadName,
+  };
+}
 
 export async function deliverGoogleChatReply(params: {
   payload: {
@@ -26,137 +55,121 @@ export async function deliverGoogleChatReply(params: {
   core: GoogleChatCoreRuntime;
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-  typingMessageName?: string;
+  typingMessage?: GoogleChatTypingMessage;
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink } = params;
   // Clear this whenever the typing message is deleted or unavailable; otherwise
   // text delivery can keep retrying a dead message and drop content.
-  let typingMessageName = params.typingMessageName;
+  let typingMessage = params.typingMessage;
+  const replyThreadName = payload.replyToId?.trim() || undefined;
   const reply = resolveSendableOutboundReplyParts(payload);
-  const mediaCount = reply.mediaCount;
-  const hasMedia = reply.hasMedia;
-  const text = reply.text;
-  let firstTextChunk = true;
-  let suppressCaption = false;
-
-  if (hasMedia && typingMessageName) {
-    try {
-      await deleteGoogleChatMessage({
-        account,
-        messageName: typingMessageName,
+  let deliveryThreadName = replyThreadName;
+  const acceptedText: Array<{ id?: string; text: string }> = [];
+  const runTextOperation = async <T>(operation: Promise<T>): Promise<T> =>
+    await operation.catch((error: unknown) => {
+      if (acceptedText.length === 0) {
+        throw error;
+      }
+      throw createChannelPartialDeliveryError(error, {
+        messageIds: acceptedText.flatMap(({ id }) => (id ? [id] : [])),
+        content: acceptedText.map(({ text }) => text).join("\n"),
+        visibleReplySent: true,
       });
-      typingMessageName = undefined;
+    });
+
+  const typingMatchesReply =
+    typingMessage?.placement === "thread"
+      ? typingMessage.requestedThreadName === replyThreadName
+      : typingMessage?.placement === "top-level"
+        ? replyThreadName === undefined
+        : false;
+  if (typingMessage && !typingMatchesReply) {
+    // Typing starts before reply directives are resolved. Never edit a placeholder
+    // from one thread into a final reply targeted at another conversation surface.
+    try {
+      await deleteGoogleChatMessage({ account, messageName: typingMessage.name });
     } catch (err) {
       runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
-      if (typingMessageName) {
-        const fallbackText = reply.hasText
-          ? text
-          : mediaCount > 1
-            ? "Sent attachments."
-            : "Sent attachment.";
-        try {
-          await updateGoogleChatMessage({
-            account,
-            messageName: typingMessageName,
-            text: fallbackText,
-          });
-          suppressCaption = Boolean(text.trim());
-        } catch (updateErr) {
-          runtime.error?.(`Google Chat typing update failed: ${String(updateErr)}`);
-          typingMessageName = undefined;
-        }
-      }
     }
+    typingMessage = undefined;
+  } else if (typingMessage?.placement === "thread") {
+    // The requested thread decides whether the placeholder still belongs to this reply;
+    // the provider-returned thread owns every later physical send after fallback.
+    deliveryThreadName = typingMessage.deliveredThreadName;
+  }
+
+  if (reply.hasMedia) {
+    runtime.error?.(
+      "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel; sending text fallback only.",
+    );
+  }
+
+  if (reply.hasMedia && !reply.hasText) {
+    try {
+      if (typingMessage) {
+        await deleteGoogleChatMessage({ account, messageName: typingMessage.name });
+      }
+    } catch (err) {
+      runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
+    }
+    // Permanent policy rejection before any recipient-visible send; the typed
+    // contract keeps delivery custody from recording a false ambiguous attempt.
+    throw new PlatformMessageNotDispatchedError(
+      "Google Chat outbound attachments require user OAuth and no text fallback is available.",
+      { cause: undefined, retryable: false },
+    );
   }
 
   const chunkLimit = account.config.textChunkLimit ?? 4000;
   const chunkMode = core.channel.text.resolveChunkMode(config, "googlechat", account.accountId);
-  const sendTextMessage = async (chunk: string) => {
-    await sendGoogleChatMessage({
-      account,
-      space: spaceId,
-      text: chunk,
-      thread: payload.replyToId,
-    });
+  const recordOutboundStatus = () => {
+    try {
+      statusSink?.({ lastOutboundAt: Date.now() });
+    } catch (err) {
+      runtime.error?.(`Google Chat outbound status update failed: ${String(err)}`);
+    }
   };
-  await deliverTextOrMediaReply({
-    payload,
-    text: suppressCaption ? "" : reply.text,
-    chunkText: (value) => core.channel.text.chunkMarkdownTextWithMode(value, chunkLimit, chunkMode),
-    sendText: async (chunk) => {
+  const sendTextMessage = async (chunk: string) => {
+    const sent = await runTextOperation(
+      sendGoogleChatMessage({
+        account,
+        space: spaceId,
+        text: chunk,
+        thread: deliveryThreadName,
+      }),
+    );
+    if (sent) {
+      acceptedText.push({ id: sent.messageName?.trim() || undefined, text: chunk });
+    }
+    if (replyThreadName) {
+      deliveryThreadName = sent?.threadName?.trim() || deliveryThreadName;
+    }
+  };
+  const chunks = core.channel.text.chunkMarkdownTextWithMode(reply.text, chunkLimit, chunkMode);
+  for (const chunk of chunks) {
+    if (!chunk) {
+      continue;
+    }
+    if (typingMessage) {
       try {
-        if (firstTextChunk && typingMessageName) {
-          await updateGoogleChatMessage({
-            account,
-            messageName: typingMessageName,
-            text: chunk,
-          });
-        } else {
-          await sendTextMessage(chunk);
-        }
-        firstTextChunk = false;
-        statusSink?.({ lastOutboundAt: Date.now() });
-      } catch (err) {
-        runtime.error?.(`Google Chat message send failed: ${String(err)}`);
-        if (firstTextChunk && typingMessageName) {
-          typingMessageName = undefined;
-          try {
-            await sendTextMessage(chunk);
-            statusSink?.({ lastOutboundAt: Date.now() });
-          } catch (fallbackErr) {
-            runtime.error?.(`Google Chat message fallback send failed: ${String(fallbackErr)}`);
-          } finally {
-            firstTextChunk = false;
-          }
-        }
-      }
-    },
-    sendMedia: async ({ mediaUrl, caption }) => {
-      try {
-        const loaded = await core.channel.media.readRemoteMediaBuffer({
-          url: mediaUrl,
-          maxBytes: (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
-        });
-        const upload = await uploadAttachmentForReply({
+        const updated = await updateGoogleChatMessage({
           account,
-          spaceId,
-          buffer: loaded.buffer,
-          contentType: loaded.contentType,
-          filename: loaded.fileName ?? "attachment",
+          messageName: typingMessage.name,
+          text: chunk,
         });
-        if (!upload.attachmentUploadToken) {
-          throw new Error("missing attachment upload token");
+        acceptedText.push({ id: updated.messageName?.trim() || typingMessage.name, text: chunk });
+      } catch (error) {
+        if (!(error instanceof GoogleChatApiError) || error.status !== 404) {
+          throw error;
         }
-        await sendGoogleChatMessage({
-          account,
-          space: spaceId,
-          text: caption,
-          thread: payload.replyToId,
-          attachments: [
-            { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
-          ],
-        });
-        statusSink?.({ lastOutboundAt: Date.now() });
-      } catch (err) {
-        runtime.error?.(`Google Chat attachment send failed: ${String(err)}`);
+        runtime.error?.(`Google Chat typing update failed: ${String(error)}`);
+        await sendTextMessage(chunk);
       }
-    },
-  });
-}
-
-async function uploadAttachmentForReply(params: {
-  account: ResolvedGoogleChatAccount;
-  spaceId: string;
-  buffer: Buffer;
-  contentType?: string;
-  filename: string;
-}) {
-  const { account, spaceId, buffer, contentType, filename } = params;
-  return await uploadGoogleChatAttachment({
-    account,
-    space: spaceId,
-    filename,
-    buffer,
-    contentType,
-  });
+      typingMessage = undefined;
+      recordOutboundStatus();
+      continue;
+    }
+    await sendTextMessage(chunk);
+    recordOutboundStatus();
+  }
 }

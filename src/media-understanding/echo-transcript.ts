@@ -4,22 +4,20 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 
-let messageRuntimePromise: Promise<typeof import("../channels/message/runtime.js")> | null = null;
-
-function loadMessageRuntime() {
-  // The message runtime is heavy and only needed when echo delivery actually
-  // proceeds to a deliverable channel.
-  messageRuntimePromise ??= import("../channels/message/runtime.js");
-  return messageRuntimePromise;
-}
+// The message runtime is heavy and only needed when echo delivery actually
+// proceeds to a deliverable channel.
+const loadMessageRuntime = createLazyRuntimeModule(() => import("../channels/message/runtime.js"));
 
 /** Default operator-visible transcript echo format for preflight audio transcription. */
 export const DEFAULT_ECHO_TRANSCRIPT_FORMAT = '📝 "{transcript}"';
 
 function formatEchoTranscript(transcript: string, format: string): string {
-  return format.replace("{transcript}", transcript);
+  // Function replacer keeps `$` sequences in the transcript literal instead of
+  // being parsed as String.prototype.replace substitution patterns.
+  return format.replace("{transcript}", () => transcript);
 }
 
 /** Sends a best-effort transcript echo back to the originating deliverable chat. */
@@ -28,6 +26,8 @@ export async function sendTranscriptEcho(params: {
   cfg: OpenClawConfig;
   transcript: string;
   format?: string;
+  logSuccess?: boolean;
+  failureLogPrefix?: string;
 }): Promise<void> {
   const { ctx, cfg, transcript } = params;
   const channel = ctx.Provider ?? ctx.Surface ?? "";
@@ -53,8 +53,8 @@ export async function sendTranscriptEcho(params: {
   const text = formatEchoTranscript(transcript, params.format ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT);
 
   try {
-    const { sendDurableMessageBatch } = await loadMessageRuntime();
-    const send = await sendDurableMessageBatch({
+    const { sendDurableMessageBatchCore } = await loadMessageRuntime();
+    const send = await sendDurableMessageBatchCore({
       cfg,
       channel: normalizedChannel,
       to,
@@ -67,10 +67,11 @@ export async function sendTranscriptEcho(params: {
     if (send.status === "failed") {
       throw send.error;
     }
-    if (shouldLogVerbose()) {
+    if ((params.logSuccess ?? true) && shouldLogVerbose()) {
       logVerbose(`media: echo-transcript sent to ${normalizedChannel}/${to}`);
     }
   } catch (err) {
-    logVerbose(`media: echo-transcript delivery failed: ${String(err)}`);
+    const prefix = params.failureLogPrefix ?? "media: echo-transcript delivery failed";
+    logVerbose(`${prefix}: ${String(err)}`);
   }
 }

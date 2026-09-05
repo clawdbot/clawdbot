@@ -95,26 +95,15 @@ vi.mock("openclaw/plugin-sdk/routing", () => ({
   }),
 }));
 
-import {
-  createTestLegacyFlatWebInboundMessage,
-  createTestWebAudioInboundMessage,
-} from "../../inbound/test-message.test-helper.js";
-import type { WebInboundMessage } from "../../inbound/types.js";
+import { createTestWebAudioInboundMessage } from "../../inbound/test-message.test-helper.js";
+import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { createWebOnMessageHandler } from "./on-message.js";
 
-function makeAudioMsg(): WebInboundMessage {
+function makeAudioMsg(): AdmittedWebInboundMessage {
   return createTestWebAudioInboundMessage();
 }
 
-function makeLegacyAudioMsg() {
-  return createTestLegacyFlatWebInboundMessage({
-    body: "<media:audio>",
-    mediaPath: "/tmp/voice.ogg",
-    mediaType: "audio/ogg; codecs=opus",
-  });
-}
-
-function makeGroupAudioMsg(): WebInboundMessage {
+function makeGroupAudioMsg(): AdmittedWebInboundMessage {
   return createTestWebAudioInboundMessage({
     platform: { chatJid: "1203630@g.us" },
     admission: {
@@ -130,7 +119,7 @@ function makeGroupAudioMsg(): WebInboundMessage {
   });
 }
 
-function makeBlockedDirectAudioMsg(): WebInboundMessage {
+function makeBlockedDirectAudioMsg(): AdmittedWebInboundMessage {
   return createTestWebAudioInboundMessage({
     admission: {
       ingress: {
@@ -150,15 +139,6 @@ function makeBlockedDirectAudioMsg(): WebInboundMessage {
       },
     },
   });
-}
-
-function makeEchoTracker() {
-  return {
-    has: () => false,
-    forget: () => {},
-    rememberText: () => {},
-    buildCombinedKey: (p: { combinedBody: string }) => p.combinedBody,
-  };
 }
 
 function mockObjectArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex = 0) {
@@ -188,7 +168,6 @@ function makeHandler(overrides: Partial<Parameters<typeof createWebOnMessageHand
     groupHistoryLimit: 20,
     groupHistories: new Map(),
     groupMemberNames: new Map(),
-    echoTracker: makeEchoTracker() as never,
     backgroundTasks: new Set(),
     replyResolver: vi.fn() as never,
     replyLogger: {
@@ -275,49 +254,6 @@ describe("createWebOnMessageHandler audio preflight", () => {
     expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
     expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
     expect(updateLastRouteInBackgroundMock).not.toHaveBeenCalled();
-    expect(processMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("skips early DM ack/preflight for legacy audio without explicit access proof", async () => {
-    const handler = makeHandler();
-
-    await handler(makeLegacyAudioMsg());
-
-    expect(events).toStrictEqual([]);
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-    expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
-    expect(processMessageMock).toHaveBeenCalledTimes(1);
-    const processParams = mockObjectArg(processMessageMock, "processMessage");
-    expect(processParams).not.toHaveProperty("preflightAudioTranscript");
-    expect(processParams).not.toHaveProperty("ackAlreadySent");
-    expect(processParams).not.toHaveProperty("ackReaction");
-  });
-
-  it("shares one transcript for legacy direct broadcasts without explicit access proof", async () => {
-    maybeBroadcastMessageMock.mockImplementation(
-      async (params: { preflightAudioTranscript?: string | null }) => {
-        expect(params.preflightAudioTranscript).toBe("transcribed voice note");
-        return true;
-      },
-    );
-    const handler = makeHandler({
-      cfg: {
-        channels: {
-          whatsapp: {
-            ackReaction: { enabled: true },
-          },
-        },
-        broadcast: {
-          "+15551234567": ["main", "backup"],
-        },
-      } as never,
-    });
-
-    await handler(makeLegacyAudioMsg());
-
-    expect(events).toStrictEqual(["stt"]);
-    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-    expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
     expect(processMessageMock).not.toHaveBeenCalled();
   });
 
@@ -465,8 +401,13 @@ describe("createWebOnMessageHandler audio preflight", () => {
     await handler(makeAudioMsg());
 
     expect(capturedCtx).toEqual({
-      MediaPaths: ["/tmp/voice.ogg"],
-      MediaTypes: ["audio/ogg; codecs=opus"],
+      media: [
+        {
+          path: "/tmp/voice.ogg",
+          contentType: "audio/ogg; codecs=opus",
+          kind: "audio",
+        },
+      ],
       From: "+15550000002",
       To: "+15550000001",
       Provider: "whatsapp",

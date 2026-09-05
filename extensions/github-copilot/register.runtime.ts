@@ -1,25 +1,6 @@
 // Github Copilot plugin module implements register behavior.
-import {
-  coerceSecretRef,
-  ensureAuthProfileStore,
-  listProfilesForProvider,
-} from "openclaw/plugin-sdk/provider-auth";
-import { githubCopilotLoginCommand } from "./login.js";
-import { PROVIDER_ID, resolveCopilotForwardCompatModel } from "./models.js";
-import { wrapCopilotAnthropicStream, wrapCopilotProviderStream } from "./stream.js";
-import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } from "./token.js";
-import { fetchCopilotUsage } from "./usage.js";
+export { DEFAULT_COPILOT_API_BASE_URL } from "./runtime-auth.js";
+export { resolveCopilotRuntimeAuth } from "./runtime-auth.js";
 
-export {
-  coerceSecretRef,
-  DEFAULT_COPILOT_API_BASE_URL,
-  ensureAuthProfileStore,
-  fetchCopilotUsage,
-  githubCopilotLoginCommand,
-  listProfilesForProvider,
-  PROVIDER_ID,
-  resolveCopilotApiToken,
-  resolveCopilotForwardCompatModel,
-  wrapCopilotAnthropicStream,
-  wrapCopilotProviderStream,
-};
+export { resolveCopilotStarterModel } from "./starter-model.js";
+export { fetchCopilotUsage } from "./usage.js";

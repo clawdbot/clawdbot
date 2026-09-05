@@ -1,12 +1,7 @@
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 // Fetches Codex provider usage windows.
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
-import { parseStrictFiniteNumber } from "./parse-finite-number.js";
-import {
-  buildUsageHttpErrorSnapshot,
-  discardUsageResponseBody,
-  fetchJson,
-  readUsageJson,
-} from "./provider-usage.fetch.shared.js";
+import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
@@ -81,23 +76,14 @@ export async function fetchCodexUsage(
       defaultHeaders,
     }) ?? defaultHeaders;
 
-  const res = await fetchJson(
-    "https://chatgpt.com/backend-api/wham/usage",
-    { method: "GET", headers },
+  const parsed = await fetchUsageJson({
+    provider: "openai",
+    url: "https://chatgpt.com/backend-api/wham/usage",
+    init: { method: "GET", headers },
     timeoutMs,
     fetchFn,
-  );
-
-  if (!res.ok) {
-    await discardUsageResponseBody(res);
-    return buildUsageHttpErrorSnapshot({
-      provider: "openai",
-      status: res.status,
-      tokenExpiredStatuses: [401, 403],
-    });
-  }
-
-  const parsed = await readUsageJson("openai", res);
+    tokenExpiredStatuses: [401, 403],
+  });
   if (!parsed.ok) {
     return parsed.snapshot;
   }
@@ -129,13 +115,16 @@ export async function fetchCodexUsage(
     });
   }
 
-  let plan = data.plan_type;
+  const plan = data.plan_type;
+  let billing: ProviderUsageSnapshot["billing"];
   if (data.credits?.balance !== undefined && data.credits.balance !== null) {
     const balance =
       typeof data.credits.balance === "number"
         ? data.credits.balance
-        : (parseStrictFiniteNumber(data.credits.balance) ?? 0);
-    plan = plan ? `${plan} ($${balance.toFixed(2)})` : `$${balance.toFixed(2)}`;
+        : parseStrictFiniteNumber(data.credits.balance);
+    if (balance !== undefined && balance >= 0) {
+      billing = [{ type: "balance", amount: balance, unit: "credits" }];
+    }
   }
 
   return {
@@ -143,5 +132,6 @@ export async function fetchCodexUsage(
     displayName: PROVIDER_LABELS.openai,
     windows,
     plan,
+    ...(billing ? { billing } : {}),
   };
 }

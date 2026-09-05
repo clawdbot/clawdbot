@@ -3,19 +3,36 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
-import { resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WizardStartResult } from "../../packages/gateway-protocol/src/index.js";
+import {
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfig,
+  writeConfigFile,
+} from "../config/config.js";
+import { resetConfigOverrides, setConfigOverride } from "../config/runtime-overrides.js";
+import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { getPairedDevice } from "../infra/device-pairing.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { callGateway } from "./call.js";
+import {
+  createGatewayConfigPath,
+  GATEWAY_TEST_ENV_KEYS,
+  nextGatewayId,
+  removeGatewayTempHome,
+  resetGatewayTestState,
+  setupGatewayTempHome,
+} from "./gateway.test-support.js";
 import { startGatewayServer } from "./server.js";
 import {
   connectDeviceAuthReq,
   disconnectGatewayClient,
   connectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
 import { installOpenAiResponsesMock } from "./test-helpers.openai-mock.js";
@@ -23,54 +40,14 @@ import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.
 
 let createConfigIO: typeof import("../config/config.js").createConfigIO;
 const GATEWAY_E2E_TIMEOUT_MS = 90_000;
-let gatewayTestSeq = 0;
-const GATEWAY_TEST_ENV_KEYS = [
-  "HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_GMAIL_WATCHER",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_SKIP_CANVAS_HOST",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-] as const;
-
-function nextGatewayId(prefix: string): string {
-  return `${prefix}-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${gatewayTestSeq++}`;
-}
-
-async function createEmptyBundledPluginsDir(tempHome: string): Promise<string> {
-  const bundledPluginsDir = path.join(tempHome, "openclaw-test-empty-bundled-plugins");
-  await fs.mkdir(bundledPluginsDir, { recursive: true });
-  return bundledPluginsDir;
-}
-
-async function createGatewayConfigPath(tempHome: string): Promise<string> {
-  const configPath = path.join(tempHome, ".openclaw", "openclaw.json");
-  await fs.mkdir(path.dirname(configPath), { recursive: true });
-  return configPath;
-}
-
-async function removeGatewayTempHome(tempHome: string): Promise<void> {
-  await fs.rm(tempHome, {
-    recursive: true,
-    force: true,
-    maxRetries: 10,
-    retryDelay: 50,
-  });
-}
 
 async function startLoopbackTokenGateway(token: string) {
-  const port = await getFreeGatewayPort();
+  const port = await getGatewayE2ePortBlock();
   const server = await startGatewayServer(port, {
     bind: "loopback",
     auth: { mode: "token", token },
     controlUiEnabled: false,
-    deferStartupSidecars: true,
+    sidecarStartup: "defer",
   });
   return { port, server };
 }
@@ -129,44 +106,6 @@ async function readCounterWithRetry(filePath: string): Promise<number> {
   return counter;
 }
 
-async function setupGatewayTempHome(params: { prefix: string; minimalGateway?: boolean }) {
-  const envSnapshot = captureEnv([
-    ...GATEWAY_TEST_ENV_KEYS,
-    ...(params.minimalGateway ? (["OPENCLAW_TEST_MINIMAL_GATEWAY"] as const) : []),
-  ]);
-
-  const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), params.prefix));
-  setTestEnvValue("HOME", tempHome);
-  setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempHome, ".openclaw"));
-  deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-  setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
-  setTestEnvValue("OPENCLAW_SKIP_GMAIL_WATCHER", "1");
-  setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
-  setTestEnvValue("OPENCLAW_SKIP_CANVAS_HOST", "1");
-  setTestEnvValue("OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", "1");
-  setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "1");
-  if (params.minimalGateway) {
-    setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "1");
-  } else {
-    deleteTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY");
-  }
-
-  const workspaceDir = path.join(tempHome, "openclaw");
-  await fs.mkdir(workspaceDir, { recursive: true });
-  setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", await createEmptyBundledPluginsDir(tempHome));
-  setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
-  return { envSnapshot, tempHome, workspaceDir };
-}
-
-function resetGatewayTestState(): void {
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  clearSessionStoreCacheForTest();
-  resetAgentRunContextForTest();
-  clearAllBootstrapSnapshots();
-  clearGatewaySubagentRuntime();
-}
-
 describe("gateway e2e", () => {
   beforeEach(resetGatewayTestState);
 
@@ -176,83 +115,566 @@ describe("gateway e2e", () => {
     ({ createConfigIO } = await import("../config/config.js"));
   });
 
+  it("pairs the local CLI before a runtime-token loopback gateway becomes ready", async () => {
+    const { envSnapshot, tempHome } = await setupGatewayTempHome({
+      prefix: "openclaw-gw-runtime-token-cli-pairing-",
+      minimalGateway: true,
+    });
+    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    try {
+      deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+      const configPath = await createGatewayConfigPath(tempHome);
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      const initialConfig: OpenClawConfig = {
+        gateway: { mode: "local", bind: "loopback" },
+        logging: { level: "info" },
+      };
+      await createConfigIO({ configPath }).writeConfigFile(initialConfig);
+      const port = await getGatewayE2ePortBlock();
+      server = await startGatewayServer(port, {
+        bind: "loopback",
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      });
+
+      await expect(
+        callGateway({
+          config: initialConfig,
+          localPortOverride: port,
+          method: "health",
+          timeoutMs: 5_000,
+        }),
+      ).resolves.toEqual(expect.any(Object));
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+      expect(persisted.gateway?.auth?.token).toBeUndefined();
+      const identity = loadOrCreateDeviceIdentity();
+      expect(loadDeviceAuthToken({ deviceId: identity.deviceId, role: "operator" })).toMatchObject({
+        scopes: expect.arrayContaining(["operator.admin"]),
+      });
+      await expect(getPairedDevice(identity.deviceId)).resolves.toMatchObject({
+        approvedVia: "silent",
+        approvedScopes: expect.arrayContaining(["operator.admin"]),
+      });
+    } finally {
+      if (server) {
+        await server.close({ reason: "runtime-token local CLI pairing test complete" });
+      }
+      await removeGatewayTempHome(tempHome);
+      envSnapshot.restore();
+    }
+  });
+
+  it.each(["generated", "explicit-override", "secret-ref-override", "runtime-overrides"] as const)(
+    "preserves %s auth across a safe direct gateway reload",
+    async (authSource) => {
+      const { envSnapshot, tempHome } = await setupGatewayTempHome({
+        prefix: "openclaw-gw-direct-reload-",
+      });
+      let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+      let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+      try {
+        deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+        const fileToken = nextGatewayId("direct-file-token");
+        const overrideToken = nextGatewayId("direct-override-token");
+        const initialConfig: OpenClawConfig = {
+          ...(authSource !== "generated"
+            ? {
+                gateway: {
+                  auth: {
+                    mode: "token",
+                    token:
+                      authSource === "secret-ref-override"
+                        ? {
+                            source: "env" as const,
+                            provider: "default",
+                            id: "OPENCLAW_TEST_MISSING_DISK_TOKEN",
+                          }
+                        : fileToken,
+                  },
+                },
+              }
+            : {}),
+          ...(authSource === "runtime-overrides"
+            ? { channels: { whatsapp: { dmPolicy: "pairing" as const } } }
+            : {}),
+          logging: { level: "info" },
+        };
+        const configPath = await createGatewayConfigPath(tempHome);
+        setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+        const configIO = createConfigIO({ configPath });
+        await configIO.writeConfigFile(initialConfig);
+        if (authSource === "secret-ref-override") {
+          setTestEnvValue("OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN", overrideToken);
+        }
+        if (authSource === "runtime-overrides") {
+          deleteTestEnvValue("OPENCLAW_SKIP_CHANNELS");
+          deleteTestEnvValue("OPENCLAW_SKIP_PROVIDERS");
+          setTestEnvValue("OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN", overrideToken);
+          expect(
+            setConfigOverride("gateway.auth.token", {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
+            }).ok,
+          ).toBe(true);
+          expect(
+            setConfigOverride("channels.whatsapp", { dmPolicy: "open", allowFrom: ["*"] }).ok,
+          ).toBe(true);
+        }
+        const callerAuthOverride: GatewayAuthConfig | undefined =
+          authSource === "explicit-override"
+            ? {
+                mode: "token" as const,
+                token: overrideToken,
+                rateLimit: { maxAttempts: 7 },
+              }
+            : authSource === "secret-ref-override"
+              ? {
+                  mode: "token",
+                  token: {
+                    source: "env",
+                    provider: "default",
+                    id: "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
+                  },
+                }
+              : undefined;
+        const callerTailscaleOverride: GatewayTailscaleConfig | undefined =
+          authSource === "explicit-override"
+            ? { mode: "off" as const, preserveFunnel: true }
+            : undefined;
+        const port = await getGatewayE2ePortBlock();
+        server = await startGatewayServer(port, {
+          bind: "loopback",
+          ...(callerAuthOverride ? { auth: callerAuthOverride } : {}),
+          ...(callerTailscaleOverride ? { tailscale: callerTailscaleOverride } : {}),
+          controlUiEnabled: false,
+        });
+        const expectedToken =
+          authSource === "generated" ? getRuntimeConfig().gateway?.auth?.token : overrideToken;
+        expect(typeof expectedToken).toBe("string");
+        client = await connectGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token: expectedToken as string,
+          clientDisplayName: "vitest-direct-reload",
+        });
+
+        const health = await client.request<{
+          configReload?: { hotReloadStatus?: string };
+        }>("health", { probe: true });
+        expect(health?.configReload?.hotReloadStatus).toBe("active");
+
+        if (authSource === "runtime-overrides") {
+          expect(getRuntimeConfig().channels?.whatsapp?.dmPolicy).toBe("open");
+        } else if (callerAuthOverride && callerTailscaleOverride) {
+          callerAuthOverride.token = `${overrideToken}-mutated`;
+          callerAuthOverride.rateLimit!.maxAttempts = 99;
+          callerTailscaleOverride.preserveFunnel = false;
+        }
+        const nextLoggingSource = {
+          ...initialConfig,
+          logging: { level: "debug" },
+        } satisfies OpenClawConfig;
+        await writeConfigFile(nextLoggingSource);
+        await expect
+          .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })
+          .toBe("debug");
+        expect(getRuntimeConfig().gateway?.auth?.token).toBe(expectedToken);
+        if (authSource === "explicit-override") {
+          expect(getRuntimeConfig().gateway?.auth?.rateLimit?.maxAttempts).toBe(7);
+          expect(getRuntimeConfig().gateway?.tailscale?.preserveFunnel).toBe(true);
+        }
+        if (authSource === "runtime-overrides") {
+          expect(getRuntimeConfig().channels?.whatsapp?.dmPolicy).toBe("open");
+          expect(getRuntimeConfig().channels?.whatsapp?.allowFrom).toEqual(["*"]);
+
+          const sourceBeforePolicyEdit = (await configIO.readConfigFileSnapshot()).sourceConfig;
+          const nextPolicySource = {
+            ...sourceBeforePolicyEdit,
+            channels: {
+              ...sourceBeforePolicyEdit.channels,
+              whatsapp: {
+                ...sourceBeforePolicyEdit.channels?.whatsapp,
+                dmPolicy: "disabled",
+              },
+            },
+          } satisfies OpenClawConfig;
+          await writeConfigFile(nextPolicySource);
+          const persistedPolicyEdit = JSON.parse(
+            await fs.readFile(configPath, "utf-8"),
+          ) as OpenClawConfig;
+          expect(persistedPolicyEdit.channels?.whatsapp?.dmPolicy).toBe("disabled");
+          expect(getRuntimeConfig().channels?.whatsapp?.dmPolicy).toBe("open");
+
+          const sourceBeforeUnrelatedWrite = (await configIO.readConfigFileSnapshot()).sourceConfig;
+          const nextUnrelatedSource = {
+            ...sourceBeforeUnrelatedWrite,
+            ui: { seamColor: "#123456" },
+          } satisfies OpenClawConfig;
+          await writeConfigFile(nextUnrelatedSource);
+          const persistedAfterUnrelatedWrite = JSON.parse(
+            await fs.readFile(configPath, "utf-8"),
+          ) as OpenClawConfig;
+          expect(persistedAfterUnrelatedWrite.channels?.whatsapp?.dmPolicy).toBe("disabled");
+          expect(persistedAfterUnrelatedWrite.ui?.seamColor).toBe("#123456");
+        }
+
+        const reconnected = await connectGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token: expectedToken as string,
+          clientDisplayName: "vitest-direct-reload-reconnect",
+        });
+        await disconnectGatewayClient(reconnected);
+      } finally {
+        if (client) {
+          await disconnectGatewayClient(client);
+        }
+        if (server) {
+          await server.close({ reason: "direct reload test complete" });
+        }
+        await removeGatewayTempHome(tempHome);
+        envSnapshot.restore();
+      }
+    },
+  );
+
+  it("refreshes direct hook target policy after hot reload", async () => {
+    const { envSnapshot, tempHome } = await setupGatewayTempHome({
+      prefix: "openclaw-gw-hook-policy-reload-",
+    });
+    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    try {
+      const configPath = await createGatewayConfigPath(tempHome);
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      const gatewayToken = nextGatewayId("hook-policy-gateway-token");
+      const hookToken = nextGatewayId("hook-policy-token");
+      const fixedSessionStore = path.join(tempHome, ".openclaw", "sessions.json");
+      const initialConfig: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "old" } },
+          entries: { old: {} },
+        },
+        gateway: { auth: { mode: "token", token: gatewayToken } },
+        hooks: { enabled: true, token: hookToken, allowedAgentIds: [] },
+        session: { scope: "global", store: fixedSessionStore },
+      };
+      await createConfigIO({ configPath }).writeConfigFile(initialConfig, {
+        allowedAgentRosterRemovals: ["main"],
+      });
+      const port = await getGatewayE2ePortBlock();
+      const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
+      server = await startGatewayServer(port, {
+        bind: "loopback",
+        controlUiEnabled: false,
+        hotReloadRecovery,
+      });
+      await expect
+        .poll(
+          async () => {
+            const health = await callGateway({
+              config: initialConfig,
+              localPortOverride: port,
+              method: "health",
+              timeoutMs: 5_000,
+            });
+            return (health as { configReload?: { hotReloadStatus?: string } }).configReload
+              ?.hotReloadStatus;
+          },
+          { timeout: 5_000, interval: 50 },
+        )
+        .toBe("active");
+      const writeConfigAtomically = async (config: OpenClawConfig) => {
+        const stagedConfigPath = `${configPath}.next`;
+        await fs.writeFile(stagedConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+        await fs.rename(stagedConfigPath, configPath);
+      };
+
+      const postAgentHook = async (agentId: string) => {
+        const response = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${hookToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ message: "policy probe", agentId }),
+        });
+        return {
+          status: response.status,
+          body: (await response.json()) as { error?: string },
+        };
+      };
+
+      await expect(postAgentHook("old")).resolves.toMatchObject({
+        status: 400,
+        body: { error: "agentId is not allowed by hooks.allowedAgentIds" },
+      });
+      await expect(postAgentHook("new")).resolves.toMatchObject({
+        status: 400,
+        body: { error: 'unknown agentId "new"' },
+      });
+
+      const nextConfig: OpenClawConfig = {
+        ...initialConfig,
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "new" } },
+          entries: { new: {} },
+        },
+      };
+      await writeConfigAtomically(nextConfig);
+      await expect
+        .poll(
+          () => ({
+            agentIds: Object.keys(getRuntimeConfig().agents?.entries ?? {}),
+            ownerAgentId: getRuntimeConfig().agents?.defaults?.sessionStore?.agentId,
+          }),
+          { timeout: 5_000, interval: 50 },
+        )
+        .toEqual({ agentIds: ["new"], ownerAgentId: "new" });
+
+      await expect(postAgentHook("new")).resolves.toMatchObject({
+        status: 400,
+        body: { error: "agentId is not allowed by hooks.allowedAgentIds" },
+      });
+      await expect(postAgentHook("old")).resolves.toMatchObject({
+        status: 400,
+        body: { error: 'unknown agentId "old"' },
+      });
+      expect(hotReloadRecovery).not.toHaveBeenCalled();
+    } finally {
+      if (server) {
+        await server.close({ reason: "hook policy reload test complete" });
+      }
+      await removeGatewayTempHome(tempHome);
+      envSnapshot.restore();
+    }
+  });
+
+  it(
+    "re-resolves a startup auth SecretRef override when secrets reload",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async () => {
+      const { envSnapshot, tempHome } = await setupGatewayTempHome({
+        prefix: "openclaw-gw-startup-auth-ref-",
+      });
+      let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+      let oldClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+      try {
+        const configPath = await createGatewayConfigPath(tempHome);
+        setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+        const configIO = createConfigIO({ configPath });
+        const fileToken = nextGatewayId("startup-auth-file-token");
+        const oldToken = nextGatewayId("startup-auth-ref-old");
+        const newToken = nextGatewayId("startup-auth-ref-new");
+        await configIO.writeConfigFile({
+          gateway: { auth: { mode: "token", token: fileToken } },
+          logging: { level: "info" },
+        });
+        setTestEnvValue("OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN", oldToken);
+        const port = await getGatewayE2ePortBlock();
+        server = await startGatewayServer(port, {
+          bind: "loopback",
+          auth: {
+            mode: "token",
+            token: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
+            },
+          },
+          controlUiEnabled: false,
+        });
+        oldClient = await connectGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token: oldToken,
+          clientDisplayName: "vitest-startup-auth-ref-old",
+        });
+
+        setTestEnvValue("OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN", newToken);
+        const reload = await oldClient
+          .request<{ ok?: boolean }>("secrets.reload", {})
+          .catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
+        if (!(reload instanceof Error)) {
+          expect(reload.ok).toBe(true);
+        }
+        const newClient = await connectGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token: newToken,
+          clientDisplayName: "vitest-startup-auth-ref-new",
+        });
+        await disconnectGatewayClient(newClient);
+
+        await writeConfigFile({
+          gateway: { auth: { mode: "token", token: fileToken } },
+          logging: { level: "debug" },
+        });
+        const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+          gateway?: { auth?: { token?: unknown } };
+        };
+        expect(persisted.gateway?.auth?.token).toBe(fileToken);
+      } finally {
+        if (oldClient) {
+          await disconnectGatewayClient(oldClient);
+        }
+        if (server) {
+          await server.close({ reason: "startup auth SecretRef rotation test complete" });
+        }
+        await removeGatewayTempHome(tempHome);
+        envSnapshot.restore();
+      }
+    },
+  );
+
+  it("preserves runtime-seeded Control UI origins across a safe direct reload", async () => {
+    const { envSnapshot, tempHome } = await setupGatewayTempHome({
+      prefix: "openclaw-gw-direct-origins-",
+    });
+    const token = nextGatewayId("direct-origins-token");
+    const configPath = await createGatewayConfigPath(tempHome);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    const configIO = createConfigIO({ configPath });
+    const initialConfig: OpenClawConfig = {
+      gateway: { auth: { mode: "token", token } },
+      logging: { level: "info" },
+    };
+    await configIO.writeConfigFile(initialConfig);
+    const port = await getGatewayE2ePortBlock();
+    const server = await startGatewayServer(port, {
+      bind: "lan",
+      controlUiEnabled: false,
+    });
+
+    try {
+      const seededOrigins = getRuntimeConfig().gateway?.controlUi?.allowedOrigins;
+      expect(seededOrigins?.length).toBeGreaterThan(0);
+
+      await writeConfigFile({
+        ...initialConfig,
+        logging: { level: "debug" },
+      });
+      await expect
+        .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })
+        .toBe("debug");
+      expect(getRuntimeConfig().gateway?.controlUi?.allowedOrigins).toEqual(seededOrigins);
+
+      expect(setConfigOverride("logging.level", "warn").ok).toBe(true);
+      await writeConfigFile({
+        ...initialConfig,
+        ui: { seamColor: "#123456" },
+        logging: { level: "debug" },
+      });
+      await expect
+        .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })
+        .toBe("warn");
+
+      resetConfigOverrides();
+      await writeConfigFile({
+        ...initialConfig,
+        ui: { seamColor: "#654321" },
+        logging: { level: "debug" },
+      });
+      await expect
+        .poll(() => getRuntimeConfig().logging?.level, { timeout: 5_000, interval: 50 })
+        .toBe("debug");
+      expect(getRuntimeConfig().gateway?.controlUi?.allowedOrigins).toEqual(seededOrigins);
+    } finally {
+      await server.close({ reason: "direct origin reload test complete" });
+      await removeGatewayTempHome(tempHome);
+      envSnapshot.restore();
+    }
+  });
+
   it(
     "accepts a gateway agent request over ws and returns a run id",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {
-      const { baseUrl: openaiBaseUrl, restore } = installOpenAiResponsesMock();
       const { envSnapshot, tempHome, workspaceDir } = await setupGatewayTempHome({
         prefix: "openclaw-gw-mock-home-",
-        minimalGateway: true,
       });
+      const { baseUrl: openaiBaseUrl, restore } = installOpenAiResponsesMock();
 
-      const token = nextGatewayId("test-token");
-      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
+      try {
+        const token = nextGatewayId("test-token");
+        setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
 
-      const configPath = await createGatewayConfigPath(tempHome);
-      const mockProvider = buildMockOpenAiResponsesProvider(openaiBaseUrl);
+        const configPath = await createGatewayConfigPath(tempHome);
+        const mockProvider = buildMockOpenAiResponsesProvider(openaiBaseUrl);
 
-      const cfg = {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-            model: { primary: mockProvider.modelRef },
-            models: {
-              [mockProvider.modelRef]: {
-                params: {
-                  transport: "sse",
-                  openaiWsWarmup: false,
+        const cfg = {
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+              model: { primary: mockProvider.modelRef },
+              models: {
+                [mockProvider.modelRef]: {
+                  params: {
+                    transport: "sse",
+                    openaiWsWarmup: false,
+                  },
                 },
               },
             },
+            // The request below runs sessionKey "agent:dev:mock-openai"; the
+            // gateway rejects session keys whose agent id is not declared.
+            entries: { dev: { default: true } },
           },
-        },
-        models: {
-          mode: "replace",
-          providers: {
-            [mockProvider.providerId]: mockProvider.config,
+          models: {
+            mode: "replace",
+            providers: {
+              [mockProvider.providerId]: mockProvider.config,
+            },
           },
-        },
-        gateway: { auth: { token } },
-      };
+          gateway: { auth: { token } },
+        };
 
-      const { server, client } = await startGatewayWithClient({
-        cfg,
-        configPath,
-        token,
-        clientDisplayName: "vitest-mock-openai",
-      });
+        const { server, client } = await startGatewayWithClient({
+          cfg,
+          configPath,
+          token,
+          clientDisplayName: "vitest-mock-openai",
+        });
 
-      try {
-        const sessionKey = "agent:dev:mock-openai";
+        try {
+          // Agent admission needs the reply runtime published by normal sidecar startup.
+          await server.startupSettled;
+          const sessionKey = "agent:dev:mock-openai";
 
-        const runId = nextGatewayId("run");
-        const payload = await client.request(
-          "agent",
-          {
-            sessionKey,
-            idempotencyKey: `idem-${runId}`,
-            message: "Reply with ok.",
-            deliver: false,
-          },
-          { expectFinal: false },
-        );
+          const runId = nextGatewayId("run");
+          const payload = await client.request(
+            "agent",
+            {
+              sessionKey,
+              idempotencyKey: `idem-${runId}`,
+              message: "Reply with ok.",
+              deliver: false,
+            },
+            { expectFinal: false },
+          );
 
-        expect(payload?.status).toBe("accepted");
-        expect(typeof payload?.runId).toBe("string");
+          expect(payload?.status).toBe("accepted");
+          expect(typeof payload?.runId).toBe("string");
 
-        const abortPayload = await client.request(
-          "sessions.abort",
-          { runId: payload.runId },
-          { timeoutMs: 5_000 },
-        );
-        expect(["aborted", "no-active-run"]).toContain(abortPayload?.status);
+          const abortPayload = await client.request(
+            "sessions.abort",
+            { runId: payload.runId },
+            { timeoutMs: 5_000 },
+          );
+          expect(["aborted", "no-active-run"]).toContain(abortPayload?.status);
+        } finally {
+          try {
+            await disconnectGatewayClient(client);
+          } finally {
+            await server.close({ reason: "mock openai test complete" });
+          }
+        }
       } finally {
-        await disconnectGatewayClient(client);
-        await server.close({ reason: "mock openai test complete" });
-        await removeGatewayTempHome(tempHome);
-        restore();
-        envSnapshot.restore();
+        try {
+          await removeGatewayTempHome(tempHome);
+        } finally {
+          restore();
+          envSnapshot.restore();
+        }
       }
     },
   );
@@ -291,7 +713,7 @@ module.exports = {
       const cfg = {
         agents: {
           defaults: { workspace: workspaceDir },
-          list: [{ id: "main", default: true, tools: { allow: ["agents_list"] } }],
+          entries: { main: { default: true, tools: { allow: ["agents_list"] } } },
         },
         plugins: {
           allow: ["http-probe"],
@@ -352,7 +774,7 @@ module.exports = {
       clearConfigCache();
 
       const wizardToken = nextGatewayId("wiz-token");
-      const port = await getFreeGatewayPort();
+      const port = await getGatewayE2ePortBlock();
       const server = await startGatewayServer(port, {
         bind: "loopback",
         auth: { mode: "token", token: wizardToken },
@@ -433,7 +855,7 @@ module.exports = {
         await server.close({ reason: "wizard e2e complete" });
       }
 
-      const port2 = await getFreeGatewayPort();
+      const port2 = await getGatewayE2ePortBlock();
       const server2 = await startGatewayServer(port2, {
         bind: "loopback",
         controlUiEnabled: false,
@@ -459,24 +881,51 @@ module.exports = {
   );
 
   it(
+    "returns targeted channel resolution errors without wizard or config effects",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async () => {
+      const { envSnapshot, tempHome } = await setupGatewayTempHome({
+        prefix: "openclaw-wizard-channel-target-home-",
+        minimalGateway: true,
+      });
+      const configPath = await createGatewayConfigPath(tempHome);
+      const { client, server } = await startGatewayWithClient({
+        cfg: {},
+        configPath,
+        token: nextGatewayId("wiz-channel-target"),
+      });
+
+      try {
+        for (const channel of [" \t ", "unknown-channel"]) {
+          const expectedChannel = channel.trim();
+          const result = await client.request<WizardStartResult>("wizard.start", {
+            flow: "channels",
+            channel,
+          });
+          expect(result).toMatchObject({
+            done: true,
+            status: "error",
+            error: `Error: Unknown channel "${expectedChannel}". Run \`openclaw channels list --all\` to see configured and installable channels.`,
+          });
+          expect(result.step).toBeUndefined();
+        }
+
+        await expect(client.request("health", {})).resolves.toBeDefined();
+        await expect(fs.readFile(configPath, "utf8")).resolves.toBe("{}\n");
+      } finally {
+        await disconnectGatewayClient(client);
+        await server.close({ reason: "wizard channel target validation E2E complete" });
+        await removeGatewayTempHome(tempHome);
+        envSnapshot.restore();
+      }
+    },
+  );
+
+  it(
     "ignores env-driven plugin auto-enable in minimal gateway mode",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {
-      const envSnapshot = captureEnv([
-        "HOME",
-        "OPENCLAW_STATE_DIR",
-        "OPENCLAW_CONFIG_PATH",
-        "OPENCLAW_GATEWAY_TOKEN",
-        "OPENCLAW_SKIP_CHANNELS",
-        "OPENCLAW_SKIP_GMAIL_WATCHER",
-        "OPENCLAW_SKIP_CRON",
-        "OPENCLAW_SKIP_CANVAS_HOST",
-        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-        "OPENCLAW_SKIP_PROVIDERS",
-        "OPENCLAW_BUNDLED_PLUGINS_DIR",
-        "OPENCLAW_TEST_MINIMAL_GATEWAY",
-        "DISCORD_BOT_TOKEN",
-      ]);
+      const envSnapshot = captureEnv([...GATEWAY_TEST_ENV_KEYS, "DISCORD_BOT_TOKEN"]);
 
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimal-gateway-home-"));
       const configPath = await createGatewayConfigPath(tempHome);

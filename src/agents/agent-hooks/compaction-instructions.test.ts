@@ -1,10 +1,8 @@
 /** Tests compaction instruction defaults, precedence, and split-turn composition. */
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_COMPACTION_INSTRUCTIONS,
-  resolveCompactionInstructions,
-  composeSplitTurnInstructions,
-} from "./compaction-instructions.js";
+import { resolveCompactionInstructions } from "./compaction-instructions.js";
+
+const DEFAULT_COMPACTION_INSTRUCTIONS = resolveCompactionInstructions(undefined, undefined);
 
 describe("DEFAULT_COMPACTION_INSTRUCTIONS", () => {
   it("is a non-empty string", () => {
@@ -185,58 +183,5 @@ describe("resolveCompactionInstructions", () => {
         expect(result).toBe(expected);
       }
     });
-  });
-});
-
-describe("composeSplitTurnInstructions", () => {
-  it("joins turn prefix, separator, and resolved instructions with double newlines", () => {
-    const result = composeSplitTurnInstructions("Turn prefix here", "Resolved instructions here");
-    expect(result).toBe(
-      "Turn prefix here\n\nAdditional requirements:\n\nResolved instructions here",
-    );
-  });
-
-  it("output contains the turn prefix verbatim", () => {
-    const prefix = "Summarize the last 5 messages.";
-    const result = composeSplitTurnInstructions(prefix, "Keep it short.");
-    expect(result).toContain(prefix);
-  });
-
-  it("output contains the resolved instructions verbatim", () => {
-    const instructions = "Write in Korean. Preserve persona.";
-    const result = composeSplitTurnInstructions("prefix", instructions);
-    expect(result).toContain(instructions);
-  });
-
-  it("output contains 'Additional requirements:' separator", () => {
-    const result = composeSplitTurnInstructions("a", "b");
-    expect(result).toContain("Additional requirements:");
-  });
-
-  it("KNOWN_EDGE: empty turnPrefix produces leading blank line", () => {
-    const result = composeSplitTurnInstructions("", "instructions");
-    expect(result).toBe("\n\nAdditional requirements:\n\ninstructions");
-    expect(result.startsWith("\n")).toBe(true);
-  });
-
-  it("KNOWN_EDGE: empty resolvedInstructions produces trailing blank area", () => {
-    const result = composeSplitTurnInstructions("prefix", "");
-    expect(result).toBe("prefix\n\nAdditional requirements:\n\n");
-    expect(result.endsWith("\n\n")).toBe(true);
-  });
-
-  it("does not deduplicate if instructions already contain 'Additional requirements:'", () => {
-    const instructions = "Additional requirements: keep it short.";
-    const result = composeSplitTurnInstructions("prefix", instructions);
-    const count = (result.match(/Additional requirements:/g) || []).length;
-    expect(count).toBe(2);
-  });
-
-  it("preserves multiline content in both inputs", () => {
-    const prefix = "Line 1\nLine 2";
-    const instructions = "Rule A\nRule B\nRule C";
-    const result = composeSplitTurnInstructions(prefix, instructions);
-    expect(result).toContain("Line 1\nLine 2");
-    expect(result).toContain("Rule A\nRule B\nRule C");
   });
 });

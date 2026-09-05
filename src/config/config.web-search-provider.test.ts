@@ -1,18 +1,11 @@
 // Covers web-search provider config parsing and provider defaults.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as webSearchTesting } from "../agents/tools/web-search.js";
+import { resolveWebSearchProviderId } from "../web-search/runtime.js";
 import { buildWebSearchProviderConfig } from "./test-helpers.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn() },
-}));
-
-vi.mock("../plugin-sdk/telegram-command-config.js", () => ({
-  TELEGRAM_COMMAND_NAME_PATTERN: /^[a-z0-9_]+$/,
-  normalizeTelegramCommandName: (value: string) => value.trim().toLowerCase(),
-  normalizeTelegramCommandDescription: (value: string) => value.trim(),
-  resolveTelegramCustomCommands: () => ({ commands: [], issues: [] }),
 }));
 
 const mockWebSearchProviders = vi.hoisted(() => {
@@ -169,7 +162,7 @@ vi.mock("../plugins/manifest-registry.js", () => {
   });
 
   return {
-    loadPluginManifestRegistry: () => ({
+    loadPluginManifestRegistryCore: () => ({
       plugins: [
         {
           id: "brave",
@@ -241,7 +234,9 @@ vi.mock("../plugins/manifest-registry.js", () => {
   };
 });
 
-const { resolveSearchProvider } = webSearchTesting;
+const resolveSearchProvider = (
+  search?: Parameters<typeof resolveWebSearchProviderId>[0]["search"],
+) => resolveWebSearchProviderId({ search });
 
 type ValidationMessage = {
   path?: string;
@@ -569,29 +564,18 @@ describe("web search provider config", () => {
 });
 
 describe("web search provider auto-detection", () => {
-  const savedEnv = { ...process.env };
-
   beforeEach(() => {
-    delete process.env.BRAVE_API_KEY;
-    delete process.env.FIRECRAWL_API_KEY;
-    delete process.env.GEMINI_API_KEY;
-    delete process.env.KIMI_API_KEY;
-    delete process.env.MINIMAX_API_KEY;
-    delete process.env.MINIMAX_CODE_PLAN_KEY;
-    delete process.env.MINIMAX_CODING_API_KEY;
-    delete process.env.MINIMAX_OAUTH_TOKEN;
-    delete process.env.MOONSHOT_API_KEY;
-    delete process.env.PERPLEXITY_API_KEY;
-    delete process.env.OPENROUTER_API_KEY;
-    delete process.env.SEARXNG_BASE_URL;
-    delete process.env.TAVILY_API_KEY;
-    delete process.env.XAI_API_KEY;
-    delete process.env.KIMI_API_KEY;
-    delete process.env.MOONSHOT_API_KEY;
+    for (const provider of mockWebSearchProviders) {
+      for (const envVar of provider.envVars) {
+        vi.stubEnv(envVar, undefined);
+      }
+    }
   });
 
   afterEach(() => {
-    process.env = { ...savedEnv };
+    // Preserve Node's native env object: later workers in this shared fork
+    // must inherit fixture env changes, including OPENCLAW_STATE_DIR.
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 

@@ -4,11 +4,11 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
+import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import {
-  stripTargetKindPrefix,
+  stripOutboundTargetKindPrefix,
   stripTargetProviderPrefix,
   stripTargetTopicSuffix,
 } from "../../infra/outbound/channel-target-prefix.js";
@@ -29,42 +29,20 @@ function extractInferredGroupTargetId(params: {
       continue;
     }
     const target = stripTargetTopicSuffix(
-      stripTargetKindPrefix(stripTargetProviderPrefix(candidate, params.channelId), [
+      stripOutboundTargetKindPrefix(stripTargetProviderPrefix(candidate, params.channelId), [
         "group",
         "channel",
         "conversation",
         "room",
         "thread",
       ]),
-      { allowNumericShorthand: params.channelId === "telegram" },
+      { allowNumericShorthand: params.messaging?.numericTopicShorthand === true },
     );
     if (target) {
       return target;
     }
   }
   return undefined;
-}
-
-function extractLegacyParsedGroupTargetId(params: {
-  raw: string;
-  channelId: string;
-  messaging?: ChannelMessagingAdapter;
-}): string | undefined {
-  const parsed = params.messaging?.parseExplicitTarget?.({ raw: params.raw });
-  if (parsed?.chatType === "direct" || parsed?.chatType == null) {
-    return undefined;
-  }
-  const target = stripTargetTopicSuffix(
-    stripTargetKindPrefix(stripTargetProviderPrefix(parsed.to, params.channelId), [
-      "group",
-      "channel",
-      "conversation",
-      "room",
-      "thread",
-    ]),
-    { allowNumericShorthand: params.channelId === "telegram" },
-  );
-  return target || undefined;
 }
 
 /** Extracts a group/channel target id from explicit channel target syntax. */
@@ -84,16 +62,9 @@ export function extractExplicitGroupId(raw: string | undefined | null): string |
   if (!channelId) {
     return undefined;
   }
-  return (
-    extractInferredGroupTargetId({
-      raw: trimmed,
-      channelId,
-      messaging,
-    }) ??
-    extractLegacyParsedGroupTargetId({
-      raw: trimmed,
-      channelId,
-      messaging,
-    })
-  );
+  return extractInferredGroupTargetId({
+    raw: trimmed,
+    channelId,
+    messaging,
+  });
 }

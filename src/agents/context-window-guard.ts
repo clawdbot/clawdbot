@@ -82,19 +82,11 @@ export function resolveContextWindowInfo(params: {
     normalizePositiveInt(params.modelContextWindow);
   const defaultTokens =
     normalizePositiveInt(params.defaultTokens) ?? CONTEXT_WINDOW_WARN_BELOW_TOKENS;
-  const baseInfo = fromModelsConfig
+  return fromModelsConfig
     ? { tokens: fromModelsConfig, source: "modelsConfig" as const }
     : fromModel
       ? { tokens: fromModel, source: "model" as const }
       : { tokens: defaultTokens, source: "default" as const };
-
-  const capTokens = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
-  if (capTokens && capTokens < baseInfo.tokens) {
-    // Agent defaults can intentionally cap a larger model context window.
-    return { tokens: capTokens, referenceTokens: baseInfo.tokens, source: "agentContextTokens" };
-  }
-
-  return baseInfo;
 }
 
 type ContextWindowGuardResult = ContextWindowInfo & {
@@ -153,12 +145,6 @@ export function formatContextWindowWarningMessage(params: {
   if (!hint.likelySelfHosted) {
     return base;
   }
-  if (params.guard.source === "agentContextTokens") {
-    return (
-      `${base}; OpenClaw is capped by agents.defaults.contextTokens, so raise that cap ` +
-      `if you want to use more of the model context window`
-    );
-  }
   if (params.guard.source === "modelsConfig") {
     return (
       `${base}; OpenClaw is using the configured model context limit for this model, ` +
@@ -182,9 +168,6 @@ export function formatContextWindowBlockMessage(params: {
   const hint = resolveContextWindowGuardHint({ runtimeBaseUrl: params.runtimeBaseUrl });
   if (!hint.likelySelfHosted) {
     return base;
-  }
-  if (params.guard.source === "agentContextTokens") {
-    return `${base} OpenClaw is capped by agents.defaults.contextTokens. Raise that cap.`;
   }
   if (params.guard.source === "modelsConfig") {
     return (

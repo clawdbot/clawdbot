@@ -7,9 +7,7 @@ import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import { copyPluginToolMeta } from "../../plugins/tools.js";
-import { copyBeforeToolCallHookMarker } from "../agent-tools.before-tool-call.js";
-import { copyChannelAgentToolMeta } from "../channel-tools.js";
+import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
@@ -19,7 +17,7 @@ import {
   filterProviderNormalizableTools,
   type RuntimeToolSchemaDiagnostic,
 } from "../tool-schema-projection.js";
-import { copyToolTerminalPresentation } from "../tool-terminal-presentation.js";
+import type { AnyAgentTool } from "../tools/common.js";
 import type { AgentRuntimePlan } from "./types.js";
 
 type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
@@ -63,10 +61,13 @@ function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   if (source === target) {
     return;
   }
-  copyPluginToolMeta(source as never, target as never);
-  copyChannelAgentToolMeta(source as never, target as never);
-  copyBeforeToolCallHookMarker(source as never, target as never);
-  copyToolTerminalPresentation(source as never, target as never);
+  const { catalogMode, outputSchema, hideFromChannelProgress } = source as AnyAgentTool;
+  Object.assign(target, {
+    ...(catalogMode ? { catalogMode } : {}),
+    ...(outputSchema !== undefined ? { outputSchema } : {}),
+    ...(hideFromChannelProgress === true ? { hideFromChannelProgress } : {}),
+  });
+  copyAgentToolMetadata(source as never, target as never);
 }
 
 // Duplicate names cannot be matched by map lookup alone, so same-index matches
@@ -103,31 +104,38 @@ function preserveRuntimeToolMetadata<TSchemaType extends TSchema = TSchema, TRes
 export function normalizeAgentRuntimeTools<
   TSchemaType extends TSchema = TSchema,
   TResult = unknown,
->(params: AgentRuntimeToolPolicyParams<TSchemaType, TResult>): AgentTool<TSchemaType, TResult>[] {
+>(
+  params: Omit<AgentRuntimeToolPolicyParams<TSchemaType, TResult>, "tools"> & {
+    tools: readonly AgentTool<TSchemaType, TResult>[];
+  },
+): AgentTool<TSchemaType, TResult>[] {
   const planContext = runtimePlanToolContext(params);
   const normalizableToolProjection = filterProviderNormalizableTools(params.tools);
   params.onPreNormalizationSchemaDiagnostics?.(
     normalizableToolProjection.diagnostics,
     params.tools,
   );
-  const normalizableTools = [...normalizableToolProjection.tools] as AgentTool<
-    TSchemaType,
-    TResult
-  >[];
+  // Projection owns this fresh array, so normalizers can mutate it without changing raw input.
+  const normalizableTools = normalizableToolProjection.tools;
+  const planNormalized = params.runtimePlan?.tools.normalize(normalizableTools, planContext);
+  // Empty fallback input cannot gain provider-specific schema changes. Avoid loading a provider
+  // runtime just to return the same empty list; runtime plans still receive their normal callback.
   const normalized =
-    params.runtimePlan?.tools.normalize(normalizableTools, planContext) ??
-    normalizeProviderToolSchemas({
-      tools: normalizableTools,
-      provider: params.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env ?? process.env,
-      modelId: params.modelId,
-      modelApi: params.modelApi,
-      model: params.model,
-      runtimeHandle: params.runtimeHandle,
-      allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
-    });
+    planNormalized ??
+    (normalizableTools.length === 0
+      ? normalizableTools
+      : normalizeProviderToolSchemas({
+          tools: normalizableTools,
+          provider: params.provider,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env ?? process.env,
+          modelId: params.modelId,
+          modelApi: params.modelApi,
+          model: params.model,
+          runtimeHandle: params.runtimeHandle,
+          allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
+        }));
   const normalizedTools = Array.isArray(normalized) ? normalized : normalizableTools;
   return preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
 }

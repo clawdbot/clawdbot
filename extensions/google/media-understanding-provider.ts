@@ -1,16 +1,15 @@
 // Google provider module implements model/runtime integration.
-import {
-  describeImageWithModel,
-  describeImagesWithModel,
-  type AudioTranscriptionRequest,
-  type AudioTranscriptionResult,
-  type MediaUnderstandingProvider,
-  type VideoDescriptionRequest,
-  type VideoDescriptionResult,
+import type {
+  AudioTranscriptionRequest,
+  AudioTranscriptionResult,
+  MediaUnderstandingProvider,
+  VideoDescriptionRequest,
+  VideoDescriptionResult,
 } from "openclaw/plugin-sdk/media-understanding";
 import {
   assertOkOrThrowProviderError,
   postJsonRequest,
+  readProviderJsonResponse,
   type ProviderRequestTransportOverrides,
 } from "openclaw/plugin-sdk/provider-http";
 import {
@@ -34,6 +33,7 @@ async function generateGeminiInlineDataText(params: {
   model?: string;
   prompt?: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   fetchFn?: typeof fetch;
   defaultBaseUrl: string;
   defaultModel: string;
@@ -89,6 +89,7 @@ async function generateGeminiInlineDataText(params: {
     headers,
     body,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,
@@ -97,11 +98,11 @@ async function generateGeminiInlineDataText(params: {
   try {
     await assertOkOrThrowProviderError(res, params.httpErrorLabel);
 
-    const payload = (await res.json()) as {
+    const payload = await readProviderJsonResponse<{
       candidates?: Array<{
         content?: { parts?: Array<{ text?: string }> };
       }>;
-    };
+    }>(res, params.httpErrorLabel);
     const parts = payload.candidates?.[0]?.content?.parts ?? [];
     const text = parts
       .map((part) => part?.text?.trim())
@@ -156,8 +157,8 @@ export const googleMediaUnderstandingProvider: MediaUnderstandingProvider = {
   },
   autoPriority: { image: 30, audio: 40, video: 10 },
   nativeDocumentInputs: ["pdf"],
-  describeImage: describeImageWithModel,
-  describeImages: describeImagesWithModel,
+  describeImage: undefined,
+  describeImages: undefined,
   transcribeAudio: transcribeGeminiAudio,
   describeVideo: describeGeminiVideo,
 };

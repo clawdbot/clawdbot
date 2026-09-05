@@ -17,7 +17,7 @@ vi.mock("../infra/outbound/deliver.js", () => ({
 }));
 
 vi.mock("../channels/message/runtime.js", () => ({
-  sendDurableMessageBatch: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
+  sendDurableMessageBatchCore: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
 }));
 
 vi.mock("../utils/message-channel.js", () => ({
@@ -86,6 +86,20 @@ describe("sendTranscriptEcho", () => {
       bestEffort: true,
       durability: "best_effort",
     });
+  });
+
+  it("keeps dollar sequences in the transcript literal", async () => {
+    await sendTranscriptEcho({
+      ctx: createCtx(),
+      cfg: EMPTY_CONFIG,
+      transcript: "tickets cost $$40, wait for the deal & confirm with $&",
+    });
+
+    expect(mockDeliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: '📝 "tickets cost $$40, wait for the deal & confirm with $&"' }],
+      }),
+    );
   });
 
   it("skips non-deliverable channels", async () => {

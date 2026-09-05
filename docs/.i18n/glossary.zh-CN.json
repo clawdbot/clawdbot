@@ -28,6 +28,26 @@
     "target": "BlueBubbles"
   },
   {
+    "source": "Buzz",
+    "target": "Buzz"
+  },
+  {
+    "source": "Channel overview",
+    "target": "频道概览"
+  },
+  {
+    "source": "Channel access controls",
+    "target": "频道访问控制"
+  },
+  {
+    "source": "Secrets management",
+    "target": "密钥管理"
+  },
+  {
+    "source": "Channel troubleshooting",
+    "target": "频道故障排除"
+  },
+  {
     "source": "Configuration reference - iMessage",
     "target": "Configuration reference - iMessage"
   },
@@ -42,6 +62,38 @@
   {
     "source": "ClawHub",
     "target": "ClawHub"
+  },
+  {
+    "source": "ClawHub CLI",
+    "target": "ClawHub CLI"
+  },
+  {
+    "source": "Claws",
+    "target": "Claws"
+  },
+  {
+    "source": "Cron jobs",
+    "target": "定时任务"
+  },
+  {
+    "source": "MCP configuration",
+    "target": "MCP 配置"
+  },
+  {
+    "source": "ClawRouter (managed multi-provider routing)",
+    "target": "ClawRouter（托管式多提供商路由）"
+  },
+  {
+    "source": "ClawRouter",
+    "target": "ClawRouter"
+  },
+  {
+    "source": "ClawRouter plugin",
+    "target": "ClawRouter 插件"
+  },
+  {
+    "source": "clawrouter",
+    "target": "clawrouter"
   },
   {
     "source": "OpenAI",
@@ -116,12 +168,24 @@
     "target": "Gateway RPC 参考"
   },
   {
+    "source": "Building a Gateway client",
+    "target": "构建 Gateway 客户端"
+  },
+  {
+    "source": "Embedding OpenClaw",
+    "target": "嵌入 OpenClaw"
+  },
+  {
     "source": "Secure file operations",
     "target": "安全文件操作"
   },
   {
     "source": "Sessions",
     "target": "会话"
+  },
+  {
+    "source": "Session permission modes",
+    "target": "会话权限模式"
   },
   {
     "source": "Pi",
@@ -138,6 +202,10 @@
   {
     "source": "Code mode",
     "target": "代码模式"
+  },
+  {
+    "source": "Swarm",
+    "target": "Swarm"
   },
   {
     "source": "Codex harness",
@@ -158,6 +226,10 @@
   {
     "source": "Codex Computer Use",
     "target": "Codex Computer Use"
+  },
+  {
+    "source": "Computer use",
+    "target": "计算机使用"
   },
   {
     "source": "Diagnostics export",
@@ -214,6 +286,10 @@
   {
     "source": "Skills Config",
     "target": "Skills 配置"
+  },
+  {
+    "source": "Self-learning",
+    "target": "自我学习"
   },
   {
     "source": "local loopback",
@@ -320,6 +396,10 @@
     "target": "微信"
   },
   {
+    "source": "WeCom",
+    "target": "企业微信"
+  },
+  {
     "source": "Weixin",
     "target": "微信"
   },
@@ -410,6 +490,10 @@
   {
     "source": "Adding capabilities (redirect)",
     "target": "添加能力（重定向）"
+  },
+  {
+    "source": "Adding capabilities",
+    "target": "添加能力"
   },
   {
     "source": "Adding capabilities (contributor guide)",
@@ -524,6 +608,14 @@
     "target": "Discord"
   },
   {
+    "source": "Fireworks",
+    "target": "Fireworks"
+  },
+  {
+    "source": "Google Chat",
+    "target": "Google Chat"
+  },
+  {
     "source": "Matrix",
     "target": "Matrix"
   },
@@ -532,12 +624,36 @@
     "target": "Microsoft Teams"
   },
   {
+    "source": "Raft",
+    "target": "Raft"
+  },
+  {
+    "source": "Runway",
+    "target": "Runway"
+  },
+  {
+    "source": "Signal",
+    "target": "Signal"
+  },
+  {
     "source": "Slack",
     "target": "Slack"
   },
   {
+    "source": "Synthetic",
+    "target": "Synthetic"
+  },
+  {
     "source": "Telegram",
     "target": "Telegram"
+  },
+  {
+    "source": "Tokenjuice",
+    "target": "Tokenjuice"
+  },
+  {
+    "source": "WhatsApp",
+    "target": "WhatsApp"
   },
   {
     "source": "Discovery + transports",
@@ -560,6 +676,10 @@
     "target": "Doctor"
   },
   {
+    "source": "Triage",
+    "target": "Triage"
+  },
+  {
     "source": "Config",
     "target": "配置"
   },
@@ -570,6 +690,10 @@
   {
     "source": "Memory overview",
     "target": "记忆概览"
+  },
+  {
+    "source": "QMD memory backend removal",
+    "target": "QMD 记忆后端移除"
   },
   {
     "source": "Active memory",
@@ -624,6 +748,10 @@
     "target": "发布策略"
   },
   {
+    "source": "Release notes",
+    "target": "发布说明"
+  },
+  {
     "source": "for full details",
     "target": "了解详情"
   },
@@ -633,7 +761,7 @@
   },
   {
     "source": "Auth: where it lives (important)",
-    "target": "凭证：存储位置（重要）"
+    "target": "身份验证：存储位置（重要）"
   },
   {
     "source": "agent",
@@ -728,12 +856,48 @@
     "target": "Google Meet 插件"
   },
   {
+    "source": "Google Meet plugin",
+    "target": "Google Meet 插件"
+  },
+  {
+    "source": "Meeting plugins",
+    "target": "会议插件"
+  },
+  {
+    "source": "Meeting plugins overview",
+    "target": "会议插件概览"
+  },
+  {
+    "source": "Microsoft Teams channel",
+    "target": "Microsoft Teams 频道"
+  },
+  {
+    "source": "Microsoft Teams meetings plugin",
+    "target": "Microsoft Teams 会议插件"
+  },
+  {
+    "source": "Zoom meetings plugin",
+    "target": "Zoom 会议插件"
+  },
+  {
+    "source": "Voice call plugin",
+    "target": "语音通话插件"
+  },
+  {
+    "source": "Browser control",
+    "target": "浏览器控制"
+  },
+  {
     "source": "Plugin SDK",
     "target": "插件 SDK"
   },
   {
     "source": "Tool plugins",
     "target": "工具插件"
+  },
+  {
+    "source": "Feature plugins",
+    "target": "功能插件"
   },
   {
     "source": "Plugin SDK subpaths",
@@ -790,6 +954,10 @@
   {
     "source": "Parallel search",
     "target": "Parallel 搜索"
+  },
+  {
+    "source": "Mxc plugin",
+    "target": "MXC 插件"
   },
   {
     "source": "CLI reference",
@@ -972,8 +1140,8 @@
     "target": "轨迹导出"
   },
   {
-    "source": "Tencent Cloud (TokenHub)",
-    "target": "腾讯云（TokenHub）"
+    "source": "Tencent Cloud (TokenHub / TokenPlan)",
+    "target": "腾讯云（TokenHub / TokenPlan）"
   },
   {
     "source": "Codex Harness Context Engine Port",
@@ -1140,6 +1308,10 @@
     "target": "Discord 语音"
   },
   {
+    "source": "Discord voice channels",
+    "target": "Discord 语音频道"
+  },
+  {
     "source": "Plugin management",
     "target": "插件管理"
   },
@@ -1204,7 +1376,523 @@
     "target": "cohere"
   },
   {
+    "source": "Meta",
+    "target": "Meta"
+  },
+  {
+    "source": "Meta plugin",
+    "target": "Meta 插件"
+  },
+  {
+    "source": "meta",
+    "target": "meta"
+  },
+  {
     "source": "Zalo ClawBot",
     "target": "Zalo ClawBot"
+  },
+  {
+    "source": "Docs map",
+    "target": "文档地图"
+  },
+  {
+    "source": "Additional provider variants",
+    "target": "其他提供商变体"
+  },
+  {
+    "source": "Agent config reference",
+    "target": "Agent 配置参考"
+  },
+  {
+    "source": "Audit records",
+    "target": "审计记录"
+  },
+  {
+    "source": "Background process",
+    "target": "后台进程"
+  },
+  {
+    "source": "Channel inbound API",
+    "target": "渠道入站 API"
+  },
+  {
+    "source": "Channel outbound API",
+    "target": "渠道出站 API"
+  },
+  {
+    "source": "Channel routing",
+    "target": "渠道路由"
+  },
+  {
+    "source": "Channels Overview",
+    "target": "渠道概览"
+  },
+  {
+    "source": "Compaction",
+    "target": "压缩"
+  },
+  {
+    "source": "Debugging (--dev)",
+    "target": "调试（--dev）"
+  },
+  {
+    "source": "Devices",
+    "target": "设备"
+  },
+  {
+    "source": "Gateway CLI",
+    "target": "Gateway CLI"
+  },
+  {
+    "source": "Gateway configuration",
+    "target": "Gateway 配置"
+  },
+  {
+    "source": "Gmail Pub/Sub integration",
+    "target": "Gmail Pub/Sub 集成"
+  },
+  {
+    "source": "Group chats",
+    "target": "群聊"
+  },
+  {
+    "source": "Hooks",
+    "target": "Hooks"
+  },
+  {
+    "source": "Incident response",
+    "target": "事件响应"
+  },
+  {
+    "source": "Logging overview",
+    "target": "日志概览"
+  },
+  {
+    "source": "Menu bar",
+    "target": "菜单栏"
+  },
+  {
+    "source": "Message Presentation",
+    "target": "消息呈现"
+  },
+  {
+    "source": "Media understanding",
+    "target": "媒体理解"
+  },
+  {
+    "source": "Media playback",
+    "target": "媒体播放"
+  },
+  {
+    "source": "Image and media support",
+    "target": "图像和媒体支持"
+  },
+  {
+    "source": "Audio and voice notes",
+    "target": "音频和语音消息"
+  },
+  {
+    "source": "Media overview",
+    "target": "媒体概览"
+  },
+  {
+    "source": "Text to speech",
+    "target": "文本转语音"
+  },
+  {
+    "source": "Linux app",
+    "target": "Linux 应用"
+  },
+  {
+    "source": "Inline audio and video playback",
+    "target": "内联音频和视频播放"
+  },
+  {
+    "source": "Models CLI reference",
+    "target": "模型 CLI 参考"
+  },
+  {
+    "source": "Network proxy",
+    "target": "网络代理"
+  },
+  {
+    "source": "Node troubleshooting",
+    "target": "节点故障排查"
+  },
+  {
+    "source": "Nodes",
+    "target": "节点"
+  },
+  {
+    "source": "Nodes CLI",
+    "target": "节点 CLI"
+  },
+  {
+    "source": "Nodes overview",
+    "target": "节点概览"
+  },
+  {
+    "source": "NovitaAI",
+    "target": "NovitaAI"
+  },
+  {
+    "source": "Onboard",
+    "target": "引导设置"
+  },
+  {
+    "source": "Operator scopes",
+    "target": "操作员权限范围"
+  },
+  {
+    "source": "Pull request review flow",
+    "target": "PR 审查流程"
+  },
+  {
+    "source": "Scheduled tasks vs heartbeat",
+    "target": "定时任务与心跳对比"
+  },
+  {
+    "source": "CI pipeline",
+    "target": "CI 流水线"
+  },
+  {
+    "source": "Scheduled tasks: Troubleshooting",
+    "target": "定时任务：故障排查"
+  },
+  {
+    "source": "Session config",
+    "target": "会话配置"
+  },
+  {
+    "source": "Signal reactions",
+    "target": "Signal 表情回应"
+  },
+  {
+    "source": "Task Flow",
+    "target": "Task Flow"
+  },
+  {
+    "source": "Telegram reaction notifications",
+    "target": "Telegram 表情回应通知"
+  },
+  {
+    "source": "Threat model",
+    "target": "威胁模型"
+  },
+  {
+    "source": "Timezones",
+    "target": "时区"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "故障排查"
+  },
+  {
+    "source": "Update troubleshooting",
+    "target": "更新故障排查"
+  },
+  {
+    "source": "Webhooks",
+    "target": "Webhooks"
+  },
+  {
+    "source": "WhatsApp reaction level",
+    "target": "WhatsApp 表情回应级别"
+  },
+  {
+    "source": "Zalo (official Bot/webhook channel)",
+    "target": "Zalo（官方 Bot/webhook 渠道）"
+  },
+  {
+    "source": "Zalo personal channel config",
+    "target": "Zalo 个人渠道配置"
+  },
+  {
+    "source": "device pairing",
+    "target": "设备配对"
+  },
+  {
+    "source": "Device pairing",
+    "target": "设备配对"
+  },
+  {
+    "source": "node pairing",
+    "target": "节点配对"
+  },
+  {
+    "source": "Node pairing",
+    "target": "节点配对"
+  },
+  {
+    "source": "pending device pairing request",
+    "target": "待处理的设备配对请求"
+  },
+  {
+    "source": "openclaw devices list",
+    "target": "openclaw devices list"
+  },
+  {
+    "source": "openclaw devices approve",
+    "target": "openclaw devices approve"
+  },
+  {
+    "source": "openclaw nodes pending",
+    "target": "openclaw nodes pending"
+  },
+  {
+    "source": "openclaw nodes approve",
+    "target": "openclaw nodes approve"
+  },
+  {
+    "source": "Cloud workers plan",
+    "target": "云端工作节点计划"
+  },
+  {
+    "source": "Crabbox plugin",
+    "target": "Crabbox 插件"
+  },
+  {
+    "source": "Path 3 SQLite session artifact family",
+    "target": "Path 3 SQLite 会话工件族"
+  },
+  {
+    "source": "Path 3 live SQLite E2E harness",
+    "target": "Path 3 live SQLite E2E harness"
+  },
+  {
+    "source": "HealthKit summaries",
+    "target": "HealthKit 摘要"
+  },
+  {
+    "source": "iOS app",
+    "target": "iOS 应用"
+  },
+  {
+    "source": "Gateway configuration reference",
+    "target": "Gateway 配置参考"
+  },
+  {
+    "source": "v2026.8.1 (AKA OpenClaw 2.0)",
+    "target": "v2026.8.1 (AKA OpenClaw 2.0)"
+  },
+  {
+    "source": "v2026.8.2",
+    "target": "v2026.8.2"
+  },
+  {
+    "source": "v2026.8.1",
+    "target": "v2026.8.1"
+  },
+  {
+    "source": "v2026.7.1",
+    "target": "v2026.7.1"
+  },
+  {
+    "source": "Security audit",
+    "target": "安全审计"
+  },
+  {
+    "source": "Linux Canvas plugin",
+    "target": "Linux Canvas plugin"
+  },
+  {
+    "source": "Baseten",
+    "target": "Baseten"
+  },
+  {
+    "source": "Baseten plugin",
+    "target": "Baseten 插件"
+  },
+  {
+    "source": "baseten",
+    "target": "baseten"
+  },
+  {
+    "source": "Baseten (Inkling + Model APIs)",
+    "target": "Baseten（Inkling + Model APIs）"
+  },
+  {
+    "source": "ChromeOS",
+    "target": "ChromeOS"
+  },
+  {
+    "source": "ChromeOS (Crostini)",
+    "target": "ChromeOS (Crostini)"
+  },
+  {
+    "source": "Linux guide",
+    "target": "Linux 指南"
+  },
+  {
+    "source": "Node install guidance",
+    "target": "Node 安装指南"
+  },
+  {
+    "source": "Gateway runbook",
+    "target": "Gateway 运行手册"
+  },
+  {
+    "source": "Multi-user mode",
+    "target": "多用户模式"
+  },
+  {
+    "source": "The main session",
+    "target": "主会话"
+  },
+  {
+    "source": "Session management",
+    "target": "会话管理"
+  },
+  {
+    "source": "Session tools",
+    "target": "会话工具"
+  },
+  {
+    "source": "Presence",
+    "target": "在线状态"
+  },
+  {
+    "source": "Gateway security",
+    "target": "Gateway 安全"
+  },
+  {
+    "source": "Retired HEARTBEAT.md workspace file",
+    "target": "已弃用的 HEARTBEAT.md 工作区文件"
+  },
+  {
+    "source": "Cron CLI",
+    "target": "Cron CLI"
+  },
+  {
+    "source": "TOOLS.md retired",
+    "target": "TOOLS.md 已弃用"
+  },
+  {
+    "source": "Automations",
+    "target": "自动化"
+  },
+  {
+    "source": "Automations (cron)",
+    "target": "自动化 (cron)"
+  },
+  {
+    "source": "Daytona",
+    "target": "Daytona"
+  },
+  {
+    "source": "Gateway remote access",
+    "target": "Gateway 远程访问"
+  },
+  {
+    "source": "Updating OpenClaw",
+    "target": "更新 OpenClaw"
+  },
+  {
+    "source": "Connect a machine",
+    "target": "连接机器"
+  },
+  {
+    "source": "Portals",
+    "target": "门户"
+  },
+  {
+    "source": "Channels",
+    "target": "渠道"
+  },
+  {
+    "source": "Docker VM Runtime",
+    "target": "Docker VM 运行时"
+  },
+  {
+    "source": "Updating",
+    "target": "更新"
+  },
+  {
+    "source": "Onboarding (CLI)",
+    "target": "引导设置（CLI）"
+  },
+  {
+    "source": "CLI Automation",
+    "target": "CLI 自动化"
+  },
+  {
+    "source": "llama-server",
+    "target": "llama-server"
+  },
+  {
+    "source": "llmman",
+    "target": "llmman"
+  },
+  {
+    "source": "llmman (local models)",
+    "target": "llmman（本地模型）"
+  },
+  {
+    "source": "llama.cpp (managed or existing server)",
+    "target": "llama.cpp（托管或现有服务器）"
+  },
+  {
+    "source": "Local model services",
+    "target": "本地模型服务"
+  },
+  {
+    "source": "LM Studio",
+    "target": "LM Studio"
+  },
+  {
+    "source": "Widget panel",
+    "target": "小组件面板"
+  },
+  {
+    "source": "Show widget",
+    "target": "显示小组件"
+  },
+  {
+    "source": "Session dashboards",
+    "target": "会话仪表板"
+  },
+  {
+    "source": "macOS widget panel",
+    "target": "macOS 小组件面板"
+  },
+  {
+    "source": "Geolocation plugin",
+    "target": "地理位置插件"
+  },
+  {
+    "source": "Trusted proxy auth",
+    "target": "受信任代理认证"
+  },
+  {
+    "source": "geolocation",
+    "target": "geolocation"
+  },
+  {
+    "source": "Memory provenance and deletion",
+    "target": "记忆溯源与删除"
+  },
+  {
+    "source": "Provenance & deletion",
+    "target": "溯源与删除"
+  },
+  {
+    "source": "Memory admission policy configuration",
+    "target": "记忆准入策略配置"
+  },
+  {
+    "source": "Memory architecture",
+    "target": "记忆架构"
+  },
+  {
+    "source": "Built-in memory",
+    "target": "内置记忆"
+  },
+  {
+    "source": "macOS SSH tunnel",
+    "target": "macOS SSH 隧道"
+  },
+  {
+    "source": "Node and tsx startup errors",
+    "target": "Node 和 tsx 启动错误"
   }
 ]

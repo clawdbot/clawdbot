@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 
 /** Final execution strategy chosen for a Windows spawn command. */
 export type WindowsSpawnResolution =
@@ -128,7 +129,8 @@ export function detectWindowsSpawnCommandInlineArgs(
   }
   const normalizedToken = parsed.token.replace(/\\/g, "/");
   const executable = normalizeLowercaseStringOrEmpty(path.posix.basename(normalizedToken));
-  if (!INLINE_ARGUMENT_EXECUTABLES.has(executable)) {
+  // Existing paths can contain spaces after a directory named node or pnpm.
+  if (!INLINE_ARGUMENT_EXECUTABLES.has(executable) || isFilePath(command)) {
     return null;
   }
   return {
@@ -143,14 +145,15 @@ export function resolveWindowsExecutablePath(command: string, env: NodeJS.Proces
     return command;
   }
 
-  const pathValue = env.PATH ?? env.Path ?? process.env.PATH ?? process.env.Path ?? "";
+  const pathValue =
+    resolveEnvironmentValue(env, "PATH", "win32") ??
+    resolveEnvironmentValue(process.env, "PATH", "win32") ??
+    "";
   const pathEntries = normalizeStringEntries(pathValue.split(";"));
   const hasExtension = path.extname(command).length > 0;
   const pathExtRaw =
-    env.PATHEXT ??
-    env.Pathext ??
-    process.env.PATHEXT ??
-    process.env.Pathext ??
+    resolveEnvironmentValue(env, "PATHEXT", "win32") ??
+    resolveEnvironmentValue(process.env, "PATHEXT", "win32") ??
     ".EXE;.CMD;.BAT;.COM";
   const pathExt = hasExtension
     ? [""]
@@ -181,6 +184,25 @@ function resolveEntrypointFromCmdShim(wrapperPath: string): string | null {
 
   try {
     const content = readFileSync(wrapperPath, "utf8");
+    const normalizedContent = content.replaceAll("\r\n", "\n").toLowerCase();
+    const significantLines = content
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const isNpmCmdShim =
+      normalizedContent.includes("\ngoto start\n") &&
+      normalizedContent.includes("\n:find_dp0\n") &&
+      normalizedContent.includes("set dp0=%~dp0") &&
+      normalizedContent.includes("call :find_dp0");
+    const isDirectForwarder =
+      significantLines.length === 2 &&
+      /^@echo off$/iu.test(significantLines[0] ?? "") &&
+      /^"%~?dp0%?[\\/][^"\r\n]+"\s+%\*$/iu.test(significantLines[1] ?? "");
+    // Only known direct-forwarder shapes are safe to bypass; arbitrary batch
+    // wrappers can depend on setup commands before dispatching their target.
+    if (!isNpmCmdShim && !isDirectForwarder) {
+      return null;
+    }
     const candidates: string[] = [];
     for (const match of content.matchAll(/"([^"\r\n]*)"/g)) {
       const token = match[1] ?? "";
@@ -199,6 +221,12 @@ function resolveEntrypointFromCmdShim(wrapperPath: string): string | null {
       const base = normalizeLowercaseStringOrEmpty(path.basename(candidate));
       return base !== "node.exe" && base !== "node";
     });
+    if (isDirectForwarder && nonNode) {
+      const ext = normalizeLowercaseStringOrEmpty(path.extname(nonNode));
+      if (ext !== ".exe" && ext !== ".js" && ext !== ".cjs" && ext !== ".mjs") {
+        return null;
+      }
+    }
     return nonNode ?? null;
   } catch {
     return null;

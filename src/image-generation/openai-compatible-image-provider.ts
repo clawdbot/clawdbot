@@ -1,18 +1,23 @@
 /** Factory for image providers with OpenAI-compatible generation/edit endpoints. */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
+import { resolveApiKeyForProvider } from "../plugin-sdk/provider-auth-runtime.js";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   postJsonRequest,
   postMultipartRequest,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
-} from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parseOpenAiCompatibleImageResponse } from "./image-assets.js";
+} from "../plugin-sdk/provider-http.js";
+import {
+  parseOpenAiCompatibleImageResponse,
+  resolveInlineImageJsonResponseMaxBytes,
+} from "./image-assets.js";
 import type {
   ImageGenerationProvider,
   ImageGenerationProviderCapabilities,
@@ -127,6 +132,16 @@ function resolveRequestTimeoutMs(params: {
   });
 }
 
+function resolveResponseMaxImages(params: {
+  count: number;
+  mode: OpenAiCompatibleImageRequestMode;
+  options: OpenAiCompatibleImageProviderOptions;
+}): number {
+  return params.mode === "edit"
+    ? (params.options.capabilities.edit.maxCount ?? params.count)
+    : (params.options.capabilities.generate.maxCount ?? params.count);
+}
+
 /** Creates an image-generation provider backed by OpenAI-style image endpoints. */
 export function createOpenAiCompatibleImageGenerationProvider(
   options: OpenAiCompatibleImageProviderOptions,
@@ -147,11 +162,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
       ? { defaultTimeoutMs: options.defaultTimeoutMs }
       : {}),
     models: [...options.models],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: options.id,
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: options.id, ...ctx }),
     capabilities: options.capabilities,
     async generateImage(req): Promise<ImageGenerationResult> {
       const inputImages = req.inputImages ?? [];
@@ -269,7 +280,13 @@ export function createOpenAiCompatibleImageGenerationProvider(
             ? (options.failureLabels?.edit ?? `${options.label} image edit failed`)
             : (options.failureLabels?.generate ?? `${options.label} image generation failed`),
         );
-        const images = parseOpenAiCompatibleImageResponse(await response.json(), {
+        const payload = await readProviderJsonResponse(response, `${options.id}.image-generation`, {
+          maxBytes: resolveInlineImageJsonResponseMaxBytes(
+            resolveResponseMaxImages({ count, mode, options }),
+            resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+          ),
+        });
+        const images = parseOpenAiCompatibleImageResponse(payload, {
           ...options.response,
           malformedResponseError:
             mode === "edit"

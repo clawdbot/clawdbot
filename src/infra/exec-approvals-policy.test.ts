@@ -1,13 +1,14 @@
 // Tests execution approval policy matching and persistence.
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   makeMockCommandResolution,
   makeMockExecutableResolution,
 } from "./exec-approvals-test-helpers.js";
 import type { ExecApprovalsFile } from "./exec-approvals.js";
+import { buildCwdBoundHashedArgPattern } from "./exec-command-resolution.js";
 
 vi.unmock("./exec-approvals.js");
 vi.unmock("./exec-approvals-effective.js");
@@ -29,6 +30,7 @@ let normalizeExecApprovalUnavailableDecisions: typeof import("./exec-approvals.j
 let resolveExecApprovalUnavailableDecisions: typeof import("./exec-approvals.js").resolveExecApprovalUnavailableDecisions;
 let resolveExecApprovalRequestAllowedDecisions: typeof import("./exec-approvals.js").resolveExecApprovalRequestAllowedDecisions;
 let resolveExecModeFromPolicy: typeof import("./exec-approvals.js").resolveExecModeFromPolicy;
+let resolveExactExecModeFromPolicy: typeof import("./exec-approvals.js").resolveExactExecModeFromPolicy;
 let resolveExecModePolicy: typeof import("./exec-approvals.js").resolveExecModePolicy;
 let resolveExecPolicyForMode: typeof import("./exec-approvals.js").resolveExecPolicyForMode;
 
@@ -58,6 +60,7 @@ async function loadActualExecApprovalModules(): Promise<void> {
   resolveExecApprovalRequestAllowedDecisions =
     execApprovals.resolveExecApprovalRequestAllowedDecisions;
   resolveExecModeFromPolicy = execApprovals.resolveExecModeFromPolicy;
+  resolveExactExecModeFromPolicy = execApprovals.resolveExactExecModeFromPolicy;
   resolveExecModePolicy = execApprovals.resolveExecModePolicy;
   resolveExecPolicyForMode = execApprovals.resolveExecPolicyForMode;
 }
@@ -105,14 +108,15 @@ function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
   expectFields(summary.ask, {
     requested: "off",
     host: "always",
-    hostSource: "~/.openclaw/exec-approvals.json defaults.ask",
+    hostSource: "~/.openclaw/state/openclaw.sqlite#exec_approvals_config defaults.ask",
     effective: "always",
     note: "more aggressive ask wins",
   });
 }
 
 describe("exec approvals policy helpers", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
+    // Reload once to isolate this suite from facade mocks left by other test files.
     await loadActualExecApprovalModules();
   });
 
@@ -189,6 +193,21 @@ describe("exec approvals policy helpers", () => {
     { security: "full" as const, ask: "always" as const, expected: "ask" as const },
   ])("derives normalized exec mode from legacy policy %j", ({ security, ask, expected }) => {
     expect(resolveExecModeFromPolicy({ security, ask })).toBe(expected);
+  });
+
+  it.each([
+    { security: "deny" as const, ask: "off" as const, expected: "deny" as const },
+    { security: "deny" as const, ask: "on-miss" as const, expected: "deny" as const },
+    { security: "allowlist" as const, ask: "off" as const, expected: "allowlist" as const },
+    { security: "allowlist" as const, ask: "on-miss" as const, expected: "ask" as const },
+    { security: "full" as const, ask: "off" as const, expected: "full" as const },
+    // Only the retired pair can express these postures; migration and hints must not widen them.
+    { security: "full" as const, ask: "on-miss" as const, expected: null },
+    { security: "deny" as const, ask: "always" as const, expected: null },
+    { security: "allowlist" as const, ask: "always" as const, expected: null },
+    { security: "full" as const, ask: "always" as const, expected: null },
+  ])("resolves the exact exec mode for legacy policy %j", ({ security, ask, expected }) => {
+    expect(resolveExactExecModeFromPolicy({ security, ask })).toBe(expected);
   });
 
   it.each([
@@ -373,6 +392,13 @@ describe("exec approvals policy helpers", () => {
       resolvedRealPath: "/usr/bin/echo",
       executableName: "echo",
     });
+    const allowlist = [
+      {
+        pattern: "/usr/bin/echo",
+        argPattern: buildCwdBoundHashedArgPattern(["/usr/bin/echo", "ok"], "/tmp"),
+        source: "allow-always" as const,
+      },
+    ];
     const result = evaluateExecAllowlist({
       analysis: {
         ok: true,
@@ -398,7 +424,7 @@ describe("exec approvals policy helpers", () => {
           },
         ],
       },
-      allowlist: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
+      allowlist,
       safeBins: new Set(),
       cwd: "/tmp",
       platform: process.platform,
@@ -412,7 +438,7 @@ describe("exec approvals policy helpers", () => {
       hasDurableExecApproval({
         analysisOk: true,
         segmentAllowlistEntries: result.segmentAllowlistEntries,
-        allowlist: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
+        allowlist,
       }),
     ).toBe(false);
   });
@@ -439,19 +465,19 @@ describe("exec approvals policy helpers", () => {
       requested: "full",
       host: "allowlist",
       effective: "allowlist",
-      hostSource: "~/.openclaw/exec-approvals.json defaults.security",
+      hostSource: "~/.openclaw/state/openclaw.sqlite#exec_approvals_config defaults.security",
       note: "stricter host security wins",
     });
     expectFields(summary.ask, {
       requested: "off",
       host: "always",
       effective: "always",
-      hostSource: "~/.openclaw/exec-approvals.json defaults.ask",
+      hostSource: "~/.openclaw/state/openclaw.sqlite#exec_approvals_config defaults.ask",
       note: "more aggressive ask wins",
     });
     expect(summary.askFallback).toEqual({
       effective: "deny",
-      source: "~/.openclaw/exec-approvals.json defaults.askFallback",
+      source: "~/.openclaw/state/openclaw.sqlite#exec_approvals_config defaults.askFallback",
     });
   });
 
@@ -622,7 +648,7 @@ describe("exec approvals policy helpers", () => {
       });
 
       expect(summary.security.hostSource).toBe(
-        `${path.join(stateDir, "exec-approvals.json")} defaults.security`,
+        `${path.join(stateDir, "state", "openclaw.sqlite#exec_approvals_config")} defaults.security`,
       );
     } finally {
       if (originalOpenClawStateDir === undefined) {
@@ -676,7 +702,7 @@ describe("exec approvals policy helpers", () => {
 
     expect(summary.askFallback).toEqual({
       effective: "allowlist",
-      source: "~/.openclaw/exec-approvals.json defaults.askFallback",
+      source: "~/.openclaw/state/openclaw.sqlite#exec_approvals_config defaults.askFallback",
     });
   });
 
@@ -720,15 +746,15 @@ describe("exec approvals policy helpers", () => {
 
     expectFields(summary.security, {
       host: "allowlist",
-      hostSource: "~/.openclaw/exec-approvals.json agents.*.security",
+      hostSource: "~/.openclaw/state/openclaw.sqlite#exec_approvals_config agents.*.security",
     });
     expectFields(summary.ask, {
       host: "always",
-      hostSource: "~/.openclaw/exec-approvals.json agents.*.ask",
+      hostSource: "~/.openclaw/state/openclaw.sqlite#exec_approvals_config agents.*.ask",
     });
     expect(summary.askFallback).toEqual({
       effective: "deny",
-      source: "~/.openclaw/exec-approvals.json agents.*.askFallback",
+      source: "~/.openclaw/state/openclaw.sqlite#exec_approvals_config agents.*.askFallback",
     });
   });
 
@@ -782,6 +808,35 @@ describe("exec approvals policy helpers", () => {
     });
   });
 
+  it("uses host-reported defaults instead of requested policy fallbacks", () => {
+    const summary = summarizeExecPolicyScopeSnapshot({
+      approvals: { version: 1, agents: {} },
+      scopeExecConfig: { security: "full", ask: "off" },
+      configPath: "tools.exec",
+      scopeLabel: "tools.exec",
+      hostDefaults: {
+        security: "deny",
+        ask: "on-miss",
+        askFallback: "deny",
+      },
+      hostDefaultSource: "node-reported resolved defaults",
+    });
+
+    expectFields(summary.security, {
+      requested: "full",
+      host: "deny",
+      hostSource: "node-reported resolved defaults",
+      effective: "deny",
+    });
+    expectFields(summary.ask, {
+      requested: "off",
+      host: "on-miss",
+      hostSource: "node-reported resolved defaults",
+      effective: "on-miss",
+    });
+    expect(summary.askFallback.source).toBe("node-reported resolved defaults");
+  });
+
   it("collects global, configured-agent, and approvals-only agent scopes", () => {
     const snapshots = collectExecPolicyScopeSnapshots({
       cfg: {
@@ -792,7 +847,7 @@ describe("exec approvals policy helpers", () => {
           },
         },
         agents: {
-          list: [{ id: "runner" }],
+          entries: { runner: { default: true } },
         },
       } satisfies OpenClawConfig,
       approvals: {
@@ -808,18 +863,14 @@ describe("exec approvals policy helpers", () => {
       },
     });
 
-    expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual([
-      "tools.exec",
-      "agent:batch",
-      "agent:runner",
-    ]);
+    expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual(["tools.exec", "agent:batch"]);
     expectFields(snapshots[1]?.ask, {
       requested: "off",
       requestedSource: "tools.exec.ask",
       host: "always",
       effective: "always",
     });
-    expectFields(snapshots[2]?.security, {
+    expectFields(snapshots[0]?.security, {
       requested: "full",
       requestedSource: "tools.exec.security",
       host: "allowlist",
@@ -836,6 +887,7 @@ describe("exec approvals policy helpers", () => {
             ask: "off",
           },
         },
+        agents: { entries: { [DEFAULT_AGENT_ID]: { default: true } } },
       } satisfies OpenClawConfig,
       approvals: {
         version: 1,
@@ -851,11 +903,11 @@ describe("exec approvals policy helpers", () => {
     expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual(["tools.exec"]);
     expectFields(snapshots[0]?.security, {
       host: "allowlist",
-      hostSource: "~/.openclaw/exec-approvals.json agents.main.security",
+      hostSource: "~/.openclaw/state/openclaw.sqlite#exec_approvals_config agents.main.security",
     });
     expectFields(snapshots[0]?.ask, {
       host: "always",
-      hostSource: "~/.openclaw/exec-approvals.json agents.main.ask",
+      hostSource: "~/.openclaw/state/openclaw.sqlite#exec_approvals_config agents.main.ask",
     });
   });
 
@@ -869,16 +921,16 @@ describe("exec approvals policy helpers", () => {
           },
         },
         agents: {
-          list: [
-            {
-              id: DEFAULT_AGENT_ID,
+          entries: {
+            [DEFAULT_AGENT_ID]: {
+              default: true,
               tools: {
                 exec: {
                   ask: "always",
                 },
               },
             },
-          ],
+          },
         },
       } satisfies OpenClawConfig,
       approvals: {
@@ -889,7 +941,30 @@ describe("exec approvals policy helpers", () => {
     expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual(["tools.exec", "agent:main"]);
     expectFields(snapshots[1]?.ask, {
       requested: "always",
-      requestedSource: "agents.list.main.tools.exec.ask",
+      requestedSource: "agents.entries.main.tools.exec.ask",
+    });
+  });
+
+  it("includes keyed agents with exec overrides", () => {
+    const snapshots = collectExecPolicyScopeSnapshots({
+      cfg: {
+        agents: {
+          entries: {
+            main: { default: true },
+            runner: { tools: { exec: { ask: "always" } } },
+          },
+        },
+      } satisfies OpenClawConfig,
+      approvals: { version: 1 },
+    });
+
+    expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual([
+      "tools.exec",
+      "agent:runner",
+    ]);
+    expectFields(snapshots[1]?.ask, {
+      requested: "always",
+      requestedSource: "agents.entries.runner.tools.exec.ask",
     });
   });
 });

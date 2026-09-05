@@ -1,9 +1,5 @@
 // Lmstudio API module exposes the plugin public contract.
 export {
-  buildLmstudioAuthHeaders,
-  buildLmstudioModelName,
-  configureLmstudioNonInteractive,
-  discoverLmstudioProvider,
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_DEFAULT_BASE_URL,
   LMSTUDIO_DEFAULT_EMBEDDING_MODEL,
@@ -16,6 +12,9 @@ export {
   LMSTUDIO_MODEL_PLACEHOLDER,
   LMSTUDIO_PROVIDER_ID,
   LMSTUDIO_PROVIDER_LABEL,
+} from "./src/defaults.js";
+export {
+  buildLmstudioModelName,
   type LmstudioModelBase,
   type LmstudioModelWire,
   mapLmstudioWireEntry,
@@ -23,15 +22,24 @@ export {
   normalizeLmstudioConfiguredCatalogEntries,
   normalizeLmstudioConfiguredCatalogEntry,
   normalizeLmstudioProviderConfig,
-  prepareLmstudioDynamicModels,
-  promptAndConfigureLmstudioInteractive,
-  resolveLmstudioConfiguredApiKey,
   resolveLmstudioInferenceBase,
-  resolveLmstudioProviderHeaders,
   resolveLmstudioReasoningCapability,
   resolveLmstudioReasoningCompat,
-  resolveLmstudioRequestContext,
-  resolveLmstudioRuntimeApiKey,
   resolveLmstudioServerBase,
   resolveLoadedContextWindow,
-} from "./src/api.js";
+} from "./src/models.js";
+export {
+  buildLmstudioAuthHeaders,
+  resolveLmstudioConfiguredApiKey,
+  resolveLmstudioProviderHeaders,
+  resolveLmstudioRequestContext,
+  resolveLmstudioRuntimeApiKey,
+} from "./src/runtime.js";
+export {
+  configureLmstudioNonInteractive,
+  detectAppGuidedLmstudioAvailability,
+  discoverLmstudioProvider,
+  prepareAppGuidedLmstudioSetup,
+  prepareLmstudioDynamicModel,
+  promptAndConfigureLmstudioInteractive,
+} from "./src/setup.js";

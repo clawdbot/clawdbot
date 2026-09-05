@@ -1,1544 +1,336 @@
-// Memory Core tests cover dreaming narrative plugin behavior.
-import { createHash } from "node:crypto";
+// Memory Core tests cover prompt-only dreaming and publication boundaries.
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  RequestScopedSubagentRuntimeError,
-  SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
-} from "openclaw/plugin-sdk/error-runtime";
-import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
-import * as memoryCoreHostRuntimeCoreModule from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
-import * as sessionStoreRuntimeModule from "openclaw/plugin-sdk/session-store-runtime";
+import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  appendNarrativeEntry,
-  buildBackfillDiaryEntry,
-  buildDiaryEntry,
-  buildNarrativePrompt,
-  dedupeDreamDiaryEntries,
-  extractNarrativeText,
-  formatNarrativeDate,
-  formatBackfillDiaryDate,
-  generateAndAppendDreamNarrative,
-  readRecentDreamDiaryEntries,
-  removeBackfillDiaryEntries,
-  runDetachedDreamNarrative,
-  type NarrativePhaseData,
-  writeBackfillDiaryEntries,
-} from "./dreaming-narrative.js";
+import { readRecentDreamDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
+import { runDreamNarrative, type DreamingCompletion } from "./dreaming-narrative.js";
+import { forgetMemoryEntries } from "./memory-forget.js";
+import { SESSION_CORPUS_RELATIVE_DIR } from "./session-ingestion.js";
+import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
-const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
-const NARRATIVE_SESSION_LOCKS_KEY = Symbol.for(
-  "openclaw.memoryCore.dreamingNarrative.sessionLocks",
-);
-const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
-
-type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
-
-function mockCallArg(source: MockCallSource, label: string, callIndex = 0, argIndex = 0): unknown {
-  const call = source.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected ${label} call ${callIndex} to exist`);
-  }
-  if (!(argIndex in call)) {
-    throw new Error(`Expected ${label} call ${callIndex} argument ${argIndex} to exist`);
-  }
-  return call[argIndex];
+function setNarrativeTestEnv(stateDir: string): void {
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 }
-
-function mockObjectArg(
-  source: MockCallSource,
-  label: string,
-  callIndex = 0,
-  argIndex = 0,
-): Record<string, unknown> {
-  const value = mockCallArg(source, label, callIndex, argIndex);
-  if (!value || typeof value !== "object") {
-    throw new Error(`Expected ${label} call ${callIndex} argument ${argIndex} to be an object`);
-  }
-  return value as Record<string, unknown>;
+function createLogger() {
+  return { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 }
-
-function logIncludes(source: MockCallSource, text: string): boolean {
-  return source.mock.calls.some((call) => String(call[0]).includes(text));
+function expectLogIncludes(source: ReturnType<typeof vi.fn>, text: string) {
+  expect(source.mock.calls.some((call) => String(call[0]).includes(text))).toBe(true);
 }
-
-function expectLogIncludes(source: MockCallSource, text: string): void {
-  expect(logIncludes(source, text), `Expected log to include ${text}`).toBe(true);
+function createCompletion(text = "The repository whispered of forgotten endpoints.") {
+  return { complete: vi.fn<DreamingCompletion["complete"]>().mockResolvedValue({ text }) };
 }
-
-function expectLogExcludes(source: MockCallSource, text: string): void {
-  expect(logIncludes(source, text), `Expected log not to include ${text}`).toBe(false);
-}
-
-async function flushNarrativeSettleTimers<T>(operation: Promise<T>): Promise<T> {
-  await vi.runAllTimersAsync();
-  return operation;
-}
-
-async function expectPathMissing(targetPath: string): Promise<void> {
-  const accessResult = await fs
-    .access(targetPath)
-    .then(() => "exists")
-    .catch((error: unknown) => (error as { code?: unknown }).code);
-  expect(accessResult).toBe("ENOENT");
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY).clear();
-  resolveGlobalMap<string, unknown>(NARRATIVE_SESSION_LOCKS_KEY).clear();
 });
 
-describe("buildNarrativePrompt", () => {
-  it("builds a prompt from snippets only", () => {
-    const data: NarrativePhaseData = {
-      phase: "light",
-      snippets: ["user prefers dark mode", "API key rotation scheduled"],
-    };
-    const prompt = buildNarrativePrompt(data);
-    expect(prompt).toContain("user prefers dark mode");
-    expect(prompt).toContain("API key rotation scheduled");
-    expect(prompt).not.toContain("Recurring themes");
-  });
-
-  it("includes themes when provided", () => {
-    const data: NarrativePhaseData = {
-      phase: "rem",
-      snippets: ["config migration path"],
-      themes: ["infrastructure", "deployment"],
-    };
-    const prompt = buildNarrativePrompt(data);
-    expect(prompt).toContain("Recurring themes");
-    expect(prompt).toContain("infrastructure");
-    expect(prompt).toContain("deployment");
-  });
-
-  it("includes promotions for deep phase", () => {
-    const data: NarrativePhaseData = {
-      phase: "deep",
-      snippets: ["trading bot uses bracket orders"],
-      promotions: ["always use stop-loss on options trades"],
-    };
-    const prompt = buildNarrativePrompt(data);
-    expect(prompt).toContain("crystallized");
-    expect(prompt).toContain("always use stop-loss on options trades");
-  });
-
-  it("caps snippets at 12", () => {
-    const snippets = Array.from({ length: 20 }, (_, i) => `snippet-${i}`);
-    const prompt = buildNarrativePrompt({ phase: "light", snippets });
-    expect(prompt).toContain("snippet-11");
-    expect(prompt).not.toContain("snippet-12");
-  });
-
-  it("includes current sweep and recent diary context", () => {
-    const prompt = buildNarrativePrompt({
-      phase: "light",
-      snippets: ["Later workspace routing notes surfaced."],
-      currentDate: "April 6, 2026, 9:00 AM UTC",
-      recentDiaryEntries: ["The first meeting memory already filled the page."],
-    });
-    expect(prompt).toContain("Diary continuity context");
-    expect(prompt).toContain("Current sweep: April 6, 2026, 9:00 AM UTC");
-    expect(prompt).toContain("The first meeting memory already filled the page.");
-    expect(prompt).toContain("do not replay the same first-day framing");
-  });
-});
-
-describe("extractNarrativeText", () => {
-  it("extracts string content from assistant message", () => {
-    const messages = [
-      { role: "user", content: "hello" },
-      { role: "assistant", content: "The workspace hummed quietly." },
-    ];
-    expect(extractNarrativeText(messages)).toBe("The workspace hummed quietly.");
-  });
-
-  it("extracts from content array with text blocks", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "First paragraph." },
-          { type: "text", text: "Second paragraph." },
-        ],
-      },
-    ];
-    expect(extractNarrativeText(messages)).toBe("First paragraph.\nSecond paragraph.");
-  });
-
-  it("extracts from OpenAI output_text assistant parts", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "output_text", text: "The light phase found a diary thread." }],
-      },
-    ];
-    expect(extractNarrativeText(messages)).toBe("The light phase found a diary thread.");
-  });
-
-  it("returns null when no assistant message exists", () => {
-    const messages = [{ role: "user", content: "hello" }];
-    expect(extractNarrativeText(messages)).toBeNull();
-  });
-
-  it("returns null for empty assistant content", () => {
-    const messages = [{ role: "assistant", content: "   " }];
-    expect(extractNarrativeText(messages)).toBeNull();
-  });
-
-  it("picks the last assistant message", () => {
-    const messages = [
-      { role: "assistant", content: "First response." },
-      { role: "user", content: "more" },
-      { role: "assistant", content: "Final response." },
-    ];
-    expect(extractNarrativeText(messages)).toBe("Final response.");
-  });
-});
-
-describe("formatNarrativeDate", () => {
-  it("formats a UTC date", () => {
-    const date = formatNarrativeDate(Date.parse("2026-04-05T03:00:00Z"), "UTC");
-    expect(date).toContain("April");
-    expect(date).toContain("2026");
-    expect(date).toContain("3:00");
-    expect(date).toContain("UTC");
-  });
-
-  it("applies an explicit timezone", () => {
-    // 2026-04-11T21:46:55Z in America/Los_Angeles (PDT, UTC-7) → 2:46 PM
-    const date = formatNarrativeDate(Date.parse("2026-04-11T21:46:55Z"), "America/Los_Angeles");
-    expect(date).toContain("2:46");
-    expect(date).toContain("PM");
-    expect(date).toContain("PDT");
-  });
-
-  it("uses host local timezone when timezone is undefined (#65027)", () => {
-    // Force a non-UTC host timezone so this test is meaningful on UTC CI
-    // runners where the old `?? "UTC"` fallback would silently pass.
-    const originalTZ = process.env.TZ;
-    try {
-      process.env.TZ = "America/Los_Angeles"; // PDT = UTC-7
-      const epochMs = Date.parse("2026-04-11T21:46:55Z");
-      const result = formatNarrativeDate(epochMs);
-      // 21:46 UTC → 14:46 PDT → "2:46 PM"
-      expect(result).toContain("2:46");
-      expect(result).toContain("PM");
-      expect(result).toContain("PDT");
-    } finally {
-      if (originalTZ === undefined) {
-        delete process.env.TZ;
-      } else {
-        process.env.TZ = originalTZ;
-      }
-    }
-  });
-});
-
-describe("buildDiaryEntry", () => {
-  it("formats narrative with date and separators", () => {
-    const entry = buildDiaryEntry("The code drifted gently.", "April 5, 2026, 3:00 AM");
-    expect(entry).toContain("---");
-    expect(entry).toContain("*April 5, 2026, 3:00 AM*");
-    expect(entry).toContain("The code drifted gently.");
-  });
-});
-
-describe("backfill diary entries", () => {
-  it("formats a backfill date without time", () => {
-    expect(formatBackfillDiaryDate("2026-01-01", "UTC")).toBe("January 1, 2026");
-  });
-
-  it("preserves the iso day label in high-positive-offset timezones", () => {
-    expect(formatBackfillDiaryDate("2026-01-01", "Pacific/Kiritimati")).toBe("January 1, 2026");
-  });
-
-  it("builds a marked backfill diary entry", () => {
-    const entry = buildBackfillDiaryEntry({
-      isoDay: "2026-01-01",
-      sourcePath: "memory/2026-01-01.md",
-      bodyLines: ["What Happened", "1. A durable preference appeared."],
-      timezone: "UTC",
-    });
-    expect(entry).toContain("*January 1, 2026*");
-    expect(entry).toContain("openclaw:dreaming:backfill-entry");
-    expect(entry).toContain("What Happened");
-  });
-
-  it("writes and replaces backfill diary entries", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-backfill-");
-    const first = await writeBackfillDiaryEntries({
-      workspaceDir,
-      timezone: "UTC",
-      entries: [
-        {
-          isoDay: "2026-01-01",
-          sourcePath: "memory/2026-01-01.md",
-          bodyLines: ["What Happened", "1. First pass."],
-        },
-      ],
-    });
-    expect(first.written).toBe(1);
-    expect(first.replaced).toBe(0);
-
-    const second = await writeBackfillDiaryEntries({
-      workspaceDir,
-      timezone: "UTC",
-      entries: [
-        {
-          isoDay: "2026-01-02",
-          sourcePath: "memory/2026-01-02.md",
-          bodyLines: ["Reflections", "1. Second pass."],
-        },
-      ],
-    });
-    expect(second.written).toBe(1);
-    expect(second.replaced).toBe(1);
-
-    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(content).not.toContain("First pass.");
-    expect(content).toContain("Second pass.");
-    expect(content.match(/openclaw:dreaming:backfill-entry/g)?.length).toBe(1);
-  });
-
-  it("removes only backfill diary entries", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-backfill-");
-    await appendNarrativeEntry({
-      workspaceDir,
-      narrative: "Keep this real dream.",
-      nowMs: Date.parse("2026-04-05T03:00:00Z"),
-      timezone: "UTC",
-    });
-    await writeBackfillDiaryEntries({
-      workspaceDir,
-      timezone: "UTC",
-      entries: [
-        {
-          isoDay: "2026-01-01",
-          sourcePath: "memory/2026-01-01.md",
-          bodyLines: ["What Happened", "1. Remove this backfill."],
-        },
-      ],
-    });
-
-    const removed = await removeBackfillDiaryEntries({ workspaceDir });
-    expect(removed.removed).toBe(1);
-
-    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(content).toContain("Keep this real dream.");
-    expect(content).not.toContain("Remove this backfill.");
-  });
-
-  it("refuses to overwrite a symlinked DREAMS.md during backfill writes", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-backfill-");
-    const targetPath = path.join(workspaceDir, "outside.txt");
-    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
-    await fs.writeFile(targetPath, "outside\n", "utf-8");
-    await fs.symlink(targetPath, dreamsPath);
-
-    await expect(
-      writeBackfillDiaryEntries({
-        workspaceDir,
-        timezone: "UTC",
-        entries: [
-          {
-            isoDay: "2026-01-01",
-            sourcePath: "memory/2026-01-01.md",
-            bodyLines: ["What Happened", "1. First pass."],
-          },
-        ],
-      }),
-    ).rejects.toThrow("Refusing to write symlinked DREAMS.md");
-    await expect(fs.readFile(targetPath, "utf-8")).resolves.toBe("outside\n");
-  });
-});
-
-describe("appendNarrativeEntry", () => {
-  it("creates DREAMS.md with diary header on fresh workspace", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const dreamsPath = await appendNarrativeEntry({
-      workspaceDir,
-      narrative: "Fragments of authentication logic kept surfacing.",
-      nowMs: Date.parse("2026-04-05T03:00:00Z"),
-      timezone: "UTC",
-    });
-    expect(dreamsPath).toBe(path.join(workspaceDir, "DREAMS.md"));
-    const content = await fs.readFile(dreamsPath, "utf-8");
-    expect(content).toContain("# Dream Diary");
-    expect(content).toContain("Fragments of authentication logic kept surfacing.");
-    expect(content).toContain("<!-- openclaw:dreaming:diary:start -->");
-    expect(content).toContain("<!-- openclaw:dreaming:diary:end -->");
-  });
-
-  it("appends a second entry within the diary markers", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    await appendNarrativeEntry({
-      workspaceDir,
-      narrative: "First dream.",
-      nowMs: Date.parse("2026-04-04T03:00:00Z"),
-      timezone: "UTC",
-    });
-    await appendNarrativeEntry({
-      workspaceDir,
-      narrative: "Second dream.",
-      nowMs: Date.parse("2026-04-05T03:00:00Z"),
-      timezone: "UTC",
-    });
-    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(content).toContain("First dream.");
-    expect(content).toContain("Second dream.");
-    // Both entries should be between start and end markers.
-    const start = content.indexOf("<!-- openclaw:dreaming:diary:start -->");
-    const end = content.indexOf("<!-- openclaw:dreaming:diary:end -->");
-    const firstIdx = content.indexOf("First dream.");
-    const secondIdx = content.indexOf("Second dream.");
-    expect(firstIdx).toBeGreaterThan(start);
-    expect(secondIdx).toBeGreaterThan(firstIdx);
-    expect(secondIdx).toBeLessThan(end);
-  });
-
-  it("reads recent diary entries without timestamps or markers", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    await appendNarrativeEntry({
-      workspaceDir,
-      narrative: "The first meeting memory already filled the page.",
-      nowMs: Date.parse("2026-04-04T03:00:00Z"),
-      timezone: "UTC",
-    });
-    await appendNarrativeEntry({
-      workspaceDir,
-      narrative: "A later routing note flickered in the margins.",
-      nowMs: Date.parse("2026-04-05T03:00:00Z"),
-      timezone: "UTC",
-    });
-
-    await expect(readRecentDreamDiaryEntries({ workspaceDir, limit: 1 })).resolves.toEqual([
-      "A later routing note flickered in the margins.",
-    ]);
-  });
-
-  it("skips symlinked DREAMS.md when building recent diary context", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const targetPath = path.join(workspaceDir, "target-dreams.md");
-    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
-    const symlinkTargetDiary = "Symlink target diary text must not enter the prompt.";
-    await fs.writeFile(
-      targetPath,
-      [
-        "# Dream Diary",
-        "",
-        "<!-- openclaw:dreaming:diary:start -->",
-        "---",
-        "",
-        "*April 5, 2026, 3:00 AM UTC*",
-        "",
-        symlinkTargetDiary,
-        "",
-        "<!-- openclaw:dreaming:diary:end -->",
-        "",
-      ].join("\n"),
-      "utf-8",
-    );
-    await fs.symlink(targetPath, dreamsPath);
-
-    const entries = await readRecentDreamDiaryEntries({ workspaceDir, limit: 3 });
-    expect(entries).toEqual([]);
-    const prompt = buildNarrativePrompt({
-      phase: "light",
-      snippets: ["A fresh routing memory arrived."],
-      recentDiaryEntries: entries,
-    });
-    expect(prompt).not.toContain(symlinkTargetDiary);
-  });
-
-  it("skips non-file DREAMS.md when reading recent diary context", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    await fs.mkdir(path.join(workspaceDir, "DREAMS.md"));
-
-    await expect(readRecentDreamDiaryEntries({ workspaceDir, limit: 3 })).resolves.toEqual([]);
-  });
-
-  it("treats unreadable DREAMS.md as empty recent diary context", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "unreadable", "utf-8");
-    vi.spyOn(fs, "access").mockRejectedValueOnce(
-      Object.assign(new Error("permission denied"), { code: "EACCES" }),
-    );
-
-    await expect(readRecentDreamDiaryEntries({ workspaceDir, limit: 3 })).resolves.toEqual([]);
-  });
-
-  it("prepends diary before existing managed blocks", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
-    await fs.writeFile(
-      dreamsPath,
-      "## Light Sleep\n<!-- openclaw:dreaming:light:start -->\n- Candidate: test\n<!-- openclaw:dreaming:light:end -->\n",
-      "utf-8",
-    );
-    await appendNarrativeEntry({
-      workspaceDir,
-      narrative: "The workspace was quiet tonight.",
-      nowMs: Date.parse("2026-04-05T03:00:00Z"),
-      timezone: "UTC",
-    });
-    const content = await fs.readFile(dreamsPath, "utf-8");
-    const diaryIdx = content.indexOf("# Dream Diary");
-    const lightIdx = content.indexOf("## Light Sleep");
-    // Diary should come before the managed block.
-    expect(diaryIdx).toBeLessThan(lightIdx);
-    expect(content).toContain("The workspace was quiet tonight.");
-  });
-
-  it("reuses existing dreams file when present", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
-    await fs.writeFile(dreamsPath, "# Existing\n", "utf-8");
-    const result = await appendNarrativeEntry({
-      workspaceDir,
-      narrative: "Appended dream.",
-      nowMs: Date.parse("2026-04-05T03:00:00Z"),
-      timezone: "UTC",
-    });
-    expect(result).toBe(dreamsPath);
-    const content = await fs.readFile(dreamsPath, "utf-8");
-    expect(content).toContain("Appended dream.");
-    // Original content should still be there, after the diary.
-    expect(content).toContain("# Existing");
-  });
-
-  it("keeps existing diary content intact when the atomic replace fails", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
-    await fs.writeFile(dreamsPath, "# Existing\n", "utf-8");
-    const renameError = Object.assign(new Error("replace failed"), { code: "ENOSPC" });
-    const renameSpy = vi.spyOn(fs, "rename").mockRejectedValueOnce(renameError);
-
-    await expect(
-      appendNarrativeEntry({
-        workspaceDir,
-        narrative: "Appended dream.",
-        nowMs: Date.parse("2026-04-05T03:00:00Z"),
-        timezone: "UTC",
-      }),
-    ).rejects.toThrow("replace failed");
-
-    expect(renameSpy).toHaveBeenCalledOnce();
-    await expect(fs.readFile(dreamsPath, "utf-8")).resolves.toBe("# Existing\n");
-  });
-
-  it("preserves restrictive dreams file permissions across atomic replace", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
-    await fs.writeFile(dreamsPath, "# Existing\n", { encoding: "utf-8", mode: 0o600 });
-    await fs.chmod(dreamsPath, 0o600);
-
-    await appendNarrativeEntry({
-      workspaceDir,
-      narrative: "Appended dream.",
-      nowMs: Date.parse("2026-04-05T03:00:00Z"),
-      timezone: "UTC",
-    });
-
-    const stat = await fs.stat(dreamsPath);
-    if (EXPECTS_POSIX_PRIVATE_FILE_MODE) {
-      expect(stat.mode & 0o777).toBe(0o600);
-    }
-  });
-
-  it("dedupes only exact diary duplicates while keeping distinct timestamps", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
-    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
-    await fs.writeFile(
-      dreamsPath,
-      [
-        "# Dream Diary",
-        "",
-        "<!-- openclaw:dreaming:diary:start -->",
-        "---",
-        "",
-        "*April 11, 2026, 8:00 AM*",
-        "",
-        "The server room smelled like rain.",
-        "",
-        "---",
-        "",
-        "*April 11, 2026, 8:00 AM*",
-        "",
-        "<!-- transient comment -->",
-        "",
-        "The server room smelled like rain.",
-        "",
-        "---",
-        "",
-        "*April 11, 2026, 8:30 AM*",
-        "",
-        "The server room smelled like rain.",
-        "",
-        "<!-- openclaw:dreaming:diary:end -->",
-        "",
-      ].join("\n"),
-      "utf-8",
-    );
-
-    const result = await dedupeDreamDiaryEntries({ workspaceDir });
-
-    expect(result.removed).toBe(1);
-    expect(result.kept).toBe(2);
-    const content = await fs.readFile(dreamsPath, "utf-8");
-    expect(content.match(/The server room smelled like rain\./g)?.length).toBe(2);
-    expect(content).toContain("*April 11, 2026, 8:00 AM*");
-    expect(content).toContain("*April 11, 2026, 8:30 AM*");
-  });
-
-  it("serializes append and dedupe so concurrent rewrites keep the new entry", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
-    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
-    await fs.writeFile(
-      dreamsPath,
-      [
-        "# Dream Diary",
-        "",
-        "<!-- openclaw:dreaming:diary:start -->",
-        "---",
-        "",
-        "*April 11, 2026, 8:00 AM*",
-        "",
-        "The server room smelled like rain.",
-        "",
-        "---",
-        "",
-        "*April 11, 2026, 8:00 AM*",
-        "",
-        "The server room smelled like rain.",
-        "",
-        "<!-- openclaw:dreaming:diary:end -->",
-        "",
-      ].join("\n"),
-      "utf-8",
-    );
-
-    await Promise.all([
-      dedupeDreamDiaryEntries({ workspaceDir }),
-      appendNarrativeEntry({
-        workspaceDir,
-        narrative: "A fresh signal arrived after the cleanup started.",
-        nowMs: Date.parse("2026-04-11T14:30:00Z"),
-        timezone: "UTC",
-      }),
-    ]);
-
-    const content = await fs.readFile(dreamsPath, "utf-8");
-    expect(content.match(/The server room smelled like rain\./g)?.length).toBe(1);
-    expect(content).toContain("A fresh signal arrived after the cleanup started.");
-  });
-
-  it("keeps dedupe a no-op when no exact duplicates exist", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
-    await appendNarrativeEntry({
-      workspaceDir,
-      narrative: "Only one entry exists.",
-      nowMs: Date.parse("2026-04-11T14:00:00Z"),
-      timezone: "UTC",
-    });
-
-    const result = await dedupeDreamDiaryEntries({ workspaceDir });
-
-    expect(result.removed).toBe(0);
-    expect(result.kept).toBe(1);
-    await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
-      "Only one entry exists.",
-    );
-  });
-
-  it("does not rewrite the diary file when dedupe finds nothing to remove", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
-    const dreamsPath = await appendNarrativeEntry({
-      workspaceDir,
-      narrative: "Only one entry exists.",
-      nowMs: Date.parse("2026-04-11T14:00:00Z"),
-      timezone: "UTC",
-    });
-    const stableMtime = new Date("2026-04-11T14:00:05Z");
-    await fs.utimes(dreamsPath, stableMtime, stableMtime);
-    const before = await fs.stat(dreamsPath);
-
-    const result = await dedupeDreamDiaryEntries({ workspaceDir });
-    const after = await fs.stat(dreamsPath);
-
-    expect(result.removed).toBe(0);
-    expect(after.mtimeMs).toBe(before.mtimeMs);
-  });
-
-  it("cleans up the per-file lock entry after diary updates finish", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
-    const dreamsLocks = resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY);
-
-    expect(dreamsLocks.size).toBe(0);
-
-    await appendNarrativeEntry({
-      workspaceDir,
-      narrative: "Only one entry exists.",
-      nowMs: Date.parse("2026-04-11T14:00:00Z"),
-      timezone: "UTC",
-    });
-
-    expect(dreamsLocks.size).toBe(0);
-  });
-
-  it("surfaces temp cleanup failure after atomic replace error", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
-    await fs.writeFile(dreamsPath, "# Existing\n", "utf-8");
-    vi.spyOn(fs, "rename").mockRejectedValueOnce(
-      Object.assign(new Error("replace failed"), { code: "ENOSPC" }),
-    );
-    vi.spyOn(fs, "rm").mockRejectedValueOnce(
-      Object.assign(new Error("cleanup failed"), { code: "EACCES" }),
-    );
-
-    await expect(
-      appendNarrativeEntry({
-        workspaceDir,
-        narrative: "Appended dream.",
-        nowMs: Date.parse("2026-04-05T03:00:00Z"),
-        timezone: "UTC",
-      }),
-    ).rejects.toThrow("cleanup also failed");
-  });
-});
-
-describe("generateAndAppendDreamNarrative", () => {
-  function createMockSubagent(responseText: string) {
-    return {
-      run: vi.fn().mockResolvedValue({ runId: "run-123" }),
-      waitForRun: vi.fn().mockResolvedValue({ status: "ok" }),
-      getSessionMessages: vi.fn().mockResolvedValue({
-        messages: [
-          { role: "user", content: "prompt" },
-          { role: "assistant", content: responseText },
-        ],
-      }),
-      deleteSession: vi.fn().mockResolvedValue(undefined),
-    };
-  }
-
-  function createMockLogger() {
-    return {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
-  }
-
-  it("generates narrative and writes diary entry", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
-    const logger = createMockLogger();
-    const nowMs = Date.parse("2026-04-05T03:00:00Z");
-    const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}`;
-
-    await generateAndAppendDreamNarrative({
-      subagent,
-      workspaceDir,
-      data: {
-        phase: "light",
-        snippets: ["API endpoints need authentication"],
-      },
-      nowMs,
-      timezone: "UTC",
-      model: "anthropic/claude-sonnet-4-6",
-      logger,
-    });
-
-    expect(subagent.run).toHaveBeenCalledOnce();
-    const runOptions = mockObjectArg(subagent.run, "subagent run");
-    expect(runOptions.idempotencyKey).toBe(`${expectedSessionKey}-${nowMs}`);
-    expect(runOptions.sessionKey).toBe(expectedSessionKey);
-    expect(runOptions.lane).toBe(`dreaming-narrative:${expectedSessionKey}`);
-    expect(runOptions.lightContext).toBe(true);
-    expect(runOptions.deliver).toBe(false);
-    expect(runOptions.model).toBe("anthropic/claude-sonnet-4-6");
-    expect(subagent.waitForRun).toHaveBeenCalledOnce();
-    expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
-
-    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    expect(content).toContain("The repository whispered of forgotten endpoints.");
-    expect(logger.info).toHaveBeenCalled();
-  });
-
-  it("waits for persisted assistant text before falling back", async () => {
-    vi.useFakeTimers();
-    try {
-      const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-      const subagent = createMockSubagent("");
-      subagent.getSessionMessages
-        .mockResolvedValueOnce({
-          messages: [{ role: "user", content: "prompt" }],
-        })
-        .mockResolvedValueOnce({
-          messages: [
-            { role: "user", content: "prompt" },
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "The delayed diary text finally settled." }],
-            },
-          ],
-        });
-      const logger = createMockLogger();
-
-      const operation = generateAndAppendDreamNarrative({
-        subagent,
-        workspaceDir,
-        data: {
-          phase: "light",
-          snippets: ["The narrative assistant persisted after the run completed."],
-        },
-        nowMs: Date.parse("2026-04-05T03:00:00Z"),
-        timezone: "UTC",
-        logger,
-      });
-      await flushNarrativeSettleTimers(operation);
-
-      expect(subagent.getSessionMessages).toHaveBeenCalledTimes(2);
-      expect(subagent.getSessionMessages).toHaveBeenNthCalledWith(1, {
-        sessionKey: expect.stringContaining("dreaming-narrative-light-"),
-        limit: expect.any(Number),
-      });
-      expect(subagent.getSessionMessages).toHaveBeenNthCalledWith(2, {
-        sessionKey: expect.stringContaining("dreaming-narrative-light-"),
-        limit: expect.any(Number),
-      });
-      const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-      expect(content).toContain("The delayed diary text finally settled.");
-      expect(content).not.toContain("A memory trace surfaced");
-      expectLogExcludes(logger.warn, "produced no text");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("falls back after settled assistant text never appears", async () => {
-    vi.useFakeTimers();
-    try {
-      const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-      const subagent = createMockSubagent("");
-      const logger = createMockLogger();
-
-      const operation = generateAndAppendDreamNarrative({
-        subagent,
-        workspaceDir,
-        data: {
-          phase: "light",
-          snippets: ["The narrative assistant never persisted text."],
-        },
-        nowMs: Date.parse("2026-04-05T03:00:00Z"),
-        timezone: "UTC",
-        logger,
-      });
-      await flushNarrativeSettleTimers(operation);
-
-      expect(subagent.getSessionMessages).toHaveBeenCalledTimes(5);
-      const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-      expect(content).toContain(
-        "A memory trace surfaced, but details were unavailable in this run.",
-      );
-      expectLogIncludes(logger.warn, "produced no text");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("retries with the session default when the configured model cannot start", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const subagent = createMockSubagent("The default model carried the diary home.");
-    subagent.run.mockRejectedValueOnce(new Error("model unavailable"));
-    const logger = createMockLogger();
-    const nowMs = Date.parse("2026-04-05T03:00:00Z");
-    const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}`;
-    const retrySessionKey = `${expectedSessionKey}-retry-1`;
-
-    await generateAndAppendDreamNarrative({
-      subagent,
-      workspaceDir,
-      data: {
-        phase: "light",
-        snippets: ["API endpoints need authentication"],
-      },
-      nowMs,
-      timezone: "UTC",
-      model: "ollama/missing-model",
-      logger,
-    });
-
-    expect(subagent.run).toHaveBeenCalledTimes(2);
-    const configuredRunOptions = mockObjectArg(subagent.run, "subagent run");
-    expect(configuredRunOptions.sessionKey).toBe(expectedSessionKey);
-    expect(configuredRunOptions.model).toBe("ollama/missing-model");
-    const retryRunOptions = mockObjectArg(subagent.run, "subagent run", 1);
-    expect(retryRunOptions.sessionKey).toBe(retrySessionKey);
-    expect(retryRunOptions).not.toHaveProperty("model");
-    expect(subagent.getSessionMessages).toHaveBeenCalledWith({
-      sessionKey: retrySessionKey,
-      limit: 5,
-    });
-    expect(subagent.deleteSession).toHaveBeenCalledTimes(3);
-    expect(mockObjectArg(subagent.deleteSession, "delete session")).toEqual({
-      sessionKey: expectedSessionKey,
-    });
-    expect(mockObjectArg(subagent.deleteSession, "delete session", 1)).toEqual({
-      sessionKey: retrySessionKey,
-    });
-    expect(mockObjectArg(subagent.deleteSession, "delete session", 2)).toEqual({
-      sessionKey: retrySessionKey,
-    });
-    expectLogIncludes(logger.warn, "session default");
-  });
-
-  it("retries with the session default when the configured model run ends unavailable", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const subagent = createMockSubagent("The default model carried the diary home.");
-    subagent.run
-      .mockResolvedValueOnce({ runId: "run-configured" })
-      .mockResolvedValueOnce({ runId: "run-default" });
-    subagent.waitForRun
-      .mockResolvedValueOnce({ status: "error", error: "unknown model: ollama/missing-model" })
-      .mockResolvedValueOnce({ status: "ok" });
-    const logger = createMockLogger();
-    const nowMs = Date.parse("2026-04-05T03:00:00Z");
-    const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `dreaming-narrative-rem-${workspaceHash}`;
-    const retrySessionKey = `${expectedSessionKey}-retry-1`;
-
-    await generateAndAppendDreamNarrative({
-      subagent,
-      workspaceDir,
-      data: {
-        phase: "rem",
-        snippets: ["The index remembered a missing provider."],
-      },
-      nowMs,
-      timezone: "UTC",
-      model: "ollama/missing-model",
-      logger,
-    });
-
-    expect(subagent.waitForRun).toHaveBeenCalledTimes(2);
-    expect(subagent.getSessionMessages).toHaveBeenCalledWith({
-      sessionKey: retrySessionKey,
-      limit: 5,
-    });
-    expect(subagent.deleteSession).toHaveBeenCalledTimes(4);
-    expect(mockObjectArg(subagent.deleteSession, "delete session")).toEqual({
-      sessionKey: expectedSessionKey,
-    });
-    expect(mockObjectArg(subagent.deleteSession, "delete session", 1)).toEqual({
-      sessionKey: retrySessionKey,
-    });
-    expect(mockObjectArg(subagent.deleteSession, "delete session", 2)).toEqual({
-      sessionKey: expectedSessionKey,
-    });
-    expect(mockObjectArg(subagent.deleteSession, "delete session", 3)).toEqual({
-      sessionKey: retrySessionKey,
-    });
-    expectLogIncludes(logger.warn, "unknown model");
-  });
-
-  it("does not hide configured model authorization failures by retrying", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const subagent = createMockSubagent("");
-    subagent.run.mockRejectedValue(
-      new Error("provider/model override is not authorized for this plugin subagent run."),
-    );
-    const logger = createMockLogger();
-
-    await generateAndAppendDreamNarrative({
-      subagent,
-      workspaceDir,
-      data: {
-        phase: "light",
-        snippets: ["API endpoints need authentication"],
-      },
-      model: "ollama/missing-model",
-      logger,
-    });
-
-    expect(subagent.run).toHaveBeenCalledOnce();
-    expect(subagent.waitForRun).not.toHaveBeenCalled();
-    expect(subagent.deleteSession).toHaveBeenCalledOnce();
-    expectLogIncludes(logger.warn, "narrative generation failed");
-  });
-
-  it("skips narrative when no snippets are available", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const subagent = createMockSubagent("Should not appear.");
-    const logger = createMockLogger();
-
-    await generateAndAppendDreamNarrative({
-      subagent,
-      workspaceDir,
-      data: { phase: "light", snippets: [] },
-      logger,
-    });
-
-    expect(subagent.run).not.toHaveBeenCalled();
-    const exists = await fs
-      .access(path.join(workspaceDir, "DREAMS.md"))
-      .then(() => true)
-      .catch(() => false);
-    expect(exists).toBe(false);
-  });
-
-  it("writes a fallback diary entry when the subagent times out", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const subagent = createMockSubagent("");
-    subagent.waitForRun.mockResolvedValue({ status: "timeout" });
-    const logger = createMockLogger();
-
-    await generateAndAppendDreamNarrative({
-      subagent,
-      workspaceDir,
-      data: { phase: "deep", snippets: ["some memory"] },
-      logger,
-    });
-
-    // Should not throw, should warn.
-    expect(logger.warn).toHaveBeenCalled();
-    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    // Raw staging snippets must never leak into the diary; only the generic
-    // placeholder is written on fallback.
-    expect(content).not.toContain("some memory");
-    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
-    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("status=timeout"));
-  });
-
-  it("does not leak sensitive raw staging fragments into the diary on fallback", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const subagent = createMockSubagent("");
-    subagent.waitForRun.mockResolvedValue({ status: "timeout" });
-    const logger = createMockLogger();
-
-    // Realistic staging fragments as described in issue #88391: session
-    // metadata, conversation summaries, and operational logs that must never
-    // be persisted to the human-readable dream diary.
-    const sensitiveSnippets = [
-      "Conversation Summary: 343 files copied, 30 MB on B2 so far",
-      "Session: 2026-05-22 00:02:16 GMT+1: Session Key: agent:main:dashboard:secret",
-    ];
-
-    await generateAndAppendDreamNarrative({
-      subagent,
-      workspaceDir,
-      data: { phase: "deep", snippets: sensitiveSnippets },
-      logger,
-    });
-
-    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    for (const fragment of sensitiveSnippets) {
-      expect(content).not.toContain(fragment);
-    }
-    expect(content).not.toContain("Session Key:");
-    expect(content).not.toContain("agent:main:dashboard");
-    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
-  });
-
-  it("skips extra settle waits after timeout and still attempts cleanup", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const subagent = createMockSubagent("");
-    subagent.waitForRun.mockResolvedValueOnce({ status: "timeout" });
-    subagent.deleteSession.mockRejectedValue(new Error("still active"));
-    const logger = createMockLogger();
-
-    await generateAndAppendDreamNarrative({
-      subagent,
-      workspaceDir,
-      data: { phase: "rem", snippets: ["some memory"] },
-      logger,
-    });
-
-    expect(subagent.waitForRun).toHaveBeenCalledOnce();
-    expect(mockObjectArg(subagent.waitForRun, "wait for run").timeoutMs).toBe(60_000);
-    expectLogIncludes(logger.warn, "narrative session cleanup failed for rem phase");
-  });
-
-  it("handles subagent error gracefully", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const subagent = createMockSubagent("");
-    subagent.run.mockRejectedValue(
-      new Error("connection failed", {
-        cause: new RequestScopedSubagentRuntimeError(),
-      }),
-    );
-    const logger = createMockLogger();
-
-    await generateAndAppendDreamNarrative({
-      subagent,
-      workspaceDir,
-      data: { phase: "rem", snippets: ["pattern surfaced"] },
-      logger,
-    });
-
-    // Should not throw.
-    expect(logger.warn).toHaveBeenCalled();
-    await expectPathMissing(path.join(workspaceDir, "DREAMS.md"));
-  });
-
-  it("falls back to a local narrative when subagent runtime is request-scoped", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const subagent = createMockSubagent("");
-    subagent.deleteSession.mockRejectedValueOnce(new RequestScopedSubagentRuntimeError());
-    subagent.run.mockRejectedValue(new RequestScopedSubagentRuntimeError());
-    const logger = createMockLogger();
-
-    await generateAndAppendDreamNarrative({
+describe("runDreamNarrative", () => {
+  it("writes the completion using the workspace owner's configured model", async () => {
+    const workspaceDir = await createTempWorkspace("dreaming-completion-");
+    const subagent = createCompletion();
+    const outcome = await runDreamNarrative({
+      agentId: "researcher",
       subagent,
       workspaceDir,
       data: { phase: "light", snippets: ["API endpoints need authentication"] },
       nowMs: Date.parse("2026-04-05T03:00:00Z"),
       timezone: "UTC",
-      logger,
+      model: "anthropic/claude-sonnet-4-6",
+      logger: createLogger(),
     });
 
-    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    // Raw staging snippets must never leak into the diary on fallback.
-    expect(content).not.toContain("API endpoints need authentication");
-    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
-    expectLogIncludes(logger.info, "request-scoped");
-    expectLogExcludes(logger.warn, "request-scoped");
-    expectLogExcludes(logger.warn, workspaceDir);
-    expectLogExcludes(logger.warn, "narrative pre-cleanup");
-    expectLogExcludes(logger.warn, "narrative session cleanup failed");
-    expect(subagent.deleteSession).toHaveBeenCalledOnce();
-  });
-
-  it("falls back when the request-scoped runtime error is detected by stable code", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const subagent = createMockSubagent("");
-    const crossBoundaryError = new Error("different wrapper text");
-    crossBoundaryError.name = "RequestScopedSubagentRuntimeError";
-    Object.assign(crossBoundaryError, {
-      code: SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
+    expect(subagent.complete).toHaveBeenCalledOnce();
+    expect(subagent.complete.mock.calls[0]?.[0]).toMatchObject({
+      agentId: "researcher",
+      model: "anthropic/claude-sonnet-4-6",
+      timeoutMs: 60_000,
+      message: expect.stringContaining("API endpoints need authentication"),
+      extraSystemPrompt: expect.stringContaining("Output ONLY the diary entry"),
     });
-    subagent.run.mockRejectedValue(crossBoundaryError);
-    const logger = createMockLogger();
-
-    await generateAndAppendDreamNarrative({
-      subagent,
-      workspaceDir,
-      data: { phase: "deep", snippets: [], promotions: ["A durable candidate surfaced."] },
-      nowMs: Date.parse("2026-04-05T03:00:00Z"),
-      timezone: "UTC",
-      logger,
-    });
-
-    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
-    // Raw staging promotions must never leak into the diary on fallback.
-    expect(content).not.toContain("A durable candidate surfaced.");
-    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
-    expectLogIncludes(logger.info, "request-scoped");
-    expectLogExcludes(logger.warn, "request-scoped");
-    expect(subagent.deleteSession).toHaveBeenCalledOnce();
-  });
-
-  it("does not fall back for non-Error objects that only spoof the stable code", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const subagent = createMockSubagent("");
-    subagent.run.mockRejectedValue({
-      code: SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
-      name: "RequestScopedSubagentRuntimeError",
-      message: "spoofed",
-    });
-    const logger = createMockLogger();
-
-    await generateAndAppendDreamNarrative({
-      subagent,
-      workspaceDir,
-      data: { phase: "deep", snippets: ["should not persist"] },
-      logger,
-    });
-
-    await expectPathMissing(path.join(workspaceDir, "DREAMS.md"));
-    expectLogIncludes(logger.warn, "narrative generation failed");
-  });
-
-  it("cleans up session even on failure", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const subagent = createMockSubagent("");
-    subagent.getSessionMessages.mockRejectedValue(new Error("fetch failed"));
-    const logger = createMockLogger();
-
-    await generateAndAppendDreamNarrative({
-      subagent,
-      workspaceDir,
-      data: { phase: "light", snippets: ["memory fragment"] },
-      logger,
-    });
-
-    expect(subagent.deleteSession).toHaveBeenCalled();
-  });
-
-  it("scrubs stale dreaming entries and orphan transcripts after cleanup", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const stateDir = await createTempWorkspace("openclaw-dreaming-state-");
-    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const orphanPath = path.join(sessionsDir, "orphan.jsonl");
-    const livePath = path.join(sessionsDir, "still-live.jsonl");
-    const normalTranscriptPath = path.join(sessionsDir, "normal-user-session.jsonl");
-    const updatedAt = Date.now();
-    await sessionStoreRuntimeModule.saveSessionStore(
-      storePath,
-      {
-        "agent:main:dreaming-narrative-light-1": {
-          sessionId: "missing",
-          updatedAt,
-        },
-        "agent:main:kept-session": {
-          sessionId: "still-live",
-          updatedAt,
-        },
-        "agent:main:telegram:group:dreaming-narrative-room": {
-          sessionId: "still-missing-non-dreaming",
-          updatedAt,
-        },
-        "agent:main:dreaming-narrative-corrupt-normal": {
-          sessionId: "normal-user-session",
-          updatedAt,
-        },
-      },
-      { skipMaintenance: true },
+    expect(outcome).toEqual({ status: "completed" });
+    expect(await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8")).toContain(
+      "The repository whispered of forgotten endpoints.",
     );
-    await fs.writeFile(orphanPath, '{"runId":"dreaming-narrative-light-123"}\n', "utf-8");
-    await fs.writeFile(livePath, '{"runId":"dreaming-narrative-light-keep"}\n', "utf-8");
-    await fs.writeFile(normalTranscriptPath, '{"runId":"ordinary-user-session"}\n', "utf-8");
-    const oldDate = new Date(Date.now() - 600_000);
-    await fs.utimes(orphanPath, oldDate, oldDate);
-    await fs.utimes(livePath, oldDate, oldDate);
-    await fs.utimes(normalTranscriptPath, oldDate, oldDate);
+  });
 
-    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig").mockReturnValue({
-      session: {},
-    } as never);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
-
-    const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
-    const logger = createMockLogger();
-
-    await generateAndAppendDreamNarrative({
+  it.each([
+    new Error("model unavailable"),
+    new Error("Completion failed", { cause: new Error("unknown model: ollama/missing-model") }),
+  ])("retries an unavailable configured model with the default (%s)", async (error) => {
+    const workspaceDir = await createTempWorkspace("dreaming-model-retry-");
+    const subagent = createCompletion("The default model carried the diary home.");
+    subagent.complete.mockRejectedValueOnce(error);
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
-      data: { phase: "light", snippets: ["memory fragment"] },
-      logger,
+      data: { phase: "rem", snippets: ["A configured endpoint was absent."] },
+      model: "ollama/missing-model",
+      logger: createLogger(),
     });
 
-    const updatedStore = sessionStoreRuntimeModule.loadSessionStore(storePath, {
-      skipCache: true,
-    }) as Record<string, unknown>;
-    expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-light-1");
-    expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-corrupt-normal");
-    expect(updatedStore).toHaveProperty("agent:main:kept-session");
-    expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
-    const sessionFiles = await fs.readdir(sessionsDir);
-    expect(sessionFiles.filter((file) => file.startsWith("orphan.jsonl.deleted."))).not.toEqual([]);
-    expect(sessionFiles).toContain("still-live.jsonl");
-    expect(sessionFiles).toContain("normal-user-session.jsonl");
-    expectLogIncludes(logger.info, "dreaming cleanup scrubbed");
+    expect(subagent.complete).toHaveBeenCalledTimes(2);
+    expect(subagent.complete.mock.calls[0]?.[0].model).toBe("ollama/missing-model");
+    expect(subagent.complete.mock.calls[1]?.[0]).not.toHaveProperty("model");
+    expect(await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8")).toContain(
+      "The default model carried the diary home.",
+    );
   });
 
-  it("reclaims an aged dreaming row whose transcript still exists (failed deleteSession)", async () => {
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const stateDir = await createTempWorkspace("openclaw-dreaming-state-");
-    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const storePath = path.join(sessionsDir, "sessions.json");
-    // Orphan: a completed dreaming row whose deleteSession previously threw, so
-    // BOTH the store row and its transcript still exist (issue #88322).
-    const orphanTranscript = path.join(sessionsDir, "orphan-dreaming.jsonl");
-    // A second dreaming row whose transcript is fresh (a live/just-started run)
-    // must be preserved.
-    const liveTranscript = path.join(sessionsDir, "live-dreaming.jsonl");
-    const updatedAt = Date.now();
-    await sessionStoreRuntimeModule.saveSessionStore(
-      storePath,
-      {
-        "agent:main:dreaming-narrative-deep-orphan": {
-          sessionId: "orphan-dreaming",
-          updatedAt,
-        },
-        "agent:main:dreaming-narrative-deep-live": {
-          sessionId: "live-dreaming",
-          updatedAt,
-        },
-        "agent:main:kept-session": {
-          sessionId: "still-live",
-          updatedAt,
-        },
-      },
-      { skipMaintenance: true },
+  it("does not retry unauthorized model selection even when its cause names an unavailable model", async () => {
+    const workspaceDir = await createTempWorkspace("dreaming-model-denied-");
+    const subagent = createCompletion();
+    subagent.complete.mockRejectedValue(
+      Object.assign(
+        new Error("model override is not authorized", {
+          cause: new Error("unknown model: ollama/missing-model"),
+        }),
+        { code: "LLM_COMPLETION_NOT_AUTHORIZED" },
+      ),
     );
-    await fs.writeFile(orphanTranscript, '{"runId":"dreaming-narrative-deep-orphan"}\n', "utf-8");
-    await fs.writeFile(liveTranscript, '{"runId":"dreaming-narrative-deep-live"}\n', "utf-8");
-    await fs.writeFile(path.join(sessionsDir, "still-live.jsonl"), "{}\n", "utf-8");
-    // Age the orphan transcript past the 5-minute orphan threshold; keep the
-    // live transcript fresh.
-    const aged = new Date(Date.now() - 600_000);
-    await fs.utimes(orphanTranscript, aged, aged);
-
-    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig").mockReturnValue({
-      session: {},
-    } as never);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
-
-    const subagent = createMockSubagent("A forgotten endpoint hummed in the dark.");
-    const logger = createMockLogger();
-
-    await generateAndAppendDreamNarrative({
+    const logger = createLogger();
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
-      data: { phase: "light", snippets: ["memory fragment"] },
+      data: { phase: "light", snippets: ["A private raw staging fragment."] },
+      model: "ollama/missing-model",
       logger,
     });
 
-    const updatedStore = sessionStoreRuntimeModule.loadSessionStore(storePath, {
-      skipCache: true,
-    }) as Record<string, unknown>;
-    // The aged orphan dreaming row is reclaimed even though its transcript existed.
-    expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-deep-orphan");
-    // The fresh dreaming row and the non-dreaming row survive.
-    expect(updatedStore).toHaveProperty("agent:main:dreaming-narrative-deep-live");
-    expect(updatedStore).toHaveProperty("agent:main:kept-session");
-
-    const sessionFiles = await fs.readdir(sessionsDir);
-    // The orphan transcript is archived; the live transcript stays.
-    expect(
-      sessionFiles.filter((file) => file.startsWith("orphan-dreaming.jsonl.deleted.")),
-    ).not.toEqual([]);
-    expect(sessionFiles).not.toContain("orphan-dreaming.jsonl");
-    expect(sessionFiles).toContain("live-dreaming.jsonl");
-    expectLogIncludes(logger.info, "dreaming cleanup scrubbed");
+    expect(subagent.complete).toHaveBeenCalledOnce();
+    expectLogIncludes(logger.warn, "not authorized");
+    const diary = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8");
+    expect(diary).not.toContain("A private raw staging fragment.");
+    expect(diary).toContain("A memory trace surfaced");
   });
 
-  it("isolates narrative sessions across workspaces even at the same timestamp", async () => {
-    const firstWorkspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const secondWorkspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
-    const subagent = createMockSubagent("A quiet memory took shape.");
-    const logger = createMockLogger();
-    const nowMs = Date.parse("2026-04-05T03:00:00Z");
-
-    await generateAndAppendDreamNarrative({
+  it.each([
+    { name: "empty completion", failure: undefined },
+    { name: "timeout", failure: new Error("completion timed out") },
+    { name: "request-scoped runtime", failure: new RequestScopedSubagentRuntimeError() },
+  ])("writes only a generic trace after $name", async ({ failure }) => {
+    const workspaceDir = await createTempWorkspace("dreaming-fallback-");
+    const subagent = createCompletion("   \n  ");
+    if (failure) {
+      subagent.complete.mockRejectedValue(failure);
+    }
+    const outcome = await runDreamNarrative({
+      agentId: "main",
       subagent,
-      workspaceDir: firstWorkspaceDir,
-      data: { phase: "light", snippets: ["first workspace fragment"] },
-      nowMs,
-      logger,
-    });
-    await generateAndAppendDreamNarrative({
-      subagent,
-      workspaceDir: secondWorkspaceDir,
-      data: { phase: "light", snippets: ["second workspace fragment"] },
-      nowMs,
-      logger,
+      workspaceDir,
+      data: { phase: "deep", snippets: ["A private raw staging fragment."] },
+      logger: createLogger(),
     });
 
-    const firstSessionKey = mockObjectArg(subagent.run, "subagent run").sessionKey;
-    const secondSessionKey = mockObjectArg(subagent.run, "subagent run", 1).sessionKey;
-    expect(firstSessionKey).toBeTypeOf("string");
-    expect(secondSessionKey).toBeTypeOf("string");
-    expect(firstSessionKey).not.toBe(secondSessionKey);
-    expect(firstSessionKey).toContain("dreaming-narrative-light-");
-    expect(secondSessionKey).toContain("dreaming-narrative-light-");
-    const deleteKeys = subagent.deleteSession.mock.calls.map(
-      (call: unknown[]) => (call[0] as { sessionKey: string })?.sessionKey,
+    expect(outcome).toMatchObject({ status: "degraded" });
+    const diary = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8");
+    expect(diary).toContain("A memory trace surfaced, but details were unavailable in this run.");
+    expect(diary).not.toContain("A private raw staging fragment.");
+  });
+
+  it.each(["main", undefined])("skips empty data for owner %s", async (agentId) => {
+    const workspaceDir = await createTempWorkspace("dreaming-empty-");
+    const subagent = createCompletion();
+    await expect(
+      runDreamNarrative({
+        agentId,
+        subagent,
+        workspaceDir,
+        data: { phase: "light", snippets: [] },
+        logger: createLogger(),
+      }),
+    ).resolves.toEqual({ status: "skipped" });
+    expect(subagent.complete).not.toHaveBeenCalled();
+    await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("keeps ownerless sweeps alive with a local trace", async () => {
+    const workspaceDir = await createTempWorkspace("dreaming-ownerless-");
+    const subagent = createCompletion();
+    await runDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: ["An ownerless memory fragment."] },
+      logger: createLogger(),
+    });
+    expect(subagent.complete).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8")).toContain(
+      "A memory trace surfaced",
     );
-    expect(deleteKeys.filter((key: string) => key === firstSessionKey)).toHaveLength(2);
-    expect(deleteKeys.filter((key: string) => key === secondSessionKey)).toHaveLength(2);
   });
+
+  it.each([false, true])(
+    "detaches publication without an unhandled failure (reject=%s)",
+    async (reject) => {
+      const workspaceDir = await createTempWorkspace("dreaming-detached-");
+      const completion = createDeferred<{ text: string }>();
+      const subagent = createCompletion();
+      subagent.complete.mockReturnValue(completion.promise);
+      const unhandled = vi.fn();
+      process.on("unhandledRejection", unhandled);
+      try {
+        await expect(
+          runDreamNarrative({
+            agentId: "main",
+            subagent,
+            workspaceDir,
+            data: { phase: "rem", snippets: ["A detached fragment."] },
+            logger: createLogger(),
+            detached: true,
+          }),
+        ).resolves.toEqual({ status: "pending" });
+        expect(subagent.complete).toHaveBeenCalledOnce();
+        if (reject) {
+          completion.reject(new Error("completion failed"));
+        } else {
+          completion.resolve({ text: "A detached memory found its page." });
+        }
+        await vi.waitFor(async () => {
+          const diary = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8");
+          expect(diary).toContain(
+            reject ? "A memory trace surfaced" : "A detached memory found its page.",
+          );
+        });
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        completion.resolve({ text: "settled" });
+        process.off("unhandledRejection", unhandled);
+      }
+    },
+  );
 });
 
-describe("runDetachedDreamNarrative", () => {
-  type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void };
-  function deferred<T>(): Deferred<T> {
-    let resolve: ((v: T) => void) | undefined;
-    const promise = new Promise<T>((r) => {
-      resolve = r;
-    });
-    if (!resolve) {
-      throw new Error("Expected dream narrative deferred resolver to be initialized");
-    }
-    return { promise, resolve };
-  }
-
-  function createBlockingSubagent() {
-    const runDeferreds: Array<Deferred<{ runId: string }>> = [];
-    const subagent = {
-      run: vi.fn(() => {
-        const d = deferred<{ runId: string }>();
-        runDeferreds.push(d);
-        return d.promise;
-      }),
-      // Resolve the rest of the pipeline as a no-op so a single resolve()
-      // on a deferred unblocks the slot for the queued task.
-      waitForRun: vi.fn().mockResolvedValue({ status: "timeout" }),
-      getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
-      deleteSession: vi.fn().mockResolvedValue(undefined),
-    };
-    return { subagent, runDeferreds };
-  }
-
-  function createMockLogger() {
-    return { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  }
-
-  async function drainMicrotasks(rounds = 30): Promise<void> {
-    for (let i = 0; i < rounds; i += 1) {
-      await Promise.resolve();
-    }
-  }
-
-  it("caps the number of in-flight detached narratives at 3", async () => {
-    const { subagent, runDeferreds } = createBlockingSubagent();
-    const workspaceDirs = await Promise.all(
-      Array.from({ length: 5 }, () => createTempWorkspace("openclaw-dreaming-detach-")),
-    );
-    const logger = createMockLogger();
-
-    for (const [i, workspaceDir] of workspaceDirs.entries()) {
-      runDetachedDreamNarrative({
-        subagent,
+describe("runDreamNarrative deletion boundary", () => {
+  it.each([
+    { source: "tracked source", mutation: "forget" },
+    { source: "prior diary", mutation: "forget" },
+    { source: "prior diary", mutation: "unrelated append" },
+  ] as const)(
+    "validates $source before publishing generated quotes after $mutation",
+    async ({ source, mutation }) => {
+      const workspaceDir = await createTempWorkspace("dreaming-forget-generated-");
+      setNarrativeTestEnv(path.join(workspaceDir, ".state"));
+      const nowMs = Date.now();
+      const claim = "The private cobalt archive opens every midnight.";
+      const retainedClaim = "A public archive is open throughout the afternoon.";
+      const sourcePath = "memory/2026-08-26.md";
+      const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, sourcePath), `${claim}\n${retainedClaim}\n`);
+      await fs.mkdir(path.join(workspaceDir, SESSION_CORPUS_RELATIVE_DIR), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, SESSION_CORPUS_RELATIVE_DIR, "2026-08-26.txt"),
+        `[main:forgotten-narrative-source#L1] ${claim}\n`,
+      );
+      await fs.writeFile(dreamsPath, "# Dream Diary\n\nA retained public diary entry.\n");
+      await recordShortTermRecalls({
         workspaceDir,
-        data: { phase: "light", snippets: [`fragment-${i}`] },
-        nowMs: Date.parse("2026-04-28T03:00:00Z"),
-        logger,
+        query: "archive opening time",
+        signalType: "daily",
+        nowMs,
+        results: [
+          {
+            path: sourcePath,
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: claim,
+            source: "memory",
+            sessionOrigin: { agentId: "main", sessionId: "forgotten-narrative-source" },
+          },
+          {
+            path: sourcePath,
+            startLine: 2,
+            endLine: 2,
+            score: 0.9,
+            snippet: retainedClaim,
+            source: "memory",
+          },
+        ],
       });
-    }
-
-    await drainMicrotasks();
-
-    // Only the first 3 should have reached subagent.run; the rest are queued.
-    expect(subagent.run).toHaveBeenCalledTimes(3);
-
-    // Drain the rest so module-level concurrency state does not leak into
-    // subsequent tests. The mock subagent creates a new deferred every time
-    // queued tasks acquire a slot, so loop until no new deferreds appear.
-    for (let iter = 0; iter < 10; iter += 1) {
-      const before = runDeferreds.length;
-      for (const d of runDeferreds) {
-        d.resolve({ runId: "drain" });
-      }
-      if (before >= 5) {
-        break;
-      }
-      await vi.waitFor(() => {
-        expect(runDeferreds.length).toBeGreaterThan(before);
-      });
-    }
-    for (const d of runDeferreds) {
-      d.resolve({ runId: "drain" });
-    }
-    await vi.waitFor(() => {
-      expect(subagent.deleteSession).toHaveBeenCalledTimes(10);
-    });
-    expect(subagent.run).toHaveBeenCalledTimes(5);
-    expect(subagent.waitForRun).toHaveBeenCalledTimes(5);
-  });
-
-  it("serializes detached narratives that reuse a workspace and phase session", async () => {
-    let nextRunId = 0;
-    const waitDeferreds: Array<Deferred<{ status: string }>> = [];
-    const subagent = {
-      run: vi.fn(() => {
-        nextRunId += 1;
-        return Promise.resolve({ runId: `run-${nextRunId}` });
-      }),
-      waitForRun: vi.fn(() => {
-        const d = deferred<{ status: string }>();
-        waitDeferreds.push(d);
-        return d.promise;
-      }),
-      getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
-      deleteSession: vi.fn().mockResolvedValue(undefined),
-    };
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-detach-");
-    const logger = createMockLogger();
-
-    for (let i = 0; i < 5; i += 1) {
-      runDetachedDreamNarrative({
-        subagent,
-        workspaceDir,
-        data: { phase: "light", snippets: [`fragment-${i}`] },
-        nowMs: Date.parse("2026-04-28T03:00:00Z"),
-        logger,
-      });
-    }
-
-    await vi.waitFor(() => {
-      expect(waitDeferreds.length).toBe(1);
-    });
-
-    expect(subagent.run).toHaveBeenCalledTimes(1);
-    expect(subagent.waitForRun).toHaveBeenCalledTimes(1);
-    // The first run is still active, so later same-key jobs must not pre-delete its session.
-    expect(subagent.deleteSession).toHaveBeenCalledTimes(1);
-
-    for (let i = 0; i < 5; i += 1) {
-      const currentDeferred = waitDeferreds[i];
-      if (!currentDeferred) {
-        throw new Error(`Expected wait deferred ${i} to exist`);
-      }
-      currentDeferred.resolve({ status: "timeout" });
-      if (i < 4) {
-        await vi.waitFor(() => {
-          expect(waitDeferreds.length).toBeGreaterThan(i + 1);
+      const entries = (await readShortTermRecallEntries({ workspaceDir, nowMs })).filter(
+        (entry) => entry.snippet === (source === "prior diary" ? retainedClaim : claim),
+      );
+      if (source === "prior diary") {
+        await writeBackfillDiaryEntries({
+          workspaceDir,
+          preserveExisting: true,
+          entries: [{ isoDay: "2026-08-26", bodyLines: [claim] }],
         });
       }
-    }
-
-    await vi.waitFor(() => {
-      expect(subagent.deleteSession).toHaveBeenCalledTimes(10);
-    });
-    expect(subagent.run).toHaveBeenCalledTimes(5);
-    expect(subagent.waitForRun).toHaveBeenCalledTimes(5);
-  });
-
-  it("swallows underlying narrative errors instead of leaving an unhandled rejection", async () => {
-    const error = new Error("boom");
-    const subagent = {
-      run: vi.fn().mockRejectedValue(error),
-      waitForRun: vi.fn().mockResolvedValue({ status: "ok" }),
-      getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
-      deleteSession: vi.fn().mockResolvedValue(undefined),
-    };
-    const logger = createMockLogger();
-    const workspaceDir = await createTempWorkspace("openclaw-dreaming-detach-");
-    const unhandled = vi.fn();
-    process.on("unhandledRejection", unhandled);
-
-    try {
-      runDetachedDreamNarrative({
+      const waiting = createDeferred<void>();
+      const terminal = createDeferred<{ text: string }>();
+      const reply = { text: `I remembered: ${claim}` };
+      const subagent = {
+        complete: vi.fn(async (_params: { message: string }) => {
+          waiting.resolve();
+          return await terminal.promise;
+        }),
+      };
+      const data = {
+        phase: "light" as const,
+        snippets: entries.map((entry) => entry.snippet),
+        sourceEntryKeys: entries.map((entry) => entry.key),
+        ...(source === "prior diary"
+          ? { recentDiaryEntries: await readRecentDreamDiaryEntries({ workspaceDir }) }
+          : {}),
+      };
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const operation = runDreamNarrative({
+        agentId: "main",
         subagent,
         workspaceDir,
-        data: { phase: "light", snippets: ["fragment"] },
-        nowMs: Date.parse("2026-04-28T03:00:00Z"),
+        data,
+        nowMs,
         logger,
       });
-
-      await drainMicrotasks();
-
-      expect(subagent.run).toHaveBeenCalledOnce();
-      expect(unhandled).not.toHaveBeenCalled();
-    } finally {
-      process.off("unhandledRejection", unhandled);
-    }
-  });
+      try {
+        await waiting.promise;
+        expect(subagent.complete.mock.calls[0]?.[0].message).toContain(claim);
+        if (mutation === "forget") {
+          const forgotten = await forgetMemoryEntries({
+            cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
+            agentId: "main",
+            sessionIds: ["forgotten-narrative-source"],
+          });
+          expect(forgotten.artifacts.shortTermEntries).toBe(1);
+          expect(await fs.readFile(dreamsPath, "utf8")).not.toContain(claim);
+        } else {
+          // The original context remains valid even after it falls outside
+          // the recent-entry window used to prepare the next narrative.
+          await writeBackfillDiaryEntries({
+            workspaceDir,
+            preserveExisting: true,
+            entries: Array.from({ length: 4 }, (_, index) => ({
+              isoDay: "2026-08-26",
+              bodyLines: [`Another retained diary entry ${index}.`],
+            })),
+          });
+        }
+        terminal.resolve(reply);
+        const outcome = await operation;
+        const content = await fs.readFile(dreamsPath, "utf8");
+        expect(content).toContain("A retained public diary entry.");
+        if (mutation === "forget") {
+          expect(content).not.toContain(claim);
+          expect(outcome).toEqual({ status: "skipped" });
+          expectLogIncludes(logger.info, "narrative publication skipped");
+        } else {
+          expect(content).toContain(reply.text);
+          expect(outcome).toEqual({ status: "completed" });
+        }
+      } finally {
+        terminal.resolve(reply);
+        await operation;
+      }
+    },
+  );
 });

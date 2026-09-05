@@ -31,17 +31,68 @@ const hostHookStateMocks = vi.hoisted(() => ({
   drainPluginNextTurnInjectionContext: vi.fn(),
 }));
 
-vi.mock("../../image-generation-task-status.js", () => imageGenerationTaskStatusMocks);
-vi.mock("../../music-generation-task-status.js", () => musicGenerationTaskStatusMocks);
-vi.mock("../../video-generation-task-status.js", () => videoGenerationTaskStatusMocks);
+vi.mock("../../media-generation-task-status.js", () => ({
+  ...imageGenerationTaskStatusMocks,
+  ...musicGenerationTaskStatusMocks,
+  ...videoGenerationTaskStatusMocks,
+}));
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
 import {
   forgetPromptBuildDrainCacheForRun,
-  resolvePromptSubmissionSkipReason,
+  mergeOrphanedTrailingUserPrompt,
   resolveAttemptMediaTaskSystemPromptAddition,
   resolvePromptBuildHookResult,
-} from "./attempt.prompt-helpers.js";
+} from "./attempt-prompt-helpers.js";
+import { resolvePromptSubmissionSkipReason } from "./attempt-prompt-submit.js";
+
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+describe("mergeOrphanedTrailingUserPrompt", () => {
+  it("keeps structured media and JSON summaries on UTF-16 boundaries", () => {
+    const result = mergeOrphanedTrailingUserPrompt({
+      prompt: "Continue.",
+      trigger: "user",
+      leafMessage: {
+        content: [
+          {
+            type: "image_url",
+            image_url: { url: `${"u".repeat(299)}😀tail` },
+          },
+          {
+            type: "custom",
+            value: `${"v".repeat(299)}😀tail`,
+          },
+          {
+            [`${"k".repeat(997)}😀tail`]: 1,
+          },
+        ],
+      },
+    });
+
+    expect(result.merged).toBe(true);
+    expect(hasLoneSurrogate(result.prompt)).toBe(false);
+    expect(result.prompt).not.toContain("\\ud83d");
+    expect(result.prompt).toContain("[image_url]");
+    expect(result.prompt).toContain("chars)");
+  });
+});
 
 describe("resolveAttemptMediaTaskSystemPromptAddition", () => {
   it("joins active media task guidance for user triggers", () => {
@@ -62,13 +113,13 @@ describe("resolveAttemptMediaTaskSystemPromptAddition", () => {
 
     expect(
       imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123");
+    ).toHaveBeenCalledWith("agent:main:discord:direct:123", undefined);
     expect(
       videoGenerationTaskStatusMocks.buildActiveVideoGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123");
+    ).toHaveBeenCalledWith("agent:main:discord:direct:123", undefined);
     expect(
       musicGenerationTaskStatusMocks.buildActiveMusicGenerationTaskPromptContextForSession,
-    ).toHaveBeenCalledWith("agent:main:discord:direct:123");
+    ).toHaveBeenCalledWith("agent:main:discord:direct:123", undefined);
     expect(result).toBe("Image task hint\n\nActive task hint\n\nMusic task hint");
   });
 
@@ -194,6 +245,29 @@ describe("resolvePromptSubmissionSkipReason", () => {
 });
 
 describe("resolvePromptBuildHookResult drain cache", () => {
+  it("preserves an explicit empty per-turn tool allowlist", async () => {
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockReset();
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
+      queuedInjections: [],
+    });
+    const runBeforePromptBuild = vi.fn(async () => ({ toolsAllow: [] }));
+
+    const result = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "answer without tools",
+      messages: [],
+      hookCtx: { runId: "tools-allow-run", sessionKey: "agent:main:main" },
+      hookRunner: {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild,
+      },
+    });
+
+    expect(result.toolsAllow).toEqual([]);
+    expect(runBeforePromptBuild).toHaveBeenCalledOnce();
+    forgetPromptBuildDrainCacheForRun("tools-allow-run");
+  });
+
   it("drains plugin next-turn injections at most once per runId across retry attempts", async () => {
     // Retry attempts reuse the first drain result so plugin-provided next-turn
     // context is not consumed or duplicated multiple times.
@@ -212,7 +286,7 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     });
     forgetPromptBuildDrainCacheForRun("run-cache-test");
 
-    const hookCtx = { runId: "run-cache-test", sessionKey: "agent:main:main" };
+    const hookCtx = { runId: "run-cache-test", sessionKey: "global", agentId: "qa" };
 
     const first = await resolvePromptBuildHookResult({
       config: {},
@@ -228,6 +302,11 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     });
 
     expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(1);
+    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledWith({
+      cfg: {},
+      sessionKey: "global",
+      agentId: "qa",
+    });
     expect(first.prependContext).toBe("first attempt context");
     expect(second.prependContext).toBe("first attempt context");
 

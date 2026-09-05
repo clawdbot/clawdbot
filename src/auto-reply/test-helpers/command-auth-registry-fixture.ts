@@ -1,9 +1,14 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Test registry fixture for command authorization across Discord and phone-based channels. */
 import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { afterEach, beforeEach } from "vitest";
+import { beforeEach } from "vitest";
 import { normalizeE164 } from "../../plugin-sdk/account-resolution.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
+  stageActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 function formatDiscordAllowFromEntries(allowFrom: Array<string | number>): string[] {
@@ -24,12 +29,16 @@ function normalizePhoneAllowFromEntries(allowFrom: Array<string | number>): stri
       }
       if (/^(\d+)(?::\d+)?@s\.whatsapp\.net$/i.test(stripped)) {
         const match = stripped.match(/^(\d+)(?::\d+)?@s\.whatsapp\.net$/i);
-        return match ? normalizeE164(match[1]) : null;
+        return match
+          ? normalizeE164(expectDefined(match[1], "command auth registry fixture regex capture 1"))
+          : null;
       }
       // WhatsApp LID values are numeric identifiers; test fixtures map them like phone ids.
       if (/^(\d+)@lid$/i.test(stripped)) {
         const match = stripped.match(/^(\d+)@lid$/i);
-        return match ? normalizeE164(match[1]) : null;
+        return match
+          ? normalizeE164(expectDefined(match[1], "command auth registry fixture regex capture 1"))
+          : null;
       }
       if (stripped.includes("@")) {
         return null;
@@ -87,13 +96,13 @@ const createCommandAuthRegistry = () =>
     },
   ]);
 
-/** Installs and resets the command-auth registry around each test case. */
+/** Owns the command-auth registry only for the current test case. */
 export function installDiscordRegistryHooks() {
-  beforeEach(() => {
-    setActivePluginRegistry(createCommandAuthRegistry());
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(createCommandAuthRegistry());
+  beforeEach(({ onTestFinished }) => {
+    const previous = captureActivePluginRegistrySnapshot();
+    onTestFinished(() => rollbackStagedPluginRegistry(previous));
+    // Stage without retiring the predecessor; roll back after caller cleanup
+    // so its original lifecycle authority survives this temporary fixture.
+    stageActivePluginRegistry(createCommandAuthRegistry(), null, "default");
   });
 }

@@ -5,17 +5,37 @@ import path from "node:path";
 
 // Synchronous temporary directory helpers for tests.
 
-export type TempDirCollection = string[] | Set<string>;
+type TempDirCollection = string[] | Set<string>;
+type RegisterTempDirCleanup = (cleanup: () => void) => unknown;
 
-export interface TestTempDirTracker {
+const canonicalSystemTempRoots = new Map<string, string>();
+
+function resolveCanonicalSystemTempRoot(): string {
+  const rawRoot = os.tmpdir();
+  const cachedRoot = canonicalSystemTempRoots.get(rawRoot);
+  if (cachedRoot !== undefined) {
+    return cachedRoot;
+  }
+  const canonicalRoot = fs.realpathSync(rawRoot);
+  canonicalSystemTempRoots.set(rawRoot, canonicalRoot);
+  return canonicalRoot;
+}
+
+interface TestTempDirTracker {
   readonly dirs: ReadonlySet<string>;
-  make(prefix: string): string;
-  cleanup(): void;
+  make(prefix: string, root?: string): string;
+  cleanup(this: void): void;
+}
+
+interface AutoCleanupTempDirTracker {
+  readonly dirs: ReadonlySet<string>;
+  make(prefix: string, root?: string): string;
 }
 
 /** Create a temp dir and register it in an array or set for cleanup. */
-export function makeTempDir(tempDirs: TempDirCollection, prefix: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+export function makeTempDir(tempDirs: TempDirCollection, prefix: string, root?: string): string {
+  const tempRoot = root ?? resolveCanonicalSystemTempRoot();
+  const dir = fs.mkdtempSync(path.join(tempRoot, prefix));
   if (Array.isArray(tempDirs)) {
     tempDirs.push(dir);
   } else {
@@ -24,14 +44,28 @@ export function makeTempDir(tempDirs: TempDirCollection, prefix: string): string
   return dir;
 }
 
-/** Remove all tracked temporary directories and clear the tracker. */
+/** Remove tracked directories, retaining failed removals for cleanup retry. */
 export function cleanupTempDirs(tempDirs: TempDirCollection): void {
-  const dirs = Array.isArray(tempDirs) ? tempDirs.splice(0) : [...tempDirs];
+  // Successful releases mutate the tracker; walk the original ownership snapshot.
+  const dirs = [...tempDirs];
+  const errors: unknown[] = [];
   for (const dir of dirs) {
-    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+      if (Array.isArray(tempDirs)) {
+        tempDirs.splice(tempDirs.indexOf(dir), 1);
+      } else {
+        tempDirs.delete(dir);
+      }
+    } catch (error) {
+      errors.push(error);
+    }
   }
-  if (!Array.isArray(tempDirs)) {
-    tempDirs.clear();
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Test temporary directory cleanup failed");
   }
 }
 
@@ -39,11 +73,20 @@ export function createTempDirTracker(): TestTempDirTracker {
   const dirs = new Set<string>();
   return {
     dirs,
-    make(prefix: string): string {
-      return makeTempDir(dirs, prefix);
+    make(prefix: string, root?: string): string {
+      return makeTempDir(dirs, prefix, root);
     },
-    cleanup(): void {
+    cleanup(this: void): void {
       cleanupTempDirs(dirs);
     },
   };
+}
+
+/** Create a temp dir tracker that Vitest cleans up after each test. */
+export function useAutoCleanupTempDirTracker(
+  registerCleanup: RegisterTempDirCleanup,
+): AutoCleanupTempDirTracker {
+  const tracker = createTempDirTracker();
+  registerCleanup(tracker.cleanup);
+  return tracker;
 }

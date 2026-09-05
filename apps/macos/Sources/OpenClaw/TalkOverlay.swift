@@ -10,7 +10,6 @@ final class TalkOverlayController {
     static let overlaySize: CGFloat = 440
     static let orbSize: CGFloat = 96
     static let orbPadding: CGFloat = 12
-    static let orbHitSlop: CGFloat = 10
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.overlay")
 
@@ -25,8 +24,10 @@ final class TalkOverlayController {
     private var window: NSPanel?
     private var hostingView: NSHostingView<TalkOverlayView>?
     private let screenInset: CGFloat = 0
+    @ObservationIgnored private var transitionID = UUID()
 
     func present() {
+        self.transitionID = UUID()
         self.ensureWindow()
         self.hostingView?.rootView = TalkOverlayView(controller: self)
         let target = self.targetFrame()
@@ -43,16 +44,15 @@ final class TalkOverlayController {
     }
 
     func dismiss() {
-        guard let window else {
-            self.model.isVisible = false
-            return
-        }
+        let dismissalID = UUID()
+        self.transitionID = dismissalID
+        self.model.isVisible = false
+        guard let window else { return }
 
-        OverlayPanelFactory.animateDismiss(window: window) {
-            Task { @MainActor in
-                window.orderOut(nil)
-                self.model.isVisible = false
-            }
+        OverlayPanelFactory.animateDismiss(window: window) { [weak self] in
+            // A later present or dismiss owns the panel, even while this fade is completing.
+            guard self?.transitionID == dismissalID else { return }
+            window.orderOut(nil)
         }
     }
 
@@ -71,15 +71,6 @@ final class TalkOverlayController {
     func updateLevel(_ level: Double) {
         guard self.model.isVisible else { return }
         self.model.level = max(0, min(1, level))
-    }
-
-    func currentWindowOrigin() -> CGPoint? {
-        self.window?.frame.origin
-    }
-
-    func setWindowOrigin(_ origin: CGPoint) {
-        guard let window else { return }
-        window.setFrameOrigin(origin)
     }
 
     // MARK: - Private

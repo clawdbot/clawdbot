@@ -2,6 +2,7 @@
  * Browser screenshot normalization helpers that bound screenshots for media
  * transport and model input.
  */
+import { toErrorObject } from "../infra/errors.js";
 import {
   buildImageResizeSideGrid,
   getImageMetadata,
@@ -20,7 +21,11 @@ export async function normalizeBrowserScreenshot(
     maxSide?: number;
     maxBytes?: number;
   },
-): Promise<{ buffer: Buffer; contentType?: "image/jpeg" }> {
+): Promise<{
+  buffer: Buffer;
+  contentType?: "image/jpeg";
+  sourceDimensions: { width: number; height: number } | null;
+}> {
   const maxSide = Math.max(1, Math.round(opts?.maxSide ?? DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE));
   const maxBytes = Math.max(1, Math.round(opts?.maxBytes ?? DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES));
 
@@ -30,7 +35,7 @@ export async function normalizeBrowserScreenshot(
   const maxDim = Math.max(width, height);
 
   if (buffer.byteLength <= maxBytes && (maxDim === 0 || (width <= maxSide && height <= maxSide))) {
-    return { buffer };
+    return { buffer, sourceDimensions: meta };
   }
 
   const sideStart = maxDim > 0 ? Math.min(maxSide, maxDim) : maxSide;
@@ -62,7 +67,7 @@ export async function normalizeBrowserScreenshot(
       }
 
       if (out.byteLength <= maxBytes) {
-        return { buffer: out, contentType: "image/jpeg" };
+        return { buffer: out, contentType: "image/jpeg", sourceDimensions: meta };
       }
     }
     if (processorUnavailableError) {
@@ -71,25 +76,11 @@ export async function normalizeBrowserScreenshot(
   }
 
   if (processorUnavailableError) {
-    throw toLintErrorObject(processorUnavailableError, "Non-Error thrown");
+    throw toErrorObject(processorUnavailableError, "Non-Error thrown");
   }
 
   const best = smallest?.buffer ?? buffer;
   throw new Error(
     `Browser screenshot could not be reduced below ${(maxBytes / (1024 * 1024)).toFixed(0)}MB (got ${(best.byteLength / (1024 * 1024)).toFixed(2)}MB)`,
   );
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

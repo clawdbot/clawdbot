@@ -15,8 +15,6 @@ export function resolveDeviceSessionAuthz(client: GatewayClient | null): DeviceS
   const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const rawCallerDeviceId = client?.connect?.device?.id;
   const callerDeviceId =
-    // Plain shared-auth connections may report device metadata, but only
-    // device-token auth proves ownership for self-service pairing actions.
     client?.isDeviceTokenAuth && typeof rawCallerDeviceId === "string" && rawCallerDeviceId.trim()
       ? rawCallerDeviceId.trim()
       : null;

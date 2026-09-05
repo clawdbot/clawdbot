@@ -1,7 +1,7 @@
 // Verifies createOpenClawTools wires shared config and context into the TTS tool.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { testing, createOpenClawTools } from "./openclaw-tools.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => {
@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => {
   return {
     stubTool,
     createCronToolOptions: vi.fn(),
+    createTranscriptsToolOptions: vi.fn(),
     createSessionStatusToolOptions: vi.fn(),
     createImageGenerateToolOptions: vi.fn(),
     createMusicGenerateToolOptions: vi.fn(),
@@ -63,10 +64,10 @@ vi.mock("./tools/image-generate-tool.js", () => ({
 }));
 
 vi.mock("./tools/image-tool.js", () => ({
-  createImageTool: () => mocks.stubTool("image"),
+  createImageTool: () => mocks.stubTool("view_image"),
 }));
 
-vi.mock("./tools/message-tool.js", () => ({
+vi.mock("./tools/message-tool-execution.js", () => ({
   createMessageTool: () => mocks.stubTool("message"),
 }));
 
@@ -116,8 +117,11 @@ vi.mock("./tools/subagents-tool.js", () => ({
   createSubagentsTool: () => mocks.stubTool("subagents"),
 }));
 
-vi.mock("./tools/update-plan-tool.js", () => ({
-  createUpdatePlanTool: () => mocks.stubTool("update_plan"),
+vi.mock("./tools/transcripts-tool.js", () => ({
+  createTranscriptsTool: (options: unknown) => {
+    mocks.createTranscriptsToolOptions(options);
+    return mocks.stubTool("transcripts");
+  },
 }));
 
 vi.mock("./tools/video-generate-tool.js", () => ({
@@ -153,6 +157,7 @@ function getTextToSpeechParams() {
 describe("createOpenClawTools TTS config wiring", () => {
   beforeEach(() => {
     mocks.createCronToolOptions.mockClear();
+    mocks.createTranscriptsToolOptions.mockClear();
     mocks.createImageGenerateToolOptions.mockClear();
     mocks.createMusicGenerateToolOptions.mockClear();
     mocks.createVideoGenerateToolOptions.mockClear();
@@ -161,59 +166,47 @@ describe("createOpenClawTools TTS config wiring", () => {
 
   it("passes the resolved shared config into the tts tool", async () => {
     const injectedConfig = {
-      messages: {
-        tts: {
-          auto: "always",
-          provider: "microsoft",
-          providers: {
-            microsoft: {
-              voice: "en-US-AvaNeural",
-            },
+      tts: {
+        auto: "always",
+        provider: "microsoft",
+        providers: {
+          microsoft: {
+            voice: "en-US-AvaNeural",
           },
         },
       },
     } satisfies OpenClawConfig;
 
-    testing.setDepsForTest({ config: injectedConfig });
+    const tool = createOpenClawTools({
+      config: injectedConfig,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    }).find((candidate) => candidate.name === "tts");
 
-    try {
-      const tool = createOpenClawTools({
-        disableMessageTool: true,
-        disablePluginTools: true,
-      }).find((candidate) => candidate.name === "tts");
-
-      if (!tool) {
-        throw new Error("missing tts tool");
-      }
-
-      await tool.execute("call-1", { text: "hello from config" });
-
-      const ttsParams = getTextToSpeechParams();
-      expect(ttsParams?.text).toBe("hello from config");
-      expect(ttsParams?.cfg).toBe(injectedConfig);
-    } finally {
-      testing.setDepsForTest();
+    if (!tool) {
+      throw new Error("missing tts tool");
     }
+
+    await tool.execute("call-1", { text: "hello from config" });
+
+    const ttsParams = getTextToSpeechParams();
+    expect(ttsParams?.text).toBe("hello from config");
+    expect(ttsParams?.cfg).toBe(injectedConfig);
   });
 
   it("keeps direct TTS tool guidance explicit even when the tool is available", async () => {
-    testing.setDepsForTest({ config: {} });
+    const tool = createOpenClawTools({
+      config: {},
+      disableMessageTool: true,
+      disablePluginTools: true,
+    }).find((candidate) => candidate.name === "tts");
 
-    try {
-      const tool = createOpenClawTools({
-        disableMessageTool: true,
-        disablePluginTools: true,
-      }).find((candidate) => candidate.name === "tts");
-
-      if (!tool) {
-        throw new Error("missing tts tool");
-      }
-
-      expect(tool.description).toContain("Use only for explicit audio intent");
-      expect(tool.description).toContain("Never use for ordinary text replies");
-    } finally {
-      testing.setDepsForTest();
+    if (!tool) {
+      throw new Error("missing tts tool");
     }
+
+    expect(tool.description).toContain("Only explicit voice/speech/TTS intent");
+    expect(tool.description).toContain("never ordinary text reply");
   });
 
   it("passes the resolved session agent id into the tts tool", async () => {
@@ -223,27 +216,22 @@ describe("createOpenClawTools TTS config wiring", () => {
       },
     } satisfies OpenClawConfig;
 
-    testing.setDepsForTest({ config: injectedConfig });
+    const tool = createOpenClawTools({
+      config: injectedConfig,
+      agentSessionKey: "agent:reader:telegram:chat:123",
+      disableMessageTool: true,
+      disablePluginTools: true,
+    }).find((candidate) => candidate.name === "tts");
 
-    try {
-      const tool = createOpenClawTools({
-        agentSessionKey: "agent:reader:telegram:chat:123",
-        disableMessageTool: true,
-        disablePluginTools: true,
-      }).find((candidate) => candidate.name === "tts");
-
-      if (!tool) {
-        throw new Error("missing tts tool");
-      }
-
-      await tool.execute("call-1", { text: "hello from reader" });
-
-      const ttsParams = getTextToSpeechParams();
-      expect(ttsParams?.text).toBe("hello from reader");
-      expect(ttsParams?.agentId).toBe("reader");
-    } finally {
-      testing.setDepsForTest();
+    if (!tool) {
+      throw new Error("missing tts tool");
     }
+
+    await tool.execute("call-1", { text: "hello from reader" });
+
+    const ttsParams = getTextToSpeechParams();
+    expect(ttsParams?.text).toBe("hello from reader");
+    expect(ttsParams?.agentId).toBe("reader");
   });
 
   it("passes the active account id into the tts tool", async () => {
@@ -261,30 +249,123 @@ describe("createOpenClawTools TTS config wiring", () => {
       },
     } satisfies OpenClawConfig;
 
-    testing.setDepsForTest({ config: injectedConfig });
+    const tool = createOpenClawTools({
+      config: injectedConfig,
+      agentChannel: "feishu",
+      agentAccountId: "feishu-main",
+      disableMessageTool: true,
+      disablePluginTools: true,
+    }).find((candidate) => candidate.name === "tts");
 
-    try {
-      const tool = createOpenClawTools({
-        agentChannel: "feishu",
-        agentAccountId: "feishu-main",
-        disableMessageTool: true,
-        disablePluginTools: true,
-      }).find((candidate) => candidate.name === "tts");
-
-      if (!tool) {
-        throw new Error("missing tts tool");
-      }
-
-      await tool.execute("call-1", { text: "hello from account" });
-
-      const ttsParams = getTextToSpeechParams();
-      expect(ttsParams?.text).toBe("hello from account");
-      expect(ttsParams?.cfg).toBe(injectedConfig);
-      expect(ttsParams?.channel).toBe("feishu");
-      expect(ttsParams?.accountId).toBe("feishu-main");
-    } finally {
-      testing.setDepsForTest();
+    if (!tool) {
+      throw new Error("missing tts tool");
     }
+
+    await tool.execute("call-1", { text: "hello from account" });
+
+    const ttsParams = getTextToSpeechParams();
+    expect(ttsParams?.text).toBe("hello from account");
+    expect(ttsParams?.cfg).toBe(injectedConfig);
+    expect(ttsParams?.channel).toBe("feishu");
+    expect(ttsParams?.accountId).toBe("feishu-main");
+  });
+});
+
+describe("createOpenClawTools transcript ownership wiring", () => {
+  beforeEach(() => {
+    mocks.createTranscriptsToolOptions.mockClear();
+  });
+
+  it("uses trusted caller authority instead of the delivery account", () => {
+    const injectedConfig = { transcripts: { enabled: true } } satisfies OpenClawConfig;
+
+    createOpenClawTools({
+      config: injectedConfig,
+      agentChannel: "discord",
+      agentAccountId: "delivery",
+      gatewayCallerAccountId: "creator",
+      gatewayCallerChannel: "telegram",
+      gatewayCallerScheduled: true,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        agentChannel: "telegram",
+        agentAccountId: "creator",
+        caller: { kind: "operator", source: "scheduled" },
+        config: injectedConfig,
+      }),
+    );
+  });
+
+  it("uses the delivery account when no separate authority exists", () => {
+    createOpenClawTools({
+      agentChannel: "discord",
+      agentAccountId: "delivery",
+      requesterSenderId: "requester",
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        agentChannel: "discord",
+        agentAccountId: "delivery",
+        caller: expect.objectContaining({
+          kind: "channel",
+          channel: "discord",
+          accountId: "delivery",
+          senderId: "requester",
+        }),
+      }),
+    );
+  });
+
+  it("hides transcripts when scheduled caller-channel provenance is unavailable", () => {
+    createOpenClawTools({
+      agentChannel: "discord",
+      agentAccountId: "delivery",
+      gatewayCallerAccountId: "creator",
+      gatewayCallerChannel: null,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createTranscriptsToolOptions).not.toHaveBeenCalled();
+
+    createOpenClawTools({
+      agentChannel: "discord",
+      agentAccountId: "delivery",
+      gatewayCallerAccountId: "creator",
+      gatewayCallerLocal: true,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createTranscriptsToolOptions).not.toHaveBeenCalled();
+  });
+
+  it("keeps transcripts channel-less for explicit local scheduled provenance", () => {
+    createOpenClawTools({
+      agentChannel: "discord",
+      agentAccountId: "delivery",
+      gatewayCallerAccountId: "creator",
+      gatewayCallerLocal: true,
+      gatewayCallerScheduled: true,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createTranscriptsToolOptions).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        agentChannel: undefined,
+        agentAccountId: "creator",
+        caller: { kind: "operator", source: "scheduled" },
+      }),
+    );
   });
 });
 
@@ -299,9 +380,11 @@ describe("createOpenClawTools media generation session wiring", () => {
     const config = {
       agents: {
         defaults: {
-          imageGenerationModel: { primary: "image-owner/model" },
-          videoGenerationModel: { primary: "video-owner/model" },
-          musicGenerationModel: { primary: "music-owner/model" },
+          mediaModels: {
+            image: { primary: "image-owner/model" },
+            video: { primary: "video-owner/model" },
+            music: { primary: "music-owner/model" },
+          },
         },
       },
     } satisfies OpenClawConfig;
@@ -337,7 +420,7 @@ describe("createOpenClawTools media generation session wiring", () => {
     const config = {
       agents: {
         defaults: {
-          imageGenerationModel: { primary: "image-owner/model" },
+          mediaModels: { image: { primary: "image-owner/model" } },
         },
       },
     } satisfies OpenClawConfig;
@@ -397,6 +480,24 @@ describe("createOpenClawTools cron context wiring", () => {
     mocks.createCronToolOptions.mockClear();
   });
 
+  it.each([
+    ["prefers the durable run session key", "agent:main:main"],
+    ["falls back to the policy session key", undefined],
+  ])("%s for cron bindings", (_label, runSessionKey) => {
+    createOpenClawTools({
+      agentSessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey,
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createCronToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: runSessionKey ?? "agent:main:telegram:default:direct:1234",
+      }),
+    );
+  });
+
   it("passes preserved channel delivery context into the cron tool", async () => {
     createOpenClawTools({
       agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
@@ -410,15 +511,20 @@ describe("createOpenClawTools cron context wiring", () => {
       disablePluginTools: true,
     });
 
-    expect(mocks.createCronToolOptions).toHaveBeenCalledWith({
-      agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
-      currentDeliveryContext: {
-        channel: "matrix",
-        to: "room:!AbCdEf1234567890:example.org",
-        accountId: "bot-a",
-        threadId: "$RootEvent:Example.Org",
-      },
-    });
+    expect(mocks.createCronToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+        agentAccountId: "bot-a",
+        creatorToolAllowlist: undefined,
+        currentDeliveryContext: {
+          channel: "matrix",
+          to: "room:!AbCdEf1234567890:example.org",
+          accountId: "bot-a",
+          threadId: "$RootEvent:Example.Org",
+        },
+        runId: undefined,
+      }),
+    );
   });
 
   it("uses agent route context when auto-threading context is unavailable", async () => {
@@ -432,15 +538,20 @@ describe("createOpenClawTools cron context wiring", () => {
       disablePluginTools: true,
     });
 
-    expect(mocks.createCronToolOptions).toHaveBeenCalledWith({
-      agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
-      currentDeliveryContext: {
-        channel: "matrix",
-        to: "room:!FallbackRoom:Example.Org",
-        accountId: "bot-a",
-        threadId: "$FallbackThread:Example.Org",
-      },
-    });
+    expect(mocks.createCronToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
+        agentAccountId: "bot-a",
+        creatorToolAllowlist: undefined,
+        currentDeliveryContext: {
+          channel: "matrix",
+          to: "room:!FallbackRoom:Example.Org",
+          accountId: "bot-a",
+          threadId: "$FallbackThread:Example.Org",
+        },
+        runId: undefined,
+      }),
+    );
   });
 
   it("passes self-remove scope into the cron tool", async () => {
@@ -451,15 +562,17 @@ describe("createOpenClawTools cron context wiring", () => {
       disablePluginTools: true,
     });
 
-    expect(mocks.createCronToolOptions).toHaveBeenCalledWith({
-      agentSessionKey: "agent:main:cron:job-current",
-      currentDeliveryContext: {
-        channel: undefined,
-        to: undefined,
-        accountId: undefined,
-        threadId: undefined,
-      },
-      selfRemoveOnlyJobId: "job-current",
-    });
+    expect(mocks.createCronToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:cron:job-current",
+        currentDeliveryContext: {
+          channel: undefined,
+          to: undefined,
+          accountId: undefined,
+          threadId: undefined,
+        },
+        selfRemoveOnlyJobId: "job-current",
+      }),
+    );
   });
 });

@@ -1,100 +1,96 @@
 import path from "node:path";
+import { booleanFlag, parseFlagArgs, stringFlag, type FlagSpec } from "./arg-utils.mts";
 
-export type VersionScriptFormat = "json" | "shell";
-export type VersionQueryCliOptions = {
+type VersionScriptFormat = "json" | "shell";
+type CommonVersionCliOptions = {
+  appStoreRevision: string | null;
+  help: boolean;
+  releaseVersion: string | null;
+  rootDir: string;
+};
+type VersionQueryCliOptions = CommonVersionCliOptions & {
   field: string | null;
   format: VersionScriptFormat;
-  help: boolean;
-  rootDir: string;
 };
-export type VersionSyncMode = "check" | "write";
-export type VersionSyncCliOptions = {
-  help: boolean;
+type VersionSyncMode = "check" | "write";
+type VersionSyncCliOptions = CommonVersionCliOptions & {
   mode: VersionSyncMode;
-  rootDir: string;
 };
 
-export function parseVersionQueryArgs(argv: string[]): VersionQueryCliOptions {
-  let field: string | null = null;
-  let format: VersionScriptFormat = "json";
-  let help = false;
-  let rootDir = path.resolve(".");
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case "--field": {
-        field = readOptionValue(argv, index, "--field");
-        index += 1;
-        break;
-      }
-      case "--json": {
-        format = "json";
-        break;
-      }
-      case "--shell": {
-        format = "shell";
-        break;
-      }
-      case "--root": {
-        const value = readOptionValue(argv, index, "--root");
-        rootDir = path.resolve(value);
-        index += 1;
-        break;
-      }
-      case "-h":
-      case "--help": {
-        help = true;
-        break;
-      }
-      default: {
-        throw new Error(`Unknown argument: ${arg}`);
-      }
-    }
-  }
-
-  return { field, format, help, rootDir };
+function versionValueFlag<T extends Record<string, unknown>>(
+  flag: string,
+  key: string,
+  transform?: (value: string) => unknown,
+): FlagSpec<T> {
+  return stringFlag<T>(flag, key, {
+    allowInline: false,
+    missingValueMessage: `Missing value for ${flag}.`,
+    rejectShortOptions: true,
+    repeatable: true,
+    transform,
+  });
 }
 
-export function parseVersionSyncArgs(argv: string[]): VersionSyncCliOptions {
-  let help = false;
-  let mode: VersionSyncMode = "write";
-  let rootDir = path.resolve(".");
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case "--check": {
-        mode = "check";
-        break;
-      }
-      case "--write": {
-        mode = "write";
-        break;
-      }
-      case "--root": {
-        rootDir = path.resolve(readOptionValue(argv, index, "--root"));
-        index += 1;
-        break;
-      }
-      case "-h":
-      case "--help": {
-        help = true;
-        break;
-      }
-      default: {
-        throw new Error(`Unknown argument: ${arg}`);
-      }
-    }
-  }
-
-  return { help, mode, rootDir };
+function parseVersionArgs<T extends CommonVersionCliOptions & Record<string, unknown>>(
+  argv: string[],
+  args: T,
+  specs: FlagSpec<T>[],
+  allowAppStoreRevision: boolean,
+): T {
+  const commonSpecs = [
+    versionValueFlag<T>("--root", "rootDir", path.resolve),
+    ...(allowAppStoreRevision ? [versionValueFlag<T>("--revision", "appStoreRevision")] : []),
+    versionValueFlag<T>("--version", "releaseVersion"),
+    booleanFlag<T>("-h", "help", true, { repeatable: true }),
+    booleanFlag<T>("--help", "help", true, { repeatable: true }),
+  ];
+  return parseFlagArgs(argv, args, [...specs, ...commonSpecs], {
+    onUnhandledArg(arg) {
+      throw new Error(`Unknown argument: ${arg}`);
+    },
+  });
 }
 
-function readOptionValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`Missing value for ${flag}.`);
-  }
-  return value;
+export function parseVersionQueryArgs(
+  argv: string[],
+  options?: { allowAppStoreRevision?: boolean },
+): VersionQueryCliOptions {
+  return parseVersionArgs<VersionQueryCliOptions & Record<string, unknown>>(
+    argv,
+    {
+      appStoreRevision: null,
+      field: null,
+      format: "json",
+      help: false,
+      releaseVersion: null,
+      rootDir: path.resolve("."),
+    },
+    [
+      versionValueFlag("--field", "field"),
+      booleanFlag("--json", "format", "json", { repeatable: true }),
+      booleanFlag("--shell", "format", "shell", { repeatable: true }),
+    ],
+    options?.allowAppStoreRevision === true,
+  );
+}
+
+export function parseVersionSyncArgs(
+  argv: string[],
+  options?: { allowAppStoreRevision?: boolean },
+): VersionSyncCliOptions {
+  return parseVersionArgs<VersionSyncCliOptions & Record<string, unknown>>(
+    argv,
+    {
+      appStoreRevision: null,
+      help: false,
+      mode: "write",
+      releaseVersion: null,
+      rootDir: path.resolve("."),
+    },
+    [
+      booleanFlag("--check", "mode", "check", { repeatable: true }),
+      booleanFlag("--write", "mode", "write", { repeatable: true }),
+    ],
+    options?.allowAppStoreRevision === true,
+  );
 }

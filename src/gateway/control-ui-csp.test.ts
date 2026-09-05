@@ -8,6 +8,7 @@ describe("buildControlUiCspHeader", () => {
   it("blocks inline scripts while allowing inline styles", () => {
     const csp = buildControlUiCspHeader();
     expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).toContain("frame-src 'self' http: https:");
     expect(csp).toContain("script-src 'self'");
     expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
     expect(csp).toContain("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com");
@@ -27,6 +28,7 @@ describe("buildControlUiCspHeader", () => {
       "'self'",
       "ws:",
       "wss:",
+      "data:",
       "https://api.openai.com",
       "https://tweakcn.com",
     ]);
@@ -34,10 +36,31 @@ describe("buildControlUiCspHeader", () => {
     expect(connectSrc?.split(" ")).not.toContain("https:");
   });
 
-  it("limits image loading to same-origin, data, and managed blob URLs", () => {
+  it("allows portal probes only across ports on the current document host", () => {
+    const csp = buildControlUiCspHeader({ portalHost: "gateway.example.test:18789" });
+    const connectSrc = csp.split("; ").find((directive) => directive.startsWith("connect-src "));
+    expect(connectSrc?.split(" ")).toContain("http://gateway.example.test:*");
+    expect(connectSrc?.split(" ")).toContain("https://gateway.example.test:*");
+    expect(connectSrc?.split(" ")).not.toContain("https:");
+
+    const invalid = buildControlUiCspHeader({
+      portalHost: "gateway.example.test/path;connect-src https://example.test",
+    });
+    expect(invalid).not.toContain("https://example.test");
+  });
+
+  it("limits image loading to local sources and the Gravatar fallback origin", () => {
     const csp = buildControlUiCspHeader();
-    expect(csp).toContain("img-src 'self' data: blob:");
-    expect(csp).not.toContain("img-src 'self' data: blob: https:");
+    const imgSrc = csp.split("; ").find((directive) => directive.startsWith("img-src "));
+    expect(imgSrc?.split(" ")).toEqual([
+      "img-src",
+      "'self'",
+      "data:",
+      "blob:",
+      "https://gravatar.com",
+      "https://avatars.githubusercontent.com",
+    ]);
+    expect(imgSrc?.split(" ")).not.toContain("https:");
   });
 
   it("allows same-origin and inline audio/video playback", () => {
@@ -64,6 +87,30 @@ describe("buildControlUiCspHeader", () => {
   it("falls back to plain script-src self when hashes array is empty", () => {
     const csp = buildControlUiCspHeader({ inlineScriptHashes: [] });
     expect(csp).toMatch(/script-src 'self'(?:;|$)/);
+  });
+
+  it("does not relax script execution for the terminal unless allowWasm is set", () => {
+    const csp = buildControlUiCspHeader();
+    expect(csp).not.toContain("wasm-unsafe-eval");
+    expect(csp).toMatch(/connect-src[^;]*data:/);
+  });
+
+  it("relaxes script-src and connect-src for the terminal's ghostty-web WASM engine", () => {
+    const csp = buildControlUiCspHeader({ allowWasm: true });
+    // Narrow WASM compilation permission — never full unsafe-eval.
+    expect(csp).toMatch(/script-src[^;]*'wasm-unsafe-eval'/);
+    expect(csp).not.toMatch(/script-src[^;]*'unsafe-eval'(?!-)/);
+    // Web Awesome icons and ghostty-web both fetch inlined data: assets.
+    expect(csp).toMatch(/connect-src[^;]*\bdata:/);
+  });
+
+  it("keeps inline script hashes alongside the wasm relaxation", () => {
+    const csp = buildControlUiCspHeader({
+      inlineScriptHashes: ["sha256-abc123"],
+      allowWasm: true,
+    });
+    expect(csp).toContain("'sha256-abc123'");
+    expect(csp).toContain("'wasm-unsafe-eval'");
   });
 });
 

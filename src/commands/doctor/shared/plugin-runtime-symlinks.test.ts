@@ -1,0 +1,134 @@
+// Plugin runtime symlink tests cover doctor detection and repair of dangling global links.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  collectStalePluginRuntimeSymlinkHealthFindings,
+  removeStalePluginRuntimeSymlinks,
+} from "./plugin-runtime-symlinks.js";
+
+async function expectSymlinkPresent(targetPath: string): Promise<void> {
+  expect((await fs.lstat(targetPath)).isSymbolicLink()).toBe(true);
+}
+
+async function canCreateDirectorySymlink(root: string): Promise<boolean> {
+  const target = path.join(root, "symlink-capability-target");
+  const link = path.join(root, "symlink-capability-link");
+  await fs.mkdir(target, { recursive: true });
+  try {
+    await fs.symlink(target, link, "dir");
+    return (await fs.lstat(link)).isSymbolicLink();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EPERM" || code === "EACCES" || code === "ENOTSUP") {
+      return false;
+    }
+    throw error;
+  } finally {
+    await fs.rm(link, { recursive: true, force: true });
+    await fs.rm(target, { recursive: true, force: true });
+  }
+}
+
+describe("plugin runtime symlink health findings", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-runtime-symlinks-")),
+    );
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves POSIX relative runtime links across directory symlinks and ..",
+    async () => {
+      const packageRoot = path.join(tempDir, "global", "node_modules", "openclaw");
+      const runtimeRoot = path.join(tempDir, "shared", "plugin-runtime-deps");
+      const physicalRoot = path.join(tempDir, "physical");
+      const dependency = path.join(physicalRoot, "dep");
+      const link = path.join(path.dirname(packageRoot), "relative-runtime");
+      const contents = '{"name":"live-relative-runtime"}\n';
+      await fs.mkdir(packageRoot, { recursive: true });
+      await fs.mkdir(runtimeRoot, { recursive: true });
+      await fs.mkdir(path.join(physicalRoot, "current"), { recursive: true });
+      await fs.mkdir(dependency);
+      await fs.writeFile(path.join(dependency, "package.json"), contents);
+      await fs.symlink(
+        path.join(physicalRoot, "current"),
+        path.join(runtimeRoot, "current"),
+        "dir",
+      );
+      // Keep .. in the stored link: POSIX follows the directory symlink before ascending.
+      const target = `${path.relative(path.dirname(link), runtimeRoot)}/current/../dep`;
+      await fs.symlink(target, link, "dir");
+      expect(await fs.readFile(path.join(link, "package.json"), "utf8")).toBe(contents);
+
+      const findings = await collectStalePluginRuntimeSymlinkHealthFindings({ packageRoot });
+      const repair = await removeStalePluginRuntimeSymlinks(packageRoot);
+      expect({ findings, ...repair }).toEqual({ findings: [], changes: [], warnings: [] });
+      await expectSymlinkPresent(link);
+      expect(await fs.readlink(link)).toBe(target);
+      expect(await fs.readFile(path.join(link, "package.json"), "utf8")).toBe(contents);
+    },
+  );
+
+  it.each(["ENOENT", "ENOTDIR"])(
+    "reports and removes dangling links while preserving live shared-cache links (%s)",
+    async (code) => {
+      if (!(await canCreateDirectorySymlink(tempDir))) {
+        return;
+      }
+      const packageRoot = path.join(tempDir, "prefix", "lib", "node_modules", "openclaw");
+      const legacyRoot = path.join(tempDir, "state", "plugin-runtime-deps");
+      const missingTarget = path.join(
+        legacyRoot,
+        "openclaw-slack",
+        "node_modules",
+        "@slack",
+        "web-api",
+      );
+      const scopeRoot = path.join(path.dirname(packageRoot), "@slack");
+      const staleLink = path.join(scopeRoot, "web-api");
+      const liveTarget = path.join(legacyRoot, "openclaw-live", "node_modules", "@slack", "bolt");
+      const liveLink = path.join(scopeRoot, "bolt");
+
+      await fs.mkdir(packageRoot, { recursive: true });
+      await fs.mkdir(scopeRoot, { recursive: true });
+      await fs.mkdir(liveTarget, { recursive: true });
+      await fs.writeFile(path.join(liveTarget, "package.json"), '{"name":"live-runtime"}\n');
+      if (code === "ENOTDIR") {
+        await fs.writeFile(path.join(legacyRoot, "openclaw-slack"), "not a directory\n");
+      }
+      await fs.symlink(missingTarget, staleLink, "dir");
+      await fs.symlink(liveTarget, liveLink, "dir");
+
+      expect(await collectStalePluginRuntimeSymlinkHealthFindings({ packageRoot })).toEqual([
+        {
+          checkId: "core/doctor/stale-plugin-runtime-symlinks",
+          severity: "warning",
+          message: `Stale plugin-runtime symlink @slack/web-api points at ${missingTarget}.`,
+          path: staleLink,
+          target: staleLink,
+          requirement: "stale-plugin-runtime-symlink-removed",
+          fixHint: "Run `openclaw doctor --fix` to remove stale plugin-runtime symlinks.",
+        },
+      ]);
+      await expectSymlinkPresent(staleLink);
+      await expectSymlinkPresent(liveLink);
+      expect(await removeStalePluginRuntimeSymlinks(packageRoot)).toEqual({
+        changes: [`Removed stale plugin-runtime symlink: ${staleLink}`],
+        warnings: [],
+      });
+      await expect(fs.lstat(staleLink)).rejects.toMatchObject({ code: "ENOENT" });
+      await expectSymlinkPresent(liveLink);
+      expect(await fs.readFile(path.join(liveLink, "package.json"), "utf8")).toBe(
+        '{"name":"live-runtime"}\n',
+      );
+    },
+  );
+});

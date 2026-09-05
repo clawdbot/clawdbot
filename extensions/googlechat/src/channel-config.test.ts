@@ -2,17 +2,58 @@
 import type { ChannelOutboundPayloadHint } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { inspectGoogleChatAccount } from "./accounts.js";
 import {
-  clearGoogleChatApprovalCardBindingsForTest,
   registerGoogleChatApprovalCardBinding,
+  unregisterGoogleChatApprovalCardBindings,
 } from "./approval-card-actions.js";
 import { googlechatPlugin } from "./channel.js";
 import { googlechatSetupPlugin } from "./channel.setup.js";
 
 describe("googlechatPlugin config adapter", () => {
-  beforeEach(() => {
-    clearGoogleChatApprovalCardBindingsForTest();
+  afterEach(() => {
+    unregisterGoogleChatApprovalCardBindings(["token-1"]);
+  });
+
+  it.each([
+    { serviceAccount: { client_email: "bot@example.com" }, configured: true, source: "inline" },
+    {
+      serviceAccount: { source: "env", provider: "default", id: "MISSING_GOOGLE_CHAT_ACCOUNT" },
+      configured: true,
+      source: "none",
+    },
+    { serviceAccount: undefined, configured: false, source: "none" },
+  ])("inspects service account configuration as configured=$configured", async (entry) => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          accounts: {
+            work: {
+              serviceAccount: entry.serviceAccount,
+              audienceType: "app-url",
+              audience: "https://bot.example.com/googlechat",
+              webhookPath: "/googlechat",
+              webhookUrl: "https://bot.example.com/googlechat",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const account = inspectGoogleChatAccount({ cfg, accountId: "work" });
+    expect(await googlechatPlugin.config.isConfigured?.(account, cfg)).toBe(entry.configured);
+    expect(account).toMatchObject({
+      accountId: "work",
+      enabled: true,
+      configured: entry.configured,
+      credentialSource: entry.source,
+      audienceType: "app-url",
+      audience: "https://bot.example.com/googlechat",
+      webhookPath: "/googlechat",
+      webhookUrl: "https://bot.example.com/googlechat",
+      dmPolicy: "pairing",
+    });
+    expect(googlechatPlugin.status?.collectStatusIssues?.([account])).toEqual([]);
   });
 
   it("keeps setup metadata aligned with the runtime plugin", () => {
@@ -21,6 +62,32 @@ describe("googlechatPlugin config adapter", () => {
     expect(googlechatSetupPlugin.capabilities?.chatTypes).toEqual(
       googlechatPlugin.capabilities?.chatTypes,
     );
+    expect(googlechatPlugin.capabilities?.media).toBe(true);
+    expect(googlechatPlugin.capabilities?.reactions).toBeUndefined();
+  });
+
+  it("classifies Google Chat users as direct and spaces as groups", () => {
+    const inferTargetChatType = googlechatPlugin.messaging?.inferTargetChatType;
+
+    expect(inferTargetChatType?.({ to: "users/abc" })).toBe("direct");
+    expect(inferTargetChatType?.({ to: "spaces/xyz" })).toBe("group");
+    expect(inferTargetChatType?.({ to: "unknown" })).toBeUndefined();
+  });
+
+  it("does not advertise user-auth-only actions", () => {
+    const cfg = {
+      channels: {
+        googlechat: {
+          serviceAccount: { client_email: "bot@example.com" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(googlechatPlugin.actions?.describeMessageTool?.({ cfg })).toEqual({
+      actions: ["send"],
+    });
+    expect(googlechatPlugin.actions?.supportsAction?.({ action: "send" })).toBe(true);
+    expect(googlechatPlugin.actions?.supportsAction?.({ action: "upload-file" })).toBe(false);
   });
 
   it("registers an exec-capable native approval runtime", () => {
@@ -45,9 +112,7 @@ describe("googlechatPlugin config adapter", () => {
             provider: "google_chat_service_account",
             id: "value",
           },
-          dm: {
-            allowFrom: ["users/123"],
-          },
+          allowFrom: ["users/123"],
           defaultTo: "spaces/AAA",
         },
       },
@@ -74,7 +139,7 @@ describe("googlechatPlugin config adapter", () => {
           },
           audienceType: "app-url",
           audience: "https://chat-app.example.test/googlechat",
-          dm: { allowFrom: ["users/123"] },
+          allowFrom: ["users/123"],
         },
       },
     } as OpenClawConfig;

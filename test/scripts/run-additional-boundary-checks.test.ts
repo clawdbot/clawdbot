@@ -16,7 +16,8 @@ import {
   runChecks,
   runSingleCheck,
   selectChecksForShard,
-} from "../../scripts/run-additional-boundary-checks.mjs";
+} from "../../scripts/run-additional-boundary-checks.mts";
+import { waitForFile, waitForPidFile } from "../helpers/process-wait.js";
 
 function createOutputBuffer() {
   const chunks: string[] = [];
@@ -32,10 +33,14 @@ function createOutputBuffer() {
 }
 
 function runCli(...args: string[]) {
-  return spawnSync(process.execPath, ["scripts/run-additional-boundary-checks.mjs", ...args], {
-    cwd: path.resolve("."),
-    encoding: "utf8",
-  });
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/run-additional-boundary-checks.mts", ...args],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+    },
+  );
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -60,24 +65,13 @@ async function sleep(ms: number): Promise<void> {
   });
 }
 
-async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (fs.existsSync(filePath)) {
-      return;
-    }
-    await sleep(25);
-  }
-  throw new Error(`timeout waiting for ${filePath}`);
-}
-
 async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
   const deadlineAt = Date.now() + timeoutMs;
   while (Date.now() < deadlineAt) {
     if (!isProcessAlive(pid)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`process still alive: ${pid}`);
 }
@@ -88,7 +82,7 @@ async function waitForNotRunning(pid: number, timeoutMs: number): Promise<void> 
     if (!isProcessAlive(pid) || isProcessZombie(pid)) {
       return;
     }
-    await sleep(25);
+    await sleep(5);
   }
   throw new Error(`process still running: ${pid}`);
 }
@@ -109,12 +103,11 @@ async function waitForChildClose(
 }
 
 describe("run-additional-boundary-checks", () => {
-  it("runs prompt snapshot drift checks in CI", () => {
-    expect(BOUNDARY_CHECKS[0]).toEqual({
-      label: "prompt:snapshots:check",
-      command: "pnpm",
-      args: ["prompt:snapshots:check"],
-    });
+  it("keeps prompt snapshot drift checks out of boundary shards", () => {
+    // The snapshot check regenerates prompt fixtures over the full agent
+    // tool/prompt import graph; packing it into a boundary shard makes that
+    // shard the PR wall clock, so it owns the check-prompt-snapshots lane.
+    expect(BOUNDARY_CHECKS.some((check) => check.label === "prompt:snapshots:check")).toBe(false);
   });
 
   it("normalizes concurrency input", () => {
@@ -153,6 +146,21 @@ describe("run-additional-boundary-checks", () => {
     expect(output.read()).toBe("[output truncated to last 12 bytes]\nsecond-line\n");
   });
 
+  it("drops split UTF-8 prefixes when one chunk exceeds the output byte cap", () => {
+    const output = createBoundedOutputBuffer(5);
+    output.append("old😀new");
+
+    expect(output.read()).toBe("[output truncated to last 5 bytes]\nnew");
+  });
+
+  it("drops split UTF-8 prefixes when older buffered output overflows", () => {
+    const output = createBoundedOutputBuffer(5);
+    output.append("old😀");
+    output.append("new");
+
+    expect(output.read()).toBe("[output truncated to last 5 bytes]\nnew");
+  });
+
   it("parses and applies CI shard specs", () => {
     expect(parseShardSpec("2/4")).toEqual({ count: 4, index: 1, label: "2/4" });
     expect(parseShardSelection("2/4,3/4")).toEqual([
@@ -172,18 +180,47 @@ describe("run-additional-boundary-checks", () => {
       BOUNDARY_CHECKS.map((check) => check.label).toSorted((a, b) => a.localeCompare(b)),
     );
     expect(new Set(shardedLabels).size).toBe(BOUNDARY_CHECKS.length);
+    const transferred = [1, 2, 3, 4].flatMap((index) => {
+      const full = selectChecksForShard(BOUNDARY_CHECKS, `${index}/4`);
+      const selected = selectChecksForShard(BOUNDARY_CHECKS, `${index}/4`, "test-types");
+      expect(selected).toEqual(
+        full.filter((check) => check.label !== "lint:tmp:tsgo-core-boundary"),
+      );
+      return selected;
+    });
+    expect(transferred).toHaveLength(BOUNDARY_CHECKS.length - 1);
+
     expect(() => parseShardSpec("5/4")).toThrow("Invalid shard spec");
     expect(() => parseShardSpec("9007199254740993/9007199254740994")).toThrow("Invalid shard spec");
   });
 
   it("parses CLI help and shard args before running checks", () => {
-    expect(parseCliArgs(["--help"], {})).toEqual({ help: true, shardSpec: "" });
-    expect(parseCliArgs(["--shard", "2/4"], {})).toEqual({ help: false, shardSpec: "2/4" });
-    expect(parseCliArgs(["--shard=3/4"], {})).toEqual({ help: false, shardSpec: "3/4" });
+    expect(parseCliArgs(["--help"], {})).toEqual({
+      help: true,
+      shardSpec: "",
+      coreTestBoundaryOwner: "additional",
+    });
+    expect(parseCliArgs(["--shard", "2/4"], {})).toEqual({
+      help: false,
+      shardSpec: "2/4",
+      coreTestBoundaryOwner: "additional",
+    });
+    expect(parseCliArgs(["--shard=3/4"], {})).toEqual({
+      help: false,
+      shardSpec: "3/4",
+      coreTestBoundaryOwner: "additional",
+    });
     expect(parseCliArgs([], { OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: "4/4" })).toEqual({
       help: false,
       shardSpec: "4/4",
+      coreTestBoundaryOwner: "additional",
     });
+    expect(parseCliArgs(["--core-test-boundary-owner=test-types"], {})).toEqual({
+      help: false,
+      shardSpec: "",
+      coreTestBoundaryOwner: "test-types",
+    });
+    expect(() => parseCliArgs(["--core-test-boundary-owner=none"], {})).toThrow("Unknown argument");
     expect(() => parseCliArgs(["--shard"], {})).toThrow("--shard requires a value");
     expect(() => parseCliArgs(["--shard", "-h"], {})).toThrow("--shard requires a value");
     expect(() => parseCliArgs(["--wat"], {})).toThrow("Unknown argument: --wat");
@@ -192,7 +229,9 @@ describe("run-additional-boundary-checks", () => {
   it("does not start checks for CLI help or invalid arguments", () => {
     const help = runCli("--help");
     expect(help.status).toBe(0);
-    expect(help.stdout).toContain("Usage: node scripts/run-additional-boundary-checks.mjs");
+    expect(help.stdout).toContain(
+      "Usage: node --import tsx scripts/run-additional-boundary-checks.mts",
+    );
     expect(help.stdout).not.toContain("::group::");
     expect(help.stderr).toBe("");
 
@@ -200,7 +239,9 @@ describe("run-additional-boundary-checks", () => {
     expect(unknown.status).toBe(1);
     expect(unknown.stdout).toBe("");
     expect(unknown.stderr).toContain("Unknown argument: --wat");
-    expect(unknown.stderr).toContain("Usage: node scripts/run-additional-boundary-checks.mjs");
+    expect(unknown.stderr).toContain(
+      "Usage: node --import tsx scripts/run-additional-boundary-checks.mts",
+    );
     expect(unknown.stderr).not.toContain("::group::");
     expect(unknown.stderr).not.toContain("pnpm");
   });
@@ -213,11 +254,60 @@ describe("run-additional-boundary-checks", () => {
     });
   });
 
+  it("keeps the Docker E2E package guard in CI boundary checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "lint:docker-e2e",
+      command: "pnpm",
+      args: ["run", "lint:docker-e2e"],
+    });
+  });
+
+  it("runs the shared focused guard pass once across every source root", () => {
+    const { scripts } = JSON.parse(fs.readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    const assertionCommand = scripts["lint:no-chained-type-assertions"];
+    expect(assertionCommand).toBe(
+      "node scripts/run-oxlint.mjs --openclaw-focused-config --config config/oxlint/boundary-guards.json src extensions packages ui/src",
+    );
+    expect(scripts["lint:no-widen-then-assert"]).toBe(assertionCommand);
+    const focusedChecks = BOUNDARY_CHECKS.filter((check) => {
+      const scriptName = check.args[check.args[0] === "run" ? 1 : 0];
+      return (
+        check.command === "pnpm" &&
+        scripts[scriptName ?? ""]?.includes("--config config/oxlint/boundary-guards.json")
+      );
+    });
+    expect(focusedChecks).toEqual([
+      {
+        label: "lint:no-chained-type-assertions",
+        command: "pnpm",
+        args: ["run", "lint:no-chained-type-assertions"],
+      },
+    ]);
+  });
+
   it("keeps the Telegram grammY type import guard in source boundary checks", () => {
     expect(BOUNDARY_CHECKS).toContainEqual({
       label: "lint:extensions:telegram-grammy-types",
       command: "pnpm",
       args: ["run", "lint:extensions:telegram-grammy-types"],
+    });
+  });
+
+  it("keeps the production plugin normalization boundary in CI checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "extension-normalization-core-bypass-boundary",
+      command: "pnpm",
+      args: ["run", "lint:extensions:no-normalization-core-bypass"],
+    });
+  });
+
+  it("keeps native and Node state schema versions aligned in CI", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "native-state-schema-version",
+      command: "node",
+      args: ["scripts/check-native-state-schema-version.mjs"],
     });
   });
 
@@ -270,6 +360,30 @@ describe("run-additional-boundary-checks", () => {
     expect(result.output).toContain("timed out after 50ms");
   });
 
+  it("preserves UTF-8 split across process output chunks before trimming the byte tail", async () => {
+    const script = [
+      'const bytes = Buffer.from("old😀new");',
+      "process.stdout.write(bytes.subarray(0, 5));",
+      "setTimeout(() => process.stdout.end(bytes.subarray(5)), 20);",
+    ].join("");
+    const result = await runSingleCheck(
+      {
+        label: "split-utf8",
+        command: process.execPath,
+        args: ["-e", script],
+      },
+      {
+        checkTimeoutMs: 2_000,
+        cwd: process.cwd(),
+        env: process.env,
+        outputMaxBytes: 5,
+      },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.output).toBe("[output truncated to last 5 bytes]\nnew");
+  });
+
   it("clamps oversized check timers before scheduling", async () => {
     const result = await runSingleCheck(
       {
@@ -304,7 +418,8 @@ describe("run-additional-boundary-checks", () => {
           "const { spawn } = require('node:child_process');",
           "const fs = require('node:fs');",
           `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-          "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
+          "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', String(child.pid));",
+          "fs.renameSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', process.env.OPENCLAW_TEST_CHILD_PID);",
           "setInterval(() => {}, 1000);",
         ].join("");
 
@@ -322,8 +437,7 @@ describe("run-additional-boundary-checks", () => {
           },
         );
 
-        await waitForFile(childPidPath, 2000);
-        childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+        childPid = await waitForPidFile(childPidPath, 2000);
         const result = await resultPromise;
 
         expect(result.code).toBe(1);
@@ -355,14 +469,15 @@ describe("run-additional-boundary-checks", () => {
           "const { spawn } = require('node:child_process');",
           "const fs = require('node:fs');",
           `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-          "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
+          "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', String(child.pid));",
+          "fs.renameSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', process.env.OPENCLAW_TEST_CHILD_PID);",
           "fs.writeFileSync(process.env.OPENCLAW_TEST_READY, 'ready');",
           "process.on('SIGTERM', () => process.exit(0));",
           "setInterval(() => {}, 1000);",
         ].join("");
         const runnerScript = `
 import { runChecks } from ${JSON.stringify(
-          new URL("../../scripts/run-additional-boundary-checks.mjs", import.meta.url).href,
+          new URL("../../scripts/run-additional-boundary-checks.mts", import.meta.url).href,
         )};
 
 await runChecks(
@@ -393,7 +508,7 @@ await runChecks(
         });
 
         await waitForFile(readyPath, 2000);
-        childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+        childPid = await waitForPidFile(childPidPath, 2000);
         expect(Number.isInteger(childPid)).toBe(true);
         expect(isProcessAlive(childPid)).toBe(true);
 

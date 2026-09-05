@@ -26,6 +26,7 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    modelIdNormalizationPolicies: new Map(),
   };
   const zeroMetrics = {
     registrySnapshotMs: 0,
@@ -35,19 +36,21 @@ const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
     indexPluginCount: 0,
     manifestPluginCount: 0,
   };
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "policy",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
   return {
     policyHash: "policy",
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "policy",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: pluginManifestRegistry,
     plugins: [],
@@ -480,7 +483,33 @@ describe("gateway startup config validation", () => {
     vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
 
     await expectStartupRejects(
-      `Invalid config at ${configPath}.\ngateway.mode: Expected 'local' or 'remote'\nRun "openclaw doctor --fix" to repair, then retry.\nIf startup is still blocked, inspect the adjacent .bak backup before restoring it manually.`,
+      `Invalid config at ${configPath}:\ngateway.mode: Expected 'local' or 'remote'\nRun "openclaw doctor --fix" to repair, then retry.\nIf startup is still blocked, inspect the adjacent .bak backup before restoring it manually.`,
+    );
+  });
+
+  it("renders actionable diagnostics for invalid config written by a newer version", async () => {
+    const rawConfig = {
+      meta: { lastTouchedVersion: "9999.1.1" },
+      gateway: { mode: "nope" },
+    };
+    const invalidSnapshot = buildInvalidConfigSnapshot({
+      rawConfig,
+      config: rawConfig as OpenClawConfig,
+      issues: [
+        {
+          path: "gateway.mode",
+          pathSegments: ["gateway", "mode"],
+          message: 'Invalid input (allowed: "local", "remote")',
+        },
+      ],
+    });
+    vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
+
+    await expectStartupRejects(
+      new RegExp(
+        'openclaw-startup-recovery\\.json:1 — gateway\\.mode: Invalid input \\(allowed: "local", "remote"\\), got: "nope".*Config was last written by OpenClaw 9999\\.1\\.1, but you are running',
+        "s",
+      ),
     );
   });
 
@@ -507,7 +536,7 @@ describe("gateway startup config validation", () => {
 
     const start = loadTestStartup({});
     await expect(start).rejects.toThrow(
-      `Invalid config at ${configPath}.\nplugins.slots.memory: plugin not found: source-only-pack\nThis is a plugin packaging issue, not a local config problem.\nUpdate or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then.`,
+      `Invalid config at ${configPath}:\nplugins.slots.memory: plugin not found: source-only-pack\nThis is a plugin packaging issue, not a local config problem.\nUpdate or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then.`,
     );
     await start.catch((error: unknown) => {
       expect(String(error)).not.toContain("openclaw doctor --fix");
@@ -585,7 +614,7 @@ describe("gateway startup config validation", () => {
       ],
     });
     vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
-    await expectStartupRejects(`Invalid config at ${configPath}.`);
+    await expectStartupRejects(`Invalid config at ${configPath}:`);
   });
 
   it("keeps mixed plugin and core startup invalidity fatal", async () => {
@@ -606,7 +635,7 @@ describe("gateway startup config validation", () => {
     });
     vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
 
-    await expectStartupRejects(`Invalid config at ${configPath}.`);
+    await expectStartupRejects(`Invalid config at ${configPath}:`);
   });
 
   it("rejects stale model provider api enum values during startup", async () => {
@@ -655,7 +684,7 @@ describe("gateway startup config validation", () => {
       ],
     });
     vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
-    await expectStartupRejects(`Invalid config at ${configPath}.`, false);
+    await expectStartupRejects(`Invalid config at ${configPath}:`, false);
 
     expect(configMutate.replaceConfigFile).not.toHaveBeenCalled();
   });
@@ -667,6 +696,6 @@ describe("gateway startup config validation", () => {
     });
     vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
 
-    await expectStartupRejects(`Invalid config at ${configPath}.`);
+    await expectStartupRejects(`Invalid config at ${configPath}:`);
   });
 });

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, expect, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-profiles.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../../src/agents/embedded-agent-runner/runs.js";
-import { withFastReplyConfig } from "../../../src/auto-reply/reply/get-reply-fast-path.js";
+import { withFastReplyConfig } from "../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
@@ -79,6 +79,9 @@ vi.doMock("../../../src/agents/embedded-agent-runner/runs.js", () => ({
       : undefined,
   queueEmbeddedAgentMessageWithOutcome: (sessionId: string, text: string, options?: unknown) =>
     embeddedAgentMocks.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
+}));
+
+vi.doMock("../../../src/agents/embedded-agent-runner/active-run-projections.js", () => ({
   resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
     embeddedAgentMocks.resolveActiveEmbeddedRunSessionId(...args),
 }));
@@ -120,8 +123,7 @@ const DEFAULT_MODEL_CATALOG = [
 
 const modelCatalogMocks = getSharedMocks("openclaw.trigger-handling.model-catalog-mocks", () => ({
   loadManifestModelCatalog: vi.fn(() => DEFAULT_MODEL_CATALOG),
-  loadModelCatalog: vi.fn().mockResolvedValue(DEFAULT_MODEL_CATALOG),
-  resetModelCatalogCacheForTest: vi.fn(),
+  loadPreparedModelCatalog: vi.fn().mockResolvedValue(DEFAULT_MODEL_CATALOG),
 }));
 
 const installModelCatalogMock = () =>
@@ -129,9 +131,25 @@ const installModelCatalogMock = () =>
 
 installModelCatalogMock();
 
+vi.doMock("../../../src/agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: (...args: unknown[]) =>
+    modelCatalogMocks.loadPreparedModelCatalog(...args),
+  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
+    const entries = await modelCatalogMocks.loadPreparedModelCatalog(...args);
+    return { entries, routeVariants: entries, authoritative: true };
+  },
+}));
+
 vi.doMock("../../../src/agents/model-catalog.runtime.js", () => ({
   loadManifestModelCatalog: () => modelCatalogMocks.loadManifestModelCatalog(),
-  loadModelCatalog: (...args: unknown[]) => modelCatalogMocks.loadModelCatalog(...args),
+  loadPreparedModelCatalog: (...args: unknown[]) =>
+    modelCatalogMocks.loadPreparedModelCatalog(...args),
+  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
+    const entries = await modelCatalogMocks.loadPreparedModelCatalog(...args);
+    return { entries, routeVariants: entries, authoritative: true };
+  },
+  loadProviderScopedThinkingCatalog: async (...args: unknown[]) =>
+    await modelCatalogMocks.loadPreparedModelCatalog(...args),
 }));
 
 vi.doMock("../../../src/plugins/provider-runtime.runtime.js", () => ({
@@ -160,7 +178,7 @@ const modelFallbackMocks = getSharedMocks("openclaw.trigger-handling.model-fallb
 }));
 
 const installModelFallbackMock = () =>
-  vi.doMock("../../../src/agents/model-fallback.js", () => modelFallbackMocks);
+  vi.doMock("../../../src/agents/model-fallback-runner.js", () => modelFallbackMocks);
 
 installModelFallbackMock();
 
@@ -292,12 +310,19 @@ export function makeCfg(home: string): OpenClawConfig {
     agents: {
       defaults: {
         model: { primary: "anthropic/claude-opus-4-7" },
+        models: {
+          "anthropic/claude-haiku-4-5-20251001": {},
+          "anthropic/claude-opus-4-7": {},
+          "openai/gpt-4.1-mini": {},
+          "openai/gpt-5.4": {},
+        },
         workspace: join(home, "openclaw"),
         // Test harness: avoid 1s coalescer idle sleeps that dominate trigger suites.
         blockStreamingCoalesce: { idleMs: 1 },
         // Trigger tests assert routing/authorization behavior, not delivery pacing.
         humanDelay: { mode: "off" },
       },
+      list: [{ id: "main", default: true }],
     },
     channels: {
       whatsapp: {
@@ -313,7 +338,7 @@ export function makeCfg(home: string): OpenClawConfig {
   } as OpenClawConfig);
 }
 
-export async function loadGetReplyFromConfig() {
+async function loadGetReplyFromConfig() {
   return (await import("../../../src/auto-reply/reply.js")).getReplyFromConfig;
 }
 
@@ -399,7 +424,7 @@ export async function expectBareNewOrResetAcknowledged(params: {
   expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
 }
 
-export function installTriggerHandlingE2eTestHooks() {
+function installTriggerHandlingE2eTestHooks() {
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
     vi.clearAllMocks();
@@ -418,7 +443,7 @@ export function mockRunEmbeddedAgentOk(text = "ok"): AnyMock {
   return runEmbeddedAgentMock;
 }
 
-export function createBlockReplyCollector() {
+function createBlockReplyCollector() {
   const blockReplies: Array<{ text?: string }> = [];
   return {
     blockReplies,

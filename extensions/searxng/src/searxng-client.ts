@@ -1,4 +1,3 @@
-// Searxng plugin module implements searxng client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
@@ -78,7 +77,8 @@ function buildSearxngSearchUrl(params: {
   language?: string;
 }): string {
   const url = new URL(params.baseUrl);
-  const pathname = url.pathname.endsWith("/") ? `${url.pathname}search` : `${url.pathname}/search`;
+  const basePathname = url.pathname.replace(/\/+$/u, "");
+  const pathname = basePathname.endsWith("/search") ? basePathname : `${basePathname}/search`;
   url.pathname = pathname;
   url.search = "";
   url.searchParams.set("q", params.query);
@@ -189,6 +189,7 @@ async function fetchSearxngResults(params: {
   timeoutSeconds: number;
   count: number;
   endpointMode: SearxngEndpointMode;
+  signal?: AbortSignal;
 }): Promise<SearxngResult[]> {
   const url = buildSearxngSearchUrl({
     baseUrl: params.baseUrl,
@@ -205,6 +206,7 @@ async function fetchSearxngResults(params: {
     {
       url,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "GET",
         headers: {
@@ -222,7 +224,7 @@ async function fetchSearxngResults(params: {
 
       const body = await readResponseText(response, { maxBytes: MAX_RESPONSE_BYTES });
       if (body.truncated) {
-        throw new Error("SearXNG response too large.");
+        throw new Error(`SearXNG response incomplete after ${body.bytesRead} bytes.`);
       }
       return parseSearxngResponseText(body.text, params.count);
     },
@@ -238,13 +240,18 @@ export async function runSearxngSearch(params: {
   baseUrl?: string;
   timeoutSeconds?: number;
   cacheTtlMinutes?: number;
+  signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
+  params.signal?.throwIfAborted();
   const count = resolveSearchCount(params.count, DEFAULT_SEARCH_COUNT);
   const categories = params.categories ?? resolveSearxngCategories(params.config);
   const language = params.language ?? resolveSearxngLanguage(params.config);
   const baseUrl = params.baseUrl ?? resolveSearxngBaseUrl(params.config);
   const timeoutSeconds = resolveTimeoutSeconds(params.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
-  const cacheTtlMs = resolveCacheTtlMs(params.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES);
+  const cacheTtlMs = resolveCacheTtlMs(
+    params.cacheTtlMinutes ?? params.config?.tools?.web?.search?.cacheTtlMinutes,
+    DEFAULT_CACHE_TTL_MINUTES,
+  );
 
   if (!baseUrl) {
     throw new Error(
@@ -252,6 +259,7 @@ export async function runSearxngSearch(params: {
     );
   }
   const endpointMode = await validateSearxngBaseUrl(baseUrl);
+  params.signal?.throwIfAborted();
 
   const cacheKey = normalizeCacheKey(
     JSON.stringify({
@@ -263,7 +271,7 @@ export async function runSearxngSearch(params: {
       baseUrl,
     }),
   );
-  const cached = readCache(SEARXNG_SEARCH_CACHE, cacheKey);
+  const cached = readCache(SEARXNG_SEARCH_CACHE, cacheKey, cacheTtlMs);
   if (cached) {
     return { ...cached.value, cached: true };
   }
@@ -277,7 +285,9 @@ export async function runSearxngSearch(params: {
     timeoutSeconds,
     count,
     endpointMode,
+    signal: params.signal,
   });
+  params.signal?.throwIfAborted();
   if (results.length === 0 && shouldRetryEmptyCategorySearchWithGeneral(categories)) {
     results = await fetchSearxngResults({
       baseUrl,
@@ -287,7 +297,9 @@ export async function runSearxngSearch(params: {
       timeoutSeconds,
       count,
       endpointMode,
+      signal: params.signal,
     });
+    params.signal?.throwIfAborted();
   }
 
   const payload = {
@@ -316,10 +328,8 @@ export async function runSearxngSearch(params: {
 
 export const testing = {
   buildSearxngSearchUrl,
-  normalizeSearxngResult,
   parseSearxngResponseText,
   shouldRetryEmptyCategorySearchWithGeneral,
   validateSearxngBaseUrl,
   SEARXNG_SEARCH_CACHE,
 };
-export { testing as __testing };

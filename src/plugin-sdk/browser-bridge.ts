@@ -3,7 +3,7 @@
  */
 import type { Server } from "node:http";
 import type { ResolvedBrowserConfig } from "./browser-types.js";
-import { loadActivatedBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+import { loadActivatedBundledPluginPublicSurfaceModule } from "./facade-runtime.js";
 
 /** Running browser bridge server state returned to plugin callers. */
 export type BrowserBridge = {
@@ -28,10 +28,10 @@ type BrowserBridgeFacadeModule = {
   stopBrowserBridgeServer(server: Server): Promise<void>;
 };
 
-function loadFacadeModule(): BrowserBridgeFacadeModule {
-  return loadActivatedBundledPluginPublicSurfaceModuleSync<BrowserBridgeFacadeModule>({
+function loadFacadeModule(): Promise<BrowserBridgeFacadeModule> {
+  return loadActivatedBundledPluginPublicSurfaceModule<BrowserBridgeFacadeModule>({
     dirName: "browser",
-    artifactBasename: "runtime-api.js",
+    artifactBasename: "bridge-api.js",
   });
 }
 
@@ -39,10 +39,10 @@ function loadFacadeModule(): BrowserBridgeFacadeModule {
 export async function startBrowserBridgeServer(
   params: Parameters<BrowserBridgeFacadeModule["startBrowserBridgeServer"]>[0],
 ): Promise<BrowserBridge> {
-  return await loadFacadeModule().startBrowserBridgeServer(params);
+  return await (await loadFacadeModule()).startBrowserBridgeServer(params);
 }
 
 /** Stops a browser bridge server previously returned by startBrowserBridgeServer. */
 export async function stopBrowserBridgeServer(server: Server): Promise<void> {
-  await loadFacadeModule().stopBrowserBridgeServer(server);
+  await (await loadFacadeModule()).stopBrowserBridgeServer(server);
 }

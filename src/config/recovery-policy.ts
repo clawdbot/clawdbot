@@ -27,7 +27,7 @@ function isPluginPolicyIssue(issue: ConfigValidationIssue): boolean {
 }
 
 /** Return true for plugin validation issues caused by missing compiled runtime output. */
-export function isPluginPackagingRuntimeOutputIssue(issue: ConfigValidationIssue): boolean {
+function isPluginPackagingRuntimeOutputIssue(issue: ConfigValidationIssue): boolean {
   const path = issue.path.trim();
   const message = issue.message.trim().toLowerCase();
   return isPluginsPath(path) && message.includes(COMPILED_RUNTIME_OUTPUT_DIAGNOSTIC);

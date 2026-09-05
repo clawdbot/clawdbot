@@ -7,23 +7,23 @@ This directory is used by `fastlane deliver` for App Store Connect text metadata
 ```bash
 cd apps/ios
 APP_STORE_CONNECT_APP_ID=YOUR_APP_STORE_CONNECT_APP_ID \
-DELIVER_METADATA=1 fastlane ios metadata
+DELIVER_METADATA=1 BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios metadata release_version:2026.7.2 app_store_revision:1
 ```
 
 ## Release notes and App Review attachment
 
-`pnpm ios:release:upload` uses this mode before archiving so the editable App Store version has current release notes and the App Review PDF attachment without rewriting all metadata:
+`pnpm ios:release:upload` uses this mode after local archive validation so the editable App Store version has current release notes and the App Review PDF attachment without rewriting all metadata:
 
 ```bash
 cd apps/ios
-DELIVER_RELEASE_NOTES=1 fastlane ios metadata
+DELIVER_RELEASE_NOTES=1 BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios metadata release_version:2026.7.2 app_store_revision:1
 ```
 
 ## Optional: include screenshots
 
 ```bash
 cd apps/ios
-DELIVER_METADATA=1 DELIVER_SCREENSHOTS=1 fastlane ios metadata
+DELIVER_METADATA=1 DELIVER_SCREENSHOTS=1 BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane ios metadata release_version:2026.7.2 app_store_revision:1
 ```
 
 ## Auth
@@ -44,11 +44,12 @@ Or set `APP_STORE_CONNECT_API_KEY_PATH`.
 
 ## Notes
 
-- Locale files live under `metadata/en-US/`.
-- `release_notes.txt` is generated from `apps/ios/CHANGELOG.md`; after changelog updates, run `pnpm ios:version:sync`.
+- Locale files live under `metadata/<locale>/`, for example `metadata/en-US/` and `metadata/sv-SE/`. Each locale directory should use the public metadata filenames consumed by the `ios metadata` lane.
+- Release notes are generated from `apps/ios/CHANGELOG.md` into temporary Fastlane metadata during upload; use the `scripts/mobile-release-version.ts` prepare/plan/finalize flow to prepare the exact encoded section and the other four mobile release outputs.
+- Do not check in `release_notes.txt` under locale metadata directories; the lane strips copied release-note files and writes the current generated en-US release notes when requested.
 - `apps/ios/APP-REVIEW-NOTES.md` is rendered to `apps/ios/build/app-review/APP-REVIEW-NOTES.pdf` and uploaded as the App Review attachment when metadata is uploaded.
-- Release notes resolve from `## <pinned iOS version>` first, then fall back to `## Unreleased` while a TestFlight train is still in progress.
-- When starting a new production release train, pin the iOS version first with `pnpm ios:version:pin -- --from-gateway`.
+- Production release notes require the exact encoded App Store heading, such as `## 2026.7.21`; they do not fall back to the gateway or `## Unreleased` section.
+- Generated App Store release notes begin with the associated gateway version.
 - The release upload flow uploads release notes, screenshots, and the App Review PDF attachment before the IPA, and never submits for App Review.
 - `privacy_url.txt` is set to `https://openclaw.ai/privacy`.
 - If app lookup fails in `deliver`, set one of:

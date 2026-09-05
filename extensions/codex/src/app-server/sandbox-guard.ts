@@ -2,8 +2,11 @@
  * Blocks direct Codex app-server requests that would bypass OpenClaw sandbox or
  * node-exec routing guarantees.
  */
+import { tryResolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveSandboxRuntimeStatus } from "openclaw/plugin-sdk/sandbox";
+import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { resolveSandboxRuntimeStatus, type SandboxContext } from "openclaw/plugin-sdk/sandbox";
+import { isCodexRemoteExecPlacementSandbox } from "./config-parsing.js";
 import {
   formatCodexNativeNodeExecBlock,
   resolveCodexNativeExecutionPolicy,
@@ -17,8 +20,13 @@ type DirectMethodPolicy =
 const DIRECT_METHOD_POLICIES = new Map<string, DirectMethodPolicy>([
   ["account/rateLimits/read", "allowed-control-plane"],
   ["account/read", "allowed-control-plane"],
+  ["app/installed", "allowed-control-plane"],
   ["app/list", "allowed-control-plane"],
+  ["app/read", "allowed-control-plane"],
+  ["config/batchWrite", "allowed-control-plane"],
   ["config/mcpServer/reload", "allowed-control-plane"],
+  ["config/read", "allowed-control-plane"],
+  ["config/value/write", "allowed-control-plane"],
   ["environment/add", "allowed-control-plane"],
   ["experimentalFeature/enablement/set", "allowed-control-plane"],
   ["feedback/upload", "allowed-control-plane"],
@@ -28,6 +36,7 @@ const DIRECT_METHOD_POLICIES = new Map<string, DirectMethodPolicy>([
   ["mcpServerStatus/list", "allowed-control-plane"],
   ["model/list", "allowed-control-plane"],
   ["plugin/install", "allowed-control-plane"],
+  ["plugin/installed", "allowed-control-plane"],
   ["plugin/list", "allowed-control-plane"],
   ["plugin/read", "allowed-control-plane"],
   ["skills/list", "allowed-control-plane"],
@@ -35,7 +44,7 @@ const DIRECT_METHOD_POLICIES = new Map<string, DirectMethodPolicy>([
   ["thread/inject_items", "allowed-control-plane"],
   ["thread/list", "allowed-control-plane"],
   ["thread/metadata/update", "allowed-control-plane"],
-  ["thread/name/update", "allowed-control-plane"],
+  ["thread/name/set", "allowed-control-plane"],
   ["thread/read", "allowed-control-plane"],
   ["thread/rollback", "allowed-control-plane"],
   ["thread/start", "requires-openclaw-environment"],
@@ -76,6 +85,7 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
+  sandbox?: Pick<SandboxContext, "enabled"> | null;
 }): string | undefined {
   const policy = resolveDirectMethodPolicy(params.method);
   if (NODE_EXEC_BLOCKED_CONTROL_PLANE_METHODS.has(params.method)) {
@@ -108,6 +118,7 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
   const sandboxBlock = resolveCodexNativeSandboxBlock({
     config: params.config,
     sessionKey,
+    sandbox: params.sandbox,
     surface: `app-server method \`${params.method}\``,
   });
   if (!sandboxBlock) {
@@ -128,6 +139,8 @@ export function resolveCodexNativeExecutionBlock(params: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  sandbox?: Pick<SandboxContext, "enabled"> | null;
+  sandboxEnvironmentSelected?: boolean;
   surface: string;
 }): string | undefined {
   return resolveCodexNativeSandboxBlock(params) ?? resolveCodexNativeNodeExecBlock(params);
@@ -138,15 +151,33 @@ export function resolveCodexNativeSandboxBlock(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
+  agentId?: string;
+  sandbox?: Pick<SandboxContext, "enabled"> | null;
+  sandboxEnvironmentSelected?: boolean;
   surface: string;
 }): string | undefined {
+  if (params.sandboxEnvironmentSelected) {
+    return undefined;
+  }
   const sessionKey = params.sessionKey?.trim() || params.sessionId?.trim();
   if (!sessionKey) {
+    return undefined;
+  }
+  if (isCodexRemoteExecPlacementSandbox(params.sandbox) || params.sandbox?.enabled === true) {
+    return formatCodexNativeSandboxBlock({ surface: params.surface });
+  }
+  const sandboxAgentId =
+    parseAgentSessionKey(sessionKey)?.agentId ??
+    params.agentId ??
+    tryResolveDefaultAgentId(params.config ?? {});
+  if (!sandboxAgentId) {
     return undefined;
   }
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,
     sessionKey,
+    agentId: sandboxAgentId,
+    classificationAgentId: sandboxAgentId,
   });
   if (!runtime.sandboxed) {
     return undefined;

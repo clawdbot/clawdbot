@@ -1,7 +1,7 @@
 // OC Path tests cover sentinel cross kind plugin behavior.
 import { describe, expect, it } from "vitest";
 import { emitMd } from "../../emit.js";
-import { setJsoncOcPath } from "../../jsonc/edit.js";
+import { insertJsoncOcPath, setJsoncOcPath } from "../../jsonc/edit.js";
 import { emitJsonc } from "../../jsonc/emit.js";
 import { parseJsonc } from "../../jsonc/parse.js";
 import { emitJsonl } from "../../jsonl/emit.js";
@@ -37,57 +37,16 @@ describe("sentinel guard cross-kind", () => {
     expect(() => emitMd(ast, { acceptPreExistingSentinel: false })).toThrow(OcEmitSentinelError);
   });
 
-  it("jsonc render mode walks every leaf for sentinel", () => {
-    const ast = parseJsonc('{ "x": "ok" }').ast;
-    const tampered = {
-      ...ast,
-      root: {
-        kind: "object" as const,
-        entries: [
-          {
-            key: "x",
-            line: 1,
-            value: { kind: "string" as const, value: REDACTED_SENTINEL },
-          },
-        ],
-      },
-    };
-    expect(() => emitJsonc(tampered, { mode: "render" })).toThrow(OcEmitSentinelError);
-  });
-
-  it("jsonl render mode walks every value-line leaf", () => {
-    const ast = parseJsonl('{"a":"ok"}\n').ast;
-    const tampered = {
-      ...ast,
-      lines: [
-        {
-          kind: "value" as const,
-          line: 1,
-          raw: '{"a":"ok"}',
-          value: {
-            kind: "object" as const,
-            entries: [
-              {
-                key: "a",
-                line: 1,
-                value: { kind: "string" as const, value: REDACTED_SENTINEL },
-              },
-            ],
-          },
-        },
-      ],
-    };
-    expect(() => emitJsonl(tampered, { mode: "render" })).toThrow(OcEmitSentinelError);
-  });
-
-  it("setJsoncOcPath itself throws when the new value contains the sentinel", () => {
-    // The substrate guard fires at write-time: setJsoncOcPath rebuilds
-    // raw via render mode emit, which scans every leaf. Defense-in-depth
-    // — even if a caller forgets to call emit afterward, the sentinel
-    // can't make it into an in-memory AST that pretends to be valid.
+  it("jsonc edits reject caller-injected sentinels before mutation", () => {
     const ast = parseJsonc('{ "x": "ok" }').ast;
     expect(() =>
       setJsoncOcPath(ast, parseOcPath("oc://config/x"), {
+        kind: "string",
+        value: REDACTED_SENTINEL,
+      }),
+    ).toThrow(OcEmitSentinelError);
+    expect(() =>
+      insertJsoncOcPath(ast, parseOcPath("oc://config"), "y", {
         kind: "string",
         value: REDACTED_SENTINEL,
       }),

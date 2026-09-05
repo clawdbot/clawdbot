@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/session-url-contract",
+  "version": "0.0.0-private",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./parse": "./src/parse.ts",
+    "./share-build": "./src/share-build.ts"
+  },
+  "dependencies": {
+    "@openclaw/normalization-core": "workspace:*"
+  }
+}

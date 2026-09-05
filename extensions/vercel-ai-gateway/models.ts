@@ -1,11 +1,9 @@
 // Vercel Ai Gateway plugin module implements models behavior.
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-import {
-  getCachedLiveProviderModelRows,
-  LiveModelCatalogHttpError,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const VERCEL_AI_GATEWAY_PROVIDER_ID = "vercel-ai-gateway";
@@ -20,7 +18,6 @@ export const VERCEL_AI_GATEWAY_DEFAULT_COST = {
   cacheWrite: 0,
 } as const;
 
-const log = createSubsystemLogger("agents/vercel-ai-gateway");
 const VERCEL_AI_GATEWAY_DISCOVERY_CACHE_TTL_MS = 60_000;
 const VERCEL_AI_GATEWAY_DISCOVERY_TIMEOUT_MS = 5000;
 
@@ -33,6 +30,7 @@ type VercelPricingShape = {
 
 type VercelGatewayModelShape = {
   id?: string;
+  type?: string;
   name?: string;
   context_window?: number;
   max_tokens?: number;
@@ -161,11 +159,13 @@ export function getStaticVercelAiGatewayModelCatalog(): ModelDefinitionConfig[] 
   return STATIC_VERCEL_AI_GATEWAY_MODEL_CATALOG.map(buildStaticModelDefinition);
 }
 
-function buildDiscoveredModelDefinition(
-  model: VercelGatewayModelShape,
-): ModelDefinitionConfig | null {
+function buildDiscoveredModelDefinition(value: unknown): ModelDefinitionConfig | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Vercel AI Gateway model list: malformed JSON response");
+  }
+  const model = value as VercelGatewayModelShape;
   const id = typeof model.id === "string" ? model.id.trim() : "";
-  if (!id) {
+  if (!id || (model.type !== undefined && model.type !== "language")) {
     return null;
   }
 
@@ -204,37 +204,27 @@ function buildDiscoveredModelDefinition(
   };
 }
 
-function asVercelGatewayModelShape(value: unknown): VercelGatewayModelShape {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("Vercel AI Gateway model list: malformed JSON response");
-  }
-  return value as VercelGatewayModelShape;
-}
-
 export async function discoverVercelAiGatewayModels(): Promise<ModelDefinitionConfig[]> {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return getStaticVercelAiGatewayModelCatalog();
   }
 
-  try {
-    const data = await getCachedLiveProviderModelRows({
-      providerId: VERCEL_AI_GATEWAY_PROVIDER_ID,
-      endpoint: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
-      timeoutMs: VERCEL_AI_GATEWAY_DISCOVERY_TIMEOUT_MS,
-      ttlMs: VERCEL_AI_GATEWAY_DISCOVERY_CACHE_TTL_MS,
-      auditContext: "vercel-ai-gateway.models",
-    });
-    const discovered = data
-      .map(asVercelGatewayModelShape)
-      .map(buildDiscoveredModelDefinition)
-      .filter((entry): entry is ModelDefinitionConfig => entry !== null);
-    return discovered.length > 0 ? discovered : getStaticVercelAiGatewayModelCatalog();
-  } catch (error) {
-    if (error instanceof LiveModelCatalogHttpError) {
-      log.warn(`Failed to discover Vercel AI Gateway models: HTTP ${error.status}`);
-      return getStaticVercelAiGatewayModelCatalog();
-    }
-    log.warn(`Failed to discover Vercel AI Gateway models: ${String(error)}`);
-    return getStaticVercelAiGatewayModelCatalog();
-  }
+  const provider = await buildLiveModelProviderConfig({
+    providerId: VERCEL_AI_GATEWAY_PROVIDER_ID,
+    endpoint: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+    providerConfig: {
+      baseUrl: VERCEL_AI_GATEWAY_BASE_URL,
+      api: "anthropic-messages",
+    },
+    models: getStaticVercelAiGatewayModelCatalog(),
+    timeoutMs: VERCEL_AI_GATEWAY_DISCOVERY_TIMEOUT_MS,
+    ttlMs: VERCEL_AI_GATEWAY_DISCOVERY_CACHE_TTL_MS,
+    auditContext: "vercel-ai-gateway.models",
+    fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
+    projectRows: (rows) =>
+      rows
+        .map(buildDiscoveredModelDefinition)
+        .filter((entry): entry is ModelDefinitionConfig => entry !== null),
+  });
+  return provider.models;
 }

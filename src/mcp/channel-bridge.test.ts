@@ -16,7 +16,10 @@ type BridgeInternals = {
   pendingClaudePermissions: Map<string, unknown>;
   pendingApprovals: Map<string, unknown>;
   pendingSweepInterval: NodeJS.Timeout | null;
-  pollEvents: (filter: WaitFilter, limit?: number) => {
+  pollEvents: (
+    filter: WaitFilter,
+    limit?: number,
+  ) => {
     events: QueueEvent[];
     nextCursor: number;
   };
@@ -31,6 +34,15 @@ type BridgeInternals = {
     event: string;
     payload?: Record<string, unknown>;
   }) => Promise<void>;
+  dispatchGatewayEvent: (event: {
+    event: string;
+    payload?: Record<string, unknown>;
+  }) => Promise<void>;
+  handleSessionMessageEvent: (payload: {
+    sessionKey: string;
+    senderIsOwner?: boolean;
+    message: { role: string; content: unknown };
+  }) => Promise<void>;
   listPendingApprovals: () => unknown[];
   close: () => Promise<void>;
   server: { server: { notification: (n: unknown) => Promise<void> } } | null;
@@ -43,6 +55,108 @@ function makeBridge(verbose = false): BridgeInternals {
     verbose,
   }) as unknown as BridgeInternals;
 }
+
+describe("OpenClawChannelBridge — Claude permission authorization", () => {
+  test.each([
+    { name: "non-owner", senderIsOwner: false, role: "user" },
+    { name: "missing owner metadata", senderIsOwner: undefined, role: "user" },
+    { name: "assistant message", senderIsOwner: true, role: "assistant" },
+  ])("does not resolve a pending permission from a $name reply", async (reply) => {
+    const bridge = makeBridge();
+    const notification = vi.fn(async () => undefined);
+    bridge.server = { server: { notification } };
+    try {
+      await bridge.handleClaudePermissionRequest({
+        requestId: "abcde",
+        toolName: "Bash",
+        description: "run npm test",
+        inputPreview: "{}",
+      });
+
+      await bridge.handleSessionMessageEvent({
+        sessionKey: "agent:main:telegram:group:-100123",
+        senderIsOwner: reply.senderIsOwner,
+        message: {
+          role: reply.role,
+          content: [{ type: "text", text: "yes abcde" }],
+        },
+      });
+
+      expect(notification).not.toHaveBeenCalled();
+      expect(bridge.pendingClaudePermissions.has("abcde")).toBe(true);
+      expect(bridge.queue.at(-1)).toMatchObject({ type: "message", text: "yes abcde" });
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  test("resolves a pending permission from an owner user reply", async () => {
+    const bridge = makeBridge();
+    const notification = vi.fn(async () => undefined);
+    bridge.server = { server: { notification } };
+    try {
+      await bridge.handleClaudePermissionRequest({
+        requestId: "abcde",
+        toolName: "Bash",
+        description: "run npm test",
+        inputPreview: "{}",
+      });
+
+      await bridge.handleSessionMessageEvent({
+        sessionKey: "agent:main:telegram:group:-100123",
+        senderIsOwner: true,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "yes abcde" }],
+        },
+      });
+
+      expect(notification).toHaveBeenCalledWith({
+        method: "notifications/claude/channel/permission",
+        params: { request_id: "abcde", behavior: "allow" },
+      });
+      expect(bridge.pendingClaudePermissions.has("abcde")).toBe(false);
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  test("keeps a permission retryable until its notification is delivered", async () => {
+    const bridge = makeBridge();
+    const notification = vi
+      .fn<(notification: unknown) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("transport closed"))
+      .mockResolvedValueOnce(undefined);
+    const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    bridge.server = { server: { notification } };
+    const reply = {
+      sessionKey: "agent:main:telegram:group:-100123",
+      senderIsOwner: true,
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "yes abcde" }],
+      },
+    };
+    try {
+      await bridge.handleClaudePermissionRequest({
+        requestId: "abcde",
+        toolName: "Bash",
+        description: "run npm test",
+        inputPreview: "{}",
+      });
+
+      await bridge.handleSessionMessageEvent(reply);
+      await bridge.handleSessionMessageEvent(reply);
+      expect(notification).toHaveBeenCalledTimes(2);
+
+      await bridge.handleSessionMessageEvent(reply);
+      expect(notification).toHaveBeenCalledTimes(2);
+    } finally {
+      writeSpy.mockRestore();
+      await bridge.close();
+    }
+  });
+});
 
 describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals memory bounds", () => {
   beforeEach(() => {
@@ -230,6 +344,52 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
     }
   });
 
+  test("a rejected gateway event still emits exactly one diagnostic record with verbose off", async () => {
+    const bridge = makeBridge(false);
+    const writes: string[] = [];
+    const writeSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array): boolean => {
+        writes.push(String(chunk));
+        return true;
+      });
+    vi.spyOn(bridge, "handleGatewayEvent").mockRejectedValue(new Error("handler boom"));
+    try {
+      await bridge.dispatchGatewayEvent({ event: "exec.approval.requested", payload: {} });
+
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toBe("openclaw mcp: gateway event exec.approval.requested failed\n");
+      expect(writes[0]).not.toContain("handler boom");
+    } finally {
+      writeSpy.mockRestore();
+      await bridge.close();
+    }
+  });
+
+  test("a rejected gateway event includes error detail with verbose on", async () => {
+    const bridge = makeBridge(true);
+    const writes: string[] = [];
+    const writeSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array): boolean => {
+        writes.push(String(chunk));
+        return true;
+      });
+    vi.spyOn(bridge, "handleGatewayEvent").mockRejectedValue(new Error("handler boom"));
+    try {
+      await bridge.dispatchGatewayEvent({ event: "exec.approval.requested", payload: {} });
+
+      expect(writes).toHaveLength(2);
+      expect(writes[0]).toBe("openclaw mcp: gateway event exec.approval.requested failed\n");
+      expect(writes[1]).toBe(
+        "openclaw mcp: gateway event exec.approval.requested error: Error: handler boom\n",
+      );
+    } finally {
+      writeSpy.mockRestore();
+      await bridge.close();
+    }
+  });
+
   test("sweeper interval is not started before any pending entry is added", async () => {
     const bridge = makeBridge();
     try {
@@ -306,7 +466,7 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
       expect(resolved).toBe(false);
 
       vi.advanceTimersByTime(1);
-      await expect(waited).resolves.toBeNull();
+      await expect(waited).resolves.toEqual({ event: null });
       expect(resolved).toBe(true);
     } finally {
       await bridge.close();

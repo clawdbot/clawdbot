@@ -1,18 +1,11 @@
 // Test Device Pair Telegram tests cover the dev Telegram pairing smoke helper.
-import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   parseDevicePairTelegramArgs,
   runDevicePairTelegram,
 } from "../../scripts/dev/test-device-pair-telegram.ts";
 
-const scriptUrl = pathToFileURL("scripts/dev/test-device-pair-telegram.ts").href;
-
 describe("scripts/dev/test-device-pair-telegram.ts", () => {
-  it("loads without resolving the Telegram runtime sidecar", async () => {
-    await expect(import(`${scriptUrl}?case=load-${Date.now()}`)).resolves.toBeDefined();
-  });
-
   it("parses help without requiring Telegram config", () => {
     expect(parseDevicePairTelegramArgs(["--help"])).toEqual({
       accountId: undefined,
@@ -23,9 +16,7 @@ describe("scripts/dev/test-device-pair-telegram.ts", () => {
 
   it("rejects option tokens as device-pair Telegram values", () => {
     for (const flag of ["--chat", "-c", "--account", "-a"]) {
-      expect(() => parseDevicePairTelegramArgs([flag, "-h"])).toThrow(
-        `${flag} requires a value`,
-      );
+      expect(() => parseDevicePairTelegramArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
     }
     expect(() => parseDevicePairTelegramArgs(["--chat", "--help"])).toThrow(
       "--chat requires a value",

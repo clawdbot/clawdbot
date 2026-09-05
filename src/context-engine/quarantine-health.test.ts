@@ -12,12 +12,8 @@ import {
   clearPersistedContextEngineQuarantineForProcess,
   recordPersistedContextEngineQuarantine,
 } from "./quarantine-health.js";
-import {
-  clearContextEngineRuntimeQuarantine,
-  clearContextEnginesForOwner,
-  listContextEngineQuarantines,
-  registerContextEngineForOwner,
-} from "./registry.js";
+import { listContextEngineQuarantines } from "./registry.js";
+import { resetContextEngineRuntimeQuarantineForTests } from "./registry.test-support.js";
 
 const CONTEXT_ENGINE_QUARANTINE_OWNER_ID = "core:context-engine-quarantine-health";
 const CONTEXT_ENGINE_QUARANTINE_NAMESPACE = "runtime-quarantines";
@@ -83,7 +79,7 @@ afterEach(() => {
 describe("context engine quarantine health", () => {
   it("lists persisted runtime quarantines when local process state is empty", async () => {
     await withStateDirEnv("openclaw-context-engine-quarantine-", async () => {
-      clearContextEngineRuntimeQuarantine();
+      resetContextEngineRuntimeQuarantineForTests();
       recordPersistedContextEngineQuarantine({
         engineId: "lossless-claw",
         owner: "plugin:lossless-claw",
@@ -169,7 +165,7 @@ describe("context engine quarantine health", () => {
             processStartTime: getProcessStartTime(siblingProcessId),
           });
 
-          clearContextEngineRuntimeQuarantine();
+          resetContextEngineRuntimeQuarantineForTests();
 
           expect(listContextEngineQuarantines()).toEqual([
             {
@@ -187,7 +183,7 @@ describe("context engine quarantine health", () => {
 
   it("drops records from a previous incarnation of this PID", async () => {
     await withStateDirEnv("openclaw-context-engine-quarantine-incarnation-", async () => {
-      clearContextEngineRuntimeQuarantine();
+      resetContextEngineRuntimeQuarantineForTests();
       seedPersistedContextEngineQuarantineForTest({
         engineId: "lossless-claw",
         owner: "plugin:lossless-claw",
@@ -206,7 +202,7 @@ describe("context engine quarantine health", () => {
     async () => {
       await withStateDirEnv("openclaw-context-engine-quarantine-pid-reuse-", async () => {
         await withLiveSiblingProcess(async (siblingProcessId) => {
-          clearContextEngineRuntimeQuarantine();
+          resetContextEngineRuntimeQuarantineForTests();
           const siblingStartTime = getProcessStartTime(siblingProcessId);
           seedSiblingQuarantineForTest({
             engineId: "lossless-claw",
@@ -227,7 +223,7 @@ describe("context engine quarantine health", () => {
   it("drops sibling records whose process identity cannot be verified", async () => {
     await withStateDirEnv("openclaw-context-engine-quarantine-unverified-", async () => {
       await withLiveSiblingProcess(async (siblingProcessId) => {
-        clearContextEngineRuntimeQuarantine();
+        resetContextEngineRuntimeQuarantineForTests();
         // A null recorded start time (non-Linux recorder or /proc read failure)
         // must fail closed instead of trusting bare PID liveness.
         seedSiblingQuarantineForTest({
@@ -242,39 +238,6 @@ describe("context engine quarantine health", () => {
 
         expect(listContextEngineQuarantines()).toEqual([]);
       });
-    });
-  });
-
-  it("clears persisted quarantine records when owner engines unload", async () => {
-    await withStateDirEnv("openclaw-context-engine-quarantine-owner-", async () => {
-      const owner = "plugin:lossless-claw";
-      registerContextEngineForOwner(
-        "lossless-claw",
-        () => ({
-          info: { id: "lossless-claw", name: "Lossless Claw", version: "1" },
-          async ingest() {
-            return { ingested: true };
-          },
-          async assemble({ messages }) {
-            return { messages, estimatedTokens: 0 };
-          },
-          async compact() {
-            return { ok: true, compacted: false };
-          },
-        }),
-        owner,
-      );
-      recordPersistedContextEngineQuarantine({
-        engineId: "lossless-claw",
-        owner,
-        operation: "bootstrap",
-        reason: "plugin disabled",
-        failedAt: new Date(123),
-      });
-
-      clearContextEnginesForOwner(owner);
-
-      expect(listContextEngineQuarantines()).toEqual([]);
     });
   });
 });

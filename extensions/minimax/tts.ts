@@ -1,10 +1,6 @@
 // Minimax plugin module implements tts behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEFAULT_MINIMAX_TTS_BASE_URL = "https://api.minimax.io";
 
@@ -17,7 +13,6 @@ export const MINIMAX_TTS_MODELS = [
   "speech-02-turbo",
   "speech-01-hd",
   "speech-01-turbo",
-  "speech-01-240228",
 ] as const;
 
 export const MINIMAX_TTS_VOICES = [
@@ -67,6 +62,12 @@ export async function minimaxTTS(params: {
     timeoutMs,
   } = params;
   const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
+  const { assertOkOrThrowProviderError, readProviderJsonObjectResponse } =
+    await import("openclaw/plugin-sdk/provider-http");
+  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+    await import("openclaw/plugin-sdk/ssrf-runtime");
+  const { assertMinimaxBaseResp, normalizeMinimaxHexAudio } =
+    await import("./media-provider-runtime.js");
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), safeTimeoutMs);
@@ -105,31 +106,15 @@ export async function minimaxTTS(params: {
     try {
       await assertOkOrThrowProviderError(response, "MiniMax TTS API error");
 
-      const body = (await response.json()) as {
-        data?: { audio?: string };
-        base_resp?: { status_code?: number; status_msg?: string };
-      };
+      const body = await readProviderJsonObjectResponse(response, "minimax.tts");
 
-      // Check base_resp for envelope errors (HTTP 200 with non-zero status_code).
-      // Other MiniMax providers (image, video, music, web-search) already check this.
-      // Without this check, quota/billing errors with placeholder audio are silently accepted.
-      if (
-        body.base_resp &&
-        typeof body.base_resp.status_code === "number" &&
-        body.base_resp.status_code !== 0
-      ) {
-        const msg = body.base_resp.status_msg ?? "unknown error";
-        throw new Error(
-          `MiniMax TTS API error (${body.base_resp.status_code}): ${msg}`,
-        );
-      }
-
-      const hexAudio = body?.data?.audio;
+      assertMinimaxBaseResp(body.base_resp, "MiniMax TTS API error");
+      const hexAudio = readStringField(asOptionalRecord(body.data), "audio");
       if (!hexAudio) {
         throw new Error("MiniMax TTS API returned no audio data");
       }
 
-      return Buffer.from(hexAudio, "hex");
+      return Buffer.from(normalizeMinimaxHexAudio(hexAudio, "MiniMax TTS API"), "hex");
     } finally {
       await release();
     }

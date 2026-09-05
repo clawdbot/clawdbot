@@ -1,18 +1,32 @@
 // Covers paired-node reapproval reuse and changed-surface write limits.
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import {
   approveNodePairing,
   beginNodePairingConnect,
   listNodePairing,
   releaseNodePairingCleanupClaim,
   requestNodePairing,
-} from "../infra/node-pairing.js";
+} from "../infra/device-pairing-node.js";
+import { requestDevicePairing } from "../infra/device-pairing.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-reapproval-" });
 
 async function setupPairedNode(baseDir: string): Promise<void> {
+  // Node surfaces attach to paired devices, so device pairing comes first.
+  const devicePairing = await requestDevicePairing(
+    {
+      deviceId: "node-1",
+      publicKey: "pk-node-1",
+      role: "node",
+      roles: ["node"],
+      scopes: [],
+    },
+    baseDir,
+  );
+  await approveDevicePairing(devicePairing.request.requestId, { callerScopes: [] }, baseDir);
   const request = await requestNodePairing(
     {
       nodeId: "node-1",
@@ -37,7 +51,7 @@ describe("node reapproval coordinator", () => {
     await tempDirs.cleanup();
   });
 
-  test("reuses identical pending state without consuming changed-surface quota", async () => {
+  test("retains changed-surface quota and free pending reuse across policy updates", async () => {
     const baseDir = await tempDirs.make("reuse");
     await setupPairedNode(baseDir);
     const pending = await requestNodePairing(
@@ -49,9 +63,10 @@ describe("node reapproval coordinator", () => {
       baseDir,
     );
     const coordinator = createNodeReapprovalCoordinator({
-      maxAttempts: 1,
+      maxAttempts: 2,
       windowMs: 60_000,
       lockoutMs: 60_000,
+      exemptLoopback: true,
     });
 
     const matchingConnect = await beginNodePairingConnect("node-1", baseDir);
@@ -92,6 +107,12 @@ describe("node reapproval coordinator", () => {
       await releaseNodePairingCleanupClaim(changedConnect.cleanupClaim);
     }
 
+    coordinator.updateConfig({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      exemptLoopback: true,
+    });
     await expect(
       coordinator.request({
         input: {
@@ -105,6 +126,19 @@ describe("node reapproval coordinator", () => {
     expect((await listNodePairing(baseDir)).pending).toEqual([
       expect.objectContaining({ caps: ["camera", "microphone"] }),
     ]);
+    await expect(
+      coordinator.request({
+        input: {
+          nodeId: "node-1",
+          platform: "darwin",
+          caps: ["camera", "microphone"],
+        },
+        baseDir,
+      }),
+    ).resolves.toMatchObject({
+      request: { caps: ["camera", "microphone"] },
+      created: false,
+    });
 
     coordinator.dispose();
   });

@@ -8,14 +8,16 @@ extension AgentProTab {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Totals")
-                        .font(.headline)
+                        .font(OpenClawType.headline)
                     Spacer()
-                    ProValuePill(value: "\(self.overview?.usage?.days ?? 31)d", color: OpenClawBrand.accent)
+                    ProValuePill(
+                        value: "\(self.overview?.usage?.days ?? 31)d",
+                        color: OpenClawBrand.accentForeground)
                 }
                 HStack(spacing: 10) {
-                    self.detailMetric(label: "Cost", value: self.usageValue)
-                    self.detailMetric(label: "Tokens", value: self.usageTokenValue)
-                    self.detailMetric(label: "Cache", value: self.usageCacheValue)
+                    agentProDetailMetric(label: "Cost", value: self.usageValue)
+                    agentProDetailMetric(label: "Tokens", value: self.usageTokenValue)
+                    agentProDetailMetric(label: "Cache", value: self.usageCacheValue)
                 }
             }
         }
@@ -38,18 +40,18 @@ extension AgentProTab {
         VStack(alignment: .leading, spacing: 8) {
             ProSectionHeader(title: "Daily")
             ProCard(padding: 0, radius: AgentLayout.cardRadius) {
-                let days = self.overview?.usage?.daily ?? []
+                let days = Self.displayedUsageDays(self.overview?.usage?.daily ?? [])
                 if days.isEmpty {
-                    self.emptyDetailRow(
+                    agentProEmptyDetailRow(
                         icon: "chart.bar",
                         title: "No daily usage yet",
                         detail: "The gateway returned totals without daily session cost rows.")
                         .padding(14)
                 } else {
                     VStack(spacing: 0) {
-                        ForEach(Array(days.prefix(14).enumerated()), id: \.element.date) { index, day in
+                        ForEach(Array(days.enumerated()), id: \.element.date) { index, day in
                             self.usageDayRow(day)
-                            if index < min(days.count, 14) - 1 {
+                            if index < days.count - 1 {
                                 Divider().padding(.leading, 60)
                             }
                         }
@@ -60,22 +62,32 @@ extension AgentProTab {
         }
     }
 
+    static func displayedUsageDays(_ days: [CostUsageDailyEntryLite]) -> [CostUsageDailyEntryLite] {
+        Array(days.suffix(14).reversed())
+    }
+
     func usageDayRow(_ day: CostUsageDailyEntryLite) -> some View {
         HStack(spacing: 12) {
             ProIconBadge(systemName: "calendar", color: OpenClawBrand.accent)
             VStack(alignment: .leading, spacing: 3) {
                 Text(day.date)
-                    .font(.subheadline.weight(.semibold))
-                Text("\(Self.compactNumber(day.totalTokens ?? 0)) tokens")
-                    .font(.caption)
+                    .font(OpenClawType.subheadSemiBold)
+                Text(verbatim: Self.tokenCountText(day.totalTokens ?? 0))
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
             Text(Self.currency(day.totalCost ?? 0))
-                .font(.caption2.weight(.semibold))
+                .font(OpenClawType.caption2SemiBold)
                 .foregroundStyle(OpenClawBrand.accent)
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 14)
+    }
+
+    private static func tokenCountText(_ count: Int) -> String {
+        String(
+            format: String(localized: "%@ tokens"),
+            self.compactNumber(count))
     }
 }

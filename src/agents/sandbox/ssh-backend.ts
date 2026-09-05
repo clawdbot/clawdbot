@@ -16,18 +16,22 @@ import type {
   SandboxBackendManager,
 } from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { hashTextSha256 } from "./hash.js";
 import {
   createRemoteShellSandboxFsBridge,
   type RemoteShellSandboxHandle,
 } from "./remote-fs-bridge.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
+import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
+import { resolveSandboxAgentId } from "./shared.js";
 import {
   buildRemoteCommand,
-  buildSshSandboxArgv,
+  buildRemoteWorkdirValidationCommand,
   buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
+  prepareSshSandboxExec,
   runSshSandboxCommand,
   uploadDirectoryToSshTarget,
   type SshSandboxSession,
@@ -35,6 +39,7 @@ import {
 
 type PendingExec = {
   sshSession: SshSandboxSession;
+  cleanup: () => Promise<void>;
 };
 
 type ResolvedSshRuntimePaths = {
@@ -48,7 +53,8 @@ type ResolvedSshRuntimePaths = {
 /** SSH backend lifecycle hooks for probing and removing remote sandbox copies. */
 export const sshSandboxBackendManager: SandboxBackendManager = {
   async describeRuntime({ entry, config, agentId }) {
-    const cfg = resolveSandboxConfigForAgent(config, agentId);
+    const effectiveAgentId = agentId ?? resolveSandboxAgentId(entry.sessionKey);
+    const cfg = resolveSandboxConfigForAgent(config, effectiveAgentId);
     if (cfg.backend !== "ssh" || !cfg.ssh.target) {
       return {
         running: false,
@@ -56,6 +62,11 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
         configLabelMatch: false,
       };
     }
+    assertSshSandboxSecretOwnerAvailable({
+      config,
+      scope: cfg.scope,
+      agentId: effectiveAgentId,
+    });
     const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
     const session = await createSshSandboxSessionFromSettings({
       ...cfg.ssh,
@@ -82,17 +93,23 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
     }
   },
   async removeRuntime({ entry, config, agentId }) {
-    const cfg = resolveSandboxConfigForAgent(config, agentId);
+    const effectiveAgentId = agentId ?? resolveSandboxAgentId(entry.sessionKey);
+    const cfg = resolveSandboxConfigForAgent(config, effectiveAgentId);
     if (cfg.backend !== "ssh" || !cfg.ssh.target) {
       return;
     }
+    assertSshSandboxSecretOwnerAvailable({
+      config,
+      scope: cfg.scope,
+      agentId: effectiveAgentId,
+    });
     const runtimePaths = resolveSshRuntimePaths(cfg.ssh.workspaceRoot, entry.sessionKey);
     const session = await createSshSandboxSessionFromSettings({
       ...cfg.ssh,
       target: cfg.ssh.target,
     });
     try {
-      await runSshSandboxCommand({
+      const result = await runSshSandboxCommand({
         session,
         remoteCommand: buildRemoteCommand([
           "/bin/sh",
@@ -103,6 +120,10 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
         ]),
         allowFailure: true,
       });
+      if (result.code !== 0) {
+        const detail = result.stderr.toString("utf8").trim() || `exit ${result.code}`;
+        throw new Error(`Failed to remove SSH sandbox runtime ${entry.containerName}: ${detail}`);
+      }
     } finally {
       await disposeSshSandboxSession(session);
     }
@@ -110,8 +131,11 @@ export const sshSandboxBackendManager: SandboxBackendManager = {
 };
 
 /** Create an SSH sandbox backend that mirrors the workspace to a remote target. */
-export async function createSshSandboxBackend(
+type PreprovisionedSshWorkdir = { runtimeId: string; remoteWorkspaceDir: string };
+
+async function createSshSandboxBackendInternal(
   params: CreateSandboxBackendParams,
+  preprovisionedSshWorkdir?: PreprovisionedSshWorkdir,
 ): Promise<SandboxBackendHandle> {
   if ((params.cfg.docker.binds?.length ?? 0) > 0) {
     throw new Error("SSH sandbox backend does not support sandbox.docker.binds.");
@@ -121,21 +145,40 @@ export async function createSshSandboxBackend(
     throw new Error('Sandbox backend "ssh" requires agents.defaults.sandbox.ssh.target.');
   }
 
-  const runtimePaths = resolveSshRuntimePaths(params.cfg.ssh.workspaceRoot, params.scopeKey);
+  const runtimePaths = preprovisionedSshWorkdir
+    ? resolvePreprovisionedSshRuntimePaths(preprovisionedSshWorkdir)
+    : resolveSshRuntimePaths(params.cfg.ssh.workspaceRoot, params.scopeKey);
   const impl = new SshSandboxBackendImpl({
     createParams: params,
+    preprovisionedSshWorkdir,
     target,
     runtimePaths,
   });
   return impl.asHandle();
 }
 
+export async function createSshSandboxBackend(
+  params: CreateSandboxBackendParams,
+): Promise<SandboxBackendHandle> {
+  return await createSshSandboxBackendInternal(params);
+}
+
+/** Adopts a placement-owned remote worktree without mirroring local files into it. */
+export async function createPreprovisionedSshSandboxBackend(
+  params: CreateSandboxBackendParams,
+  preprovisionedSshWorkdir: PreprovisionedSshWorkdir,
+): Promise<SandboxBackendHandle> {
+  return await createSshSandboxBackendInternal(params, preprovisionedSshWorkdir);
+}
+
 class SshSandboxBackendImpl {
   private ensurePromise: Promise<void> | null = null;
+  private refreshedSkillsForNextExecWorkdir: string | null = null;
 
   constructor(
     private readonly params: {
       createParams: CreateSandboxBackendParams;
+      preprovisionedSshWorkdir?: PreprovisionedSshWorkdir;
       target: string;
       runtimePaths: ResolvedSshRuntimePaths;
     },
@@ -150,27 +193,41 @@ class SshSandboxBackendImpl {
       env: this.params.createParams.cfg.docker.env,
       configLabel: this.params.target,
       configLabelKind: "Target",
+      workdirValidation: "backend",
+      validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
+      discardPreparedWorkdir: (workdir) => this.discardPreparedWorkdir(workdir),
+      workdirRoots: [
+        this.params.runtimePaths.remoteWorkspaceDir,
+        ...(this.params.preprovisionedSshWorkdir
+          ? []
+          : [this.params.runtimePaths.remoteAgentWorkspaceDir]),
+      ],
       remoteWorkspaceDir: this.params.runtimePaths.remoteWorkspaceDir,
       remoteAgentWorkspaceDir: this.params.runtimePaths.remoteAgentWorkspaceDir,
       buildExecSpec: async ({ command, workdir, env, usePty }) => {
+        const remoteWorkdir = workdir ?? this.params.runtimePaths.remoteWorkspaceDir;
         const remoteCommand = buildValidatedExecRemoteCommand({
           command,
-          workdir: workdir ?? this.params.runtimePaths.remoteWorkspaceDir,
-          env,
+          workdir: remoteWorkdir,
+          env: {},
         });
         await this.ensureRuntime();
         const sshSession = await this.createSession();
         try {
-          await this.refreshRemoteSkillsWorkspace(sshSession);
+          if (!this.consumeRefreshedSkillsForNextExec(remoteWorkdir)) {
+            await this.refreshRemoteSkillsWorkspace(sshSession);
+          }
+          const prepared = await prepareSshSandboxExec({
+            session: sshSession,
+            remoteCommand,
+            env,
+            tty: usePty,
+          });
           return {
-            argv: buildSshSandboxArgv({
-              session: sshSession,
-              remoteCommand,
-              tty: usePty,
-            }),
+            argv: prepared.argv,
             env: sanitizeEnvVars(process.env).allowed,
             stdinMode: "pipe-open",
-            finalizeToken: { sshSession } satisfies PendingExec,
+            finalizeToken: { sshSession, cleanup: prepared.cleanup } satisfies PendingExec,
           };
         } catch (error) {
           await disposeSshSandboxSession(sshSession);
@@ -178,9 +235,13 @@ class SshSandboxBackendImpl {
         }
       },
       finalizeExec: async ({ token }) => {
-        const sshSession = (token as PendingExec | undefined)?.sshSession;
-        if (sshSession) {
-          await disposeSshSandboxSession(sshSession);
+        const pending = token as PendingExec | undefined;
+        if (pending) {
+          try {
+            await pending.cleanup();
+          } finally {
+            await disposeSshSandboxSession(pending.sshSession);
+          }
         }
       },
       runShellCommand: async (command) => await this.runRemoteShellScript(command),
@@ -216,6 +277,11 @@ class SshSandboxBackendImpl {
   }
 
   private async ensureRuntimeInner(): Promise<void> {
+    if (this.params.preprovisionedSshWorkdir) {
+      // The placement lifecycle owns this exact worktree. Backend mirroring here would overwrite
+      // managed files and bypass the placement's manifest/reconciliation boundary.
+      return;
+    }
     const session = await this.createSession();
     try {
       const exists = await runSshSandboxCommand({
@@ -252,8 +318,71 @@ class SshSandboxBackendImpl {
     }
   }
 
+  private async validateWorkdir(workdir: string): Promise<string | null> {
+    await this.ensureRuntime();
+    const session = await this.createSession();
+    let refreshedSkillsForWorkdir: string | null = null;
+    try {
+      if (isRemotePathInsideRoot(this.params.runtimePaths.remoteSkillsWorkspaceDir, workdir)) {
+        await this.refreshRemoteSkillsWorkspace(session);
+        refreshedSkillsForWorkdir = workdir;
+        this.refreshedSkillsForNextExecWorkdir = workdir;
+      }
+      const result = await runSshSandboxCommand({
+        session,
+        remoteCommand: buildRemoteWorkdirValidationCommand({
+          workdir,
+          root: this.resolveWorkdirValidationRoot(workdir),
+        }),
+        allowFailure: true,
+      });
+      const resolvedWorkdir = result.code === 0 ? result.stdout.toString("utf8").trim() : "";
+      if (refreshedSkillsForWorkdir) {
+        this.refreshedSkillsForNextExecWorkdir = resolvedWorkdir || null;
+      }
+      return resolvedWorkdir || null;
+    } catch (error) {
+      if (
+        refreshedSkillsForWorkdir &&
+        this.refreshedSkillsForNextExecWorkdir === refreshedSkillsForWorkdir
+      ) {
+        this.refreshedSkillsForNextExecWorkdir = null;
+      }
+      throw error;
+    } finally {
+      await disposeSshSandboxSession(session);
+    }
+  }
+
+  private discardPreparedWorkdir(workdir: string): void {
+    if (this.refreshedSkillsForNextExecWorkdir === workdir) {
+      this.refreshedSkillsForNextExecWorkdir = null;
+    }
+  }
+
+  private consumeRefreshedSkillsForNextExec(workdir: string): boolean {
+    if (this.refreshedSkillsForNextExecWorkdir !== workdir) {
+      this.refreshedSkillsForNextExecWorkdir = null;
+      return false;
+    }
+    this.refreshedSkillsForNextExecWorkdir = null;
+    return true;
+  }
+
+  private resolveWorkdirValidationRoot(workdir: string): string {
+    const roots = [
+      this.params.runtimePaths.remoteAgentWorkspaceDir,
+      this.params.runtimePaths.remoteWorkspaceDir,
+    ];
+    return (
+      roots.find((root) => isRemotePathInsideRoot(root, workdir)) ??
+      this.params.runtimePaths.remoteWorkspaceDir
+    );
+  }
+
   private async refreshRemoteSkillsWorkspace(session: SshSandboxSession): Promise<void> {
     if (
+      this.params.preprovisionedSshWorkdir ||
       this.params.createParams.cfg.workspaceAccess !== "rw" ||
       !this.params.createParams.skillsWorkspaceDir
     ) {
@@ -333,6 +462,22 @@ async function isExistingDirectory(dir: string): Promise<boolean> {
   }
 }
 
+function normalizeRemotePath(input: string): string {
+  const normalized = path.posix.normalize(input.replace(/\\/g, "/"));
+  return normalized === "/" ? normalized : normalized.replace(/\/+$/g, "");
+}
+
+function isRemotePathInsideRoot(root: string, candidate: string): boolean {
+  const normalizedRoot = normalizeRemotePath(root);
+  const normalizedCandidate = normalizeRemotePath(candidate);
+  return (
+    normalizedCandidate === normalizedRoot ||
+    (normalizedRoot === "/"
+      ? normalizedCandidate.startsWith("/")
+      : normalizedCandidate.startsWith(`${normalizedRoot}/`))
+  );
+}
+
 export function resolveSshRuntimePaths(
   workspaceRoot: string,
   scopeKey: string,
@@ -353,8 +498,37 @@ export function resolveSshRuntimePaths(
   };
 }
 
+function resolvePreprovisionedSshRuntimePaths(params: {
+  runtimeId: string;
+  remoteWorkspaceDir: string;
+}): ResolvedSshRuntimePaths {
+  const remoteWorkspaceDir = params.remoteWorkspaceDir;
+  if (
+    !path.posix.isAbsolute(remoteWorkspaceDir) ||
+    remoteWorkspaceDir === "/" ||
+    path.posix.normalize(remoteWorkspaceDir) !== remoteWorkspaceDir ||
+    remoteWorkspaceDir.endsWith("/")
+  ) {
+    throw new Error("Preprovisioned SSH workdir must be an absolute non-root path.");
+  }
+  const runtimeId = params.runtimeId.trim();
+  if (!runtimeId) {
+    throw new Error("Preprovisioned SSH runtime id must be a non-empty string.");
+  }
+  return {
+    runtimeId,
+    runtimeRootDir: remoteWorkspaceDir,
+    remoteWorkspaceDir,
+    remoteAgentWorkspaceDir: remoteWorkspaceDir,
+    remoteSkillsWorkspaceDir: path.posix.join(remoteWorkspaceDir, ".openclaw", "sandbox-skills"),
+  };
+}
+
 function buildSshSandboxRuntimeId(scopeKey: string): string {
   const trimmed = scopeKey.trim() || "session";
+  if (/:workspace:[a-f0-9]{32}$/i.test(trimmed)) {
+    return `openclaw-ssh-workspace-${hashTextSha256(trimmed).slice(0, 32)}`;
+  }
   // Keep the path human-readable while hashing the original scope to avoid
   // collisions after normalization and truncation.
   const safe = normalizeLowercaseStringOrEmpty(trimmed)

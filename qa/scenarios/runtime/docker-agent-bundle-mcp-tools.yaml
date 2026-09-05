@@ -1,0 +1,28 @@
+title: Docker agent bundle MCP tools
+
+scenario:
+  id: docker-agent-bundle-mcp-tools
+  surface: containers
+  category: containers.agent-sandbox-and-tooling
+  coverage:
+    primary:
+      - containers.docker-backed-agent-sandbox-support
+  objective: Verify the package-installed Docker image can materialize bundled MCP tools for an agent run and apply tool policy inside the container-hosted runtime.
+  successCriteria:
+    - The functional Docker E2E image starts with an empty OpenClaw test state.
+    - The mounted QA Lab harness imports packaged `dist` modules from the installed app, not source modules.
+    - Bundled MCP tools materialize for a Docker-hosted agent session and respect effective tool policy.
+    - The probe MCP server returns the expected tool result through the container runtime.
+  docsRefs:
+    - docs/install/docker.md
+    - docs/help/testing.md
+  codeRefs:
+    - scripts/e2e/agent-bundle-mcp-tools-docker.sh
+    - test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts
+  execution:
+    kind: script
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
+    summary: Runs the existing agent-bundle-mcp-tools Docker E2E lane for Docker-backed agent tooling coverage.
+    args:
+      - --lane
+      - agent-bundle-mcp-tools

@@ -4,7 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
-import type { SessionEntry } from "../config/sessions.js";
+import { SessionManager } from "../agents/sessions/index.js";
+import * as thinking from "../auto-reply/thinking.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -17,29 +20,49 @@ import {
   DEFAULT_MESSAGE,
   makeDeps,
   mockEmbeddedOk,
-  readSessionEntry,
+  readCronSessionEntry,
   runCronTurn,
   withTempHome,
 } from "./isolated-agent.turn-test-helpers.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
 import {
   dispatchCronDeliveryMock,
+  loadSessionEntryMock,
   mockRunCronFallbackPassthrough,
+  patchSessionEntryMock,
+  resolveCronSessionMock,
   runEmbeddedAgentMock,
-  updateSessionStoreMock,
 } from "./isolated-agent/run.test-harness.js";
 import { normalizeCronJobCreate } from "./normalize.js";
-import type { CronJob } from "./types.js";
+import type { CronJob, CronStoredJob } from "./types.js";
 
 setupRunCronIsolatedAgentTurnSuite();
+
+async function useRealCronSessionState(): Promise<void> {
+  const [sessionRuntime, sessionAccessor] = await Promise.all([
+    vi.importActual<typeof import("./isolated-agent/session.js")>("./isolated-agent/session.js"),
+    vi.importActual<typeof import("../config/sessions/session-accessor.js")>(
+      "../config/sessions/session-accessor.js",
+    ),
+  ]);
+  resolveCronSessionMock.mockImplementation(sessionRuntime.resolveCronSession);
+  loadSessionEntryMock.mockImplementation(sessionRuntime.loadCronSessionEntryLatest);
+  patchSessionEntryMock.mockImplementation(sessionAccessor.patchSessionEntryCore);
+}
 
 function lastEmbeddedAgentCall(): {
   agentDir?: string;
   bootstrapContextMode?: "full" | "lightweight";
   prompt?: string;
+  sessionId?: string;
   sessionKey?: string;
+  sessionTarget?: {
+    agentId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+    storePath?: string;
+  };
   workspaceDir?: string;
-  sessionFile?: string;
 } {
   const calls = runEmbeddedAgentMock.mock.calls;
   const call = calls[calls.length - 1];
@@ -54,15 +77,64 @@ function lastEmbeddedAgentCall(): {
     agentDir?: string;
     bootstrapContextMode?: "full" | "lightweight";
     prompt?: string;
+    sessionId?: string;
     sessionKey?: string;
+    sessionTarget?: {
+      agentId?: string;
+      sessionId?: string;
+      sessionKey?: string;
+      storePath?: string;
+    };
     workspaceDir?: string;
-    sessionFile?: string;
   };
+}
+
+function mockEmbeddedTranscriptWrite(
+  storePath: string,
+  content: string,
+  resultMeta?: {
+    sessionId?: string;
+    sessionFile?: string;
+    compactionCount?: number;
+    compactionTokensAfter?: number;
+  },
+): void {
+  runEmbeddedAgentMock.mockImplementationOnce(async (input: Record<string, unknown>) => {
+    const agentId = typeof input.agentId === "string" ? input.agentId : "main";
+    const sessionId = typeof input.sessionId === "string" ? input.sessionId : "";
+    const sessionKey = typeof input.sessionKey === "string" ? input.sessionKey : "";
+    const workspaceDir =
+      typeof input.workspaceDir === "string" ? input.workspaceDir : process.cwd();
+    const manager = SessionManager.open(
+      { agentId, sessionId, sessionKey, storePath },
+      workspaceDir,
+    );
+    manager.appendMessage({ role: "user", content, timestamp: Date.now() });
+    return {
+      payloads: [{ text: "ok" }],
+      meta: {
+        durationMs: 5,
+        agentMeta: {
+          sessionId: resultMeta?.sessionId ?? sessionId,
+          ...(resultMeta?.sessionFile ? { sessionFile: resultMeta.sessionFile } : {}),
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          ...(resultMeta?.compactionCount !== undefined
+            ? { compactionCount: resultMeta.compactionCount }
+            : {}),
+          ...(resultMeta?.compactionTokensAfter !== undefined
+            ? { compactionTokensAfter: resultMeta.compactionTokensAfter }
+            : {}),
+        },
+      },
+    };
+  });
 }
 
 describe("runCronIsolatedAgentTurn session identity", () => {
   beforeEach(() => {
     vi.spyOn(modelThinkingDefault, "resolveThinkingDefault").mockReturnValue("off");
+    vi.spyOn(thinking, "isThinkingLevelSupported").mockReturnValue(true);
     runEmbeddedAgentMock.mockClear();
     mockRunCronFallbackPassthrough();
   });
@@ -94,10 +166,25 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     });
   });
 
-  it("uses agentId for workspace, session key, and store paths", async () => {
+  it.each([
+    {
+      label: "uses agentId for workspace, session key, and store paths",
+      agentId: "ops",
+      sessionKey: "cron:job-ops",
+      explicitAgentId: true,
+      jobSessionKey: false,
+    },
+    {
+      label: "uses an agent-scoped job session when the cron job omits agentId",
+      agentId: "molty",
+      sessionKey: "agent:molty:cron:job-molty",
+      explicitAgentId: false,
+      jobSessionKey: true,
+    },
+  ])("$label", async ({ agentId, sessionKey, explicitAgentId, jobSessionKey }) => {
     await withTempHome(async (home) => {
       const deps = makeDeps();
-      const opsWorkspace = path.join(home, "ops-workspace");
+      const workspaceDir = path.join(home, `${agentId}-workspace`);
       mockEmbeddedOk();
 
       const cfg = makeCfg(
@@ -106,10 +193,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         {
           agents: {
             defaults: { workspace: path.join(home, "default-workspace") },
-            list: [
-              { id: "main", default: true },
-              { id: "ops", workspace: opsWorkspace },
-            ],
+            list: [{ id: "main" }, { id: agentId, workspace: workspaceDir }],
           },
         },
       );
@@ -118,40 +202,149 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         cfg,
         deps,
         job: {
-          ...makeJob({
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-          }),
-          agentId: "ops",
+          ...makeJob({ kind: "agentTurn", message: DEFAULT_MESSAGE }),
+          ...(explicitAgentId ? { agentId } : {}),
+          ...(jobSessionKey ? { sessionKey } : {}),
           delivery: { mode: "none" },
         },
         message: DEFAULT_MESSAGE,
-        sessionKey: "cron:job-ops",
-        agentId: "ops",
+        sessionKey,
+        ...(explicitAgentId ? { agentId } : {}),
         lane: "cron",
       });
 
       expect(res.status).toBe("ok");
       const call = lastEmbeddedAgentCall();
-      expect(call.sessionKey).toMatch(/^agent:ops:cron:job-ops:run:/);
-      expect(call.workspaceDir).toBe(opsWorkspace);
-      expect(call.sessionFile).toContain(path.join("agents", "ops"));
+      expect(call.sessionKey).toMatch(new RegExp(`^agent:${agentId}:`));
+      expect(call.workspaceDir).toBe(workspaceDir);
+      expect(call.sessionTarget).toEqual({
+        agentId,
+        sessionId: call.sessionId,
+        sessionKey: call.sessionKey,
+        storePath: path.join(home, ".openclaw", "agents", agentId, "sessions", "sessions.json"),
+      });
     });
   });
 
-  it("passes sessionFile to isolated cron runs", async () => {
+  it("passes the canonical identity through the structured session target", async () => {
     await withTempHome(async (home) => {
       await runCronTurn(home, {
         jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
       });
       const call = lastEmbeddedAgentCall();
 
-      expect(call.sessionFile).toContain(
-        path.join(home, ".openclaw", "agents", "main", "sessions"),
-      );
-      expect(String(call.sessionFile).endsWith(".jsonl")).toBe(true);
+      expect(call.sessionTarget).toEqual({
+        agentId: "main",
+        sessionId: call.sessionId,
+        sessionKey: call.sessionKey,
+        storePath: expect.any(String),
+      });
     });
   });
+
+  it.each([
+    ["cron", "cron:job-1"],
+    ["hook", "hook:webhook:request-1"],
+  ])("initializes the exact %s run session before transcript writes", async (_name, sessionKey) => {
+    await useRealCronSessionState();
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      mockEmbeddedTranscriptWrite(storePath, `${sessionKey} transcript`);
+
+      const { res } = await runCronTurn(home, {
+        jobPayload: {
+          kind: "agentTurn",
+          message: "persist this turn",
+          ...(sessionKey.startsWith("hook:") ? { externalContentSource: "webhook" as const } : {}),
+        },
+        message: "persist this turn",
+        mockTexts: null,
+        sessionKey,
+        storePath,
+      });
+
+      expect(res.status, res.status === "error" ? res.error : undefined).toBe("ok");
+      expect(res.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
+    });
+  });
+
+  it.each([
+    { required: false, source: "profile" },
+    { required: true, source: "profile" },
+    { required: true, source: "channel" },
+    { required: true, source: "unknown" },
+  ] as const)(
+    "retains $source provenance on both cron owners before running (required=$required)",
+    async ({ required, source }) => {
+      await useRealCronSessionState();
+      await withTempHome(async (home) => {
+        const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+        const profile = ensureProfileForEmail("cron-creator@example.test");
+        const createdActor = { type: "human" as const, source, id: profile.id };
+        const job: CronStoredJob = {
+          ...makeJob({ kind: "agentTurn", message: "persist this turn" }),
+          createdActor,
+          delivery: { mode: "none" },
+        };
+        const cfg = makeCfg(
+          home,
+          storePath,
+          required
+            ? {
+                gateway: {
+                  roles: {
+                    default: "guest",
+                    definitions: {
+                      guest: {
+                        sessions: { others: "none" },
+                        agents: "*",
+                        scopes: [],
+                        sandbox: "required",
+                      },
+                    },
+                  },
+                },
+              }
+            : {},
+        );
+        runEmbeddedAgentMock.mockImplementationOnce(async (input: Record<string, unknown>) => {
+          const sessionKey = typeof input.sessionKey === "string" ? input.sessionKey : "";
+          expect(sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
+          for (const key of ["agent:main:cron:job-1", sessionKey]) {
+            const entry = loadSessionEntry({ storePath, sessionKey: key });
+            expect(entry).toMatchObject({ createdVia: "cron", createdActor });
+            expect(entry?.sandbox).toBe(required ? "required" : undefined);
+          }
+          return {
+            payloads: [{ text: "ok" }],
+            meta: {
+              durationMs: 5,
+              agentMeta: {
+                sessionId: input.sessionId,
+                provider: "anthropic",
+                model: "claude-opus-4-6",
+              },
+            },
+          };
+        });
+        const res = await runCronIsolatedAgentTurn({
+          cfg,
+          deps: makeDeps(),
+          job,
+          message: "persist this turn",
+          sessionKey: "cron:job-1",
+          lane: "cron",
+        });
+        expect(res.status, res.status === "error" ? res.error : undefined).toBe("ok");
+        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+        for (const key of ["agent:main:cron:job-1", res.sessionKey!]) {
+          const entry = await readCronSessionEntry(storePath, key);
+          expect(entry).toMatchObject({ createdActor });
+          expect(entry?.sandbox).toBe(required ? "required" : undefined);
+        }
+      });
+    },
+  );
 
   it("persists rotated transcript identity for current-bound cron runs", async () => {
     await withTempHome(async (home) => {
@@ -159,6 +352,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       const boundSessionKey = "agent:main:telegram:direct:42";
       const originalSessionFile = path.join(home, "bound-session.jsonl");
       const rotatedSessionFile = path.join(home, "bound-session-rotated.jsonl");
+      await fs.writeFile(rotatedSessionFile, "");
       const storePath = await writeSessionStoreEntries(home, {
         [boundSessionKey]: {
           sessionId: "bound-session",
@@ -168,26 +362,6 @@ describe("runCronIsolatedAgentTurn session identity", () => {
           systemSent: true,
         },
       });
-      runEmbeddedAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "ok" }],
-        meta: {
-          durationMs: 5,
-          agentMeta: {
-            sessionId: "bound-session-rotated",
-            sessionFile: rotatedSessionFile,
-            provider: "anthropic",
-            model: "claude-opus-4-6",
-            compactionCount: 1,
-            compactionTokensAfter: 42,
-          },
-        },
-      });
-      updateSessionStoreMock.mockImplementation(async (targetStorePath, update) => {
-        const raw = await fs.readFile(targetStorePath, "utf-8");
-        const store = JSON.parse(raw) as Record<string, SessionEntry>;
-        update(store);
-        await fs.writeFile(targetStorePath, JSON.stringify(store, null, 2), "utf-8");
-      });
       const currentBoundJob = normalizeCronJobCreate(
         {
           ...makeJob(DEFAULT_AGENT_TURN_PAYLOAD),
@@ -196,6 +370,13 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         },
         { sessionContext: { sessionKey: boundSessionKey } },
       ) as CronJob;
+      const executionSessionKey = `agent:main:cron:${currentBoundJob.id}`;
+      mockEmbeddedTranscriptWrite(storePath, "current-bound transcript", {
+        sessionId: "bound-session-rotated",
+        sessionFile: rotatedSessionFile,
+        compactionCount: 1,
+        compactionTokensAfter: 42,
+      });
 
       const res = await runCronIsolatedAgentTurn({
         cfg: makeCfg(home, storePath),
@@ -212,23 +393,14 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         expect.objectContaining({ sessionId: "bound-session-rotated" }),
       );
 
-      const finalPersist = updateSessionStoreMock.mock.calls.at(-1);
-      expect(finalPersist?.[0]).toBe(storePath);
-      const persistedStore: Record<string, { [key: string]: unknown }> = {};
-      (finalPersist![1] as (store: typeof persistedStore) => void)(persistedStore);
-      expect(persistedStore[boundSessionKey]).toEqual(
+      await expect(readCronSessionEntry(storePath, executionSessionKey)).resolves.toEqual(
         expect.objectContaining({
           sessionId: "bound-session-rotated",
-          sessionFile: rotatedSessionFile,
-          usageFamilyKey: boundSessionKey,
-          usageFamilySessionIds: ["bound-session", "bound-session-rotated"],
         }),
       );
-
-      await expect(readSessionEntry(storePath, boundSessionKey)).resolves.toEqual(
+      await expect(readCronSessionEntry(storePath, boundSessionKey)).resolves.toEqual(
         expect.objectContaining({
-          sessionId: "bound-session-rotated",
-          sessionFile: rotatedSessionFile,
+          sessionId: "bound-session",
         }),
       );
     });
@@ -272,6 +444,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
   });
 
   it("starts a fresh session id for each cron run", async () => {
+    await useRealCronSessionState();
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = makeDeps();
@@ -297,23 +470,24 @@ describe("runCronIsolatedAgentTurn session identity", () => {
   });
 
   it("preserves an existing cron session label", async () => {
+    await useRealCronSessionState();
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
-      const raw = await fs.readFile(storePath, "utf-8");
-      const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
-      store["agent:main:cron:job-1"] = {
-        sessionId: "old",
-        updatedAt: Date.now(),
-        label: "Nightly digest",
-      };
-      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await upsertSessionEntryCore(
+        { storePath, sessionKey: "agent:main:cron:job-1" },
+        {
+          sessionId: "old",
+          updatedAt: Date.now(),
+          label: "Nightly digest",
+        },
+      );
 
       await runCronTurn(home, {
         jobPayload: { kind: "agentTurn", message: "ping" },
         message: "ping",
         storePath,
       });
-      const entry = await readSessionEntry(storePath, "agent:main:cron:job-1");
+      const entry = await readCronSessionEntry(storePath, "agent:main:cron:job-1");
 
       expect(entry?.label).toBe("Nightly digest");
     });

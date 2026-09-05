@@ -60,6 +60,14 @@ function isPinnedLoopbackTarget(addresses: readonly string[]): boolean {
   return addresses.length > 0 && addresses.every((address) => isLoopbackIpAddress(address));
 }
 
+/** Return whether proving a configured local-origin bypass requires target DNS. */
+export function shouldResolveConfiguredLocalOriginManagedProxyBypass(params: {
+  url: URL;
+  managedProxyBypass: ConfiguredLocalOriginManagedProxyBypass | undefined;
+}): boolean {
+  return isExactConfiguredLocalOriginBypass(params);
+}
+
 /** Return whether a configured local provider origin may bypass the managed proxy. */
 export function shouldUseConfiguredLocalOriginManagedProxyBypass(params: {
   url: URL;

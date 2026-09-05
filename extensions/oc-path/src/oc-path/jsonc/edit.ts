@@ -5,17 +5,18 @@ import {
   isPositionalSeg,
   isQuotedSeg,
   parseArrayIndexSegment,
-  resolvePositionalSeg,
   splitRespectingBrackets,
   unquoteSeg,
 } from "../oc-path.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
 import type { JsoncAst, JsoncValue } from "./ast.js";
 import { parseJsonc } from "./parse.js";
+import { resolveJsoncPositionalSegment } from "./resolve-value.js";
 
 type JsoncEditPath = Array<string | number>;
+type JsoncEditTarget = { readonly path: JsoncEditPath; readonly value: JsoncValue };
 
-export type JsoncEditResult =
+type JsoncEditResult =
   | { readonly ok: true; readonly ast: JsoncAst }
   | { readonly ok: false; readonly reason: "unresolved" | "no-root" };
 
@@ -24,15 +25,54 @@ export function setJsoncOcPath(ast: JsoncAst, path: OcPath, newValue: JsoncValue
     return { ok: false, reason: "no-root" };
   }
 
-  const segments = resolveEditSegments(ast.root, pathSegments(path));
-  if (segments === null) {
+  const target = resolveEditTarget(ast.root, pathSegments(path));
+  if (target === null) {
     return { ok: false, reason: "unresolved" };
   }
-  guardSentinel(newValue, `oc://${path.file}/${segments.join("/")}`);
+  guardSentinel(newValue, `oc://${path.file}/${target.path.join("/")}`);
+  return applyJsoncEdit(ast, target.path, newValue, false);
+}
 
-  const edits = modify(ast.raw, segments, jsoncValueToJson(newValue), {
+export function insertJsoncOcPath(
+  ast: JsoncAst,
+  parentPath: OcPath,
+  indexOrKey: number | string,
+  newValue: JsoncValue,
+): JsoncEditResult {
+  if (ast.root === null) {
+    return { ok: false, reason: "no-root" };
+  }
+
+  const target = resolveEditTarget(ast.root, pathSegments(parentPath));
+  if (target === null) {
+    return { ok: false, reason: "unresolved" };
+  }
+  if (typeof indexOrKey === "string") {
+    if (
+      target.value.kind !== "object" ||
+      target.value.entries.some((entry) => entry.key === indexOrKey)
+    ) {
+      return { ok: false, reason: "unresolved" };
+    }
+  } else if (target.value.kind !== "array") {
+    return { ok: false, reason: "unresolved" };
+  }
+
+  const segment = typeof indexOrKey === "number" && indexOrKey < 0 ? -1 : indexOrKey;
+  const editPath = [...target.path, segment];
+  guardSentinel(newValue, `oc://${parentPath.file}/${editPath.join("/")}`);
+  return applyJsoncEdit(ast, editPath, newValue, typeof segment === "number");
+}
+
+function applyJsoncEdit(
+  ast: JsoncAst,
+  path: JsoncEditPath,
+  newValue: JsoncValue,
+  isArrayInsertion: boolean,
+): JsoncEditResult {
+  const edits = modify(ast.raw, path, jsoncValueToJson(newValue), {
     formattingOptions: { insertSpaces: true, tabSize: 2 },
-    isArrayInsertion: false,
+    isArrayInsertion,
   });
   if (edits.length === 0) {
     return { ok: false, reason: "unresolved" };
@@ -78,7 +118,7 @@ function pathSegments(path: OcPath): string[] {
   return out;
 }
 
-function resolveEditSegments(root: JsoncValue, segments: readonly string[]): JsoncEditPath | null {
+function resolveEditTarget(root: JsoncValue, segments: readonly string[]): JsoncEditTarget | null {
   const out: JsoncEditPath = [];
   let current: JsoncValue = root;
   for (let segment of segments) {
@@ -86,7 +126,7 @@ function resolveEditSegments(root: JsoncValue, segments: readonly string[]): Jso
       return null;
     }
     if (isPositionalSeg(segment)) {
-      const concrete = positionalForJsonc(current, segment);
+      const concrete = resolveJsoncPositionalSegment(current, segment);
       if (concrete !== null) {
         segment = concrete;
       }
@@ -111,18 +151,7 @@ function resolveEditSegments(root: JsoncValue, segments: readonly string[]): Jso
     }
     return null;
   }
-  return out;
-}
-
-function positionalForJsonc(node: JsoncValue, segment: string): string | null {
-  if (node.kind === "object") {
-    const keys = node.entries.map((entry) => entry.key);
-    return resolvePositionalSeg(segment, { indexable: false, size: keys.length, keys });
-  }
-  if (node.kind === "array") {
-    return resolvePositionalSeg(segment, { indexable: true, size: node.items.length });
-  }
-  return null;
+  return { path: out, value: current };
 }
 
 function jsoncValueToJson(value: JsoncValue): unknown {

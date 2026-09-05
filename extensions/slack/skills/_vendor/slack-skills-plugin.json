@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "repository": "https://github.com/slackapi/slack-skills-plugin.git",
+    "revision": "f3f404205cbbfa18fabc79cc9d06fb444efff075",
+    "version": "1.3.0",
+    "license": "MIT"
+  },
+  "files": [
+    {
+      "source": "LICENSE",
+      "destination": "skills/_vendor/slack-skills-plugin.LICENSE",
+      "sourceSha256": "ccbd532eabd9c4a87884b19caa6738bd6541e047460a736aca3bf1ac4fd91300",
+      "vendoredSha256": "ccbd532eabd9c4a87884b19caa6738bd6541e047460a736aca3bf1ac4fd91300"
+    },
+    {
+      "source": "skills/block-kit/SKILL.md",
+      "destination": "skills/block-kit/references/official-block-kit.md",
+      "sourceSha256": "255f2ef5be5a6b5363b57931d5549227f375fe02fc2be7ce98226b33ed18f097",
+      "vendoredSha256": "5b5c792b21d6d9bc95d46a9f11e9b274beb45c3fd3b540b9deeec070ea1a57d2",
+      "adaptation": "Replaces unavailable Slack CLI, Slack API skill, and named tool handoffs with capability-gated OpenClaw guidance; corrects the relocated common-pattern reference; URL-encodes validation form values."
+    },
+    {
+      "source": "skills/block-kit/references/common-patterns.md",
+      "destination": "skills/block-kit/references/official-common-patterns.md",
+      "sourceSha256": "b372af9aa4367fbfc6561f6629db720595e0552711d83c7208fdba512443c05e",
+      "vendoredSha256": "b106cdeaf9a76dee386f489e37f709a3e56610c26e18246066a7ec540c90ca55",
+      "adaptation": "Formatted with the repository's Markdown formatter; content and examples are unchanged."
+    }
+  ]
+}

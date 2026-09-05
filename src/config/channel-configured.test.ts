@@ -15,8 +15,14 @@ describe("isChannelConfigured", () => {
     expect(isChannelConfigured({}, "discord", { DISCORD_BOT_TOKEN: "token" })).toBe(true);
   });
 
-  it("detects Slack env configuration through the package metadata seam", () => {
-    expect(isChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(true);
+  it("requires both Slack identity and transport tokens through the package metadata seam", () => {
+    expect(isChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(false);
+    expect(
+      isChannelConfigured({}, "slack", {
+        SLACK_BOT_TOKEN: "xoxb-test",
+        SLACK_APP_TOKEN: "xapp-test",
+      }),
+    ).toBe(true);
   });
 
   it("requires both IRC host and nick env vars through the package metadata seam", () => {
@@ -29,13 +35,28 @@ describe("isChannelConfigured", () => {
     ).toBe(true);
   });
 
+  it("requires both Mattermost URL and token env vars through the package metadata seam", () => {
+    expect(isChannelConfigured({}, "mattermost", { MATTERMOST_BOT_TOKEN: "token" })).toBe(false);
+    expect(
+      isChannelConfigured({}, "mattermost", {
+        MATTERMOST_URL: "https://mattermost.example.test",
+      }),
+    ).toBe(false);
+    expect(
+      isChannelConfigured({}, "mattermost", {
+        MATTERMOST_BOT_TOKEN: "token",
+        MATTERMOST_URL: "https://mattermost.example.test",
+      }),
+    ).toBe(true);
+  });
+
   it("still falls back to generic config presence for channels without a custom hook", () => {
     expect(
       isChannelConfigured(
         {
           channels: {
             signal: {
-              httpPort: 8080,
+              transport: { kind: "managed-native", httpPort: 8080 },
             },
           },
         },

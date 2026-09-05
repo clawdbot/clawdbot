@@ -47,16 +47,26 @@ function resolveRecentPhaseLimit(limit: number): number | null {
   return Math.floor(limit);
 }
 
-export function getRecentDiagnosticPhases(limit = 8): DiagnosticPhaseSnapshot[] {
+export function getRecentDiagnosticPhases(
+  limit = 8,
+  options?: { completedAfter?: number },
+): DiagnosticPhaseSnapshot[] {
   const resolved = resolveRecentPhaseLimit(limit);
   if (resolved === null) {
     return [];
   }
-  return recentPhases.slice(-resolved).map((phase) => Object.assign({}, phase));
+  const completedAfter = options?.completedAfter;
+  const eligiblePhases =
+    completedAfter === undefined
+      ? recentPhases
+      : recentPhases.filter(
+          (phase) => phase.endedAt !== undefined && phase.endedAt >= completedAfter,
+        );
+  return eligiblePhases.slice(-resolved).map((phase) => Object.assign({}, phase));
 }
 
 /** Records a completed phase in memory and emits it when diagnostics are enabled. */
-export function recordDiagnosticPhase(snapshot: DiagnosticPhaseSnapshot): void {
+function recordDiagnosticPhase(snapshot: DiagnosticPhaseSnapshot): void {
   pushRecentPhase(snapshot);
   if (!areDiagnosticsEnabledForProcess()) {
     return;

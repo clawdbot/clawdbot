@@ -1,5 +1,6 @@
 // Sends HMAC-protected exec host requests over the local socket.
 import crypto from "node:crypto";
+import type { ExecApprovalPolicySnapshot } from "./exec-approvals.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 
 // Exec host requests cross the local JSONL socket boundary into a privileged
@@ -14,6 +15,8 @@ export type ExecHostRequest = {
   agentId?: string | null;
   sessionKey?: string | null;
   approvalDecision?: "allow-once" | "allow-always" | null;
+  approvalSource?: "ask-fallback" | "auto-review" | null;
+  policySnapshot?: ExecApprovalPolicySnapshot | null;
 };
 
 export type ExecHostRunResult = {
@@ -41,6 +44,7 @@ export async function requestExecHostViaSocket(params: {
   token: string;
   request: ExecHostRequest;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<ExecHostResponse | null> {
   const { socketPath, token, request } = params;
   if (!socketPath || !token) {
@@ -69,6 +73,7 @@ export async function requestExecHostViaSocket(params: {
     socketPath,
     requestLine: payload,
     timeoutMs,
+    signal: params.signal,
     accept: (value) => {
       const msg = value as { type?: string; ok?: boolean; payload?: unknown; error?: unknown };
       if (msg?.type !== "exec-res") {

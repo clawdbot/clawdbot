@@ -1,5 +1,7 @@
 // Covers session-message sanitization for empty blocks, tool ids, and
 // thought-signature replay rules.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
@@ -67,13 +69,13 @@ function makeOpenAiResponsesAssistantMessage(
 function expectToolCallAndResultIds(out: AgentMessage[], expectedId: string) {
   // Tool call and result ids must stay in lockstep or replayed transcripts break
   // provider tool-result matching.
-  const assistant = out[0];
+  const assistant = expectDefined(out[0], "out[0] test invariant");
   expect(assistant.role).toBe("assistant");
   const assistantContent = assistant.role === "assistant" ? assistant.content : [];
   const toolCall = assistantContent.find((block) => block.type === "toolCall");
   expect(toolCall?.id).toBe(expectedId);
 
-  const toolResult = out[1];
+  const toolResult = expectDefined(out[1], "out[1] test invariant");
   expect(toolResult.role).toBe("toolResult");
   if (toolResult.role === "toolResult") {
     expect(toolResult.toolCallId).toBe(expectedId);
@@ -150,10 +152,21 @@ describe("sanitizeSessionMessagesImages", () => {
 
   it("removes empty assistant text blocks but preserves tool calls", async () => {
     const input = castAgentMessages([
-      makeOpenAiResponsesAssistantMessage([
-        { type: "text", text: "" },
-        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-      ]),
+      {
+        ...makeOpenAiResponsesAssistantMessage([
+          { type: "text", text: "" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        ]),
+        providerReplay: {
+          v: 1,
+          type: "openai-responses-compaction",
+          data: "opaque-checkpoint",
+          replayIndex: 1,
+          provider: "openai",
+          api: "openai-responses",
+          model: "gpt-5.4",
+        },
+      } satisfies AssistantMessage,
     ]);
 
     const out = await sanitizeSessionMessagesImages(input, "test");
@@ -161,6 +174,7 @@ describe("sanitizeSessionMessagesImages", () => {
     expectSingleAssistantContentEntry(out, (entry) => {
       expect(entry.type).toBe("toolCall");
     });
+    expect(out[0]?.role === "assistant" ? out[0].providerReplay?.replayIndex : undefined).toBe(0);
   });
 
   it("sanitizes tool ids in strict mode (alphanumeric only)", async () => {
@@ -248,6 +262,49 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(out).toHaveLength(1);
     expect(out[0]?.role).toBe("user");
   });
+  it("strips an exact checkpoint when assistant content becomes empty", async () => {
+    const checkpoint = {
+      ...makeOpenAiResponsesAssistantMessage([{ type: "text", text: "" }], "stop"),
+      providerReplay: {
+        v: 1,
+        type: "openai-responses-compaction",
+        data: "opaque-checkpoint",
+        replayIndex: 0,
+        provider: "openai",
+        api: "openai-responses",
+        model: "gpt-5.4",
+      },
+    } satisfies AssistantMessage;
+
+    const out = await sanitizeSessionMessagesImages([checkpoint], "test");
+
+    expect(out).toEqual([{ ...checkpoint, content: [], providerReplay: undefined }]);
+  });
+  it.each([
+    ["full", "length"],
+    ["images-only", "length"],
+    ["full", "error"],
+    ["images-only", "error"],
+  ] as const)(
+    "preserves an empty provider replay owner in %s mode after %s",
+    async (sanitizeMode, stopReason) => {
+      const checkpoint = {
+        ...makeOpenAiResponsesAssistantMessage([{ type: "text", text: "" }], stopReason),
+        providerReplay: {
+          v: 1,
+          type: "opaque-checkpoint",
+          data: "opaque-state",
+          provider: "openai",
+          api: "openai-responses",
+          model: "gpt-5.4",
+        },
+      } satisfies AssistantMessage;
+
+      const out = await sanitizeSessionMessagesImages([checkpoint], "test", { sanitizeMode });
+
+      expect(out).toEqual([{ ...checkpoint, content: [] }]);
+    },
+  );
   it("drops empty assistant error messages", async () => {
     const input = castAgentMessages([
       { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,

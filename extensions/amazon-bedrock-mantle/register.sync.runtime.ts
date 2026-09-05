@@ -4,20 +4,46 @@
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi, ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
-  mergeImplicitMantleProvider,
+  modelCostsEqual,
+  resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import {
   resolveImplicitMantleProvider,
   resolveMantleBearerToken,
   resolveMantleRuntimeBearerToken,
+  resolveMantleSonnet5Cost,
 } from "./discovery.js";
 import { createMantleAnthropicStreamFn } from "./mantle-anthropic.runtime.js";
+
+const MANTLE_OPUS_5_COST = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
 
 type BedrockMantlePluginConfig = {
   discovery?: {
     enabled?: boolean;
   };
 };
+
+function normalizeMantleResolvedModel(params: {
+  modelId: string;
+  model: ProviderRuntimeModel;
+}): ProviderRuntimeModel | undefined {
+  const ref = { id: params.modelId, params: params.model.params };
+  const cost = resolveClaudeOpus5ModelIdentity(ref)
+    ? MANTLE_OPUS_5_COST
+    : resolveClaudeSonnet5ModelIdentity(ref)
+      ? resolveMantleSonnet5Cost()
+      : undefined;
+  if (!cost) {
+    return undefined;
+  }
+  if (modelCostsEqual(params.model.cost, cost)) {
+    return undefined;
+  }
+  return { ...params.model, cost };
+}
 
 /** Register the Amazon Bedrock Mantle provider with OpenClaw. */
 export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
@@ -51,10 +77,7 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
           return null;
         }
         return {
-          provider: mergeImplicitMantleProvider({
-            existing: ctx.config.models?.providers?.[providerId],
-            implicit,
-          }),
+          provider: implicit,
         };
       },
     },
@@ -65,6 +88,8 @@ export function registerBedrockMantlePlugin(api: OpenClawPluginApi): void {
         apiKey,
         env,
       }),
+    normalizeResolvedModel: ({ modelId, model }) =>
+      normalizeMantleResolvedModel({ modelId, model }),
     createStreamFn: ({ model }) =>
       model.api === "anthropic-messages" ? createMantleAnthropicStreamFn() : undefined,
     matchesContextOverflowError: ({ errorMessage }) =>

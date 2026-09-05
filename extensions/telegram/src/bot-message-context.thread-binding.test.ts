@@ -2,7 +2,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramRouteTestSessionRuntime } from "./bot-message-context.route-test-support.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
-import type { TelegramConversationBindingMode } from "./conversation-route.js";
+
+type ResolveTelegramConversationRoute =
+  typeof import("./conversation-route.js").resolveTelegramConversationRoute;
+type TelegramConversationBindingMode = ReturnType<ResolveTelegramConversationRoute>["bindingMode"];
 
 const recordInboundSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const resolveTelegramConversationRouteMock = vi.hoisted(() => vi.fn());
@@ -102,8 +105,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
     expect(routeArgs.accountId).toBe("default");
     expect(routeArgs.chatId).toBe(-100200300);
     expect(routeArgs.isGroup).toBe(true);
-    expect(routeArgs.resolvedThreadId).toBe(77);
-    expect(routeArgs.replyThreadId).toBe(77);
+    expect(routeArgs.threadSpec).toEqual({ id: 77, scope: "forum" });
     expect(routeArgs.senderId).toBe("42");
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-1");
     expect(ctx?.turn.record.updateLastRoute).toBeUndefined();
@@ -115,7 +117,10 @@ describe("buildTelegramMessageContext thread binding override", () => {
         accountId: "default",
         sessionKey: "plugin-binding:openclaw-codex-app-server:session-1",
         agentId: "main",
-        bindingMode: { kind: "plugin-owned-runtime" },
+        bindingMode: {
+          kind: "plugin-owned-runtime",
+          pluginId: "openclaw-codex-app-server",
+        },
       }),
     );
 
@@ -131,6 +136,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
     });
 
     expect(ctx?.ctxPayload?.SessionKey).toBe("plugin-binding:openclaw-codex-app-server:session-1");
+    expect(ctx?.ctxPayload?.GroupRequireMention).toBe(true);
   });
 
   it("keeps mention gating for normal channel binding routes", async () => {
@@ -171,8 +177,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
     expect(routeArgs.accountId).toBe("work");
     expect(routeArgs.chatId).toBe(-100200300);
     expect(routeArgs.isGroup).toBe(true);
-    expect(routeArgs.resolvedThreadId).toBe(77);
-    expect(routeArgs.replyThreadId).toBe(77);
+    expect(routeArgs.threadSpec).toEqual({ id: 77, scope: "forum" });
     expect(routeArgs.senderId).toBe("42");
     expect(ctx?.route.accountId).toBe("work");
     expect(ctx?.route.matchedBy).toBe("binding.channel");
@@ -203,8 +208,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
     expect(routeArgs.accountId).toBe("default");
     expect(routeArgs.chatId).toBe(1234);
     expect(routeArgs.isGroup).toBe(false);
-    expect(routeArgs.resolvedThreadId).toBeUndefined();
-    expect(routeArgs.replyThreadId).toBeUndefined();
+    expect(routeArgs.threadSpec).toEqual({ scope: "dm" });
     expect(routeArgs.senderId).toBe("42");
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-dm");
   });
@@ -233,8 +237,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
     const routeArgs = expectRouteArgs();
     expect(routeArgs.chatId).toBe(1234);
     expect(routeArgs.isGroup).toBe(false);
-    expect(routeArgs.resolvedThreadId).toBeUndefined();
-    expect(routeArgs.replyThreadId).toBe(77);
+    expect(routeArgs.threadSpec).toEqual({ id: 77, scope: "dm" });
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(77);
   });
 });

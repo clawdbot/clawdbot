@@ -24,6 +24,11 @@ describe("config secret refs schema", () => {
   it("accepts top-level secrets sources and model apiKey refs", () => {
     const result = validateConfigObjectRaw({
       secrets: {
+        egressProxy: {
+          enabled: true,
+          allowedHosts: ["api.example.com"],
+          bypassHosts: ["pinned.example.com"],
+        },
         providers: {
           default: { source: "env" },
           filemain: {
@@ -31,15 +36,15 @@ describe("config secret refs schema", () => {
             path: "~/.openclaw/secrets.json",
             mode: "json",
             timeoutMs: 10_000,
-            allowInsecurePath: true,
           },
           vault: {
             source: "exec",
             command: "/usr/local/bin/openclaw-secret-resolver",
             args: ["resolve"],
-            allowSymlinkCommand: true,
           },
+          store: { source: "store" },
         },
+        defaults: { store: "store" },
       },
       models: {
         providers: {
@@ -48,11 +53,54 @@ describe("config secret refs schema", () => {
             apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
             models: [{ id: "gpt-5", name: "gpt-5" }],
           },
+          stored: {
+            baseUrl: "https://stored.example.test/v1",
+            apiKey: { source: "store", provider: "store", id: "STORED_API_KEY" },
+            models: [{ id: "fixture", name: "fixture" }],
+          },
         },
       },
     });
 
     expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.secrets?.egressProxy).toEqual({
+        enabled: true,
+        allowedHosts: ["api.example.com"],
+        bypassHosts: ["pinned.example.com"],
+      });
+    }
+  });
+
+  it.each(
+    (["allowedHosts", "bypassHosts"] as const).flatMap((field) =>
+      ["", "https://api.example.com", "api.example.com:443", "*.example.com", "bad host"].map(
+        (host) => ({ field, host }),
+      ),
+    ),
+  )("rejects invalid secret egress $field entry $host", ({ field, host }) => {
+    const result = validateConfigObjectRaw({
+      secrets: { egressProxy: { enabled: false, [field]: [host] } },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it.each(["allowedHosts", "bypassHosts"] as const)(
+    "accepts exact hostname and IP secret egress %s entries",
+    (field) => {
+      const result = validateConfigObjectRaw({
+        secrets: { egressProxy: { enabled: false, [field]: ["API.example.com.", "127.0.0.1"] } },
+      });
+
+      expect(result.ok).toBe(true);
+    },
+  );
+
+  it("rejects store refs outside the env-name grammar", () => {
+    expect(
+      validateOpenAiApiKeyRef({ source: "store", provider: "default", id: "lowercase" }).ok,
+    ).toBe(false);
   });
 
   it("accepts openai-chatgpt-responses as a model api value", () => {
@@ -86,6 +134,42 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts a preview SecretRef while keeping GitHub tool identity secret-free", () => {
+    expect(
+      validateConfigObjectRaw({
+        gateway: {
+          controlUi: {
+            github: {
+              token: { source: "store", provider: "default", id: "CONTROL_UI_GITHUB" },
+            },
+          },
+        },
+        tools: {
+          github: {
+            profileId: "ghp_77777777777777777777777777777777",
+          },
+        },
+      }).ok,
+    ).toBe(true);
+
+    expect(
+      validateConfigObjectRaw({
+        tools: {
+          github: {
+            profileId: "ghp_88888888888888888888888888888888",
+            token: { source: "store", provider: "default", id: "AGENT_GITHUB" },
+          },
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateConfigObjectRaw({
+        tools: { github: { profileId: "../../native" } },
+      }).ok,
+    ).toBe(false);
+    expect(validateConfigObjectRaw({ tools: { github: {} } }).ok).toBe(false);
+  });
+
   it("accepts media request secret refs for auth, headers, and tls material", () => {
     const result = validateConfigObjectRaw({
       tools: {
@@ -113,8 +197,8 @@ describe("config secret refs schema", () => {
                 passphrase: { source: "exec", provider: "vault", id: "media/audio/passphrase" },
               },
             },
-            models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
           },
+          models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
         },
       },
     });

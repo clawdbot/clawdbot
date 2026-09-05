@@ -26,19 +26,17 @@ export type NodeMatchCandidate = {
   clientId?: string;
 };
 
-type ScoredNodeMatch = {
-  /** Candidate that matched one of the accepted query shapes. */
-  node: NodeMatchCandidate;
-  /** Match class strength; higher classes outrank all tie-break heuristics. */
-  matchScore: number;
-  /** Tie-break score within one match class, such as connected/current-client preference. */
-  selectionScore: number;
-};
-
 /** Normalizes human node names into stable lookup keys for fuzzy CLI/API matching. */
-export function normalizeNodeKey(value: string) {
-  return normalizeLowercaseStringOrEmpty(value)
-    .replace(/[^a-z0-9]+/g, "-")
+function normalizeNodeKey(value: string) {
+  // Emoji components can also be marks (variation selectors and keycaps); drop
+  // them so decorated and plain display-name selectors stay equivalent.
+  // Retain script marks only when attached to a surviving letter/number; marks
+  // on stripped emoji or symbols must not become invisible selector bytes.
+  const normalized = normalizeLowercaseStringOrEmpty(value.normalize("NFC"))
+    .replace(/(?=\p{M})\p{Emoji_Component}/gu, "")
+    .replace(/(?<![\p{L}\p{M}\p{N}])\p{M}+/gu, "");
+  return normalized
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, "-")
     .replace(/^-+/, "")
     .replace(/-+$/, "");
 }
@@ -90,6 +88,7 @@ function resolveMatchScore(
   node: NodeMatchCandidate,
   query: string,
   queryNormalized: string,
+  queryCompact: string | undefined,
 ): number {
   // Match class outranks selection heuristics: exact ids beat IPs, names, and id prefixes.
   if (node.nodeId === query) {
@@ -99,8 +98,16 @@ function resolveMatchScore(
     return 3_000;
   }
   const name = typeof node.displayName === "string" ? node.displayName : "";
-  if (name && normalizeNodeKey(name) === queryNormalized) {
+  const nameNormalized = name ? normalizeNodeKey(name) : "";
+  if (nameNormalized && nameNormalized === queryNormalized) {
     return 2_000;
+  }
+  if (
+    queryCompact !== undefined &&
+    nameNormalized &&
+    nameNormalized.replace(/-/g, "") === queryCompact
+  ) {
+    return 1_900;
   }
   if (query.length >= 6 && node.nodeId.startsWith(query)) {
     return 1_000;
@@ -108,76 +115,50 @@ function resolveMatchScore(
   return 0;
 }
 
-function scoreNodeCandidate(node: NodeMatchCandidate, matchScore: number): number {
-  let score = matchScore;
-  if (node.connected === true) {
-    score += 100;
-  }
-  if (isCurrentOpenClawClient(node.clientId)) {
-    score += 10;
-  } else if (isLegacyClawdbotClient(node.clientId)) {
-    score -= 10;
-  }
-  return score;
-}
-
-function resolveScoredMatches(nodes: NodeMatchCandidate[], query: string): ScoredNodeMatch[] {
-  const trimmed = normalizeOptionalString(query);
-  if (!trimmed) {
-    return [];
-  }
-  const normalized = normalizeNodeKey(trimmed);
-  return nodes
-    .map((node) => {
-      const matchScore = resolveMatchScore(node, trimmed, normalized);
-      if (matchScore === 0) {
-        return null;
-      }
-      return {
-        node,
-        matchScore,
-        selectionScore: scoreNodeCandidate(node, matchScore),
-      };
-    })
-    .filter((entry): entry is ScoredNodeMatch => entry !== null);
-}
-
 /** Resolves a single node id or throws an operator-readable unknown/ambiguous-node error. */
-export function resolveNodeIdFromCandidates(nodes: NodeMatchCandidate[], query: string): string {
+export function resolveNodeIdFromCandidates(
+  nodes: NodeMatchCandidate[],
+  query: string,
+  allowCompactDisplayName = false,
+): string {
   const q = query.trim();
   if (!q) {
     throw new Error("node required");
   }
 
-  const rawMatches = resolveScoredMatches(nodes, q);
-  if (rawMatches.length === 1) {
-    return rawMatches[0]?.node.nodeId ?? "";
-  }
-  if (rawMatches.length === 0) {
+  const normalized = normalizeNodeKey(q);
+  const compact = allowCompactDisplayName ? normalized.replace(/-/g, "") : undefined;
+  let topMatchScore = 0;
+  const strongestMatches: NodeMatchCandidate[] = [];
+  nodes.forEach((node) => {
+    const score = resolveMatchScore(node, q, normalized, compact);
+    if (score > topMatchScore) {
+      topMatchScore = score;
+      strongestMatches.length = 0;
+    }
+    if (score > 0 && score === topMatchScore) {
+      strongestMatches.push(node);
+    }
+  });
+  if (strongestMatches.length === 0) {
     const known = listKnownNodes(nodes);
     throw new Error(`unknown node: ${q}${known ? ` (known: ${known})` : ""}`);
   }
 
-  const topMatchScore = Math.max(...rawMatches.map((match) => match.matchScore));
-  const strongestMatches = rawMatches.filter((match) => match.matchScore === topMatchScore);
-  if (strongestMatches.length === 1) {
-    return strongestMatches[0]?.node.nodeId ?? "";
-  }
-
-  // Only after the strongest match class is isolated do operational tie-breakers
-  // like connected state and current-client preference choose a winner.
-  const topSelectionScore = Math.max(...strongestMatches.map((match) => match.selectionScore));
-  const matches = strongestMatches.filter((match) => match.selectionScore === topSelectionScore);
+  // Connected state only breaks ties within the strongest match class. Client
+  // identity may disambiguate known legacy migrations, never other current nodes.
+  const connectedMatches = strongestMatches.filter((match) => match.connected === true);
+  const matches = connectedMatches.length > 0 ? connectedMatches : strongestMatches;
   if (matches.length === 1) {
-    return matches[0]?.node.nodeId ?? "";
+    return matches[0]?.nodeId ?? "";
   }
 
-  const preferred = pickPreferredLegacyMigrationMatch(matches.map((match) => match.node));
+  const preferred = pickPreferredLegacyMigrationMatch(matches);
   if (preferred) {
     return preferred.nodeId;
   }
 
   throw new Error(
-    `ambiguous node: ${q} (matches: ${matches.map((match) => formatNodeCandidateLabel(match.node)).join(", ")})`,
+    `ambiguous node: ${q} (matches: ${matches.map(formatNodeCandidateLabel).join(", ")})`,
   );
 }

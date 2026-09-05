@@ -7,7 +7,7 @@ import {
   createSetSessionModeRequest,
   createSetSessionConfigOptionRequest,
   type MockCallSource,
-  requireRecord,
+  requireAcpObject,
   expectConfigOption,
   expectSessionUpdate,
 } from "./translator.bridge-test-helpers.js";
@@ -36,8 +36,6 @@ describe("acp setSessionMode bridge behavior", () => {
     await expect(
       agent.setSessionMode(createSetSessionModeRequest("mode-session", "high")),
     ).rejects.toThrow(/gateway rejected mode/i);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("emits current mode and thought-level config updates after a successful mode change", async () => {
@@ -90,8 +88,6 @@ describe("acp setSessionMode bridge behavior", () => {
       "thought_level",
       { currentValue: "high" },
     );
-
-    sessionStore.clearAllSessionsForTest();
   });
 });
 
@@ -149,8 +145,6 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       "thought_level",
       { currentValue: "minimal" },
     );
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("updates non-mode ACP config options through gateway session patches", async () => {
@@ -200,8 +194,6 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       "reasoning_level",
       { currentValue: "stream" },
     );
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("updates fast mode ACP config options through gateway session patches", async () => {
@@ -257,8 +249,6 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       "fast_mode",
       { currentValue: "on" },
     );
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("accepts forwarded timeout config options without failing OpenClaw ACP bridge turns", async () => {
@@ -303,8 +293,6 @@ describe("acp setSessionConfigOption bridge behavior", () => {
     expect(Array.isArray(result.configOptions)).toBe(true);
 
     expect(requestMock.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("rejects non-string ACP config option values", async () => {
@@ -352,10 +340,106 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       (request as unknown as MockCallSource).mock.calls.some(
         ([method, params]) =>
           method === "sessions.patch" &&
-          requireRecord(params, "sessions.patch params").key === "bool-config-session",
+          requireAcpObject(params, "sessions.patch params").key === "bool-config-session",
       ),
     ).toBe(false);
+  });
 
-    sessionStore.clearAllSessionsForTest();
+  it('maps response_usage "inherit" selection to sessions.patch with responseUsage: null', async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "usage-inherit-session",
+              kind: "direct",
+              updatedAt: Date.now(),
+              thinkingLevel: "minimal",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+              responseUsage: "tokens",
+            },
+          ],
+        };
+      }
+      if (method === "sessions.patch") {
+        expect(requireAcpObject(_params, "sessions.patch params")).toMatchObject({
+          key: "usage-inherit-session",
+          responseUsage: null,
+        });
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await agent.loadSession(createLoadSessionRequest("usage-inherit-session"));
+
+    const result = await agent.setSessionConfigOption(
+      createSetSessionConfigOptionRequest("usage-inherit-session", "response_usage", "inherit"),
+    );
+
+    // After selecting "inherit", the ACP config option should report "inherit" (unset).
+    expectConfigOption(result.configOptions, "response_usage", { currentValue: "inherit" });
+    expect(
+      (request as unknown as MockCallSource).mock.calls.some(
+        ([method]) => method === "sessions.patch",
+      ),
+    ).toBe(true);
+  });
+
+  it('maps response_usage "off" selection to sessions.patch with responseUsage: "off"', async () => {
+    const sessionStore = createInMemorySessionStore();
+    const connection = createAcpConnection();
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          ts: Date.now(),
+          path: "/tmp/sessions.json",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "usage-off-session",
+              kind: "direct",
+              updatedAt: Date.now(),
+              thinkingLevel: "minimal",
+              modelProvider: "openai",
+              model: "gpt-5.4",
+            },
+          ],
+        };
+      }
+      if (method === "sessions.patch") {
+        expect(requireAcpObject(_params, "sessions.patch params")).toMatchObject({
+          key: "usage-off-session",
+          responseUsage: "off",
+        });
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await agent.loadSession(createLoadSessionRequest("usage-off-session"));
+
+    const result = await agent.setSessionConfigOption(
+      createSetSessionConfigOptionRequest("usage-off-session", "response_usage", "off"),
+    );
+
+    expectConfigOption(result.configOptions, "response_usage", { currentValue: "off" });
+    expect(
+      (request as unknown as MockCallSource).mock.calls.some(
+        ([method]) => method === "sessions.patch",
+      ),
+    ).toBe(true);
   });
 });

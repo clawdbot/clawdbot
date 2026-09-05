@@ -10,7 +10,9 @@ import {
 import { describe, expect, it } from "vitest";
 import { createOpenAIResponsesContextManagementWrapper } from "../llm/providers/stream-wrappers/openai.js";
 import { buildProviderToolCompatFamilyHooks } from "../plugin-sdk/provider-tools.js";
-import { buildOpenAIResponsesParams } from "./openai-transport-stream.js";
+import { testing as openAITransportTesting } from "./openai-transport-stream.test-support.js";
+
+const { buildOpenAIResponsesParams } = openAITransportTesting;
 
 describe("OpenAI transport schema normalization runtime contract", () => {
   it("keeps HTTP Responses strict decisions stable for the same tool set", () => {

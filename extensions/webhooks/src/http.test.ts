@@ -21,24 +21,6 @@ function createManagedFlow(
   return flow;
 }
 
-const hoisted = vi.hoisted(() => {
-  const resolveConfiguredSecretInputStringMock = vi.fn();
-  return {
-    resolveConfiguredSecretInputStringMock,
-  };
-});
-
-vi.mock("../runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../runtime-api.js")>();
-  hoisted.resolveConfiguredSecretInputStringMock.mockImplementation(
-    actual.resolveConfiguredSecretInputString,
-  );
-  return {
-    ...actual,
-    resolveConfiguredSecretInputString: hoisted.resolveConfiguredSecretInputStringMock,
-  };
-});
-
 type MockIncomingMessage = IncomingMessage & {
   destroyed?: boolean;
   destroy: () => MockIncomingMessage;
@@ -74,19 +56,17 @@ function createJsonRequest(params: {
   return req;
 }
 
-function createHandler(): {
+function createHandler(secret = "shared-secret"): {
   handler: ReturnType<typeof createTaskFlowWebhookRequestHandler>;
   target: TaskFlowWebhookTarget;
   secret: string;
 } {
   const runtime = createRuntimeTaskFlow();
   nextSessionId += 1;
-  const secret = "shared-secret";
   const target: TaskFlowWebhookTarget = {
     routeId: "zapier",
     path: "/plugins/webhooks/zapier",
     secretInput: secret,
-    secretConfigPath: "plugins.entries.webhooks.routes.zapier.secret",
     defaultControllerId: "webhooks/zapier",
     taskFlow: runtime.bindSession({
       sessionKey: `agent:main:webhook-test-${String(nextSessionId)}`,
@@ -153,10 +133,9 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     expect(res.statusCode).toBe(401);
     expect(res.body).toBe("unauthorized");
     expect(target.taskFlow.list()).toStrictEqual([]);
-    expect(hoisted.resolveConfiguredSecretInputStringMock).not.toHaveBeenCalled();
   });
 
-  it("re-resolves SecretRef-backed secrets across requests", async () => {
+  it("keeps an unresolved SecretRef-backed route cold", async () => {
     const runtime = createRuntimeTaskFlow();
     const target: TaskFlowWebhookTarget = {
       routeId: "cached",
@@ -166,16 +145,11 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         provider: "default",
         id: "OPENCLAW_WEBHOOK_SECRET",
       },
-      secretConfigPath: "plugins.entries.webhooks.routes.cached.secret",
       defaultControllerId: "webhooks/cached",
       taskFlow: runtime.bindSession({
         sessionKey: "agent:main:webhook-cached",
       }),
     };
-    hoisted.resolveConfiguredSecretInputStringMock
-      .mockResolvedValueOnce({ value: "shared-secret" })
-      .mockResolvedValueOnce({ value: "rotated-secret" })
-      .mockResolvedValueOnce({ value: "rotated-secret" });
     const handler = createHandlerWithTarget(target);
 
     const first = await dispatchJsonRequest({
@@ -203,11 +177,25 @@ describe("createTaskFlowWebhookRequestHandler", () => {
       },
     });
 
-    expect(first.statusCode).toBe(200);
-    expect(second.statusCode).toBe(401);
-    expect(second.body).toBe("unauthorized");
-    expect(third.statusCode).toBe(200);
-    expect(hoisted.resolveConfiguredSecretInputStringMock).toHaveBeenCalledTimes(3);
+    expect([first, second, third].map((response) => response.statusCode)).toEqual([401, 401, 401]);
+    expect([first, second, third].map((response) => response.body)).toEqual([
+      "unauthorized",
+      "unauthorized",
+      "unauthorized",
+    ]);
+  });
+
+  it("accepts a resolved secret that has env-template syntax", async () => {
+    const { handler, target } = createHandler("${MATERIALIZED_SECRET}");
+
+    const response = await dispatchJsonRequest({
+      handler,
+      path: target.path,
+      secret: "${MATERIALIZED_SECRET}",
+      body: { action: "list_flows" },
+    });
+
+    expect(response.statusCode).toBe(200);
   });
 
   it("creates flows through the bound session and scrubs owner metadata from responses", async () => {
@@ -247,7 +235,6 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         action: "run_task",
         flowId: flow.flowId,
         runtime: "acp",
-        childSessionKey: "agent:main:subagent:child",
         task: "Inspect the next message batch",
         status: "running",
         startedAt: 10,
@@ -260,7 +247,7 @@ describe("createTaskFlowWebhookRequestHandler", () => {
     expect(parsed.ok).toBe(true);
     expect(parsed.result.created).toBe(true);
     expect(parsed.result.task.parentFlowId).toBe(flow.flowId);
-    expect(parsed.result.task.childSessionKey).toBe("agent:main:subagent:child");
+    expect(parsed.result.task.childSessionKey).toBeUndefined();
     expect(parsed.result.task.runtime).toBe("acp");
     expect(parsed.result.task.ownerKey).toBeUndefined();
     expect(parsed.result.task.requesterSessionKey).toBeUndefined();
@@ -374,7 +361,6 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         action: "run_task",
         flowId: flow.flowId,
         runtime: "acp",
-        childSessionKey: "agent:main:subagent:child",
         runId: "retry-me",
         task: "Inspect the next message batch",
       },
@@ -387,7 +373,6 @@ describe("createTaskFlowWebhookRequestHandler", () => {
         action: "run_task",
         flowId: flow.flowId,
         runtime: "acp",
-        childSessionKey: "agent:main:subagent:child",
         runId: "retry-me",
         task: "Inspect the next message batch",
       },

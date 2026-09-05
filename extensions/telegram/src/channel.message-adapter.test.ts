@@ -9,9 +9,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageTelegramMock = vi.fn();
 const reactMessageTelegramMock = vi.fn();
+const sendLocationTelegramMock = vi.fn();
 
 vi.mock("./send.js", () => ({
   reactMessageTelegram: (...args: unknown[]) => reactMessageTelegramMock(...args),
+  sendLocationTelegram: (...args: unknown[]) => sendLocationTelegramMock(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegramMock(...args),
 }));
 
@@ -29,6 +31,7 @@ function requireTelegramMessageAdapter(): TelegramMessageAdapter {
 describe("telegram channel message adapter", () => {
   beforeEach(() => {
     reactMessageTelegramMock.mockReset();
+    sendLocationTelegramMock.mockReset();
     sendMessageTelegramMock.mockReset();
   });
 
@@ -82,19 +85,37 @@ describe("telegram channel message adapter", () => {
     };
 
     const provePayload = async () => {
-      sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-payload", chatId: "12345" });
+      sendMessageTelegramMock.mockResolvedValueOnce({
+        messageId: "tg-payload-2",
+        chatId: "12345",
+        receipt: {
+          primaryPlatformMessageId: "tg-payload-1",
+          platformMessageIds: ["tg-payload-1", "tg-payload-2"],
+          parts: [
+            { platformMessageId: "tg-payload-1", kind: "text", index: 0 },
+            { platformMessageId: "tg-payload-2", kind: "text", index: 1 },
+          ],
+          sentAt: 123,
+        },
+      });
       const result = await adapter.send!.payload!({
         cfg: {} as never,
         to: "12345",
         text: "payload",
         payload: { text: "payload" },
+        replyToId: "900",
+        replyToIdSource: "implicit",
+        replyToMode: "first",
+        threadId: "12",
         deps: { sendTelegram: sendMessageTelegramMock },
       });
       expect(sendMessageTelegramMock).toHaveBeenLastCalledWith("12345", "payload", {
         cfg: {},
         verbose: false,
-        messageThreadId: undefined,
-        replyToMessageId: undefined,
+        messageThreadId: 12,
+        replyToMessageId: 900,
+        replyToIdSource: "implicit",
+        replyToMode: "first",
         accountId: undefined,
         silent: undefined,
         gatewayClientScopes: undefined,
@@ -104,7 +125,8 @@ describe("telegram channel message adapter", () => {
         quoteText: undefined,
         buttons: undefined,
       });
-      expect(result.receipt.platformMessageIds).toEqual(["tg-payload"]);
+      expect(result.receipt.primaryPlatformMessageId).toBe("tg-payload-1");
+      expect(result.receipt.platformMessageIds).toEqual(["tg-payload-1", "tg-payload-2"]);
     };
 
     const proveReplyThreadSilent = async () => {
@@ -114,6 +136,8 @@ describe("telegram channel message adapter", () => {
         to: "12345",
         text: "threaded",
         replyToId: "900",
+        replyToIdSource: "implicit",
+        replyToMode: "first",
         threadId: "12",
         silent: true,
         deps: { sendTelegram: sendMessageTelegramMock },
@@ -123,6 +147,8 @@ describe("telegram channel message adapter", () => {
         verbose: false,
         messageThreadId: 12,
         replyToMessageId: 900,
+        replyToIdSource: "implicit",
+        replyToMode: "first",
         accountId: undefined,
         silent: true,
         gatewayClientScopes: undefined,
@@ -138,6 +164,9 @@ describe("telegram channel message adapter", () => {
         cfg: {} as never,
         to: "12345",
         text: "batch",
+        replyToId: "900",
+        replyToIdSource: "implicit",
+        replyToMode: "first",
         payload: {
           text: "batch",
           mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
@@ -152,7 +181,9 @@ describe("telegram channel message adapter", () => {
           cfg: {},
           verbose: false,
           messageThreadId: undefined,
-          replyToMessageId: undefined,
+          replyToMessageId: 900,
+          replyToIdSource: "implicit",
+          replyToMode: "first",
           accountId: undefined,
           silent: undefined,
           gatewayClientScopes: undefined,
@@ -172,6 +203,8 @@ describe("telegram channel message adapter", () => {
           verbose: false,
           messageThreadId: undefined,
           replyToMessageId: undefined,
+          replyToIdSource: undefined,
+          replyToMode: undefined,
           accountId: undefined,
           silent: undefined,
           gatewayClientScopes: undefined,
@@ -220,6 +253,36 @@ describe("telegram channel message adapter", () => {
         },
       },
     });
+  });
+
+  it("keeps implicit first replies on the first delivered payload media", async () => {
+    const adapter = requireTelegramMessageAdapter();
+    sendMessageTelegramMock
+      .mockResolvedValueOnce({ messageId: "tg-media-1", chatId: "12345" })
+      .mockResolvedValueOnce({ messageId: "tg-media-2", chatId: "12345" });
+
+    await adapter.send!.payload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "batch",
+      replyToId: "900",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+      payload: {
+        text: "batch",
+        mediaUrls: ["", "https://example.com/a.png", "https://example.com/b.png"],
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const firstOpts = sendMessageTelegramMock.mock.calls[0]?.[2] as
+      | { replyToMessageId?: number }
+      | undefined;
+    const secondOpts = sendMessageTelegramMock.mock.calls[1]?.[2] as
+      | { replyToMessageId?: number }
+      | undefined;
+    expect(firstOpts?.replyToMessageId).toBe(900);
+    expect(secondOpts?.replyToMessageId).toBeUndefined();
   });
 
   it("backs declared live preview finalizer capabilities with adapter proofs", async () => {

@@ -87,7 +87,7 @@ export function windowsCodexPlatformPackageRepairFunction(): string {
 }`;
 }
 
-export function providerOnlyPluginId(modelId: string, fallbackPluginId: string): string {
+function providerOnlyPluginId(modelId: string, fallbackPluginId: string): string {
   return providerIdFromModelId(modelId) || fallbackPluginId;
 }
 

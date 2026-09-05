@@ -1,7 +1,9 @@
 // Mattermost tests cover accounts plugin behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import {
+  inspectMattermostAccount,
+  isMattermostConfigured,
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
@@ -104,6 +106,69 @@ describe("resolveDefaultMattermostAccountId", () => {
   });
 });
 
+describe("Mattermost account SecretRef inspection", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  const unresolvedRef = {
+    source: "env" as const,
+    provider: "default",
+    id: "OPENCLAW_TEST_MISSING_MATTERMOST_TOKEN",
+  };
+
+  it.each([
+    { botToken: "bot-token", baseUrl: "https://mm.example.com", configured: true },
+    { botToken: unresolvedRef, baseUrl: "https://mm.example.com", configured: true },
+    { botToken: undefined, baseUrl: "https://mm.example.com", configured: false },
+    { botToken: "bot-token", baseUrl: undefined, configured: false },
+  ])("reports configured=$configured for token $botToken and URL $baseUrl", (entry) => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          accounts: {
+            work: { botToken: entry.botToken, baseUrl: entry.baseUrl, dmPolicy: "allowlist" },
+          },
+        },
+      },
+    };
+    const account = inspectMattermostAccount({ cfg, accountId: "work" });
+    expect(isMattermostConfigured(account)).toBe(entry.configured);
+    expect(account).toMatchObject({
+      accountId: "work",
+      enabled: true,
+      configured: entry.configured,
+      dmPolicy: "allowlist",
+    });
+  });
+
+  it("keeps direct account resolution strict", () => {
+    expect(() =>
+      resolveMattermostAccount({
+        cfg: {
+          channels: {
+            mattermost: { botToken: unresolvedRef, baseUrl: "https://mm.example.com" },
+          },
+        },
+      }),
+    ).toThrow(/unresolved SecretRef/);
+  });
+
+  it("does not fall through an unavailable configured ref to the environment", () => {
+    vi.stubEnv("MATTERMOST_BOT_TOKEN", "lower-precedence-token");
+    const account = inspectMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: { botToken: unresolvedRef, baseUrl: "https://mm.example.com" },
+        },
+      },
+    });
+    expect(account).toMatchObject({
+      botToken: undefined,
+      botTokenSource: "config",
+      botTokenStatus: "configured_unavailable",
+    });
+  });
+});
+
 describe("resolveMattermostReplyToMode", () => {
   it("uses configured defaultAccount when accountId is omitted", () => {
     const cfg: OpenClawConfig = {
@@ -140,7 +205,7 @@ describe("resolveMattermostReplyToMode", () => {
     expect(resolveMattermostReplyToMode(account, "group")).toBe("all");
   });
 
-  it("keeps direct messages off even when replyToMode is enabled", () => {
+  it("keeps direct messages off by default even when replyToMode is enabled", () => {
     const cfg: OpenClawConfig = {
       channels: {
         mattermost: {
@@ -151,6 +216,25 @@ describe("resolveMattermostReplyToMode", () => {
 
     const account = resolveMattermostAccount({ cfg, accountId: "default" });
     expect(resolveMattermostReplyToMode(account, "direct")).toBe("off");
+  });
+
+  it("uses per-chat-type overrides before the channel and group default", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          replyToMode: "all",
+          replyToModeByChatType: {
+            direct: "first",
+            channel: "off",
+          },
+        },
+      },
+    };
+
+    const account = resolveMattermostAccount({ cfg, accountId: "default" });
+    expect(resolveMattermostReplyToMode(account, "direct")).toBe("first");
+    expect(resolveMattermostReplyToMode(account, "channel")).toBe("off");
+    expect(resolveMattermostReplyToMode(account, "group")).toBe("all");
   });
 
   it("defaults to off when replyToMode is unset", () => {
@@ -190,10 +274,10 @@ describe("resolveMattermostReplyToMode", () => {
       cfg: {
         channels: {
           mattermost: {
-            streaming: "partial",
+            streaming: { mode: "partial" },
             accounts: {
               work: {
-                streaming: "off",
+                streaming: { mode: "off" },
               },
             },
           },

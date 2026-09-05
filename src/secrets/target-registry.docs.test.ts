@@ -1,11 +1,12 @@
 /** Verifies docs stay aligned with the secret target registry. */
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   buildSecretRefCredentialMatrix,
   type SecretRefCredentialMatrixDocument,
-} from "./credential-matrix.js";
+} from "./credential-matrix.test-support.js";
 
 function buildSecretRefCredentialMatrixJson(): string {
   return `${JSON.stringify(buildSecretRefCredentialMatrix(), null, 2)}\n`;
@@ -78,7 +79,7 @@ describe("secret target registry docs", () => {
         if (!match) {
           continue;
         }
-        const candidate = match[1];
+        const candidate = expectDefined(match[1], "match[1] test invariant");
         if (!candidate.includes(".")) {
           continue;
         }
@@ -98,7 +99,7 @@ describe("secret target registry docs", () => {
 
     const supportedFromMatrix = new Set(
       matrix.entries.map((entry) =>
-        entry.configFile === "auth-profiles.json" && entry.refPath ? entry.refPath : entry.path,
+        entry.configFile === "auth-profile-store" && entry.refPath ? entry.refPath : entry.path,
       ),
     );
     const unsupportedFromMatrix = new Set(matrix.excludedMutableOrRuntimeManaged);

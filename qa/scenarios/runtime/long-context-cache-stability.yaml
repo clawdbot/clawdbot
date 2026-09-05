@@ -3,12 +3,12 @@ title: Large tool-result prompt cache stability
 scenario:
   id: runtime-long-context-cache-stability
   surface: runtime
-  runtimeParityTier: soak
+  runtimePairLane: soak
   coverage:
     primary:
-      - runtime.reasoning-and-cache-controls
+      - agent-runtime.reasoning-and-cache-controls
     secondary:
-      - runtime.long-context
+      - session-memory.token-pressure-long-context
   objective: Exercise repeated same-session turns after a large tool result so prompt assembly and provider cache reuse remain stable.
   successCriteria:
     - The agent reads a large workspace fixture and returns the warmup marker from the capped read output.
@@ -26,7 +26,9 @@ scenario:
     config:
       sessionKey: agent:qa:long-context-cache-stability
       fixtureFile: large-cache-fixture.txt
-      cacheEvidenceNeedle: CACHE-FIXTURE-0550
+      cacheEvidenceNeedle: CACHE-FIXTURE-0050
+      cacheEvidenceLine: "CACHE-FIXTURE-0050: stable tool-result evidence for prompt-cache reuse across long sessions."
+      followupPromptNeedle: Using the already-read
       warmupMarker: QA-LARGE-CACHE-WARMUP-OK
       hitMarker: QA-LARGE-CACHE-HIT-OK
 
@@ -62,7 +64,7 @@ flow:
         - call: waitForCondition
           args:
             - lambda:
-                expr: "state.getSnapshot().messages.some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && normalizeLowercaseStringOrEmpty(candidate.text).includes(normalizeLowercaseStringOrEmpty(config.warmupMarker)))"
+                expr: "state.getSnapshot().messages.find((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && normalizeLowercaseStringOrEmpty(candidate.text).includes(normalizeLowercaseStringOrEmpty(config.warmupMarker)))"
             - expr: liveTurnTimeoutMs(env, 120000)
             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
         - call: runAgentPrompt
@@ -84,8 +86,17 @@ flow:
         - set: debugRequests
           value:
             expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))] : []"
+        - set: cappedReadOutputIndex
+          value:
+            expr: "debugRequests.reduce((found, planned, index) => { if (found >= 0 || !planned.plannedToolCallId || planned.plannedToolName !== 'read' || planned.plannedToolArgs?.path !== config.fixtureFile) return found; const outputOffset = debugRequests.slice(index + 1).findIndex((candidate) => Boolean(candidate.toolOutputCallId) && candidate.toolOutputCallId === planned.plannedToolCallId); if (outputOffset < 0) return found; const output = debugRequests[index + 1 + outputOffset]; const evidence = [planned.allInputText, output.allInputText, output.toolOutput].filter((value) => typeof value === 'string').join('\\n'); const hasCodexFormattedTruncation = evidence.includes('Warning: truncated output') && (evidence.includes('chars truncated') || evidence.includes('tokens truncated')); return evidence.includes(config.cacheEvidenceLine) && (evidence.includes('[Read output capped at 50KB') || evidence.includes('...(OpenClaw truncated dynamic tool result') || evidence.includes('...(truncated)...') || hasCodexFormattedTruncation) ? index + 1 + outputOffset : found; }, -1)"
+        - set: hasCappedReadEvidence
+          value:
+            expr: "cappedReadOutputIndex >= 0"
+        - set: hasFollowupCacheEvidence
+          value:
+            expr: "cappedReadOutputIndex >= 0 && debugRequests.some((request, index) => index > cappedReadOutputIndex && String(request.prompt ?? '').includes(config.followupPromptNeedle) && String(request.allInputText ?? '').includes(config.cacheEvidenceLine))"
         - assert:
-            expr: "!env.mock || debugRequests.some((request) => request.plannedToolName === 'read' && request.plannedToolArgs?.path === config.fixtureFile && String(request.allInputText ?? '').includes(config.cacheEvidenceNeedle) && String(request.allInputText ?? '').includes('[Read output capped at 50KB') && String(request.allInputText ?? '').length >= 50000)"
+            expr: "!env.mock || (hasCappedReadEvidence && hasFollowupCacheEvidence)"
             message:
-              expr: "`large capped read tool result was not observed: ${JSON.stringify(debugRequests.slice(-8).map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, allInputLength: String(request.allInputText ?? '').length, hasNeedle: String(request.allInputText ?? '').includes(config.cacheEvidenceNeedle), hasReadCap: String(request.allInputText ?? '').includes('[Read output capped at 50KB') })))}`"
+              expr: "`large capped read cache evidence was not observed: ${JSON.stringify({ hasCappedReadEvidence, hasFollowupCacheEvidence, requests: debugRequests.slice(-8).map((request) => ({ prompt: request.prompt ?? null, plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, plannedToolCallId: request.plannedToolCallId ?? null, toolOutputCallId: request.toolOutputCallId ?? null, toolOutputLength: String(request.toolOutput ?? '').length, outputHasReadCap: String(request.toolOutput ?? '').includes('[Read output capped at 50KB'), outputHasCodexTruncation: String(request.toolOutput ?? '').includes('...(truncated)...'), inputHasEvidenceLine: String(request.allInputText ?? '').includes(config.cacheEvidenceLine) })) })}`"
       detailsExpr: "outbound?.text ?? config.hitMarker"

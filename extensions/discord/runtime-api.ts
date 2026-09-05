@@ -1,85 +1,100 @@
 // Discord API module exposes the plugin public contract.
+export { handleDiscordAction } from "./src/actions/runtime.js";
 export {
-  discordMessageActions,
-  handleDiscordAction,
   isDiscordModerationAction,
-  readDiscordChannelCreateParams,
-  readDiscordChannelEditParams,
-  readDiscordChannelMoveParams,
   readDiscordModerationCommand,
-  readDiscordParentIdParam,
   requiredGuildPermissionForModerationAction,
   type DiscordModerationAction,
   type DiscordModerationCommand,
-} from "./runtime-api.actions.js";
+} from "./src/actions/runtime.moderation-shared.js";
 export {
-  auditDiscordChannelPermissions,
-  collectDiscordAuditChannelIds,
-  fetchDiscordApplicationId,
-  fetchDiscordApplicationSummary,
+  readDiscordChannelCreateParams,
+  readDiscordChannelEditParams,
+  readDiscordChannelMoveParams,
+  readDiscordParentIdParam,
+} from "./src/actions/runtime.shared.js";
+export { discordMessageActions } from "./src/channel-actions.js";
+export { auditDiscordChannelPermissions, collectDiscordAuditChannelIds } from "./src/audit.js";
+export {
   listDiscordDirectoryGroupsLive,
   listDiscordDirectoryPeersLive,
+} from "./src/directory-live.js";
+export {
+  fetchDiscordApplicationId,
+  fetchDiscordApplicationSummary,
   parseApplicationIdFromToken,
   probeDiscord,
-  resolveDiscordChannelAllowlist,
   resolveDiscordPrivilegedIntentsFromFlags,
-  resolveDiscordUserAllowlist,
-  setDiscordRuntime,
   type DiscordApplicationSummary,
-  type DiscordChannelResolution,
   type DiscordPrivilegedIntentsSummary,
   type DiscordPrivilegedIntentStatus,
   type DiscordProbe,
-  type DiscordUserResolution,
-} from "./runtime-api.lookup.js";
+} from "./src/probe.js";
+export {
+  resolveDiscordChannelAllowlist,
+  type DiscordChannelResolution,
+} from "./src/resolve-channels.js";
+export { resolveDiscordUserAllowlist, type DiscordUserResolution } from "./src/resolve-users.js";
+export { setDiscordRuntime } from "./src/runtime.js";
+export type {
+  DiscordAllowList,
+  DiscordChannelConfigResolved,
+  DiscordGuildEntryResolved,
+} from "./src/monitor/allow-list.js";
+export {
+  allowListMatches,
+  isDiscordGroupAllowedByPolicy,
+  normalizeDiscordAllowList,
+  normalizeDiscordSlug,
+  resolveDiscordChannelConfig,
+  resolveDiscordChannelConfigWithFallback,
+  resolveDiscordCommandAuthorized,
+  resolveDiscordGuildEntry,
+  resolveDiscordShouldRequireMention,
+  resolveGroupDmAllow,
+  shouldEmitDiscordReactionNotification,
+} from "./src/monitor/allow-list.js";
+export type { DiscordMessageEvent, DiscordMessageHandler } from "./src/monitor/listeners.js";
+export { registerDiscordListener } from "./src/monitor/listeners.js";
+
+export { createDiscordMessageHandler } from "./src/monitor/message-handler.js";
+export { createDiscordNativeCommand } from "./src/monitor/native-command.js";
+export type { MonitorDiscordOpts } from "./src/monitor/provider.js";
+export { monitorDiscordProvider } from "./src/monitor/provider.js";
+
+export { resolveDiscordReplyTarget, sanitizeDiscordThreadName } from "./src/monitor/threading.js";
+export {
+  createDiscordGatewayPlugin,
+  resolveDiscordGatewayIntents,
+  waitForDiscordGatewayPluginRegistration,
+} from "./src/monitor/gateway-plugin.js";
+export {
+  clearGateways,
+  getGateway,
+  registerGateway,
+  unregisterGateway,
+} from "./src/monitor/gateway-registry.js";
+export {
+  clearPresences,
+  getPresence,
+  presenceCacheSize,
+  setPresence,
+} from "./src/monitor/presence-cache.js";
 export {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
   DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
   DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-  allowListMatches,
-  buildDiscordMediaPayload,
-  clearGateways,
-  clearPresences,
-  createDiscordGatewayPlugin,
-  createDiscordMessageHandler,
-  createDiscordNativeCommand,
-  getGateway,
-  getPresence,
   isAbortError,
-  isDiscordGroupAllowedByPolicy,
-  mergeAbortSignals,
-  monitorDiscordProvider,
-  normalizeDiscordAllowList,
   normalizeDiscordInboundWorkerTimeoutMs,
   normalizeDiscordListenerTimeoutMs,
-  normalizeDiscordSlug,
-  presenceCacheSize,
-  registerDiscordListener,
-  registerGateway,
-  resolveDiscordChannelConfig,
-  resolveDiscordChannelConfigWithFallback,
-  resolveDiscordCommandAuthorized,
-  resolveDiscordGatewayIntents,
-  resolveDiscordGuildEntry,
-  resolveDiscordReplyTarget,
-  resolveDiscordShouldRequireMention,
-  resolveGroupDmAllow,
   runDiscordTaskWithTimeout,
-  sanitizeDiscordThreadName,
-  setPresence,
-  shouldEmitDiscordReactionNotification,
-  unregisterGateway,
-  waitForDiscordGatewayPluginRegistration,
-  type DiscordAllowList,
-  type DiscordChannelConfigResolved,
-  type DiscordGuildEntryResolved,
-  type DiscordMessageEvent,
-  type DiscordMessageHandler,
-  type MonitorDiscordOpts,
-} from "./runtime-api.monitor.js";
+} from "./src/monitor/timeouts.js";
 export {
-  DiscordSendError,
+  resolveDiscordOutboundSessionRoute,
+  type ResolveDiscordOutboundSessionRouteParams,
+} from "./src/outbound-session-route.js";
+export {
   addRoleDiscord,
   banMemberDiscord,
   createChannelDiscord,
@@ -87,8 +102,8 @@ export {
   createThreadDiscord,
   deleteChannelDiscord,
   deleteMessageDiscord,
+  DiscordSendError,
   editChannelDiscord,
-  editDiscordComponentMessage,
   editMessageDiscord,
   fetchChannelInfoDiscord,
   fetchChannelPermissionsDiscord,
@@ -110,15 +125,12 @@ export {
   pinMessageDiscord,
   reactMessageDiscord,
   readMessagesDiscord,
-  registerBuiltDiscordComponentMessage,
   removeChannelPermissionDiscord,
   removeOwnReactionsDiscord,
   removeReactionDiscord,
   removeRoleDiscord,
-  resolveDiscordOutboundSessionRoute,
   resolveEventCoverImage,
   searchMessagesDiscord,
-  sendDiscordComponentMessage,
   sendMessageDiscord,
   sendPollDiscord,
   sendStickerDiscord,
@@ -151,17 +163,18 @@ export {
   type DiscordThreadCreate,
   type DiscordThreadList,
   type DiscordTimeoutTarget,
-  type ResolveDiscordOutboundSessionRouteParams,
-} from "./runtime-api.send.js";
+} from "./src/send.js";
 export {
-  testing as __testing,
-  testing,
+  editDiscordComponentMessage,
+  registerBuiltDiscordComponentMessage,
+  sendDiscordComponentMessage,
+} from "./src/send.components.js";
+export {
   autoBindSpawnedDiscordSubagent,
   createNoopThreadBindingManager,
   createThreadBindingManager,
   formatThreadBindingDurationLabel,
   getThreadBindingManager,
-  isRecentlyUnboundThreadWebhookMessage,
   listThreadBindingsBySessionKey,
   listThreadBindingsForAccount,
   reconcileAcpThreadBindingsOnStartup,
@@ -183,4 +196,4 @@ export {
   type ThreadBindingManager,
   type ThreadBindingRecord,
   type ThreadBindingTargetKind,
-} from "./runtime-api.threads.js";
+} from "./src/monitor/thread-bindings.js";

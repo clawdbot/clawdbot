@@ -86,7 +86,7 @@ describe("resolveSlackThreadTargets", () => {
 
     expect(context.isThreadReply).toBe(false);
     expect(context.messageThreadId).toBe("123");
-    expect(context.replyToId).toBe("123");
+    expect(context.replyToId).toBeUndefined();
   });
 
   it("sets messageThreadId for DM assistant thread-root messages regardless of replyToMode", () => {
@@ -107,7 +107,7 @@ describe("resolveSlackThreadTargets", () => {
       // thread_ts == ts in a DM: Agents & Assistants root — preserve thread
       // context so tool calls (subagent results) thread correctly.
       expect(context.messageThreadId).toBe("123");
-      expect(context.replyToId).toBe("123");
+      expect(context.replyToId).toBeUndefined();
     }
   });
 
@@ -129,7 +129,7 @@ describe("resolveSlackThreadTargets", () => {
 
       expect(context.isThreadReply).toBe(false);
       expect(context.messageThreadId).toBe("123");
-      expect(context.replyToId).toBe("123");
+      expect(context.replyToId).toBeUndefined();
     }
   });
 
@@ -151,7 +151,7 @@ describe("resolveSlackThreadTargets", () => {
       // thread_ts == ts in a channel: auto-created top-level thread_ts should
       // NOT force threaded mode — only DM assistant threads get the override.
       expect(context.messageThreadId).toBeUndefined();
-      expect(context.replyToId).toBe("123");
+      expect(context.replyToId).toBeUndefined();
     }
   });
 

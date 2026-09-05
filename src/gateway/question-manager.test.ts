@@ -1,0 +1,421 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Question, QuestionAnswers } from "../../packages/gateway-protocol/src/index.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import {
+  QuestionManager,
+  QuestionManagerError,
+  QuestionManagerErrorCodes,
+} from "./question-manager.js";
+
+const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
+
+const questions: Question[] = [
+  {
+    questionId: "choice",
+    header: "Choice",
+    question: "Which option?",
+    options: [
+      { label: "One", description: "First" },
+      { label: "Two", description: "Second" },
+    ],
+    isOther: true,
+  },
+];
+const answers = { answers: { choice: ["Two"] } };
+
+const invalidAnswerCases: Array<[string, Question[], QuestionAnswers, string]> = [
+  ["an empty answer map", questions, { answers: {} }, "choice"],
+  [
+    "a prototype-key question id with no submitted answer",
+    [{ ...questions[0]!, questionId: "constructor" }],
+    { answers: {} },
+    "constructor",
+  ],
+  [
+    "an unknown question id",
+    questions,
+    { answers: { choice: ["Two"], unknown: ["value"] } },
+    "unknown",
+  ],
+  [
+    "a missing question answer",
+    [...questions, { ...questions[0]!, questionId: "second" }],
+    answers,
+    "second",
+  ],
+  ["an empty string", questions, { answers: { choice: ["  "] } }, "choice"],
+  [
+    "multiple values for a single-select question",
+    questions,
+    { answers: { choice: ["One", "Two"] } },
+    "choice",
+  ],
+  [
+    "a value outside the declared options",
+    [{ ...questions[0]!, isOther: false }],
+    { answers: { choice: ["Three"] } },
+    "choice",
+  ],
+];
+
+let manager: QuestionManager;
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_000);
+  manager = new QuestionManager();
+});
+
+afterEach(() => {
+  manager.close();
+  vi.useRealTimers();
+});
+
+describe("QuestionManager", () => {
+  it("requests, gets, and deterministically lists pending questions", () => {
+    const first = manager.request({
+      questions,
+      timeoutMs: 10_000,
+      agentId: "main",
+      runId: "run-first",
+    });
+    vi.setSystemTime(1_001);
+    const second = manager.request({
+      questions: [{ ...questions[0]!, questionId: "other" }],
+      timeoutMs: 10_000,
+      sessionKey: "agent:main:main",
+    });
+
+    expect(manager.get(first.id)).toEqual(first);
+    expect(first.runId).toBe("run-first");
+    expect(manager.list().map((record) => record.id)).toEqual([first.id, second.id]);
+  });
+
+  it("accepts a unique client id and rejects reuse during the grace window", () => {
+    const first = manager.request({ id: "ask_client_id", questions, timeoutMs: 10_000 });
+
+    expect(first.id).toBe("ask_client_id");
+    expect(() =>
+      manager.request({ id: "ask_client_id", questions, timeoutMs: 10_000 }),
+    ).toThrowError(QuestionManagerError);
+    try {
+      manager.request({ id: "ask_client_id", questions, timeoutMs: 10_000 });
+    } catch (error) {
+      expect(error).toMatchObject({ code: QuestionManagerErrorCodes.ID_IN_USE });
+    }
+  });
+
+  it("releases waitAnswer with the submitted answer", async () => {
+    const record = manager.request({ questions, timeoutMs: 10_000 });
+    const waiting = manager.waitAnswer(record.id);
+
+    expect(manager.resolve(record.id, answers, "control-ui")).toEqual({
+      status: "answered",
+      answers,
+    });
+    await expect(waiting).resolves.toEqual({ status: "answered", answers });
+    expect(manager.get(record.id)).toMatchObject({ status: "answered", resolvedBy: "control-ui" });
+  });
+
+  it("keeps resolution receipts opt-in for simultaneous and late waiters", async () => {
+    const onResolved = vi.fn();
+    const record = manager.request({ questions, timeoutMs: 10_000, onResolved });
+    const legacy = manager.waitAnswer(record.id);
+    const tracked = manager.waitAnswer(record.id, undefined, true);
+    const resolutionId = "candidate-resolution";
+
+    expect(manager.resolve(record.id, answers, "plain-text", { resolutionId })).toEqual({
+      status: "answered",
+      answers,
+    });
+    await expect(legacy).resolves.toEqual({ status: "answered", answers });
+    await expect(tracked).resolves.toEqual({ status: "answered", answers, resolutionId });
+    await expect(manager.waitAnswer(record.id)).resolves.toEqual({ status: "answered", answers });
+    await expect(manager.waitAnswer(record.id, undefined, true)).resolves.toEqual({
+      status: "answered",
+      answers,
+      resolutionId,
+    });
+    expect(manager.get(record.id)).not.toHaveProperty("resolutionId");
+    expect(onResolved).toHaveBeenCalledExactlyOnceWith({
+      id: record.id,
+      status: "answered",
+      answers,
+    });
+    expect(() =>
+      manager.resolve(record.id, answers, "other", { resolutionId: "other-resolution" }),
+    ).toThrowError(QuestionManagerError);
+    await vi.advanceTimersByTimeAsync(QUESTION_RESOLVED_ENTRY_GRACE_MS);
+    expect(manager.get(record.id)).toBeNull();
+    // Already-delivered proof survives terminal-record cleanup, without a later lookup.
+    await expect(tracked).resolves.toEqual({ status: "answered", answers, resolutionId });
+  });
+
+  it("does not stamp a receipt when the synchronous commit fails", async () => {
+    const record = manager.request({ questions, timeoutMs: 10_000 });
+    const waiting = manager.waitAnswer(record.id, undefined, true);
+    expect(() =>
+      manager.resolve(record.id, answers, "failed", {
+        resolutionId: "uncommitted",
+        commit: () => {
+          throw new Error("commit failed");
+        },
+      }),
+    ).toThrow("commit failed");
+    expect(manager.get(record.id)?.status).toBe("pending");
+    manager.resolve(record.id, answers, "legacy");
+    await expect(waiting).resolves.toEqual({ status: "answered", answers });
+  });
+
+  it.each(invalidAnswerCases)(
+    "rejects %s without terminalizing",
+    (_name, requestQuestions, invalid, questionId) => {
+      const record = manager.request({ questions: [...requestQuestions], timeoutMs: 10_000 });
+
+      expect(() => manager.resolve(record.id, invalid)).toThrow(`question '${questionId}'`);
+      expect(manager.get(record.id)?.status).toBe("pending");
+    },
+  );
+
+  it("accepts trimmed option labels and free text when allowed", () => {
+    const strict = manager.request({
+      questions: [{ ...questions[0]!, isOther: false }],
+      timeoutMs: 10_000,
+    });
+    expect(manager.resolve(strict.id, { answers: { choice: ["  Two  "] } })).toMatchObject({
+      status: "answered",
+    });
+
+    const open = manager.request({ questions, timeoutMs: 10_000 });
+    expect(manager.resolve(open.id, { answers: { choice: ["custom"] } })).toMatchObject({
+      status: "answered",
+    });
+
+    const freeText = manager.request({
+      questions: [{ ...questions[0]!, options: [], isOther: false }],
+      timeoutMs: 10_000,
+    });
+    expect(manager.resolve(freeText.id, { answers: { choice: ["custom"] } })).toMatchObject({
+      status: "answered",
+    });
+  });
+
+  it("retires local questions without cancelling truth or refreshing human-input recovery", async () => {
+    const onResolved = vi.fn();
+    const releaseHumanInputWait = vi.fn();
+    const record = manager.request({
+      questions,
+      timeoutMs: 10_000,
+      onResolved,
+      registerHumanInputWait: () => releaseHumanInputWait,
+    });
+    const waiting = manager.waitAnswer(record.id, 5_000);
+
+    manager.reset();
+    await expect(waiting).resolves.toEqual({ status: "pending" });
+    expect(record.status).toBe("pending");
+    expect(manager.get(record.id)).toBeNull();
+    expect(releaseHumanInputWait).toHaveBeenCalledExactlyOnceWith(false);
+    await vi.advanceTimersByTimeAsync(10_000 + QUESTION_RESOLVED_ENTRY_GRACE_MS);
+    expect(onResolved).not.toHaveBeenCalled();
+    expect(manager.request({ id: record.id, questions, timeoutMs: 10_000 }).status).toBe("pending");
+  });
+
+  it("permanently closes admission without reset reopening the retired owner", () => {
+    const releaseHumanInputWait = vi.fn();
+    const onResolved = vi.fn();
+    const record = manager.request({
+      questions,
+      timeoutMs: 10_000,
+      onResolved,
+      registerHumanInputWait: () => releaseHumanInputWait,
+    });
+    manager.close();
+    manager.reset();
+    manager.close();
+    expect(() => manager.request({ questions, timeoutMs: 10_000 })).toThrow(
+      "Question manager is closed",
+    );
+    expect(manager.get(record.id)).toBeNull();
+    expect(releaseHumanInputWait).toHaveBeenCalledExactlyOnceWith(false);
+    expect(onResolved).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not recreate a retention timer when resolution closes the manager reentrantly", () => {
+    const record = manager.request({
+      questions,
+      timeoutMs: 10_000,
+      onResolved: () => manager.close(),
+    });
+    expect(manager.resolve(record.id, answers)).toEqual({ status: "answered", answers });
+    expect(manager.get(record.id)).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("preserves an answer recorded before human-input release reentrantly closes its observer", async () => {
+    const observer = new AsyncWorkScope();
+    const releaseHumanInputWait = vi.fn(() => observer.beginClose());
+    const onResolved = vi.fn();
+    const record = manager.request({
+      questions,
+      timeoutMs: 10_000,
+      onResolved,
+      registerHumanInputWait: () => releaseHumanInputWait,
+    });
+    const waiting = observer.track(() => manager.waitAnswer(record.id));
+    try {
+      manager.resolve(record.id, answers);
+      await expect(waiting).resolves.toEqual({ status: "answered", answers });
+      expect(manager.get(record.id)).toMatchObject({ status: "answered", answers });
+      expect(releaseHumanInputWait).toHaveBeenCalledExactlyOnceWith(true);
+      expect(onResolved).toHaveBeenCalledExactlyOnceWith({
+        id: record.id,
+        status: "answered",
+        answers,
+      });
+    } finally {
+      manager.close();
+      await waiting;
+      await observer.drain();
+    }
+  });
+
+  it("detaches only the closing observer without releasing the question's human-input wait", async () => {
+    const observer = new AsyncWorkScope();
+    const onResolved = vi.fn();
+    const releaseHumanInputWait = vi.fn();
+    const record = manager.request({
+      questions,
+      timeoutMs: 10_000,
+      onResolved,
+      registerHumanInputWait: () => releaseHumanInputWait,
+    });
+    let closingObserverSettled = false;
+    let otherObserverSettled = false;
+    const closingObserver = observer
+      .track(() => manager.waitAnswer(record.id, 5_000))
+      .then((result) => {
+        closingObserverSettled = true;
+        return result;
+      });
+    const otherObserver = manager.waitAnswer(record.id, 5_000).then((result) => {
+      otherObserverSettled = true;
+      return result;
+    });
+    try {
+      observer.beginClose();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(closingObserverSettled).toBe(true);
+      expect(otherObserverSettled).toBe(false);
+      await expect(closingObserver).resolves.toEqual({ status: "pending" });
+      await observer.drain();
+      expect(manager.get(record.id)?.status).toBe("pending");
+      expect(onResolved).not.toHaveBeenCalled();
+      expect(releaseHumanInputWait).not.toHaveBeenCalled();
+
+      manager.resolve(record.id, answers);
+      await expect(otherObserver).resolves.toEqual({ status: "answered", answers });
+      expect(releaseHumanInputWait).toHaveBeenCalledExactlyOnceWith(true);
+      expect(onResolved).toHaveBeenCalledExactlyOnceWith({
+        id: record.id,
+        status: "answered",
+        answers,
+      });
+    } finally {
+      // Owner retirement is post-observer cleanup, not the cancellation mechanism being tested.
+      manager.close();
+      await Promise.all([closingObserver, otherObserver]);
+      await observer.drain();
+    }
+  });
+
+  it("times out one waiter without resolving the question", async () => {
+    const record = manager.request({ questions, timeoutMs: 10_000 });
+    const waiting = manager.waitAnswer(record.id, 50);
+
+    await vi.advanceTimersByTimeAsync(50);
+
+    await expect(waiting).resolves.toEqual({ status: "pending" });
+    expect(manager.get(record.id)?.status).toBe("pending");
+  });
+
+  it("expires pending questions and emits the terminal event", async () => {
+    const onResolved = vi.fn();
+    const record = manager.request({ questions, timeoutMs: 50, onResolved });
+    const waiting = manager.waitAnswer(record.id);
+
+    await vi.advanceTimersByTimeAsync(50);
+
+    await expect(waiting).resolves.toEqual({ status: "expired" });
+    expect(manager.get(record.id)?.status).toBe("expired");
+    expect(onResolved).toHaveBeenCalledWith({ id: record.id, status: "expired" });
+  });
+
+  it("cancels pending questions", async () => {
+    const record = manager.request({ questions, timeoutMs: 10_000 });
+    const waiting = manager.waitAnswer(record.id);
+
+    expect(manager.cancel(record.id, "agent")).toEqual({ status: "cancelled" });
+    await expect(waiting).resolves.toEqual({ status: "cancelled" });
+    expect(manager.get(record.id)).toMatchObject({ status: "cancelled", resolvedBy: "agent" });
+  });
+
+  it("rejects double resolve and resolve after expiry with typed errors", async () => {
+    const answered = manager.request({ questions, timeoutMs: 10_000 });
+    manager.resolve(answered.id, answers);
+
+    expect(() => manager.resolve(answered.id, answers)).toThrowError(QuestionManagerError);
+    try {
+      manager.resolve(answered.id, answers);
+    } catch (error) {
+      expect(error).toMatchObject({ code: QuestionManagerErrorCodes.ALREADY_TERMINAL });
+    }
+
+    const expired = manager.request({ questions, timeoutMs: 10 });
+    await vi.advanceTimersByTimeAsync(10);
+    try {
+      manager.resolve(expired.id, answers);
+      throw new Error("expected resolve to fail");
+    } catch (error) {
+      expect(error).toMatchObject({ code: QuestionManagerErrorCodes.ALREADY_TERMINAL });
+    }
+  });
+
+  it("keeps terminal records through the grace window", async () => {
+    const record = manager.request({ questions, timeoutMs: 10_000 });
+    manager.resolve(record.id, answers);
+
+    await vi.advanceTimersByTimeAsync(QUESTION_RESOLVED_ENTRY_GRACE_MS - 1);
+    expect(manager.get(record.id)?.status).toBe("answered");
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(manager.get(record.id)).toBeNull();
+  });
+});
+
+describe("answer canonicalization", () => {
+  it("stores declared option labels for trim-variant submissions", () => {
+    const localManager = new QuestionManager();
+    const record = localManager.request({
+      questions: [
+        {
+          questionId: "pick",
+          header: "Pick",
+          question: "Pick one",
+          options: [{ label: "Two" }, { label: "Three" }],
+          isOther: false,
+        },
+      ],
+      timeoutMs: 60_000,
+    });
+    const result = localManager.resolve(record.id, {
+      answers: { pick: ["  Two  "] },
+    });
+    expect(result).toEqual({
+      status: "answered",
+      answers: { answers: { pick: ["Two"] } },
+    });
+    localManager.close();
+  });
+});

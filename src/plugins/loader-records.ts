@@ -1,10 +1,21 @@
 /** Converts loaded plugin registries into stable plugin records for status and diagnostics. */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { collectErrorGraphCandidates, extractErrorCode, readErrorCause } from "../infra/errors.js";
+import { parseBooleanValue } from "../utils/boolean.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
 import type { PluginBundleFormat, PluginDiagnosticCode, PluginFormat } from "./manifest-types.js";
-import type { PluginManifestContracts } from "./manifest.js";
+import type {
+  PluginManifestContracts,
+  PluginManifestControlUi,
+  PluginManifestDashboard,
+  PluginManifestMcpServer,
+} from "./manifest.js";
+import { isPluginLifecycleTraceEnabled } from "./plugin-lifecycle-trace.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
+import {
+  formatPluginVerificationDiagnostic,
+  type DegradedPlugin,
+} from "./runtime-degraded-state.js";
 import type { PluginLogger } from "./types.js";
 
 /** Builds the registry record shape shared by plugin loading, status, and diagnostics. */
@@ -12,7 +23,9 @@ export function createPluginRecord(params: {
   id: string;
   name?: string;
   description?: string;
+  packageVersion?: string;
   version?: string;
+  builtWithOpenClawVersion?: string;
   packageName?: string;
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
@@ -22,6 +35,7 @@ export function createPluginRecord(params: {
   origin: PluginRecord["origin"];
   workspaceDir?: string;
   trustedOfficialInstall?: boolean;
+  trust?: PluginRecord["trust"];
   enabled: boolean;
   compat?: readonly PluginCompatCode[];
   activationState?: PluginActivationState;
@@ -30,12 +44,17 @@ export function createPluginRecord(params: {
   providerIds?: readonly string[];
   configSchema: boolean;
   contracts?: PluginManifestContracts;
+  dashboard?: PluginManifestDashboard;
+  controlUi?: PluginManifestControlUi;
+  mcpServers?: Record<string, PluginManifestMcpServer>;
 }): PluginRecord {
   return {
     id: params.id,
     name: params.name ?? params.id,
     description: params.description,
+    packageVersion: params.packageVersion,
     version: params.version,
+    builtWithOpenClawVersion: params.builtWithOpenClawVersion,
     packageName: params.packageName,
     format: params.format ?? "openclaw",
     bundleFormat: params.bundleFormat,
@@ -45,6 +64,7 @@ export function createPluginRecord(params: {
     origin: params.origin,
     workspaceDir: params.workspaceDir,
     trustedOfficialInstall: params.trustedOfficialInstall,
+    trust: params.trust,
     enabled: params.enabled,
     compat: params.compat,
     explicitlyEnabled: params.activationState?.explicitlyEnabled,
@@ -72,7 +92,6 @@ export function createPluginRecord(params: {
     webSearchProviderIds: [...(params.contracts?.webSearchProviders ?? [])],
     migrationProviderIds: [...(params.contracts?.migrationProviders ?? [])],
     contextEngineIds: [],
-    memoryEmbeddingProviderIds: [...(params.contracts?.memoryEmbeddingProviders ?? [])],
     agentHarnessIds: [],
     cliCommands: [],
     services: [],
@@ -84,6 +103,9 @@ export function createPluginRecord(params: {
     configUiHints: undefined,
     configJsonSchema: undefined,
     contracts: params.contracts,
+    dashboard: params.dashboard,
+    controlUi: params.controlUi,
+    mcpServers: params.mcpServers,
   };
 }
 
@@ -94,6 +116,31 @@ export function markPluginActivationDisabled(record: PluginRecord, reason?: stri
   record.activationReason = reason;
 }
 
+/** Records a boot-time payload quarantine without importing or activating the plugin. */
+export function recordPluginConfiguredUnavailable(params: {
+  registry: PluginRegistry;
+  record: PluginRecord;
+  seenIds: Map<string, PluginRecord["origin"]>;
+  origin: PluginRecord["origin"];
+  degradedPlugin: DegradedPlugin;
+}): void {
+  const error = formatPluginVerificationDiagnostic(params.degradedPlugin.diagnostic);
+  params.record.status = "error";
+  params.record.error = error;
+  params.record.failurePhase = "validation";
+  params.record.activated = false;
+  params.record.activationReason = `configured-unavailable: ${params.degradedPlugin.diagnostic.reason}`;
+  params.registry.plugins.push(params.record);
+  params.seenIds.set(params.record.id, params.origin);
+  params.registry.diagnostics.push({
+    level: "error",
+    pluginId: params.record.id,
+    source: params.record.source,
+    code: "plugin-verification",
+    message: error,
+  });
+}
+
 /** Joins auto-enable reasons into the single registry field shown by status surfaces. */
 export function formatAutoEnabledActivationReason(
   reasons: readonly string[] | undefined,
@@ -102,6 +149,25 @@ export function formatAutoEnabledActivationReason(
     return undefined;
   }
   return reasons.join("; ");
+}
+
+// A plugin-thrown error may expose throwing `cause`/`code` accessors; diagnostics inside the
+// loader's catch handler must classify without rethrowing.
+function readCauseOrNothing(node: unknown): unknown[] {
+  try {
+    return [readErrorCause(node)];
+  } catch {
+    return [];
+  }
+}
+
+function isMissingModuleNode(node: unknown): boolean {
+  try {
+    const code = extractErrorCode(node);
+    return code === "MODULE_NOT_FOUND" || code === "ERR_MODULE_NOT_FOUND";
+  } catch {
+    return false;
+  }
 }
 
 /** Records a loader failure in the registry, diagnostics list, and operator log consistently. */
@@ -117,9 +183,11 @@ export function recordPluginError(params: {
   logPrefix: string;
   diagnosticMessagePrefix: string;
   diagnosticCode?: PluginDiagnosticCode;
+  /** Shown when the failure is a missing module so operators learn the install path. */
+  missingDependencyHint?: string;
 }) {
   const errorText =
-    process.env.OPENCLAW_PLUGIN_LOADER_DEBUG_STACKS === "1" &&
+    isPluginLifecycleTraceEnabled() &&
     params.error instanceof Error &&
     typeof params.error.stack === "string"
       ? params.error.stack
@@ -128,8 +196,15 @@ export function recordPluginError(params: {
     errorText.includes("api.registerHttpHandler") && errorText.includes("is not a function")
       ? "deprecated api.registerHttpHandler(...) was removed; use api.registerHttpRoute(...) for plugin-owned routes or registerPluginHttpRoute(...) for dynamic lifecycle routes"
       : null;
+  // Native-require failures rewrap the Node error, so the missing-module code can sit on a cause.
+  const missingDependencyHint =
+    params.missingDependencyHint &&
+    collectErrorGraphCandidates(params.error, readCauseOrNothing).some(isMissingModuleNode)
+      ? params.missingDependencyHint
+      : null;
   // Rewrite the common removed-API failure into an actionable migration hint while preserving detail.
-  const displayError = deprecatedApiHint ? `${deprecatedApiHint} (${errorText})` : errorText;
+  const hint = deprecatedApiHint ?? missingDependencyHint;
+  const displayError = hint ? `${hint} (${errorText})` : errorText;
   params.logger.error(`${params.logPrefix}${displayError}`);
   params.record.status = "error";
   params.record.error = displayError;
@@ -162,8 +237,7 @@ export function formatPluginFailureSummary(failedPlugins: PluginRecord[]): strin
 }
 
 function isPluginLoadDebugEnabled(env: NodeJS.ProcessEnv): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(env.OPENCLAW_PLUGIN_LOAD_DEBUG);
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+  return parseBooleanValue(env.OPENCLAW_PLUGIN_LOAD_DEBUG) === true;
 }
 
 function describePluginModuleExportShape(

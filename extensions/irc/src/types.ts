@@ -1,6 +1,7 @@
 // Irc type declarations define plugin contracts.
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelDeliveryStreamingConfig } from "openclaw/plugin-sdk/channel-outbound";
 import type {
-  BlockStreamingCoalesceConfig,
   DmConfig,
   DmPolicy,
   GroupPolicy,
@@ -8,8 +9,8 @@ import type {
   GroupToolPolicyConfig,
   MarkdownConfig,
   OpenClawConfig,
-  BaseProbeResult,
-} from "./runtime-api.js";
+  ReplyToMode,
+} from "openclaw/plugin-sdk/config-contracts";
 
 export type IrcChannelConfig = {
   requireMention?: boolean;
@@ -33,6 +34,9 @@ export type IrcNickServConfig = {
 export type IrcAccountConfig = {
   name?: string;
   enabled?: boolean;
+  replyToMode?: ReplyToMode;
+  /** Allow channel-initiated config writes (default: true). */
+  configWrites?: boolean;
   /**
    * Break-glass override: allow nick-only allowlist matching.
    * Default behavior requires host/user-qualified identities.
@@ -54,15 +58,12 @@ export type IrcAccountConfig = {
   groupAllowFrom?: Array<string | number>;
   groups?: Record<string, IrcChannelConfig>;
   channels?: string[];
-  mentionPatterns?: string[];
   markdown?: MarkdownConfig;
   historyLimit?: number;
   dmHistoryLimit?: number;
   dms?: Record<string, DmConfig>;
   textChunkLimit?: number;
-  chunkMode?: "length" | "newline";
-  blockStreaming?: boolean;
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  streaming?: ChannelDeliveryStreamingConfig;
   responsePrefix?: string;
   mediaMaxMb?: number;
 };

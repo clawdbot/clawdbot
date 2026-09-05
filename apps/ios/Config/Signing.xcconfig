@@ -1,5 +1,5 @@
 // Shared iOS signing defaults for local development + CI.
-#include "Version.xcconfig"
+#include "../build/Version.xcconfig"
 
 OPENCLAW_IOS_DEFAULT_TEAM = FWJYW4S8P8
 OPENCLAW_IOS_SELECTED_TEAM = $(OPENCLAW_IOS_DEFAULT_TEAM)
@@ -18,6 +18,12 @@ OPENCLAW_WATCH_APP_PROFILE =
 // Keep include after defaults: xcconfig is evaluated top-to-bottom.
 #include? "../.local-signing.xcconfig"
 #include? "../LocalSigning.xcconfig"
+
+// Debug products install alongside release products and keep their app-group data separate.
+OPENCLAW_DEBUG_APP_BUNDLE_ID = $(OPENCLAW_APP_BUNDLE_ID).debug
+OPENCLAW_DEBUG_ACTIVITY_WIDGET_BUNDLE_ID = $(OPENCLAW_DEBUG_APP_BUNDLE_ID).activitywidget
+OPENCLAW_DEBUG_WATCH_APP_BUNDLE_ID = $(OPENCLAW_DEBUG_APP_BUNDLE_ID).watchkitapp
+OPENCLAW_DEBUG_APP_GROUP_ID = $(OPENCLAW_APP_GROUP_ID).debug
 
 CODE_SIGN_STYLE = $(OPENCLAW_CODE_SIGN_STYLE)
 CODE_SIGN_IDENTITY = $(OPENCLAW_CODE_SIGN_IDENTITY)

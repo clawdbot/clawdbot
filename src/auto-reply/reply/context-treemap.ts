@@ -2,10 +2,11 @@
 import crypto from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import zlib from "node:zlib";
+import { expectDefined } from "@openclaw/normalization-core";
+import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
+import { encodePngRgba } from "../../media/png-encode.js";
 
 /** PNG treemap renderer for visualizing prompt context size by section. */
 type Rect = {
@@ -111,9 +112,8 @@ function mixColor(a: Rgba, b: Rgba, amount: number): Rgba {
   );
 }
 
-function formatInt(value: number): string {
-  return new Intl.NumberFormat("en-US").format(value);
-}
+const numberFormat = new Intl.NumberFormat("en-US");
+const formatInt = (value: number) => numberFormat.format(value);
 
 function formatSize(value: number): string {
   return `${formatInt(value)} CH / ~${formatInt(estimateTokensFromChars(value))} TOK`;
@@ -144,50 +144,49 @@ function truncateLabel(value: string, maxChars: number): string {
   return value.slice(0, maxChars - 1);
 }
 
-function layoutBinary<T extends { value: number }>(rawItems: T[], rect: Rect): PositionedItem<T>[] {
+function layoutBinary<T extends { value: number }>(
+  rawItems: T[],
+  bounds: Rect,
+): PositionedItem<T>[] {
   const items = rawItems.filter((item) => item.value > 0).toSorted((a, b) => b.value - a.value);
-  if (items.length === 0 || rect.width <= 0 || rect.height <= 0) {
-    return [];
-  }
-  if (items.length === 1) {
-    return [{ item: items[0], rect }];
-  }
-  const total = totalValue(items);
-  let splitIndex = 1;
-  let splitSum = items[0]?.value ?? 0;
-  for (let i = 1; i < items.length - 1; i += 1) {
-    const next = splitSum + items[i].value;
-    if (Math.abs(total / 2 - next) > Math.abs(total / 2 - splitSum)) {
-      break;
+  const positioned: PositionedItem<T>[] = [];
+  // Child ranges retain the stable descending order; sum each range from zero
+  // to preserve floating-point split decisions and pixel boundaries.
+  function visit(start: number, end: number, rect: Rect): void {
+    if (start === end || rect.width <= 0 || rect.height <= 0) {
+      return;
     }
-    splitSum = next;
-    splitIndex = i + 1;
+    if (end - start === 1) {
+      positioned.push({ item: expectDefined(items[start], "items entry at start"), rect });
+      return;
+    }
+    let total = 0;
+    for (let i = start; i < end; i += 1) {
+      total += expectDefined(items[i], "items entry at i").value;
+    }
+    let splitIndex = start + 1;
+    let splitSum = items[start]?.value ?? 0;
+    for (let i = start + 1; i < end - 1; i += 1) {
+      const next = splitSum + expectDefined(items[i], "items entry at i").value;
+      if (Math.abs(total / 2 - next) > Math.abs(total / 2 - splitSum)) {
+        break;
+      }
+      splitSum = next;
+      splitIndex = i + 1;
+    }
+    const ratio = splitSum / total;
+    const dimension = rect.width >= rect.height ? "width" : "height";
+    const position = dimension === "width" ? "x" : "y";
+    const firstSize = rect[dimension] * ratio;
+    visit(start, splitIndex, { ...rect, [dimension]: firstSize });
+    visit(splitIndex, end, {
+      ...rect,
+      [position]: rect[position] + firstSize,
+      [dimension]: rect[dimension] - firstSize,
+    });
   }
-  const first = items.slice(0, splitIndex);
-  const second = items.slice(splitIndex);
-  const ratio = splitSum / total;
-  if (rect.width >= rect.height) {
-    const firstWidth = rect.width * ratio;
-    return [
-      ...layoutBinary(first, { ...rect, width: firstWidth }),
-      ...layoutBinary(second, {
-        x: rect.x + firstWidth,
-        y: rect.y,
-        width: rect.width - firstWidth,
-        height: rect.height,
-      }),
-    ];
-  }
-  const firstHeight = rect.height * ratio;
-  return [
-    ...layoutBinary(first, { ...rect, height: firstHeight }),
-    ...layoutBinary(second, {
-      x: rect.x,
-      y: rect.y + firstHeight,
-      width: rect.width,
-      height: rect.height - firstHeight,
-    }),
-  ];
+  visit(0, items.length, bounds);
+  return positioned;
 }
 
 /** Tiny in-process RGBA canvas used to avoid runtime image dependencies. */
@@ -234,9 +233,9 @@ class PngCanvas {
     const cursorY = Math.floor(y);
     for (const rawChar of text) {
       const char = rawChar.toUpperCase();
-      const glyph = FONT[char] ?? FONT[" "];
+      const glyph = expectDefined(FONT[char] ?? FONT[" "], "treemap font glyph");
       for (let row = 0; row < glyph.length; row += 1) {
-        const line = glyph[row];
+        const line = expectDefined(glyph[row], "treemap glyph row");
         for (let col = 0; col < line.length; col += 1) {
           if (line[col] !== "1") {
             continue;
@@ -288,55 +287,17 @@ function drawLabel(
   });
 }
 
-function crc32(buffer: Buffer): number {
-  let crc = 0xffffffff;
-  for (const byte of buffer) {
-    crc ^= byte;
-    for (let i = 0; i < 8; i += 1) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function pngChunk(type: string, data: Buffer): Buffer {
-  const typeBuffer = Buffer.from(type, "ascii");
-  const length = Buffer.alloc(4);
-  length.writeUInt32BE(data.length, 0);
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(Buffer.concat([typeBuffer, data])), 0);
-  return Buffer.concat([length, typeBuffer, data, crc]);
-}
-
-function encodePng(data: Buffer): Buffer {
-  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(WIDTH, 0);
-  ihdr.writeUInt32BE(HEIGHT, 4);
-  ihdr[8] = 8;
-  ihdr[9] = 6;
-  const stride = WIDTH * 4;
-  const raw = Buffer.alloc((stride + 1) * HEIGHT);
-  for (let y = 0; y < HEIGHT; y += 1) {
-    const rowStart = y * (stride + 1);
-    raw[rowStart] = 0;
-    data.copy(raw, rowStart + 1, y * stride, (y + 1) * stride);
-  }
-  return Buffer.concat([
-    signature,
-    pngChunk("IHDR", ihdr),
-    pngChunk("IDAT", zlib.deflateSync(raw)),
-    pngChunk("IEND", Buffer.alloc(0)),
-  ]);
-}
-
 function treemapGroup(params: { name: string; color: Rgba; leaves: TreemapLeaf[] }): TreemapGroup {
   return { ...params, value: totalValue(params.leaves) };
 }
 
-function buildGroups(report: SessionSystemPromptReport): TreemapGroup[] {
+function buildGroups(params: {
+  report: SessionSystemPromptReport;
+  conversation: TreemapLeaf[];
+}): TreemapGroup[] {
+  const { report } = params;
   const injectedTotal = report.injectedWorkspaceFiles.reduce(
-    (sum, file) => sum + file.injectedChars,
+    (sum, file) => (file.injectionStatus === "native_unverified" ? sum : sum + file.injectedChars),
     0,
   );
   const projectFrameChars = Math.max(0, report.systemPrompt.projectContextChars - injectedTotal);
@@ -345,26 +306,22 @@ function buildGroups(report: SessionSystemPromptReport): TreemapGroup[] {
   const tools = report.tools.entries
     .map((tool) => ({ name: tool.name, value: tool.schemaChars ?? 0 }))
     .filter((tool) => tool.value > 0);
-  const currentTurnLeaves = report.currentTurn
-    ? [
-        { name: "Model prompt", value: report.currentTurn.promptChars },
-        { name: "Runtime context", value: report.currentTurn.runtimeContextChars },
-      ].filter((leaf) => leaf.value > 0)
-    : [];
   const groups = [
     treemapGroup({
-      name: report.currentTurn?.kind === "room_event" ? "Room event" : "Current turn",
-      color: rgba(72, 135, 197),
-      leaves: currentTurnLeaves,
+      name: "Conversation",
+      color: rgba(201, 82, 96),
+      leaves: params.conversation,
     }),
     treemapGroup({
       name: "Workspace files",
       color: rgba(58, 145, 91),
       leaves: [
-        ...report.injectedWorkspaceFiles.map((file) => ({
-          name: file.name,
-          value: file.injectedChars,
-        })),
+        ...report.injectedWorkspaceFiles
+          .filter((file) => file.injectionStatus !== "native_unverified")
+          .map((file) => ({
+            name: file.name,
+            value: file.injectedChars,
+          })),
         { name: "Project context frame", value: projectFrameChars },
       ],
     }),
@@ -412,8 +369,7 @@ function drawTreemap(canvas: PngCanvas, groups: TreemapGroup[], rect: Rect): voi
       },
       0,
     );
-    const leaves = group.leaves.filter((leaf) => leaf.value > 0);
-    const leafRects = layoutBinary(leaves, childRect);
+    const leafRects = layoutBinary(group.leaves, childRect);
     leafRects.forEach(({ item: leaf, rect: leafRect }, leafIndex) => {
       const shade = (leafIndex % 7) / 10 + (groupIndex % 2) * 0.08;
       const fill = mixColor(group.color, rgba(255, 255, 255), shade);
@@ -455,8 +411,10 @@ function drawLegend(canvas: PngCanvas, groups: TreemapGroup[], rect: Rect, total
 export async function renderContextTreemapPng(params: {
   report: SessionSystemPromptReport;
   session: ContextTreemapSessionStats;
+  conversation: TreemapLeaf[];
 }): Promise<{ path: string; trackedChars: number; caption: string }> {
-  const groups = buildGroups(params.report);
+  const groups = buildGroups({ report: params.report, conversation: params.conversation });
+  const conversationChars = totalValue(params.conversation);
   const trackedChars = totalValue(groups);
   const canvas = new PngCanvas();
   canvas.fill(rgba(238, 241, 245));
@@ -502,11 +460,12 @@ export async function renderContextTreemapPng(params: {
     resolvePreferredOpenClawTmpDir(),
     `openclaw-context-map-${crypto.randomUUID()}.png`,
   );
-  await writeFile(outPath, encodePng(canvas.data));
+  await writeFile(outPath, encodePngRgba(canvas.data, WIDTH, HEIGHT));
   const caption = [
     "Context treemap",
     `Source: ${params.report.source}`,
     `Tracked: ${formatInt(trackedChars)} chars (~${formatInt(estimateTokensFromChars(trackedChars))} tok)`,
+    `Conversation: ${formatInt(conversationChars)} chars (~${formatInt(estimateTokensFromChars(conversationChars))} tok)`,
     params.session.cachedContextTokens == null
       ? "Actual cached context: unavailable"
       : `Actual cached context: ${formatInt(params.session.cachedContextTokens)} tok`,

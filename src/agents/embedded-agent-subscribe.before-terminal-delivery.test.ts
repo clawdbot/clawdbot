@@ -1,8 +1,11 @@
 // Before-terminal-delivery tests cover the async gate that can suppress or
 // release deferred assistant events and block replies at run completion.
 import { describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import type { AssistantMessage } from "../llm/types.js";
 import {
   emitAssistantTextDeltaAndEnd,
+  emitAssistantTextDelta,
   createSubscribedSessionHarness,
   emitMessageStartAndEndForAssistantText,
 } from "./embedded-agent-subscribe.e2e-harness.js";
@@ -24,6 +27,73 @@ function hasLifecycleEndEvent(calls: Array<unknown[]>): boolean {
 }
 
 describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
+  it("streams commentary before tools while retaining the revisable final reply gate", async () => {
+    const onAgentEvent = vi.fn();
+    const onBeforeTerminalDelivery = vi.fn(async () => ({
+      suppressTerminalDelivery: true as const,
+    }));
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-before-terminal-commentary",
+      onAgentEvent,
+      onBeforeTerminalDelivery,
+      blockReplyBreak: "message_end",
+    });
+    const commentaryMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Checking current state.",
+          textSignature: JSON.stringify({ v: 1, id: "progress", phase: "commentary" }),
+        },
+      ],
+      stopReason: "toolUse",
+    } as AssistantMessage;
+
+    emit({ type: "message_start", message: commentaryMessage });
+    emit({ type: "message_end", message: commentaryMessage });
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "item",
+      data: expect.objectContaining({
+        kind: "preamble",
+        progressText: "Checking current state.",
+      }),
+    });
+    emit({
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-after-commentary",
+      args: {},
+    });
+    const preambleCallIndex = onAgentEvent.mock.calls.findIndex(
+      ([event]) => event.stream === "item" && event.data?.kind === "preamble",
+    );
+    const toolCallIndex = onAgentEvent.mock.calls.findIndex(
+      ([event]) => event.stream === "item" && event.data?.kind === "tool",
+    );
+    expect(preambleCallIndex).toBeGreaterThanOrEqual(0);
+    expect(toolCallIndex).toBeGreaterThan(preambleCallIndex);
+
+    emitAssistantTextDeltaAndEnd({ emit, text: "Visible final answer." });
+    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(false);
+
+    emit({
+      type: "agent_end",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Visible final answer." }],
+          stopReason: "stop",
+        },
+      ],
+      willRetry: false,
+    });
+
+    await subscription.waitForPendingEvents();
+    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(false);
+  });
+
   it("suppresses deferred block replies when the terminal gate requests a revision", async () => {
     const onBlockReply = vi.fn();
     const onAgentEvent = vi.fn();
@@ -130,9 +200,12 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
       blockReplyBreak: "message_end",
     });
 
-    emitAssistantTextDeltaAndEnd({
-      emit,
-      text: "Visible stream.",
+    for (const delta of ["Visible", " stream", "."]) {
+      emitAssistantTextDelta({ emit, delta });
+    }
+    emit({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "Visible stream." }] },
     });
     expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(false);
     expect(onPartialReply).not.toHaveBeenCalled();
@@ -150,8 +223,17 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     });
 
     await subscription.waitForPendingEvents();
-    expect(hasAssistantEvent(onAgentEvent.mock.calls)).toBe(true);
-    expect(onPartialReply).toHaveBeenCalled();
+    const assistantEvents = onAgentEvent.mock.calls.filter(
+      ([event]) => event.stream === "assistant",
+    );
+    expect(assistantEvents).toHaveLength(1);
+    expect(assistantEvents[0]?.[0].data).toMatchObject({
+      text: "Visible stream.",
+      delta: "Visible stream.",
+    });
+    expect(onPartialReply).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: "Visible stream.", delta: "Visible stream." }),
+    );
     expect(hasLifecycleEndEvent(onAgentEvent.mock.calls)).toBe(true);
   });
 
@@ -218,6 +300,7 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     await subscription.waitForPendingEvents();
     expect(onBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Fallback answer." }),
+      { assistantMessageIndex: 1 },
     );
     expect(hasLifecycleEndEvent(onAgentEvent.mock.calls)).toBe(true);
   });
@@ -253,6 +336,32 @@ describe("subscribeEmbeddedAgentSession before terminal delivery", () => {
     await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
     expect(onBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Accepted answer." }),
+      { assistantMessageIndex: 1 },
     );
+  });
+
+  it("preserves original transcript media references on deferred block replies", async () => {
+    const onBlockReply = vi.fn();
+    const { emit } = createSubscribedSessionHarness({
+      runId: "run-before-terminal-media",
+      onBlockReply,
+      onBeforeTerminalDelivery: vi.fn(async () => undefined),
+      blockReplyBreak: "message_end",
+    });
+    const text = "MEDIA:/tmp/generated.png\nAttached image";
+
+    emitMessageStartAndEndForAssistantText({ emit, text });
+    emit({
+      type: "agent_end",
+      messages: [{ role: "assistant", content: [{ type: "text", text }], stopReason: "stop" }],
+      willRetry: false,
+    });
+
+    await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledTimes(1));
+    const payload = onBlockReply.mock.calls[0]?.[0] as object;
+    expect(getReplyPayloadMetadata(payload)).toMatchObject({
+      assistantMessageIndex: 1,
+      assistantTranscriptMediaUrls: ["/tmp/generated.png"],
+    });
   });
 });

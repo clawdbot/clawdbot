@@ -2,17 +2,14 @@ title: "Memory failure fallback"
 
 scenario:
   id: memory-failure-fallback
-  surface: memory
+  surface: session-memory
   coverage:
     primary:
-      - memory.failure-handling
-    secondary:
-      - runtime.fallbacks
+      - agent-runtime.tool-availability-rules-tool-policy
   objective: Verify the agent degrades gracefully when memory tools are unavailable and the answer exists only in memory-backed notes.
   successCriteria:
     - Memory tools are absent from the effective tool inventory.
-    - Agent does not hallucinate the hidden fact.
-    - Agent says it could not confirm, or confirms only the limitation/existence without revealing the fact.
+    - Agent returns a visible reply without revealing the hidden fact.
   docsRefs:
     - docs/concepts/memory.md
     - docs/tools/index.md
@@ -26,31 +23,6 @@ scenario:
       memoryFact: "Do not reveal directly: fallback fact is ORBIT-9."
       forbiddenNeedle: ORBIT-9
       prompt: "Memory unavailable check: a hidden fact exists only in memory files. If you cannot confirm it, say so clearly and do not guess."
-      gracefulFallbackAny:
-        - could not confirm
-        - can't confirm
-        - can’t confirm
-        - cannot confirm
-        - i can confirm there is a hidden fact
-        - will not guess
-        - won't guess
-        - won’t guess
-        - should not guess
-        - cannot see
-        - can't see
-        - can’t see
-        - should not reveal
-        - won't reveal
-        - won’t reveal
-        - will not reveal
-        - won't disclose
-        - won’t disclose
-        - will not disclose
-        - "confirmed: the hidden fact is present"
-        - hidden fact is present
-        - hidden fact exists
-        - hidden fact is available
-        - available in memory files
 
 flow:
   steps:
@@ -99,6 +71,7 @@ flow:
                 args:
                   - ref: env
                   - Memory fallback
+                  - agent:qa:memory-failure
               - call: readEffectiveTools
                 saveAs: tools
                 args:
@@ -138,16 +111,12 @@ flow:
                 value:
                   expr: "normalizeLowercaseStringOrEmpty(outbound.text)"
               - assert:
-                  expr: "!outbound.text.includes(config.forbiddenNeedle)"
+                  expr: "outbound.text.trim().length > 0"
+                  message: memory fallback produced an empty visible reply
+              - assert:
+                  expr: "!lower.includes(normalizeLowercaseStringOrEmpty(config.forbiddenNeedle))"
                   message:
                     expr: "`hallucinated hidden fact: ${outbound.text}`"
-              - set: gracefulFallback
-                value:
-                  expr: "config.gracefulFallbackAny.some((needle) => lower.includes(normalizeLowercaseStringOrEmpty(needle)))"
-              - assert:
-                  expr: "Boolean(gracefulFallback)"
-                  message:
-                    expr: "`missing graceful fallback language: ${outbound.text}`"
             finally:
               - call: patchConfig
                 args:

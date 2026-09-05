@@ -8,20 +8,20 @@ title: "Image generation"
 sidebarTitle: "Image generation"
 ---
 
-The `image_generate` tool lets the agent create and edit images using your
-configured providers. In chat sessions, image generation runs asynchronously:
-OpenClaw records a background task, returns the task id immediately, and wakes
-the agent when the provider finishes. The completion agent follows the
-session's normal visible-reply mode: automatic final reply delivery when
-configured, or `message(action="send")` when the session requires the message
-tool. If the requester session is inactive or its active wake fails, and some
-generated images are still missing from the completion reply, OpenClaw sends an
-idempotent direct fallback with only the missing images.
+The `image_generate` tool creates and edits images through your configured
+providers. In chat sessions it runs asynchronously: OpenClaw records a
+background task, returns the task id immediately, and wakes the agent when
+the provider finishes. The task record stays silent, while the completion
+agent follows the session's current visible-reply contract with a short
+user-facing caption and every structured generated attachment. If generation
+fails, the agent returns a concise visible failure instead. If the requester
+session is inactive or its active wake fails, OpenClaw sends an idempotent
+direct fallback with the generated images so the result is not lost.
 
 <Note>
 The tool only appears when at least one image-generation provider is
 available. If you do not see `image_generate` in your agent's tools,
-configure `agents.defaults.imageGenerationModel`, set up a provider API key,
+configure `agents.defaults.mediaModels.image`, set up a provider API key,
 or sign in with OpenAI ChatGPT/Codex OAuth.
 </Note>
 
@@ -37,9 +37,11 @@ or sign in with OpenAI ChatGPT/Codex OAuth.
     {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "openai/gpt-image-2",
-            timeoutMs: 180_000,
+          mediaModels: {
+            image: {
+              primary: "openai/gpt-image-2",
+              timeoutMs: 180000,
+            },
           },
         },
       },
@@ -48,10 +50,9 @@ or sign in with OpenAI ChatGPT/Codex OAuth.
 
     ChatGPT/Codex OAuth uses the same `openai/gpt-image-2` model ref. When an
     `openai` OAuth profile is configured, OpenClaw routes image requests
-    through that OAuth profile instead of first trying
-    `OPENAI_API_KEY`. Explicit `models.providers.openai` config (API key,
-    custom/Azure base URL) opts back into the direct OpenAI Images API
-    route.
+    through that OAuth profile instead of first trying `OPENAI_API_KEY`.
+    Explicit `models.providers.openai` config (API key, custom/Azure base URL)
+    opts back into the direct OpenAI Images API route.
 
   </Step>
   <Step title="Ask the agent">
@@ -59,8 +60,8 @@ or sign in with OpenAI ChatGPT/Codex OAuth.
 
     The agent calls `image_generate` automatically. No tool allow-listing
     needed - it is enabled by default when a provider is available. The tool
-    returns a background task id, then the completion agent sends the generated
-    attachment through the `message` tool when it is ready.
+    returns a background task id, then the completion agent replies with every
+    generated attachment when it is ready.
 
   </Step>
 </Steps>
@@ -84,17 +85,21 @@ internal image endpoints remain blocked by default.
 | OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview` | `OPENROUTER_API_KEY`                   |
 | LiteLLM image generation                             | `litellm/gpt-image-2`                              | `LITELLM_API_KEY`                      |
 | Microsoft Foundry MAI image generation               | `microsoft-foundry/<deployment-name>`              | `AZURE_OPENAI_API_KEY` or Entra ID     |
-| Google Gemini image generation                       | `google/gemini-3.1-flash-image-preview`            | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
+| Google Gemini image generation                       | `google/gemini-3.1-flash-image`                    | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
 
-The same `image_generate` tool handles text-to-image and reference-image
-editing. Use `image` for one reference or `images` for multiple references.
-For Krea 2 models on fal, those references are sent as style references
-instead of edit inputs.
+The same tool handles text-to-image and reference-image editing. Use `image`
+for one reference or `images` for multiple. For Krea 2 models on fal, those
+references are sent as style references instead of edit inputs.
 Provider-supported output hints such as `quality`, `outputFormat`, and
 `background` are forwarded when available and reported as ignored when a
-provider does not support them. Bundled transparent-background support is
+provider does not declare support. Bundled transparent-background support is
 OpenAI-specific; other providers may still preserve PNG alpha if their
 backend emits it.
+
+OpenAI supports `low` and `auto` moderation for both text-to-image generation
+and reference-image edits through the direct Images API or the Codex Responses
+backend. For CLI requests, pass `--openai-moderation low|auto` to either
+`openclaw infer image generate` or `openclaw infer image edit`.
 
 ## Supported providers
 
@@ -103,14 +108,14 @@ backend emits it.
 | ComfyUI           | `workflow`                              | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
 | DeepInfra         | `black-forest-labs/FLUX-1-schnell`      | Yes (1 image)                      | `DEEPINFRA_API_KEY`                                   |
 | fal               | `fal-ai/flux/dev`                       | Yes (model-specific limits)        | `FAL_KEY`                                             |
-| Google            | `gemini-3.1-flash-image-preview`        | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
+| Google            | `gemini-3.1-flash-image`                | Yes (up to 5 images)               | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
 | LiteLLM           | `gpt-image-2`                           | Yes (up to 5 input images)         | `LITELLM_API_KEY`                                     |
 | Microsoft Foundry | `<deployment-name>`                     | Yes (MAI-Image-2.5 models only)    | `AZURE_OPENAI_API_KEY` or Entra ID (`az login`)       |
 | MiniMax           | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
-| OpenAI            | `gpt-image-2`                           | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth        |
+| OpenAI            | `gpt-image-2`                           | Yes (up to 5 images)               | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth        |
 | OpenRouter        | `google/gemini-3.1-flash-image-preview` | Yes (up to 5 input images)         | `OPENROUTER_API_KEY`                                  |
 | Vydra             | `grok-imagine`                          | No                                 | `VYDRA_API_KEY`                                       |
-| xAI               | `grok-imagine-image`                    | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
+| xAI               | `grok-imagine-image`                    | Yes (up to 3 images)               | `XAI_API_KEY`                                         |
 
 Use `action: "list"` to inspect available providers and models at runtime:
 
@@ -129,8 +134,8 @@ current session:
 
 | Capability            | ComfyUI            | DeepInfra | fal                                            | Google         | Microsoft Foundry | MiniMax               | OpenAI         | Vydra | xAI            |
 | --------------------- | ------------------ | --------- | ---------------------------------------------- | -------------- | ----------------- | --------------------- | -------------- | ----- | -------------- |
-| Generate (max count)  | Workflow-defined   | 4         | 4                                              | 4              | 1                 | 9                     | 4              | 1     | 4              |
-| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT: 10; Krea style refs: 10; NB2: 14 | Up to 5 images | 1 image           | 1 image (subject ref) | Up to 5 images | -     | Up to 5 images |
+| Generate (max count)  | 1                  | 4         | 4                                              | 4              | 1                 | 9                     | 4              | 1     | 4              |
+| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT: 10; Krea style refs: 10; NB2: 14 | Up to 5 images | 1 image           | 1 image (subject ref) | Up to 5 images | -     | Up to 3 images |
 | Size control          | -                  | ✓         | ✓                                              | ✓              | ✓                 | -                     | Up to 4K       | -     | -              |
 | Aspect ratio          | -                  | -         | ✓                                              | ✓              | -                 | ✓                     | -              | -     | ✓              |
 | Resolution (1K/2K/4K) | -                  | -         | ✓                                              | ✓              | -                 | -                     | -              | -     | 1K, 2K         |
@@ -152,16 +157,16 @@ current session:
   Single reference image path or URL for edit mode.
 </ParamField>
 <ParamField path="images" type="string[]">
-  Multiple reference images for edit mode or style-reference models (up to 10
+  Multiple reference images for edit mode or style-reference models (up to 14
   through the shared tool; provider-specific limits still apply).
 </ParamField>
 <ParamField path="size" type="string">
   Size hint: `1024x1024`, `1536x1024`, `1024x1536`, `2048x2048`, `3840x2160`.
 </ParamField>
 <ParamField path="aspectRatio" type="string">
-  Aspect ratio: `1:1`, `2:3`, `3:2`, `2.35:1`, `3:4`, `4:3`, `4:5`,
-  `5:4`, `9:16`, `16:9`, `21:9`, `4:1`, `1:4`, `8:1`, `1:8`. Providers
-  validate their model-specific subset.
+  Aspect ratio: `1:1`, `2:1`, `20:9`, `19.5:9`, `2:3`, `3:2`, `2.35:1`, `3:4`,
+  `4:3`, `4:5`, `5:4`, `9:16`, `9:19.5`, `9:20`, `16:9`, `21:9`, `1:2`, `4:1`,
+  `1:4`, `8:1`, `1:8`. Providers validate their model-specific subset.
 </ParamField>
 <ParamField path="resolution" type='"1K" | "2K" | "4K"'>Resolution hint.</ParamField>
 <ParamField path="quality" type='"low" | "medium" | "high" | "auto"'>
@@ -206,14 +211,16 @@ translation.
 {
   agents: {
     defaults: {
-      imageGenerationModel: {
-        primary: "openai/gpt-image-2",
-        timeoutMs: 180_000,
-        fallbacks: [
-          "openrouter/google/gemini-3.1-flash-image-preview",
-          "google/gemini-3.1-flash-image-preview",
-          "fal/fal-ai/flux/dev",
-        ],
+      mediaModels: {
+        image: {
+          primary: "openai/gpt-image-2",
+          timeoutMs: 180000,
+          fallbacks: [
+            "openrouter/google/gemini-3.1-flash-image-preview",
+            "google/gemini-3.1-flash-image",
+            "fal/fal-ai/flux/dev",
+          ],
+        },
       },
     },
   },
@@ -222,12 +229,13 @@ translation.
 
 ### Provider selection order
 
-OpenClaw tries providers in this order:
+For `image_generate`, OpenClaw tries providers in this order:
 
-1. **`model` parameter** from the tool call (if the agent specifies one).
-2. **`imageGenerationModel.primary`** from config.
-3. **`imageGenerationModel.fallbacks`** in order.
-4. **Auto-detection** - auth-backed provider defaults only:
+1. **`model` parameter** from the tool call. When set, only this model is tried.
+2. **`agents.defaults.mediaModels.image.primary`** from config.
+3. **`agents.defaults.mediaModels.image.fallbacks`** in order.
+4. **Auto-detection** - only when neither a primary nor fallback model is
+   configured, using configured provider defaults:
    - current default provider first;
    - remaining registered image-generation providers in provider-id order.
 
@@ -240,21 +248,20 @@ from each attempt.
     A per-call `model` override tries only that provider/model and does
     not continue to configured primary/fallback or auto-detected providers.
   </Accordion>
-  <Accordion title="Auto-detection is auth-aware">
-    A provider default only enters the candidate list when OpenClaw can
-    actually authenticate that provider. Set
-    `agents.defaults.mediaGenerationAutoProviderFallback: false` to use only
-    explicit `model`, `primary`, and `fallbacks` entries.
+  <Accordion title="Auto-detection uses configured providers">
+    Auto-detection considers provider defaults whose readiness or auth checks pass.
+    Explicit image model configuration limits fallback to the configured list;
+    OpenClaw does not append auto-detected providers.
   </Accordion>
   <Accordion title="Timeouts">
-    Set `agents.defaults.imageGenerationModel.timeoutMs` for slow image
+    Set `agents.defaults.mediaModels.image.timeoutMs` for slow image
     backends. A per-call `timeoutMs` tool parameter overrides the configured
     default, and configured defaults override plugin-authored provider
     defaults. Google and OpenRouter hosted image providers use 180 second
     defaults; Microsoft Foundry MAI, xAI, and Azure OpenAI image generation use
     600 seconds. Codex dynamic-tool calls use a 120 second `image_generate`
-    bridge default and honor the same timeout budget when configured, bounded by
-    OpenClaw's 600000 ms dynamic-tool bridge maximum.
+    bridge default and honor the same timeout budget when configured, bounded
+    by OpenClaw's 600000 ms dynamic-tool bridge maximum.
   </Accordion>
   <Accordion title="Inspect at runtime">
     Use `action: "list"` to inspect the currently registered providers,
@@ -265,18 +272,19 @@ from each attempt.
 ### Image editing
 
 OpenAI, OpenRouter, Google, DeepInfra, fal, Microsoft Foundry, MiniMax,
-ComfyUI, and xAI support editing reference images. Krea 2 models on fal use the
-same `image` / `images` fields as style references instead of edit inputs. Pass
-a reference image path or URL:
+ComfyUI, and xAI support editing reference images. Krea 2 models on fal use
+the same `image` / `images` fields as style references instead of edit
+inputs. Pass a reference image path or URL:
 
 ```text
 "Generate a watercolor version of this photo" + image: "/path/to/photo.jpg"
 ```
 
-OpenAI, OpenRouter, Google, and xAI support up to 5 reference images via the
-`images` parameter. fal supports 1 reference image for Flux image-to-image, up
-to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
-14 for Nano Banana 2 edits. Microsoft Foundry, MiniMax, and ComfyUI support 1.
+OpenAI, OpenRouter, and Google support up to 5 reference images via the
+`images` parameter; xAI supports up to 3. fal supports 1 reference image for
+Flux image-to-image, up to 10 for GPT Image 2 edits, up to 10 style references
+for Krea 2, and up to 14 for Nano Banana 2 edits. Microsoft Foundry, MiniMax,
+and ComfyUI support 1.
 
 ## Provider deep dives
 
@@ -305,6 +313,15 @@ to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
     `aspectRatio` or `resolution` directly; when possible OpenClaw maps
     those into a supported `size`, otherwise the tool reports them as
     ignored overrides.
+
+    For direct OpenAI Images API requests, `gpt-image-2` and its
+    `gpt-image-2-2026-04-21` snapshot preserve valid explicit
+    `WIDTHxHEIGHT` sizes instead of snapping them to presets. Both
+    dimensions must be multiples of 16, neither may exceed 3840 pixels,
+    the aspect ratio cannot exceed 3:1, and the image must contain
+    between 655,360 and 8,294,400 pixels. For example, `1024x640` is
+    valid. When only `aspectRatio` is specified, OpenClaw still selects
+    the closest supported size.
 
     OpenAI-specific options live under the `openai` object:
 
@@ -348,9 +365,11 @@ to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
     {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "microsoft-foundry/<deployment-name>",
-            timeoutMs: 600_000,
+          mediaModels: {
+            image: {
+              primary: "microsoft-foundry/<deployment-name>",
+              timeoutMs: 600000,
+            },
           },
         },
       },
@@ -381,15 +400,19 @@ to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
   </Accordion>
   <Accordion title="OpenRouter image models">
     OpenRouter image generation uses the same `OPENROUTER_API_KEY` and
-    routes through OpenRouter's chat completions image API. Select
-    OpenRouter image models with the `openrouter/` prefix:
+    routes canonical requests through OpenRouter's dedicated `/api/v1/images`
+    endpoint. Configured custom OpenRouter base URLs retain the existing
+    chat-completions image route for proxy compatibility. Select OpenRouter
+    image models with the `openrouter/` prefix:
 
     ```json5
     {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "openrouter/google/gemini-3.1-flash-image-preview",
+          mediaModels: {
+            image: {
+              primary: "openrouter/google/gemini-3.1-flash-image-preview",
+            },
           },
         },
       },
@@ -399,8 +422,8 @@ to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
     OpenClaw forwards `prompt`, `count`, reference images, and
     Gemini-compatible `aspectRatio` / `resolution` hints to OpenRouter.
     Current built-in OpenRouter image model shortcuts include
-    `google/gemini-3.1-flash-image-preview`,
-    `google/gemini-3-pro-image-preview`, and `openai/gpt-5.4-image-2`. Use
+    `google/gemini-3.1-flash-image`,
+    `google/gemini-3-pro-image`, and `openai/gpt-5.4-image-2`. Use
     `action: "list"` to see what your configured plugin exposes.
 
   </Accordion>
@@ -419,8 +442,10 @@ to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
     {
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "fal/krea/v2/medium/text-to-image",
+          mediaModels: {
+            image: {
+              primary: "fal/krea/v2/medium/text-to-image",
+            },
           },
         },
       },
@@ -458,14 +483,15 @@ to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
 
     - Models: `xai/grok-imagine-image`, `xai/grok-imagine-image-quality`
     - Count: up to 4
-    - References: one `image` or up to five `images`
-    - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `2:3`, `3:2`
+    - References: one `image` or up to three `images`
+    - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`, `2:1`,
+      `1:2`, `19.5:9`, `9:19.5`, `20:9`, `9:20`
     - Resolutions: `1K`, `2K`
     - Outputs: returned as OpenClaw-managed image attachments
 
     OpenClaw intentionally does not expose xAI-native `quality`, `mask`,
-    `user`, or extra native-only aspect ratios until those controls exist
-    in the shared cross-provider `image_generate` contract.
+    `user`, or the `auto` aspect ratio until those controls exist in the shared
+    cross-provider `image_generate` contract.
 
   </Accordion>
 </AccordionGroup>
@@ -534,11 +560,14 @@ openclaw infer image generate \
   </Tab>
 </Tabs>
 
-The same `--output-format`, `--background`, `--quality`, and
-`--openai-moderation` flags are available on `openclaw infer image edit`;
-`--openai-background` remains as an OpenAI-specific alias. Bundled providers
-other than OpenAI do not declare explicit background control today, so
-`background: "transparent"` is reported as ignored for them.
+The same `--output-format`, `--background`, and `--quality` flags are available
+on `openclaw infer image edit`; `--openai-background` remains as an
+OpenAI-specific alias. Use `--openai-moderation low|auto` with both OpenAI image
+generation and reference-image edits. The direct OpenAI Images API and the
+ChatGPT/Codex OAuth Responses backend both support the moderation hint.
+Bundled providers other than OpenAI do not declare
+explicit background control today, so `background: "transparent"` is reported
+as ignored for them.
 
 ## Related
 
@@ -551,5 +580,5 @@ other than OpenAI do not declare explicit background control today, so
 - [OpenAI](/providers/openai) - OpenAI Images provider setup
 - [Vydra](/providers/vydra) - Vydra image, video, and speech setup
 - [xAI](/providers/xai) - Grok image, video, search, code execution, and TTS setup
-- [Configuration reference](/gateway/config-agents#agent-defaults) - `imageGenerationModel` config
+- [Configuration reference](/gateway/config-agents#agent-defaults) - `agents.defaults.mediaModels.image` config
 - [Models](/concepts/models) - model configuration and failover

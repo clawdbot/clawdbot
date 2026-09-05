@@ -1,16 +1,21 @@
 /**
  * Tests for tool catalog gateway methods and plugin tool visibility.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import {
   ensureStandalonePluginToolRegistryLoaded,
   resolvePluginTools,
 } from "../../plugins/tools.js";
 import { toolsCatalogHandlers } from "./tools-catalog.js";
 
-vi.mock("../../agents/agent-scope.js", () => ({
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   listAgentIds: vi.fn(() => ["main"]),
   resolveDefaultAgentId: vi.fn(() => "main"),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace-main"),
@@ -21,22 +26,9 @@ vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 
-const pluginToolMetaState = new Map<string, { pluginId: string; optional: boolean }>();
-
 vi.mock("../../plugins/tools.js", () => ({
-  buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
-    JSON.stringify([pluginId, toolName]),
   ensureStandalonePluginToolRegistryLoaded: vi.fn(),
-  resolvePluginTools: vi.fn(() => [
-    { name: "voice_call", label: "voice_call", description: "Plugin calling tool" },
-    {
-      name: "matrix_room",
-      label: "matrix_room",
-      displaySummary: "Summarized Matrix room helper.",
-      description: "Matrix room helper\n\nACTIONS:\n- join\n- leave",
-    },
-  ]),
-  getPluginToolMeta: vi.fn((tool: { name: string }) => pluginToolMetaState.get(tool.name)),
+  resolvePluginTools: vi.fn(),
 }));
 
 const getActivePluginRegistryMock = vi.hoisted(() => vi.fn<() => unknown>(() => null));
@@ -72,15 +64,18 @@ type CatalogPayload = {
   groups: CatalogGroup[];
 };
 
-function createInvokeParams(params: Record<string, unknown>) {
+function createInvokeParams(params: Record<string, unknown>, config: Record<string, unknown> = {}) {
   const respond = vi.fn();
   return {
     respond,
     invoke: async () =>
-      await toolsCatalogHandlers["tools.catalog"]({
+      await expectDefined(
+        toolsCatalogHandlers["tools.catalog"],
+        'toolsCatalogHandlers["tools.catalog"] test invariant',
+      )({
         params,
         respond: respond as never,
-        context: { getRuntimeConfig: () => ({}) } as never,
+        context: { getRuntimeConfig: () => config } as never,
         client: null,
         req: { type: "req", id: "req-1", method: "tools.catalog" },
         isWebchatConnect: () => false,
@@ -119,9 +114,24 @@ function expectCatalogPayload(respond: ReturnType<typeof vi.fn>): CatalogPayload
 
 describe("tools.catalog handler", () => {
   beforeEach(() => {
-    pluginToolMetaState.clear();
-    pluginToolMetaState.set("voice_call", { pluginId: "voice-call", optional: true });
-    pluginToolMetaState.set("matrix_room", { pluginId: "matrix", optional: false });
+    const voiceCall = {
+      name: "voice_call",
+      label: "voice_call",
+      description: "Plugin calling tool",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [], details: {} }),
+    };
+    const matrixRoom = {
+      name: "matrix_room",
+      label: "matrix_room",
+      displaySummary: "Summarized Matrix room helper.",
+      description: "Matrix room helper\n\nACTIONS:\n- join\n- leave",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [], details: {} }),
+    };
+    setPluginToolMeta(voiceCall, { pluginId: "voice-call", optional: true });
+    setPluginToolMeta(matrixRoom, { pluginId: "matrix", optional: false });
+    vi.mocked(resolvePluginTools).mockReturnValue([voiceCall, matrixRoom]);
     getActivePluginRegistryMock.mockReturnValue(null);
     vi.mocked(ensureStandalonePluginToolRegistryLoaded).mockReturnValue(undefined);
   });
@@ -147,6 +157,24 @@ describe("tools.catalog handler", () => {
     expect(groups.some((group) => group.source === "plugin")).toBe(false);
     const media = groups.find((group) => group.id === "media");
     expect(media?.tools.map((tool) => `${tool.source}:${tool.id}`) ?? []).toContain("core:tts");
+  });
+
+  it("includes agents_wait by default and honors an explicit Swarm opt-out", async () => {
+    const disabled = createInvokeParams({ includePlugins: false }, { tools: { swarm: false } });
+    await disabled.invoke();
+    expect(
+      expectCatalogPayload(disabled.respond).groups.flatMap((group) =>
+        group.tools.map((tool) => tool.id),
+      ),
+    ).not.toContain("agents_wait");
+
+    const enabled = createInvokeParams({ includePlugins: false });
+    await enabled.invoke();
+    expect(
+      expectCatalogPayload(enabled.respond).groups.flatMap((group) =>
+        group.tools.map((tool) => tool.id),
+      ),
+    ).toContain("agents_wait");
   });
 
   it("includes plugin groups with plugin metadata", async () => {

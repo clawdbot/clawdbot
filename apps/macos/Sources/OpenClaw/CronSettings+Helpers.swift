@@ -1,11 +1,6 @@
 import SwiftUI
 
 extension CronSettings {
-    var selectedJob: CronJob? {
-        guard let id = self.store.selectedJobId else { return nil }
-        return self.store.jobs.first(where: { $0.id == id })
-    }
-
     func statusTint(_ status: String?) -> Color {
         switch (status ?? "").lowercased() {
         case "ok": .green
@@ -27,6 +22,9 @@ extension CronSettings {
         case let .cron(expr, tz):
             if let tz, !tz.isEmpty { return "cron \(expr) (\(tz))" }
             return "cron \(expr)"
+        case let .onExit(command, cwd):
+            if let cwd, !cwd.isEmpty { return "on exit: \(command) (cwd: \(cwd))" }
+            return "on exit: \(command)"
         }
     }
 

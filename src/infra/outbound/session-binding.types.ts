@@ -6,7 +6,7 @@ export type BindingTargetKind = "subagent" | "session";
 /**
  * Lifecycle state for a registered session binding.
  */
-export type BindingStatus = "active" | "ending" | "ended";
+type BindingStatus = "active" | "ending" | "ended";
 
 /**
  * Placement requested when binding a child/current session to a conversation.
@@ -30,6 +30,9 @@ export type ConversationRef = {
   conversationId: string;
   parentConversationId?: string;
 };
+
+/** Channel/account owner of an adapter-local binding id. */
+export type SessionBindingScope = Pick<ConversationRef, "channel" | "accountId">;
 
 /**
  * Persistable record that connects one conversation to one target session.
@@ -63,6 +66,8 @@ export type SessionBindingBindInput = {
 export type SessionBindingUnbindInput = {
   bindingId?: string;
   targetSessionKey?: string;
+  /** Restrict removal to this owner; omit only for intentional cross-channel cleanup. */
+  scope?: SessionBindingScope;
   reason: string;
 };
 

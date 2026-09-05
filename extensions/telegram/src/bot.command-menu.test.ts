@@ -6,17 +6,11 @@ import {
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 
-const {
-  getLoadConfigMock,
-  listSkillCommandsForAgents,
-  setMyCommandsSpy,
-  telegramBotDepsForTest,
-  telegramBotRuntimeForTest,
-} = await import("./bot.create-telegram-bot.test-harness.js");
+const { getLoadConfigMock, listSkillCommandsForAgents, setMyCommandsSpy, telegramBotDepsForTest } =
+  await import("./bot.create-telegram-bot.test-harness.js");
 
 let normalizeTelegramCommandName: typeof import("./command-config.js").normalizeTelegramCommandName;
 let createTelegramBotBase: typeof import("./bot-core.js").createTelegramBotCore;
-let setTelegramBotRuntimeForTest: typeof import("./bot-core.js").setTelegramBotRuntimeForTest;
 let createTelegramBot: (
   opts: import("./bot.types.js").TelegramBotOptions,
 ) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
@@ -44,8 +38,7 @@ function waitForNextSetMyCommands() {
 }
 
 function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsForConfig>[0]) {
-  void config;
-  return listSkillCommandsForAgents() as NonNullable<
+  return listSkillCommandsForAgents({ cfg: config }) as NonNullable<
     Parameters<typeof listNativeCommandSpecsForConfig>[1]
   >["skillCommands"];
 }
@@ -66,14 +59,15 @@ function registeredCommands(callIndex = -1): Array<{ command: string; descriptio
   if (!call) {
     throw new Error(`expected setMyCommands call ${callIndex}`);
   }
-  return call[0] as Array<{ command: string; description: string }>;
+  return (call[0] as Array<{ command: string; description: string }>).map(
+    ({ command, description }) => ({ command, description }),
+  );
 }
 
 describe("createTelegramBot command menu", () => {
   beforeAll(async () => {
     ({ normalizeTelegramCommandName } = await import("./command-config.js"));
-    ({ createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
-      await import("./bot-core.js"));
+    ({ createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js"));
   });
 
   beforeEach(() => {
@@ -87,9 +81,6 @@ describe("createTelegramBot command menu", () => {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
       },
     });
-    setTelegramBotRuntimeForTest(
-      telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
-    );
     createTelegramBot = (opts) =>
       createTelegramBotBase({
         ...opts,
@@ -132,14 +123,23 @@ describe("createTelegramBot command menu", () => {
 
     const registered = registeredCommands();
     const skillCommands = resolveSkillCommands(config);
-    const native = listNativeCommandSpecsForConfig(config, { skillCommands }).map((command) => ({
+    const native = listNativeCommandSpecsForConfig(config, {
+      skillCommands,
+      provider: "telegram",
+    }).map((command) => ({
       command: normalizeTelegramCommandName(command.name),
       description: command.description,
+      isAlias: command.isAlias === true,
     }));
     expect(registered).toStrictEqual([
-      ...native,
       { command: "custom_backup", description: "Git backup" },
       { command: "custom_generate", description: "Create an image" },
+      ...native
+        .filter((command) => !command.isAlias)
+        .map(({ isAlias: _isAlias, ...command }) => command),
+      ...native
+        .filter((command) => command.isAlias)
+        .map(({ isAlias: _isAlias, ...command }) => command),
     ]);
   });
 
@@ -183,24 +183,37 @@ describe("createTelegramBot command menu", () => {
 
     const registered = registeredCommands();
     const skillCommands = resolveSkillCommands(config);
-    const native = listNativeCommandSpecsForConfig(config, { skillCommands }).map((command) => ({
+    const native = listNativeCommandSpecsForConfig(config, {
+      skillCommands,
+      provider: "telegram",
+    }).map((command) => ({
       command: normalizeTelegramCommandName(command.name),
       description: command.description,
+      isAlias: command.isAlias === true,
     }));
     const nativeStatus = native.find((command) => command.command === "status");
     if (!nativeStatus) {
       throw new Error("expected native Telegram status command");
     }
     expect(registered).toStrictEqual([
-      ...native,
       { command: "custom_backup", description: "Git backup" },
+      ...native
+        .filter((command) => !command.isAlias)
+        .map(({ isAlias: _isAlias, ...command }) => command),
+      ...native
+        .filter((command) => command.isAlias)
+        .map(({ isAlias: _isAlias, ...command }) => command),
     ]);
-    expect(registered.find((command) => command.command === "status")).toEqual(nativeStatus);
+    expect(registered.find((command) => command.command === "status")).toEqual({
+      command: nativeStatus.command,
+      description: nativeStatus.description,
+    });
     expect(countMatching(registered, (command) => command.command === "status")).toBe(1);
     expect(errorSpy).toHaveBeenCalled();
   });
 
   it("registers custom commands when native commands are disabled", async () => {
+    const errorSpy = vi.fn();
     const config = {
       commands: { native: false },
       agents: {
@@ -214,6 +227,7 @@ describe("createTelegramBot command menu", () => {
           allowFrom: ["*"],
           customCommands: [
             { command: "custom_backup", description: "Git backup" },
+            { command: "login", description: "Custom login" },
             { command: "custom_generate", description: "Create an image" },
           ],
         },
@@ -222,7 +236,16 @@ describe("createTelegramBot command menu", () => {
     loadConfig.mockReturnValue(config);
     const commandsSynced = waitForNextSetMyCommands();
 
-    createTelegramBot({ token: "tok" });
+    createTelegramBot({
+      token: "tok",
+      runtime: {
+        log: vi.fn(),
+        error: errorSpy,
+        exit: ((code: number) => {
+          throw new Error(`exit ${code}`);
+        }) as (code: number) => never,
+      },
+    });
 
     await commandsSynced;
 
@@ -231,7 +254,12 @@ describe("createTelegramBot command menu", () => {
       { command: "custom_backup", description: "Git backup" },
       { command: "custom_generate", description: "Create an image" },
     ]);
-    const reserved = new Set(listNativeCommandSpecs().map((command) => command.name));
+    const reserved = new Set(
+      listNativeCommandSpecs({ provider: "telegram" }).map((command) => command.name),
+    );
     expect(registered.filter((command) => reserved.has(command.command))).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Telegram custom command "/login" conflicts with a native command.'),
+    );
   });
 });

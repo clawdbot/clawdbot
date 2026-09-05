@@ -1,11 +1,113 @@
 /**
  * Gateway agent-list RPC regression tests.
  */
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
 
 describe("listGatewayAgentsBasic", () => {
+  it("projects sole, retained-legacy, and explicit fleet ownership honestly", async () => {
+    await withStateDirEnv("openclaw-agent-list-", async () => {
+      expect(listGatewayAgentsBasic({ agents: { entries: { ops: {} } } })).toMatchObject({
+        defaultId: "ops",
+        ownership: "sole",
+        selectionRequired: false,
+      });
+
+      const legacy = retainLegacyDefaultAgentId(
+        { agents: { entries: { first: {}, retired: {}, research: {} } } },
+        "retired",
+      );
+      expect(listGatewayAgentsBasic(legacy)).toMatchObject({
+        defaultId: "retired",
+        ownership: "legacy",
+        selectionRequired: false,
+      });
+
+      expect(
+        listGatewayAgentsBasic({
+          agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+        }),
+      ).toMatchObject({
+        defaultId: "ops",
+        ownership: "explicit",
+        selectionRequired: true,
+      });
+    });
+  });
+
+  it("retains disk system agents without treating regular disk dirs as roster members", async () => {
+    await withStateDirEnv("openclaw-agent-list-", async ({ stateDir }) => {
+      await Promise.all(
+        ["openclaw", "crestodian", "research"].map((id) =>
+          fs.mkdir(path.join(stateDir, "agents", id), { recursive: true }),
+        ),
+      );
+
+      const result = listGatewayAgentsBasic({
+        agents: { entries: { main: { default: true } } },
+      });
+
+      expect(result.agents).toEqual([
+        { id: "main", kind: "agent", name: undefined },
+        { id: "crestodian", kind: "system", name: undefined },
+        { id: "openclaw", kind: "system", name: undefined },
+      ]);
+    });
+  });
+
+  it("does not add owner entries without a roster membership source", async () => {
+    await withStateDirEnv("openclaw-agent-list-", async () => {
+      expect(
+        listGatewayAgentsBasic({
+          agents: { entries: { main: { default: true } } },
+        }).agents,
+      ).toEqual([{ id: "main", kind: "agent", name: undefined }]);
+    });
+  });
+
+  it("lets configured ownership override disk system metadata", async () => {
+    await withStateDirEnv("openclaw-agent-list-", async ({ stateDir }) => {
+      await fs.mkdir(path.join(stateDir, "agents", "openclaw"), { recursive: true });
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", default: true },
+            { id: "openclaw", name: "OpenClaw" },
+          ],
+        },
+      };
+
+      expect(listGatewayAgentsBasic(cfg).agents).toEqual([
+        { id: "main", kind: "agent", name: undefined },
+        { id: "openclaw", kind: "agent", name: "OpenClaw" },
+      ]);
+    });
+  });
+
+  it("retains disk-backed system agents beside an explicit roster", async () => {
+    await withStateDirEnv("openclaw-agent-list-", async ({ stateDir }) => {
+      await Promise.all(
+        ["openclaw", "research"].map((id) =>
+          fs.mkdir(path.join(stateDir, "agents", id), { recursive: true }),
+        ),
+      );
+
+      expect(
+        listGatewayAgentsBasic({
+          agents: { entries: { main: { default: true } } },
+        }).agents,
+      ).toEqual([
+        { id: "main", kind: "agent", name: undefined },
+        { id: "openclaw", kind: "system", name: undefined },
+      ]);
+    });
+  });
+
   it("falls back to identity.name when the configured agent name is missing", () => {
     const cfg: OpenClawConfig = {
       session: { mainKey: "main" },
@@ -16,7 +118,7 @@ describe("listGatewayAgentsBasic", () => {
 
     const result = listGatewayAgentsBasic(cfg);
 
-    expect(result.agents).toEqual([{ id: "main", name: "小金" }]);
+    expect(result.agents).toEqual([{ id: "main", kind: "agent", name: "小金" }]);
   });
 
   it("prefers the explicit configured name over identity.name", () => {
@@ -36,7 +138,7 @@ describe("listGatewayAgentsBasic", () => {
 
     const result = listGatewayAgentsBasic(cfg);
 
-    expect(result.agents).toEqual([{ id: "main", name: "Ops" }]);
+    expect(result.agents).toEqual([{ id: "main", kind: "agent", name: "Ops" }]);
   });
 
   it("leaves the name unset when neither agents.list[].name nor identity.name is present", () => {
@@ -49,6 +151,6 @@ describe("listGatewayAgentsBasic", () => {
 
     const result = listGatewayAgentsBasic(cfg);
 
-    expect(result.agents).toEqual([{ id: "main", name: undefined }]);
+    expect(result.agents).toEqual([{ id: "main", kind: "agent", name: undefined }]);
   });
 });

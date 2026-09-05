@@ -15,6 +15,14 @@ Avoid implementation details such as:
 fix: add null check to task query
 -->
 
+<details>
+<summary>Additional instructions</summary>
+
+**MUST:** Keep **Allow edits from maintainers** enabled for this PR so maintainers
+can help update the branch when needed.
+
+</details>
+
 ## What Problem This Solves
 
 <!--

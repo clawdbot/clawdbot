@@ -1,10 +1,10 @@
 // Msteams plugin module implements conversation store state behavior.
 import crypto from "node:crypto";
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   findPreferredDmConversationByUserId,
   mergeStoredConversationReference,
   normalizeStoredConversationId,
-  parseStoredConversationTimestamp,
   toConversationStoreEntries,
 } from "./conversation-store-helpers.js";
 import type {
@@ -26,10 +26,10 @@ export type MSTeamsLegacyConversationStoreData = {
 
 export const MSTEAMS_CONVERSATIONS_LEGACY_FILENAME = "msteams-conversations.json";
 export const MSTEAMS_CONVERSATIONS_NAMESPACE = "conversations";
-export const MSTEAMS_MAX_CONVERSATIONS = 1000;
+const MSTEAMS_MAX_CONVERSATIONS = 1000;
 export const MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS = MSTEAMS_MAX_CONVERSATIONS + 1000;
-export const MSTEAMS_CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
-const CONVERSATION_LOCK_FILENAME = "msteams-conversations.sqlite.lock";
+const MSTEAMS_CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+const CONVERSATION_MUTATION_KEY = "conversations";
 
 type MSTeamsConversationStoreStateOptions = {
   env?: NodeJS.ProcessEnv;
@@ -88,15 +88,15 @@ export function selectRetainedMSTeamsConversations(
   ttlMs = MSTEAMS_CONVERSATION_TTL_MS,
 ): Array<[string, StoredConversationReference]> {
   const retained = Object.entries(conversations).filter(([, reference]) => {
-    const lastSeenAt = parseStoredConversationTimestamp(reference.lastSeenAt);
+    const lastSeenAt = parseDateStringTimestampMs(reference.lastSeenAt);
     return lastSeenAt == null || Date.now() - lastSeenAt <= ttlMs;
   });
   if (retained.length <= MSTEAMS_MAX_CONVERSATIONS) {
     return retained;
   }
   retained.sort((a, b) => {
-    const aTs = parseStoredConversationTimestamp(a[1].lastSeenAt) ?? 0;
-    const bTs = parseStoredConversationTimestamp(b[1].lastSeenAt) ?? 0;
+    const aTs = parseDateStringTimestampMs(a[1].lastSeenAt) ?? 0;
+    const bTs = parseDateStringTimestampMs(b[1].lastSeenAt) ?? 0;
     return aTs - bTs || a[0].localeCompare(b[0]);
   });
   return retained.slice(retained.length - MSTEAMS_MAX_CONVERSATIONS);
@@ -109,7 +109,7 @@ export function createMSTeamsConversationStoreState(
   const conversationStore = createConversationStateStore(params);
 
   const isExpired = (reference: StoredConversationReference): boolean => {
-    const lastSeenAt = parseStoredConversationTimestamp(reference.lastSeenAt);
+    const lastSeenAt = parseDateStringTimestampMs(reference.lastSeenAt);
     // Preserve migrated legacy entries that have no lastSeenAt until they're seen again.
     return lastSeenAt != null && Date.now() - lastSeenAt > ttlMs;
   };
@@ -168,8 +168,8 @@ export function createMSTeamsConversationStoreState(
       return;
     }
     const sorted = rows.toSorted((a, b) => {
-      const aTs = parseStoredConversationTimestamp(a.value.lastSeenAt) ?? 0;
-      const bTs = parseStoredConversationTimestamp(b.value.lastSeenAt) ?? 0;
+      const aTs = parseDateStringTimestampMs(a.value.lastSeenAt) ?? 0;
+      const bTs = parseDateStringTimestampMs(b.value.lastSeenAt) ?? 0;
       const aId = getStoredConversationId(a.value) ?? a.key;
       const bId = getStoredConversationId(b.value) ?? b.key;
       return aTs - bTs || aId.localeCompare(bId);
@@ -198,7 +198,7 @@ export function createMSTeamsConversationStoreState(
     reference: StoredConversationReference,
   ): Promise<void> => {
     const normalizedId = normalizeStoredConversationId(conversationId);
-    await withMSTeamsSqliteMutationLock(params, CONVERSATION_LOCK_FILENAME, async () => {
+    await withMSTeamsSqliteMutationLock(params, CONVERSATION_MUTATION_KEY, async () => {
       const existing = await lookupStored(normalizedId);
       await register(
         normalizedId,
@@ -213,7 +213,7 @@ export function createMSTeamsConversationStoreState(
 
   const remove = async (conversationId: string): Promise<boolean> => {
     const normalizedId = normalizeStoredConversationId(conversationId);
-    return await withMSTeamsSqliteMutationLock(params, CONVERSATION_LOCK_FILENAME, async () => {
+    return await withMSTeamsSqliteMutationLock(params, CONVERSATION_MUTATION_KEY, async () => {
       return await conversationStore.delete(buildMSTeamsConversationStateKey(normalizedId));
     });
   };
@@ -224,6 +224,5 @@ export function createMSTeamsConversationStoreState(
     list,
     remove,
     findPreferredDmByUserId,
-    findByUserId: findPreferredDmByUserId,
   };
 }

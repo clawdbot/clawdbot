@@ -1,25 +1,13 @@
+import {
+  scanReasoningTags,
+  stripReasoningTagsFromMarkdown,
+} from "../../../packages/markdown-core/src/reasoning-tags.js";
 // Reasoning tag helpers find and remove model reasoning tag blocks from text.
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 import { findFinalTagMatches } from "./final-tags.js";
 export type ReasoningTagMode = "strict" | "preserve";
 export type ReasoningTagTrim = "none" | "start" | "both";
-
-// Reasoning tags may carry a model-specific namespace prefix (e.g. Anthropic's
-// `antml:`, MiniMax's `mm:`). Accept the known prefixes so namespaced variants
-// like `<mm:think>` are stripped instead of leaking into visible output.
-const QUICK_TAG_RE = /<\s*\/?\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking|final)\b/i;
-const THINKING_TAG_RE =
-  /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
-
-function applyTrim(value: string, mode: ReasoningTagTrim): string {
-  if (mode === "none") {
-    return value;
-  }
-  if (mode === "start") {
-    return value.trimStart();
-  }
-  return value.trim();
-}
+export type ReasoningTagScope = "all" | "leading";
 
 /** Detects whether a stray reasoning close tag separates two visible text regions. */
 export function hasOrphanReasoningCloseBoundary(params: {
@@ -35,106 +23,44 @@ export function stripReasoningTagsFromText(
   options?: {
     mode?: ReasoningTagMode;
     trim?: ReasoningTagTrim;
+    scope?: ReasoningTagScope;
+    recoverUnclosed?: boolean;
   },
 ): string {
   if (!text) {
     return text;
   }
-  if (!QUICK_TAG_RE.test(text)) {
-    return text;
-  }
 
   const mode = options?.mode ?? "strict";
   const trimMode = options?.trim ?? "both";
+  const scope = options?.scope ?? "all";
 
   let cleaned = text;
   const matches = findFinalTagMatches(cleaned);
-  THINKING_TAG_RE.lastIndex = 0;
-  const hasThinkingTag = THINKING_TAG_RE.test(cleaned);
-  THINKING_TAG_RE.lastIndex = 0;
+  const hasThinkingTag = scanReasoningTags(cleaned).tags.length > 0;
   if (matches.length === 0 && !hasThinkingTag) {
     return text;
   }
   if (matches.length > 0) {
-    const finalMatches: Array<{ start: number; length: number; inCode: boolean }> = [];
     const preCodeRegions = findCodeRegions(cleaned);
+    let visible = "";
+    let lastIndex = 0;
     for (const match of matches) {
-      const start = match.index;
-      finalMatches.push({
-        start,
-        length: match.text.length,
-        inCode: isInsideCode(start, preCodeRegions),
-      });
-    }
-
-    for (let i = finalMatches.length - 1; i >= 0; i--) {
-      const m = finalMatches[i];
-      if (!m.inCode) {
-        cleaned = cleaned.slice(0, m.start) + cleaned.slice(m.start + m.length);
+      if (!isInsideCode(match.index, preCodeRegions)) {
+        visible += cleaned.slice(lastIndex, match.index);
+        lastIndex = match.index + match.text.length;
       }
     }
+    cleaned = visible + cleaned.slice(lastIndex);
   }
 
-  const codeRegions = findCodeRegions(cleaned);
-
-  THINKING_TAG_RE.lastIndex = 0;
-  let result = "";
-  let lastIndex = 0;
-  let thinkingDepth = 0;
-  let firstUnclosedContentIndex: number | undefined;
-
-  for (const match of cleaned.matchAll(THINKING_TAG_RE)) {
-    const idx = match.index ?? 0;
-    const isClose = match[1] === "/";
-
-    if (isInsideCode(idx, codeRegions)) {
-      continue;
-    }
-
-    if (thinkingDepth === 0) {
-      if (isClose) {
-        const afterIndex = idx + match[0].length;
-        const before = cleaned.slice(lastIndex, idx);
-        const after = cleaned.slice(afterIndex);
-        if (hasOrphanReasoningCloseBoundary({ before, after })) {
-          // A lone close tag after visible preamble means the hidden opening tag was
-          // probably truncated; drop the preamble so partial reasoning is not leaked.
-          result = "";
-        } else {
-          result += before;
-        }
-        lastIndex = afterIndex;
-        continue;
-      }
-      result += cleaned.slice(lastIndex, idx);
-      thinkingDepth = 1;
-      firstUnclosedContentIndex = idx + match[0].length;
-    } else if (isClose) {
-      thinkingDepth -= 1;
-      if (thinkingDepth === 0) {
-        firstUnclosedContentIndex = undefined;
-      }
-    } else {
-      thinkingDepth += 1;
-    }
-
-    lastIndex = idx + match[0].length;
+  const stripped = stripReasoningTagsFromMarkdown(cleaned, {
+    mode,
+    scope,
+    recoverUnclosed: options?.recoverUnclosed,
+  });
+  if (trimMode === "none") {
+    return stripped;
   }
-
-  if (thinkingDepth === 0 || mode === "preserve") {
-    result += cleaned.slice(lastIndex);
-  }
-
-  const trimmedResult = applyTrim(result, trimMode);
-  if (
-    mode === "strict" &&
-    thinkingDepth > 0 &&
-    !trimmedResult &&
-    firstUnclosedContentIndex !== undefined &&
-    cleaned.trim()
-  ) {
-    return applyTrim(cleaned.slice(firstUnclosedContentIndex), trimMode);
-  }
-
-  return trimmedResult;
+  return trimMode === "start" ? stripped.trimStart() : stripped.trim();
 }

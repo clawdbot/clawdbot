@@ -7,11 +7,12 @@
  * (transport error or an `ok:false` payload) so automation never mistakes a
  * silent no-op for success.
  */
-import { callGatewayCli, type GatewayRpcOpts } from "../cli/gateway-cli/call.js";
+import { rethrowExpectedCliError } from "../cli/failure-output.js";
+import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
-export type SessionsCompactCliOptions = {
+type SessionsCompactCliOptions = {
   key: string;
   agent?: string;
   maxLines?: number;
@@ -28,29 +29,29 @@ type SessionsCompactResult = {
   compacted?: boolean;
   reason?: string;
   kept?: number;
-  archived?: string;
   result?: {
     tokensBefore?: number;
     tokensAfter?: number;
     sessionId?: string;
     sessionFile?: string;
-    // Codex app-server `thread/compact/start` reports ok:true / compacted:false
-    // with this pending marker; the compaction was *started* and completion is
-    // delivered asynchronously, so it must not be rendered as "no work needed".
+    // A backend can explicitly report an accepted asynchronous operation.
     details?: {
       backend?: string;
       threadId?: string;
       signal?: string;
       pending?: boolean;
+      completed?: boolean;
     };
   };
 };
+
+type SessionsCompactRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
 function describeCompaction(result: SessionsCompactResult, fallbackKey: string): string {
   const sessionKey = result.key ?? fallbackKey;
   if (!result.compacted) {
     const details = result.result?.details;
-    if (details?.pending === true || details?.signal === "thread/compact/start") {
+    if (details?.pending === true) {
       return `Compaction started for session ${sessionKey} (pending; completion is reported asynchronously by the backend).`;
     }
     const reason = result.reason ? ` (${result.reason})` : "";
@@ -72,23 +73,32 @@ export async function sessionsCompactCommand(
   opts: SessionsCompactCliOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const rpcOpts: GatewayRpcOpts = {
+  const agent = opts.agent?.trim();
+  if (opts.agent !== undefined && !agent) {
+    throw new Error("--agent must not be blank");
+  }
+  const rpcOpts: SessionsCompactRpcOpts = {
     url: opts.url,
     token: opts.token,
     password: opts.password,
-    timeout: opts.timeout,
+    // Compaction owns a configurable multi-stage server deadline. Keep an
+    // explicit CLI override, but otherwise avoid an ambiguous client timeout.
+    timeout: opts.timeout ?? null,
     json: opts.json,
   };
   const params = {
     key: opts.key,
-    ...(opts.agent ? { agentId: opts.agent } : {}),
+    ...(agent ? { agentId: agent } : {}),
     ...(opts.maxLines !== undefined ? { maxLines: opts.maxLines } : {}),
   };
 
   let result: SessionsCompactResult;
   try {
-    result = (await callGatewayCli("sessions.compact", rpcOpts, params)) as SessionsCompactResult;
+    result = (await callGatewayFromCliWithTransport("sessions.compact", rpcOpts, params, {
+      defaultTimeoutMs: 10_000,
+    })) as SessionsCompactResult;
   } catch (err) {
+    rethrowExpectedCliError(err);
     const message = formatErrorMessage(err);
     if (opts.json) {
       writeRuntimeJson(runtime, { ok: false, key: opts.key, error: message });
@@ -120,7 +130,4 @@ export async function sessionsCompactCommand(
   }
 
   runtime.log(describeCompaction(result ?? {}, opts.key));
-  if (result?.archived) {
-    runtime.log(`Archived transcript: ${result.archived}`);
-  }
 }

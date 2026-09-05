@@ -9,6 +9,8 @@ const {
   buildContextMock,
   isControlCommandMessageMock,
   dispatchBufferedReplyMock,
+  replyPlanParamsMock,
+  runChannelInboundEventParamsMock,
   runMessageReceivedMock,
   shouldComputeCommandAuthorizedMock,
   trackBackgroundTaskMock,
@@ -16,14 +18,27 @@ const {
   resolvePolicyMock: vi.fn(),
   buildContextMock: vi.fn(),
   isControlCommandMessageMock: vi.fn(() => false),
-  dispatchBufferedReplyMock: vi.fn(async () => ({
+  dispatchBufferedReplyMock: vi.fn(async (_params?: unknown) => ({
     queuedFinal: false,
     counts: { tool: 0, block: 0, final: 0 },
   })),
+  replyPlanParamsMock: vi.fn(),
+  runChannelInboundEventParamsMock: vi.fn(),
   runMessageReceivedMock: vi.fn(async () => undefined),
   shouldComputeCommandAuthorizedMock: vi.fn(() => false),
   trackBackgroundTaskMock: vi.fn(),
 }));
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  return {
+    ...actual,
+    runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) => {
+      runChannelInboundEventParamsMock(params);
+      return await actual.runChannelInboundEvent(params);
+    },
+  };
+});
 
 vi.mock("../../inbound-policy.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../inbound-policy.js")>();
@@ -38,8 +53,27 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./inbound-dispatch.js")>();
   return {
     ...actual,
-    buildWhatsAppInboundContext: buildContextMock,
-    dispatchWhatsAppBufferedReply: dispatchBufferedReplyMock,
+    prepareWhatsAppInboundContext: async (
+      params: Parameters<typeof actual.prepareWhatsAppInboundContext>[0],
+    ) => {
+      const prepared = await actual.prepareWhatsAppInboundContext(params);
+      return {
+        ...prepared,
+        ctxPayload: buildContextMock(params),
+      };
+    },
+    createWhatsAppReplyPlan: (...args: unknown[]) => {
+      const params = args[0] as { replyResolver?: unknown };
+      replyPlanParamsMock(params);
+      void dispatchBufferedReplyMock(params);
+      return {
+        dispatcherOptions: {},
+        delivery: { deliver: async () => {} },
+        replyOptions: {},
+        replyResolver: params.replyResolver,
+        finalize: () => true,
+      };
+    },
     resolveWhatsAppDmRouteTarget: () => null,
     resolveWhatsAppResponsePrefix: () => undefined,
     updateWhatsAppMainLastRoute: () => {},
@@ -95,7 +129,7 @@ vi.mock("./inbound-context.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./inbound-context.js")>();
   return {
     ...actual,
-    resolveVisibleWhatsAppGroupHistory: () => [],
+    resolveVisibleWhatsAppGroupHistory: (params: { history: unknown[] }) => params.history,
     resolveVisibleWhatsAppReplyContext: () => null,
   };
 });
@@ -141,6 +175,7 @@ vi.mock("./runtime-api.js", async (importOriginal) => {
 });
 
 import { clearInternalHooks, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
+import { attachWhatsAppIngressLifecycle } from "../../inbound/ingress-lifecycle.js";
 import { processMessage } from "./process-message.js";
 
 // ---------------------------------------------------------------------------
@@ -173,7 +208,7 @@ function makePolicy(account: ReturnType<typeof makeAccount>) {
 
 const GROUP_JID = "123@g.us";
 
-function makeBaseMsg(overrides: { body?: string } = {}) {
+function makeBaseMsg(overrides: { body?: string; commandBody?: string } = {}) {
   const body = overrides.body ?? "hi";
   return createTestWebInboundMessage({
     event: {
@@ -182,6 +217,7 @@ function makeBaseMsg(overrides: { body?: string } = {}) {
     },
     payload: {
       body,
+      commandBody: overrides.commandBody,
     },
     platform: {
       chatJid: GROUP_JID,
@@ -222,24 +258,28 @@ const baseRoute = {
   matchedBy: "default",
 };
 
-function callProcessMessage(overrides: { cfg?: unknown; msg?: unknown } = {}) {
+function callProcessMessage(
+  overrides: {
+    cfg?: unknown;
+    dispatchReplyFromConfig?: Parameters<typeof processMessage>[0]["dispatchReplyFromConfig"];
+    groupHistories?: Map<string, unknown[]>;
+    msg?: unknown;
+  } = {},
+) {
   return processMessage({
     cfg: (overrides.cfg ?? {}) as never,
     msg: (overrides.msg ?? makeBaseMsg()) as never,
     route: baseRoute as never,
     groupHistoryKey: "whatsapp:default:group:123@g.us",
-    groupHistories: new Map(),
+    groupHistories: (overrides.groupHistories ?? new Map()) as never,
     groupMemberNames: new Map(),
     connectionId: "conn-1",
     verbose: false,
     maxMediaBytes: 1024,
+    dispatchReplyFromConfig: overrides.dispatchReplyFromConfig,
     replyResolver: (async () => undefined) as never,
     replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
     backgroundTasks: new Set(),
-    rememberSentText: () => {},
-    echoHas: () => false,
-    echoForget: () => {},
-    buildCombinedEchoKey: ({ sessionKey }) => sessionKey,
   });
 }
 
@@ -265,6 +305,8 @@ describe("processMessage group system prompt wiring", () => {
     isControlCommandMessageMock.mockReset();
     isControlCommandMessageMock.mockReturnValue(false);
     resolvePolicyMock.mockReset();
+    replyPlanParamsMock.mockClear();
+    runChannelInboundEventParamsMock.mockClear();
     runMessageReceivedMock.mockClear();
     shouldComputeCommandAuthorizedMock.mockReset();
     shouldComputeCommandAuthorizedMock.mockReturnValue(false);
@@ -298,51 +340,97 @@ describe("processMessage group system prompt wiring", () => {
     ).toBe("from config");
   });
 
-  it("marks detected WhatsApp slash messages as text command turns", async () => {
+  it.each([
+    {
+      name: "marks detected WhatsApp slash messages as text command turns",
+      message: { body: "/status" },
+      commandBody: "/status",
+      isControlCommand: true,
+      expectedContext: {
+        command: {
+          kind: "text-slash",
+          authorization: { kind: "authorized" },
+          body: "/status",
+        },
+        rawBody: "/status",
+      },
+    },
+    {
+      name: "keeps generated media notices out of command input",
+      message: {
+        body: "/reset\n\n[whatsapp attachment unavailable]",
+        commandBody: "/reset",
+      },
+      commandBody: "/reset",
+      isControlCommand: true,
+      expectedContext: {
+        bodyForAgent: "/reset\n\n[whatsapp attachment unavailable]",
+        command: {
+          kind: "text-slash",
+          authorization: { kind: "authorized" },
+          body: "/reset",
+        },
+        rawBody: "/reset",
+      },
+    },
+    {
+      name: "checks auth for inline command tokens without marking them as command-source turns",
+      message: { body: "please inspect `/tmp/foo`" },
+      commandBody: "please inspect `/tmp/foo`",
+      isControlCommand: false,
+      expectedContext: {
+        command: {
+          kind: "normal",
+          authorization: { kind: "authorized" },
+          body: "please inspect `/tmp/foo`",
+        },
+        rawBody: "please inspect `/tmp/foo`",
+      },
+    },
+  ])("$name", async ({ message, commandBody, isControlCommand, expectedContext }) => {
     resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
-    isControlCommandMessageMock.mockReturnValue(true);
+    isControlCommandMessageMock.mockReturnValue(isControlCommand);
     shouldComputeCommandAuthorizedMock.mockReturnValue(true);
 
-    await callProcessMessage({
-      msg: makeBaseMsg({ body: "/status" }),
-    });
+    await callProcessMessage({ msg: makeBaseMsg(message) });
 
-    expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/status", {});
-    expect(isControlCommandMessageMock).toHaveBeenCalledWith("/status", {});
-    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
-      commandBody: "/status",
-      commandAuthorized: true,
-      commandTurn: {
-        kind: "text-slash",
-        source: "text",
-        authorized: true,
-        body: "/status",
-      },
-      rawBody: "/status",
-    });
+    expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith(commandBody, {});
+    expect(isControlCommandMessageMock).toHaveBeenCalledWith(commandBody, {});
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject(
+      expectedContext,
+    );
   });
 
-  it("checks auth for inline command tokens without marking them as command-source turns", async () => {
+  it("passes pending group history from the history window into inbound context", async () => {
     resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
-    isControlCommandMessageMock.mockReturnValue(false);
-    shouldComputeCommandAuthorizedMock.mockReturnValue(true);
+    const groupHistories = new Map<string, unknown[]>([
+      [
+        "whatsapp:default:group:123@g.us",
+        [
+          {
+            sender: "Alice (+15550002222)",
+            body: "quiet pending context",
+            timestamp: 1710000000,
+            id: "quiet-msg-1",
+            senderJid: "15550002222@s.whatsapp.net",
+          },
+        ],
+      ],
+    ]);
 
-    await callProcessMessage({
-      msg: makeBaseMsg({ body: "please inspect `/tmp/foo`" }),
-    });
+    await callProcessMessage({ groupHistories });
 
-    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
-      commandBody: "please inspect `/tmp/foo`",
-      commandAuthorized: true,
-      commandTurn: {
-        kind: "normal",
-        source: "message",
-        authorized: false,
-        body: "please inspect `/tmp/foo`",
-      },
-      rawBody: "please inspect `/tmp/foo`",
+    expect(mockCallArg(buildContextMock, "buildWhatsAppInboundContext")).toMatchObject({
+      groupHistory: [
+        {
+          sender: "Alice (+15550002222)",
+          body: "quiet pending context",
+          timestamp: 1710000000,
+          id: "quiet-msg-1",
+          senderJid: "15550002222@s.whatsapp.net",
+        },
+      ],
     });
-    expect(buildContextMock.mock.calls[0][0].commandSource).toBeUndefined();
   });
 
   it("fires message_received hooks with canonical WhatsApp correlation fields", async () => {
@@ -365,6 +453,7 @@ describe("processMessage group system prompt wiring", () => {
       Timestamp: 1710000000,
       Provider: "whatsapp",
       Surface: "whatsapp",
+      SuppressMessageReceivedHooks: true,
       OriginatingChannel: "whatsapp",
       OriginatingTo: GROUP_JID,
       GroupSubject: "Test Group",
@@ -487,6 +576,43 @@ describe("processMessage group system prompt wiring", () => {
     expect(mockCallArg(trackBackgroundTaskMock, "trackBackgroundTask", 0, 1)).toBeInstanceOf(
       Promise,
     );
+  });
+
+  it("passes one lifecycle and owning dispatcher through the portable turn boundary", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    buildContextMock.mockImplementationOnce(() => ({
+      Body: "hi",
+      RawBody: "hi",
+      CommandBody: "hi",
+      SessionKey: baseRoute.sessionKey,
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+    }));
+    const lifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted: vi.fn(async () => undefined),
+      onDeferred: vi.fn(),
+      onAbandoned: vi.fn(async () => undefined),
+    };
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    }));
+    const msg = attachWhatsAppIngressLifecycle(makeBaseMsg(), lifecycle as never);
+
+    await callProcessMessage({ msg, dispatchReplyFromConfig });
+
+    const runParams = mockCallArg(runChannelInboundEventParamsMock, "runChannelInboundEvent") as {
+      raw?: unknown;
+      turnAdoptionLifecycle?: unknown;
+    };
+    const replyPlanParams = mockCallArg(replyPlanParamsMock, "createWhatsAppReplyPlan") as {
+      turnAdoptionLifecycle?: unknown;
+    };
+    expect(runParams.turnAdoptionLifecycle).toBe(replyPlanParams.turnAdoptionLifecycle);
+    expect(dispatchReplyFromConfig).toHaveBeenCalledOnce();
+    expect(runParams.raw).not.toHaveProperty("platform");
+    expect(runParams.raw).not.toHaveProperty("admission");
   });
 
   it("drops blocked admission before session record and reply dispatch", async () => {

@@ -11,6 +11,20 @@ export const TOOL_NAME_SEPARATOR = "__";
 const TOOL_NAME_MAX_PREFIX = 30;
 const TOOL_NAME_MAX_TOTAL = 64;
 
+/** Builds stable node-ID prefixes capped at 32 characters. */
+export function sanitizeNodeIdFragment(value: string): string {
+  const fragment = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 32);
+  if (!fragment) {
+    return "node";
+  }
+  return /^[a-z]/.test(fragment) ? fragment : `node_${fragment}`.slice(0, 32);
+}
+
 function sanitizeToolFragment(raw: string, fallback: string, maxChars?: number): string {
   const cleaned = raw.trim().replace(TOOL_NAME_SAFE_RE, "-");
   const normalized = cleaned || fallback;
@@ -33,6 +47,21 @@ export function sanitizeServerName(raw: string, usedNames: Set<string>): string 
   }
   usedNames.add(normalizeLowercaseStringOrEmpty(candidate));
   return candidate;
+}
+
+/**
+ * Assign safe server names from the full declared set in declaration order,
+ * independent of which servers resolve for a requester. Declaration order
+ * preserves legacy collision-suffix ownership for existing static configs;
+ * sorting here would silently swap safe names between colliding servers.
+ */
+export function assignSafeServerNames(serverNames: Iterable<string>): Map<string, string> {
+  const usedNames = new Set<string>();
+  const assignments = new Map<string, string>();
+  for (const serverName of serverNames) {
+    assignments.set(serverName, sanitizeServerName(serverName, usedNames));
+  }
+  return assignments;
 }
 
 function sanitizeToolName(raw: string): string {

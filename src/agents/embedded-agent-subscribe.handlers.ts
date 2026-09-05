@@ -1,6 +1,7 @@
 /**
  * Dispatches serialized embedded-agent subscription events to specific handlers.
  */
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   handleAgentEnd,
   handleAgentStart,
@@ -8,137 +9,91 @@ import {
   handleCompactionStart,
 } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import {
-  handleMessageEnd,
   handleMessageStart,
-  handleMessageUpdate,
-} from "./embedded-agent-subscribe.handlers.messages.js";
+  handleMessageEnd,
+} from "./embedded-agent-subscribe.handlers.messages.lifecycle.js";
+import { handleMessageUpdate } from "./embedded-agent-subscribe.handlers.messages.update.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
   handleToolExecutionUpdate,
 } from "./embedded-agent-subscribe.handlers.tools.js";
-import type {
-  EmbeddedAgentSubscribeContext,
-  EmbeddedAgentSubscribeEvent,
-} from "./embedded-agent-subscribe.handlers.types.js";
-import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
+import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import type { AgentSessionEvent } from "./sessions/index.js";
 
 /** Create the serialized event dispatcher for subscribed embedded-agent sessions. */
 export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscribeContext) {
-  const scheduleEvent = (
-    evt: EmbeddedAgentSubscribeEvent,
-    handler: () => void | Promise<void>,
-    options?: { detach?: boolean },
-  ): void => {
-    // Most stream events must preserve order across async formatting and flush
-    // work. A detached event may run after the chain without blocking delivery.
+  const scheduleEvent = (evt: AgentSessionEvent, handler: () => unknown): void | Promise<void> => {
+    // Tool-result delivery must settle before later assistant or terminal events;
+    // suppression flags would discard those events instead of preserving order.
     const run = () => {
       try {
+        if (evt.type !== "message_update") {
+          ctx.flushAssistantStream();
+        }
         return handler();
       } catch (err) {
         ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
+        return undefined;
       }
     };
 
-    if (!ctx.state.pendingEventChain) {
-      const result = run();
-      if (!isPromiseLike<void>(result)) {
-        return;
-      }
-      const task = result
-        .catch((err: unknown) => {
-          ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
-        })
-        .finally(() => {
-          if (ctx.state.pendingEventChain === task) {
-            ctx.state.pendingEventChain = null;
-          }
-        });
-      if (!options?.detach) {
-        ctx.state.pendingEventChain = task;
-      }
+    const result = ctx.state.pendingEventChain ? ctx.state.pendingEventChain.then(run) : run();
+    if (!isPromiseLike(result)) {
       return;
     }
 
-    const task = ctx.state.pendingEventChain
-      .then(() => run())
-      .catch((err: unknown) => {
-        ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
-      })
+    const task = Promise.resolve(result)
+      .then(
+        () => {},
+        (err: unknown) => {
+          ctx.log.debug(`${evt.type} handler failed: ${String(err)}`);
+        },
+      )
       .finally(() => {
         if (ctx.state.pendingEventChain === task) {
           ctx.state.pendingEventChain = null;
         }
       });
-    if (!options?.detach) {
-      ctx.state.pendingEventChain = task;
-    }
+    ctx.state.pendingEventChain = task;
+    return task;
   };
 
-  return (evt: EmbeddedAgentSubscribeEvent) => {
+  return (evt: AgentSessionEvent) => {
+    // Model facts advance before persistence, independently of queued reply delivery.
+    ctx.captureModelEvent(evt);
     switch (evt.type) {
       case "message_start":
-        scheduleEvent(evt, () => {
-          handleMessageStart(ctx, evt as never);
-        });
+        void scheduleEvent(evt, () => handleMessageStart(ctx, evt));
         return;
       case "message_update":
-        scheduleEvent(evt, () => {
-          handleMessageUpdate(ctx, evt as never);
-        });
+        void scheduleEvent(evt, () => handleMessageUpdate(ctx, evt));
         return;
       case "message_end":
-        scheduleEvent(evt, () => {
-          return handleMessageEnd(ctx, evt as never);
-        });
+        void scheduleEvent(evt, () => handleMessageEnd(ctx, evt));
         return;
       case "tool_execution_start":
-        scheduleEvent(evt, () => {
-          return handleToolExecutionStart(ctx, evt as never);
-        });
+        void scheduleEvent(evt, () => handleToolExecutionStart(ctx, evt));
         return;
       case "tool_execution_update":
-        scheduleEvent(evt, () => {
-          handleToolExecutionUpdate(ctx, evt as never);
-        });
+        void scheduleEvent(evt, () => handleToolExecutionUpdate(ctx, evt));
         return;
       case "tool_execution_end":
-        scheduleEvent(
-          evt,
-          () => {
-            return handleToolExecutionEnd(ctx, evt as never);
-          },
-          { detach: true },
-        );
+        void scheduleEvent(evt, () => handleToolExecutionEnd(ctx, evt));
         return;
       case "agent_start":
-        scheduleEvent(evt, () => {
-          handleAgentStart(ctx);
-        });
+        void scheduleEvent(evt, () => handleAgentStart(ctx));
         return;
       case "compaction_start":
-        scheduleEvent(evt, () => {
-          handleCompactionStart(ctx, {
-            type: "compaction_start",
-            reason: evt.reason,
-          });
-        });
+        void scheduleEvent(evt, () => handleCompactionStart(ctx, evt));
         return;
       case "compaction_end":
-        scheduleEvent(evt, () => {
-          handleCompactionEnd(ctx, {
-            type: "compaction_end",
-            reason: evt.reason,
-            willRetry: evt.willRetry,
-            result: evt.result,
-            aborted: evt.aborted,
-          });
-        });
+        // The attempt's replacement hook already recorded its private commit fact.
+        // Keep public completion timing and standalone subscriber counting unchanged.
+        void scheduleEvent(evt, () => handleCompactionEnd(ctx, evt));
         return;
       case "agent_end":
-        scheduleEvent(evt, () => {
-          return handleAgentEnd(ctx, evt as never);
-        });
+        return scheduleEvent(evt, () => handleAgentEnd(ctx, evt));
       default:
     }
   };

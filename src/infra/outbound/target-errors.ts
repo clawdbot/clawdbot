@@ -1,7 +1,9 @@
+import { MessageActionDeniedError } from "./message-action-denial.js";
+
 /**
  * Formats the user-facing error shown when no target is available.
  */
-export function missingTargetMessage(provider: string, hint?: string): string {
+function missingTargetMessage(provider: string, hint?: string): string {
   return `Delivering to ${provider} requires target${formatTargetHint(hint)}`;
 }
 
@@ -9,13 +11,29 @@ export function missingTargetMessage(provider: string, hint?: string): string {
  * Builds an Error for missing outbound target failures.
  */
 export function missingTargetError(provider: string, hint?: string): Error {
-  return new Error(missingTargetMessage(provider, hint));
+  return new MessageActionDeniedError(
+    missingTargetMessage(provider, hint),
+    "message_target_missing",
+    "message-target:required",
+  );
+}
+
+export function missingMessageActionTargetError(action: string): Error {
+  return new MessageActionDeniedError(
+    `Action ${action} requires a target.`,
+    "message_target_missing",
+    "message-target:required",
+  );
+}
+
+export function invalidMessageActionTargetError(message: string): Error {
+  return new MessageActionDeniedError(message, "message_target_invalid", "message-target:valid");
 }
 
 /**
  * Formats the user-facing error shown when a target name resolves ambiguously.
  */
-export function ambiguousTargetMessage(provider: string, raw: string, hint?: string): string {
+function ambiguousTargetMessage(provider: string, raw: string, hint?: string): string {
   return `Ambiguous target "${raw}" for ${provider}. Provide a unique name or an explicit id.${formatTargetHint(hint, true)}`;
 }
 
@@ -23,13 +41,17 @@ export function ambiguousTargetMessage(provider: string, raw: string, hint?: str
  * Builds an Error for ambiguous outbound target failures.
  */
 export function ambiguousTargetError(provider: string, raw: string, hint?: string): Error {
-  return new Error(ambiguousTargetMessage(provider, raw, hint));
+  return new MessageActionDeniedError(
+    ambiguousTargetMessage(provider, raw, hint),
+    "message_target_ambiguous",
+    "message-target:unique",
+  );
 }
 
 /**
  * Formats the user-facing error shown when no target matches the input.
  */
-export function unknownTargetMessage(provider: string, raw: string, hint?: string): string {
+function unknownTargetMessage(provider: string, raw: string, hint?: string): string {
   return `Unknown target "${raw}" for ${provider}.${formatTargetHint(hint, true)}`;
 }
 
@@ -37,7 +59,27 @@ export function unknownTargetMessage(provider: string, raw: string, hint?: strin
  * Builds an Error for unknown outbound target failures.
  */
 export function unknownTargetError(provider: string, raw: string, hint?: string): Error {
-  return new Error(unknownTargetMessage(provider, raw, hint));
+  return new MessageActionDeniedError(
+    unknownTargetMessage(provider, raw, hint),
+    "message_target_unknown",
+    "message-target:known",
+  );
+}
+
+function reservedTargetLiteralMessage(provider: string, raw: string, hint?: string): string {
+  return `Reserved target "${raw}" for ${provider} cannot be used as a literal destination. Provide an explicit id or handle.${formatTargetHint(hint, true)}`;
+}
+
+export function reservedTargetLiteralError(provider: string, raw: string, hint?: string): Error {
+  return new MessageActionDeniedError(
+    reservedTargetLiteralMessage(provider, raw, hint),
+    "message_target_reserved",
+    "message-target:explicit",
+  );
+}
+
+export function isReservedTargetLiteralError(error: Error): boolean {
+  return error.message.includes("Reserved target");
 }
 
 function formatTargetHint(hint?: string, withLabel = false): string {

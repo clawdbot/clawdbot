@@ -1,0 +1,114 @@
+import { vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
+import type { collectGatewayHealthSnapshot } from "../gateway/health/collector.js";
+import type { HealthSummary } from "../gateway/health/types.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
+
+export type LegacyHealthSnapshotParams = Partial<
+  Omit<Parameters<typeof collectGatewayHealthSnapshot>[0], "audience">
+> & {
+  includeSensitive?: boolean;
+};
+
+function createLegacyHealthSnapshotCollector(collectSnapshot: typeof collectGatewayHealthSnapshot) {
+  return (params: LegacyHealthSnapshotParams = {}): Promise<HealthSummary> => {
+    const { includeSensitive, probe, ...rest } = params;
+    return collectSnapshot({
+      ...rest,
+      audience: includeSensitive === false ? "public" : "admin",
+      probe: probe !== false,
+    });
+  };
+}
+
+export type HealthTestPlugin = Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config" | "status"
+>;
+
+export async function loadFreshHealthModulesForTest(params: {
+  getConfig: () => Record<string, unknown>;
+  getSessionStorePath: () => string;
+  getSessions: () => Record<string, { updatedAt?: number }>;
+  getPlugins: () => HealthTestPlugin[];
+  onSessionRead?: (scope: { agentId?: string; storePath?: string }) => void;
+}) {
+  vi.doMock("../config/config.js", () => ({
+    getRuntimeConfig: params.getConfig,
+    loadConfig: params.getConfig,
+  }));
+  vi.doMock("../config/sessions.js", () => ({
+    resolveSessionStorePathCore: params.getSessionStorePath,
+    resolveSessionFilePathCore: vi.fn(params.getSessionStorePath),
+    loadSessionStore: params.getSessions,
+    saveSessionStore: vi.fn().mockResolvedValue(undefined),
+    readSessionUpdatedAt: vi.fn(() => undefined),
+    recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
+    updateLastRoute: vi.fn().mockResolvedValue(undefined),
+  }));
+  vi.doMock("../config/sessions/paths.js", () => ({
+    resolveSessionStorePathCore: params.getSessionStorePath,
+  }));
+  vi.doMock("../config/sessions/session-accessor.js", () => ({
+    readSessionStoreSummaryReadOnly: (
+      ...[scope, options]: Parameters<
+        typeof import("../config/sessions/session-accessor.js").readSessionStoreSummaryReadOnly
+      >
+    ) => {
+      params.onSessionRead?.(scope);
+      const entries = Object.entries(params.getSessions())
+        .filter(
+          ([sessionKey]) =>
+            parseAgentSessionKey(sessionKey) !== null && !isInternalSessionEffectsKey(sessionKey),
+        )
+        .map(([sessionKey, entry]) => ({
+          sessionKey,
+          entry: { sessionId: sessionKey, updatedAt: 0, ...entry },
+        }))
+        .toSorted(
+          (left, right) =>
+            right.entry.updatedAt - left.entry.updatedAt ||
+            (left.sessionKey < right.sessionKey ? -1 : 1),
+        );
+      return {
+        count: entries.length,
+        recent: entries.slice(0, options.recentLimit),
+        byAgent: new Map(
+          options.agentIds.map((agentId) => {
+            const owned = entries.filter(
+              ({ sessionKey }) => parseAgentSessionKey(sessionKey)?.agentId === agentId,
+            );
+            return [agentId, { count: owned.length, recent: owned.slice(0, options.recentLimit) }];
+          }),
+        ),
+      };
+    },
+  }));
+  vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
+    webAuthExists: vi.fn(async () => true),
+    getWebAuthAgeMs: vi.fn(() => 1234),
+    readWebSelfId: vi.fn(() => ({ e164: null, jid: null })),
+    logWebSelfId: vi.fn(),
+    logoutWeb: vi.fn(),
+  }));
+  vi.doMock("../channels/plugins/read-only.js", () => ({
+    listReadOnlyChannelPluginsForConfig: params.getPlugins,
+  }));
+
+  const [pluginsRuntime, pluginDegradedState, channelTestUtils, health] = await Promise.all([
+    import("../plugins/runtime.js"),
+    import("../plugins/runtime-degraded-state.js"),
+    import("../test-utils/channel-plugins.js"),
+    import("../gateway/health/collector.js"),
+  ]);
+  const collectSnapshot = health.collectGatewayHealthSnapshot;
+
+  return {
+    setActivePluginRegistry: pluginsRuntime.setActivePluginRegistry,
+    setActiveDegradedPlugins: pluginDegradedState.setActiveDegradedPlugins,
+    createChannelTestPluginBase: channelTestUtils.createChannelTestPluginBase,
+    createTestRegistry: channelTestUtils.createTestRegistry,
+    getHealthSnapshot: createLegacyHealthSnapshotCollector(collectSnapshot),
+  };
+}

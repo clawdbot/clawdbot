@@ -1,5 +1,5 @@
 // Gateway BOOT.md runner.
-// Runs per-workspace boot checks in an isolated boot session and restores mappings.
+// Runs per-workspace boot checks in a run-owned temporary session.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -11,17 +11,17 @@ import {
 } from "../agents/internal-runtime-context.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { agentCommand } from "../commands/agent.js";
+import { agentCommandFromSystem } from "../commands/agent.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
 } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
 import { clearBootEchoContextForSession, setBootEchoContextForSession } from "./boot-echo-guard.js";
@@ -33,19 +33,11 @@ function generateBootSessionId(): string {
   return `boot-${ts}-${suffix}`;
 }
 
-type SessionMappingSnapshot = {
-  storePath: string;
-  sessionKey: string;
-  canRestore: boolean;
-  hadEntry: boolean;
-  entry?: SessionEntry;
-};
-
 const log = createSubsystemLogger("gateway/boot");
 const BOOT_FILENAME = "BOOT.md";
 
 /** Result of attempting to run a workspace BOOT.md check. */
-export type BootRunResult =
+type BootRunResult =
   | { status: "skipped"; reason: "missing" | "empty" }
   | { status: "ran" }
   | { status: "failed"; reason: string };
@@ -76,22 +68,24 @@ function buildBootPrompt(content: string) {
   ].join("\n");
 }
 
-function resolveBootSessionKey(sessionKey: string): string {
-  const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  return `agent:${agentId}:boot`;
-}
+const MAX_BOOT_FILE_BYTES = 16 * 1024 * 1024;
 
 async function loadBootFile(
   workspaceDir: string,
 ): Promise<{ content?: string; status: "ok" | "missing" | "empty" }> {
   const bootPath = path.join(workspaceDir, BOOT_FILENAME);
+
+  // Resolve symlinks so BOOT.md can be a readable symlink to a regular file
+  // while keeping directory/permission/size-limit failures surfaced to the
+  // operator. ENOENT from either resolution or the bounded open keeps the
+  // established readFile contract: treat disappearance as missing.
+  let buffer: Buffer;
   try {
-    const content = await fs.readFile(bootPath, "utf-8");
-    const trimmed = content.trim();
-    if (!trimmed) {
-      return { status: "empty" };
-    }
-    return { status: "ok", content: trimmed };
+    const resolvedPath = await fs.realpath(bootPath);
+    ({ buffer } = await readRegularFile({
+      filePath: resolvedPath,
+      maxBytes: MAX_BOOT_FILE_BYTES,
+    }));
   } catch (err) {
     const anyErr = err as { code?: string };
     if (anyErr.code === "ENOENT") {
@@ -99,68 +93,12 @@ async function loadBootFile(
     }
     throw err;
   }
-}
-
-function snapshotSessionMapping(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-}): SessionMappingSnapshot {
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-  try {
-    const store = loadSessionStore(storePath, { skipCache: true });
-    const entry = store[params.sessionKey];
-    if (!entry) {
-      return {
-        storePath,
-        sessionKey: params.sessionKey,
-        canRestore: true,
-        hadEntry: false,
-      };
-    }
-    return {
-      storePath,
-      sessionKey: params.sessionKey,
-      canRestore: true,
-      hadEntry: true,
-      entry: structuredClone(entry),
-    };
-  } catch (err) {
-    log.debug("boot: could not snapshot session mapping", {
-      sessionKey: params.sessionKey,
-      error: String(err),
-    });
-    return {
-      storePath,
-      sessionKey: params.sessionKey,
-      canRestore: false,
-      hadEntry: false,
-    };
+  const content = buffer.toString("utf-8");
+  const trimmed = content.trim();
+  if (!trimmed) {
+    return { status: "empty" };
   }
-}
-
-async function restoreSessionMapping(
-  snapshot: SessionMappingSnapshot,
-): Promise<string | undefined> {
-  if (!snapshot.canRestore) {
-    return undefined;
-  }
-  try {
-    await updateSessionStore(
-      snapshot.storePath,
-      (store) => {
-        if (snapshot.hadEntry && snapshot.entry) {
-          store[snapshot.sessionKey] = snapshot.entry;
-          return;
-        }
-        delete store[snapshot.sessionKey];
-      },
-      { activeSessionKey: snapshot.sessionKey },
-    );
-    return undefined;
-  } catch (err) {
-    return formatErrorMessage(err);
-  }
+  return { status: "ok", content: trimmed };
 }
 
 export async function runBootOnce(params: {
@@ -190,31 +128,31 @@ export async function runBootOnce(params: {
   const mainSessionKey = params.agentId
     ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId })
     : resolveMainSessionKey(params.cfg);
-  const sessionKey = resolveBootSessionKey(mainSessionKey);
   const message = buildBootPrompt(result.content ?? "");
   const sessionId = generateBootSessionId();
-  const mappingSnapshot = snapshotSessionMapping({
-    cfg: params.cfg,
-    sessionKey,
-  });
-
-  // Register the boot prompt for the message-tool echo guard so the
-  // tool layer can drop fallback-model echoes that copy substantial
-  // BOOT.md content without preserving the wrapper markers above.
-  // Always cleared in finally so a failed run does not leave a stale
-  // entry that mis-fires on an unrelated subsequent run reusing the
-  // same session key. Refs #53732.
-  setBootEchoContextForSession(sessionKey, message);
+  const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
+  // A run-owned key avoids rebinding a retained boot session, which would reject
+  // admission or discard its collaboration state when the session ID rotates.
+  const sessionKey = `agent:${agentId}:boot:${sessionId}`;
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
+  let ownedSessionId = sessionId;
   let agentFailure: string | undefined;
+  let cleanupFailure: string | undefined;
+  // Message tools use this exact run key to suppress unwrapped BOOT.md echoes.
+  setBootEchoContextForSession(sessionKey, message);
   try {
-    await agentCommand(
+    await agentCommandFromSystem(
       {
         message,
         sessionKey,
         sessionId,
         deliver: false,
         suppressPromptPersistence: true,
+        onSessionIdChanged: (nextSessionId) => {
+          ownedSessionId = nextSessionId;
+        },
       },
+      { boundary: "gateway.boot" },
       bootRuntime,
       params.deps,
     );
@@ -223,19 +161,28 @@ export async function runBootOnce(params: {
     log.error(`boot: agent run failed: ${agentFailure}`);
   } finally {
     clearBootEchoContextForSession(sessionKey);
+    try {
+      await applySessionEntryLifecycleMutation({
+        agentId,
+        storePath,
+        // Follow committed run rotations, but preserve an operator's replacement.
+        removals: [
+          { sessionKey, expectedSessionId: ownedSessionId, archiveRemovedTranscript: false },
+        ],
+        skipMaintenance: true,
+      });
+    } catch (err) {
+      cleanupFailure = formatErrorMessage(err);
+      log.error(`boot: failed to clean up session: ${cleanupFailure}`);
+    }
   }
 
-  const mappingRestoreFailure = await restoreSessionMapping(mappingSnapshot);
-  if (mappingRestoreFailure) {
-    log.error(`boot: failed to restore session mapping: ${mappingRestoreFailure}`);
-  }
-
-  if (!agentFailure && !mappingRestoreFailure) {
+  if (!agentFailure && !cleanupFailure) {
     return { status: "ran" };
   }
   const reasonParts = [
     agentFailure ? `agent run failed: ${agentFailure}` : undefined,
-    mappingRestoreFailure ? `mapping restore failed: ${mappingRestoreFailure}` : undefined,
+    cleanupFailure ? `session cleanup failed: ${cleanupFailure}` : undefined,
   ].filter((part): part is string => Boolean(part));
   return { status: "failed", reason: reasonParts.join("; ") };
 }

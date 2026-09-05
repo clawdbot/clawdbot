@@ -5,9 +5,11 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import type { Api } from "../../llm/types.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
+  attachModelProviderRequestRouteFacts,
   attachModelProviderRequestTransport,
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
@@ -16,8 +18,9 @@ import {
 /**
  * Normalizes inline `models.providers` config into runtime model entries.
  */
-type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
+export type InlineModelEntry = Omit<ModelDefinitionConfig, "api" | "contextWindow"> & {
   api?: Api;
+  contextWindow?: number;
   provider: string;
   baseUrl?: string;
   headers?: Record<string, string>;
@@ -27,8 +30,6 @@ export type InlineProviderConfig = {
   baseUrl?: string;
   api?: ModelDefinitionConfig["api"];
   models?: ModelDefinitionConfig[];
-  contextWindow?: ModelProviderConfig["contextWindow"];
-  contextTokens?: ModelProviderConfig["contextTokens"];
   maxTokens?: ModelProviderConfig["maxTokens"];
   params?: ModelProviderConfig["params"];
   headers?: unknown;
@@ -138,9 +139,10 @@ function resolveInlineProviderTransport(params: { api?: Api | null; baseUrl?: st
   };
 }
 
-/** Builds runtime model records from inline provider config, inheriting provider-level defaults. */
+/** Builds runtime model records from inline provider config. */
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
+  options: { providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps } = {},
 ): InlineModelEntry[] {
   return Object.entries(providers).flatMap(([providerId, entry]) => {
     const trimmed = providerId.trim();
@@ -163,6 +165,9 @@ export function buildInlineProviderModels(
         provider: trimmed,
         api: transport.api ?? model.api,
         baseUrl: transport.baseUrl,
+        ...(options.providerMetadataOwners
+          ? { providerMetadataOwners: options.providerMetadataOwners }
+          : {}),
         providerHeaders,
         modelHeaders,
         authHeader: entry?.authHeader,
@@ -170,27 +175,29 @@ export function buildInlineProviderModels(
         capability: "llm",
         transport: "stream",
       });
-      return attachModelProviderLocalService(
-        attachModelProviderRequestTransport(
-          {
-            ...model,
-            contextWindow: model.contextWindow ?? entry?.contextWindow,
-            contextTokens: model.contextTokens ?? entry?.contextTokens,
-            maxTokens: model.maxTokens ?? entry?.maxTokens,
-            input: resolveProviderModelInput({
+      const maxTokens = model.maxTokens ?? entry?.maxTokens;
+      return attachModelProviderRequestRouteFacts(
+        attachModelProviderLocalService(
+          attachModelProviderRequestTransport(
+            {
+              ...model,
+              ...(maxTokens !== undefined ? { maxTokens } : {}),
+              input: resolveProviderModelInput({
+                provider: trimmed,
+                modelId: model.id,
+                modelName: model.name,
+                input: model.input,
+              }),
               provider: trimmed,
-              modelId: model.id,
-              modelName: model.name,
-              input: model.input,
-            }),
-            provider: trimmed,
-            baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
-            api: requestConfig.api ?? model.api,
-            headers: requestConfig.headers,
-          },
-          providerRequest,
+              baseUrl: requestConfig.baseUrl ?? transport.baseUrl,
+              api: requestConfig.api ?? model.api,
+              headers: requestConfig.headers,
+            },
+            providerRequest,
+          ),
+          entry?.localService,
         ),
-        entry?.localService,
+        options.providerMetadataOwners,
       );
     });
   });

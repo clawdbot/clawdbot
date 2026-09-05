@@ -14,3 +14,5 @@ Brining
 wit
 allowIn
 planText
+nwe
+smoe

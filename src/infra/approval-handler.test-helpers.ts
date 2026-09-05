@@ -5,7 +5,9 @@ import type { ChannelApprovalNativeRuntimeAdapter } from "./approval-handler-run
 // Shared approval-runtime stubs keep channel approval tests focused on route
 // behavior instead of rebuilding the native adapter shape.
 export type ApprovalNativeRuntimeAdapterStubParams = {
+  eventKinds?: ChannelApprovalNativeRuntimeAdapter["eventKinds"];
   resolveApprovalKind?: ChannelApprovalNativeRuntimeAdapter["resolveApprovalKind"];
+  shouldHandle?: ChannelApprovalNativeRuntimeAdapter["availability"]["shouldHandle"];
   buildResolvedResult?: ChannelApprovalNativeRuntimeAdapter["presentation"]["buildResolvedResult"];
   unbindPending?: NonNullable<ChannelApprovalNativeRuntimeAdapter["interactions"]>["unbindPending"];
   cancelDelivered?: NonNullable<
@@ -14,6 +16,7 @@ export type ApprovalNativeRuntimeAdapterStubParams = {
   prepareTarget?: ChannelApprovalNativeRuntimeAdapter["transport"]["prepareTarget"];
   deliverPending?: ChannelApprovalNativeRuntimeAdapter["transport"]["deliverPending"];
   bindPending?: NonNullable<ChannelApprovalNativeRuntimeAdapter["interactions"]>["bindPending"];
+  onFinalized?: NonNullable<ChannelApprovalNativeRuntimeAdapter["observe"]>["onFinalized"];
 };
 
 /** Build a complete native approval adapter stub with per-test overrides. */
@@ -21,10 +24,11 @@ export function createApprovalNativeRuntimeAdapterStubs(
   params: ApprovalNativeRuntimeAdapterStubParams = {},
 ): ChannelApprovalNativeRuntimeAdapter {
   return {
-    resolveApprovalKind: params.resolveApprovalKind,
+    ...(params.eventKinds ? { eventKinds: params.eventKinds } : {}),
+    ...(params.resolveApprovalKind ? { resolveApprovalKind: params.resolveApprovalKind } : {}),
     availability: {
       isConfigured: vi.fn().mockReturnValue(true),
-      shouldHandle: vi.fn().mockReturnValue(true),
+      shouldHandle: params.shouldHandle ?? vi.fn().mockReturnValue(true),
     },
     presentation: {
       buildPendingPayload: vi.fn().mockResolvedValue({ text: "pending" }),
@@ -44,6 +48,9 @@ export function createApprovalNativeRuntimeAdapterStubs(
       bindPending: params.bindPending ?? vi.fn().mockResolvedValue({ bindingId: "bound" }),
       unbindPending: params.unbindPending,
       cancelDelivered: params.cancelDelivered,
+    },
+    observe: {
+      onFinalized: params.onFinalized,
     },
   };
 }

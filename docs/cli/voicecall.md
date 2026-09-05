@@ -8,9 +8,21 @@ title: "Voicecall"
 
 # `openclaw voicecall`
 
-`voicecall` is a plugin-provided command. It only appears when the voice-call plugin is installed and enabled.
+`voicecall` is a plugin-provided command. It only appears when the voice-call
+plugin is installed and enabled.
 
-When the Gateway is running, operational commands (`call`, `start`, `continue`, `speak`, `dtmf`, `end`, `status`) are routed to that Gateway's voice-call runtime. If no Gateway is reachable, they fall back to a standalone CLI runtime.
+When the Gateway is running, operational commands (`call`, `start`,
+`continue`, `speak`, `dtmf`, `end`, `status`) route to that Gateway's
+voice-call runtime. If no Gateway is reachable, they fall back to a standalone
+CLI runtime. `status` uses the persisted call store instead of starting that
+runtime.
+
+Fallback is limited to transport-level absence. If the Gateway responds with a
+request or authentication error, or does not answer before the timeout, the
+command exits nonzero and points to `openclaw gateway status`; it does not start
+a second webhook server. If standalone fallback cannot bind the configured
+`serve.port`, the error identifies the likely running Gateway instead of
+printing a raw `EADDRINUSE` failure.
 
 ## Subcommands
 
@@ -40,8 +52,8 @@ openclaw voicecall expose   [--mode <m>] [--path <p>] [--port <port>] [--serve-p
 | `dtmf`     | Send DTMF digits to an active call.                             |
 | `end`      | Hang up an active call.                                         |
 | `status`   | Inspect active calls (or one by `--call-id`).                   |
-| `tail`     | Tail `calls.jsonl` (useful during provider tests).              |
-| `latency`  | Summarize turn-latency metrics from `calls.jsonl`.              |
+| `tail`     | Tail persisted call records or an explicit custom JSONL log.    |
+| `latency`  | Summarize turn latency from call history or a custom JSONL log. |
 | `expose`   | Toggle Tailscale serve/funnel for the webhook endpoint.         |
 
 ## Setup and smoke
@@ -57,7 +69,8 @@ openclaw voicecall setup --json
 
 ### `smoke`
 
-Runs the same readiness checks. It will not place a real phone call unless both `--to` and `--yes` are present.
+Runs the same readiness checks. Places a real phone call only when both
+`--to` and `--yes` are present.
 
 | Flag               | Default                           | Description                             |
 | ------------------ | --------------------------------- | --------------------------------------- |
@@ -74,7 +87,7 @@ openclaw voicecall smoke --to "+15555550123" --yes  # live notify call
 ```
 
 <Note>
-For external providers (`twilio`, `telnyx`, `plivo`), `setup` and `smoke` require a public webhook URL from `publicUrl`, a tunnel, or Tailscale exposure. A loopback or private serve fallback is rejected because carriers cannot reach it.
+For external providers (`plivo`, `telnyx`, `twilio`), `setup` and `smoke` require a public webhook URL from `publicUrl`, a tunnel, or Tailscale exposure. A loopback or private serve fallback is rejected because carriers cannot reach it.
 </Note>
 
 ## Call lifecycle
@@ -126,10 +139,10 @@ Speak a message without waiting for a response.
 
 Send DTMF digits to an active call.
 
-| Flag                | Required | Description                               |
-| ------------------- | -------- | ----------------------------------------- |
-| `--call-id <id>`    | yes      | Call ID.                                  |
-| `--digits <digits>` | yes      | DTMF digits (e.g. `ww123456#` for waits). |
+| Flag                | Required | Description                                      |
+| ------------------- | -------- | ------------------------------------------------ |
+| `--call-id <id>`    | yes      | Call ID.                                         |
+| `--digits <digits>` | yes      | DTMF digits (for example `ww123456#` for waits). |
 
 ### `end`
 
@@ -158,7 +171,13 @@ openclaw voicecall status --call-id <id>
 
 ### `tail`
 
-Tail the voice-call JSONL log. Prints the last `--since` lines on start, then streams new lines as they are written.
+Tail persisted voice-call records from SQLite: print the last `--since` records
+initially, then only new snapshots (`--since 0` starts with new snapshots only).
+With an existing custom `--file`
+whose basename is not `calls.jsonl`, prints the last `--since` nonempty complete
+lines on start, then streams new complete lines. Partial lines wait for a newline;
+file replacement or observed truncation starts a fresh stream. Slow output pipes
+pause reading instead of accumulating the rest of the log in memory.
 
 | Flag            | Default                    | Description                    |
 | --------------- | -------------------------- | ------------------------------ |
@@ -168,7 +187,15 @@ Tail the voice-call JSONL log. Prints the last `--since` lines on start, then st
 
 ### `latency`
 
-Summarize turn-latency and listen-wait metrics from `calls.jsonl`. Output is JSON with `recordsScanned`, `turnLatency`, and `listenWait` summaries.
+Summarize turn-latency and listen-wait metrics from SQLite or an existing custom
+log selected with `--file`. Output is JSON with `recordsScanned`, `turnLatency`,
+and `listenWait` summaries.
+
+Custom logs are scanned incrementally without a byte cap on requested history.
+`latency` selects the last N nonempty records, skips malformed JSON, and accepts
+a final JSON record without a newline. It parses one selected record at a time;
+memory still scales with the largest selected JSON record and the requested
+number of metric samples.
 
 | Flag            | Default                    | Description                          |
 | --------------- | -------------------------- | ------------------------------------ |
@@ -179,7 +206,11 @@ Summarize turn-latency and listen-wait metrics from `calls.jsonl`. Output is JSO
 
 ### `expose`
 
-Enable, disable, or change the Tailscale serve/funnel configuration for the voice webhook.
+Enable, disable, or change the Tailscale serve/funnel configuration for the
+voice webhook. When realtime or streaming audio is enabled, the command also
+exposes or clears that mode's WebSocket stream path. The external HTTPS port
+comes from `tailscale.port` (default `443`); Funnel supports `443`, `8443`, or
+`10000`.
 
 | Flag                  | Default                                   | Description                                     |
 | --------------------- | ----------------------------------------- | ----------------------------------------------- |

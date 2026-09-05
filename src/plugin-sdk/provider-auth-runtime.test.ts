@@ -1,28 +1,12 @@
 // Provider auth runtime tests cover OAuth callback handling and provider auth flow helpers.
 import fs from "node:fs/promises";
-import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { getFreePort } from "../test-utils/ports.js";
 import * as providerAuthRuntime from "./provider-auth-runtime.js";
-
-async function getFreePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("Failed to allocate a local port")));
-        return;
-      }
-      const { port } = address;
-      server.close((err) => (err ? reject(err) : resolve(port)));
-    });
-  });
-}
 
 describe("plugin-sdk provider-auth-runtime", () => {
   it("exports the runtime-ready auth helper", () => {
@@ -90,7 +74,7 @@ describe("plugin-sdk provider-auth-runtime", () => {
       callbackPath: "/callback",
       redirectUri: `http://127.0.0.1:${port}/callback`,
       hostname: "127.0.0.1",
-      successTitle: "OAuth complete",
+      successTitle: `OAuth <complete>&"'`,
       corsOriginAllowlist: ["auth.x.ai", "accounts.x.ai"],
     });
 
@@ -117,6 +101,65 @@ describe("plugin-sdk provider-auth-runtime", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("access-control-allow-origin")).toBe("https://auth.x.ai");
+    await expect(response.text()).resolves.toContain("OAuth &lt;complete&gt;&amp;&quot;&#39;");
+    await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
+  });
+
+  it("closes a pending localhost callback when its owner cancels", async () => {
+    const controller = new AbortController();
+    const port = await getFreePort();
+    const callback = providerAuthRuntime.waitForLocalOAuthCallback({
+      expectedState: "state-1",
+      timeoutMs: 5_000,
+      port,
+      callbackPath: "/callback",
+      redirectUri: `http://127.0.0.1:${port}/callback`,
+      hostname: "127.0.0.1",
+      successTitle: "OAuth complete",
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    await expect(callback).rejects.toThrow("OAuth callback cancelled");
+  });
+
+  it("binds the redirect host when the public hostname option is omitted", async () => {
+    const port = await getFreePort();
+    const callback = providerAuthRuntime.waitForLocalOAuthCallback({
+      expectedState: "state-1",
+      timeoutMs: 5_000,
+      port,
+      callbackPath: "/callback",
+      redirectUri: `http://127.0.0.1:${port}/callback`,
+      successTitle: "OAuth complete",
+    });
+
+    const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`);
+    expect(response.status).toBe(200);
+    await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
+  });
+
+  it("keeps an explicit localhost bind compatible with an IPv4 redirect", async () => {
+    const port = await getFreePort();
+    let markReady!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      markReady = resolve;
+    });
+    const callback = providerAuthRuntime.waitForLocalOAuthCallback({
+      expectedState: "state-1",
+      timeoutMs: 5_000,
+      port,
+      callbackPath: "/callback",
+      redirectUri: `http://127.0.0.1:${port}/callback`,
+      hostname: "localhost",
+      successTitle: "OAuth complete",
+      onProgress: markReady,
+    });
+
+    await ready;
+    const response = await fetch(`http://127.0.0.1:${port}/callback?code=code-1&state=state-1`);
+    expect(response.status).toBe(200);
     await expect(callback).resolves.toEqual({ code: "code-1", state: "state-1" });
   });
 

@@ -10,6 +10,12 @@ describe("shared/model-param-b", () => {
     expect(inferParamBFromIdOrName("(70b) + m1.5b + qwen-14b")).toBe(70);
   });
 
+  it("matches both tokens when two are separated by a single delimiter", () => {
+    expect(inferParamBFromIdOrName("8b 70b")).toBe(70);
+    expect(inferParamBFromIdOrName("8b-70b")).toBe(70);
+    expect(inferParamBFromIdOrName("7b-13b")).toBe(13);
+  });
+
   it("ignores malformed, zero, and non-delimited matches", () => {
     expect(inferParamBFromIdOrName("abc70beta 0b x70b2")).toBeNull();
     expect(inferParamBFromIdOrName("model 0b")).toBeNull();

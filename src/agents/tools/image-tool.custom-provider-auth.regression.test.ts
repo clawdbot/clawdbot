@@ -7,14 +7,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { ImageDescriptionRequest } from "../../plugin-sdk/media-understanding.js";
-import { getApiKeyForModel, hasUsableCustomProviderApiKey } from "../model-auth.js";
+import { getApiKeyForModelCore, hasUsableCustomProviderApiKey } from "../model-auth.js";
 import { resolveImageToolFactoryAvailable } from "../openclaw-tools.media-factory-plan.js";
-import { createImageTool, resolveImageModelConfigForTool, testing } from "./image-tool.js";
+import { createImageTool } from "./image-tool.js";
+import { resolveImageModelConfigForTool, testing } from "./image-tool.test-support.js";
 import { hasProviderAuthForTool } from "./model-config.helpers.js";
 
 const USER_PROVIDER = "hatchery-qwen3.6-plus";
 const USER_MODEL = "qwen3.6-plus";
 const USER_PRIMARY = `${USER_PROVIDER}/${USER_MODEL}`;
+const BEDROCK_PROVIDER = "amazon-bedrock";
+const BEDROCK_VISION_MODEL = "vision-1";
 const CONFIG_API_KEY = "sk-user-configured-key"; // pragma: allowlist secret
 const USER_PROVIDER_AUTH_ENV_KEYS = [
   "HATCHERY_QWEN3_6_PLUS_API_KEY",
@@ -74,6 +77,23 @@ function createUserReportedConfig(params?: { includeApiKey?: boolean }): OpenCla
   };
 }
 
+function createBedrockSdkConfig(): OpenClawConfig {
+  return {
+    agents: { defaults: { model: { primary: `${BEDROCK_PROVIDER}/text-1` } } },
+    models: {
+      mode: "replace",
+      providers: {
+        [BEDROCK_PROVIDER]: {
+          baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+          auth: "aws-sdk",
+          api: "bedrock-converse-stream",
+          models: [makeVisionModel(BEDROCK_VISION_MODEL)],
+        },
+      },
+    },
+  };
+}
+
 async function withEmptyAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-auth-regression-"));
   try {
@@ -105,6 +125,7 @@ describe("image custom provider auth regression", () => {
       }),
       resolveAutoMediaKeyProviders: () => [],
       resolveDefaultMediaModel: () => undefined,
+      resolveRegisteredMediaUnderstandingProvider: () => undefined,
       resolveModelAsync: async () => ({
         model: {} as never,
         authStorage: {} as never,
@@ -148,12 +169,34 @@ describe("image custom provider auth regression", () => {
     });
   });
 
-  it("executes deferred image tool discovery with config-backed auth and runtime key resolution", async () => {
-    // This covers the production deferred-discovery path: registration can
-    // avoid auth work, but execution still resolves the config-backed key.
+  it("registers config-only AWS SDK Bedrock image models", async () => {
+    await withEmptyAgentDir(async (agentDir) => {
+      vi.stubEnv("AWS_PROFILE", "");
+      vi.stubEnv("AWS_ACCESS_KEY_ID", "");
+      vi.stubEnv("AWS_SECRET_ACCESS_KEY", "");
+      vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "");
+      const cfg = createBedrockSdkConfig();
+
+      expect(hasProviderAuthForTool({ provider: BEDROCK_PROVIDER, cfg })).toBe(true);
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: `${BEDROCK_PROVIDER}/${BEDROCK_VISION_MODEL}`,
+      });
+      expect(
+        resolveImageToolFactoryAvailable({
+          config: cfg,
+          agentDir,
+          modelHasVision: true,
+        }),
+      ).toBe(true);
+    });
+  });
+
+  it("executes deferred fallback discovery with config-backed auth and runtime key resolution", async () => {
+    // This covers the text-only fallback path: registration can avoid auth work,
+    // but execution still resolves the config-backed image-model key.
     await withEmptyAgentDir(async (agentDir) => {
       const cfg = createUserReportedConfig();
-      const auth = await getApiKeyForModel({
+      const auth = await getApiKeyForModelCore({
         model: {
           id: USER_MODEL,
           name: USER_MODEL,
@@ -176,13 +219,14 @@ describe("image custom provider auth regression", () => {
         config: cfg,
         agentDir,
         deferAutoModelResolution: true,
-        modelHasVision: true,
+        modelHasVision: false,
       });
       expect(typeof tool?.execute).toBe("function");
+      expect(tool?.name).toBe("view_image");
 
       const result = await tool!.execute("regression-1", {
         prompt: "Read this screenshot.",
-        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
       });
 
       const payload = result as { content?: Array<{ type?: string; text?: string }> };
@@ -193,7 +237,7 @@ describe("image custom provider auth regression", () => {
     });
   });
 
-  it("still rejects the same config when apiKey is missing", async () => {
+  it("still rejects the same fallback config when apiKey is missing", async () => {
     await withEmptyAgentDir(async (agentDir) => {
       const cfg = createUserReportedConfig({ includeApiKey: false });
       expect(hasUsableCustomProviderApiKey(cfg, USER_PROVIDER)).toBe(false);
@@ -204,12 +248,12 @@ describe("image custom provider auth regression", () => {
         config: cfg,
         agentDir,
         deferAutoModelResolution: true,
-        modelHasVision: true,
+        modelHasVision: false,
       });
       await expect(
         tool!.execute("regression-2", {
           prompt: "Read this screenshot.",
-          image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+          path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
         }),
       ).rejects.toThrow(/No image model is configured/);
     });

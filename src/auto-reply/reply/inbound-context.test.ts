@@ -1,8 +1,12 @@
 // Tests inbound context text built from sender and conversation metadata.
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../channels/plugins/contracts/test-helpers.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext } from "../templating.js";
-import { finalizeInboundContext } from "./inbound-context.js";
+import { appendChannelPromptContext } from "./channel-prompt-context.js";
+import { markInboundContextLabel } from "./inbound-context-marker.js";
+import { finalizeInboundContext, finalizeInboundContextForSdk } from "./inbound-context.js";
+import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 
 describe("normalizeInboundTextNewlines", () => {
@@ -26,6 +30,59 @@ describe("normalizeInboundTextNewlines", () => {
 });
 
 describe("inbound context contract (providers + extensions)", () => {
+  it.each([
+    ["heartbeat", "heartbeat"],
+    ["cron-event", "cron"],
+    ["exec-event", "exec"],
+  ] as const)("folds the legacy %s source without changing the reply route", (provider, source) => {
+    const input: MsgContext = {
+      Body: "An internal turn",
+      Provider: provider,
+      Surface: provider,
+      OriginatingChannel: "telegram",
+      OriginatingTo: "chat:123",
+      MessageThreadId: "456",
+      InputProvenance: { kind: "internal_system", sourceTool: "existing-source" },
+    };
+    const ctx = finalizeInboundContextForSdk(input);
+    expect(ctx).toMatchObject({
+      InternalTurnSource: source,
+      OriginatingChannel: "telegram",
+      OriginatingTo: "chat:123",
+      MessageThreadId: "456",
+      InputProvenance: { kind: "internal_system", sourceTool: "existing-source" },
+    });
+    expect(ctx.Provider).toBeUndefined();
+    expect(ctx.Surface).toBeUndefined();
+  });
+
+  it("preserves a typed wake without inventing a transport", () => {
+    const ctx = finalizeInboundContext({ Body: "Background work", InternalTurnSource: "exec" });
+    expect(ctx.InternalTurnSource).toBe("exec");
+    expect(ctx.Provider).toBeUndefined();
+    expect(ctx.OriginatingChannel).toBeUndefined();
+  });
+
+  it("removes a legacy wake label from the reply channel", () => {
+    const ctx = finalizeInboundContextForSdk({
+      Body: "Background work",
+      Provider: "cron-event",
+      OriginatingChannel: "cron-event",
+    });
+    expect(ctx.InternalTurnSource).toBe("cron");
+    expect(ctx.OriginatingChannel).toBeUndefined();
+  });
+
+  it("does not turn an unknown source into an internal wake", () => {
+    const ctx = finalizeInboundContextForSdk({
+      Body: "A user message",
+      Provider: "telegram",
+      InternalTurnSource: "unknown",
+    });
+    expect(ctx.InternalTurnSource).toBeUndefined();
+    expect(ctx.Provider).toBe("telegram");
+  });
+
   const cases: Array<{ name: string; ctx: MsgContext }> = [
     {
       name: "whatsapp group",
@@ -182,6 +239,241 @@ describe("inbound context contract (providers + extensions)", () => {
   }
 });
 
+describe("finalizeInboundContext text facts", () => {
+  it.each(["native", "text"] as const)(
+    "keeps suppressed %s command input literal across repeated finalization",
+    (source) => {
+      const body = "/new keep this as task text";
+      const ctx = finalizeInboundContext({
+        Body: body,
+        RawBody: body,
+        CommandBody: body,
+        BodyForCommands: body,
+        commandText: body,
+        CommandInterpretationSuppressed: true,
+        CommandAuthorized: true,
+        CommandSource: source,
+        CommandTargetSessionKey: "agent:other:main",
+        CommandTurn: {
+          kind: source === "native" ? "native" : "text-slash",
+          source,
+          authorized: true,
+          commandName: "new",
+          body,
+        },
+      });
+
+      const expected = {
+        agentText: body,
+        rawText: body,
+        BodyForAgent: body,
+        commandText: "",
+        BodyForCommands: "",
+        CommandAuthorized: false,
+        CommandSource: undefined,
+        CommandTurn: { kind: "normal", source: "message", authorized: false, body: "" },
+      };
+      expect(ctx).toMatchObject(expected);
+      expect(resolveCommandTurnTargetSessionKey(ctx)).toBeUndefined();
+      expect(finalizeInboundContext(ctx, { forceBodyForCommands: true })).toMatchObject(expected);
+    },
+  );
+
+  it.each([
+    {
+      name: "BodyForCommands",
+      ctx: {
+        Body: "body",
+        BodyStripped: "stripped",
+        Transcript: "transcript",
+        RawBody: "raw",
+        CommandBody: "command",
+        BodyForCommands: "commands",
+      },
+      expected: "commands",
+    },
+    {
+      name: "CommandBody",
+      ctx: {
+        Body: "body",
+        BodyStripped: "stripped",
+        Transcript: "transcript",
+        RawBody: "raw",
+        CommandBody: "command",
+      },
+      expected: "command",
+    },
+    {
+      name: "RawBody",
+      ctx: { Body: "body", BodyStripped: "stripped", Transcript: "transcript", RawBody: "raw" },
+      expected: "raw",
+    },
+    {
+      name: "Transcript",
+      ctx: { Body: "body", BodyStripped: "stripped", Transcript: "transcript" },
+      expected: "transcript",
+    },
+    {
+      name: "BodyStripped",
+      ctx: { Body: "body", BodyStripped: "stripped" },
+      expected: "stripped",
+    },
+    { name: "Body", ctx: { Body: "body" }, expected: "body" },
+  ])("resolves commandText from $name", ({ ctx, expected }) => {
+    expect(finalizeInboundContext(ctx).commandText).toBe(expected);
+  });
+
+  it("carries prompt-facing and raw text separately", () => {
+    const ctx = finalizeInboundContext({
+      Body: "enveloped body",
+      BodyForAgent: "agent body",
+      BodyForCommands: "command body",
+      RawBody: "raw body",
+    });
+
+    expect(ctx).toMatchObject({
+      commandText: "command body",
+      agentText: "agent body",
+      rawText: "raw body",
+      BodyForCommands: "command body",
+      BodyForAgent: "agent body",
+    });
+  });
+
+  it("preserves an explicitly empty raw projection", () => {
+    const ctx = finalizeInboundContext({
+      Body: "fallback body",
+      BodyForCommands: "/new payload",
+      RawBody: "",
+    });
+
+    expect(ctx).toMatchObject({
+      commandText: "/new payload",
+      agentText: "",
+      rawText: "",
+    });
+  });
+
+  it("normalizes canonical text once and keeps repeated finalization stable", () => {
+    const ctx = finalizeInboundContext({
+      Body: "body\r\nline",
+      Transcript: "transcript\r\nline",
+    });
+
+    expect(ctx).toMatchObject({
+      commandText: "transcript\nline",
+      agentText: "transcript\nline",
+      rawText: "transcript\nline",
+    });
+    expect(finalizeInboundContext(ctx)).toMatchObject({
+      commandText: "transcript\nline",
+      agentText: "transcript\nline",
+      rawText: "transcript\nline",
+    });
+  });
+});
+
+describe("finalizeInboundContext media cleanup", () => {
+  it("removes legacy media fields from both the value and its return type", () => {
+    const ctx = finalizeInboundContext({
+      Body: "hello",
+      MediaPath: "/tmp/photo.jpg",
+      MediaUrl: "file:///tmp/photo.jpg",
+      MediaType: "image/jpeg",
+      MediaPaths: ["/tmp/photo.jpg"],
+      MediaUrls: ["file:///tmp/photo.jpg"],
+      MediaTypes: ["image/jpeg"],
+      MediaDir: "/tmp/media",
+      MediaWorkspaceDir: "/tmp",
+      MediaTranscribedIndexes: [0],
+      MediaStaged: true,
+    });
+
+    expectTypeOf<Extract<keyof typeof ctx, "MediaPath">>().toEqualTypeOf<never>();
+    for (const key of [
+      "MediaPath",
+      "MediaUrl",
+      "MediaType",
+      "MediaPaths",
+      "MediaUrls",
+      "MediaTypes",
+      "MediaDir",
+      "MediaWorkspaceDir",
+      "MediaTranscribedIndexes",
+      "MediaStaged",
+    ] as const) {
+      expect(Object.hasOwn(ctx, key)).toBe(false);
+    }
+  });
+
+  it("restores legacy media projections only for the shipped SDK adapter", () => {
+    const ctx = finalizeInboundContextForSdk({
+      Body: "hello",
+      MediaPath: "/tmp/photo.jpg",
+      MediaUrl: "file:///tmp/photo.jpg",
+      MediaType: "image/jpeg",
+      MediaDir: "/tmp/media",
+      MediaWorkspaceDir: "/tmp/workspace",
+      MediaStaged: true,
+    });
+
+    expect(ctx).toMatchObject({
+      MediaPath: "/tmp/photo.jpg",
+      MediaUrl: "file:///tmp/photo.jpg",
+      MediaType: "image/jpeg",
+      MediaPaths: ["/tmp/photo.jpg"],
+      MediaUrls: ["file:///tmp/photo.jpg"],
+      MediaTypes: ["image/jpeg"],
+      MediaDir: "/tmp/media",
+      MediaWorkspaceDir: "/tmp/workspace",
+      MediaStaged: true,
+    });
+  });
+
+  it("adopts a singular SDK-staged path without losing canonical facts or metadata", () => {
+    const ctx = finalizeInboundContext({
+      Body: "hello",
+      media: [
+        {
+          path: "/remote/photo.jpg",
+          contentType: "image/jpeg",
+          kind: "image",
+          transcribed: true,
+          messageId: "photo",
+        },
+        {
+          path: "/remote/document.pdf",
+          contentType: "application/pdf",
+          kind: "document",
+          messageId: "document",
+          hydrationSuppressed: true,
+        },
+      ],
+      MediaPath: "/tmp/staged/photo.jpg",
+      MediaStaged: true,
+    });
+
+    expect(ctx.media).toHaveLength(2);
+    expect(ctx.media?.[0]).toMatchObject({
+      path: "/tmp/staged/photo.jpg",
+      contentType: "image/jpeg",
+      kind: "image",
+      transcribed: true,
+      messageId: "photo",
+      staged: true,
+    });
+    expect(ctx.media?.[1]).toMatchObject({
+      path: "/remote/document.pdf",
+      contentType: "application/pdf",
+      kind: "document",
+      messageId: "document",
+      hydrationSuppressed: true,
+    });
+    expect(Object.hasOwn(ctx, "MediaPath")).toBe(false);
+    expect(Object.hasOwn(ctx, "MediaStaged")).toBe(false);
+  });
+});
+
 describe("finalizeInboundContext supplemental projection", () => {
   it("projects supplemental facts into legacy context fields", () => {
     const ctx = finalizeInboundContext({
@@ -206,7 +498,7 @@ describe("finalizeInboundContext supplemental projection", () => {
           label: "thread label",
         },
         groupSystemPrompt: "group prompt",
-        untrustedContext: [{ label: "raw", payload: { ok: true } }],
+        channelStructuredContext: [{ label: "raw", payload: { ok: true } }],
       },
     });
 
@@ -224,7 +516,7 @@ describe("finalizeInboundContext supplemental projection", () => {
       ThreadHistoryBody: "history",
       ThreadLabel: "thread label",
       GroupSystemPrompt: "group prompt",
-      UntrustedStructuredContext: [{ label: "raw", payload: { ok: true } }],
+      ChannelStructuredContext: [{ label: "raw", payload: { ok: true } }],
     });
     expect(Object.hasOwn(ctx, "SupplementalContext")).toBe(false);
   });
@@ -246,5 +538,71 @@ describe("finalizeInboundContext supplemental projection", () => {
     expect(ctx.GroupSystemPrompt).toBe("explicit prompt");
     expect(ctx.ReplyToIsQuote).toBe(false);
     expect(Object.hasOwn(ctx, "ReplyToBody")).toBe(false);
+  });
+
+  it("folds the deprecated supplemental structured-context key", () => {
+    const supplemental: NonNullable<MsgContext["SupplementalContext"]> = {
+      untrustedContext: [{ label: "raw", payload: { ok: true } }],
+    };
+    const ctx = finalizeInboundContext({ Body: "hello", SupplementalContext: supplemental });
+
+    expect(ctx.ChannelStructuredContext).toEqual([{ label: "raw", payload: { ok: true } }]);
+    expect(supplemental.channelStructuredContext).toEqual([
+      { label: "raw", payload: { ok: true } },
+    ]);
+    expect(Object.hasOwn(supplemental, "untrustedContext")).toBe(false);
+  });
+});
+
+describe("finalizeInboundContext deprecated prompt-context aliases", () => {
+  it("folds deprecated UntrustedStructuredContext before prompt rendering", () => {
+    const entry = {
+      label: "Channel metadata",
+      source: "test",
+      type: "channel_metadata",
+      payload: { value: "same bytes" },
+    };
+    const deprecated = finalizeInboundContext({
+      Body: "hello",
+      UntrustedStructuredContext: [entry],
+    });
+    const canonical = finalizeInboundContext({
+      Body: "hello",
+      ChannelStructuredContext: [entry],
+    });
+
+    expect(buildInboundUserContextPrefix(deprecated)).toBe(
+      buildInboundUserContextPrefix(canonical),
+    );
+    expect(deprecated.ChannelStructuredContext).toEqual([entry]);
+    expect(Object.hasOwn(deprecated, "UntrustedStructuredContext")).toBe(false);
+  });
+
+  it("keeps explicitly empty structured context ahead of the deprecated alias", () => {
+    const ctx = finalizeInboundContext({
+      Body: "hello",
+      ChannelStructuredContext: [],
+      UntrustedStructuredContext: [{ label: "stale", payload: {} }],
+    });
+
+    expect(ctx.ChannelStructuredContext).toEqual([]);
+    expect(Object.hasOwn(ctx, "UntrustedStructuredContext")).toBe(false);
+  });
+
+  it("folds deprecated UntrustedContext before prompt rendering", () => {
+    const deprecated = finalizeInboundContext({
+      Body: "hello",
+      UntrustedContext: ["Channel metadata (src)\r\nvalue"],
+    });
+    const canonical = finalizeInboundContext({
+      Body: "hello",
+      ChannelPromptContext: ["Channel metadata (src)\r\nvalue"],
+    });
+
+    const rendered = appendChannelPromptContext("hello", deprecated.ChannelPromptContext);
+    expect(rendered).toBe(appendChannelPromptContext("hello", canonical.ChannelPromptContext));
+    expect(rendered).toContain(markInboundContextLabel("Context:"));
+    expect(deprecated.ChannelPromptContext).toEqual(["Channel metadata (src)\nvalue"]);
+    expect(Object.hasOwn(deprecated, "UntrustedContext")).toBe(false);
   });
 });

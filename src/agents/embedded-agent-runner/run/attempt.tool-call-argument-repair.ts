@@ -1,13 +1,14 @@
 /**
  * Repairs malformed tool-call arguments in embedded-agent stream results.
  */
-import { extractBalancedJsonPrefix } from "../../../shared/balanced-json.js";
+import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { normalizeProviderId } from "../../model-selection.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { log } from "../logger.js";
 import { createHtmlEntityToolCallArgumentDecodingWrapper } from "../tool-call-argument-decoding.js";
-import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
+import { isRunnerToolCallBlockType } from "./attempt-tool-call-block-type.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 const MAX_TOOLCALL_REPAIR_BUFFER_CHARS = 64_000;
@@ -152,17 +153,6 @@ type ToolCallRepairParsedObject = {
   endIndex: number;
 };
 
-function parseUsableObjectJson(raw: string): Record<string, unknown> | undefined {
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function findAsciiStringEnd(raw: string, startIndex: number): number {
   let escaped = false;
   for (let i = startIndex + 1; i < raw.length; i += 1) {
@@ -288,11 +278,14 @@ function shouldCloseSmartQuotedValueAt(
 }
 
 function decodeSmartQuotedJsonStringEscapes(value: string): string {
-  return value.replace(/\\(?:(["\\/bfnrt])|u([0-9a-fA-F]{4}))/g, (_match, escaped, hex) =>
-    typeof hex === "string"
-      ? String.fromCharCode(Number.parseInt(hex, 16))
-      : TOOLCALL_REPAIR_JSON_STRING_ESCAPES[escaped as string],
-  );
+  return value.replace(/\\(?:(["\\/bfnrt])|u([0-9a-fA-F]{4}))/g, (match, escaped, hex) => {
+    if (typeof hex === "string") {
+      return String.fromCharCode(Number.parseInt(hex, 16));
+    }
+    return typeof escaped === "string"
+      ? (TOOLCALL_REPAIR_JSON_STRING_ESCAPES[escaped] ?? match)
+      : match;
+  });
 }
 
 function readSmartQuotedValue(
@@ -489,7 +482,7 @@ function tryExtractUsableToolCallArgumentsFromJson(
     return undefined;
   }
 
-  const parsedExtracted = parseUsableObjectJson(extracted.json);
+  const parsedExtracted = safeParseJsonRecord(extracted.json);
   if (!parsedExtracted) {
     return undefined;
   }
@@ -546,7 +539,7 @@ function tryExtractUsableToolCallArguments(
   if (!raw.trim()) {
     return undefined;
   }
-  const parsedRaw = parseUsableObjectJson(raw);
+  const parsedRaw = safeParseJsonRecord(raw);
   if (parsedRaw) {
     return {
       args: parsedRaw,
@@ -793,3 +786,4 @@ export function shouldRepairMalformedToolCallArguments(params: {
 export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   return createHtmlEntityToolCallArgumentDecodingWrapper(baseFn);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,18 +1,13 @@
 import type { WhatsAppInboundAdmission } from "./admission.js";
 import { resolveWhatsAppGroupConversationId } from "./group-conversation.js";
-import { withDeprecatedWebInboundMessageFlatAliases } from "./message-aliases.js";
 import { createAcceptedWhatsAppSendResult } from "./send-result.test-helper.js";
-import type {
-  LegacyFlatWebInboundMessage,
-  AdmittedWebInboundMessage,
-  WebInboundCallbackMessage,
-  WebInboundMessage,
-  WhatsAppInboundEvent,
-  WhatsAppInboundPayload,
-  WhatsAppInboundPlatform,
-} from "./types.js";
+import type { WebInboundCallbackMessage, WebInboundMessage } from "./types.js";
 
-export type TestWhatsAppInboundAdmissionOverrides = Partial<
+type WhatsAppInboundEvent = WebInboundCallbackMessage["event"];
+type WhatsAppInboundPayload = WebInboundCallbackMessage["payload"];
+type WhatsAppInboundPlatform = WebInboundCallbackMessage["platform"];
+
+type TestWhatsAppInboundAdmissionOverrides = Partial<
   Omit<
     WhatsAppInboundAdmission,
     | "account"
@@ -34,18 +29,7 @@ export type TestWhatsAppInboundAdmissionOverrides = Partial<
 };
 
 type TestInboundMessageOverrides = Partial<
-  Omit<
-    WebInboundCallbackMessage,
-    | "event"
-    | "payload"
-    | "platform"
-    | "admission"
-    | "from"
-    | "conversationId"
-    | "accountId"
-    | "accessControlPassed"
-    | "chatType"
-  >
+  Omit<WebInboundCallbackMessage, "event" | "payload" | "platform" | "admission">
 > & {
   admission?: TestWhatsAppInboundAdmissionOverrides;
   event?: Partial<WhatsAppInboundEvent>;
@@ -53,7 +37,7 @@ type TestInboundMessageOverrides = Partial<
   platform?: Partial<WhatsAppInboundPlatform>;
 };
 
-export function createTestWhatsAppInboundAdmission(
+function createTestWhatsAppInboundAdmission(
   overrides: TestWhatsAppInboundAdmissionOverrides = {},
 ): WhatsAppInboundAdmission {
   const conversationId = overrides.conversation?.id ?? "+15551234567";
@@ -61,6 +45,7 @@ export function createTestWhatsAppInboundAdmission(
   const kind = overrides.conversation?.kind ?? "direct";
 
   return {
+    channelIngress: overrides.channelIngress,
     accountId,
     isSelfChat: overrides.isSelfChat ?? false,
     account: {
@@ -113,10 +98,10 @@ export function createTestWhatsAppInboundAdmission(
 
 export function createTestWebInboundMessage(
   overrides: TestInboundMessageOverrides = {},
-): WebInboundMessage & AdmittedWebInboundMessage {
+): WebInboundMessage {
   const { admission: admissionOverrides, event, payload, platform, ...message } = overrides;
   const admission = createTestWhatsAppInboundAdmission(admissionOverrides);
-  return withDeprecatedWebInboundMessageFlatAliases({
+  return {
     event: {
       id: "msg-1",
       ...event,
@@ -135,37 +120,19 @@ export function createTestWebInboundMessage(
     },
     admission,
     ...message,
-  }) as WebInboundMessage & AdmittedWebInboundMessage;
-}
-
-export function createTestLegacyFlatWebInboundMessage(
-  overrides: Partial<LegacyFlatWebInboundMessage> = {},
-): LegacyFlatWebInboundMessage {
-  return {
-    id: "msg-1",
-    from: "+15551234567",
-    conversationId: "+15551234567",
-    accountId: "default",
-    chatType: "direct",
-    to: "+15559876543",
-    body: "hello",
-    chatId: "+15551234567",
-    sendComposing: async () => {},
-    reply: async () => createAcceptedWhatsAppSendResult("text", "reply-1"),
-    sendMedia: async () => createAcceptedWhatsAppSendResult("media", "media-1"),
-    ...overrides,
   };
 }
 
 export function createTestWebAudioInboundMessage(
   overrides: TestInboundMessageOverrides = {},
-): WebInboundMessage & AdmittedWebInboundMessage {
+): WebInboundMessage {
   const { event, payload, platform, ...message } = overrides;
   const media = Object.hasOwn(payload ?? {}, "media")
     ? payload?.media
     : {
         type: "audio/ogg; codecs=opus",
         path: "/tmp/voice.ogg",
+        kind: "audio" as const,
       };
   return createTestWebInboundMessage({
     event: {
@@ -174,7 +141,7 @@ export function createTestWebAudioInboundMessage(
       ...event,
     },
     payload: {
-      body: "<media:audio>",
+      body: "",
       media,
       ...payload,
     },

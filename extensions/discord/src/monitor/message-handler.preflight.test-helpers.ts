@@ -64,6 +64,8 @@ export function createDiscordMessage(params: {
   };
   mentionedUsers?: Array<{ id: string }>;
   mentionedEveryone?: boolean;
+  messageReference?: import("../internal/discord.js").Message["messageReference"];
+  referencedMessage?: import("../internal/discord.js").Message;
   attachments?: Array<Record<string, unknown>>;
   webhookId?: string;
   type?: import("../internal/discord.js").MessageType;
@@ -80,6 +82,8 @@ export function createDiscordMessage(params: {
     mentionedUsers: params.mentionedUsers ?? [],
     mentionedRoles: [],
     mentionedEveryone: params.mentionedEveryone ?? false,
+    messageReference: params.messageReference,
+    referencedMessage: params.referencedMessage,
     author: params.author,
   } as unknown as import("../internal/discord.js").Message;
 }
@@ -105,7 +109,7 @@ export function createDiscordPreflightArgs(params: {
     replyToMode: "all",
     dmEnabled: true,
     groupDmEnabled: true,
-    dmPolicy: params.discordConfig?.dmPolicy ?? params.discordConfig?.dm?.policy ?? "pairing",
+    dmPolicy: params.discordConfig?.dmPolicy ?? "pairing",
     ackReactionScope: "direct",
     groupPolicy: "open",
     threadBindings: createNoopThreadBindingManager("default"),

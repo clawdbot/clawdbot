@@ -2,15 +2,15 @@
  * Contract suites for provider setup wizard choices, options, and model pickers.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderAuthMethod } from "../plugin-entry.js";
-import type { ProviderPlugin } from "../provider-model-shared.js";
+import { resolveProviderPluginChoice } from "../../plugins/provider-auth-choice.runtime.js";
 import {
   buildProviderPluginMethodChoice,
   resolveProviderModelPickerEntries,
-  resolveProviderPluginChoice,
   resolveProviderWizardOptions,
   setProviderWizardProvidersResolverForTest,
-} from "../testing.js";
+} from "../../plugins/provider-wizard.js";
+import type { ProviderAuthMethod } from "../plugin-entry.js";
+import type { ProviderPlugin } from "../provider-model-shared.js";
 
 const resolvePluginProvidersMock = vi.fn();
 let restoreProviderResolver: (() => void) | undefined;

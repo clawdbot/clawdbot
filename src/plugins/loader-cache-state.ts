@@ -2,7 +2,7 @@
 import { PluginLruCache } from "./plugin-cache-primitives.js";
 
 /** Error thrown when one plugin registry cache key attempts nested loading. */
-export class PluginLoadReentryError extends Error {
+class PluginLoadReentryError extends Error {
   readonly cacheKey: string;
 
   constructor(cacheKey: string) {
@@ -16,18 +16,11 @@ export class PluginLoadReentryError extends Error {
 export class PluginLoaderCacheState<T> {
   readonly #registryCache: PluginLruCache<T>;
   readonly #inFlightLoads = new Set<string>();
-  readonly #openAllowlistWarningCache = new Set<string>();
+  readonly #openAllowlistWarningCache: PluginLruCache<true>;
 
   constructor(defaultMaxEntries: number) {
     this.#registryCache = new PluginLruCache<T>(defaultMaxEntries);
-  }
-
-  get maxEntries(): number {
-    return this.#registryCache.maxEntries;
-  }
-
-  setMaxEntriesForTest(value?: number): void {
-    this.#registryCache.setMaxEntriesForTest(value);
+    this.#openAllowlistWarningCache = new PluginLruCache<true>(defaultMaxEntries);
   }
 
   clear(): void {
@@ -49,6 +42,10 @@ export class PluginLoaderCacheState<T> {
     this.#registryCache.set(cacheKey, state);
   }
 
+  deleteValue(state: T): void {
+    this.#registryCache.deleteValue(state);
+  }
+
   isLoadInFlight(cacheKey: string): boolean {
     return this.#inFlightLoads.has(cacheKey);
   }
@@ -65,10 +62,10 @@ export class PluginLoaderCacheState<T> {
   }
 
   hasOpenAllowlistWarning(cacheKey: string): boolean {
-    return this.#openAllowlistWarningCache.has(cacheKey);
+    return this.#openAllowlistWarningCache.get(cacheKey) === true;
   }
 
   recordOpenAllowlistWarning(cacheKey: string): void {
-    this.#openAllowlistWarningCache.add(cacheKey);
+    this.#openAllowlistWarningCache.set(cacheKey, true);
   }
 }

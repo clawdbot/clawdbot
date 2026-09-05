@@ -1,9 +1,9 @@
+import { createDeepSeekTextFilter } from "@openclaw/ai/transports";
 /**
  * Regression coverage for DeepSeek DSML streamed text filtering.
  * Verifies complete, split, full-width, and unterminated DSML markup handling.
  */
 import { describe, expect, it } from "vitest";
-import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 
 function filteredText(chunks: readonly string[]) {
   const filter = createDeepSeekTextFilter();
@@ -17,6 +17,27 @@ describe("createDeepSeekTextFilter", () => {
       chunks: [
         "before <｜DSML｜tool_use_error><tool_name>write</tool_name></｜DSML｜tool_use_error> after",
       ],
+      expected: "before  after",
+    },
+    {
+      name: "doubled full-width streamed error",
+      chunks: Array.from(
+        "before <｜｜DSML｜｜tool_use_error>hidden</｜｜DSML｜｜tool_use_error> after",
+      ),
+      expected: "before  after",
+    },
+    {
+      name: "foreign close stays inside the filtered block",
+      chunks: Array.from(
+        "before <｜DSML｜tool_use_error>hidden</|DSML|tool_use_error>still hidden</｜DSML｜tool_use_error> after",
+      ),
+      expected: "before  after",
+    },
+    {
+      name: "doubled open ignores a single close",
+      chunks: Array.from(
+        "before <｜｜DSML｜｜tool_use_error>hidden</｜DSML｜tool_use_error>still hidden</｜｜DSML｜｜tool_use_error> after",
+      ),
       expected: "before  after",
     },
     {

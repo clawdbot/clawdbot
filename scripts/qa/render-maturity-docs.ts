@@ -26,6 +26,7 @@ import {
   type QaMaturityTaxonomyLevel,
   type QaMaturityTaxonomySurface,
 } from "../../extensions/qa-lab/src/scorecard-taxonomy.js";
+import { collectMirroredDocsRoutes } from "../lib/docs-published-routes.mts";
 
 const DEFAULT_TAXONOMY_PATH = "taxonomy.yaml";
 const DEFAULT_SCORES_PATH = "qa/maturity-scores.yaml";
@@ -40,6 +41,7 @@ type Args = {
   evidenceDir?: string;
   check: boolean;
   strictInputs: boolean;
+  allowFailures: boolean;
 };
 
 type EvidenceSummary = {
@@ -98,6 +100,7 @@ function parseArgs(argv: string[]): Args {
     evidenceDir: undefined,
     check: false,
     strictInputs: false,
+    allowFailures: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -110,6 +113,10 @@ function parseArgs(argv: string[]): Args {
     }
     if (arg === "--strict-inputs") {
       args.strictInputs = true;
+      continue;
+    }
+    if (arg === "--allow-failures") {
+      args.allowFailures = true;
       continue;
     }
     const next = (): string => {
@@ -145,6 +152,7 @@ Options:
   --evidence-dir <path> Optional directory containing qa-evidence.json artifacts
   --check               Fail when output files are stale
   --strict-inputs       Fail on score or evidence input warnings
+  --allow-failures      Render valid incomplete QA evidence; non-passing checks earn no Coverage
   -h, --help            Show this help
 `);
       process.exit(0);
@@ -157,8 +165,14 @@ Options:
 
 function familyTitle(value: string): string {
   const titles: Record<string, string> = {
+    googlechat: "Google Chat",
+    imessage: "iMessage",
+    msteams: "Microsoft Teams",
+    openai: "OpenAI",
+    openclaw: "OpenClaw",
     "platform-app": "Platform",
     "provider-tool": "Provider and tool",
+    whatsapp: "WhatsApp",
   };
   return (
     titles[value] ??
@@ -220,8 +234,12 @@ function collectDocsRouteIndex(docsRoot: string): DocsRouteIndex {
   const docsJsonPath = path.join(docsRoot, "docs.json");
   if (fs.existsSync(docsJsonPath)) {
     const docsJson = JSON.parse(fs.readFileSync(docsJsonPath, "utf8")) as {
+      navigation?: unknown;
       redirects?: Array<{ source?: string; destination?: string }>;
     };
+    for (const route of collectMirroredDocsRoutes(docsJson.navigation)) {
+      routes.add(normalizeRoutePath(route));
+    }
     for (const redirect of docsJson.redirects ?? []) {
       if (!redirect.source || !redirect.destination || redirect.destination.startsWith("http")) {
         continue;
@@ -245,10 +263,12 @@ function docsLink(docPath: string, docsRouteIndex: DocsRouteIndex): string | und
   const publicRoute = docsRouteIndex.routes.has(withoutExtension)
     ? withoutExtension
     : docsRouteIndex.redirects.get(withoutExtension);
-  if (!publicRoute || !docsRouteIndex.routes.has(publicRoute)) {
+  // Redirect fragments override source fragments; route validation only checks the page.
+  const [publicPage = "", publicAnchor = anchor] = (publicRoute ?? "").split("#", 2);
+  if (!publicPage || !docsRouteIndex.routes.has(publicPage)) {
     return undefined;
   }
-  const publicHref = anchor ? `${publicRoute}#${anchor}` : publicRoute;
+  const publicHref = publicAnchor ? `${publicPage}#${publicAnchor}` : publicPage;
   return `[${markdownEscape(title)}](/${markdownEscape(publicHref)})`;
 }
 
@@ -299,6 +319,7 @@ function scoreSummary(
   title: string,
   value: QaMaturityScoreObject | undefined,
   description: string,
+  details: readonly string[] = [],
 ): string[] {
   const score = scorePercent(value);
   const displayScore = score === undefined ? "-" : `${score}%`;
@@ -313,6 +334,7 @@ function scoreSummary(
     '  <div className="maturity-summary-meta">',
     `    ${maturityLabelPill(value?.label ?? "Unscored")}`,
     `    <span>${markdownEscape(description)}</span>`,
+    ...details.map((detail) => `    <span>${markdownEscape(detail)}</span>`),
     "  </div>",
     "</div>",
   ];
@@ -430,13 +452,15 @@ function renderSurfaceRows({
   for (const surface of surfaces) {
     const scoreSurface = scoreSurfaces.get(surface.id);
     rows.push(
-      '  <div className="maturity-surface-row">',
-      `    <a className="maturity-surface-name" href="/maturity/taxonomy#${markdownSlug(surface.name)}"><span className="maturity-surface-title">${markdownEscape(surface.name)}</span><span className="maturity-surface-meta">${maturityLevelPillFromText(levelText(surface, levels))}<span>${surface.categories.length} areas</span></span></a>`,
-      `    <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span>${scoreMeter(coverage.surfaces.get(surface.id))}</div>`,
-      `    <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span>${scoreMeter(scoreSurface?.scores?.quality)}</div>`,
-      `    <div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span>${scoreMeter(scoreSurface?.scores?.completeness)}</div>`,
-      `    <div className="maturity-surface-support">${maturityLtsBadge(scoreSurface?.lts)}</div>`,
-      "  </div>",
+      [
+        '  <div className="maturity-surface-row">',
+        `<a className="maturity-surface-name" href="/maturity/taxonomy#${markdownSlug(surface.name)}"><span className="maturity-surface-title">${markdownEscape(surface.name)}</span><span className="maturity-surface-meta">${maturityLevelPillFromText(levelText(surface, levels))}<span>${surface.categories.length} areas</span></span></a>`,
+        `<div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Coverage</span>${scoreMeter(coverage.surfaces.get(surface.id))}</div>`,
+        `<div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Quality</span>${scoreMeter(scoreSurface?.scores?.quality)}</div>`,
+        `<div className="maturity-surface-metric"><span className="maturity-surface-metric-label">Completeness</span>${scoreMeter(scoreSurface?.scores?.completeness)}</div>`,
+        `<div className="maturity-surface-support">${maturityLtsBadge(scoreSurface?.lts)}</div>`,
+        "</div>",
+      ].join(""),
     );
   }
   rows.push("</div>");
@@ -546,11 +570,10 @@ function renderScoreBands(): string[] {
     "## Score bands",
     "",
     '<div className="maturity-band-list">',
-    ...QA_MATURITY_SCORE_LABEL_BANDS.toReversed()
-      .map(
-        ([label, low, high]) =>
-          `  <div className="maturity-band ${maturityBandClass(label)}"><span className="maturity-band-title">${maturityLabelPill(label)}</span><span>${low}-${high}%</span></div>`,
-      ),
+    ...QA_MATURITY_SCORE_LABEL_BANDS.toReversed().map(
+      ([label, low, high]) =>
+        `  <div className="maturity-band ${maturityBandClass(label)}"><span className="maturity-band-title">${maturityLabelPill(label)}</span><span>${low}-${high}%</span></div>`,
+    ),
     "</div>",
     "",
   ];
@@ -645,6 +668,12 @@ function checkSetTitle(profile: string): string {
 
 function resultCountsText(statuses: StatusCounts): string {
   const parts = [`${statuses.pass} passed`];
+  if (statuses.fail > 0) {
+    parts.push(`${statuses.fail} failed`);
+  }
+  if (statuses.blocked > 0) {
+    parts.push(`${statuses.blocked} blocked`);
+  }
   if (statuses.skipped > 0) {
     parts.push(`${statuses.skipped} skipped`);
   }
@@ -747,7 +776,7 @@ function deriveCoverageScores(
   for (const report of coverageSummary.scorecard?.categoryReports ?? []) {
     categories.set(
       qaMaturityCoverageCategoryKey(report.surfaceId, report.name),
-      qaMaturityScoreObjectForScore(Math.round(report.features.fulfillmentPercent)),
+      qaMaturityScoreObjectForScore(Math.round(report.coverageIds.fulfillmentPercent)),
     );
   }
 
@@ -834,7 +863,7 @@ function copyStaticSourceAssets({
   taxonomyPath: string;
 }): string[] {
   fs.mkdirSync(staticAssetsDir, { recursive: true });
-  const copied = [
+  const copied: Array<[string, string]> = [
     [taxonomyPath, path.join(staticAssetsDir, "taxonomy.yaml")],
     [scoresPath, path.join(staticAssetsDir, "maturity-scores.yaml")],
   ];
@@ -882,7 +911,7 @@ function renderEvidenceSection(
       `    <span className="maturity-evidence-title">${markdownEscape(checkSetTitle(item.profile))}</span>`,
       `    <span>${markdownEscape(item.generatedAt)}</span>`,
       `    <span>${item.entryCount} checks - ${markdownEscape(resultCountsText(item.statuses))}</span>`,
-      `    <span>${markdownEscape(countText(scorecard?.categories))} areas - ${markdownEscape(countText(scorecard?.features))} capabilities</span>`,
+      `    <span>${markdownEscape(countText(scorecard?.categories))} areas - ${markdownEscape(countText(scorecard?.features))} features - ${markdownEscape(countText(scorecard?.coverageIds))} coverage IDs</span>`,
       "  </div>",
     );
   }
@@ -907,14 +936,11 @@ function renderEvidenceSection(
     );
     for (const [surfaceId, rows] of grouped) {
       const surfaceName = surfaceNames.get(surfaceId) ?? familyTitle(surfaceId);
-      const statusCounts = rows.reduce<Record<string, number>>(
-        (counts, row) => {
-          counts[readinessStatusText(row.category.status)] =
-            (counts[readinessStatusText(row.category.status)] ?? 0) + 1;
-          return counts;
-        },
-        {},
-      );
+      const statusCounts = rows.reduce<Record<string, number>>((counts, row) => {
+        counts[readinessStatusText(row.category.status)] =
+          (counts[readinessStatusText(row.category.status)] ?? 0) + 1;
+        return counts;
+      }, {});
       const summary = Object.entries(statusCounts)
         .map(([status, count]) => `${count} ${status.toLowerCase()}`)
         .join(" / ");
@@ -922,7 +948,7 @@ function renderEvidenceSection(
         `  <Accordion title="${markdownEscape(surfaceName)} - ${rows.length} areas">`,
         `    <p className="maturity-readiness-summary">${markdownEscape(summary)}</p>`,
         '    <div className="maturity-readiness-list">',
-        '      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Capabilities</span><span>Follow-up</span></div>',
+        '      <div className="maturity-readiness-row maturity-readiness-row-header"><span>Area</span><span>Features / coverage IDs</span><span>Follow-up</span></div>',
       );
       for (const { item, category } of rows) {
         const status = readinessStatusText(category.status);
@@ -932,7 +958,7 @@ function renderEvidenceSection(
           `          <span className="maturity-readiness-title">${markdownEscape(category.name)}</span>`,
           `          <span className="maturity-readiness-status maturity-readiness-status-${markdownSlug(status)}">${markdownEscape(status)} - ${markdownEscape(checkSetTitle(item.profile))}</span>`,
           "        </div>",
-          `        <span>${markdownEscape(countText(category.features))}</span>`,
+          `        <span>${markdownEscape(countText(category.features))} / ${markdownEscape(countText(category.coverageIds))}</span>`,
           `        <span>${markdownEscape(followUpText(category.missingCoverageIds))}</span>`,
           "      </div>",
         );
@@ -962,6 +988,7 @@ function renderMaturityScorecard({
   const surfaceAverage = coverage.rollups.surface_average;
   const qualityAverage = scores.rollups.surface_average.quality;
   const completenessAverage = scores.rollups.surface_average.completeness;
+  const maturityAverage = averageScores([qualityAverage, completenessAverage]);
   const lines = [
     ...frontmatter(
       "Maturity scorecard",
@@ -983,26 +1010,23 @@ function renderMaturityScorecard({
     "## At a glance",
     "",
     '<div className="maturity-summary-grid">',
-    ...indentMarkdown(scoreSummary("Coverage", surfaceAverage, "QA profile evidence"), 2),
     ...indentMarkdown(
-      scoreSummary("Quality", qualityAverage, "Reliability and operator confidence"),
-      2,
-    ),
-    ...indentMarkdown(
-      scoreSummary("Completeness", completenessAverage, "Expected workflow coverage"),
+      scoreSummary("Maturity score", maturityAverage, "Quality + completeness", [
+        `Coverage ${scoreLabel(surfaceAverage)}`,
+        `Quality ${scoreLabel(qualityAverage)}`,
+        `Completeness ${scoreLabel(completenessAverage)}`,
+      ]),
       2,
     ),
     "</div>",
     "",
-    'Coverage is deliberately evidence-led: an area does not become "ready" just because the implementation exists.',
+    'Coverage is deliberately evidence-led: an area does not become "ready" just because the implementation exists. It is not an input to the maturity score, but OpenClaw aims to keep end-to-end coverage above 90% for mature Stable-or-better features over time.',
     "",
     ...renderScoreBands(),
   ];
 
   lines.push(
     "## Surface explorer",
-    "",
-    '<a id="surface-explorer" />',
     "",
     "Surfaces are ordered by maturity level, completeness, and quality. LTS support is shown alongside each row so release-ready options are easy to compare.",
     "",
@@ -1058,8 +1082,6 @@ function renderTaxonomy({
     "",
     "## Product areas",
     "",
-    '<a id="product-areas" />',
-    "",
   ];
 
   const families = qaMaturityFamilyOrder(surfaces);
@@ -1113,7 +1135,11 @@ function renderTaxonomy({
           `    <div>${scoreMeter(coverageScore)}</div>`,
           `    <div>${scoreMeter(scoreCategory?.quality)}</div>`,
           `    <div>${scoreMeter(scoreCategory?.completeness)}</div>`,
-          `    <div className="maturity-category-docs">${docs || "No linked docs"}</div>`,
+          '    <div className="maturity-category-docs">',
+          "",
+          docs || "No linked docs",
+          "",
+          "</div>",
           "  </div>",
         );
       }
@@ -1210,7 +1236,9 @@ function main(): void {
   }
 
   const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
-  rejectBlockingEvidence(evidenceSummaries);
+  if (!args.allowFailures) {
+    rejectBlockingEvidence(evidenceSummaries);
+  }
   const coverage = deriveCoverageScores(taxonomy, evidenceSummaries);
   const { scores, warnings: scoreWarnings } = readValidatedQaMaturityScoreSources({
     coverageScores: coverage,
