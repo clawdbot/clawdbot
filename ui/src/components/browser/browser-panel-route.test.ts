@@ -219,7 +219,7 @@ describe("browser panel route handoff", () => {
 
   it("leaves a stopped browser on its Start affordance instead of focusing a historical tab", async () => {
     let running = false;
-    const routedRefresh = createDeferred<void>();
+    const routedRefresh = createDeferred();
     let pauseRefresh = false;
     const gateway = createBrowserClient(async (request) => {
       if (request.path === "/tabs") {
