@@ -9,7 +9,6 @@ import type { ApplicationContext } from "../app/context.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
-import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.ts";
 
 export const SESSION_LINK_SCAN_RE = /agent:[^\s<>"'`]*[^\s<>"'`.,;:!?)}\]]/g;
 
@@ -162,7 +161,7 @@ export function markdownSessionLinkFromEvent(
     return parseSessionLinkKey(sessionKey);
   }
   // Lit assigns context before the lazy provider upgrades; routing must not wait for its card.
-  const context = anchor?.closest<SessionProgressHovercardProvider>(
+  const context = anchor?.closest<HTMLElement & { context?: ApplicationContext | null }>(
     "openclaw-session-progress-hovercard-provider",
   )?.context;
   const href = anchor?.getAttribute("href") ?? anchor?.dataset.sessionHref;
