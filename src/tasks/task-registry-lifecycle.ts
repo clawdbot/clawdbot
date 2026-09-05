@@ -1,4 +1,5 @@
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agents/agent-run-terminal-outcome.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { hasAuthoritativeTaskBacking, readTaskBackingInstance } from "./task-backing-authority.js";
 import { isTerminalTaskStatus } from "./task-executor-policy.js";
@@ -21,6 +22,7 @@ import {
   setTaskRegistryListenerStop,
 } from "./task-registry-state.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import { getTaskRunOwner } from "./task-run-owner.js";
 
 // Keep durable liveness well inside the 30-minute stale-task audit without writing every delta.
 const ACTIVITY_LIVENESS_WRITE_MS = 60_000;
@@ -35,18 +37,44 @@ function ensureListener() {
       runId: evt.runId,
       sessionKey: evt.sessionKey,
     });
+    const subagent = subagentRuns.get(evt.runId);
+    const canonicalRunId = subagent?.taskRunId;
+    // Replacement runs retain the original task identity. Follow the live
+    // registry owner without changing event routing for other task runtimes.
+    if (canonicalRunId && canonicalRunId !== evt.runId) {
+      scopedTasks.push(
+        ...getTasksByRunScope({
+          runId: canonicalRunId,
+          runtime: "subagent",
+          sessionKey: evt.sessionKey,
+        }).filter((task) => readTaskBackingInstance(task.detail)?.runtime === "subagent"),
+      );
+    }
     if (scopedTasks.length === 0) {
       return;
     }
     const now = evt.ts || Date.now();
     for (const current of scopedTasks) {
-      if (isTerminalTaskStatus(current.status) || !hasAuthoritativeTaskBacking(current)) {
+      const backing = readTaskBackingInstance(current.detail);
+      const registryBackedSubagent =
+        current.runtime === "subagent" && backing?.runtime === "subagent";
+      if (
+        isTerminalTaskStatus(current.status) ||
+        !hasAuthoritativeTaskBacking(current) ||
+        (registryBackedSubagent &&
+          (subagent?.generation !== backing.generation ||
+            subagent?.childSessionKey !== current.childSessionKey))
+      ) {
+        continue;
+      }
+      const phase = evt.stream === "lifecycle" ? evt.data?.phase : undefined;
+      // An abort event starts cancellation; only the live producer knows when work has settled.
+      if ((phase === "end" || phase === "error") && getTaskRunOwner(current)) {
         continue;
       }
       recordTaskActivityEvent(current, evt);
       const patch: Partial<TaskRecord> = {};
       if (evt.stream === "lifecycle") {
-        const phase = typeof evt.data?.phase === "string" ? evt.data.phase : undefined;
         const eventStartedAt = evt.data?.startedAt;
         const startedAt =
           typeof eventStartedAt === "number" && Number.isFinite(eventStartedAt)
@@ -61,10 +89,7 @@ function ensureListener() {
         } else if (phase === "end" || phase === "error") {
           // Registry-backed subagents keep task.runId across replacement runs.
           // Their registry owns terminal projection; predecessor events do not.
-          if (
-            current.runtime === "subagent" &&
-            readTaskBackingInstance(current.detail)?.runtime === "subagent"
-          ) {
+          if (registryBackedSubagent) {
             continue;
           }
           const terminal = buildAgentRunTerminalOutcomeFromLifecycleEvent({

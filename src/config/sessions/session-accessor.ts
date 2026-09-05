@@ -13,6 +13,7 @@ export {
   readSessionSubmittedInput,
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
+  withSessionPendingInputRelocation,
   type SessionPendingInput,
   type SessionPendingInputPage,
   type SessionPendingInputReceipt,

@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -544,22 +545,16 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
 
       const main = page.getByRole("main");
-      const openModelSelect = async () => {
-        const trigger = main.locator(
-          'openclaw-chat-pane[aria-hidden="false"] [data-chat-model-select="true"]',
-        );
-        await trigger.waitFor({ state: "visible", timeout: 10_000 });
-        return trigger;
-      };
+      const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const modelSelect = activePane.locator('[data-chat-model-select="true"]');
       const selectModel = async (value: string) => {
-        const activePane = main.locator('openclaw-chat-pane[aria-hidden="false"]');
         await activePane.locator('[data-chat-model-select="true"]').click();
         const option = activePane.locator(`[data-chat-model-option="${value}"]`);
         await option.waitFor({ state: "visible", timeout: 10_000 });
         await option.click();
       };
 
-      let modelSelect = await openModelSelect();
+      await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
 
       await selectModel("bedrock/claude-opus-4.5");
@@ -580,7 +575,10 @@ suite.define(() => {
       await page.locator(".sidebar-recent-session--active").getByText("Session B").waitFor({
         timeout: 10_000,
       });
-      modelSelect = await openModelSelect();
+      await expect
+        .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
+        .toBe("agent:main:session-b");
+      await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe("");
 
       await page
@@ -591,8 +589,11 @@ suite.define(() => {
       await page.locator(".sidebar-recent-session--active").getByText("Session A").waitFor({
         timeout: 10_000,
       });
+      await expect
+        .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
+        .toBe("agent:main:session-a");
 
-      modelSelect = await openModelSelect();
+      await modelSelect.waitFor({ state: "visible", timeout: 10_000 });
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
         "bedrock/claude-opus-4.5",
       );
@@ -810,6 +811,9 @@ suite.define(() => {
       await page.locator(".sidebar-recent-session--active").getByText("Explicit Sol").waitFor({
         timeout: 10_000,
       });
+      await expect
+        .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
+        .toBe("agent:main:session-explicit");
       await modelSelect.click();
       await expect.poll(() => modelOption.count()).toBe(1);
       await expect

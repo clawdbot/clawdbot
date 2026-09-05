@@ -1,53 +1,13 @@
 // Resolves directive interpretation and prompt projection at the text-command boundary.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
+import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import { type InlineDirectives, parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { HISTORY_CONTEXT_MARKER } from "./history.js";
-import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { stripInlineStatus } from "./reply-inline.js";
 
 type DirectiveCommand = NonNullable<Parameters<typeof parseInlineSessionDirectives>[1]>["command"];
-
-function hasInlineDirective(directives: InlineDirectives): boolean {
-  return (
-    directives.hasThinkDirective ||
-    directives.hasVerboseDirective ||
-    directives.hasTraceDirective ||
-    directives.hasFastDirective ||
-    directives.hasReasoningDirective ||
-    directives.hasElevatedDirective ||
-    directives.hasExecDirective ||
-    directives.hasModelDirective ||
-    directives.hasQueueDirective
-  );
-}
-
-function preserveMixedModelDirective(
-  directives: InlineDirectives,
-  cleaned: string,
-): InlineDirectives {
-  return {
-    ...clearInlineDirectives(cleaned),
-    hasModelDirective: directives.hasModelDirective,
-    rawModelDirective: directives.rawModelDirective,
-    rawModelProfile: directives.rawModelProfile,
-    rawModelRuntime: directives.rawModelRuntime,
-    modelDirectiveSource: directives.modelDirectiveSource,
-    modelScope: directives.modelScope,
-    modelScopeConflict: directives.modelScopeConflict,
-  };
-}
-
-function isModelSelectionDirective(directives: InlineDirectives): boolean {
-  const rawModelDirective = directives.rawModelDirective?.trim().toLowerCase();
-  return (
-    directives.hasModelDirective &&
-    Boolean(rawModelDirective) &&
-    (directives.modelDirectiveSource === "alias" ||
-      (rawModelDirective !== "list" && rawModelDirective !== "status"))
-  );
-}
 
 export function resolveReplyDirectiveRouting(params: {
   commandText: string;
@@ -100,32 +60,44 @@ export function resolveReplyDirectiveRouting(params: {
     parsed = clearExecInlineDirectives(parsed);
   }
 
-  if (params.canInterpretTextDirectives && hasInlineDirective(parsed) && !parsed.command) {
-    const stripped = stripStructuralPrefixes(parsed.cleaned);
-    const noMentions = params.isGroup
-      ? stripMentions(stripped, params.ctx, params.cfg, params.agentId)
-      : stripped;
-    if (
-      noMentions.trim() &&
-      parseInlineSessionDirectives(noMentions, { modelAliases: params.modelAliases }).cleaned.trim()
-    ) {
-      const mixed = isModelSelectionDirective(parsed)
-        ? preserveMixedModelDirective(parsed, parsed.cleaned)
-        : clearInlineDirectives(parsed.cleaned);
-      // Exec policy belongs to this message; placement keeps its directive-only persistence path.
-      const hasExecPolicy = parsed.rawExecSecurity !== undefined || parsed.rawExecAsk !== undefined;
-      parsed = {
-        ...mixed,
-        hasExecDirective: hasExecPolicy,
-        hasExecOptions: hasExecPolicy,
-        execSecurity: parsed.execSecurity,
-        execAsk: parsed.execAsk,
-        rawExecSecurity: parsed.rawExecSecurity,
-        rawExecAsk: parsed.rawExecAsk,
-        invalidExecSecurity: parsed.invalidExecSecurity,
-        invalidExecAsk: parsed.invalidExecAsk,
-      };
-    }
+  if (
+    params.canInterpretTextDirectives &&
+    !isDirectiveOnly({
+      directives: parsed,
+      cleanedBody: parsed.cleaned,
+      ctx: params.ctx,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      isGroup: params.isGroup,
+    })
+  ) {
+    // Model browsing and exec placement remain command-only; runtime hints stay on the turn.
+    const modelInfo =
+      parsed.modelDirectiveSource !== "alias" &&
+      ["", "list", "status"].includes(parsed.rawModelDirective?.trim().toLowerCase() ?? "");
+    const hasExecPolicy = parsed.rawExecSecurity !== undefined || parsed.rawExecAsk !== undefined;
+    parsed = {
+      ...parsed,
+      ...(modelInfo
+        ? {
+            hasModelDirective: false,
+            rawModelDirective: undefined,
+            rawModelProfile: undefined,
+            rawModelRuntime: undefined,
+            modelDirectiveSource: undefined,
+            modelScope: undefined,
+            modelScopeConflict: false,
+          }
+        : {}),
+      hasExecDirective: hasExecPolicy,
+      hasExecOptions: hasExecPolicy,
+      execHost: undefined,
+      execNode: undefined,
+      rawExecHost: undefined,
+      rawExecNode: undefined,
+      invalidExecHost: false,
+      invalidExecNode: false,
+    };
   }
 
   const unauthorizedReasoningDirectiveAttempt =

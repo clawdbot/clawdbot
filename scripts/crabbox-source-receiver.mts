@@ -78,8 +78,9 @@ try {
     ["refs/heads/openclaw-source^{tree}", expected.tree],
     ["refs/heads/openclaw-source^", expected.baseSha],
   ]) if (git(["rev-parse", ref]).trim() !== value) fail("source capsule identity mismatch");
-  function entries(tree) {
-    const output = git(["ls-tree", "-r", "-z", tree], { encoding: "buffer" });
+  function entries(tree, directory = gitDir) {
+    const output = git(["ls-tree", "-r", "-z", tree], { encoding: "buffer",
+      env: { ...env, GIT_DIR: directory, GIT_INDEX_FILE: path.join(directory, "index") } });
     if (!isUtf8(output)) fail("unsupported non-UTF-8 source paths");
     return output.subarray(0, -1).toString("utf8")
       .split("\0").filter(Boolean).map(row => {
@@ -88,6 +89,10 @@ try {
         return { mode: match[1], oid: match[2], file: safePath(match[3]) };
       });
   }
+  // The prepared workspace can contain newer workflow source. Its committed tree
+  // owns only cleanup candidates; the capsule alone selects the executed source.
+  const previous = new Map((process.argv[2] ? entries("HEAD", path.join(cwd, ".git")) : [])
+    .map(entry => [entry.file, entry]));
   const files = entries(expected.tree);
   const metadata = JSON.parse(git(["show", "-s", "--format=%B", expected.carrier]));
   if (!Array.isArray(metadata.deleted) || metadata.deleted.some(file => typeof file !== "string"))
@@ -112,8 +117,8 @@ try {
     safePath(file);
     if (reachable(file)) fs.rmSync(file, { recursive: true, force: true });
   }
-  // Only the producer can declare source deletions: old indexes may have lost
-  // ignored entries. A directory with unknown contents is not ours to erase.
+  // The producer owns privacy-filtered deletions, including ignored entries lost
+  // from old indexes. A directory with unknown contents is not ours to erase.
   for (const file of [...deleted].sort((a, b) => b.split("/").length - a.split("/").length)) {
     if (selected.has(file) || directories.has(file)) fail("conflicting source deletion");
     if (reachable(file)) {
@@ -174,14 +179,32 @@ try {
   } finally { fs.closeSync(input); }
   git(["read-tree", expected.tree]);
   fs.rmSync(capsule);
-  for (const file of git(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean)) {
-    if (!file.startsWith(path.basename(temporary) + "/")) fail("unexpected source entry: " + file);
+  for (;;) {
+    const extras = git(["ls-files", "--others", "--exclude-standard", "-z"]).split("\0")
+      .filter(file => file && !file.startsWith(path.basename(temporary) + "/"));
+    if (extras.length === 0) break;
+    // Settle ancestor ignore rules first: removing a negated rule can protect
+    // descendant rules already listed, while removing an exclusion can reveal more.
+    const ignore = extras.filter(file => path.posix.basename(file) === ".gitignore")
+      .sort((a, b) => a.split("/").length - b.split("/").length)[0];
+    for (const file of ignore ? [ignore] : extras) {
+      const entry = previous.get(file);
+      if (!entry) fail("unexpected source entry: " + file);
+      // Preserve untracked, ignored, and modified runtime state. Only unchanged
+      // committed extras may be retired after the new source's ignore rules apply.
+      verify(entry);
+      fs.unlinkSync(file);
+      deleted.add(file);
+    }
+    // Each pass removes committed files. Retiring their .gitignore rules can
+    // expose more entries, so verification ends only with an empty inventory.
   }
   for (const file of deleted) {
     if (reachable(file) && stat(file)) fail("source deletion mismatch: " + file);
   }
-  // Verify filesystem bytes, kind, and executable bit independently of the index.
-  for (const { file, mode, oid } of files) {
+  // Verify filesystem bytes, kind, and executable bit independently of either index.
+  function verify({ file, mode, oid }) {
+    if (!reachable(file)) fail("source parent mismatch: " + file);
     const info = stat(file);
     let actual;
     if (mode === "120000") {
@@ -195,6 +218,7 @@ try {
     }
     if (actual !== oid) fail("source bytes mismatch: " + file);
   }
+  for (const entry of files) verify(entry);
   if (expected.alias) git(["update-ref", expected.alias, expected.baseSha]);
   git(["symbolic-ref", "HEAD", "refs/heads/openclaw-source"]);
   fs.rmSync(".git", { recursive: true, force: true });

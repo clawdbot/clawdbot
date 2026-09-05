@@ -63,6 +63,10 @@ The account arrow appears only while publication is idle and the account selecti
 
 If the Gateway rejects the selected account before accepting the first publication request, choose **Refresh publication**, review the current account, then explicitly publish again. An unknown outcome keeps the original account and request locked: **Retry publication** checks that same request instead of switching accounts or starting another publication.
 
+Publication state survives navigation between chats, including when an inactive chat pane is unloaded. Split panes showing the same chat share its publication progress and retry. The page retains up to 32 publication attempts within the current authenticated Gateway connection. At capacity, existing retries remain available; complete and review an existing publication, then select **Choose a new publication** before starting another. Read-only operators can **Dismiss** an observed completed result without publishing or confirming anything.
+
+Pending session deletion blocks publication actions without discarding the original request; a failed deletion restores its retry. Confirmed deletion retires the attempt. The page clears this memory on reload or connection changes; profile and session access changes also retire affected attempts.
+
 Publication requires `operator.write` and current access to modify the session; connecting your account alone does not grant either permission.
 
 Personal GitHub is a Gateway-brokered publication connection, not a session-wide shell identity. Ordinary agent `git`/`gh` commands, model-initiated publication, and repository previews and discovery keep their existing credential behavior. OpenClaw cloud workers use the shared execution identity, never your personal connection. Finish and reclaim remote work before publishing it with your personal connection. See [`tools.github`](/gateway/config-tools#tools-github) for shared agent execution.

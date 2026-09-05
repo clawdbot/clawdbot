@@ -1206,6 +1206,8 @@ describe("handleControlUiHttpRequest", () => {
       available: false,
       code: "outside-allowed-folders",
       reason: "Outside allowed folders",
+      retryable: false,
+      canAllow: true,
     });
   });
 

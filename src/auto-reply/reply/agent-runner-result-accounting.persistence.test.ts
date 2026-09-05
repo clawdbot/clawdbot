@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentMeta } from "../../agents/embedded-agent-runner/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
@@ -12,6 +13,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { isReplyPayloadTerminalContent } from "../reply-payload.js";
+import type { ReplyPayload } from "../types.js";
 import type {
   AgentTurnCompaction,
   AgentTurnExecutionResult,
@@ -20,6 +25,7 @@ import { accountAgentTurn, accountFollowupTurn } from "./agent-runner-result-acc
 import { completeReplyAgentRun } from "./agent-runner-result-complete.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
+import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import {
   createReplyOperation,
@@ -231,6 +237,42 @@ async function createFixture() {
   };
   return {
     context,
+    turn,
+    deliverQueued: async () => {
+      const registry = createEmptyPluginRegistry();
+      registry.providers.push({
+        pluginId: "synthetic",
+        source: "test",
+        provider: { id: diagnostic.provider, label: "Synthetic provider", auth: [] },
+      });
+      return withPluginRuntimeRegistryScope(registry, async () => {
+        const delivered: ReplyPayload[] = [];
+        const accounting = await accountQueued(context.execution);
+        const decision = resolveFollowupDeliveryDecision({
+          turn,
+          execution: { runId: context.runId, outcome: context.execution },
+          accounting,
+          opts: { onBlockReply: async () => {} },
+        });
+        await deliverFollowupDecision({
+          decision,
+          turn,
+          defaults: {
+            defaultModel: diagnostic.model,
+            typing: createMockTypingController(),
+            typingMode: "never",
+            opts: {
+              onBlockReply: async (payload) => {
+                delivered.push(payload);
+              },
+            },
+          },
+          runId: context.runId,
+          runFollowup: async () => {},
+        });
+        return delivered;
+      });
+    },
     recordCompaction,
     accountAborted: (reason: "user" | "restart") => {
       const compaction =
@@ -275,6 +317,172 @@ async function createFixture() {
     },
   };
 }
+
+it.each([
+  { stored: "off", selected: "raw", authorized: true, trace: true },
+  { stored: "raw", selected: "off", authorized: true, trace: false },
+  { stored: "raw", selected: undefined, authorized: true, trace: true },
+  { stored: "off", selected: "raw", authorized: false, trace: false },
+] as const)(
+  "delivers queued trace $selected over stored $stored with authority=$authorized",
+  async ({ stored, selected, authorized, trace }) => {
+    const fixture = await createFixture();
+    await fixture.replace({
+      ...fixture.context.activeSessionEntry!,
+      traceLevel: stored,
+      verboseLevel: "off",
+    });
+    fixture.context.followupRun.prompt = "QUEUED_INPUT";
+    fixture.context.followupRun.run.traceAuthorized = authorized;
+    fixture.context.followupRun.run.traceLevelOverride = selected;
+    const delivered = await fixture.deliverQueued();
+    expect(delivered.some((payload) => payload.text === "done")).toBe(true);
+    const diagnostics = delivered.find((payload) =>
+      payload.text?.includes("Model Input (User Role)"),
+    );
+    expect(Boolean(diagnostics)).toBe(trace);
+    if (diagnostics) {
+      expect(diagnostics.text).toContain("QUEUED_INPUT");
+      expect(isReplyPayloadTerminalContent(diagnostics)).toBe(false);
+    }
+    expect(fixture.read()?.traceLevel).toBe(stored);
+  },
+);
+
+it.each([
+  { stored: "off", selected: "on", status: true },
+  { stored: "on", selected: "off", status: false },
+] as const)(
+  "delivers queued plugin status at turn verbosity $selected over stored $stored",
+  async ({ stored, selected, status }) => {
+    const fixture = await createFixture();
+    await fixture.replace({
+      ...fixture.context.activeSessionEntry!,
+      verboseLevel: stored,
+      pluginDebugEntries: [{ pluginId: "synthetic", lines: ["PLUGIN_STATUS_MARKER"] }],
+    });
+    fixture.context.followupRun.run.verboseLevelOverride = selected;
+    const delivered = await fixture.deliverQueued();
+    expect(delivered.some((payload) => payload.text?.includes("PLUGIN_STATUS_MARKER"))).toBe(
+      status,
+    );
+    expect(fixture.read()?.verboseLevel).toBe(stored);
+  },
+);
+
+describe.each(["ordinary", "followup"] as const)("%s completion verbosity", (lane) => {
+  it.each([
+    { initial: "on", live: "off", override: undefined, visible: false },
+    { initial: "off", live: "on", override: undefined, visible: true },
+    { initial: "on", live: "off", override: "on", visible: true },
+    { initial: "off", live: "on", override: "off", visible: false },
+  ] as const)(
+    "uses live $live after $initial unless the turn selects $override",
+    async ({ initial, live, override, visible }) => {
+      const fixture = await createFixture();
+      const entry = fixture.context.activeSessionEntry!;
+      entry.verboseLevel = initial;
+      fixture.context.resolvedVerboseLevel = override ?? initial;
+      fixture.context.followupRun.run.verboseLevel = override ?? initial;
+      fixture.context.followupRun.run.verboseLevelOverride = override;
+      fixture.context.followupRun.run.traceAuthorized = false;
+      await fixture.replace({
+        ...entry,
+        verboseLevel: live,
+        pluginDebugEntries: [{ pluginId: "synthetic", lines: ["LIVE_VERBOSE_STATUS"] }],
+      });
+      const result =
+        lane === "ordinary"
+          ? await finalizeReplyAgentRun(fixture.context)
+          : await fixture.deliverQueued();
+      const text = (Array.isArray(result) ? result : [result])
+        .map((payload) => payload?.text)
+        .join("\n");
+      expect(text).toContain("done");
+      expect(text.includes("LIVE_VERBOSE_STATUS")).toBe(visible);
+      expect(fixture.read()?.verboseLevel).toBe(live);
+    },
+  );
+});
+
+it.each([
+  { lane: "ordinary", field: "sessionId" },
+  { lane: "ordinary", field: "lifecycleRevision" },
+  { lane: "followup", field: "sessionId" },
+  { lane: "followup", field: "lifecycleRevision" },
+] as const)(
+  "keeps $lane diagnostic refresh inside its captured $field",
+  async ({ lane, field }) => {
+    const fixture = await createFixture();
+    const original = fixture.context.activeSessionEntry!;
+    const replacement = {
+      ...original,
+      [field]: "replacement",
+      updatedAt: Date.now(),
+      traceLevel: "on" as const,
+      pluginDebugEntries: [{ pluginId: "replacement", lines: ["🔎 REPLACEMENT_DIAGNOSTIC"] }],
+    };
+    fixture.context.followupRun.run.traceAuthorized = true;
+    fixture.context.followupRun.run.traceLevelOverride = "on";
+    fixture.context.activeSessionStore = fixture.turn.sessionStore;
+    const reader = vi
+      .spyOn(sessionAccessor, "loadSessionEntryReadOnly")
+      .mockReturnValue(replacement);
+    try {
+      const result =
+        lane === "ordinary"
+          ? await finalizeReplyAgentRun(fixture.context)
+          : await fixture.deliverQueued();
+      const text = (Array.isArray(result) ? result : [result])
+        .map((payload) => payload?.text)
+        .join("\n");
+      expect(text).not.toContain("REPLACEMENT_DIAGNOSTIC");
+    } finally {
+      reader.mockRestore();
+      expect(fixture.turn.session.current()).toMatchObject({
+        sessionId: original.sessionId,
+        lifecycleRevision: original.lifecycleRevision,
+      });
+    }
+  },
+);
+
+it.each(["NO_REPLY", "hook_block"] as const)(
+  "keeps a queued %s completion silent despite trace",
+  async (kind) => {
+    const fixture = await createFixture();
+    fixture.context.followupRun.run.traceAuthorized = true;
+    fixture.context.followupRun.run.traceLevelOverride = "raw";
+    fixture.context.execution.result.payloads = [];
+    if (kind === "NO_REPLY") {
+      fixture.context.execution.result.meta.finalAssistantRawText = "NO_REPLY";
+    } else {
+      fixture.context.execution.result.meta.error = { kind: "hook_block", message: "blocked" };
+    }
+    expect(await fixture.deliverQueued()).toEqual([]);
+  },
+);
+
+it("does not let queued diagnostics replace a missing terminal answer", async () => {
+  const fixture = await createFixture();
+  fixture.context.followupRun.run.traceAuthorized = true;
+  fixture.context.followupRun.run.traceLevelOverride = "raw";
+  fixture.context.execution.result.payloads = [];
+  const delivered = await fixture.deliverQueued();
+  expect(
+    delivered.some((payload) => payload.isError && isReplyPayloadTerminalContent(payload)),
+  ).toBe(true);
+  const supplement = delivered.find((payload) => payload.text?.includes("Model Input (User Role)"));
+  expect(supplement?.isStatusNotice).toBe(true);
+});
+
+it("keeps queued diagnostic supplements behind source send policy", async () => {
+  const fixture = await createFixture();
+  fixture.context.followupRun.run.traceAuthorized = true;
+  fixture.context.followupRun.run.traceLevelOverride = "raw";
+  fixture.turn.sendPolicy = "deny";
+  expect(await fixture.deliverQueued()).toEqual([]);
+});
 
 it("accounts a completed compaction before an empty heartbeat skips reply preparation", async () => {
   const fixture = await createFixture();

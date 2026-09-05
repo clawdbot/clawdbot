@@ -1,6 +1,7 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
@@ -33,6 +34,9 @@ export type ArtifactDownloadResolver = (params: {
 }) => Promise<{ url: string; expiresAt?: string } | null>;
 
 export type ImageRenderOptions = {
+  sessionKey?: string;
+  agentId?: string;
+  policyKey?: string;
   canonicalMessageKey?: string;
   localSubmission?: boolean;
   connectionEpoch?: number;
@@ -44,6 +48,27 @@ export type ImageRenderOptions = {
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   resolveArtifactDownload?: ArtifactDownloadResolver;
 };
+
+export function assistantMediaPolicyKey(
+  session: GatewaySessionRow | undefined,
+  configEpoch = 0,
+): string | undefined {
+  if (!session && configEpoch === 0) {
+    return undefined;
+  }
+  // These facts invalidate previews; the Gateway still owns the permission decision.
+  return JSON.stringify([
+    configEpoch,
+    session?.permissionMode,
+    session?.permissionModePending,
+    session?.execNode,
+    session?.execCwd,
+    session?.sessionRoot,
+    session?.spawnedWorkspaceDir,
+    session?.spawnedCwd,
+    session?.worktree?.id,
+  ]);
+}
 
 export type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
 type AttachmentFailureItem = Extract<MessageContentItem, { type: "attachment_error" }>;

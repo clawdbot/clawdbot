@@ -98,6 +98,78 @@ describe("dispatchReplyFromConfig", () => {
     expect(activeDuringOffRun).toBe(false);
   });
 
+  it.each([
+    { stored: "off", override: "full", expected: ["Tool summary", "Tool failure output"] },
+    { stored: "full", override: "off", expected: [] },
+    { stored: "full", override: "on", expected: ["Tool summary"] },
+  ] as const)(
+    "delivers admitted run verbosity $override instead of stored $stored",
+    async ({ stored, override, expected }) => {
+      setNoAbort();
+      sessionStoreMocks.currentEntry = {
+        sessionId: "session",
+        updatedAt: 0,
+        verboseLevel: stored,
+      };
+      const dispatcher = createDispatcher();
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "telegram",
+          ChatType: "direct",
+          SessionKey: "agent:main:telegram:direct:U1",
+        }),
+        cfg: emptyConfig,
+        dispatcher,
+        replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+        replyResolver: async (_ctx, opts) => {
+          opts?.onRunVerbosityResolved?.({
+            verboseLevelOverride: override,
+            resolvedVerboseLevel: override,
+          });
+          await opts?.onToolResult?.({ text: "Tool summary" });
+          await opts?.onToolResult?.({ text: "Tool failure output", isError: true });
+          return undefined;
+        },
+      });
+      expect(
+        vi.mocked(dispatcher.sendToolResult).mock.calls.map(([payload]) => payload.text),
+      ).toEqual(expected);
+      expect(sessionStoreMocks.currentEntry.verboseLevel).toBe(stored);
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    },
+  );
+
+  it("clears an earlier admitted verbosity override for an inherited queued run", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = { verboseLevel: "off" };
+    const dispatcher = createDispatcher();
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        ChatType: "direct",
+        SessionKey: "agent:main:telegram:direct:U1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        opts?.onRunVerbosityResolved?.({
+          verboseLevelOverride: "full",
+          resolvedVerboseLevel: "full",
+        });
+        await opts?.onToolResult?.({ text: "Explicit turn" });
+        opts?.onRunVerbosityResolved?.({ resolvedVerboseLevel: "on" });
+        await opts?.onToolResult?.({ text: "Inherited off" });
+        sessionStoreMocks.currentEntry = { verboseLevel: "on" };
+        await opts?.onToolResult?.({ text: "Inherited live on" });
+        return { text: "Done" };
+      },
+    });
+    expect(
+      vi.mocked(dispatcher.sendToolResult).mock.calls.map(([payload]) => payload.text),
+    ).toEqual(["Explicit turn", "Inherited live on"]);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Done" });
+  });
+
   it("keeps verbose commentary in the channel draft when that draft owns progress", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = { verboseLevel: "on" };

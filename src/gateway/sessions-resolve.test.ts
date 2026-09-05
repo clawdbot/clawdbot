@@ -270,7 +270,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
     expect(rowSpy).not.toHaveBeenCalled();
   });
 
-  it("resolves an archived session by its trailing UUID prefix", async () => {
+  it("resolves archived short ids without projecting unrelated model metadata", async () => {
     const key = "agent:main:thread:abcdef12-3456-4789-8abc-def012345678";
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
       storePath,
@@ -280,7 +280,11 @@ describe("resolveSessionKeyFromResolveParams", () => {
           updatedAt: 10,
           archivedAt: 20,
           displayName: "Release monitor",
+          label: "Renamed release monitor",
           boardFace: "dashboard",
+          get modelOverride(): string {
+            throw new Error("Short references must not resolve model metadata");
+          },
         },
       },
     });
@@ -294,7 +298,7 @@ describe("resolveSessionKeyFromResolveParams", () => {
       ok: true,
       key,
       agentId: "main",
-      displayName: "Release monitor",
+      displayName: "Renamed release monitor",
       boardFace: "dashboard",
     });
   });
@@ -440,11 +444,142 @@ describe("resolveSessionKeyFromResolveParams", () => {
   });
 
   it.each([
+    { key: "agent:main:deploy-monitor", slug: "deploy-monitor", expected: "literal" },
+    { key: "agent:main:missing", slug: "deploy-monitor", expected: "slug" },
+    { key: "agent:main:missing", expected: "missing" },
+  ])("discovers a named reference with exact-key precedence: $expected", async (reference) => {
+    const literal = "agent:main:deploy-monitor";
+    const slugKey = "agent:main:thread:12345678-0000-4000-8000-000000000001";
+    const store = {
+      [literal]: { updatedAt: 1, displayName: "Literal session", boardFace: "chat" as const },
+      [slugKey]: { updatedAt: 2, displayName: "Deploy: monitor", boardFace: "dashboard" as const },
+    };
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store,
+      agentIdBySessionKey: new Map(Object.keys(store).map((key) => [key, "main"])),
+    });
+    const result = await resolveSessionKeyFromResolveParams({
+      cfg: {},
+      p: {
+        reference: { key: reference.key, slug: reference.slug },
+        agentId: "main",
+        allowMissing: true,
+      },
+    });
+    expect(result).toEqual(
+      reference.expected === "missing"
+        ? { ok: true, missing: true }
+        : {
+            ok: true,
+            key: reference.expected === "literal" ? literal : slugKey,
+            agentId: "main",
+            displayName: reference.expected === "literal" ? "Literal session" : "Deploy: monitor",
+            boardFace: reference.expected === "literal" ? "chat" : "dashboard",
+          },
+    );
+  });
+
+  it("resolves a configured global alias with its stored non-default owner", async () => {
+    hoisted.listAgentIdsMock.mockReturnValue(["main", "work"]);
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store: { global: { updatedAt: 1, displayName: "Work dashboard", boardFace: "dashboard" } },
+      agentIdBySessionKey: new Map([["global", "work"]]),
+    });
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: { session: { scope: "global", mainKey: "primary" } },
+        p: { reference: { key: "agent:work:primary" }, agentId: "work", includeGlobal: true },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      key: "global",
+      agentId: "work",
+      displayName: "Work dashboard",
+      boardFace: "dashboard",
+    });
+  });
+
+  it.each(["!Room:example.org", "!room:example.org"])(
+    "preserves opaque reference key casing: %s",
+    async (room) => {
+      const key = "agent:main:matrix:channel:!Room:example.org";
+      hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+        storePath,
+        store: { [key]: { updatedAt: 1, displayName: "Room" } },
+        agentIdBySessionKey: new Map([[key, "main"]]),
+      });
+      const result = await resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: {
+          reference: { key: `agent:main:matrix:channel:${room}` },
+          agentId: "main",
+          allowMissing: true,
+        },
+      });
+      expect(result).toEqual(
+        room.startsWith("!Room")
+          ? { ok: true, key, agentId: "main", displayName: "Room" }
+          : { ok: true, missing: true },
+      );
+    },
+  );
+
+  it("bounds named-reference ambiguity after excluding deleted agents and non-UUID titles", async () => {
+    const store = Object.fromEntries(
+      Array.from({ length: 12 }, (_, index) => [
+        `agent:main:thread:12345678-${index.toString(16).padStart(4, "0")}-4000-8000-000000000000`,
+        {
+          updatedAt: 100 - index,
+          displayName: "Shared dashboard",
+          boardFace: "dashboard" as const,
+        },
+      ]),
+    );
+    const keys = Object.keys(store);
+    store["agent:deleted:thread:12345678-ffff-4000-8000-000000000000"] = {
+      updatedAt: 200,
+      displayName: "Shared dashboard",
+      boardFace: "dashboard",
+    };
+    store["agent:main:literal"] = {
+      updatedAt: 300,
+      displayName: "Shared dashboard",
+      boardFace: "dashboard",
+    };
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath,
+      store,
+      agentIdBySessionKey: new Map(Object.keys(store).map((key) => [key, "main"])),
+    });
+    await expect(
+      resolveSessionKeyFromResolveParams({
+        cfg: {},
+        p: { reference: { key: "agent:main:missing", slug: "shared-dashboard" } },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      ambiguous: true,
+      candidates: keys.slice(0, 10).map((key) => ({
+        key,
+        agentId: "main",
+        displayName: "Shared dashboard",
+        boardFace: "dashboard",
+      })),
+    });
+  });
+
+  it.each([
     {
       p: { shortId: "too-short" },
       message: "shortId must be 8-32 hexadecimal characters",
     },
     { p: { label: "release", slugHint: "release" }, message: "slugHint requires shortId" },
+    {
+      p: { key: "agent:main:literal", reference: { key: "agent:main:literal" } },
+      message: "Provide either key, sessionId, label, shortId, or reference (not multiple)",
+    },
   ])("rejects invalid short reference params: $message", async ({ p, message }) => {
     await expect(resolveSessionKeyFromResolveParams({ cfg: {}, p })).resolves.toMatchObject({
       ok: false,

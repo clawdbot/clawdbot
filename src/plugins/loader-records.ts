@@ -35,6 +35,7 @@ export function createPluginRecord(params: {
   origin: PluginRecord["origin"];
   workspaceDir?: string;
   trustedOfficialInstall?: boolean;
+  trust?: PluginRecord["trust"];
   enabled: boolean;
   compat?: readonly PluginCompatCode[];
   activationState?: PluginActivationState;
@@ -63,6 +64,7 @@ export function createPluginRecord(params: {
     origin: params.origin,
     workspaceDir: params.workspaceDir,
     trustedOfficialInstall: params.trustedOfficialInstall,
+    trust: params.trust,
     enabled: params.enabled,
     compat: params.compat,
     explicitlyEnabled: params.activationState?.explicitlyEnabled,

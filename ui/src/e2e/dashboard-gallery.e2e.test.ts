@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import type { SessionsResolveResult } from "../../../packages/gateway-protocol/src/index.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -11,8 +12,15 @@ const suite = createControlUiE2eSuite({
 
 const now = Date.now();
 const selectedSessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+const selectedResolution = {
+  ok: true,
+  key: selectedSessionKey,
+  agentId: "main",
+  displayName: "Release health",
+  boardFace: "dashboard",
+} satisfies SessionsResolveResult;
 const dashboardRows = [
-  [selectedSessionKey, "Release health", "mira", "Mira", 3_000, "running"],
+  [selectedSessionKey, selectedResolution.displayName, "mira", "Mira", 3_000, "running"],
   ["agent:main:dashboard:model-spend", "Model spend", "peter", "Peter", 8_000, "done"],
   ["agent:main:dashboard:support-radar", "Support radar", "mira", "Mira", 18_000, "done"],
   ["agent:main:dashboard:ci-signal", "CI signal", "peter", "Peter", 42_000, "done"],
@@ -74,159 +82,147 @@ const boardSnapshots = dashboardRows.map((row) => ({
 suite.define(() => {
   it("opens a responsive gallery card in its owning chat with the dashboard expanded", async () => {
     const proofDir = process.env.OPENCLAW_UI_E2E_RECORD === "1" ? suite.artifactDir : null;
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      viewport: { width: 1440, height: 900 },
-    });
-    const page = await context.newPage();
-    try {
-      const gateway = await installMockGateway(page, {
-        sessionKey: selectedSessionKey,
-        featureMethods: [
-          "board.get",
-          "board.widget.appView",
-          "chat.metadata",
-          "chat.startup",
-          "sessions.resolve",
-        ],
-        methodResponses: {
-          "sessions.describe": {
-            cases: dashboardRows.map((row) => ({
-              match: { key: row.key },
-              response: { session: row },
-            })),
-          },
-          "board.get": {
-            cases: boardSnapshots.map((snapshot) => ({
-              match: { sessionKey: snapshot.sessionKey },
-              response: snapshot,
-            })),
-          },
-          "board.widget.appView": {
-            status: "ready",
-            viewId: "release-tools-view",
-            expiresAtMs: now + 60_000,
-          },
-          "chat.startup": {
-            cases: [
-              {
-                match: { shortId: "12345678", agentId: "main" },
-                response: {
-                  resolution: {
-                    ok: true,
-                    key: selectedSessionKey,
-                    agentId: "main",
-                    boardFace: "dashboard",
+    await suite.withPage(
+      { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          sessionKey: selectedSessionKey,
+          sessions: dashboardRows,
+          featureMethods: [
+            "board.get",
+            "board.widget.appView",
+            "chat.metadata",
+            "chat.startup",
+            "sessions.resolve",
+          ],
+          methodResponses: {
+            "sessions.resolve": {
+              cases: [
+                {
+                  match: { shortId: "12345678", agentId: "main" },
+                  response: selectedResolution,
+                },
+              ],
+            },
+            "board.get": {
+              cases: boardSnapshots.map((snapshot) => ({
+                match: { sessionKey: snapshot.sessionKey },
+                response: snapshot,
+              })),
+            },
+            "board.widget.appView": {
+              status: "ready",
+              viewId: "release-tools-view",
+              expiresAtMs: now + 60_000,
+            },
+            "chat.startup": {
+              cases: [
+                {
+                  match: { shortId: "12345678", agentId: "main" },
+                  response: {
+                    resolution: selectedResolution,
+                    messages: [],
+                    sessionInfo: dashboardRows[0],
                   },
-                  messages: [],
-                  sessionInfo: dashboardRows[0],
                 },
-              },
-            ],
+              ],
+            },
           },
-          "sessions.list": {
-            cases: [
-              {
-                match: { hasBoard: true },
-                response: {
-                  count: dashboardRows.length,
-                  defaults: { contextTokens: null, model: null, modelProvider: null },
-                  path: "",
-                  sessions: dashboardRows,
-                  ts: now,
-                },
-              },
-            ],
-          },
-        },
-      });
+        });
 
-      await page.goto(suite.server.baseUrl);
-      await page.getByRole("link", { name: "Dashboards", exact: true }).click();
-      await page.waitForURL(`${suite.server.baseUrl}dashboards`);
-      const gallery = page.locator("openclaw-dashboards-page");
-      const releaseCard = gallery.locator("[data-dashboard-session]", {
-        hasText: "Release health",
-      });
-      await releaseCard.waitFor();
-      expect(await gallery.locator("[data-dashboard-session]").count()).toBe(12);
-      expect(await gallery.getByText("By Mira", { exact: true }).count()).toBe(6);
-      const previewFrame = releaseCard.locator('iframe[title="Live Gateway Pulse"]');
-      await previewFrame.waitFor();
-      await previewFrame.contentFrame().getByText("All systems nominal", { exact: true }).waitFor();
-      expect(await releaseCard.locator('[data-widget-name="release-tools"]').count()).toBe(0);
-      expect(await gateway.getRequests("board.widget.appView")).toHaveLength(0);
-      const capacityKey = "agent:main:dashboard:capacity";
-      const capacityRequested = async () =>
-        (await gateway.getRequests("board.get")).some(
-          (request) => isRecord(request.params) && request.params.sessionKey === capacityKey,
+        await page.goto(suite.server.baseUrl);
+        await page.getByRole("link", { name: "Dashboards", exact: true }).click();
+        await page.waitForURL(`${suite.server.baseUrl}dashboards`);
+        const gallery = page.locator("openclaw-dashboards-page");
+        const releaseCard = gallery.locator("[data-dashboard-session]", {
+          hasText: "Release health",
+        });
+        await releaseCard.waitFor();
+        expect(await gallery.locator("[data-dashboard-session]").count()).toBe(12);
+        expect(await gallery.getByText("By Mira", { exact: true }).count()).toBe(6);
+        const previewFrame = releaseCard.locator('iframe[title="Live Gateway Pulse"]');
+        await previewFrame.waitFor();
+        await previewFrame
+          .contentFrame()
+          .getByText("All systems nominal", { exact: true })
+          .waitFor();
+        expect(await releaseCard.locator('[data-widget-name="release-tools"]').count()).toBe(0);
+        expect(await gateway.getRequests("board.widget.appView")).toHaveLength(0);
+        const capacityKey = "agent:main:dashboard:capacity";
+        const capacityRequested = async () =>
+          (await gateway.getRequests("board.get")).some(
+            (request) => isRecord(request.params) && request.params.sessionKey === capacityKey,
+          );
+        expect(await capacityRequested()).toBe(false);
+        const capacityCard = gallery.locator(`[data-dashboard-session="${capacityKey}"]`);
+        await capacityCard.scrollIntoViewIfNeeded();
+        await expect.poll(capacityRequested).toBe(true);
+        const capacityFrame = capacityCard.locator('iframe[title="Live Gateway Pulse"]');
+        await capacityFrame.waitFor();
+        await capacityFrame
+          .contentFrame()
+          .getByText("All systems nominal", { exact: true })
+          .waitFor();
+        expect(await releaseCard.locator("a").getAttribute("href")).toBe(
+          "/chat/main/release-health-12345678?dashboard=expanded",
         );
-      expect(await capacityRequested()).toBe(false);
-      const capacityCard = gallery.locator(`[data-dashboard-session="${capacityKey}"]`);
-      await capacityCard.scrollIntoViewIfNeeded();
-      await expect.poll(capacityRequested).toBe(true);
-      const capacityFrame = capacityCard.locator('iframe[title="Live Gateway Pulse"]');
-      await capacityFrame.waitFor();
-      await capacityFrame
-        .contentFrame()
-        .getByText("All systems nominal", { exact: true })
-        .waitFor();
-      expect(await releaseCard.locator("a").getAttribute("href")).toBe(
-        "/chat/main/release-health-12345678?dashboard=expanded",
-      );
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "01-gallery.png") });
-      }
+        if (proofDir) {
+          await page.screenshot({ path: path.join(proofDir, "01-gallery.png") });
+        }
 
-      await releaseCard.locator("a").click();
-      await page.waitForURL(/\/chat\/main\/release-health-12345678\?dashboard=expanded$/u);
-      await page.locator(".board-session-surface").waitFor();
-      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
-      await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "02-expanded-dashboard.png") });
-      }
+        await releaseCard.locator("a").click();
+        await page.waitForURL(/\/chat\/main\/release-health-12345678\?dashboard=expanded$/u);
+        await page.locator(".board-session-surface").waitFor();
+        await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
+        await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
+        // A cold route must resolve without the gallery's navigation handoff.
+        await page.reload();
+        await page.locator(".board-session-surface").waitFor();
+        await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
+        await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
+        if (proofDir) {
+          await page.screenshot({ path: path.join(proofDir, "02-expanded-dashboard.png") });
+        }
 
-      await page.getByRole("button", { name: "Restore split", exact: true }).click();
-      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
-      await page.locator(".chat-thread").waitFor();
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "03-split-dashboard.png") });
-      }
-      await page
-        .locator('[data-region-header="side"]')
-        .getByRole("button", { name: "Close", exact: true })
-        .click();
-      await page.locator(".board-session-surface").waitFor();
-      await page.locator(".chat-thread").waitFor({ state: "hidden" });
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "04-dashboard-only.png") });
-      }
+        await page.getByRole("button", { name: "Restore split", exact: true }).click();
+        await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
+        await page.locator(".chat-thread").waitFor();
+        if (proofDir) {
+          await page.screenshot({ path: path.join(proofDir, "03-split-dashboard.png") });
+        }
+        await page
+          .locator('[data-region-header="side"]')
+          .getByRole("button", { name: "Close", exact: true })
+          .click();
+        await page.locator(".board-session-surface").waitFor();
+        await page.locator(".chat-thread").waitFor({ state: "hidden" });
+        if (proofDir) {
+          await page.screenshot({ path: path.join(proofDir, "04-dashboard-only.png") });
+        }
 
-      await page.setViewportSize({ width: 390, height: 844 });
-      await page.goto(`${suite.server.baseUrl}dashboards`);
-      await gallery.getByText("Release health", { exact: true }).waitFor();
-      await expect
-        .poll(() =>
-          page.evaluate(() => ({
-            documentWidth: document.documentElement.scrollWidth,
-            viewportWidth: window.innerWidth,
-          })),
-        )
-        .toEqual({ documentWidth: 390, viewportWidth: 390 });
-      expect(
-        await gallery
-          .locator(".dashboards-grid")
-          .evaluate(
-            (element) =>
-              getComputedStyle(element).gridTemplateColumns.split(" ").filter(Boolean).length,
-          ),
-      ).toBe(1);
-      if (proofDir) {
-        await page.screenshot({ path: path.join(proofDir, "05-gallery-mobile.png") });
-      }
-    } finally {
-      await context.close();
-    }
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.goto(`${suite.server.baseUrl}dashboards`);
+        await gallery.getByText("Release health", { exact: true }).waitFor();
+        await expect
+          .poll(() =>
+            page.evaluate(() => ({
+              documentWidth: document.documentElement.scrollWidth,
+              viewportWidth: window.innerWidth,
+            })),
+          )
+          .toEqual({ documentWidth: 390, viewportWidth: 390 });
+        expect(
+          await gallery
+            .locator(".dashboards-grid")
+            .evaluate(
+              (element) =>
+                getComputedStyle(element).gridTemplateColumns.split(" ").filter(Boolean).length,
+            ),
+        ).toBe(1);
+        if (proofDir) {
+          await page.screenshot({ path: path.join(proofDir, "05-gallery-mobile.png") });
+        }
+      },
+    );
   });
 });

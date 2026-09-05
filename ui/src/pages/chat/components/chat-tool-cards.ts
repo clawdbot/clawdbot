@@ -1,5 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
+import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
 import {
   browserTabKey,
   type BrowserTabSelection,
@@ -25,7 +26,6 @@ import {
 } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
-import { getToolCallTitle } from "../tool-titles.ts";
 import { renderHighlightedCommand } from "./chat-command-highlight.ts";
 import { renderDiffStatChips } from "./chat-diff-render.ts";
 import {
@@ -166,7 +166,7 @@ const TOOL_ROW_ICONS: Partial<Record<ToolCallView["kind"], string>> = {
 };
 
 function firstCommandLine(command: string): string {
-  return command.split("\n")[0]?.trim() ?? "";
+  return (stripShellPreamble(command).command || command).split("\n")[0]?.trim() ?? "";
 }
 
 function compactToolTarget(target: string, kind: ToolCallView["kind"]): string {
@@ -195,6 +195,10 @@ function renderToolRowContent(
   workspaceFilePath: string | null,
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void,
 ) {
+  if (view.title) {
+    return html`<span class="chat-tool-row__title">${view.title}</span>`;
+  }
+
   if (view.kind === "command" && view.command) {
     const commandPreview = firstCommandLine(view.command);
     return html`
@@ -248,13 +252,6 @@ function renderToolRowContent(
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
   const argumentPreview = toolArgumentPreview(card.args);
   const displayName = distinctSummaryText(argumentPreview ?? summary.name, displayLabel);
-  const aiTitle = getToolCallTitle(card.name, card.args);
-  if (aiTitle) {
-    return html`
-      <span class="chat-tool-row__title">${aiTitle}</span>
-      <span class="chat-tool-row__detail">${argumentPreview ?? displayLabel}</span>
-    `;
-  }
   return html`
     <span class="chat-tool-msg-summary__label">${displayLabel}</span>
     ${
@@ -359,6 +356,9 @@ export function isRunningToolCard(card: ToolCard, runActive: boolean | undefined
 
 export function resolveToolRowText(card: ToolCard, runActive?: boolean): string {
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
+  if (view.title) {
+    return view.title;
+  }
   if (view.kind === "command" && view.command) {
     return `$ ${firstCommandLine(view.command)}`;
   }

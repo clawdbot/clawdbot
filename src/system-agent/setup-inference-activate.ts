@@ -180,6 +180,7 @@ async function activateSetupInferenceUnredacted(
       pluginWorkspaceDir: workspace,
       agentDir: testAgentDir,
       runtime: params.runtime,
+      beforePersistentEffect,
       ...(params.prompter ? { prompter: params.prompter } : {}),
       ...(params.signal ? { signal: params.signal } : {}),
       ...(params.isCancelled ? { isCancelled: params.isCancelled } : {}),
@@ -483,7 +484,9 @@ async function activateSetupInferenceUnredacted(
       throw error;
     }
     if (!test.ok) {
-      return test;
+      // Finalization below can still supersede this rejection. Plugin preparation
+      // may persist, but no model or credential promotion has been attempted.
+      return { ...test, disposition: "rejected-before-promotion" };
     }
     verificationProgress?.update("Finishing AI setup…");
     if (plan.authProfileId && test.auth.authProfileId !== plan.authProfileId) {

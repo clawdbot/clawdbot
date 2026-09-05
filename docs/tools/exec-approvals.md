@@ -284,9 +284,9 @@ explicitly when a no-UI approval prompt should fall back to allow.
 
 </Warning>
 
-For OpenClaw-managed Claude sessions, the Claude Agent SDK always uses its
+For OpenClaw-managed Claude sessions, OpenClaw launches Claude Code in its
 `default` permission mode. OpenClaw's effective exec policy remains
-authoritative through its native tool approval callback, including YOLO and
+authoritative through native tool hooks and permission requests, including YOLO and
 restrictive policies, even if raw Claude backend args request
 `bypassPermissions`.
 
@@ -663,6 +663,14 @@ facts; channels never infer them from commands or message text. Without a
 declared scope, approval cards render exactly as before.
 
 ## System events and denials
+
+When an approval can be delivered, ordinary agent runs wait for the decision
+and receive the exec result in the same turn. The final reply uses the original
+delivery path, including an inbound A2A task. An operator denial returns a denied
+tool result without running the command.
+
+Diagnostic and export commands that explicitly use asynchronous execution retain
+their separate follow-up delivery. For those workflows:
 
 Exec lifecycle posts an `Exec finished` system message to the agent's
 session after the node reports completion. OpenClaw can also emit an

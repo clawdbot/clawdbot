@@ -59,7 +59,26 @@ type PairingRequiredDetails = {
   pauseReconnect?: boolean;
 };
 
+type SshVerifyConfig = Exclude<GatewayNodePairingConfig["sshVerify"], boolean | undefined>;
+
+function createSshVerifyConfig(lanIp: string, overrides: SshVerifyConfig = {}): SshVerifyConfig {
+  return { cidrs: [`${lanIp}/32`], ...overrides };
+}
+
 describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve", (attempt) => {
+  const attemptWithSshVerify: typeof attempt = async (params) => {
+    const configure = params.configure;
+    await attempt({
+      ...params,
+      configure: async (lanIp) => {
+        await writeConfigFile({
+          gateway: { nodes: { pairing: { sshVerify: createSshVerifyConfig(lanIp) } } },
+        });
+        await configure?.(lanIp);
+      },
+    });
+  };
+
   beforeEach(() => {
     // Each case uses a distinct identityName, matching the host+device cooldown key.
     probeMock.mockReset();
@@ -77,12 +96,9 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
     lockApproval: boolean;
     next: GatewayNodePairingConfig["sshVerify"];
   }[])("keeps pairing pending when $name", async ({ name, lockApproval, next }) => {
-    await attempt({
+    await attemptWithSshVerify({
       identityName: `ssh-policy-${name.replaceAll(" ", "-")}`,
-      configure: async () => {
-        await writeConfigFile({ gateway: { nodes: { pairing: { sshVerify: true } } } });
-      },
-      run: async ({ loaded, connectNode }) => {
+      run: async ({ lanIp, loaded, connectNode }) => {
         const probe = createDeferred<NodeIdentityProbeResult>();
         const lock = createDeferred();
         const locked = createDeferred();
@@ -114,7 +130,12 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
             ...current,
             gateway: {
               ...current?.gateway,
-              nodes: { ...current?.gateway?.nodes, pairing: { sshVerify: next } },
+              nodes: {
+                ...current?.gateway?.nodes,
+                pairing: {
+                  sshVerify: typeof next === "object" ? createSshVerifyConfig(lanIp, next) : next,
+                },
+              },
             },
           });
           probe.resolve({
@@ -145,7 +166,7 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
   });
 
   test("approves device pairing and the first capability surface on a key match", async () => {
-    await attempt({
+    await attemptWithSshVerify({
       identityName: "ssh-verify-key-match",
       run: async ({ lanIp, loaded, connectNode }) => {
         probeMock.mockImplementation(async () => ({
@@ -184,7 +205,7 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
   });
 
   test("does not ssh-approve a pending request that carries scopes from an earlier attempt", async () => {
-    await attempt({
+    await attemptWithSshVerify({
       identityName: "ssh-verify-scoped-refresh",
       run: async ({ loaded, connectNode }) => {
         // Seed a scoped pending request (as an earlier interactive attempt
@@ -218,7 +239,7 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
   });
 
   test("leaves the pairing pending when the remote identity does not match", async () => {
-    await attempt({
+    await attemptWithSshVerify({
       identityName: "ssh-verify-key-mismatch",
       run: async ({ loaded, connectNode }) => {
         // A different key than the pending request: assembled from words so the
@@ -251,7 +272,7 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
   });
 
   test("sshVerify: false disables the probe and keeps default reconnect pause behavior", async () => {
-    await attempt({
+    await attemptWithSshVerify({
       identityName: "ssh-verify-disabled",
       configure: async () => {
         await writeConfigFile({

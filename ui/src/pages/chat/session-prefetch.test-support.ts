@@ -3,7 +3,6 @@ import type { ReactiveController } from "lit";
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { observeChatCache, type ChatMessageCache } from "./session-message-cache.ts";
 import { installSessionPrefetch } from "./session-prefetch.ts";
@@ -57,13 +56,10 @@ export async function settleSessionPrefetch(): Promise<void> {
 }
 
 export function createSessionPrefetchFixture() {
-  let visibility: DocumentVisibilityState;
-  let current: SessionPrefetchUpdate;
-
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(PREFETCH_TEST_NOW);
   vi.stubGlobal("indexedDB", new IDBFactory());
-  visibility = "visible";
+  let visibility: DocumentVisibilityState = "visible";
   const originalVisibility = Object.getOwnPropertyDescriptor(document, "visibilityState");
   Object.defineProperty(document, "visibilityState", {
     configurable: true,
@@ -89,20 +85,18 @@ export function createSessionPrefetchFixture() {
   const store = new SessionSnapshotStore(cache);
   store.connect();
   observeChatCache(cache, store);
-  current = { client: null, listRevision: 0, openSessionKeys: [], rows: null };
+  let current: SessionPrefetchUpdate = {
+    client: null,
+    listRevision: 0,
+    openSessionKeys: [],
+    rows: null,
+  };
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
   const gatewayListeners = new Set<() => void>();
   const context = {
     agents: { state: { agentsList: null } },
     gateway: {
-      get snapshot() {
-        return {
-          assistantAgentId: "main",
-          client: current.client,
-          hello: null,
-          phase: current.client ? ("connected" as const) : ("stopped" as const),
-        };
-      },
+      snapshot: { assistantAgentId: "main", hello: null },
       subscribe: (listener: () => void) => {
         gatewayListeners.add(listener);
         return () => gatewayListeners.delete(listener);
@@ -120,7 +114,7 @@ export function createSessionPrefetchFixture() {
         return { result: current.rows ? { sessions: current.rows } : null };
       },
     },
-  } as unknown as ApplicationContext;
+  };
   const host = Object.assign(document.createElement("div"), {
     addController: (_controller: ReactiveController) => undefined,
     removeController: (_controller: ReactiveController) => undefined,

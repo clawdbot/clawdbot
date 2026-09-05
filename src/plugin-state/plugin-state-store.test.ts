@@ -4,6 +4,7 @@ import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   closeOpenClawStateDatabaseByPath,
   isOpenClawStateDatabaseOpen,
@@ -109,6 +110,52 @@ describe("plugin state keyed store", () => {
       expect(store.consume("interaction:1")).toEqual({ count: 1 });
       expect(store.lookup("interaction:1")).toBeUndefined();
     });
+  });
+
+  it("compiles exact reads once per connection with fresh scope and expiry bindings", () => {
+    const now = Date.now();
+    seedPluginStateEntriesForTests([
+      { pluginId: "discord", namespace: "prepared", key: "first", value: 1, expiresAt: now + 100 },
+      { pluginId: "discord", namespace: "prepared", key: "second", value: 2 },
+      { pluginId: "telegram", namespace: "prepared", key: "first", value: 3 },
+      { pluginId: "discord", namespace: "sibling", key: "first", value: 4 },
+    ]);
+    const store = createPluginStateSyncKeyedStore<number>("discord", {
+      namespace: "prepared",
+      maxEntries: 10,
+    });
+    const pluginSibling = createPluginStateSyncKeyedStore<number>("telegram", {
+      namespace: "prepared",
+      maxEntries: 10,
+    });
+    const namespaceSibling = createPluginStateSyncKeyedStore<number>("discord", {
+      namespace: "sibling",
+      maxEntries: 10,
+    });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      for (let connection = 0; connection < 2; connection++) {
+        closePluginStateDatabase();
+        const { db } = openOpenClawStateDatabase();
+        const compile = vi.spyOn(getNodeSqliteKysely(db).getExecutor(), "compileQuery");
+        try {
+          clock.mockReturnValue(now);
+          expect(store.lookup("first")).toBe(1);
+          expect(store.lookup("second")).toBe(2);
+          expect(pluginSibling.lookup("first")).toBe(3);
+          expect(namespaceSibling.lookup("first")).toBe(4);
+          expect(store.lookup("missing")).toBeUndefined();
+          clock.mockReturnValue(now + 100);
+          expect(store.lookup("first")).toBeUndefined();
+          expect(store.lookup("second")).toBe(2);
+          expect(compile).toHaveBeenCalledOnce();
+        } finally {
+          compile.mockRestore();
+        }
+      }
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("shares sync and async state while preserving their error contracts", async () => {

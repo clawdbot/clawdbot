@@ -253,13 +253,14 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       panelActions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
       panelTemplates,
+      header: html`${header}${recovery}`,
       primary,
       requestUpdate: state.requestUpdate!,
     });
-    return html`<div class="chat-pane-layout">${header}${recovery}${content}</div>
-      ${renderChatImageLightbox(
-        state.imageLightbox,
-        state.handleCloseImage,
-      )}${this.renderResetConfirmation()}`;
+    return html`${content}
+    ${renderChatImageLightbox(
+      state.imageLightbox,
+      state.handleCloseImage,
+    )}${this.renderResetConfirmation()}`;
   }
 }

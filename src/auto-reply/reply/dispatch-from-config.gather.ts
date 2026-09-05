@@ -547,6 +547,7 @@ export async function gatherDispatchRequest(
     notePreparedSession,
     resolvePreparedTranscriptBinding,
     sessionAgentId,
+    noteRunVerbosity: verboseProgress.noteRunVerbosity,
     shouldEmitVerboseProgress,
     shouldEmitFullVerboseProgress,
     replyRoute,

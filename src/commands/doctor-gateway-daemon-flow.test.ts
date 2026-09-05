@@ -103,7 +103,8 @@ vi.mock("../daemon/systemd-hints.js", () => ({
   renderSystemdUnavailableHints,
 }));
 
-vi.mock("../gateway/net.js", () => ({
+vi.mock("../gateway/net.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/net.js")>()),
   resolveGatewayBindHost,
   resolveGatewayRequiredListenHosts: (bindHost: string) =>
     bindHost === "100.64.0.40" ? [bindHost, "127.0.0.1"] : [bindHost],
@@ -590,6 +591,7 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(ctx.runtime.error).toHaveBeenCalledOnce();
     expect(service.restart).not.toHaveBeenCalled();
     expect(service.isLoaded).not.toHaveBeenCalled();
+    expect(service.readCommand).not.toHaveBeenCalled();
     expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
     expect(note).not.toHaveBeenCalled();
   });

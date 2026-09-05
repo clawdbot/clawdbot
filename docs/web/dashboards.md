@@ -59,8 +59,10 @@ and widget interactions. Closing the whole side panel hides its tabs and leaves
 the main view in place. Closing the Dashboard tab removes that view from the
 layout; it does not delete the board. Reopen it from the panel's **+** menu.
 An empty dashboard stays open so you can add its first widget without changing
-your chosen layout. Task controls share the existing toolbar; side-panel tabs
-appear only when there are views to switch between.
+your chosen layout. The task toolbar sits above the main pane, aligned with the
+side-panel tabs when the panes are side by side. In a stacked layout, each
+header stays above its own pane. Side-panel tabs appear only when there are
+views to switch between.
 
 ## Build a dashboard by asking
 

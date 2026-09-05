@@ -325,6 +325,7 @@ export function createManifestPluginRecord(params: {
     origin: candidate.origin,
     workspaceDir: candidate.workspaceDir,
     trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
+    trust: manifestRecord.trust,
     enabled: params.enabled,
     compat: collectPluginManifestCompatCodes(manifestRecord),
     activationState: params.activationState,

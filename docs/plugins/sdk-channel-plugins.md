@@ -290,6 +290,12 @@ The Gateway retains the admitted account's `cfg`, resolved `account`, and owning
 use that context even when the published config removes the account or a new
 plugin registration replaces it.
 
+Finish status updates inside `stopAccount` before its promise settles. The Gateway ignores
+writes through a retained stop callback after that attempt finishes or times out.
+Terminal startup status retires previous webhook handoffs even when the account
+promise stays pending until abort; it does not revoke the current task's ability
+to register ingress and explicitly report ready after recovery.
+
 Account-count-dependent policy needs whole-channel reloads. For example, Telegram
 changes how an empty account `groups` map inherits defaults between single- and
 multi-account configurations. Synology Chat also validates inherited and duplicate

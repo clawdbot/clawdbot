@@ -508,6 +508,10 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       requestedProvider: this.requestedProvider,
       configuredModel: this.settings.model || undefined,
     });
+    const storage =
+      this.sourceInspections.size > 0
+        ? collectMemoryStorageStatus(this.db, resolveUserPath(this.settings.store.databasePath))
+        : undefined;
     return {
       backend: "builtin",
       files: aggregateState.files,
@@ -520,10 +524,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       lastSyncError: this.syncOutcomes.lastError,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.databasePath,
-      storage:
-        this.sourceInspections.size > 0
-          ? collectMemoryStorageStatus(this.db, resolveUserPath(this.settings.store.databasePath))
-          : undefined,
+      storage,
       provider: providerInfo.provider,
       model: providerInfo.model,
       requestedProvider: this.requestedProvider,
@@ -536,11 +537,13 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         ? {
             enabled: true,
             entries:
+              storage?.embeddingCacheEntries ??
               (
                 this.db
                   .prepare(`SELECT COUNT(*) as c FROM ${MEMORY_EMBEDDING_CACHE_TABLE}`)
                   .get() as { c: number } | undefined
-              )?.c ?? 0,
+              )?.c ??
+              0,
             maxEntries: this.cache.maxEntries,
           }
         : { enabled: false, maxEntries: this.cache.maxEntries },

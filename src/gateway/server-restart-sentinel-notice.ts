@@ -148,11 +148,12 @@ export async function enqueueRestartSentinelNotice(
   params: GatewayLifecycleNotice & {
     sessionKey: string;
     revision: number;
+    deliveryIntentId?: string;
   },
 ): Promise<RestartSentinelNoticeEnqueueResult> {
   return await enqueueGatewayLifecycleNotice(
     params,
-    `restart-sentinel-notice:${params.sessionKey}:${params.revision}`,
+    params.deliveryIntentId ?? `restart-sentinel-notice:${params.sessionKey}:${params.revision}`,
   );
 }
 
@@ -316,8 +317,11 @@ export async function deliverRestartSentinelNotice(
     summary: string;
     queueId: string;
   },
-): Promise<void> {
-  const claim = await deliverGatewayLifecycleNoticeAttempt(params);
+): Promise<boolean> {
+  let delivered = false;
+  const claim = await deliverGatewayLifecycleNoticeAttempt(params, () => {
+    delivered = true;
+  });
   if (claim.status === "claimed-by-other-owner") {
     log.info(`${params.summary}: durable restart notice claimed by recovery`, {
       sessionKey: params.sessionKey,
@@ -326,6 +330,8 @@ export async function deliverRestartSentinelNotice(
   if (claim.status === "claimed-by-other-owner" || !claim.value) {
     await drainFailedRestartSentinelNotice(params);
   }
+  // Only the observed platform send proves delivery; recovery owns its own receipts.
+  return delivered;
 }
 
 async function deliverGatewayLifecycleNoticeAttempt(

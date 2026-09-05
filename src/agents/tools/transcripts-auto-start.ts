@@ -142,6 +142,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
     entry: ResolvedTranscriptsAutoStartConfig,
     attempt: number,
     store: TranscriptsStore,
+    startedAt = new Date().toISOString(),
   ) => {
     if (stopped || startedSessions.has(entry.sessionId ?? "")) {
       return;
@@ -156,6 +157,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           startupWaitMs: AUTO_START_PROVIDER_READY_TIMEOUT_MS,
           configuredLifecycle: true,
           lifecycleToken,
+          startedAt,
           rawParams: { action: "start", ...entry },
         });
         const sessionId = result.details.sessionId;
@@ -171,7 +173,11 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
             `transcripts autoStart failed provider=${entry.providerId}: ${formatAutoStopDiagnostic(error)} (check the transcripts.autoStart entry in your config)`,
           );
         } else {
-          schedule(() => startContinuous(entry, attempt + 1, store), AUTO_START_RETRY_MS);
+          // Retries keep the persisted identity; a new timestamp collides with its daily selector.
+          schedule(
+            () => startContinuous(entry, attempt + 1, store, startedAt),
+            AUTO_START_RETRY_MS,
+          );
         }
       }
     });

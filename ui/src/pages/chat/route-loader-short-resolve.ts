@@ -73,6 +73,12 @@ export async function resolveShortSessionReference(
     });
   }
   signal.throwIfAborted();
+  return sessionReferenceResolution(result);
+}
+
+export function sessionReferenceResolution(
+  result: SessionsResolveResult,
+): SessionReferenceResolution {
   if (result.ok) {
     return { kind: "unique", session: result };
   }

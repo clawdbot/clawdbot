@@ -13,6 +13,7 @@ import { isBrowserCopilotClient } from "../utils/message-channel.js";
 import {
   GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
   GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
+  GATEWAY_EVENT_UPDATE_RUN_CHANGED,
 } from "./events.js";
 import {
   ADMIN_SCOPE,
@@ -71,6 +72,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   task: [READ_SCOPE],
   "task.suggestion": [READ_SCOPE],
   "update.available": [],
+  [GATEWAY_EVENT_UPDATE_RUN_CHANGED]: [ADMIN_SCOPE],
   // Hash-only change notice after a persisted config write; content stays
   // behind the operator-scoped config.get.
   "config.changed": [READ_SCOPE],
@@ -233,6 +235,7 @@ type PendingLiveText = {
 };
 type ClientDelivery = {
   socket: GatewayWsClient["socket"];
+  retired: boolean;
   inFlight: number;
   draining: boolean;
   bytes: number;
@@ -266,6 +269,7 @@ export function createGatewayBroadcaster(params: {
       }
       state = {
         socket: client.socket,
+        retired: false,
         inFlight: 0,
         draining: false,
         bytes: 0,
@@ -301,7 +305,7 @@ export function createGatewayBroadcaster(params: {
     }
   };
   const drain = (state: ClientDelivery, group?: AbortSignal) => {
-    if (state.draining) {
+    if (state.retired || state.draining) {
       return;
     }
     state.draining = true;
@@ -462,6 +466,9 @@ export function createGatewayBroadcaster(params: {
       if (live && !live.coalesce) {
         drain(state, live.group);
       }
+      if (state.retired) {
+        continue;
+      }
       const nextSeq = (clientSeq.get(c) ?? 0) + 1;
       const bufferedAmount = bufferedBytes(state);
       const slow = bufferedAmount > MAX_BUFFERED_BYTES;
@@ -483,6 +490,8 @@ export function createGatewayBroadcaster(params: {
         continue;
       }
       if (slow) {
+        state.retired = true;
+        clearPending(state);
         try {
           c.socket.close(1008, "slow consumer");
         } catch {
@@ -593,11 +602,17 @@ export function createGatewayBroadcaster(params: {
         }
         finished = true;
         state.inFlight -= 1;
+        // ws fails every queued write when compression loses its socket. Settle
+        // each callback, but retire this delivery generation only once.
+        if (state.retired) {
+          return;
+        }
         if (err) {
+          state.retired = true;
+          clearPending(state);
           log.error(`broadcast send failed conn=${c.connId}: ${formatErrorMessage(err)}`, {
             event,
           });
-          clearPending(state);
           state.socket.terminate();
         } else {
           drain(state);
@@ -622,7 +637,12 @@ export function createGatewayBroadcaster(params: {
 
   const getBufferedAmount: GatewayBufferedAmountFn = (connId) => {
     const client = params.clients.getByConnectionId(connId);
-    return client ? bufferedBytes(deliveryFor(client)) : undefined;
+    if (!client || client.invalidated || client.socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
+      return undefined;
+    }
+    const state = deliveryFor(client);
+    // Failed compression retains ws's queued byte count after transport retirement.
+    return state.retired ? undefined : bufferedBytes(state);
   };
 
   const broadcastPluginEvent: GatewayPluginEventBroadcastFn = (event, payload, scope) => {
