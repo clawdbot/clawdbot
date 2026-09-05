@@ -1,6 +1,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
   readSqliteIntegrityFileIdentity,
   type SqliteIntegrityWorkerInput,
@@ -21,7 +22,7 @@ let failure: Error | undefined;
 try {
   readSqliteIntegrityFileIdentity(input.pathname, input.identity);
   database = openNodeSqliteDatabase(input.pathname, { readOnly: true });
-  database.exec(`PRAGMA busy_timeout = ${input.busyTimeoutMs};`);
+  setSqliteBusyTimeout(database, input.busyTimeoutMs);
   readSqliteIntegrityFileIdentity(input.pathname, input.identity);
   assertSqliteIntegrity(database, input.pathname);
 } catch (error) {

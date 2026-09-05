@@ -2,6 +2,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -315,7 +316,7 @@ export function inspectOpenClawAgentDatabaseOwner(
       return { status: "owned", agentId: opened.agentId };
     }
     db = openNodeSqliteDatabase(pathname, { readOnly: true });
-    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
     assertSupportedAgentSchemaVersion(db, pathname);
     const existing = readExistingAgentSchemaMeta(db);
     if (!existing) {
