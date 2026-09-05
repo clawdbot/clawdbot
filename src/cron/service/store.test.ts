@@ -225,7 +225,7 @@ describe("cron service store seam coverage", () => {
     await saveCronStore(storePath, { version: 1, jobs: [valid, ...invalid] });
     const db = openOpenClawStateDatabase().db;
     for (const [index, spec] of invalidSpecs.entries()) {
-      const job = { ...invalid[index], ...spec };
+      const job = { ...valid, ...spec, id: `invalid-wake-${index}` };
       db.prepare("UPDATE cron_jobs SET job_json = ? WHERE job_id = ?").run(
         JSON.stringify(job),
         job.id,
