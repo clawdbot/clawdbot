@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   createGitCommandError,
   executeGitCommand,
+  normalizeGitPathForFilesystem,
   requireGitCommand,
   requireGitCommandBuffer,
   requireGitCommandRaw,
@@ -17,6 +18,13 @@ type WorktreeListEntry = {
   lockedReason?: string;
 };
 
+function withNoGlob(value: string | undefined): string {
+  if (value?.split(/\s+/).includes("noglob")) {
+    return value;
+  }
+  return value ? `${value} noglob` : "noglob";
+}
+
 /**
  * Gateway-run Git must never execute repository hooks or filesystem monitors;
  * the admin-gated setup script is the sole intentional repository-code path.
@@ -24,9 +32,23 @@ type WorktreeListEntry = {
  * `requireGit*` wrappers (e.g. a buffered, non-throwing invocation with a
  * custom timeout) still pin the same invariant instead of reimplementing it.
  */
-export function gitEnvironment(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function gitEnvironment(
+  env?: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const baseEnv = env ?? process.env;
+  const windowsNoGlob =
+    platform === "win32"
+      ? {
+          // MSYS2/Cygwin expand braces before Git sees argv. Keep revision
+          // expressions such as HEAD^{commit} literal within this Git owner.
+          MSYS: withNoGlob(baseEnv.MSYS),
+          CYGWIN: withNoGlob(baseEnv.CYGWIN),
+        }
+      : {};
   return {
-    ...(env ?? process.env),
+    ...baseEnv,
+    ...windowsNoGlob,
     GIT_CONFIG_COUNT: "2",
     GIT_CONFIG_KEY_0: "core.hooksPath",
     GIT_CONFIG_VALUE_0: os.devNull,
@@ -92,7 +114,9 @@ function parseWorktreeList(output: string): WorktreeListEntry[] {
       if (current) {
         entries.push(current);
       }
-      current = { path: field.slice("worktree ".length) };
+      current = {
+        path: normalizeGitPathForFilesystem(field.slice("worktree ".length)),
+      };
     } else if (current && field === "locked") {
       current.lockedReason = "";
     } else if (current && field.startsWith("locked ")) {

@@ -6,10 +6,37 @@ import type { SpawnResult } from "../../process/exec.js";
 import {
   commandError,
   findGitCheckoutRoot,
+  gitEnvironment,
   hasSelfContainedGitMetadata,
   insideGitCheckout,
   runGit,
 } from "./git.js";
+
+describe("Git execution environment", () => {
+  it("disables MSYS and Cygwin argv globbing for Windows worktree Git", () => {
+    expect(
+      gitEnvironment(
+        {
+          MSYS: "winsymlinks:nativestrict",
+          CYGWIN: "disable_pcon",
+        },
+        "win32",
+      ),
+    ).toMatchObject({
+      MSYS: "winsymlinks:nativestrict noglob",
+      CYGWIN: "disable_pcon noglob",
+    });
+  });
+
+  it("preserves an existing noglob option and non-Windows environments", () => {
+    expect(gitEnvironment({ MSYS: "noglob winsymlinks:native" }, "win32").MSYS).toBe(
+      "noglob winsymlinks:native",
+    );
+    expect(gitEnvironment({ MSYS: "winsymlinks:native" }, "linux")).toMatchObject({
+      MSYS: "winsymlinks:native",
+    });
+  });
+});
 
 describe("Git checkout discovery", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);

@@ -5,12 +5,35 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   createGitCommandError,
   executeGitCommand,
+  normalizeGitPathForFilesystem,
   requireGitCommand,
   requireGitCommandBuffer,
   requireGitCommandRaw,
 } from "./git-exec.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("Git filesystem paths", () => {
+  it.each([
+    { input: "/c/Users/example/repo", expected: "C:\\Users\\example\\repo" },
+    { input: "/d/", expected: "D:\\" },
+  ])("translates an MSYS drive path on Windows: $input", ({ input, expected }) => {
+    expect(normalizeGitPathForFilesystem(input, "win32")).toBe(expected);
+  });
+
+  it.each(["C:\\c\\Users\\example", "C:/Users/example", "//server/share/repo"])(
+    "leaves a native Windows path unchanged: %s",
+    (input) => {
+      expect(normalizeGitPathForFilesystem(input, "win32")).toBe(input);
+    },
+  );
+
+  it("leaves MSYS-shaped text unchanged on non-Windows hosts", () => {
+    expect(normalizeGitPathForFilesystem("/c/Users/example/repo", "linux")).toBe(
+      "/c/Users/example/repo",
+    );
+  });
+});
 
 const progress = Array.from({ length: 1000 }, (_, i) => `Updating files: ${i}/1000`).join("\r");
 const failure = {
