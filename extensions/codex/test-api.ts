@@ -122,3 +122,11 @@ export function createCodexDynamicToolSpecsForPromptSnapshot(params: {
   }).specs;
 }
 export { createCanonicalForkFixture as createCanonicalForkFixtureForTest } from "./src/app-server/canonical-fork.test-support.js";
+
+export {
+  createParams as createCodexRunAttemptParamsForTest,
+  createStartedThreadHarness as createCodexStartedThreadHarnessForTest,
+  runCodexAppServerAttempt as runCodexAppServerAttemptForTest,
+  setupRunAttemptTestHooks as setupCodexRunAttemptTestHooks,
+  tempDir as codexRunAttemptTempDir,
+} from "./src/app-server/run-attempt-test-harness.js";

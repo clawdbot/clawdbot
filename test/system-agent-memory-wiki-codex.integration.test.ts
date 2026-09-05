@@ -21,41 +21,40 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSystemAgentSession } from "../../../src/system-agent/agent-turn.js";
+import {
+  codexRunAttemptTempDir,
+  createCodexRunAttemptParamsForTest,
+  createCodexStartedThreadHarnessForTest,
+  runCodexAppServerAttemptForTest,
+  setupCodexRunAttemptTestHooks,
+} from "../extensions/codex/test-api.js";
+import type { OpenClawConfig } from "../extensions/memory-wiki/api.js";
+import {
+  activateExistingMemoryWikiVault,
+  compileMemoryWikiVault,
+  configureMemoryWikiCompiledCacheStore,
+  createMemoryWikiCompiledCacheStore,
+  createMemoryWikiTestHarness,
+  createWikiPromptSectionPreparer,
+  initializeMemoryWikiVault,
+  invalidateMemoryWikiCompiledCache,
+  renderWikiMarkdown,
+  resolveMemoryWikiAgentConfig,
+  resolveMemoryWikiConfig,
+  type ResolvedMemoryWikiConfig,
+} from "../extensions/memory-wiki/test-api.js";
+import { createSystemAgentSession } from "../src/system-agent/agent-turn.js";
 import {
   runSystemAgentTurnWithDeps,
   type SystemAgentTurnDeps,
-} from "../../../src/system-agent/agent-turn.test-support.js";
-import { ChatTurnRouter } from "../../../src/system-agent/chat-turn-router.js";
-import { ChatWizardHost } from "../../../src/system-agent/chat-wizard-host.js";
+} from "../src/system-agent/agent-turn.test-support.js";
+import { ChatTurnRouter } from "../src/system-agent/chat-turn-router.js";
+import { ChatWizardHost } from "../src/system-agent/chat-wizard-host.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
   installSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
-} from "../../../src/system-agent/system-agent.test-helpers.js";
-import {
-  createParams as createCodexParams,
-  createStartedThreadHarness,
-  runCodexAppServerAttempt,
-  setupRunAttemptTestHooks,
-  tempDir as codexTempDir,
-} from "../../codex/src/app-server/run-attempt-test-harness.js";
-import type { OpenClawConfig } from "../api.js";
-import { compileMemoryWikiVault } from "./compile.js";
-import {
-  configureMemoryWikiCompiledCacheStore,
-  createMemoryWikiCompiledCacheStore,
-  invalidateMemoryWikiCompiledCache,
-} from "./compiled-cache.js";
-import {
-  resolveMemoryWikiAgentConfig,
-  resolveMemoryWikiConfig,
-  type ResolvedMemoryWikiConfig,
-} from "./config.js";
-import { renderWikiMarkdown } from "./markdown.js";
-import { createWikiPromptSectionPreparer } from "./prompt-section.js";
-import { createMemoryWikiTestHarness } from "./test-helpers.js";
-import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
+} from "../src/system-agent/system-agent.test-helpers.js";
 
 const REQUESTER_AGENT_ID = "hq";
 /** Distinct owner the turn runner selects when no requester is delegated. */
@@ -70,7 +69,7 @@ const TEST_HOME = "/Users/tester";
 
 const { createTempDir } = createMemoryWikiTestHarness();
 
-setupRunAttemptTestHooks();
+setupCodexRunAttemptTestHooks();
 
 const knownAgentsConfig = {
   agents: {
@@ -194,7 +193,9 @@ function readWireFrames(writes: string[]): WireFrame[] {
  * all stay live and `writes` holds the bytes Codex would actually receive.
  */
 function createWireHarness() {
-  const harness = createStartedThreadHarness(async () => undefined, { persistedThreads: [] });
+  const harness = createCodexStartedThreadHarnessForTest(async () => undefined, {
+    persistedThreads: [],
+  });
   if (!("writes" in harness)) {
     throw new Error("expected the wire-backed Codex app-server harness");
   }
@@ -202,14 +203,11 @@ function createWireHarness() {
 }
 
 /** Runs the attempt against the real Codex stdio transport, not a client mock. */
-function startCodexAttempt(
-  harness: ReturnType<typeof createWireHarness>,
-  options: {
-    name: string;
-    memoryPromptAgentId: string;
-    runParams?: Parameters<NonNullable<SystemAgentTurnDeps["runEmbeddedAgent"]>>[0];
-  },
-) {
+function startCodexAttempt(options: {
+  name: string;
+  memoryPromptAgentId: string;
+  runParams?: Parameters<NonNullable<SystemAgentTurnDeps["runEmbeddedAgent"]>>[0];
+}) {
   const identity = options.runParams
     ? {
         prompt: options.runParams.prompt,
@@ -219,15 +217,15 @@ function startCodexAttempt(
         sessionKey: options.runParams.sessionKey,
       }
     : { sessionKey: SESSION_KEY };
-  const params = createCodexParams(
-    path.join(codexTempDir, `${options.name}.jsonl`),
-    path.join(codexTempDir, `${options.name}-workspace`),
+  const params = createCodexRunAttemptParamsForTest(
+    path.join(codexRunAttemptTempDir, `${options.name}.jsonl`),
+    path.join(codexRunAttemptTempDir, `${options.name}-workspace`),
     identity,
   );
   params.agentId = options.runParams?.agentId ?? SESSION_AGENT_ID;
   params.memoryPromptAgentId = options.memoryPromptAgentId;
   params.contextEngine = contextEngine;
-  return runCodexAppServerAttempt(params);
+  return runCodexAppServerAttemptForTest(params);
 }
 
 /**
@@ -248,7 +246,7 @@ async function submitHostedCodexAttempt(options: {
     if (!memoryPromptAgentId) {
       throw new Error("hosted turn omitted its memory owner");
     }
-    const run = startCodexAttempt(harness, {
+    const run = startCodexAttempt({
       name: options.name,
       memoryPromptAgentId,
       runParams,
