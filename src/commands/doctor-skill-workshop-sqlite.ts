@@ -162,11 +162,7 @@ async function relocateLegacyWorkshopTargets(
   // Recovery can establish a create's ownership or restore a partial update.
   for (const row of readRows()) {
     const record = parseSkillProposalRow(row);
-    if (
-      !record ||
-      record.status !== "pending" ||
-      !(await readSkillProposalRollback(record.id, { env }))
-    ) {
+    if (!record || record.status !== "pending") {
       continue;
     }
     const workspaceDir = resolveLegacyWorkshopWorkspaceDir(record.target.skillDir, config, env);
@@ -180,7 +176,8 @@ async function relocateLegacyWorkshopTargets(
     if (
       !workspaceDir ||
       !ownerAgentId ||
-      isPathInside(resolveWorkshopSkillsDir(config, ownerAgentId, env), record.target.skillDir)
+      isPathInside(resolveWorkshopSkillsDir(config, ownerAgentId, env), record.target.skillDir) ||
+      !(await readSkillProposalRollback(record.id, { env }))
     ) {
       continue;
     }
