@@ -91,7 +91,7 @@ describe("worker placement restart recovery", () => {
         leaseId: ready.leaseId,
         destroyRequestedAtMs: support.testState.nowMs,
       });
-      await expect(recovery.reclaim(REQUEST)).rejects.toThrow("cleanup is still pending");
+      await expect(recovery.reclaim(REQUEST)).rejects.toThrow("provider deletion unavailable");
       expect(placements.get(REQUEST.sessionId)).toMatchObject({
         state: "failed",
         environmentId: ready.environmentId,

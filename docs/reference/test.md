@@ -33,6 +33,27 @@ fresh lease. Every run still syncs the current checkout.
 `OPENCLAW_TESTBOX_ALLOW_STALE=1` is only for intentional diagnostics, not
 release proof.
 
+The Testbox workflow registers a separate disposable checkout for native sync.
+The hydrated execution workspace stays at its original absolute path, so native
+Git cleanup and rsync cannot delete dependencies, build output, or ignored runtime
+there. The wrapper verifies and applies the source bundle in that execution
+workspace, then runs the payload there. It never restores runtime from the caller
+or changes the selected rsync binary.
+
+Workspace preparation changes require a fresh lease. A missing or overlapping
+execution-workspace binding stops the payload; stop that lease and warm a new one.
+Use the OpenClaw wrapper for proof: direct native Blacksmith commands target the
+transport checkout, which deliberately has no hydrated runtime.
+
+Testbox requests with `--artifact-glob` or `--require-artifact` also require the
+`prepared-artifact-workspace` feature in the selected Crabbox binary's
+`providers describe blacksmith-testbox --json` response. The wrapper checks this
+before sync or lease work, rather than collecting missing or stale transport files.
+Update Crabbox if that capability is absent. Collection stays anchored in the
+prepared workspace across payload directory changes and normal failure exits;
+existing cancellation and signal-related artifact withholding remains unchanged.
+Ordinary runs without artifact requests do not require this additional capability.
+
 Testbox runs and POSIX remote changed gates freeze source into a Git bundle
 against the pinned base. These runs require Crabbox 0.37.0 or later for
 `sync-plan --json`; upgrade Crabbox before retrying an older binary. This API floor
@@ -154,6 +175,20 @@ lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
   for release proof. Direct-provider flags such as `--fresh-pr`, `--full-resync`,
   `--script*`, `--env-helper`, capture/download flags, and `--stop-after` are not
   a substitute for the delegated Testbox workflow.
+
+When remote sync uses a temporary checkout, the wrapper preserves native
+`.crabbox/runs` and `.crabbox/captures` outputs together beneath a fresh
+`.crabbox/wrapper-artifacts/run-*` directory before removing that checkout.
+Repeated runs retain separate evidence even when native filenames match. The
+wrapper prints the old-to-new root mapping; native logs and generated proof may
+still reference the old paths. A preservation error fails the wrapper and retains
+the temporary checkout at the reported path for manual recovery.
+
+These are local artifacts, not published or fully sanitized proof. Blacksmith's
+native failure bundle contains captured stdout/stderr and diagnostic metadata;
+it does not automatically include remote UI screenshots or reports. Retrieve
+those separately before stopping the owned Testbox, and inspect all artifacts
+for secrets and private data before sharing.
 
 The native Windows Testbox idle monitor uses the running `sshd` service's local
 listener ports, not Blacksmith's externally forwarded SSH port. Established SSH
@@ -397,6 +432,16 @@ validates consumed bytes, inherited configuration, generator and manifest inputs
 and resolution topology without starting a compiler on hits. Cache hits restore
 into fresh staging and pass the same entry and relative declaration closure checks
 before publication.
+All tsdown declaration builds (the eight SDK/unified groups, workspace packages,
+and the AI package) resolve source and dependency realpaths within their checkout.
+Ancestor installs are invisible to TypeScript lookup; selected declaration paths
+that escape through symlinks or bundler resolution fail the build. Each checkout
+needs its own installed declaration inputs, including compiler libraries. Local
+pnpm links are supported when their targets remain inside the checkout; shared
+external installs are not. Actual compiler receipts remain unfiltered, and input
+changes still prevent publication. Runtime module resolution and the separate
+native tsgo typecheck and package-boundary owners retain their existing contracts.
+
 Local preparation never overwrites packaged declarations or writes workspace
 forwarding bridges.
 
@@ -511,7 +556,12 @@ do not describe a replay as recovery of lost files.
 
 Timeout diagnostics allocate fresh children beneath the existing
 `OPENCLAW_UI_E2E_DIAGNOSTIC_DIR` or default timeout directory, keeping each PNG and
-JSON report together. Mantis allocates an invocation directory for setup logs,
+JSON report together. Their `ci.shardIndex` and `ci.vitestShardCount` fields record
+`VITEST_SHARD_INDEX` and `VITEST_SHARD_COUNT`, respectively, as supplied by normal
+CI. Missing values remain `null`; manual and separate release E2E invocations do
+not infer this metadata from Vitest's `--shard` argument.
+
+Mantis allocates an invocation directory for setup logs,
 capture attempts, and its report; the builder preserves each attempt's relative
 paths and refuses to overwrite an existing report.
 

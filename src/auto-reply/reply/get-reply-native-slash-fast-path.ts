@@ -73,6 +73,9 @@ function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
     commandName &&
     commandName !== "new" &&
     commandName !== "reset" &&
+    // Dashboard creates an agent prompt with exact skill selections. The full
+    // reply pipeline must consume that command once, without re-resolving its text.
+    commandName !== "dashboard" &&
     (isNativeCommandTurn(commandTurn) ||
       shouldRunInternalTextSlashCommandFastPath(ctx, commandTurn, commandName)),
   );

@@ -148,7 +148,7 @@ export function isPolicyTestOwnedPath(changedPath: string): boolean {
   );
 }
 
-type CompactNodeTestShard = Omit<NodeTestShard, "configs" | "groups"> & {
+export type CompactNodeTestShard = Omit<NodeTestShard, "configs" | "groups"> & {
   groups: NodeTestShardGroup[];
 };
 
@@ -652,6 +652,7 @@ const EXCLUSIVE_COMPACT_GROUP_RE =
 // Exclusive bins run serially, so their packed estimate is their wall clock.
 // An indivisible file above this budget must not acquire additional work.
 const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
+const COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS = 250;
 
 export function isExclusiveCompactShardName(shardName: string): boolean {
   return EXCLUSIVE_COMPACT_GROUP_RE.test(shardName);
@@ -766,8 +767,8 @@ function estimateCompactStripeSeconds(
     : blacksmithSeconds;
 }
 
-// Split siblings must stay in different jobs, including nested children of
-// deliberately separated fixed stripes.
+// Identify split siblings, including nested children of deliberately separated
+// fixed stripes.
 function compactStripeFamily(group: NodeTestShardGroup): string | undefined {
   if (
     /^agentic-commands-doctor-sessions-cron(?:-(?:memory|sqlite))?(?:-hosted-\d+)?$/u.test(
@@ -2701,22 +2702,55 @@ function createCompactNodeTestShardBundles(
       ) {
         return false;
       }
-      const serialSecondsCap = exclusive
-        ? COMPACT_EXCLUSIVE_JOB_SECONDS
-        : usesExpandedRunnerProfile(options.runnerBackend)
-          ? COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS
-          : resolveCiNodeTestRunnerClass(group.runner).secondsCap;
       const combined = [...candidate, group];
+      // Spend the larger budget only on a complete no-build CLI bin. Each child
+      // keeps its 150s admission limit, worker budget and separate process.
+      const sharesSerialCliBudget =
+        options.runnerBackend === "hybrid" &&
+        combined.every(
+          (entry) =>
+            !entry.requiresDist &&
+            !entry.pretestBuildMode &&
+            /^agentic-cli(?:-process-hosted-\d+)?$/u.test(entry.shard_name) &&
+            estimateBinSeconds([entry]) <= COMPACT_EXCLUSIVE_JOB_SECONDS,
+        );
+      const serialSecondsCap = sharesSerialCliBudget
+        ? COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS
+        : exclusive
+          ? COMPACT_EXCLUSIVE_JOB_SECONDS
+          : usesExpandedRunnerProfile(options.runnerBackend)
+            ? COMPACT_EXPANDED_NODE_TEST_JOB_SECONDS
+            : resolveCiNodeTestRunnerClass(group.runner).secondsCap;
       const parallel =
         usesBlacksmithCapacity &&
         combined.every(isParallelCompactGroup) &&
         combined.every((entry) => estimateBinSeconds([entry]) <= serialSecondsCap);
       const secondsCap = parallel ? COMPACT_PARALLEL_NODE_TEST_JOB_SECONDS : serialSecondsCap;
-      const family = compactStripeFamily(group);
+      // CLI runtime children retain separate serial processes but can share the
+      // prerequisite within the full 150s budget. Fixed stripe families stay apart.
+      const sharesCliRuntimeBuild = combined.every((entry) => entry.pretestBuildMode === "runtime");
+      // A later unrelated member can revoke an earlier complete-CLI exemption.
+      // Recheck every sibling collision against the final bin's eligibility.
+      const preservesStripeFamilies = combined.every((entry, index) => {
+        const family = compactStripeFamily(entry);
+        return (
+          family === undefined ||
+          sharesSerialCliBudget ||
+          combined
+            .slice(0, index)
+            .every(
+              (previous) =>
+                compactStripeFamily(previous) !== family ||
+                (sharesCliRuntimeBuild &&
+                  [previous, entry].every((sibling) =>
+                    /^agentic-cli-process-hosted-\d+$/u.test(sibling.shard_name),
+                  )),
+            )
+        );
+      });
       return (
         isExclusiveCompactGroup(candidate[0]) === exclusive &&
-        (family === undefined ||
-          candidate.every((entry) => compactStripeFamily(entry) !== family)) &&
+        preservesStripeFamilies &&
         (parallel || candidate.length < COMPACT_NODE_TEST_JOB_GROUPS) &&
         estimateBinSeconds(combined) <= secondsCap
       );

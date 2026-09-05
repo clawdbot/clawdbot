@@ -1,8 +1,10 @@
 // Control UI tests cover the responsive disconnected login gate.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
   controlUiSessionUrl,
@@ -333,11 +335,12 @@ suite.define(() => {
       if (fixture.error.code === "UNAVAILABLE") {
         await gateway.waitForRequest("connect", { after: 1 });
       }
-      await page.screenshot({
-        path: path.join(RECOVERY_ARTIFACT_DIR, "login-failure.png"),
-        fullPage: true,
-        animations: "disabled",
-      });
+      await writeFile(
+        path.join(RECOVERY_ARTIFACT_DIR, "login-failure.png"),
+        await takeControlUiViewportScreenshot(page, page.locator(".login-gate__card"), [
+          page.locator(".login-gate__failure"),
+        ]),
+      );
       const failure = page.locator(`.login-gate__failure[data-kind="${fixture.expectedKind}"]`);
       await failure.waitFor({ timeout: 10_000 });
       expect(await failure.locator(".login-gate__failure-title").textContent()).toBe(

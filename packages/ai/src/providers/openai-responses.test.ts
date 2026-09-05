@@ -187,18 +187,12 @@ describe("OpenAI Responses provider", () => {
   it.each([
     { reasoningEffort: undefined, expectedEffort: undefined },
     { reasoningEffort: "minimal", expectedEffort: "low" },
+    { reasoningEffort: "xhigh", expectedEffort: "xhigh" },
     { reasoningEffort: "max", expectedEffort: "max" },
   ] as const)(
-    "honors Astra reasoning and sampling capabilities for $reasoningEffort",
+    "honors Astra reasoning and sampling without catalog metadata for $reasoningEffort",
     async ({ reasoningEffort, expectedEffort }) => {
-      const requestModel = {
-        ...model({ id: "gpt-6-astra" }),
-        thinkingLevelMap: { off: null, minimal: "low", xhigh: "xhigh", max: "max" } as const,
-        compat: {
-          supportsTemperature: false,
-          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-        },
-      };
+      const requestModel = model({ id: "gpt-6-astra" });
       const options = { apiKey: "sentinel-key", reasoningEffort, temperature: 0.5, topP: 0.8 };
       const transportParams = buildOpenAIResponsesParams(requestModel, context, options);
       await streamOpenAIResponses(requestModel, context, options).result();

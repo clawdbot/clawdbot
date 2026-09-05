@@ -572,6 +572,25 @@ describe("loadGatewayPlugins", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  test("logs warn-level plugin diagnostics through the warn sink, not info", () => {
+    const diagnostics: PluginDiagnostic[] = [
+      {
+        level: "warn",
+        pluginId: "beads",
+        source: "/tmp/beads/index.ts",
+        message: 'typed hook "before_prompt_build" blocked by policy',
+      },
+    ];
+    loadOpenClawPlugins.mockReturnValue(createRegistry(diagnostics));
+    const log = loadGatewayStartupPluginsForTest();
+
+    expect(log.warn).toHaveBeenCalledWith(
+      '[plugins] typed hook "before_prompt_build" blocked by policy (plugin=beads, source=/tmp/beads/index.ts)',
+    );
+    expect(log.info).not.toHaveBeenCalledWith(expect.stringContaining("[plugins] typed hook"));
+    expect(log.error).not.toHaveBeenCalled();
+  });
+
   test("does not re-log a quarantined plugin verification diagnostic", () => {
     const diagnostic: PluginDiagnostic = {
       level: "error",

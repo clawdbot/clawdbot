@@ -43,6 +43,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   consumeTrustedToolNoStartError,
+  copyInternalToolResultState,
   getCoreTtsToolResultMediaUrls,
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -928,6 +929,7 @@ export function createCodexDynamicToolBridge(params: {
           (!asyncStarted &&
             isReplaySafeToolInstance(toolEntry.tool) &&
             isReplaySafeToolCall(toolName, executedArgs));
+        copyInternalToolResultState(rawResult, response);
         return withDynamicToolExecutionState(response, {
           executedArguments: executedArgs,
           executionStarted: didStartExecution && !executionPrevented,

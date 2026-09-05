@@ -12,6 +12,7 @@ export const en: TranslationMap & {
   desktop: TranslationMap &
     Record<"title" | "openWindow" | "unavailable" | "toggle" | "reconnect", string>;
   updates: TranslationMap;
+  login: TranslationMap;
 } = {
   pluginUi: {
     customize: "Customize UI",
@@ -897,6 +898,8 @@ export const en: TranslationMap & {
     cloudRecoveryUnavailable:
       "Cloud workers are unavailable because this connection does not support task recovery. Reconnect or update the Gateway.",
     placementStartFailed: "The session was created, but runner startup failed: {error}",
+    placementReloadBlocked: "Recovery needs a reload. Unsaved starts will be lost.",
+    discardUnsavedAndReload: "Discard unsaved starts and reload",
     placementSyncsFolder: "Syncs {folder} to the selected runner",
     folder: "Folder",
     folderPlaceholder: "Agent workspace",
@@ -2365,69 +2368,7 @@ export const en: TranslationMap & {
     logs: "Live gateway logs.",
     plugin: "Plugin-provided panel.",
   },
-  cloudWorkersPage: {
-    intro: "Run agent sessions on ephemeral cloud machines instead of this gateway.",
-    sectionTitle: "Profiles",
-    sectionDescription: "Each profile defines how its provider provisions and retires a worker.",
-    empty: "No cloud worker profiles are configured.",
-    addProfile: "Add profile",
-    editProfile: "Edit profile",
-    editAction: "Edit",
-    deleteTitle: "Delete cloud worker profile",
-    deleteConfirm: "Delete profile {profile}? New cloud sessions cannot use it after restart.",
-    advertised: "Advertised",
-    restartRequired: "Restart required",
-    adminRequired: "Administrator access is required to manage cloud worker profiles.",
-    catalogFailed: "Could not load advertised profiles: {error}. Check the gateway and retry.",
-    providerFact: "Provider: {provider}",
-    backendFact: "Crabbox backend: {backend}",
-    classFact: "Class: {value}",
-    ttlFact: "Max lifetime: {value}",
-    idleFact: "Idle stop: {value}",
-    desktopFact: "Desktop: {value}",
-    providerList: "View supported backends",
-    fields: {
-      profileId: "Profile ID",
-      profileIdHelp: "Use letters, numbers, hyphens, or underscores.",
-      backend: "Crabbox backend",
-      backendHelp: "The backend passed to Crabbox, such as AWS or Hetzner.",
-      backendPlaceholder: "hetzner",
-      machineClass: "Machine class",
-      machineClassHelp:
-        "Enter a class accepted by the selected Crabbox backend and binary. The provider determines its effective sizing.",
-      ttl: "Max lifetime",
-      ttlHelp: "Use a positive Go duration such as 8h or 90m.",
-      ttlPlaceholder: "8h",
-      idleTimeout: "Idle stop",
-      idleTimeoutHelp: "Stop an unused worker after this positive Go duration.",
-      idleTimeoutPlaceholder: "45m",
-      setup: "Setup command",
-      setupHelp: "Optional idempotent shell command run before OpenClaw is installed.",
-      setupPlaceholder: "command -v node || install-node",
-      desktop: "Desktop",
-      desktopHelp:
-        "Warm a direct or coordinator-backed AWS worker, or a coordinator-backed Hetzner worker, with node-carried Browser and Terminal access. Existing workers must be reprovisioned after this changes.",
-      binary: "Crabbox binary",
-      binaryHelp: "Optional absolute path to the Crabbox executable on the gateway.",
-      binaryPlaceholder: "/usr/local/bin/crabbox",
-      actions: "Save profile",
-      actionsHelp: "Saving updates the config; the gateway must restart before using it.",
-    },
-    errors: {
-      title: "Profile needs attention",
-      profileId:
-        "Use a profile ID that starts with a letter or number and contains only letters, numbers, hyphens, or underscores.",
-      profileExists: "Choose another profile ID; this one already exists.",
-      profileMissing: "This profile changed or was removed. Reload the page and try again.",
-      backend: "Enter a Crabbox backend, such as aws or hetzner.",
-      machineClass: "Enter a machine class of 1 to 128 characters.",
-      ttl: "Enter a positive Go duration for max lifetime, such as 8h or 90m.",
-      idleTimeout: "Enter a positive Go duration for idle stop, such as 45m.",
-      binary: "Enter an absolute Crabbox binary path or leave the field empty.",
-      saveFailed: "The profile was not saved. Reload the config and try again.",
-      deleteFailed: "The profile was not deleted. Reload the config and try again.",
-    },
-  },
+  cloudWorkersPage: {},
   portalsPage: {
     listLabel: "Active portals",
     portLabel: "Port {port}",
@@ -4593,124 +4534,6 @@ export const en: TranslationMap & {
   },
   login: {
     subtitle: "Gateway Dashboard",
-    passwordPlaceholder: "optional",
-    showToken: "Show token",
-    hideToken: "Hide token",
-    toggleTokenVisibility: "Toggle token visibility",
-    showPassword: "Show password",
-    hidePassword: "Hide password",
-    togglePasswordVisibility: "Toggle password visibility",
-    failure: {
-      rawError: "Raw error",
-      profileUnavailable: {
-        title: "Profile verification unavailable",
-        stepRetry: "Retry shortly.",
-        stepAdmin:
-          "If this continues, ask a Gateway administrator to check the identity provider and GitHub API credential.",
-      },
-      verifiedUserRequired: {
-        title: "Verified identity required",
-        summary:
-          "This Gateway has named roles enabled. Device and setup tokens cannot identify a person.",
-        stepIdentity:
-          "Reconnect through the trusted proxy or Tailscale so the Gateway can verify your identity.",
-        stepSharedSecret:
-          "For trusted local operator access, use the shared Gateway token or password.",
-      },
-      authRequired: {
-        title: "Auth required",
-        summary:
-          "The Gateway is reachable, but it needs a matching token or password before this browser can connect.",
-        stepPaste:
-          "Paste the token from openclaw gateway auth-token --show or enter the configured password.",
-        stepGenerate:
-          "If no token is configured, run openclaw doctor --generate-gateway-token on the gateway host.",
-        stepConnect: "Click Connect again after updating the credential.",
-      },
-      authFailed: {
-        title: "Auth did not match",
-        summary:
-          "The supplied credential was rejected. The most common cause is a stale token or a token copied from another Gateway URL.",
-        stepDashboard:
-          "Run openclaw dashboard --no-open for a fresh URL, or openclaw gateway auth-token --show to recover the token.",
-        stepReplace:
-          "Replace stale token/password values; do not reuse a token from another Gateway URL.",
-        stepMode:
-          "Use one matching auth mode at a time: gateway token for token mode, password for password mode.",
-      },
-      trustedProxy: {
-        title: "Proxy authentication required",
-        summary:
-          "The Gateway is reachable, but it rejected the proxy identity or forwarding information.",
-        stepSignIn:
-          "Open the configured authenticated proxy or SSO dashboard URL and sign in there, rather than visiting the Gateway directly.",
-        stepHeaders:
-          "Ask the Gateway administrator to check for missing identity headers and required-header forwarding on WebSocket upgrade requests, and confirm your account is permitted.",
-        stepNoToken: "A Gateway token cannot replace proxy authentication.",
-      },
-      rateLimited: {
-        title: "Too many failed attempts",
-        summary: "The Gateway is temporarily limiting authentication attempts for this client.",
-        stepStop: "Stop retrying from this tab for a moment.",
-        stepWait:
-          "Wait for the auth limiter to cool down, then reconnect with the corrected credential.",
-        stepCheckClients: "If this is a shared host, check other clients for repeated bad retries.",
-      },
-      pairing: {
-        title: "Device pairing required",
-        scopeTitle: "Scope upgrade pending",
-        roleTitle: "Role upgrade pending",
-        metadataTitle: "Device refresh pending",
-        summary:
-          "This browser needs one-time approval from the Gateway host before it can use the Control UI.",
-        upgradeSummary:
-          "This browser is already known, but the requested access changed and needs a fresh approval.",
-        stepDashboard:
-          "On the Gateway host, run openclaw dashboard to open a secure one-time pairing link.",
-        stepList: "Run openclaw devices list on the Gateway host.",
-        stepApproveId: "Approve this request: openclaw devices approve {requestId}.",
-        stepApprove: "Approve the pending browser/device request from that list.",
-        stepReconnect: "Reconnect after the approval completes.",
-      },
-      insecure: {
-        title: "Secure browser context required",
-        summary:
-          "This page is running over plain HTTP, so the browser cannot create the device identity the Gateway expects.",
-        stepHttps: "Use HTTPS/Tailscale Serve, or open http://127.0.0.1:18789 on the Gateway host.",
-        stepAvoidDisable:
-          "Do not use a remote plain-HTTP URL; a token or password cannot replace browser device identity.",
-      },
-      origin: {
-        title: "Browser origin not allowed",
-        summary:
-          "The Gateway rejected this page origin before accepting the Control UI connection.",
-        stepAllowedOrigins: "Add this browser origin to gateway.controlUi.allowedOrigins.",
-        stepFullOrigin: "Use full origins such as http://localhost:5173, not wildcard patterns.",
-        stepRestart: "Restart or reload the Gateway after changing allowed origins.",
-      },
-      protocol: {
-        title: "Protocol mismatch",
-        summary:
-          "The served Control UI and the running Gateway do not agree on the supported connection protocol.",
-        refresh: "Refresh page",
-        stepDashboard:
-          "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
-        stepDevUi:
-          "If using pnpm ui:dev, rebuild or restart the dev UI against the current checkout.",
-        stepRestart:
-          "Restart the Gateway after updating OpenClaw so it serves the current protocol.",
-      },
-      network: {
-        title: "Could not connect",
-        summary:
-          "The browser could not complete the Gateway connection. Check the target and transport before retrying credentials.",
-        stepGateway: "Confirm the Gateway is running with openclaw status or openclaw gateway run.",
-        stepUrl:
-          "Check the WebSocket URL and use wss:// when the Gateway is behind HTTPS/Tailscale Serve.",
-        stepDashboard:
-          "Reopen the dashboard with openclaw dashboard --no-open to recopy the current URL and auth details.",
-      },
-    },
   },
   chat: {
     modelAccounts: {

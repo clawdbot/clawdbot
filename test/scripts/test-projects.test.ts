@@ -1205,6 +1205,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/changed-lanes.test.ts",
           "test/scripts/install-trufflehog.test.ts",
+          "test/scripts/ancillary-workflow-concurrency.test.ts",
           "test/scripts/pr-prepare-gates.test.ts",
           "test/scripts/testbox-base.test.ts",
           "test/scripts/testbox-lease-freshness.test.ts",
@@ -1216,6 +1217,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/install-trufflehog.test.ts",
+          "test/scripts/ancillary-workflow-concurrency.test.ts",
           "test/scripts/testbox-base.test.ts",
         ],
       ],
@@ -1225,6 +1227,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/install-trufflehog.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
+          "test/scripts/ancillary-workflow-concurrency.test.ts",
           "test/scripts/testbox-base.test.ts",
         ],
       ],
@@ -1249,6 +1252,7 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         ".github/workflows/ios-periphery.yml",
         [
+          "test/scripts/ancillary-workflow-concurrency.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/ios-periphery-comment-workflow.test.ts",
           "test/scripts/periphery-scope-workflows.test.ts",
@@ -1257,6 +1261,7 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         ".github/workflows/macos-periphery.yml",
         [
+          "test/scripts/ancillary-workflow-concurrency.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/ios-periphery-comment-workflow.test.ts",
           "test/scripts/periphery-scope-workflows.test.ts",
@@ -1265,6 +1270,7 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         ".github/workflows/shared-openclawkit-periphery.yml",
         [
+          "test/scripts/ancillary-workflow-concurrency.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/periphery-intersection.test.ts",
           "test/scripts/periphery-scope-workflows.test.ts",

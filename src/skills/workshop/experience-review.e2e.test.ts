@@ -180,6 +180,8 @@ describe("Workshop experience review through the real provider and tool owners",
               await expect(run).rejects.toThrow(
                 "provider rejected the request schema or tool payload",
               );
+            } else if (scenario === "rejected") {
+              await expect(run).rejects.toThrow("Skill Workshop failed");
             } else {
               observation = await run;
             }
@@ -237,7 +239,7 @@ describe("Workshop experience review through the real provider and tool owners",
             expect(proposals).toEqual([]);
             expect(progress.mutationCount).toBe(0);
             expect(outcome).toMatchObject({
-              outcome: scenario === "failed" ? "failed" : "nothing",
+              outcome: scenario === "failed" || scenario === "rejected" ? "failed" : "nothing",
             });
             if (scenario === "rejected") {
               const toolOutput = requests[1]?.input?.find(
@@ -247,7 +249,7 @@ describe("Workshop experience review through the real provider and tool owners",
               expect(toolOutput?.output).toContain("required");
             }
           }
-          if (scenario !== "failed") {
+          if (scenario !== "failed" && scenario !== "rejected") {
             expect(outcome?.usage?.outputTokens).toBeGreaterThan(0);
             expect(observation).toBeDefined();
             const decision = () =>
@@ -259,11 +261,7 @@ describe("Workshop experience review through the real provider and tool owners",
                 outcome,
                 startedAt,
               });
-            if (scenario === "rejected") {
-              expect(decision).toThrow();
-            } else {
-              expect(decision()).toBe(scenario === "proposed" ? "proposed" : "abstained");
-            }
+            expect(decision()).toBe(scenario === "proposed" ? "proposed" : "abstained");
           }
         },
       );

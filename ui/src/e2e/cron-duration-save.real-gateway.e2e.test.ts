@@ -13,6 +13,7 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import type { CronJob } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 let instance: OpenClawTestInstance | undefined;
@@ -68,9 +69,14 @@ async function capture(page: Page, name: string, observed: unknown) {
   if (!captureEnabled) {
     return;
   }
-  await page
-    .locator(".cron-page")
-    .screenshot({ path: path.join(suite.artifactDir, `${name}.png`) });
+  // The form is taller than the viewport. Preserve the flow's scroll to the
+  // relevant field without resizing Chromium's recording surface.
+  await fs.writeFile(
+    path.join(suite.artifactDir, `${name}.png`),
+    await takeControlUiViewportScreenshot(page, page.locator(".cron-page"), [
+      page.locator("#cron-name"),
+    ]),
+  );
   await fs.writeFile(
     path.join(suite.artifactDir, `${name}.json`),
     `${JSON.stringify(observed, null, 2)}\n`,

@@ -48,7 +48,7 @@ export { sanitizeGoogleTurnOrdering } from "./embedded-agent-helpers/google.js";
 
 export {
   downgradeOpenAIFunctionCallReasoningPairs,
-  downgradeOpenAIReasoningBlocks,
+  dropStaleOpenAIReasoning,
   normalizeOpenAIResponsesToolCallIds,
 } from "./embedded-agent-helpers/openai.js";
 export { sanitizeSessionMessagesImages } from "./embedded-agent-helpers/images.js";

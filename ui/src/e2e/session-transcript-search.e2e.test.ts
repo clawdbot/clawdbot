@@ -1,8 +1,10 @@
 // Control UI E2E tests transcript search through the advertised Gateway method.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   controlUiSessionPath,
@@ -32,6 +34,15 @@ let server: ControlUiE2eServer | undefined;
 
 async function captureUiProof(fileName: string) {
   if (!captureProof || !page) {
+    return;
+  }
+  if (page.video()) {
+    await writeFile(
+      path.join(artifactDir, fileName),
+      await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+        page.locator("#control-ui-main"),
+      ]),
+    );
     return;
   }
   await page.screenshot({ fullPage: true, path: path.join(artifactDir, fileName) });

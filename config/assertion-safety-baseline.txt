@@ -411,7 +411,7 @@ extensions/discord/src/security-audit.ts	12
 extensions/discord/src/send.components.ts	3
 extensions/discord/src/send.messages.ts	2
 extensions/discord/src/send.outbound.ts	2
-extensions/discord/src/send.shared.ts	4
+extensions/discord/src/send.shared.ts	2
 extensions/discord/src/send.webhook.ts	1
 extensions/discord/src/setup-account-state.ts	1
 extensions/discord/src/setup-core.ts	1
@@ -431,7 +431,6 @@ extensions/document-extract/document-extractor.ts	1
 extensions/duckduckgo/src/config.ts	1
 extensions/duckduckgo/src/ddg-search-provider.ts	1
 extensions/elevenlabs/config-compat.ts	2
-extensions/elevenlabs/speech-provider.ts	3
 extensions/exa/src/exa-web-search-provider.runtime.ts	9
 extensions/fal/image-generation-provider.ts	1
 extensions/fal/music-generation-provider.ts	2
@@ -740,8 +739,8 @@ extensions/memory-core/src/memory/manager-embedding-cache.ts	1
 extensions/memory-core/src/memory/manager-embedding-errors.ts	2
 extensions/memory-core/src/memory/manager-embedding-ops.ts	2
 extensions/memory-core/src/memory/manager-keyword-retrieval.ts	1
-extensions/memory-core/src/memory/manager-search-orchestration.ts	3
-extensions/memory-core/src/memory/manager-search.ts	12
+extensions/memory-core/src/memory/manager-search-orchestration.ts	2
+extensions/memory-core/src/memory/manager-search.ts	9
 extensions/memory-core/src/memory/manager-source-state.ts	2
 extensions/memory-core/src/memory/manager-sync-base.ts	5
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
@@ -903,10 +902,8 @@ extensions/openai/provider-policy-api.ts	2
 extensions/openai/realtime-provider-shared.ts	2
 extensions/openai/realtime-quicksilver-bridge.ts	1
 extensions/openai/realtime-quicksilver-delegation-controller.ts	1
-extensions/openai/realtime-quicksilver-wire.ts	4
 extensions/openai/realtime-quicksilver.ts	1
 extensions/openai/realtime-voice-bridge.ts	3
-extensions/openai/realtime-voice-provider.ts	1
 extensions/openai/realtime-voice-session-policy.ts	4
 extensions/openai/speech-provider.ts	2
 extensions/openai/tts.ts	2
@@ -1387,7 +1384,7 @@ extensions/workboard/doctor-contract-api.ts	4
 extensions/workboard/src/cli.ts	2
 extensions/workboard/src/command.ts	1
 extensions/workboard/src/gateway-helpers.ts	1
-extensions/workboard/src/sqlite-store.ts	44
+extensions/workboard/src/sqlite-store.ts	38
 extensions/workboard/src/store-automation.ts	1
 extensions/workboard/src/store-card-helpers.ts	1
 extensions/workboard/src/store-core.ts	5
@@ -1399,7 +1396,6 @@ extensions/workboard/src/workspace-access.ts	1
 extensions/xai/code-execution.ts	2
 extensions/xai/image-generation-provider.ts	1
 extensions/xai/index.ts	6
-extensions/xai/lazy-capability-providers.ts	1
 extensions/xai/model-compat.ts	2
 extensions/xai/model-definitions.ts	1
 extensions/xai/provider-catalog.ts	1
@@ -1408,7 +1404,6 @@ extensions/xai/provider-models.ts	1
 extensions/xai/realtime-voice-bridge.ts	4
 extensions/xai/realtime-voice-config.ts	2
 extensions/xai/runtime-model-compat.ts	1
-extensions/xai/speech-provider-metadata.ts	3
 extensions/xai/src/code-execution-config.ts	6
 extensions/xai/src/tool-auth-shared.ts	2
 extensions/xai/src/web-search-provider.runtime.ts	2
@@ -1478,7 +1473,7 @@ packages/ai/src/providers/openai-chatgpt-responses.ts	27
 packages/ai/src/providers/openai-completions-tool-calls.ts	5
 packages/ai/src/providers/openai-completions.ts	10
 packages/ai/src/providers/openai-reasoning-effort.ts	6
-packages/ai/src/providers/openai-responses-shared.ts	7
+packages/ai/src/providers/openai-responses-shared.ts	6
 packages/ai/src/providers/openai-responses-tools.ts	2
 packages/ai/src/providers/openai-responses.ts	1
 packages/ai/src/providers/openai-tool-schema-compat.ts	6
@@ -1599,7 +1594,7 @@ src/acp/control-plane/manager.runtime-resume-state.ts	2
 src/acp/control-plane/manager.ts	1
 src/acp/control-plane/manager.utils.ts	1
 src/acp/control-plane/runtime-options.ts	2
-src/acp/event-ledger.ts	8
+src/acp/event-ledger.ts	5
 src/acp/event-ledger.types.ts	1
 src/acp/event-mapper.ts	1
 src/acp/permission-relay.ts	1
@@ -1730,7 +1725,7 @@ src/agents/custom-api-registry.ts	2
 src/agents/delegation-capability.ts	1
 src/agents/embedded-agent-helpers/bootstrap.ts	2
 src/agents/embedded-agent-helpers/images.ts	8
-src/agents/embedded-agent-helpers/openai.ts	20
+src/agents/embedded-agent-helpers/openai.ts	19
 src/agents/embedded-agent-helpers/turns.ts	23
 src/agents/embedded-agent-live-edit-diff.ts	3
 src/agents/embedded-agent-messaging-extraction.ts	1
@@ -1776,7 +1771,7 @@ src/agents/embedded-agent-runner/run/attempt-context-summary.ts	2
 src/agents/embedded-agent-runner/run/attempt-execution-phase.ts	1
 src/agents/embedded-agent-runner/run/attempt-finalize.ts	3
 src/agents/embedded-agent-runner/run/attempt-history.ts	17
-src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	19
+src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	18
 src/agents/embedded-agent-runner/run/attempt-normalization.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-build.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-helpers.ts	4
@@ -1966,7 +1961,7 @@ src/agents/sessions/package-manager.ts	3
 src/agents/sessions/resolve-config-value.ts	1
 src/agents/sessions/sdk.ts	3
 src/agents/sessions/session-manager-branching.ts	1
-src/agents/sessions/session-manager-codec.ts	7
+src/agents/sessions/session-manager-codec.ts	5
 src/agents/sessions/session-manager-core.ts	1
 src/agents/sessions/session-manager-entries.ts	3
 src/agents/sessions/session-manager-persistence.ts	2
@@ -3238,7 +3233,7 @@ src/logging/diagnostic.ts	1
 src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/log-file-shared.ts	1
-src/logging/logger.ts	13
+src/logging/logger.ts	11
 src/logging/parse-log-line.ts	1
 src/logging/redact-internal-state.ts	1
 src/logging/redact.ts	3

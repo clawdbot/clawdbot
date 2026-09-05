@@ -61,6 +61,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
   "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
   "ui/src/e2e/mount-recovery.e2e.test.ts",
+  "ui/src/e2e/native-notifications-loading.e2e.test.ts",
   "ui/src/e2e/session-management.delete.e2e.test.ts",
   "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",

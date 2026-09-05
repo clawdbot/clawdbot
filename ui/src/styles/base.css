@@ -936,6 +936,15 @@ input[type="radio"] {
   accent-color: var(--accent);
 }
 
+/* Typing into a native control whose face carries `calt` corrupts already-typed
+   glyphs, and the damage survives caret moves and blur; important because
+   feature-local `font:` shorthands reset font-variant. Editors that own their
+   text layer keep theirs, so a file reads the same viewed or edited. */
+input,
+textarea {
+  font-variant-ligatures: no-contextual !important;
+}
+
 input,
 textarea,
 [contenteditable]:not([contenteditable="false"]) {

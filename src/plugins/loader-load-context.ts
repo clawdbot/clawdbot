@@ -41,6 +41,7 @@ import {
   type PluginRuntimeArtifactPreference,
 } from "./plugin-runtime-artifact-selection.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
+import { getPluginRegistryForContext } from "./runtime.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 function resolveBundledPackageRootForCache(stockRoot?: string): string | undefined {
@@ -185,6 +186,7 @@ function buildCacheKey(params: {
   artifactPreference: PluginRuntimeArtifactPreference;
   resolveRawConfigEnvVars?: boolean;
   toolDiscovery?: boolean;
+  capabilityCatalogIdentity?: string;
   loadModules?: boolean;
   runtimeSubagentMode?: PluginRuntimeSubagentMode;
   runtimeBindingIdentity?: string;
@@ -237,6 +239,7 @@ function buildCacheKey(params: {
       installs,
       loadPaths,
       activationMetadataKey: params.activationMetadataKey ?? "",
+      capabilityCatalogIdentity: params.capabilityCatalogIdentity,
       allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs !== false,
     },
   )}::${serializePluginIdScope(params.onlyPluginIds)}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${params.channelPluginLoadIntent}::${params.artifactPreference}::${rawConfigEnvMode}::${moduleLoadMode}::${discoveryMode}::${params.runtimeSubagentMode ?? "default"}::${params.runtimeBindingIdentity ?? "{}"}::${params.pluginSdkResolution ?? "auto"}::${JSON.stringify(params.coreGatewayMethodNames ?? [])}::${activationMode}`;
@@ -386,6 +389,14 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     artifactPreference,
     resolveRawConfigEnvVars: options.resolveRawConfigEnvVars,
     toolDiscovery: options.toolDiscovery,
+    capabilityCatalogIdentity: options.capabilityCatalog
+      ? JSON.stringify([
+          options.capabilityCatalog.family,
+          resolveRuntimeBindingCacheId(options.capabilityCatalog.context),
+          resolveRuntimeBindingCacheId(getPluginCache()),
+          resolveRuntimeBindingCacheId(getPluginRegistryForContext() ?? undefined),
+        ])
+      : undefined,
     loadModules: options.loadModules,
     runtimeSubagentMode,
     runtimeBindingIdentity: resolveRuntimeBindingCacheIdentity(options.runtimeOptions),

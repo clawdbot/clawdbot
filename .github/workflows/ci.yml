@@ -70,7 +70,13 @@ run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != 
 concurrency:
   # Canonical main uses run-number parity for two non-canceling slots. Each
   # slot keeps GitHub's single coalesced pending tip while its active run finishes.
-  group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && format('{0}-v8-{1}-{2}', github.workflow, github.ref, (endsWith(format('{0}', github.run_number), '0') || endsWith(format('{0}', github.run_number), '2') || endsWith(format('{0}', github.run_number), '4') || endsWith(format('{0}', github.run_number), '6') || endsWith(format('{0}', github.run_number), '8')) && 'a' || 'b') || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha)))) }}
+  # Passive draft events must not replace runnable CI before job gates: pending
+  # replacement happens even with cancel-in-progress false. Keep converted_to_draft
+  # in the PR group so it still cancels earlier work.
+  group: >-
+    ${{ github.event_name == 'pull_request' && github.event.pull_request.draft &&
+        github.event.action != 'converted_to_draft' && format('{0}-draft-v1-{1}', github.workflow, github.run_id) ||
+        github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main' && format('{0}-v8-{1}-{2}', github.workflow, github.ref, (endsWith(format('{0}', github.run_number), '0') || endsWith(format('{0}', github.run_number), '2') || endsWith(format('{0}', github.run_number), '4') || endsWith(format('{0}', github.run_number), '6') || endsWith(format('{0}', github.run_number), '8')) && 'a' || 'b') || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha)))) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -790,15 +796,21 @@ jobs:
 
 
           if __name__ == "__main__":
-              exit_code = 0
+              exit_code, terminal_error = 0, None
               try:
                   main()
-              except (FetchTimeout, GitFailure) as error:
-                  exit_code = 124 if isinstance(error, FetchTimeout) else error.code
+              except FetchTimeout:
+                  exit_code = 124
+              except GitFailure as error:
+                  exit_code = error.code
               except Exception as error:
+                  exit_code, terminal_error = 125, error
+              # Leave the handler before diagnostics or exit can raise: older Python's
+              # implicit exception chaining can loop on an already-cyclic context.
+              if terminal_error is not None:
                   name, diagnostic = "unknown", "unavailable"
                   try:
-                      records = terminal_diagnostic(error, sys._getframe().f_code)
+                      records = terminal_diagnostic(terminal_error, sys._getframe().f_code)
                       diagnostic = json.dumps(records, separators=(",", ":"))
                       name = records[0]["type"]
                   except BaseException:
@@ -808,8 +820,6 @@ jobs:
                       print(f"[ci-git-owner] diagnostic={diagnostic}", file=sys.stderr)
                   except BaseException:
                       pass
-                  exit_code = 125
-              # Exit outside the handler: Python 3.9 can loop while chaining cyclic contexts.
               raise SystemExit(exit_code)
           PYTHON
 
@@ -1505,6 +1515,7 @@ jobs:
             }
             changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
               dedicatedContractShards: [...pluginContractShards, ...channelContractShards],
+              dedicatedUiE2e: runUiTests && !compatibilityTarget,
             });
             if (changedNodeTestShards === null) {
               changedExtensionFallbackShards =

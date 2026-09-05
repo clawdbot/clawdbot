@@ -105,6 +105,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.tools",
       "gateway.cliAgents",
       "gateway.publicOrigin",
+      "gateway.controlUi.enabled",
       "gateway.controlUi.environment",
       "gateway.controlUi.communityInvite",
       "gateway.controlUi.github",
