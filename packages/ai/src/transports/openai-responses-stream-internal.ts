@@ -611,7 +611,7 @@ export async function processResponsesStream<TApi extends Api>(
             });
           }
           outputSlots.forget(outputSlot);
-        } else if (item.type === "function_call") {
+        } else if (item.type === "function_call" && item.status !== "incomplete") {
           if (outputs.get(item, readResponsesOutputIndex(event))?.completed) {
             continue;
           }
@@ -641,10 +641,13 @@ export async function processResponsesStream<TApi extends Api>(
           finalizeToolCall(item, readResponsesOutputIndex(event), streamingToolCall, validated);
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
-        if (event.type === "response.incomplete" && streamingToolCalls.hasActive()) {
-          throw new Error("Responses stream completed with unresolved tool calls");
-        }
+        // Preserve reported accounting before rejecting unfinished tool calls.
         terminal.finalizeResponse(event.response, event.type);
+        if (event.type === "response.incomplete" && streamingToolCalls.hasActive()) {
+          throw new Error(
+            output.errorMessage ?? "Responses stream completed with unresolved tool calls",
+          );
+        }
         if (event.type === "response.completed" || output.stopReason === "length") {
           const items = event.response.output ?? [];
           const completeToolCall =
