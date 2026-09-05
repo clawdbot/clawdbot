@@ -49,6 +49,13 @@ describe("stripInlineDirectiveTagsForDisplay", () => {
 });
 
 describe("stripInlineDirectiveTagsForDelivery", () => {
+  test("preserves long blank runs around literal markers without stalling", () => {
+    const text = `before${"\n".repeat(60_000)}[[ordinary text]]after`;
+    const started = performance.now();
+    expect(stripInlineDirectiveTagsForDelivery(text)).toEqual({ text, changed: false });
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
   test("removes directives and surrounding whitespace for outbound text", () => {
     const input = "hello [[reply_to_current]] world [[audio_as_voice]]";
     const result = stripInlineDirectiveTagsForDelivery(input);
