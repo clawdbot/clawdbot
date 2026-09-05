@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { replaceSessionWithBranchedTranscript } from "../../config/sessions/session-accessor.js";
+import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import { parseOpaqueLeafEntry, parseParentLinkedOpaqueEntry } from "./session-manager-codec.js";
 import type { SessionManagerPersistenceTarget } from "./session-manager-core.js";
 import { SessionManagerEntries } from "./session-manager-entries.js";
@@ -92,6 +93,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
   }
 
   async createBranchedSession(leafId: string): Promise<string | undefined> {
+    this.assertTranscriptWriteActive();
     this.ensureCompletePersistedHistory();
     const previousSessionId = this.sessionId;
     const branchPath = this.collectBranchedSessionPath(leafId);
@@ -147,12 +149,16 @@ export class SessionManagerBranching extends SessionManagerEntries {
     ]);
     branch.opaqueFileEntries = branchPath.opaqueEntries;
     branch.buildIndex();
-    const adoptBranch = (target?: SessionManagerPersistenceTarget) => {
+    const adoptBranch = (
+      target?: SessionManagerPersistenceTarget,
+      version?: SessionTranscriptContextVersion,
+    ) => {
       this.fileEntries = branch.fileEntries;
       this.opaqueFileEntries = branch.opaqueFileEntries;
       this.sessionId = newSessionId;
       this.buildIndex();
       this.persistenceTarget = target;
+      this.transcriptVersion = version;
       this.persistenceHeaderPending = false;
     };
     if (persistenceTarget) {
@@ -160,6 +166,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
         persistenceTarget,
         { sessionId: newSessionId, events: branch.getPersistedFileEntries() },
         adoptBranch,
+        () => this.assertTranscriptWriteActive(),
       );
     } else {
       adoptBranch();

@@ -1,10 +1,6 @@
 /** Rewrites transcript entries by branching and re-appending the active suffix. */
 import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
-import {
-  loadTranscriptEventsSync,
-  publishTranscriptRewriteSync,
-  withSessionPendingInputRelocation,
-} from "../../config/sessions/session-accessor.js";
+import { withSessionPendingInputRelocation } from "../../config/sessions/session-accessor.js";
 import type {
   TranscriptRewriteReplacement,
   TranscriptRewriteResult,
@@ -152,23 +148,15 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
     };
   }
 
-  const persistenceTarget = params.sessionManager.getSessionTarget();
-  const expectedEvents = persistenceTarget
-    ? loadTranscriptEventsSync(persistenceTarget)
-    : undefined;
-  // Prepare on a detached tree so partial replay never mutates live memory or storage.
-  const rewriteManager = expectedEvents
-    ? SessionManager.fromEntries(expectedEvents, params.sessionManager.getCwd())
-    : params.sessionManager;
+  const rewrite = params.sessionManager.prepareTranscriptRewrite();
+  const rewriteManager = rewrite.sessionManager;
+  const activeBranch = params.sessionManager.getBranch();
   const branch = rewriteManager.getBranch();
-  if (expectedEvents) {
-    const activeBranch = params.sessionManager.getBranch();
-    const branchIsCurrent =
-      branch.length === activeBranch.length &&
-      branch.every((entry, index) => entry.id === activeBranch[index]?.id);
-    if (!branchIsCurrent) {
-      throw new Error("Session transcript changed before rewrite preparation");
-    }
+  if (
+    branch.length !== activeBranch.length ||
+    branch.some((entry, index) => entry.id !== activeBranch[index]?.id)
+  ) {
+    throw new Error("Session transcript changed before rewrite preparation");
   }
   if (branch.length === 0) {
     return {
@@ -202,13 +190,6 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
       reason: "invalid first rewrite target",
     };
   }
-
-  const activeState = {
-    leafId: rewriteManager.getLeafId(),
-    appendParentId: rewriteManager.getAppendParentId(),
-    ...(rewriteManager.getAppendMode() ? { appendMode: rewriteManager.getAppendMode() } : {}),
-  };
-  const existingEntryCount = rewriteManager.getEntries().length;
 
   if (!firstMatchedEntry.parentId) {
     rewriteManager.resetLeaf();
@@ -247,24 +228,7 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
     rewrittenEntryIds.set(entry.id, newEntryId);
   }
 
-  if (persistenceTarget && expectedEvents) {
-    const finalLeafId = rewriteManager.getLeafId();
-    if (!finalLeafId) {
-      throw new Error("Transcript rewrite did not produce a final leaf");
-    }
-    const outcome = publishTranscriptRewriteSync(persistenceTarget, {
-      active: activeState,
-      entries: rewriteManager.getEntries().slice(existingEntryCount),
-      expectedEvents,
-      finalLeafId,
-    });
-    if (!outcome.ok || !outcome.value) {
-      throw new Error("Session transcript rewrite was not persisted", {
-        cause: outcome.ok ? undefined : outcome.error,
-      });
-    }
-    params.sessionManager.reloadPersistedTranscript();
-  }
+  rewrite.commit(rewrittenEntryIds);
 
   return {
     changed: true,

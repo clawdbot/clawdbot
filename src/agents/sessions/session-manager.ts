@@ -7,10 +7,10 @@
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import {
   appendTranscriptMessageSync,
-  loadTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
+import { prepareTranscriptRewriteSync } from "../../config/sessions/session-accessor.sqlite-branch-rewrite.js";
 import {
   readSessionTranscriptContextMessages,
   readSessionTranscriptModelContext,
@@ -19,6 +19,8 @@ import {
   validateSessionTranscriptContextVersion,
 } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import { assertCurrentSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
+import { loadTranscriptReadSnapshotSync } from "../../config/sessions/session-accessor.sqlite-read.js";
+import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import { readSessionTranscriptModelContextAsync } from "../../config/sessions/session-model-context-worker-runtime.js";
 import {
   resolveSessionTranscriptReadFence,
@@ -35,7 +37,7 @@ import type {
   SessionManagerBoundedContextLimits,
   SessionManagerPersistenceTarget,
 } from "./session-manager-core.js";
-import type { AppendPersistenceOptions, FileEntry } from "./session-manager-types.js";
+import type { AppendPersistenceOptions, FileEntry, SessionEntry } from "./session-manager-types.js";
 
 export { CURRENT_SESSION_VERSION };
 export {
@@ -73,8 +75,10 @@ export class SessionManager extends SessionManagerBranching {
     persistenceTarget?: SessionManagerPersistenceTarget,
     loadedEntries?: FileEntry[],
     boundedContext?: SessionManagerBoundedContext,
+    version?: SessionTranscriptContextVersion,
   ) {
-    super(cwd, persistenceTarget, loadedEntries, boundedContext);
+    super(cwd, persistenceTarget, loadedEntries, boundedContext, version);
+    this.retainTranscriptWriter();
   }
 
   /** Makes pending append-oriented persistence durable without rewriting committed entries. */
@@ -97,6 +101,71 @@ export class SessionManager extends SessionManagerBranching {
     return super.appendMessageWithTranscriptAnchor(message, options);
   }
 
+  /** Prepare off-store; publish the suffix and adopt memory at the same outer commit edge. */
+  prepareTranscriptRewrite() {
+    this.assertTranscriptWriteActive();
+    const publish = this.persistenceTarget
+      ? prepareTranscriptRewriteSync(
+          this.persistenceTarget,
+          this.appendParentId,
+          () => this.assertTranscriptWriteActive(),
+          this.transcriptVersion,
+        )
+      : undefined;
+    const prepared = SessionManager.inMemory(this.cwd);
+    Object.assign(prepared, structuredClone(this.captureTranscriptView()));
+    const initialEntryCount = prepared.fileEntries.length;
+    const persistedBoundaryCount = prepared.persistedBoundaryCount;
+    prepared.persistedBoundaryCount = undefined;
+    const loadedBoundaryCount = prepared.getBoundaryCount();
+    return {
+      sessionManager: prepared,
+      commit: (rewrittenEntryIds: ReadonlyMap<string, string>) => {
+        const entries = prepared.fileEntries
+          .slice(initialEntryCount)
+          .filter((entry) => entry.type !== "session");
+        const sources = new Map<string, SessionEntry>();
+        for (const [sourceId, destination] of rewrittenEntryIds) {
+          const source = this.byId.get(sourceId);
+          if (!source) {
+            throw new Error("Transcript rewrite source is not in the loaded view");
+          }
+          sources.set(destination, source);
+        }
+        const first = entries[0];
+        const source = first && sources.get(first.id);
+        const parentId = source ? this.boundedParentIds.get(source.id) : undefined;
+        // The bounded reader owns logical ancestry, including parents outside its payload window.
+        if (first?.parentId === null && parentId !== undefined) {
+          first.parentId = parentId;
+          prepared.boundedParentIds.set(first.id, first.parentId);
+        }
+        // Reconstruct with the reader's canonical reset/leaf rules, then retain
+        // the bounded reader's ancestry for payloads absent from the loaded view.
+        prepared.buildIndex();
+        for (const [id, parent] of this.opaqueParentsById) {
+          prepared.opaqueParentsById.set(id, parent);
+        }
+        for (const [id, parent] of this.logicalParentsById) {
+          prepared.logicalParentsById.set(id, parent);
+        }
+        if (persistedBoundaryCount !== undefined) {
+          prepared.persistedBoundaryCount =
+            persistedBoundaryCount + prepared.getBoundaryCount() - loadedBoundaryCount;
+        }
+        const adopt = (version = prepared.transcriptVersion) => {
+          prepared.transcriptVersion = version;
+          Object.assign(this, prepared.captureTranscriptView());
+        };
+        if (publish) {
+          publish(entries, sources, adopt);
+        } else {
+          adopt();
+        }
+      },
+    };
+  }
+
   static open(
     target: SessionTranscriptRuntimeTarget,
     cwdOverride?: string,
@@ -108,11 +177,18 @@ export class SessionManager extends SessionManagerBranching {
         ...(cwdOverride !== undefined ? { cwd: cwdOverride } : {}),
       });
     }
-    const entries = loadTranscriptEventsSync(target) as FileEntry[];
+    const snapshot = loadTranscriptReadSnapshotSync(target);
+    const entries = snapshot.events as FileEntry[];
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
-    return new SessionManager(cwdOverride ?? header?.cwd ?? process.cwd(), target, entries);
+    return new SessionManager(
+      cwdOverride ?? header?.cwd ?? process.cwd(),
+      target,
+      entries,
+      undefined,
+      snapshot.version,
+    );
   }
 
   /** Opens only the selected model-context tail while preserving the complete durable transcript. */

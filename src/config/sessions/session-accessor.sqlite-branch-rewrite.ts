@@ -1,25 +1,27 @@
-import { randomUUID } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
-import type {
-  SessionTranscriptWriteScope,
-  TranscriptAppendRefusal,
-  TranscriptEvent,
-} from "./session-accessor.sqlite-contract.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
-import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
+import { isDeepStrictEqual } from "node:util";
+import type { SessionEntry } from "../../agents/sessions/session-manager-types.js";
+import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import {
+  deferOpenClawAgentPostCommitPublication,
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
+import type { SessionTranscriptWriteScope } from "./session-accessor.sqlite-contract.js";
+import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+import { withSessionPendingInputRelocation } from "./session-accessor.sqlite-pending-inputs.js";
+import {
+  getSessionKysely,
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
+import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
 import {
-  readNextTranscriptSeq,
-  readTranscriptGenerationInTransaction,
+  readTranscriptContextVersionInTransaction,
+  type SessionTranscriptContextVersion,
 } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventInTransaction,
-  claimStagedTranscriptIdempotencyKeysInTransaction,
   redactTranscriptMessageForStorage,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
@@ -29,121 +31,134 @@ import {
   withOwnedSessionTranscriptWriterFence,
 } from "./transcript-write-context.js";
 
-type TranscriptRewriteNavigationState = {
-  appendMode?: "side";
-  appendParentId: string | null;
-  leafId: string | null;
-};
-
-class TranscriptRewriteConflictError extends Error {
-  constructor(sessionId: string) {
-    super(`SQLite transcript changed while preparing rewrite for ${sessionId}`);
-    this.name = "TranscriptRewriteConflictError";
-  }
-}
-
-/** Stages a successor branch in bounded commits, then publishes its leaf atomically. */
-export function publishTranscriptRewriteSync(
+/** Capture a constant-size snapshot; the session owner prepares payloads outside the write lock. */
+export function prepareTranscriptRewriteSync(
   scope: SessionTranscriptWriteScope,
-  params: {
-    active: TranscriptRewriteNavigationState;
-    entries: readonly TranscriptEvent[];
-    expectedEvents: readonly TranscriptEvent[];
-    finalLeafId: string;
-  },
-): Result<boolean, TranscriptAppendRefusal> {
-  if (params.entries.length === 0) {
-    return ok(false);
-  }
+  appendParentId: string | null,
+  assertActive: () => void,
+  loadedVersion: SessionTranscriptContextVersion | undefined,
+): (
+  entries: SessionEntry[],
+  sources: ReadonlyMap<string, SessionEntry>,
+  adopt: (version: SessionTranscriptContextVersion) => void,
+) => void {
   const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
   const resolved = resolveSqliteTranscriptScope(fencedScope);
-  let expectedGeneration: string | null | undefined;
-  let expectedNextSeq: number | undefined;
-  let result: Result<boolean, TranscriptAppendRefusal> = ok(false);
-
-  for (const [index, entry] of params.entries.entries()) {
-    if (!isRecord(entry) || typeof entry.id !== "string") {
-      throw new Error("Invalid staged transcript rewrite entry");
+  const options = toDatabaseOptions(resolved);
+  const database = openOpenClawAgentDatabase(options);
+  assertActive();
+  assertOwnedTranscriptWriteCommit(fencedScope);
+  const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
+  const conflict = () => new Error("Session transcript changed before rewrite publication");
+  if (
+    !loadedVersion ||
+    version.generation !== loadedVersion.generation ||
+    version.rawSeq !== loadedVersion.rawSeq ||
+    resolveTranscriptMessageAppendParent(database, resolved.sessionId, {}) !== appendParentId
+  ) {
+    throw conflict();
+  }
+  return (entries, sources, adopt) => {
+    // A savepoint cannot own admission validation or publication at a later outer commit.
+    if (openOpenClawAgentDatabase(options).db.isTransaction) {
+      throw new Error(
+        "Transcript rewrite must own its commit; run it outside the active transaction",
+      );
     }
-    const entryId = entry.id;
-    const isFinalEntry = index === params.entries.length - 1;
-    runOpenClawAgentWriteTransaction((database) => {
+    // Replays bypass hooks, but retain canonical storage redaction. No payload preparation under BEGIN.
+    for (const entry of entries) {
+      if (entry.type === "message") {
+        entry.message = redactTranscriptMessageForStorage(entry.message, {});
+      }
+    }
+    let committedVersion: SessionTranscriptContextVersion;
+    const statePublications: Array<() => void> = [];
+    runOpenClawAgentWriteTransaction((current) => {
+      // Register first: observers queued by inserts must see the committed manager view.
+      // The version is assigned before COMMIT; rollback discards this publication.
+      if (
+        !deferOpenClawAgentPostCommitPublication(current, () => {
+          for (const publishState of statePublications) {
+            publishState();
+          }
+          adopt(committedVersion);
+        })
+      ) {
+        throw new Error("Transcript rewrite requires a commit publication");
+      }
+      assertActive();
       assertOwnedTranscriptWriteCommit(fencedScope);
-      const fresh = readSessionEntryRow(database, resolved.sessionKey);
+      const fresh = readSessionEntryRow(current, resolved.sessionKey);
       const refusal = resolveTranscriptAppendRefusal(fresh?.entry, resolved, fencedScope);
       if (refusal) {
-        result = err(refusal);
-        return;
+        throw new SessionTranscriptWriterClaimReboundError(refusal);
       }
-      const generation =
-        readTranscriptGenerationInTransaction(database, resolved.sessionId) ?? null;
-      const nextSeq = readNextTranscriptSeq(database, resolved.sessionId);
-      if (index === 0) {
-        const rows = readTranscriptEventRows(database, resolved.sessionId);
-        const unchanged =
-          rows.length === params.expectedEvents.length &&
-          rows.every(
-            (row, rowIndex) => row.eventJson === JSON.stringify(params.expectedEvents[rowIndex]),
-          );
-        if (!unchanged) {
-          throw new TranscriptRewriteConflictError(resolved.sessionId);
-        }
-        expectedGeneration = generation;
-        expectedNextSeq = nextSeq;
-      } else if (generation !== expectedGeneration || nextSeq !== expectedNextSeq) {
-        throw new TranscriptRewriteConflictError(resolved.sessionId);
-      }
-
-      const stagedEntry =
-        entry.type === "message"
-          ? { ...entry, message: redactTranscriptMessageForStorage(entry.message, {}) }
-          : entry;
+      const currentVersion = readTranscriptContextVersionInTransaction(current, resolved.sessionId);
       if (
-        !appendTranscriptEventInTransaction(database, resolved, stagedEntry, {
-          idempotencyKeyMode: "stage",
-          scheduleProjectionReconcile: false,
-        })
+        currentVersion.generation !== version.generation ||
+        currentVersion.rawSeq !== version.rawSeq
       ) {
-        throw new Error(`Staged transcript rewrite entry was not persisted: ${entryId}`);
+        throw conflict();
       }
-      const nextState = isFinalEntry
-        ? { appendParentId: params.finalLeafId, leafId: params.finalLeafId }
-        : params.active;
-      const leafControl = {
-        type: "leaf",
-        id: randomUUID(),
-        parentId: entryId,
-        timestamp: new Date().toISOString(),
-        targetId: nextState.leafId,
-        ...(nextState.appendParentId !== nextState.leafId
-          ? { appendParentId: nextState.appendParentId }
-          : {}),
-        ...(nextState.appendMode ? { appendMode: nextState.appendMode } : {}),
-      };
-      if (isFinalEntry) {
-        claimStagedTranscriptIdempotencyKeysInTransaction(
-          database,
-          resolved.sessionId,
-          params.entries,
+      // A loaded manager may predate an in-place repair even when its entry ids match.
+      // Compare only the copied suffix, never hydrate the complete archive under the lock.
+      for (const source of sources.values()) {
+        const row = executeSqliteQueryTakeFirstSync(
+          current.db,
+          getSessionKysely(current.db)
+            .selectFrom("transcript_event_identities as identity")
+            .innerJoin("transcript_events as event", (join) =>
+              join
+                .onRef("event.session_id", "=", "identity.session_id")
+                .onRef("event.seq", "=", "identity.seq"),
+            )
+            .select("event.event_json")
+            .where("identity.session_id", "=", resolved.sessionId)
+            .where("identity.event_id", "=", source.id),
         );
+        if (!row || !isDeepStrictEqual(JSON.parse(row.event_json), source)) {
+          throw conflict();
+        }
       }
-      if (
-        !appendTranscriptEventInTransaction(database, resolved, leafControl, {
-          scheduleProjectionReconcile: isFinalEntry,
-        })
-      ) {
-        throw new Error("Transcript rewrite leaf was not persisted");
+      // The existing append/relocation owners participate in the same transaction.
+      // Interruption rolls back entries, key ownership, and receipt publications together.
+      for (const entry of entries) {
+        assertActive();
+        assertOwnedTranscriptWriteCommit(fencedScope);
+        if (entry.type === "message") {
+          const source = sources.get(entry.id);
+          if (!source) {
+            throw new Error("Transcript rewrite message has no source entry");
+          }
+          const result = withSessionPendingInputRelocation(source.id, entry.message, () =>
+            appendTranscriptMessageInTransaction(
+              current,
+              resolved,
+              {
+                eventId: entry.id,
+                parentId: entry.parentId,
+                now: Date.parse(entry.timestamp),
+                message: entry.message,
+                messageAlreadyRedacted: true,
+                idempotencyLookup: "caller-checked",
+              },
+              (publishState) => {
+                statePublications.push(publishState);
+                return true;
+              },
+            ),
+          );
+          if (!result?.appended || result.messageId !== entry.id) {
+            throw new Error("Transcript rewrite message was not appended");
+          }
+          entry.message = result.message;
+        } else if (!appendTranscriptEventInTransaction(current, resolved, entry)) {
+          throw new Error("Transcript rewrite entry was not appended");
+        }
       }
+      assertActive();
       assertOwnedTranscriptWriteCommit(fencedScope);
-      expectedNextSeq = nextSeq + 2;
-      result = ok(true);
-    }, toDatabaseOptions(resolved));
-    if (!result.ok) {
-      break;
-    }
-  }
-  if (fencedScope.expectedWriterRunId !== undefined && !result.ok) {
-    throw new SessionTranscriptWriterClaimReboundError(result.error);
-  }
-  return result;
+      committedVersion = readTranscriptContextVersionInTransaction(current, resolved.sessionId);
+    }, options);
+  };
 }
