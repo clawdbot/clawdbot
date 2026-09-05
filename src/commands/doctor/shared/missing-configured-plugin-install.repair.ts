@@ -282,7 +282,11 @@ async function repairMissingPluginInstallsWithLease(
     for (const pluginId of updateDeferredPluginIds) {
       deferredPluginIds.add(pluginId);
       const record = nextRecords[pluginId];
-      if (!record || !isPayloadMissing(env, record.installPath)) {
+      if (
+        !record ||
+        (!isPayloadMissing(env, record.installPath) &&
+          !installedPluginMissingRequiredDependencies.has(pluginId))
+      ) {
         continue;
       }
       const detail = `Skipped package-manager repair for configured plugin "${pluginId}" during package update; rerun "openclaw doctor --fix" after the update completes.`;
