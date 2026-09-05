@@ -122,7 +122,6 @@ describe("chat pane assistant identity snapshots", () => {
     Object.assign(context.config.current, {
       allowExternalEmbedUrls: false,
       embedSandboxMode: "strict",
-      localMediaPreviewRoots: [],
       serverVersion: null,
     });
     Object.assign(context.config, { subscribe: () => () => undefined });

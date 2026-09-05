@@ -163,7 +163,7 @@ export const LAB_FEATURES = [
     onValue: true,
     offValue: false,
     activeValues: [true],
-    readEnabled: null,
+    readEnabled: (raw) => !isRecord(raw) || raw.enabled !== false,
     enableAlso: null,
     resetScope: "gate",
     restartHint: null,

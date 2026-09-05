@@ -229,6 +229,7 @@ export async function finalizeCronRun(params: {
       provider: providerUsed,
       model: modelUsed,
       config: prepared.cfgWithAgentDefaults,
+      agentDir: prepared.agentDir,
     });
     if (hasBillableUsage(usage)) {
       // Monetary facts do not establish token/context counters; unknown cost clears old dollars.

@@ -42,9 +42,14 @@ type AgentRunAttemptFailure = {
 
 type AgentRunAttemptTimeoutObservation = "compaction" | "tool_execution";
 type AgentRunAttemptTimeoutSource = "runtime" | "run_budget" | "idle" | "external";
+type AgentRunAttemptSettlementWarning = {
+  pendingStage: string;
+  elapsedMs: number;
+  timeoutMs: number;
+};
 
 export type AgentRunAttemptTerminal =
-  | { kind: "ok" }
+  | { kind: "ok"; settlementWarning?: AgentRunAttemptSettlementWarning }
   | {
       kind: "aborted";
       source: "runtime" | "external" | "yield_cleanup";
@@ -74,6 +79,7 @@ export type AgentRunAttemptTerminal =
     };
 
 type LegacyAgentRunAttemptTerminalInput = {
+  settlementWarning?: AgentRunAttemptSettlementWarning;
   aborted?: boolean;
   externalAbort?: boolean;
   idleTimedOut?: boolean;
@@ -204,33 +210,10 @@ export function mergeAgentRunAttemptTerminal(
   incoming: AgentRunAttemptTerminal,
 ): AgentRunAttemptTerminal {
   if (incoming.kind === "ok") {
-    return current;
+    // A later plain completion must not erase the first recorded settlement warning.
+    return current.kind === "ok" && !current.settlementWarning ? incoming : current;
   }
   const failure = getAgentRunAttemptFailure(incoming) ?? getAgentRunAttemptFailure(current);
-  if (
-    incoming.kind === "timeout" &&
-    incoming.source === "observation" &&
-    current.kind !== "timeout"
-  ) {
-    return current.kind === "ok"
-      ? withAgentRunAttemptFailure(incoming, failure)
-      : withAgentRunAttemptFailure(
-          withAgentRunAttemptTimeoutObservation(current, incoming.phase),
-          failure,
-        );
-  }
-  if (
-    current.kind === "timeout" &&
-    current.source === "observation" &&
-    incoming.kind !== "timeout"
-  ) {
-    return incoming.kind === "failed" || incoming.kind === "aborted"
-      ? withAgentRunAttemptFailure(
-          withAgentRunAttemptTimeoutObservation(incoming, current.phase),
-          failure,
-        )
-      : withAgentRunAttemptFailure(incoming, failure);
-  }
   if (current.kind === "timeout" && incoming.kind === "timeout") {
     const phase =
       ATTEMPT_TIMEOUT_PHASE_RANK[incoming.phase] > ATTEMPT_TIMEOUT_PHASE_RANK[current.phase]
@@ -327,18 +310,17 @@ export function mergeAgentRunAttemptTerminal(
     }
     return withAgentRunAttemptFailure(selected, failure);
   }
-  const selected =
-    ATTEMPT_TERMINAL_KIND_RANK[incoming.kind] >= ATTEMPT_TERMINAL_KIND_RANK[current.kind]
-      ? incoming
-      : current;
-  return withAgentRunAttemptFailure(selected, failure);
+  return withAgentRunAttemptFailure(incoming, failure);
 }
 
 /** Normalizes the shipped harness result shape at the Plugin SDK boundary. */
 export function normalizeAgentRunAttemptTerminal(
   input: LegacyAgentRunAttemptTerminalInput,
 ): AgentRunAttemptTerminal {
-  let terminal: AgentRunAttemptTerminal = { kind: "ok" };
+  let terminal: AgentRunAttemptTerminal = {
+    kind: "ok",
+    ...(input.settlementWarning && { settlementWarning: input.settlementWarning }),
+  };
   if (input.aborted || input.externalAbort) {
     terminal = mergeAgentRunAttemptTerminal(terminal, {
       kind: "aborted",
@@ -385,6 +367,8 @@ export function projectAgentRunAttemptTerminal(terminal: AgentRunAttemptTerminal
     (terminal.kind === "aborted" || terminal.kind === "timeout") && terminal.source === "external";
   const timedOut = terminal.kind === "timeout" && terminal.source !== "observation";
   return {
+    ...(terminal.kind === "ok" &&
+      terminal.settlementWarning && { settlementWarning: terminal.settlementWarning }),
     aborted:
       (terminal.kind === "aborted" && terminal.source !== "yield_cleanup") ||
       (terminal.kind === "timeout" &&

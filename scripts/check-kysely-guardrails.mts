@@ -37,6 +37,7 @@ const compiledRawAllowPaths = new Set(["src/infra/kysely-node-sqlite.ts"]);
 const rawSqliteAllowPathGroups = {
   "native Kysely adapter and sync execution": [
     "src/infra/kysely-node-sqlite.ts",
+    "src/infra/kysely-sync-cache-state.ts",
     "src/infra/kysely-sync.ts",
   ],
   "SQLite database lifecycle, schema, transactions, and pragmas": [
@@ -140,7 +141,6 @@ const rawSqliteAllowPathGroups = {
     "src/plugin-sdk/memory-core-host-engine-storage.ts",
     "src/plugins/installed-plugin-index-record-reader.ts",
     "src/plugins/installed-plugin-index-store-write.ts",
-    "src/plugins/installed-plugin-index-store.ts",
     "src/plugin-state/plugin-state-store.sqlite.ts",
     "src/proxy-capture/store.sqlite.ts",
     "src/tasks/task-flow-registry.store.sqlite.ts",

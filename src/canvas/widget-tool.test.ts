@@ -9,14 +9,13 @@ import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner
 import type { OpenClawConfig } from "../config/types.js";
 import { createBoardHandlers } from "../gateway/server-methods/board.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
-import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
-import { createPluginRecord } from "../plugins/loader-records.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
+import { registerTestWidgetContentKind as registerDiagramContentKind } from "./widget-tool.content-kinds.test-support.js";
 import { createShowWidgetTool } from "./widget-tool.js";
 import { createBoardPutCaller } from "./widget-tool.test-support.js";
 import { buildWidgetDocument } from "./wrap.js";
@@ -42,29 +41,6 @@ async function createStateDir(): Promise<string> {
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-widget-tool-"));
   tempDirs.push(stateDir);
   return stateDir;
-}
-
-function registerDiagramContentKind(): void {
-  const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({
-    id: "diagram",
-    source: "diagram-fixture",
-    origin: "bundled",
-    enabled: true,
-    configSchema: false,
-  });
-  createPluginBoardWidgetContentKindRegistrar(registry)(record, {
-    kind: "diagram",
-    label: "Diagram",
-    resources: { surface: "diagram", paths: ["/__openclaw__/diagram/app.js"] },
-    validateSource(source) {
-      if (!source.startsWith("diagram:")) {
-        throw new Error("diagram prefix required");
-      }
-    },
-    composeDocument: ({ source }) => `<main>${source}</main>`,
-  });
-  setActivePluginRegistry(registry);
 }
 
 function createLiveBoardTestContext(

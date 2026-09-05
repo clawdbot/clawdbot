@@ -451,6 +451,54 @@ describe("agent run terminal outcome", () => {
 });
 
 describe("agent run attempt terminal", () => {
+  it("preserves a degraded completion through normalization, merging, and projection", () => {
+    const settlementWarning = {
+      pendingStage: "onPartialReply",
+      elapsedMs: 120_000,
+      timeoutMs: 120_000,
+    };
+    const degraded = normalizeAgentRunAttemptTerminal({ settlementWarning });
+    expect(degraded).toEqual({ kind: "ok", settlementWarning });
+    for (const [current, incoming] of [
+      [{ kind: "ok" }, degraded],
+      [degraded, { kind: "ok" }],
+    ] as const) {
+      const terminal = mergeAgentRunAttemptTerminal(current, incoming);
+      expect(projectAgentRunAttemptTerminal(terminal)).toMatchObject({
+        settlementWarning,
+        aborted: false,
+        failed: false,
+        interrupted: false,
+        timedOut: false,
+        promptError: null,
+      });
+    }
+  });
+
+  it.each([
+    { promptError: "provider failed", expected: "failed" },
+    { externalAbort: true, expected: "aborted" },
+    { timedOut: true, expected: "timeout" },
+  ])("keeps $expected precedence over a settlement warning", ({ expected, ...input }) => {
+    const degraded = {
+      kind: "ok",
+      settlementWarning: { pendingStage: "checkpoint", elapsedMs: 120_000, timeoutMs: 120_000 },
+    } as const;
+    const terminal = normalizeAgentRunAttemptTerminal({
+      ...input,
+      settlementWarning: degraded.settlementWarning,
+    });
+    expect(terminal.kind).toBe(expected);
+    for (const [current, incoming] of [
+      [terminal, degraded],
+      [degraded, terminal],
+    ] as const) {
+      const merged = mergeAgentRunAttemptTerminal(current, incoming);
+      expect(merged.kind).toBe(expected);
+      expect(projectAgentRunAttemptTerminal(merged).settlementWarning).toBeUndefined();
+    }
+  });
+
   it.each([
     {
       label: "external abort",

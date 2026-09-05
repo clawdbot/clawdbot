@@ -444,7 +444,7 @@ export function resolveTelegramApiContext(opts: {
     // and retries) so eviction cannot close the transport mid-operation.
     clientOptionsLease = client.lease?.();
     const bot = new Bot(token, client.clientOptions ? { client: client.clientOptions } : undefined);
-    bot.api.config.use(getOrCreateAccountThrottler(token));
+    bot.api.config.use(getOrCreateAccountThrottler(token).transformer);
     api = bot.api;
   }
   return {
