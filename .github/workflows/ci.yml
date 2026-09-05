@@ -4963,6 +4963,8 @@ jobs:
             -only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests \
             -only-testing:OpenClawTests/DelayedActionGateTests \
             -only-testing:OpenClawTests/IOSGatewayChatTransportTests \
+            -only-testing:OpenClawTests/LocationPermissionSummaryTests \
+            -only-testing:OpenClawTests/GatewayConnectionControllerTests \
             -only-testing:OpenClawTests/NodeAppModelInvokeTests \
             -only-testing:OpenClawTests/WatchMessagingInboundTransportTests \
             -only-testing:OpenClawTests/WatchSessionActivationGateTests \
