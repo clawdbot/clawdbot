@@ -396,14 +396,26 @@ async function projectPlanState(params: {
   };
 }
 
-function getPlanTargetDestinationKey(
-  target: SecretsPlanTarget,
-  resolved: NonNullable<ReturnType<typeof resolveValidatedPlanTarget>>,
-): string {
-  const canonicalPath = resolved.pathSegments.join(".");
-  if (resolved.entry.configFile === "auth-profile-store") {
-    const agentId = (target.agentId ?? "").trim();
-    return `auth-profile-store:${agentId}:${canonicalPath}`;
+function getPlanTargetDestinationKey(params: {
+  target: SecretsPlanTarget;
+  resolved: NonNullable<ReturnType<typeof resolveValidatedPlanTarget>>;
+  nextConfig: OpenClawConfig;
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+}): string {
+  const canonicalPath = JSON.stringify(params.resolved.pathSegments);
+  if (params.resolved.entry.configFile === "auth-profile-store") {
+    const agentId = (params.target.agentId ?? "").trim();
+    if (!agentId) {
+      throw new Error(`Missing required agentId for auth-profiles target ${params.target.path}.`);
+    }
+    const authStoreTarget = resolveAuthStoreTargetForAgent({
+      nextConfig: params.nextConfig,
+      stateDir: params.stateDir,
+      env: params.env,
+      agentId,
+    });
+    return `auth-profile-store:${authStoreTarget.path}:${canonicalPath}`;
   }
   return `config:${canonicalPath}`;
 }
@@ -427,7 +439,13 @@ function applyConfigTargetMutations(params: {
   let configChanged = false;
 
   for (const { target, resolved } of resolvedTargets) {
-    const destinationKey = getPlanTargetDestinationKey(target, resolved);
+    const destinationKey = getPlanTargetDestinationKey({
+      target,
+      resolved,
+      nextConfig: params.nextConfig,
+      stateDir: params.stateDir,
+      env: params.env,
+    });
     survivingTargetsByDestination.set(destinationKey, target);
     if (resolved.entry.configFile === "auth-profile-store") {
       const authStoreChanged = applyAuthProfileTargetMutation({
