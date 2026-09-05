@@ -32,7 +32,6 @@ import { nodeWorkerGatewayNamespace as resolveNodeWorkerGatewayNamespace } from 
 import type { NodeWorkerWorkspaceBindingResolver } from "./worker-environments/node-worker-tunnel.js";
 import type { NodeWorkerBundleRetention } from "./worker-environments/node-workspace-retain-coordinator.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http-contract.js";
-import type { InterruptedDelegatedChildPlacement } from "./worker-environments/placement-session-tool-operations.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerPlacementDispatchContract } from "./worker-environments/service-contract.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
@@ -70,7 +69,6 @@ export type GatewayWorkerEnvironmentRuntime = {
   bindDeviceNodeControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindWorkerNodeDesktopControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindNodeWorkspaceBindingResolver?: (resolver: NodeWorkerWorkspaceBindingResolver) => void;
-  interruptedDelegatedChildPlacements?: readonly InterruptedDelegatedChildPlacement[];
   handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
   handleWorkerBootstrapArtifactTransferRequest?: WorkerBootstrapArtifactTransferHttpCallback;
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
@@ -560,7 +558,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     workerTunnelManager,
     nodeWorkerGatewayNamespace,
     nodeWorkerBundleRetention,
-    interruptedDelegatedChildPlacements: interruptedChildPlacements,
     bindWorkerSessionDispatch: (dispatch) => {
       dispatchChild = dispatch;
     },

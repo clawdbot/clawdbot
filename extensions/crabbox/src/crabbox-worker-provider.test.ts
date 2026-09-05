@@ -973,8 +973,36 @@ describe("Crabbox worker provider", () => {
     ).rejects.toThrow("worker turn authority changed");
     expect(calls.filter((argv) => argv[1] === "inspect")).toHaveLength(1);
     expect(calls.some((argv) => argv[1] === "status")).toBe(false);
-    expect(calls.some((argv) => argv[1] === "stop")).toBe(true);
+    expect(calls.filter((argv) => argv[1] === "stop")).toHaveLength(1);
   });
+
+  it.each(["warmup", "inspect"] as const)(
+    "preserves abort and authority precedence during %s",
+    async (phase) => {
+      const calls: string[][] = [];
+      const controller = new AbortController();
+      const authority = createProvisionAuthority();
+      const provider = providerWithRunner(async (argv) => {
+        calls.push(argv);
+        if (argv[1] === phase) {
+          authority.revoke();
+          controller.abort(new Error("caller stop"));
+        }
+        return argv[1] === "inspect"
+          ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
+          : commandResult();
+      });
+      const error = await provider.provisionDelegated!(PROFILE, OPERATION_ID, {
+        signal: controller.signal,
+        assertAuthorized: authority.assertAuthorized,
+      }).catch((cause: unknown) => cause);
+      expect(error).toMatchObject({
+        message: phase === "warmup" ? "worker turn authority changed" : "caller stop",
+      });
+      expect(calls.filter((argv) => argv[1] === "stop")).toHaveLength(phase === "warmup" ? 1 : 0);
+      expect(WorkerProviderError.takeCleanupComplete(error)).toBe(phase === "warmup");
+    },
+  );
 
   it("does not collect enrollment diagnostics after authority closes", async () => {
     const calls: Array<{ argv: string[]; input: unknown }> = [];

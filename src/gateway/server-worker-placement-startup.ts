@@ -48,10 +48,6 @@ import { createWorkerPlacementDispatchService } from "./worker-environments/plac
 import { createWorkerPlacementIdleSweep } from "./worker-environments/placement-idle-sweep.js";
 import { createWorkerPlacementRunnerAvailabilityReader } from "./worker-environments/placement-projector.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
-import {
-  isInterruptedDelegatedChildPlacement,
-  type InterruptedDelegatedChildPlacement,
-} from "./worker-environments/placement-session-tool-operations.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createReclaimedPlacementRedispatch } from "./worker-environments/reclaimed-placement-redispatch.js";
 import { createRepositoryWorkspaceMutationService } from "./worker-environments/repository-workspace-mutation.js";
@@ -77,7 +73,6 @@ export type GatewayWorkerPlacementRuntimeParams = {
   environments: WorkerEnvironmentService;
   gatewayNamespace: string;
   nodeWorkerBundleRetention?: NodeWorkerBundleRetention;
-  interruptedDelegatedChildPlacements?: readonly InterruptedDelegatedChildPlacement[];
   persistAbandonedPartial?: (request: {
     sessionId: string;
     sessionKey: string;
@@ -247,8 +242,6 @@ export function createGatewayWorkerPlacementRuntime(
           (command) => isNodeCommandAllowed({ command, declaredCommands, allowlist }).ok,
         );
       },
-      isInterruptedDelegatedChild: (placement) =>
-        isInterruptedDelegatedChildPlacement(params.interruptedDelegatedChildPlacements, placement),
       ...workspaceConflictHandlers,
       ...reclaimBarriers,
       runLocalBarrier: async ({

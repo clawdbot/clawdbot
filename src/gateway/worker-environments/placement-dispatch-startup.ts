@@ -105,7 +105,6 @@ export function createWorkerPlacementDispatchStartup(options: {
   resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
   resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
   isCurrentNodePlacement?: WorkerNodePlacementAuthority;
-  isInterruptedDelegatedChild?: (placement: WorkerDispatchPlacement) => boolean;
   reportTransition: (
     observer: ((placement: WorkerDispatchPlacement) => void) | undefined,
     placement: WorkerDispatchPlacement,
@@ -452,11 +451,6 @@ export function createWorkerPlacementDispatchStartup(options: {
       report(failed);
       return failed;
     };
-    if (options.isInterruptedDelegatedChild?.(placement)) {
-      return await handleRecoveryFailure(
-        new Error("Delegated child placement lost its initiating worker turn during restart"),
-      );
-    }
     const recover = async (signal?: AbortSignal) => {
       try {
         if (!environmentId) {
@@ -480,10 +474,12 @@ export function createWorkerPlacementDispatchStartup(options: {
                 if (!current) {
                   throw new Error("Worker placement authority disappeared during recovery");
                 }
-                if (options.isInterruptedDelegatedChild?.(current)) {
-                  throw new Error(
-                    "Delegated child placement lost its initiating worker turn during restart",
-                  );
+                const environment = environments.get(environmentId);
+                if (environment?.environmentId !== environmentId) {
+                  throw new Error("Provisioning worker environment record is missing");
+                }
+                if (environment.destroyRequestedAtMs !== null) {
+                  throw new Error("Provisioning worker environment destruction was requested");
                 }
                 if (
                   current.state !== recoveryOwnedPlacement.state ||
@@ -499,13 +495,6 @@ export function createWorkerPlacementDispatchStartup(options: {
                 }
               };
               assertRecoveryCurrent();
-              const initialEnvironment = environments.get(environmentId);
-              if (initialEnvironment?.environmentId !== environmentId) {
-                throw new Error("Provisioning worker environment record is missing");
-              }
-              if (initialEnvironment.destroyRequestedAtMs !== null) {
-                throw new Error("Provisioning worker environment destruction was requested");
-              }
               await reconcileEnvironmentCore(signal, undefined, assertRecoveryCurrent);
               assertRecoveryCurrent();
               const current = placements.get(placement.sessionId);

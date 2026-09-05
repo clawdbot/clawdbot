@@ -64,14 +64,6 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
       await failure.failActive(placement, error, { forceClaimFence: true });
       return;
     }
-    if (deps.isInterruptedDelegatedChild?.(placement)) {
-      await failure.failActive(
-        placement,
-        new Error("Delegated child placement lost its initiating worker turn during restart"),
-        { forceClaimFence: true },
-      );
-      return;
-    }
     const environment = placement.environmentId
       ? environments.get(placement.environmentId)
       : undefined;
@@ -127,9 +119,6 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
     if (mode === "startup") {
       // Readiness fences live owners; unowned teardown remains in the service-owned sweep.
       for (const placement of placements.listForReconcile()) {
-        if (deps.isInterruptedDelegatedChild?.(placement)) {
-          continue;
-        }
         const { environmentId, state } = placement;
         if (environmentId && state !== "failed" && state !== "reclaimed") {
           await environments.reconcileEnvironment(environmentId);
@@ -151,26 +140,6 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         continue;
       }
       if (placement.state === "local" || placement.state === "reclaimed") {
-        continue;
-      }
-      if (
-        placement.state !== "active" &&
-        placement.state !== "failed" &&
-        deps.isInterruptedDelegatedChild?.(placement)
-      ) {
-        const environment = placement.environmentId
-          ? environments.get(placement.environmentId)
-          : undefined;
-        const exactEnvironment =
-          environment?.environmentId === placement.environmentId ? environment : undefined;
-        await failure.teardownEnvironment({
-          placement,
-          environmentId: exactEnvironment?.environmentId ?? null,
-          ownerEpoch: exactEnvironment?.ownerEpoch ?? null,
-          primaryError: new Error(
-            "Delegated child placement lost its initiating worker turn during restart",
-          ),
-        });
         continue;
       }
       if (placement.state === "provisioning") {

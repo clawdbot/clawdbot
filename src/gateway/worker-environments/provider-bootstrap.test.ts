@@ -6,7 +6,7 @@ import { writeSessionStore } from "../test-helpers.js";
 import { directSessionReq } from "../test/server-sessions.test-helpers.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { createWorkerSshIdentityResolver } from "./provider-ssh-provisioning.js";
+import { createWorkerSshIdentityResolver } from "./provider-lifecycle.js";
 import * as support from "./service.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 

@@ -117,14 +117,12 @@ describe("staged worker placement result recovery", () => {
   }
 
   it.each([
-    { interrupted: false, record: true, destroyRequested: false },
-    { interrupted: true, record: true, destroyRequested: false },
-    { interrupted: true, record: false, destroyRequested: false },
-    { interrupted: false, record: true, destroyRequested: true },
-    { interrupted: false, record: false, destroyRequested: true },
+    { record: true, destroyRequested: false },
+    { record: true, destroyRequested: true },
+    { record: false, destroyRequested: true },
   ])(
-    "applies a staged pending result without a tunnel (interrupted=$interrupted, recorded=$record, destroyRequested=$destroyRequested)",
-    async ({ interrupted, record, destroyRequested }) => {
+    "applies a staged pending result without a tunnel (recorded=$record, destroyRequested=$destroyRequested)",
+    async ({ record, destroyRequested }) => {
       const workspacePath = path.join(root, "same-worker-staged-result");
       const priorConflictRef = "refs/openclaw/worker-results/prior-conflict";
       const prepareAcceptedWorkspacePublication = vi.fn(async () => {
@@ -136,17 +134,11 @@ describe("staged worker placement result recovery", () => {
         priorWorkspaceResultConflict: { paths: ["old.txt"], stagedResultRef: priorConflictRef },
         prepareAcceptedWorkspacePublication,
         publishAcceptedWorkspace,
-        isInterruptedDelegatedChild: () => interrupted,
       });
       const { active, claim } = seedWorkerTurn(harness);
       harness.markEnvironmentOwnerEpoch(2);
       if (destroyRequested) {
-        // The parent descriptor may be gone on a later restart; the environment retains teardown.
-        const getEnvironment = vi.mocked(harness.environments.get).getMockImplementation()!;
-        vi.mocked(harness.environments.get).mockImplementation((id) => {
-          const environment = getEnvironment(id);
-          return environment ? { ...environment, destroyRequestedAtMs: 1_000 } : undefined;
-        });
+        harness.requestEnvironmentDestroy();
       }
       const staged = await stagePendingResult({
         store: placementStore,
@@ -615,7 +607,6 @@ describe("staged worker placement result recovery", () => {
       expect(restartedStore.validateWorkspaceResultClaim(claim)).toBe(true);
       const restartedHarness = createHarness(restartedStore, {
         workspacePath,
-        isInterruptedDelegatedChild: () => placementState === "accepted-reclaim",
       });
       restartedHarness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
       if (placementState === "accepted-reclaim") {

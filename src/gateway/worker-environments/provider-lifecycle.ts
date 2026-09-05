@@ -1,9 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
+import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { SecretRef } from "../../config/types.secrets.js";
 import {
   WorkerProviderError,
   type WorkerExecutionMode,
   type WorkerLease,
   type WorkerProvider,
+  type WorkerProfile,
+  type WorkerSshIdentity,
 } from "../../plugins/types.js";
 import { verifyWorkerAdmissionHandshake } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
@@ -21,10 +25,6 @@ import {
 } from "./provider-persisted-lease.js";
 import { createWorkerProvisionCancellation } from "./provider-provisioning-cancellation.js";
 import {
-  createWorkerSshIdentityResolver,
-  createWorkerSshProvisioning,
-} from "./provider-ssh-provisioning.js";
-import {
   normalizeWorkerMachineOptions,
   requireProviderOperationTimeoutMs,
   requireWorkerInstall,
@@ -40,6 +40,44 @@ import type {
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 const ORPHANED_LEASE_ERROR = "Worker provider no longer recognizes the lease";
+
+export function createWorkerSshIdentityResolver(options: {
+  assertCurrent: (record: WorkerEnvironmentRecord) => void;
+  callProvider: WorkerProviderLifecycleOptions["callProvider"];
+  requireWorkerProfile: (value: unknown) => WorkerProfile;
+  resolveSshIdentity: WorkerProviderLifecycleOptions["resolveSshIdentity"];
+}) {
+  return (
+    record: WorkerEnvironmentRecord,
+    provider: WorkerProvider,
+    leaseId: string,
+    authorize?: () => void,
+  ) => {
+    const profile = options.requireWorkerProfile(record.profileSnapshot.settings);
+    return async (keyRef: SecretRef) => {
+      const resolveSshIdentity = options.resolveSshIdentity;
+      if (!resolveSshIdentity) {
+        throw new Error("Worker SSH identity resolution is unavailable");
+      }
+      const assertAuthorized = () => {
+        options.assertCurrent(record);
+        authorize?.();
+      };
+      return await options.callProvider(record.environmentId, async () => {
+        assertAuthorized();
+        const identity = await resolveSshIdentity({
+          provider,
+          leaseId,
+          profile,
+          keyRef,
+          assertAuthorized,
+        });
+        assertAuthorized();
+        return identity;
+      });
+    };
+  };
+}
 
 export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOptions) {
   const { store, callBootstrap, callProvider, inState, move, saveError, serviceError } = options;
@@ -162,13 +200,44 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       await failBootstrap(record, leaseId, provider, error, "bootstrap_failure", patch),
   });
 
-  const finishBootstrap = createWorkerSshProvisioning({
-    bootstrapWorker: options.bootstrapWorker,
-    callBootstrap,
-    commitReady,
-    failBootstrap,
-    serviceError,
-  });
+  const bootstrapWorker = options.bootstrapWorker;
+  const finishBootstrap = async (
+    record: WorkerEnvironmentRecord,
+    provider: WorkerProvider,
+    installation: WorkerInstallationArtifact,
+    resolveIdentity: (keyRef: SecretRef) => Promise<WorkerSshIdentity>,
+    cancellation?: ReturnType<typeof createWorkerProvisionCancellation>,
+    authorize?: () => void,
+  ): Promise<WorkerEnvironmentRecord> => {
+    if (record.state !== "bootstrapping" || !record.leaseId || !record.sshEndpoint) {
+      throw serviceError("invalid_state", "Worker bootstrap requires a provisioned SSH lease");
+    }
+    const leaseId = record.leaseId;
+    const sshEndpoint = record.sshEndpoint;
+    let receipt: WorkerAdmissionHandshake;
+    try {
+      authorize?.();
+      receipt = await callBootstrap(installation, (signal) => {
+        authorize?.();
+        return bootstrapWorker({
+          operationId: record.provisionOperationId,
+          sshEndpoint,
+          installation,
+          resolveIdentity,
+          signal: cancellation ? AbortSignal.any([signal, cancellation.signal]) : signal,
+          authorize,
+        });
+      });
+      cancellation?.assertActive();
+      if (!verifyWorkerAdmissionHandshake(receipt, installation)) {
+        throw new Error("Worker bootstrap receipt does not match the expected build identity");
+      }
+      authorize?.();
+    } catch (error) {
+      return await failBootstrap(record, leaseId, provider, error);
+    }
+    return commitReady(record, { ...receipt, installKind: "bundle" });
+  };
 
   const finishProvision = async (
     record: WorkerEnvironmentRecord,

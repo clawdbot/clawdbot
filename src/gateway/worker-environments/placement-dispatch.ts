@@ -81,7 +81,6 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers &
     resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
     resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
     isCurrentNodePlacement?: WorkerNodePlacementAuthority;
-    isInterruptedDelegatedChild?: (placement: WorkerDispatchPlacement) => boolean;
   };
 
 export function createWorkerPlacementDispatchService(options: WorkerPlacementDispatchOptions) {
@@ -92,7 +91,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     ...options,
     failure,
     reportTransition: reportPlacementTransition,
-    isInterruptedDelegatedChild: options.isInterruptedDelegatedChild,
   });
 
   // Background recovery observes previously requested cleanup; explicit Stop and

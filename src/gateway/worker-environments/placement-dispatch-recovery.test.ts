@@ -281,78 +281,6 @@ describe("worker placement restart recovery", () => {
     },
   );
 
-  it("tears down an active delegated child whose spawn outcome became unknown", async () => {
-    const placements = createWorkerSessionPlacementStore({
-      database: support.testState.stateDb,
-      now: () => 1_000,
-    });
-    const harness = createHarness(placements, {
-      isInterruptedDelegatedChild: (placement) => placement.sessionKey === REQUEST.sessionKey,
-    });
-    await harness.environments.attachSession({
-      environmentId: harness.ready.environmentId,
-      ownerEpoch: harness.ready.ownerEpoch,
-      sessionId: REQUEST.sessionId,
-    });
-    harness.placements.seedActive(harness.attached.ownerEpoch);
-
-    await harness.service.reconcile("startup");
-
-    expect(harness.placements.current()).toMatchObject({
-      state: "failed",
-      recoveryError: expect.stringContaining("lost its initiating worker turn"),
-    });
-    expect(harness.environments.destroy).toHaveBeenCalledWith(harness.ready.environmentId);
-    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
-  });
-
-  it.each(["session", "environment"] as const)(
-    "does not fence a replacement child with the same key but a new %s identity",
-    async (changedIdentity) => {
-      const placements = createWorkerSessionPlacementStore({
-        database: support.testState.stateDb,
-        now: () => 1_000,
-      });
-      let interrupted = {
-        sessionId: "",
-        sessionKey: REQUEST.sessionKey,
-        environmentId: "",
-      };
-      const harness = createHarness(placements, {
-        isInterruptedDelegatedChild: (placement) =>
-          placement.sessionId === interrupted.sessionId &&
-          placement.sessionKey === interrupted.sessionKey &&
-          placement.environmentId === interrupted.environmentId,
-      });
-      interrupted = {
-        sessionId:
-          changedIdentity === "session" ? `${REQUEST.sessionId}-previous` : REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        environmentId:
-          changedIdentity === "environment"
-            ? `${harness.ready.environmentId}-previous`
-            : harness.ready.environmentId,
-      };
-      await harness.environments.attachSession({
-        environmentId: harness.ready.environmentId,
-        ownerEpoch: harness.ready.ownerEpoch,
-        sessionId: REQUEST.sessionId,
-      });
-      harness.markEnvironmentOwnerEpoch(harness.attached.ownerEpoch);
-      harness.placements.seedActive(harness.attached.ownerEpoch, "remote-exec");
-
-      await harness.service.reconcileActive(harness.ready.environmentId);
-
-      expect(harness.placements.current()).toMatchObject({
-        state: "active",
-        sessionId: REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        environmentId: harness.ready.environmentId,
-      });
-      expect(harness.environments.destroy).not.toHaveBeenCalled();
-    },
-  );
-
   it.each(["startup", "active"] as const)(
     "fences a destroy-requested attachment during %s recovery even when physical cleanup fails",
     async (mode) => {
@@ -627,17 +555,13 @@ describe("worker placement restart recovery", () => {
       database: support.testState.stateDb,
       now: () => 1_000,
     });
-    let interrupted = false;
-    const harness = createHarness(placements, {
-      isInterruptedDelegatedChild: (placement) =>
-        placement.sessionKey === REQUEST.sessionKey && interrupted,
-    });
+    const harness = createHarness(placements);
     const provisioning = harness.placements.seedProvisioning();
     if (provisioning.state !== "provisioning") {
       throw new Error("recovery fixture did not produce a provisioning placement");
     }
     vi.mocked(harness.environments.attachSession).mockImplementation(async (request) => {
-      interrupted = true;
+      harness.requestEnvironmentDestroy();
       request.authorize?.();
       throw new Error("unreachable attachment");
     });
@@ -646,39 +570,12 @@ describe("worker placement restart recovery", () => {
 
     expect(harness.placements.current()).toMatchObject({
       state: "failed",
-      recoveryError: expect.stringContaining("lost its initiating worker turn"),
+      recoveryError: expect.stringContaining("destruction was requested"),
     });
     expect(harness.environments.attachSession).toHaveBeenCalledOnce();
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).toHaveBeenCalledWith(provisioning.environmentId);
     expect(harness.log).not.toContain("workspace:reconcile");
-  });
-
-  it("tears down a delegated child whose parent operation became unknown on restart", async () => {
-    const placements = createWorkerSessionPlacementStore({
-      database: support.testState.stateDb,
-      now: () => 1_000,
-    });
-    const harness = createHarness(placements, {
-      isInterruptedDelegatedChild: (placement) => placement.sessionKey === REQUEST.sessionKey,
-    });
-    const provisioning = harness.placements.seedProvisioning();
-    if (provisioning.state !== "provisioning") {
-      throw new Error("recovery fixture did not produce a provisioning placement");
-    }
-    harness.log.length = 0;
-
-    await harness.service.resumeProvisioning(provisioning, async () => {
-      harness.log.push("environment:reconcile");
-    });
-
-    expect(harness.placements.current()).toMatchObject({
-      state: "failed",
-      recoveryError: expect.stringContaining("lost its initiating worker turn"),
-    });
-    expect(harness.environments.destroy).toHaveBeenCalledWith(provisioning.environmentId);
-    expect(harness.environments.attachSession).not.toHaveBeenCalled();
-    expect(harness.log).not.toContain("recovery-barrier");
   });
 
   it("fences provisioning recovery before attachment when its durable execution mode differs", async () => {
@@ -1027,7 +924,7 @@ describe("worker placement restart recovery", () => {
     expect(restartedHarness.environments.startTunnel).not.toHaveBeenCalled();
   });
 
-  it("fences an interrupted child before pending workspace recovery effects", async () => {
+  it("fences pending workspace recovery after environment destruction is requested", async () => {
     const placements = createWorkerSessionPlacementStore({
       database: support.testState.stateDb,
       now: () => 1_000,
@@ -1058,17 +955,16 @@ describe("worker placement restart recovery", () => {
     });
     const publishAcceptedWorkspace = vi.fn(async () => {});
     const restartedHarness = createHarness(restartedStore, {
-      isInterruptedDelegatedChild: (placement) => placement.sessionKey === REQUEST.sessionKey,
       publishAcceptedWorkspace,
     });
     restartedHarness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
     restartedHarness.markEnvironmentProtocolFeatures([WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE]);
+    restartedHarness.requestEnvironmentDestroy();
 
     await restartedHarness.service.reconcile("startup");
 
     expect(restartedHarness.placements.current()).toMatchObject({
       state: "failed",
-      recoveryError: expect.stringContaining("lost its initiating worker turn"),
     });
     expect(restartedHarness.environments.startTunnel).not.toHaveBeenCalled();
     expect(restartedHarness.environments.destroy).toHaveBeenCalledWith(active.environmentId);
