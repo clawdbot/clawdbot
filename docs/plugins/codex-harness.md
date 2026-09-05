@@ -259,7 +259,8 @@ node. Run authenticated HTTP on the Gateway, or use an intentionally
 credential-free endpoint. The node process uses a fresh private
 `HOME` and `CODEX_HOME` that are removed after the attempt, and both its launch
 environment and requested child-process environments are sanitized. Completed
-filesystem changes reconcile back into the Gateway-owned managed worktree.
+filesystem changes reconcile into the Gateway-owned managed worktree or, for
+repository-only sessions, an immutable checkpoint retained by the Gateway.
 
 Disconnecting the node, closing the app-server connection, cancelling the turn,
 or retiring the plugin ends that Codex attempt visibly and terminates its remote
@@ -278,17 +279,23 @@ The bundled Crabbox provider supports both OpenClaw `worker-turn` and Codex
 `remote-exec`, so one configured cloud-worker profile is selectable for either
 harness. Choose the same **Cloud · profile** destination in New Session or
 Move Session after selecting a Codex model. Profile placement requires
-`operator.admin` and a managed Gateway worktree.
+`operator.admin`. Start from a GitHub repository URL and optional ref without a
+Gateway checkout, or place an existing Gateway managed-worktree session.
+Repository-only sessions fetch and pin their source on the selected node.
+Repository sessions require a managed node; SSH-only providers cannot create them.
 
-Enable the Codex plugin and explicitly allow
+Enable a trusted Codex plugin installation and explicitly allow
 `codex.exec-server.stdio.v1` on the Gateway, as shown in
 [Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device).
-The cloud image may include the exact-version bundled Codex plugin; otherwise,
-the profile setup or image must install the matching trusted official npm Codex
-plugin and its pinned platform-native Codex binary. Crabbox validates the
-bundled or prepared installation and preserves its provenance in the disposable
-node's isolated state without installing a plugin during enrollment. The Gateway
-checks the cloud node's current pairing and
+Crabbox automatically bootstraps the cloud node from the running Gateway's
+built installation, including the Codex plugin and its pinned native dependency.
+Bootstrap installs dependencies for the cloud machine's operating system and
+CPU, then enables the plugin in the node's isolated state. Keep profile setup
+focused on machine prerequisites and project tools, including a supported
+Node.js release and npm. See [Bundle installation](/gateway/cloud-workers#bundle-installation)
+for build and registry access requirements.
+
+The Gateway checks the cloud node's current pairing and
 effectively invocable command before starting a Codex process. The same
 placement-scoped approval or explicitly selected Full access rules apply,
 including the cloud node's local exec policy and approvals floors.
@@ -298,9 +305,10 @@ outbound connection without starting an OpenClaw worker child or consuming a
 worker slot. Its app-server, model connection, provider authentication, and
 transcript remain Gateway-owned. Process and filesystem access still have the
 node operating-system account's permissions, and only credential-free HTTP is
-forwarded. Workspace changes reconcile to the Gateway-owned worktree. A failed
-or disconnected attempt is terminal and requires a fresh attempt; it never
-resumes the remote process or falls back to Gateway-local or SSH execution.
+forwarded. Workspace changes reconcile to the Gateway-owned worktree or an
+immutable repository checkpoint. A failed or disconnected attempt is terminal
+and requires a fresh attempt; it never resumes the remote process or falls back
+to Gateway-local or SSH execution.
 
 See [Cloud workers](/gateway/cloud-workers) for profile configuration,
 placement lifecycle, and cleanup.
