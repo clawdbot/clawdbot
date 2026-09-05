@@ -42,10 +42,6 @@ function isAssistantTextContentBlockType(value: unknown): boolean {
   return value === "text" || value === "input_text" || value === "output_text";
 }
 
-export function sanitizeAssistantVisibleStreamText(text: string, phase?: AssistantPhase): string {
-  return sanitizeUserFacingText(sanitizeAssistantText(text, phase, true), { errorContext: false });
-}
-
 export function createAssistantVisibleStreamText(phase?: AssistantPhase) {
   return createTextProjection([
     ...assistantVisibleTextFilters(
