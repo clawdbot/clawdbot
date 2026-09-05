@@ -298,6 +298,9 @@ export async function cleanupPluginHostSessionStore(
     agentId: params.agentId,
     storePath: params.storePath,
   })) {
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      break;
+    }
     if (isLockedHarnessSessionOwnedByPlugin(entry, params.preserveLockedHarnessIds)) {
       continue;
     }
@@ -307,7 +310,7 @@ export async function cleanupPluginHostSessionStore(
     ) {
       continue;
     }
-    const updated = await patchSessionEntryCore(
+    await patchSessionEntryCore(
       { agentId: params.agentId, sessionKey, storePath: params.storePath },
       (currentEntry) => {
         if (isLockedHarnessSessionOwnedByPlugin(currentEntry, params.preserveLockedHarnessIds)) {
@@ -321,13 +324,14 @@ export async function cleanupPluginHostSessionStore(
         return currentEntry;
       },
       {
+        shouldCommit: params.shouldCleanup,
+        onCommitted: () => {
+          cleared += 1;
+        },
         replaceEntry: true,
         skipMaintenance: true,
       },
     );
-    if (updated) {
-      cleared += 1;
-    }
   }
   return cleared;
 }
