@@ -25,11 +25,11 @@ class GroupRequestScheduler {
   private actionTail = Promise.resolve();
   private nextActionAtMs = 0;
 
-  enqueueAction<T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  enqueueAction<T>(run: () => Promise<T>): Promise<T> {
     const result = this.actionTail.then(async () => {
       const waitMs = this.nextActionAtMs - Date.now();
       if (waitMs > 0) {
-        await sleepWithAbort(waitMs, signal);
+        await sleepWithAbort(waitMs);
       }
       // Retain the existing peer spacing without consuming the message quota.
       this.nextActionAtMs = Date.now() + 1_000;
@@ -178,7 +178,7 @@ function createTelegramAccountThrottler(
       schedulersByChat.set(groupChatKey, scheduler);
     }
     if (method === "sendChatAction") {
-      return scheduler.enqueueAction(() => prev(method, payload, signal), signal);
+      return scheduler.enqueueAction(() => prev(method, payload, signal));
     }
 
     const laneKey = resolveForumLaneKey(apiPayload);
