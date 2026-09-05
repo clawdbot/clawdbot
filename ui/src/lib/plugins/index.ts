@@ -8,6 +8,7 @@ import type {
   PluginsInspectResult as ProtocolPluginsInspectResult,
   PluginsInstallParams,
   PluginsInstallResult,
+  PluginsCatalogBrowseResult as ProtocolPluginsCatalogBrowseResult,
   PluginsListResult as ProtocolPluginsListResult,
   PluginsSetEnabledParams,
   PluginsSetEnabledResult,
@@ -17,6 +18,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 
 export type PluginCatalogItem = PluginCatalogEntry;
+export type PluginDiscoveryResult = ProtocolPluginsCatalogBrowseResult;
 export type PluginDeclaredSurface = ProtocolPluginDeclaredSurface;
 export type PluginHookGrant = ProtocolPluginHookGrant;
 export type PluginInspectSource = ProtocolPluginInspectSource;

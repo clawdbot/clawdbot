@@ -2,12 +2,109 @@
 import { createHash } from "node:crypto";
 import type {
   PluginDeclaredSurface,
+  PluginsCatalogBrowseResult,
   PluginsInspectResult,
 } from "../packages/gateway-protocol/src/schema/plugins.js";
 
 type PluginCatalogMockOptions = {
   installedCopies?: number;
 };
+
+export function buildPluginDiscoveryMock(): PluginsCatalogBrowseResult {
+  const entry = (params: {
+    packageName: string;
+    name: string;
+    summary: string;
+    author: string;
+    official: boolean;
+    downloads: number;
+    pluginId?: string;
+    enabled?: boolean;
+  }): PluginsCatalogBrowseResult["items"][number] => ({
+    id: `ch_${Buffer.from(params.packageName, "utf8").toString("base64url")}`,
+    catalog: {
+      name: params.name,
+      summary: params.summary,
+      family: "code-plugin",
+      author: params.author,
+      official: params.official,
+      categories: [],
+      downloads: params.downloads,
+    },
+    local: params.pluginId
+      ? {
+          present: true,
+          installed: true,
+          enabled: params.enabled ?? true,
+          state: (params.enabled ?? true) ? "enabled" : "disabled",
+          pluginId: params.pluginId,
+          action: "manage",
+        }
+      : {
+          present: false,
+          installed: false,
+          enabled: false,
+          state: "not-installed",
+          action: "install",
+        },
+  });
+
+  return {
+    items: [
+      entry({
+        packageName: "@openclaw/whatsapp",
+        name: "WhatsApp",
+        summary: "OpenClaw WhatsApp channel plugin for WhatsApp Web chats.",
+        author: "openclaw",
+        official: true,
+        downloads: 176_431,
+        pluginId: "whatsapp",
+      }),
+      entry({
+        packageName: "@openclaw/matrix",
+        name: "Matrix",
+        summary: "OpenClaw Matrix channel plugin for rooms and direct messages.",
+        author: "openclaw",
+        official: true,
+        downloads: 52_201,
+      }),
+      entry({
+        packageName: "@openclaw/codex",
+        name: "Codex",
+        summary: "OpenClaw Codex app-server harness and native session supervision plugin.",
+        author: "openclaw",
+        official: true,
+        downloads: 36_956,
+      }),
+      entry({
+        packageName: "@gendigital/sage-openclaw",
+        name: "Gen Sage",
+        summary: "Safety for Agents — ADR layer for OpenClaw.",
+        author: "gendigital",
+        official: false,
+        downloads: 19_609,
+      }),
+      entry({
+        packageName: "@openclaw/discord",
+        name: "Discord",
+        summary: "OpenClaw Discord channel plugin for channels, DMs, commands, and app events.",
+        author: "openclaw",
+        official: true,
+        downloads: 13_253,
+        pluginId: "discord",
+        enabled: false,
+      }),
+      entry({
+        packageName: "@openclaw/deepseek-provider",
+        name: "OpenClaw DeepSeek Provider",
+        summary: "OpenClaw DeepSeek provider plugin.",
+        author: "openclaw",
+        official: true,
+        downloads: 10_742,
+      }),
+    ],
+  };
+}
 
 export function buildPluginCatalogMock(options: PluginCatalogMockOptions = {}) {
   const entry = (params: {

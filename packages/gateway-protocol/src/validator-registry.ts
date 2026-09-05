@@ -500,6 +500,11 @@ export const validatePluginsListParams = compile(S.PluginsListParamsSchema);
 export const validatePluginsInspectParams = compile(S.PluginsInspectParamsSchema);
 export const validatePluginsRefreshParams = compile(S.PluginsRefreshParamsSchema);
 export const validatePluginsSearchParams = compile(S.PluginsSearchParamsSchema);
+export const validatePluginsCatalogBrowseParams = compile(S.PluginsCatalogBrowseParamsSchema);
+export const validatePluginsCatalogCategoriesParams = compile(
+  S.PluginsCatalogCategoriesParamsSchema,
+);
+export const validatePluginsCatalogGetParams = compile(S.PluginsCatalogGetParamsSchema);
 export const validatePluginsInstallParams = compile(S.PluginsInstallParamsSchema);
 export const validatePluginsSetEnabledParams = compile(S.PluginsSetEnabledParamsSchema);
 export const validatePluginsUninstallParams = compile(S.PluginsUninstallParamsSchema);
