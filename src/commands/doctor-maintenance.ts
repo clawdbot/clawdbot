@@ -21,6 +21,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readGatewayServiceState, resolveGatewayService } from "../daemon/service.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   acquireGatewayLifecycleCoordinator,
   acquireStateDatabaseCoordinator,
@@ -32,6 +33,7 @@ import {
   OpenClawDatabaseSchemaPreflightError,
 } from "../state/openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import { isDoctorUpdateRepairMode, resolveDoctorRepairMode } from "./doctor-repair-mode.js";
@@ -116,9 +118,23 @@ export async function beginDoctorMaintenance(params: {
     return undefined;
   }
   const env = { ...process.env };
-  const parentActivation = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options))
-    ? resolveUpdateParentGatewayActivation(env)
-    : undefined;
+  const updaterOwned = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options));
+  if (updaterOwned) {
+    const stateVersion = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+      ({ db }) => readSqliteUserVersion(db),
+      { env },
+    );
+    // The installed updater still writes its ledger after Doctor returns. Its
+    // package rollback cannot undo a migration that makes those writes invalid.
+    if (stateVersion !== undefined && stateVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
+      throw new Error(
+        `Updater-owned Doctor cannot migrate shared state from schema ${stateVersion} to ${OPENCLAW_STATE_SCHEMA_VERSION} while the older updater owns completion. ` +
+          "Let this update finish rolling back, then stop the Gateway through its service owner, back up your state, install the target directly with your package manager, and run Doctor from the new installation. " +
+          "Do not downgrade the database schema. See https://docs.openclaw.ai/reference/database-schemas.",
+      );
+    }
+  }
+  const parentActivation = updaterOwned ? resolveUpdateParentGatewayActivation(env) : undefined;
   // Repair discovery can execute plugins and open writable state. Establish
   // ownership for every explicit repair before running those inspections.
   await assertDoctorMaintenanceSchemasCompatible(env);

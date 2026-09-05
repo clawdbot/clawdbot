@@ -6,12 +6,17 @@ import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/target
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import {
+  closeOpenClawStateDatabase,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
 
-function createLegacyRegistryFixture() {
+function createLegacyRegistryFixture(schemaVersion = 8) {
   const root = tempDirs.make("openclaw-doctor-legacy-registry-");
   const stateDir = path.join(root, "state");
   const configPath = path.join(root, "openclaw.json");
@@ -29,7 +34,7 @@ function createLegacyRegistryFixture() {
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(databasePath);
   database.exec(`
-    PRAGMA user_version = 8;
+    PRAGMA user_version = ${schemaVersion};
     CREATE TABLE agent_databases (
       agent_id TEXT NOT NULL, path TEXT NOT NULL, schema_version INTEGER NOT NULL,
       last_seen_at INTEGER NOT NULL, size_bytes INTEGER,
@@ -65,6 +70,33 @@ it("admits a supported legacy registry without weakening runtime target validati
     await maintenance?.release();
   }
 });
+
+it.each([false, true])(
+  "preserves the active updater's schema compatibility (current=%s)",
+  async (current) => {
+    const fixture = createLegacyRegistryFixture(15);
+    fs.writeFileSync(fixture.configPath, JSON.stringify(fixture.config));
+    if (current) {
+      fs.rmSync(fixture.databasePath);
+      openOpenClawStateDatabase();
+      closeOpenClawStateDatabase();
+    }
+    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    const before = fs.readFileSync(fixture.databasePath);
+    if (current) {
+      const maintenance = await fixture.begin();
+      await maintenance?.release();
+    } else {
+      const attempt = fixture.begin().then(async (maintenance) => {
+        await maintenance?.release();
+      });
+      await expect(attempt).rejects.toThrow(
+        `Updater-owned Doctor cannot migrate shared state from schema 15 to ${OPENCLAW_STATE_SCHEMA_VERSION}`,
+      );
+    }
+    expect(fs.readFileSync(fixture.databasePath)).toEqual(before);
+  },
+);
 
 it.each(["canonical", "custom-json", "shared-sqlite", "registered-shared-sqlite"] as const)(
   "refuses a newer %s database before repairing an old registry",

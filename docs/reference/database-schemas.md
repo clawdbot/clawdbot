@@ -618,6 +618,25 @@ The heartbeat proves ownership, not migration progress. A live but stuck mainten
 
 ## Troubleshooting
 
+### Doctor refuses a schema migration during an update
+
+An updater from an older release may still need to write its update history after
+the target release's Doctor finishes. Doctor refuses to advance the shared-state
+schema during that overlap, because restoring the old package would not undo the
+database migration. Updates that keep the same shared-state schema can continue.
+
+Let the failed update finish before retrying. Stop the Gateway through its service
+or deployment owner and [create a verified backup](/install/updating#before-updating-create-a-verified-backup).
+Install the target release directly with the package manager and prefix that own
+the existing installation, then run `openclaw doctor --fix` from that new install
+before restarting the Gateway. This starts migration after the old updater has
+exited. Do not lower database version markers or reinstall an older package over
+migrated state.
+
+If an earlier updater already restored an old package after migration, install a
+build that supports the database's current schema before running Doctor. The old
+build cannot repair a newer schema.
+
 `SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
 
 ### Why you cannot go back after updating to 2026.7.2
