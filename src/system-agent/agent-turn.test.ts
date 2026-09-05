@@ -810,6 +810,7 @@ describe("runSystemAgentTurn", () => {
         overview: { defaultModel: "openai/gpt-5.4" } as never,
         surface: "gateway",
         approvalArmed: false,
+        memoryPromptAgentId: "research",
         session,
       },
       {
@@ -828,6 +829,7 @@ describe("runSystemAgentTurn", () => {
       provider: "openai",
       model: "gpt-5.4",
       systemAgentTool: { agentId: "ops" },
+      memoryPromptAgentId: "research",
       agentDir,
       authProfileId: "openai:ops",
       authProfileIdSource: "user",
@@ -851,6 +853,28 @@ describe("runSystemAgentTurn", () => {
     });
     expect(requireValue(call.systemAgentTool, "missing embedded OpenClaw tool").proposalRef).toBe(
       session.proposalRef,
+    );
+
+    await runSystemAgentTurnWithDeps(
+      {
+        input: "hello again",
+        overview: { defaultModel: "openai/gpt-5.4" } as never,
+        surface: "gateway",
+        approvalArmed: false,
+        session,
+      },
+      {
+        ...deps,
+        runCliAgent: runCliAgent as never,
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
+      },
+    );
+
+    // Undelegated turns fall back to the verified route's agent for memory, never
+    // to the synthetic system-agent session identity that owns execution.
+    expect(runEmbeddedAgent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ agentId: "openclaw", memoryPromptAgentId: "ops" }),
     );
   });
 

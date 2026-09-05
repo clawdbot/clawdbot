@@ -98,6 +98,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       contextEngine: activeContextEngine,
       sessionId: runtime.activeSessionId,
       sessionKey: contextSessionKey,
+      agentId: params.memoryPromptAgentId,
       messages: historyState.messages,
       tokenBudget: effectiveContextTokenBudget,
       availableTools: new Set(

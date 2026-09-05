@@ -257,6 +257,9 @@ export function createCodexLifecycleTurnHarness(
     client,
     request,
     requests,
+    // Serialized client->server stdio frames. Assertions that must prove what
+    // actually crossed the transport read these bytes, not the pre-encode params.
+    writes: wire.writes,
     waitForMethod,
     notify,
     handleServerRequest,

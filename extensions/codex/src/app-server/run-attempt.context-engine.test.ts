@@ -9,10 +9,14 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createMockPluginRegistry,
+  getActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -208,6 +212,54 @@ function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEng
   return engine;
 }
 
+const MEMORY_OWNER_MARKER = "WIKI_OWNER_MARKER_127775";
+const MEMORY_DECOY_MARKER = "WIKI_DECOY_MARKER_127775";
+
+/**
+ * Runs one Codex attempt with a registered memory prompt preparer and returns the
+ * developer instructions actually submitted on `thread/start`.
+ */
+async function submitMemoryOwnerAttempt(options: {
+  name: string;
+  memoryPromptAgentId?: string;
+  prepare: (params: { agentId?: string }) => Promise<string[]>;
+}) {
+  const prepare = vi.fn(options.prepare);
+  const registry = getActivePluginRegistry();
+  if (!registry) {
+    throw new Error("expected active plugin registry");
+  }
+  registry.memoryPromptPreparations.push({ pluginId: "memory-wiki", prepare });
+  const harness = createStartedThreadHarness();
+  const params = createParams(
+    path.join(tempDir, `${options.name}.jsonl`),
+    path.join(tempDir, `${options.name}-workspace`),
+  );
+  params.agentId = "openclaw";
+  params.sessionKey = "agent:openclaw:main";
+  if (options.memoryPromptAgentId) {
+    params.memoryPromptAgentId = options.memoryPromptAgentId;
+  }
+  params.contextEngine = createContextEngine({
+    assemble: vi.fn(async ({ messages, availableTools, citationsMode }) => ({
+      messages,
+      estimatedTokens: 42,
+      systemPromptAddition: buildMemorySystemPromptAddition({
+        availableTools: availableTools ?? new Set(),
+        citationsMode,
+      }),
+    })),
+  });
+
+  const run = runCodexAppServerAttempt(params);
+  await harness.waitForMethod("turn/start");
+  const threadStartParams = requireRequestParams(harness, "thread/start");
+  const developerInstructions = readStringValue(threadStartParams.developerInstructions) ?? "";
+  await harness.completeTurn();
+  await run;
+  return { prepare, developerInstructions };
+}
+
 type MockCallReader = { mock: { calls: unknown[][] } };
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
@@ -377,6 +429,62 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       expect(openSpy).not.toHaveBeenCalled();
     },
   );
+
+  it("projects prepared memory for the explicit prompt owner into Codex", async () => {
+    const { prepare, developerInstructions } = await submitMemoryOwnerAttempt({
+      name: "memory-owner",
+      memoryPromptAgentId: "hq",
+      prepare: async ({ agentId }) => [
+        agentId === "hq" ? MEMORY_OWNER_MARKER : MEMORY_DECOY_MARKER,
+      ],
+    });
+
+    expect(prepare).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "hq",
+        agentSessionKey: "agent:openclaw:main",
+      }),
+    );
+    expect(developerInstructions).toContain(MEMORY_OWNER_MARKER);
+    expect(developerInstructions).not.toContain(MEMORY_DECOY_MARKER);
+  });
+
+  it("projects the session owner's prepared memory when no prompt owner is declared", async () => {
+    const { prepare, developerInstructions } = await submitMemoryOwnerAttempt({
+      name: "memory-owner-fallback",
+      prepare: async ({ agentId }) => [
+        agentId === "openclaw" ? MEMORY_OWNER_MARKER : MEMORY_DECOY_MARKER,
+      ],
+    });
+
+    expect(prepare).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "openclaw",
+        agentSessionKey: "agent:openclaw:main",
+      }),
+    );
+    expect(developerInstructions).toContain(MEMORY_OWNER_MARKER);
+    expect(developerInstructions).not.toContain(MEMORY_DECOY_MARKER);
+  });
+
+  it("submits no substitute digest when the prompt owner is no longer a memory owner", async () => {
+    const { prepare, developerInstructions } = await submitMemoryOwnerAttempt({
+      name: "memory-owner-rejected",
+      memoryPromptAgentId: "hq",
+      // Models an invalidated or reassigned owner: the plugin rejects instead of
+      // resolving a different vault, so the turn must ship no digest at all.
+      prepare: async ({ agentId }) => {
+        if (agentId === "hq") {
+          throw new Error("Unknown memory-wiki agentId: hq.");
+        }
+        return [MEMORY_DECOY_MARKER];
+      },
+    });
+
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ agentId: "hq" }));
+    expect(developerInstructions).not.toContain(MEMORY_OWNER_MARKER);
+    expect(developerInstructions).not.toContain(MEMORY_DECOY_MARKER);
+  });
 
   it("starts a fresh turn before the post-start mirror records admission", async () => {
     const beforeMessageWrite = vi.fn();

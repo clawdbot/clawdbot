@@ -304,6 +304,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
       ? { sessionManager: input.transcriptOwnership.sessionManager }
       : { sessionTarget: input.transcriptOwnership.sessionTarget }),
     trajectoryRecorder: runtime.trajectoryRecorder,
+    memoryPromptAgentId: params.memoryPromptAgentId,
     workspaceDir: runtime.workspaceDir,
     bootstrapWorkspaceDir: runtime.bootstrapWorkspaceDir,
     cwd: params.cwd,

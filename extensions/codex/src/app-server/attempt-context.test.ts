@@ -152,7 +152,7 @@ describe("Codex app-server attempt context", () => {
     });
   });
 
-  it("passes agent context to Codex memory collaboration guidance", async () => {
+  it("uses the explicit memory prompt owner for Codex memory collaboration guidance", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-agent-memory-"));
     let observedContext:
       | { agentId?: string; agentSessionKey?: string; sandboxed?: boolean }
@@ -171,19 +171,24 @@ describe("Codex app-server attempt context", () => {
     try {
       const context = await buildCodexWorkspaceBootstrapContext({
         params: {
+          agentId: "openclaw",
+          memoryPromptAgentId: "marketing-agent",
           sessionId: "session-1",
-          sessionKey: "agent:marketing-agent:session-1",
+          sessionKey: "agent:openclaw:session-1",
           config: {
             agents: {
               defaults: { workspace: workspaceDir },
-              list: [{ id: "marketing-agent", default: true, workspace: workspaceDir }],
+              list: [
+                { id: "marketing-agent", default: true, workspace: workspaceDir },
+                { id: "openclaw", workspace: workspaceDir },
+              ],
             },
           },
         } as EmbeddedRunAttemptParams,
         resolvedWorkspace: workspaceDir,
         effectiveWorkspace: workspaceDir,
-        sessionKey: "agent:marketing-agent:session-1",
-        sessionAgentId: "marketing-agent",
+        sessionKey: "agent:openclaw:session-1",
+        sessionAgentId: "openclaw",
         memoryToolNames: ["memory_search", "memory_get"],
         ringZeroActive: false,
         sandboxed: true,
@@ -192,11 +197,11 @@ describe("Codex app-server attempt context", () => {
       expect(context.memoryToolRouted).toBe(true);
       expect(observedContext).toMatchObject({
         agentId: "marketing-agent",
-        agentSessionKey: "agent:marketing-agent:session-1",
+        agentSessionKey: "agent:openclaw:session-1",
         sandboxed: true,
       });
       expect(context.memoryCollaborationInstructions).toContain(
-        "agent=marketing-agent session=agent:marketing-agent:session-1",
+        "agent=marketing-agent session=agent:openclaw:session-1",
       );
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });

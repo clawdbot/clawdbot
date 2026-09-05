@@ -348,6 +348,9 @@ export class ChatTurnRouter {
       surface: this.options.surface ?? "cli",
       approvalArmed,
       ...(this.options.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),
+      ...(this.options.requesterAgentId
+        ? { memoryPromptAgentId: this.options.requesterAgentId }
+        : {}),
       session: this.agentSession,
     });
     if (!loopReply?.text) {

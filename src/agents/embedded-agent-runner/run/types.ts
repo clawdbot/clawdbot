@@ -116,6 +116,11 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   startedAtMs?: number;
   /** Explicit session owner captured before fallback agent resolution. */
   contextEngineAgentId?: string;
+  /**
+   * Host-verified owner used only to prepare agent-scoped memory prompt supplements.
+   * This does not change transcript, tool-policy, or context-engine LLM authority.
+   */
+  memoryPromptAgentId?: string;
   /** Host-resolved sandbox snapshot for plugin harness tool construction. */
   sandbox?: SandboxContext | null;
   /** Host-created authority available only after harness selection. */
