@@ -144,10 +144,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       for (const [id, parentId] of bounded.opaqueParents) {
         this.opaqueParentsById.set(id, parentId);
       }
-      this.appendParentId = bounded.activeLeafEntryId;
-      // The projection already selected the active path; its leaf control may
-      // be outside the payload window, including when it selects side entries.
-      this.leafId = this.resolveOpaqueLeafTargetId(bounded.activeLeafEntryId);
+      this.adoptSelectedTranscriptPath(bounded.activeLeafEntryId, bounded.parents);
       for (const [boundaryId, range] of bounded.firstKeptRanges) {
         // An empty retained slice starts at the boundary itself, never at an
         // earlier ancestor. Opaque entries do not become model-context cut points.
@@ -162,6 +159,21 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
         this.boundedFirstKeptById.set(boundaryId, firstKeptEntryId);
       }
     }
+  }
+
+  protected adoptSelectedTranscriptPath(
+    appendParentId: string | null,
+    parents: Iterable<readonly [string, string | null]>,
+  ): void {
+    // Selected payloads omit navigation controls. Use their resolved ancestry,
+    // not the side-append parent guesses made while indexing those payloads.
+    this.logicalParentsById.clear();
+    for (const [id, parentId] of parents) {
+      this.logicalParentsById.set(id, this.resolveCanonicalParentId(parentId));
+    }
+    this.appendParentId = appendParentId;
+    this.leafId = this.resolveOpaqueLeafTargetId(appendParentId);
+    this.appendMode = undefined;
   }
 
   /** The loaded view only: bounded managers must never hydrate inactive history for a rewrite. */

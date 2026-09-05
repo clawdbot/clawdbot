@@ -609,8 +609,41 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
         }).changed,
       ).toBe(false);
       expect(await loadTranscriptEvents(target)).toEqual(rowsBeforeNoop);
-      manager.appendMessage({ role: "user", content: "next turn", timestamp: 5 });
-      expect(SessionManager.open(target).getBranch()).toHaveLength(expectedLength + 1);
+      SessionManager.openBounded(target, { maxBytes: 64_000, maxEvents: 20 }).appendMessage({
+        role: "user",
+        content: "next turn",
+        timestamp: 5,
+      });
+      manager = SessionManager.open(target);
+      expect(manager.getBranch()).toHaveLength(expectedLength + 1);
+      await waitForSessionTranscriptProjection(target);
+      const expected = manager.buildSessionContext();
+      expect(expected.messages.map((message) => "content" in message && message.content)).toEqual(
+        withReset
+          ? ["current task", "next turn"]
+          : ["prefix", "replacement-3", "suffix", "next turn"],
+      );
+      for (const selected of [
+        SessionManager.openBounded(target, { maxBytes: 64_000, maxEvents: 20 }),
+        SessionManager.openModelContext(target),
+        await SessionManager.openModelContextAsync(target),
+      ]) {
+        expect(selected.buildSessionContext()).toEqual(expected);
+      }
+      const originalHistory = await loadTranscriptEvents(target);
+      await manager.createBranchedSession(expectDefined(manager.getLeafId(), "selected leaf"));
+      const branched = expectDefined(manager.getSessionTarget(), "branched target");
+      expect(await loadTranscriptEvents(target)).toEqual(originalHistory);
+      await waitForSessionTranscriptProjection(branched);
+      for (const selected of [
+        manager,
+        SessionManager.open(branched),
+        SessionManager.openBounded(branched, { maxBytes: 64_000, maxEvents: 20 }),
+        SessionManager.openModelContext(branched),
+        await SessionManager.openModelContextAsync(branched),
+      ]) {
+        expect(selected.buildSessionContext()).toEqual(expected);
+      }
     },
   );
 
