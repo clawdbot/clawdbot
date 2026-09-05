@@ -15,7 +15,7 @@ const STORE_UPDATE_URL = "https://clients2.google.com/service/update2/crx";
 // Chromium ignores unknown fields in each external-extension dictionary.
 const OWNED_REQUEST = {
   external_update_url: STORE_UPDATE_URL,
-  _openclaw: "browser-store-install-v1",
+  openclawOwnership: "browser-store-install-v1",
 };
 
 export type ChromeStoreInstallRequest = {
@@ -55,8 +55,8 @@ async function inspectRequest(root: ChromeProductRoot): Promise<ChromeStoreInsta
       Object.keys(value).length !== 2 ||
       !("external_update_url" in value) ||
       value.external_update_url !== OWNED_REQUEST.external_update_url ||
-      !("_openclaw" in value) ||
-      value._openclaw !== OWNED_REQUEST._openclaw
+      !("openclawOwnership" in value) ||
+      value.openclawOwnership !== OWNED_REQUEST.openclawOwnership
     ) {
       return {
         ...result,
