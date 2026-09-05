@@ -7,6 +7,17 @@ import {
 } from "./vitest.pattern-file.ts";
 
 describe("native CLI selection", () => {
+  it.each([
+    { file: "ui/src/pages/devices/capability-chips.test.ts", selected: true },
+    { file: "ui/src/pages/devices/capability-chips.browser.test.ts", selected: false },
+  ])("preserves UI extglob ownership for $file", ({ file, selected }) => {
+    const include = ["ui/src/**/!(*.browser).test.ts"];
+    const expected = selected ? [file] : [];
+    expect(narrowIncludePatternsForCli(include, ["node", "vitest", "run", file])).toEqual(expected);
+    expect(intersectIncludePatterns(include, [file])).toEqual(expected);
+    expect(matchesVitestCliSelection(file, include, ["run", file], "", {})).toBe(selected);
+  });
+
   const file = "extensions/qa-lab/src/suite-process-lifecycle.test.ts";
   it.each([
     { args: ["--configLoader", "runner"], selected: true },

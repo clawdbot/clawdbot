@@ -1,9 +1,35 @@
 // Vitest pattern file helper reads include and exclude patterns from files.
 import fs from "node:fs";
 import path from "node:path";
+import { Minimatch } from "minimatch";
 import { collectVitestFileFilters } from "../../scripts/lib/vitest-cli-mode.mts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
+const globMatchers = new Map<string, Minimatch>();
+
+export function matchesVitestGlob(value: string, pattern: string): boolean {
+  let matcher = globMatchers.get(pattern);
+  if (!matcher) {
+    // Keep Node's path.matchesGlob semantics when Bun does not support extglobs.
+    matcher = new Minimatch(pattern, {
+      nocase: process.platform === "win32" || process.platform === "darwin",
+      windowsPathsNoEscape: true,
+      nonegate: true,
+      nocomment: true,
+      optimizationLevel: 2,
+      platform: process.platform,
+      nocaseMagicOnly: true,
+    });
+    globMatchers.set(pattern, matcher);
+    if (globMatchers.size > 250) {
+      const oldest = globMatchers.keys().next().value;
+      if (oldest !== undefined) {
+        globMatchers.delete(oldest);
+      }
+    }
+  }
+  return matcher.match(value);
+}
 
 function normalizeCliPattern(value: string): string {
   let normalized = value
@@ -74,7 +100,7 @@ function literalPrefixForGlobPattern(value: string): string {
 }
 
 function patternsCouldOverlap(value: string, pattern: string): boolean {
-  if (path.matchesGlob(value, pattern) || path.matchesGlob(pattern, value)) {
+  if (matchesVitestGlob(value, pattern) || matchesVitestGlob(pattern, value)) {
     return true;
   }
 
@@ -103,7 +129,7 @@ function narrowIncludePatterns(
     const isLiteral = !/[?*[\]{}]/u.test(candidate);
     for (const laneScope of includePatterns) {
       if (isLiteral) {
-        if (path.matchesGlob(candidate, laneScope)) {
+        if (matchesVitestGlob(candidate, laneScope)) {
           narrowed.add(candidate);
         }
       } else if (patternsCouldOverlap(candidate, laneScope)) {
@@ -189,7 +215,7 @@ export function intersectIncludePatterns(
   for (const candidate of candidatePatterns) {
     if (!isPlainRepoRelativePath(candidate)) {
       if (literalIncludes) {
-        result.push(...includePatterns.filter((include) => path.matchesGlob(include, candidate)));
+        result.push(...includePatterns.filter((include) => matchesVitestGlob(include, candidate)));
         continue;
       }
       // Watch directory targets retain their glob so newly added tests appear.
@@ -204,7 +230,7 @@ export function intersectIncludePatterns(
     if (
       literalIncludes
         ? literalIncludes.has(candidate)
-        : includePatterns.some((include) => path.matchesGlob(candidate, include))
+        : includePatterns.some((include) => matchesVitestGlob(candidate, include))
     ) {
       result.push(candidate);
     }
@@ -317,10 +343,10 @@ export function matchesVitestCliSelection(
   const absoluteFile = path.resolve(repoRoot, file);
   if (
     !relativizeScopedPatterns(patterns, scopedDir).some((pattern) =>
-      path.matchesGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
+      matchesVitestGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
     ) ||
     collectVitestExcludePatterns(args).some((pattern) =>
-      path.matchesGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
+      matchesVitestGlob(path.isAbsolute(pattern) ? absoluteFile : relativeFile, pattern),
     )
   ) {
     return false;
